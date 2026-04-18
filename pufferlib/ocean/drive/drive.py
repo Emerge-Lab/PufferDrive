@@ -602,10 +602,10 @@ class Drive(pufferlib.PufferEnv):
         # make_client reads env->video_suffix when forking ffmpeg.
         binding.vec_set_video_suffix(self.c_envs, suffix, env_id)
 
-    def close_client(self, env_idx=0):
+    def close_client(self, env_id=0):
         # Tear down the render Client for one env without destroying the env.
         # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
-        binding.vec_close_client(self.c_envs, env_idx)
+        binding.vec_close_client(self.c_envs, env_id)
 
     def close(self):
         binding.vec_close(self.c_envs)

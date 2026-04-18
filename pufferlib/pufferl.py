@@ -2384,7 +2384,7 @@ def eval_multi_scenarios_render(
         _internal_num_envs = getattr(_target_env_pre, "num_envs", 1)
         for _e in range(_internal_num_envs):
             try:
-                _target_env_pre.set_video_suffix(video_suffix, env_idx=_e)
+                _target_env_pre.set_video_suffix(video_suffix, env_id=_e)
             except Exception:
                 break
 
@@ -2485,7 +2485,7 @@ def eval_multi_scenarios_render(
                     # GPU context) and close_client at scenario end flushes the
                     # trailing PBO frame.
                     for e in range(num_envs_in_batch):
-                        target_env.render(env_idx=e, view_mode=view_mode)
+                        target_env.render(env_id=e, view_mode=view_mode)
 
                 # Serial backend returns infos as single list (infos[0] is the env's info list)
                 if infos and infos[0]:
@@ -2533,7 +2533,7 @@ def eval_multi_scenarios_render(
                 for e in range(num_envs_in_batch):
                     _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n")
                     _sys_cc.stderr.flush()
-                    target_env.close_client(env_idx=e)
+                    target_env.close_client(env_id=e)
                     _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n")
                     _sys_cc.stderr.flush()
 
