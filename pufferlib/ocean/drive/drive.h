@@ -3860,7 +3860,11 @@ static RewardTerms compute_rewards(Drive *env, int i) {
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
         int target_agent_idx = (env->active_agent_count > 0) ? env->active_agent_indices[0] : -1;
         int collided_with_idx = agent->collided_with_agent_idx;
-        bool apply_collision_penalty = (agent_idx == target_agent_idx) || is_adversarial_agent(env, collided_with_idx);
+        Agent *target_agent = (target_agent_idx >= 0) ? &env->agents[target_agent_idx] : NULL;
+        bool hit_inactive_target = (collided_with_idx == target_agent_idx) && target_agent != NULL &&
+                                   (target_agent->stopped || target_agent->removed);
+        bool apply_collision_penalty =
+            (agent_idx == target_agent_idx) || is_adversarial_agent(env, collided_with_idx) || hit_inactive_target;
 
         // Velocity-dependent penalty: incentivizes braking before unavoidable collision.
         // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
