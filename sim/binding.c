@@ -82,11 +82,12 @@ Env *my_vec_init(
     int num_maps = (int) dict_get(env_kwargs, "num_maps")->value;
     int agents_per_buffer = total_agents / num_buffers;
 
-    float reward_vehicle_collision = dict_get(env_kwargs, "reward_vehicle_collision")->value;
-    float reward_offroad_collision = dict_get(env_kwargs, "reward_offroad_collision")->value;
+    float reward_collision = dict_get(env_kwargs, "reward_collision")->value;
+    float reward_offroad = dict_get(env_kwargs, "reward_offroad")->value;
     float reward_goal_post_respawn = dict_get(env_kwargs, "reward_goal_post_respawn")->value;
-    float reward_vehicle_collision_post_respawn = dict_get(env_kwargs, "reward_vehicle_collision_post_respawn")->value;
-    int human_agent_idx = (int) dict_get(env_kwargs, "human_agent_idx")->value;
+    float reward_collision_post_respawn = dict_get(env_kwargs, "reward_collision_post_respawn")->value;
+    int collision_behavior = (int) dict_get(env_kwargs, "collision_behavior")->value;
+    int offroad_behavior = (int) dict_get(env_kwargs, "offroad_behavior")->value;
 
     int discovered_maps = 0;
     char **map_files = discover_map_files(&discovered_maps);
@@ -120,7 +121,7 @@ Env *my_vec_init(
             c_close(&temp_env);
             continue;
         }
-        agents_per_map[m] = temp_env.active_agent_count < MAX_AGENTS ? temp_env.active_agent_count : MAX_AGENTS;
+        agents_per_map[m] = temp_env.active_agent_count;
         c_close(&temp_env);
         if (agents_per_map[m] > 0) {
             valid_map_ids[num_valid_maps++] = m;
@@ -188,12 +189,13 @@ Env *my_vec_init(
         Env *env = &envs[i];
         memset(env, 0, sizeof(Env));
         env->map_name = strdup(map_files[env_map_ids[i]]);
-        env->human_agent_idx = human_agent_idx;
-        env->reward_vehicle_collision = reward_vehicle_collision;
-        env->reward_offroad_collision = reward_offroad_collision;
+        env->reward_collision = reward_collision;
+        env->reward_offroad = reward_offroad;
         env->reward_goal_post_respawn = reward_goal_post_respawn;
-        env->reward_vehicle_collision_post_respawn = reward_vehicle_collision_post_respawn;
-        env->max_agents = env_max_agents[i];
+        env->reward_collision_post_respawn = reward_collision_post_respawn;
+        env->collision_behavior = collision_behavior;
+        env->offroad_behavior = offroad_behavior;
+        env->num_max_active_agents = env_max_agents[i];
         if (init(env) != 0) {
             printf("ERROR: Failed to initialize map %s\n", map_files[env_map_ids[i]]);
             for (int j = 0; j < i; j++) {
@@ -208,7 +210,6 @@ Env *my_vec_init(
             *num_envs_out = 0;
             return NULL;
         }
-        env->num_agents = env->active_agent_count;
     }
 
     free(env_map_ids);
@@ -224,13 +225,14 @@ Env *my_vec_init(
 }
 
 void my_init(Env *env, Dict *kwargs) {
-    env->human_agent_idx = dict_get(kwargs, "human_agent_idx")->value;
-    env->reward_vehicle_collision = dict_get(kwargs, "reward_vehicle_collision")->value;
-    env->reward_offroad_collision = dict_get(kwargs, "reward_offroad_collision")->value;
+    env->reward_collision = dict_get(kwargs, "reward_collision")->value;
+    env->reward_offroad = dict_get(kwargs, "reward_offroad")->value;
     env->reward_goal_post_respawn = dict_get(kwargs, "reward_goal_post_respawn")->value;
-    env->reward_vehicle_collision_post_respawn = dict_get(kwargs, "reward_vehicle_collision_post_respawn")->value;
+    env->reward_collision_post_respawn = dict_get(kwargs, "reward_collision_post_respawn")->value;
+    env->collision_behavior = (int) dict_get(kwargs, "collision_behavior")->value;
+    env->offroad_behavior = (int) dict_get(kwargs, "offroad_behavior")->value;
     int map_id = dict_get(kwargs, "map_id")->value;
-    int max_agents = dict_get(kwargs, "max_agents")->value;
+    int num_max_active_agents = dict_get(kwargs, "num_max_active_agents")->value;
     int num_maps = (int) dict_get(kwargs, "num_maps")->value;
 
     int discovered_maps = 0;
@@ -242,7 +244,7 @@ void my_init(Env *env, Dict *kwargs) {
         return;
     }
 
-    env->num_agents = max_agents;
+    env->num_max_active_agents = num_max_active_agents;
     env->map_name = strdup(map_files[map_id]);
     free_map_files(map_files, discovered_maps);
     if (init(env) != 0) {
@@ -251,7 +253,6 @@ void my_init(Env *env, Dict *kwargs) {
 }
 
 void my_log(Log *log, Dict *out) {
-    dict_set(out, "perf", log->perf);
     dict_set(out, "score", log->score);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
@@ -260,5 +261,4 @@ void my_log(Log *log, Dict *out) {
     dict_set(out, "dnf_rate", log->dnf_rate);
     dict_set(out, "n", log->n);
     dict_set(out, "completion_rate", log->completion_rate);
-    dict_set(out, "clean_collision_rate", log->clean_collision_rate);
 }

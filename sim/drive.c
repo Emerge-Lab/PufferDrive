@@ -8,9 +8,8 @@
 void demo() {
     Drive env = {
         .dynamics_model = CLASSIC,
-        .human_agent_idx = 0,
-        .reward_vehicle_collision = -0.1f,
-        .reward_offroad_collision = -0.1f,
+        .reward_collision = -0.1f,
+        .reward_offroad = -0.1f,
         .map_name = "resources/drive/demo_replay_map.bin",
     };
     if (allocate(&env) != 0) {
@@ -27,34 +26,31 @@ void demo() {
         float (*actions)[2] = (float (*)[2]) env.actions;
         forward_puffernet(net, env.observations, env.actions);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            actions[env.human_agent_idx][0] = 3;
-            actions[env.human_agent_idx][1] = 6;
+            actions[EGO_IDX][0] = 3;
+            actions[EGO_IDX][1] = 6;
             if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-                actions[env.human_agent_idx][0] += accel_delta;
-                if (actions[env.human_agent_idx][0] > 6) {
-                    actions[env.human_agent_idx][0] = 6;
+                actions[EGO_IDX][0] += accel_delta;
+                if (actions[EGO_IDX][0] > 6) {
+                    actions[EGO_IDX][0] = 6;
                 }
             }
             if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-                actions[env.human_agent_idx][0] -= accel_delta;
-                if (actions[env.human_agent_idx][0] < 0) {
-                    actions[env.human_agent_idx][0] = 0;
+                actions[EGO_IDX][0] -= accel_delta;
+                if (actions[EGO_IDX][0] < 0) {
+                    actions[EGO_IDX][0] = 0;
                 }
             }
             if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-                actions[env.human_agent_idx][1] += steer_delta;
-                if (actions[env.human_agent_idx][1] < 0) {
-                    actions[env.human_agent_idx][1] = 0;
+                actions[EGO_IDX][1] += steer_delta;
+                if (actions[EGO_IDX][1] < 0) {
+                    actions[EGO_IDX][1] = 0;
                 }
             }
             if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-                actions[env.human_agent_idx][1] -= steer_delta;
-                if (actions[env.human_agent_idx][1] > 12) {
-                    actions[env.human_agent_idx][1] = 12;
+                actions[EGO_IDX][1] -= steer_delta;
+                if (actions[EGO_IDX][1] > 12) {
+                    actions[EGO_IDX][1] = 12;
                 }
-            }
-            if (IsKeyPressed(KEY_TAB)) {
-                env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
             }
         }
         c_step(&env);
@@ -71,7 +67,6 @@ void performance_test() {
     long test_time = 10;
     Drive env = {
         .dynamics_model = CLASSIC,
-        .human_agent_idx = 0,
         .map_name = "resources/drive/demo_replay_map.bin",
     };
     if (allocate(&env) != 0) {

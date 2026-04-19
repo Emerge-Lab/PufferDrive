@@ -111,6 +111,14 @@ static inline int unnormalize_road_type(int norm_type) {
     }
 }
 
+// Metrics array indices
+#define NUM_METRICS 5
+#define COLLISION_IDX 0
+#define OFFROAD_IDX 1
+#define REACH_GOAL_IDX 2
+#define LANE_DIST_IDX 3
+#define LANE_ANGLE_IDX 4
+
 struct Agent {
     int type;
 
@@ -143,12 +151,18 @@ struct Agent {
     int sim_valid;
     int collision_state;
 
+    // Metrics and status tracking
+    float metrics_array[NUM_METRICS];
+    int current_lane_idx;
+    int previous_lane_idx;
     int respawn_timestep;
     int reached_goal_this_episode;
     int collided_before_goal;
     int reached_goal;
     int active_agent;
     int control_state;
+    int stopped;
+    int removed;
 
     // Goal position
     float goal_position_x;
