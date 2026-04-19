@@ -6,6 +6,7 @@ import contextlib
 import copy
 import numbers
 import warnings
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -128,6 +129,170 @@ def metric_log_key(metric_name):
     return f"environment/{metric_name}"
 
 
+@dataclass
+class ActorOutput:
+    action: torch.Tensor
+    logprob: torch.Tensor | None = None
+    value: torch.Tensor | None = None
+    rollout_observation: torch.Tensor | None = None
+    clip_actions: bool = False
+
+
+class TrainableTorchActor:
+    def __init__(self, policy, observation_space):
+        self.policy = policy
+        self.rollout_observation_space = observation_space
+        self.hidden_size = getattr(policy, "hidden_size", None)
+
+    def prepare_observation(self, raw_observation):
+        return raw_observation
+
+    def act(self, raw_observation, state=None, deterministic=False):
+        observation = self.prepare_observation(raw_observation)
+        logits, value = self.policy.forward_eval(observation, state)
+        action, logprob, _ = pufferlib.pytorch.sample_logits(logits, deterministic=deterministic)
+        return ActorOutput(
+            action=action,
+            logprob=logprob,
+            value=value.flatten(),
+            rollout_observation=observation,
+            clip_actions=isinstance(logits, torch.distributions.Normal),
+        )
+
+
+class TargetTorchActor:
+    def __init__(self, policy):
+        self.policy = policy
+        self.hidden_size = getattr(policy, "hidden_size", None)
+
+    def prepare_observation(self, raw_observation):
+        return raw_observation
+
+    def act(self, raw_observation, state=None, deterministic=False):
+        observation = self.prepare_observation(raw_observation)
+        logits, _ = self.policy.forward_eval(observation, state)
+        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=deterministic)
+        return ActorOutput(
+            action=action,
+            clip_actions=isinstance(logits, torch.distributions.Normal),
+        )
+
+
+def _index_batch(batch, indices):
+    if batch is None:
+        return None
+    if torch.is_tensor(batch):
+        return batch.index_select(0, indices)
+    if isinstance(batch, np.ndarray):
+        return batch[indices.detach().cpu().numpy()]
+    return batch
+
+
+def _run_actor_subset(actor, raw_observation, indices, step_context, recurrent_state=None, deterministic=False):
+    if actor is None or indices.numel() == 0:
+        return None
+
+    state = {
+        "reward": _index_batch(step_context.get("reward"), indices),
+        "done": _index_batch(step_context.get("done"), indices),
+        "env_id": step_context.get("env_id"),
+        "mask": _index_batch(step_context.get("mask"), indices),
+    }
+
+    if recurrent_state is not None:
+        state["lstm_h"] = recurrent_state["lstm_h"].index_select(0, indices)
+        state["lstm_c"] = recurrent_state["lstm_c"].index_select(0, indices)
+
+    actor_output = actor.act(
+        _index_batch(raw_observation, indices),
+        state=state,
+        deterministic=deterministic,
+    )
+
+    if recurrent_state is not None:
+        recurrent_state["lstm_h"].index_copy_(0, indices, state["lstm_h"])
+        recurrent_state["lstm_c"].index_copy_(0, indices, state["lstm_c"])
+
+    return actor_output
+
+
+def _allocate_rollout_observation(policy_actor, batch_size, device):
+    obs_space = policy_actor.rollout_observation_space
+    obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+    return torch.zeros(batch_size, *obs_space.shape, dtype=obs_dtype, device=device)
+
+
+def _route_actor_actions(
+    raw_observation,
+    target_mask,
+    policy_actor,
+    step_context,
+    policy_recurrent_state=None,
+    target_actor=None,
+    target_recurrent_state=None,
+    deterministic=False,
+):
+    batch_size = raw_observation.shape[0]
+    device = raw_observation.device
+    adv_idx = torch.nonzero(~target_mask, as_tuple=False).flatten()
+    target_idx = torch.nonzero(target_mask, as_tuple=False).flatten()
+
+    full_action = None
+    full_logprob = torch.zeros(batch_size, device=device)
+    full_value = torch.zeros(batch_size, device=device)
+    # PPO only trains the adversarial actor, so target rows stay zero-padded in rollout observations.
+    rollout_observation = _allocate_rollout_observation(policy_actor, batch_size, device)
+    clip_actions = False
+
+    adv_output = _run_actor_subset(
+        policy_actor,
+        raw_observation,
+        adv_idx,
+        step_context,
+        recurrent_state=policy_recurrent_state,
+        deterministic=deterministic,
+    )
+    if adv_output is not None:
+        full_action = torch.zeros(
+            batch_size, *adv_output.action.shape[1:], dtype=adv_output.action.dtype, device=device
+        )
+        full_action.index_copy_(0, adv_idx, adv_output.action)
+        if adv_output.logprob is not None:
+            full_logprob.index_copy_(0, adv_idx, adv_output.logprob)
+        if adv_output.value is not None:
+            full_value.index_copy_(0, adv_idx, adv_output.value)
+        if adv_output.rollout_observation is not None:
+            rollout_observation.index_copy_(0, adv_idx, adv_output.rollout_observation)
+        clip_actions = clip_actions or adv_output.clip_actions
+
+    target_output = _run_actor_subset(
+        target_actor,
+        raw_observation,
+        target_idx,
+        step_context,
+        recurrent_state=target_recurrent_state,
+        deterministic=deterministic,
+    )
+    if target_output is not None:
+        if full_action is None:
+            full_action = torch.zeros(
+                batch_size,
+                *target_output.action.shape[1:],
+                dtype=target_output.action.dtype,
+                device=device,
+            )
+        full_action.index_copy_(0, target_idx, target_output.action)
+        clip_actions = clip_actions or target_output.clip_actions
+
+    return ActorOutput(
+        action=full_action,
+        logprob=full_logprob,
+        value=full_value,
+        rollout_observation=rollout_observation,
+        clip_actions=clip_actions,
+    )
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, target_policy=None, logger=None):
         # Backend perf optimization
@@ -141,7 +306,6 @@ class PuffeRL:
 
         # Vecenv info
         vecenv.async_reset(seed)
-        obs_space = vecenv.single_observation_space
         atn_space = vecenv.single_action_space
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
@@ -162,6 +326,26 @@ class PuffeRL:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
+
+        # Torch compile
+        self.uncompiled_policy = policy
+        self.policy = policy
+        self.uncompiled_target_policy = target_policy
+        self.target_policy = target_policy
+        if config["compile"]:
+            self.policy = torch.compile(policy, mode=config["compile_mode"])
+            self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
+            pufferlib.pytorch.sample_logits = torch.compile(
+                pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
+            )
+            if target_policy is not None:
+                self.target_policy = torch.compile(target_policy, mode=config["compile_mode"])
+                self.target_policy.forward_eval = torch.compile(target_policy, mode=config["compile_mode"])
+
+        self.policy_actor = TrainableTorchActor(self.policy, vecenv.single_observation_space)
+        self.target_actor = TargetTorchActor(self.target_policy) if self.target_policy is not None else None
+        obs_space = self.policy_actor.rollout_observation_space
+
         self.observations = torch.zeros(
             segments,
             horizon,
@@ -198,12 +382,13 @@ class PuffeRL:
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch
-            h = policy.hidden_size
+            h = self.policy_actor.hidden_size
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
             self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-            if target_policy is not None:
-                self.target_lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
-                self.target_lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+            if self.target_actor is not None:
+                target_h = self.target_actor.hidden_size
+                self.target_lstm_h = {i * n: torch.zeros(n, target_h, device=device) for i in range(total_agents // n)}
+                self.target_lstm_c = {i * n: torch.zeros(n, target_h, device=device) for i in range(total_agents // n)}
 
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
@@ -224,21 +409,6 @@ class PuffeRL:
             raise pufferlib.APIUsageError(
                 f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
             )
-
-        # Torch compile
-        self.uncompiled_policy = policy
-        self.policy = policy
-        self.uncompiled_target_policy = target_policy
-        self.target_policy = target_policy
-        if config["compile"]:
-            self.policy = torch.compile(policy, mode=config["compile_mode"])
-            self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
-            pufferlib.pytorch.sample_logits = torch.compile(
-                pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
-            )
-            if target_policy is not None:
-                self.target_policy = torch.compile(target_policy, mode=config["compile_mode"])
-                self.target_policy.forward_eval = torch.compile(target_policy, mode=config["compile_mode"])
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -320,7 +490,7 @@ class PuffeRL:
 
     def _build_target_mask(self, info, env_id, device):
         num_agents_per_batch = self.vecenv.agents_per_batch
-        if self.target_policy is None:
+        if self.target_actor is None:
             return torch.zeros(num_agents_per_batch, dtype=torch.bool, device=device)
 
         num_agents_per_worker = self.vecenv.driver_env.num_agents
@@ -362,7 +532,7 @@ class PuffeRL:
             for k in self.lstm_h:
                 self.lstm_h[k].zero_()
                 self.lstm_c[k].zero_()
-                if self.target_policy is not None:
+                if self.target_actor is not None:
                     self.target_lstm_h[k].zero_()
                     self.target_lstm_c[k].zero_()
 
@@ -388,57 +558,52 @@ class PuffeRL:
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
-                state = dict(
+                step_context = dict(
                     reward=r,
                     done=done_mask,
                     env_id=env_id,
                     mask=mask,
                 )
-
+                policy_recurrent_state = None
+                target_recurrent_state = None
                 if config["use_rnn"]:
-                    state["lstm_h"] = self.lstm_h[env_id.start]
-                    state["lstm_c"] = self.lstm_c[env_id.start]
+                    policy_recurrent_state = {
+                        "lstm_h": self.lstm_h[env_id.start],
+                        "lstm_c": self.lstm_c[env_id.start],
+                    }
+                    if self.target_actor is not None:
+                        target_recurrent_state = {
+                            "lstm_h": self.target_lstm_h[env_id.start],
+                            "lstm_c": self.target_lstm_c[env_id.start],
+                        }
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-
-                if self.target_policy is not None:
-                    target_state = dict(
-                        reward=r,
-                        done=done_mask,
-                        env_id=env_id,
-                        mask=mask,
-                    )
-                    if config["use_rnn"]:
-                        target_state["lstm_h"] = self.target_lstm_h[env_id.start]
-                        target_state["lstm_c"] = self.target_lstm_c[env_id.start]
-
-                    target_logits, _ = self.target_policy.forward_eval(o_device, target_state)
-                    target_action, _, _ = pufferlib.pytorch.sample_logits(target_logits)
+                actor_output = _route_actor_actions(
+                    o_device,
+                    target_mask,
+                    self.policy_actor,
+                    step_context,
+                    policy_recurrent_state=policy_recurrent_state,
+                    target_actor=self.target_actor,
+                    target_recurrent_state=target_recurrent_state,
+                    deterministic=False,
+                )
 
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
             profile("eval_copy", epoch)
             with torch.no_grad():
-                if config["use_rnn"]:
-                    self.lstm_h[env_id.start] = state["lstm_h"]
-                    self.lstm_c[env_id.start] = state["lstm_c"]
-                    if self.target_policy is not None:
-                        self.target_lstm_h[env_id.start] = target_state["lstm_h"]
-                        self.target_lstm_c[env_id.start] = target_state["lstm_c"]
-
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o
+                    self.observations[batch_rows, l] = actor_output.rollout_observation.cpu()
                 else:
-                    self.observations[batch_rows, l] = o_device
+                    self.observations[batch_rows, l] = actor_output.rollout_observation
 
-                self.actions[batch_rows, l] = action
-                self.logprobs[batch_rows, l] = logprob
+                self.actions[batch_rows, l] = actor_output.action
+                self.logprobs[batch_rows, l] = actor_output.logprob
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
@@ -449,7 +614,7 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
-                self.values[batch_rows, l] = value.flatten()
+                self.values[batch_rows, l] = actor_output.value
                 self.masks[batch_rows, l] = m
                 self.target_masks[batch_rows, l] = target_mask
 
@@ -462,10 +627,8 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                if self.target_policy is not None:
-                    action = torch.where(target_mask[:, None], target_action, action)
-                action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
+                action = actor_output.action.cpu().numpy()
+                if actor_output.clip_actions:
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
 
             profile("eval_misc", epoch)
@@ -2597,6 +2760,8 @@ def render_adversarial(
 
     policy = policy or load_policy(args, vecenv, env_name)
     target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
+    policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+    target_actor = TargetTorchActor(target_policy)
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -2604,12 +2769,12 @@ def render_adversarial(
     target_state = {}
     if args["train"]["use_rnn"]:
         state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
         )
         target_state = dict(
-            lstm_h=torch.zeros(num_agents, target_policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
         )
 
     eval_folder = _get_eval_folder(args, adversarial=True)
@@ -2642,12 +2807,12 @@ def render_adversarial(
 
             if args["train"]["use_rnn"]:
                 state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+                    lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
                 )
                 target_state = dict(
-                    lstm_h=torch.zeros(num_agents, target_policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, target_policy.hidden_size, device=device),
+                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
                 )
 
             if args["render"]:
@@ -2693,17 +2858,21 @@ def render_adversarial(
 
                 with torch.no_grad():
                     ob_tensor = torch.as_tensor(ob).to(device)
-                    logits, _ = policy.forward_eval(ob_tensor, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-
-                    target_logits, _ = target_policy.forward_eval(ob_tensor, target_state)
-                    target_action, _, _ = pufferlib.pytorch.sample_logits(target_logits, deterministic=True)
-
                     target_mask = _build_eval_target_mask(infos, vecenv, device)
-                    action = torch.where(target_mask[:, None], target_action, action)
-                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+                    step_context = dict(reward=None, done=None, env_id=None, mask=None)
+                    actor_output = _route_actor_actions(
+                        ob_tensor,
+                        target_mask,
+                        policy_actor,
+                        step_context,
+                        policy_recurrent_state=state if args["train"]["use_rnn"] else None,
+                        target_actor=target_actor,
+                        target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
+                        deterministic=True,
+                    )
+                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
 
-                if isinstance(logits, torch.distributions.Normal):
+                if actor_output.clip_actions:
                     action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
                 ob, _, _, _, infos = vecenv.step(action)
