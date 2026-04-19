@@ -2312,12 +2312,8 @@ def eval_multi_scenarios(
     print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
-    _sys_instr.stderr.write("[render-instr] about to call vecenv.close()\n")
-    _sys_instr.stderr.flush()
     # Close vectorized environment to avoid file descriptor leaks
     vecenv.close()
-    _sys_instr.stderr.write("[render-instr] vecenv.close() returned\n")
-    _sys_instr.stderr.flush()
 
 
 def eval_multi_scenarios_render(
