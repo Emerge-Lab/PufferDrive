@@ -2,8 +2,8 @@
 set -e
 
 # Usage:
-#   ./build.sh                  # Build _C.so with drive statically linked
-#   ./build.sh --float          # float32 precision (required for --slowly)
+#   ./build.sh                  # Build torch-compatible GPU _C.so with drive statically linked
+#   ./build.sh --cuda           # Build native CUDA trainer _C.so
 #   ./build.sh --cpu            # CPU fallback, torch only
 #   ./build.sh --debug          # Debug build
 #   ./build.sh --local          # Standalone executable (debug, sanitizers)
@@ -13,20 +13,25 @@ set -e
 #   ./build.sh clean            # Remove compiled artifacts and Python bytecode
 
 ENV=drive
+BACKEND=torch
 
 for arg in "$@"; do
     case $arg in
         clean) CLEAN=1 ;;
-        --float) PRECISION="-DPRECISION_FLOAT" ;;
+        --cuda) BACKEND=cuda ;;
         --debug) DEBUG=1 ;;
         --local) MODE=local ;;
         --fast)  MODE=fast ;;
         --web)   MODE=web ;;
         --profile) MODE=profile ;;
-        --cpu)   MODE=cpu; PRECISION="-DPRECISION_FLOAT" ;;
+        --cpu)   MODE=cpu ;;
         *) echo "Error: unknown argument '$arg'" && exit 1 ;;
     esac
 done
+
+if [ -z "$MODE" ] && [ "$BACKEND" = "torch" ] && [ -z "$PRECISION" ]; then
+    PRECISION="-DPRECISION_FLOAT"
+fi
 
 if [ -n "$CLEAN" ]; then
     rm -rf build drive profile
@@ -216,7 +221,11 @@ if [ -z "$OBS_TENSOR_T" ]; then
 fi
 
 if [ -z "$MODE" ]; then
-    echo "Compiling CUDA ($ARCH) training backend..."
+    PUFFER_NATIVE_PUFFERL=0
+    if [ "$BACKEND" = "cuda" ]; then
+        PUFFER_NATIVE_PUFFERL=1
+    fi
+    echo "Compiling CUDA ($ARCH) ${BACKEND} backend..."
     $NVCC -c -arch=$ARCH -Xcompiler -fPIC \
         -Xcompiler=-D_GLIBCXX_USE_CXX11_ABI=1 \
         -Xcompiler=-DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION \
@@ -228,6 +237,7 @@ if [ -z "$MODE" ]; then
         -Xcompiler=-fopenmp \
         -DOBS_TENSOR_T=$OBS_TENSOR_T \
         -DENV_NAME=$ENV \
+        -DPUFFER_NATIVE_PUFFERL=$PUFFER_NATIVE_PUFFERL \
         $PRECISION $NVCC_OPT \
         src/bindings.cu -o build/bindings.o
 

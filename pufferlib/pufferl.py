@@ -201,11 +201,21 @@ def _resolve_backend(args):
     assert compiled_env is None or compiled_env == args["env_name"], (
         f"build.sh was run for {compiled_env}, not {args['env_name']}"
     )
-    if args.get("slowly"):
-        from pufferlib.torch_pufferl import PuffeRL
+    if args.get("cuda"):
+        if not getattr(_C, "has_native_pufferl", False):
+            raise RuntimeError(
+                "Native CUDA backend unavailable in this build. "
+                "Rerun `./build.sh --cuda`, then retry with `puffer ... --cuda`."
+            )
+        return _C
+    if _C.precision_bytes != 4:
+        raise RuntimeError(
+            "Default PyTorch backend requires the float32 build from `./build.sh`. "
+            "Rerun `./build.sh`, or use the native path with `./build.sh --cuda` and `puffer ... --cuda`."
+        )
+    from pufferlib.torch_pufferl import PuffeRL
 
-        return PuffeRL
-    return _C
+    return PuffeRL
 
 
 def _train_worker(args):
@@ -440,7 +450,7 @@ def sweep(env_name, args=None, pareto=False):
 
 
 def eval(env_name, args=None, load_path=None):
-    """Evaluate a trained policy. Supports both native and --slowly torch backends."""
+    """Evaluate a trained policy. Supports both default torch and explicit --cuda backends."""
     args = args or load_config(env_name)
     args["reset_state"] = False
     args["train"]["horizon"] = 1
@@ -480,7 +490,7 @@ def load_config(env_name):
     parser.add_argument("--wandb-project", type=str, default="puffer4")
     parser.add_argument("--wandb-group", type=str, default="debug")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
-    parser.add_argument("--slowly", action="store_true", help="Use PyTorch training backend")
+    parser.add_argument("--cuda", action="store_true", help="Use CUDA kernel training backend")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)

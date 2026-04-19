@@ -164,6 +164,7 @@ PYBIND11_MODULE(_C, m) {
     m.attr("precision_bytes") = 4;
     m.attr("env_name") = PUFFER_STRINGIFY(ENV_NAME);
     m.attr("gpu") = 0;
+    m.attr("has_native_pufferl") = false;
 
     m.def("puff_advantage_cpu", &py_puff_advantage_cpu);
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 0);

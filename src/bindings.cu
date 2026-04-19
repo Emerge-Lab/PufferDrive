@@ -6,8 +6,15 @@
 
 #define _PUFFER_STRINGIFY(x) #x
 #define PUFFER_STRINGIFY(x) _PUFFER_STRINGIFY(x)
+#ifndef PUFFER_NATIVE_PUFFERL
+#define PUFFER_NATIVE_PUFFERL 1
+#endif
 
 namespace py = pybind11;
+
+static const char* native_backend_error() {
+    return "Native CUDA backend unavailable in this build. Rebuild with `./build.sh --cuda`.";
+}
 
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
@@ -335,6 +342,9 @@ void vec_close(VecEnv& ve) {
 }
 
 std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
+#if !PUFFER_NATIVE_PUFFERL
+    throw std::runtime_error(native_backend_error());
+#else
     py::dict train_kwargs = args["train"].cast<py::dict>();
     py::dict vec_kwargs = args["vec"].cast<py::dict>();
     py::dict env_kwargs = args["env"].cast<py::dict>();
@@ -407,6 +417,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     }
 
     return pufferl;
+#endif
 }
 
 PYBIND11_MODULE(_C, m) {
@@ -455,6 +466,7 @@ PYBIND11_MODULE(_C, m) {
     m.attr("precision_bytes") = (int)sizeof(precision_t);
     m.attr("env_name") = PUFFER_STRINGIFY(ENV_NAME);
     m.attr("gpu") = 1;
+    m.attr("has_native_pufferl") = (bool)PUFFER_NATIVE_PUFFERL;
 
     // Core functions
     m.def("log", &puf_log);

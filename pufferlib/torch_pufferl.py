@@ -22,7 +22,7 @@ from pufferlib.muon import Muon
 if _C.precision_bytes != 4:
     raise RuntimeError(
         f"_C was compiled with bf16 precision (precision_bytes={_C.precision_bytes}). "
-        "The PyTorch backend requires float32. Rerun build.sh with --float"
+        "The PyTorch backend requires float32. Rerun `./build.sh`."
     )
 
 _OBS_DTYPE_MAP = {
@@ -305,7 +305,7 @@ class PuffeRL:
 
             prof.mark(1)
             logits, newvalue = self.policy(mb_obs)
-            actions, newlogprob, entropy = sample_logits(logits, action=mb_actions)
+            _, newlogprob, entropy = sample_logits(logits, action=mb_actions)
             prof.mark(2)
             prof.elapsed(P.TRAIN_FORWARD, 1, 2)
 
