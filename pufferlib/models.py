@@ -4,83 +4,48 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Policy(nn.Module):
-    def __init__(self, encoder, decoder, network):
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        self.network = network
-
-    def initial_state(self, batch_size, device):
-        return self.network.initial_state(batch_size, device)
-
-    def forward_eval(self, x, state):
-        h = self.encoder(x)
-        h, state = self.network.forward_eval(h, state)
-        logits, values = self.decoder(h)
-        return logits, values, state
-
-    def forward(self, x):
-        B, TT = x.shape[:2]
-        h = self.encoder(x.reshape(B * TT, *x.shape[2:]))
-        h = self.network.forward_train(h.reshape(B, TT, -1))
-        logits, values = self.decoder(h.reshape(B * TT, -1))
-        return logits, values.reshape(B, TT)
+try:
+    from pufferlib._C import SIM_CONSTANTS
+except Exception:
+    SIM_CONSTANTS = {}
 
 
-class DefaultEncoder(nn.Module):
-    def __init__(self, obs_size, hidden_size=128):
-        super().__init__()
-        self.encoder = nn.Linear(obs_size, hidden_size)
-
-    def forward(self, observations):
-        return self.encoder(observations.view(observations.shape[0], -1).float())
+def _layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    nn.init.orthogonal_(layer.weight, std)
+    if layer.bias is not None:
+        nn.init.constant_(layer.bias, bias_const)
+    return layer
 
 
-class DefaultDecoder(nn.Module):
-    def __init__(self, nvec, hidden_size=128):
-        super().__init__()
-        self.nvec = tuple(nvec)
-        self.is_continuous = sum(nvec) == len(nvec)
-
-        if self.is_continuous:
-            num_atns = len(nvec)
-            self.decoder_mean = nn.Linear(hidden_size, num_atns)
-            self.decoder_logstd = nn.Parameter(torch.zeros(1, num_atns))
-        else:
-            self.decoder = nn.Linear(hidden_size, int(np.sum(nvec)))
-
-        self.value_function = nn.Linear(hidden_size, 1)
-
-    def forward(self, hidden):
-        if self.is_continuous:
-            mean = self.decoder_mean(hidden)
-            logstd = self.decoder_logstd.expand_as(mean)
-            logits = torch.distributions.Normal(mean, torch.exp(logstd))
-        else:
-            logits = self.decoder(hidden)
-            if len(self.nvec) > 1:
-                logits = logits.split(self.nvec, dim=1)
-
-        values = self.value_function(hidden)
-        return logits, values
+_ACTIVATIONS = {
+    "none": nn.Identity,
+    "tanh": nn.Tanh,
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+}
 
 
 class MLP(nn.Module):
-    def __init__(self, hidden_size, num_layers=1, **kwargs):
+    def __init__(
+        self,
+        in_size,
+        hidden_size,
+        out_size,
+        num_layers=1,
+        final_std=0.01,
+        activation="gelu",
+    ):
         super().__init__()
+        activation_cls = _ACTIVATIONS[activation]
         layers = []
+        prev = in_size
         for _ in range(num_layers):
-            layers += [nn.Linear(hidden_size, hidden_size), nn.GELU()]
+            layers += [_layer_init(nn.Linear(prev, hidden_size)), activation_cls()]
+            prev = hidden_size
+        layers.append(_layer_init(nn.Linear(prev, out_size), std=final_std))
         self.net = nn.Sequential(*layers)
 
-    def initial_state(self, batch_size, device):
-        return ()
-
-    def forward_eval(self, h, state):
-        return self.net(h), state
-
-    def forward_train(self, h):
+    def forward(self, h):
         return self.net(h)
 
 
@@ -225,6 +190,263 @@ class GRU(nn.Module):
         h = h + h_in
         h = self.norm(h)
         return h.transpose(0, 1)
+
+
+_RNN_CLS = {"LSTM": LSTM, "GRU": GRU, "MinGRU": MinGRU}
+_STATE_LEN = {"MLP": 0, "LSTM": 2, "GRU": 1, "MinGRU": 1}
+
+
+class Trunk(nn.Module):
+    """MLP / LSTM / GRU / MinGRU. Takes [B(,T), in_size] -> [B(,T), hidden_size]."""
+
+    def __init__(self, trunk_type, in_size, hidden_size, num_layers, activation):
+        super().__init__()
+        self.trunk_type = trunk_type
+        if trunk_type == "MLP":
+            self.mlp = nn.Sequential(
+                MLP(
+                    in_size,
+                    hidden_size,
+                    hidden_size,
+                    num_layers=num_layers - 1,
+                    final_std=np.sqrt(2),
+                    activation=activation,
+                ),
+                _ACTIVATIONS[activation](),
+            )
+            self.rnn = None
+        else:
+            self.mlp = None
+            self.input_projection = (
+                nn.Identity() if in_size == hidden_size else _layer_init(nn.Linear(in_size, hidden_size))
+            )
+            self.rnn = _RNN_CLS[trunk_type](hidden_size, num_layers=num_layers)
+
+    def initial_state(self, batch_size, device):
+        return () if self.rnn is None else self.rnn.initial_state(batch_size, device)
+
+    def forward_eval(self, hidden, state):
+        if self.rnn is None:
+            return self.mlp(hidden), state
+        return self.rnn.forward_eval(self.input_projection(hidden), state)
+
+    def forward_train(self, hidden):
+        if self.rnn is None:
+            return self.mlp(hidden)
+        return self.rnn.forward_train(self.input_projection(hidden))
+
+
+class VecEncoder(nn.Module):
+    """Per-stream MLP + masked max-pool; concat to [B, sum_H]."""
+
+    obs_stream_names = ["ego", "cond", "partner", "lane", "boundary", "tc", "counts"]
+
+    def __init__(self, **policy_kwargs):
+        super().__init__()
+        self.mask_padded = policy_kwargs["mask_padded_observations"]
+        dropout = policy_kwargs["dropout"]
+        self.activation_fn = _ACTIVATIONS[policy_kwargs["encoder_activation"]]
+
+        is_active = lambda in_features, num_slots: in_features > 0 and (num_slots is None or num_slots > 0)
+        self.encoder_specs = []  # (name, in_features, num_slots_or_None, hidden_size)
+        self.encoders = nn.ModuleDict()
+        for name, in_features, num_slots in self._encoder_descriptions:
+            if not is_active(in_features, num_slots):
+                continue
+            hidden_size = policy_kwargs[f"{name}_hidden_size"]
+            num_layers = policy_kwargs[f"{name}_num_layers"]
+            self.encoders[name] = self._create_encoder(in_features, hidden_size, num_layers, dropout)
+            self.encoder_specs.append((name, in_features, num_slots, hidden_size))
+
+        get = lambda key: int(SIM_CONSTANTS.get(key, 0))
+        self.obs_split_sizes = [
+            get("ego_features"),
+            get("num_reward_coefs") + get("target_dim"),
+            get("obs_partner_slots") * get("partner_features"),
+            get("obs_lane_slots") * get("road_features"),
+            get("obs_boundary_slots") * get("road_features"),
+            get("obs_traffic_control_slots") * get("traffic_control_features"),
+            get("obs_count_features"),
+        ]
+        self._slot_caps = {
+            "partner": get("obs_partner_slots"),
+            "lane": get("obs_lane_slots"),
+            "boundary": get("obs_boundary_slots"),
+            "tc": get("obs_traffic_control_slots"),
+        }
+        self.register_buffer("_slot_arange", torch.arange(max(self._slot_caps.values(), default=0)), persistent=False)
+        self.out_size = sum(spec[3] for spec in self.encoder_specs)
+
+    @property
+    def _encoder_descriptions(self):
+        # (name, in_features, num_slots). num_slots is None for scalar streams (no pooling).
+        get = lambda key: int(SIM_CONSTANTS.get(key, 0))
+        return [
+            ("ego", get("ego_features"), None),
+            ("cond", get("num_reward_coefs") + get("target_dim"), 0),
+            ("partner", get("partner_features"), get("obs_partner_slots")),
+            ("lane", get("road_features"), get("obs_lane_slots")),
+            ("boundary", get("road_features"), get("obs_boundary_slots")),
+            ("tc", get("traffic_control_features"), get("obs_traffic_control_slots")),
+        ]
+
+    def _create_encoder(self, in_features, hidden_size, num_layers, dropout):
+        layers = [_layer_init(nn.Linear(in_features, hidden_size))]
+        for _ in range(num_layers - 1):
+            layers += [
+                nn.LayerNorm(hidden_size),
+                self.activation_fn(),
+                nn.Dropout(dropout),
+                _layer_init(nn.Linear(hidden_size, hidden_size)),
+            ]
+        layers.append(self.activation_fn())
+        return nn.Sequential(*layers)
+
+    def _pool(self, flat_slots, num_slots, num_features, hidden_size, encoder_layer, valid_count):
+        slots = flat_slots.view(-1, num_slots, num_features)
+        valid_mask = self._slot_arange[:num_slots] < valid_count.unsqueeze(1)
+        if self.mask_padded:
+            encoded = slots.new_full((slots.shape[0], num_slots, hidden_size), torch.finfo(slots.dtype).min)
+            encoded[valid_mask] = encoder_layer(slots[valid_mask])
+        else:
+            encoded = encoder_layer(slots)
+            encoded = encoded.masked_fill(~valid_mask.unsqueeze(-1), torch.finfo(slots.dtype).min)
+        pooled = encoded.amax(dim=1)
+        return torch.where(valid_count.unsqueeze(1) == 0, pooled.new_zeros(pooled.shape), pooled)
+
+    def forward(self, obs, counts=None):
+        obs = obs.float()
+        obs_by_stream = dict(zip(self.obs_stream_names, torch.split(obs, self.obs_split_sizes, dim=1)))
+        if counts is None:
+            lane_count, boundary_count, partner_count, tc_count = obs_by_stream["counts"].long().unbind(dim=1)
+        else:
+            lane_count, boundary_count, partner_count, tc_count = counts
+        counts_by_stream = {
+            "lane": lane_count.clamp(0, self._slot_caps["lane"]),
+            "boundary": boundary_count.clamp(0, self._slot_caps["boundary"]),
+            "partner": partner_count.clamp(0, self._slot_caps["partner"]),
+            "tc": tc_count.clamp(0, self._slot_caps["tc"]),
+        }
+
+        features = []
+        for name, in_features, num_slots, hidden_size in self.encoder_specs:
+            if num_slots is None:
+                features.append(self.encoders[name](obs_by_stream[name]))
+            else:
+                features.append(
+                    self._pool(
+                        obs_by_stream[name],
+                        num_slots,
+                        in_features,
+                        hidden_size,
+                        self.encoders[name],
+                        counts_by_stream[name],
+                    )
+                )
+        return torch.cat(features, dim=1)
+
+
+class Policy(nn.Module):
+    """Encoder(s) -> Trunk(s) -> {actor_head, critic_head}.
+
+    Sharing axes: shared_encoder, shared_trunk. Heads are always separate.
+    (shared_encoder=False, shared_trunk=True) is rejected.
+    """
+
+    def __init__(self, vec, **policy_kwargs):
+        super().__init__()
+        self.shared_encoder = policy_kwargs["shared_encoder"]
+        self.shared_trunk = policy_kwargs["shared_trunk"]
+        assert self.shared_encoder or not self.shared_trunk, "shared_trunk requires shared_encoder"
+
+        self.encoder = VecEncoder(**policy_kwargs)
+        self.critic_encoder = self.encoder if self.shared_encoder else VecEncoder(**policy_kwargs)
+
+        trunk_type = policy_kwargs["trunk_type"]
+        trunk_hidden_size = policy_kwargs["trunk_hidden_size"]
+        trunk_num_layers = policy_kwargs["trunk_num_layers"]
+        trunk_activation = policy_kwargs["trunk_activation"]
+        trunk_in_size = self.encoder.out_size
+        self.trunk = Trunk(trunk_type, trunk_in_size, trunk_hidden_size, trunk_num_layers, trunk_activation)
+        self.critic_trunk = (
+            self.trunk
+            if self.shared_trunk
+            else Trunk(trunk_type, trunk_in_size, trunk_hidden_size, trunk_num_layers, trunk_activation)
+        )
+        self.actor_state_len = 0 if self.shared_trunk else _STATE_LEN[trunk_type]
+
+        action_sizes = tuple(int(size) for size in vec.act_sizes)
+        self.action_sizes = action_sizes
+        self.is_continuous = sum(action_sizes) == len(action_sizes)
+        actor_out_size = len(action_sizes) if self.is_continuous else sum(action_sizes)
+        self.actor_head = MLP(
+            trunk_hidden_size,
+            policy_kwargs["actor_hidden_size"],
+            actor_out_size,
+            num_layers=policy_kwargs["actor_num_layers"],
+            final_std=0.01,
+            activation=policy_kwargs["actor_activation"],
+        )
+        self.critic_head = MLP(
+            trunk_hidden_size,
+            policy_kwargs["critic_hidden_size"],
+            1,
+            num_layers=policy_kwargs["critic_num_layers"],
+            final_std=1.0,
+            activation=policy_kwargs["critic_activation"],
+        )
+        if self.is_continuous:
+            self.actor_logstd = nn.Parameter(torch.zeros(1, len(action_sizes)))
+
+    def initial_state(self, batch_size, device):
+        actor_state = self.trunk.initial_state(batch_size, device)
+        if self.shared_trunk:
+            return actor_state
+        critic_state = self.critic_trunk.initial_state(batch_size, device)
+        return tuple(actor_state) + tuple(critic_state)
+
+    def _heads(self, actor_hidden, critic_hidden):
+        if self.is_continuous:
+            action_mean = self.actor_head(actor_hidden)
+            logits = torch.distributions.Normal(action_mean, self.actor_logstd.expand_as(action_mean).exp())
+        else:
+            actor_logits = self.actor_head(actor_hidden)
+            logits = (
+                torch.split(actor_logits, self.action_sizes, dim=-1) if len(self.action_sizes) > 1 else actor_logits
+            )
+        return logits, self.critic_head(critic_hidden)
+
+    def forward_eval(self, obs, state):
+        actor_hidden = self.encoder(obs)
+        critic_hidden = actor_hidden if self.shared_encoder else self.critic_encoder(obs)
+        if self.shared_trunk:
+            actor_hidden, state = self.trunk.forward_eval(actor_hidden, state)
+            critic_hidden = actor_hidden
+        else:
+            actor_state = state[: self.actor_state_len]
+            critic_state = state[self.actor_state_len :]
+            actor_hidden, actor_state = self.trunk.forward_eval(actor_hidden, actor_state)
+            critic_hidden, critic_state = self.critic_trunk.forward_eval(critic_hidden, critic_state)
+            state = tuple(actor_state) + tuple(critic_state)
+        logits, value = self._heads(actor_hidden, critic_hidden)
+        return logits, value, state
+
+    def forward(self, obs):
+        batch_size, time_steps = obs.shape[:2]
+        flat_obs = obs.reshape(batch_size * time_steps, *obs.shape[2:])
+        actor_hidden = self.encoder(flat_obs)
+        critic_hidden = actor_hidden if self.shared_encoder else self.critic_encoder(flat_obs)
+        actor_hidden = self.trunk.forward_train(actor_hidden.reshape(batch_size, time_steps, -1))
+        critic_hidden = (
+            actor_hidden
+            if self.shared_trunk
+            else self.critic_trunk.forward_train(critic_hidden.reshape(batch_size, time_steps, -1))
+        )
+        logits, value = self._heads(
+            actor_hidden.reshape(batch_size * time_steps, -1),
+            critic_hidden.reshape(batch_size * time_steps, -1),
+        )
+        return logits, value.reshape(batch_size, time_steps)
 
 
 class NatureEncoder(nn.Module):
