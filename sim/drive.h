@@ -75,19 +75,22 @@
 #define COLLISION_DIST_SQ (15.0f * 15.0f)
 #define OBS_DIST_SQ (100.0f * 100.0f)
 
-// Action space
-#define NUM_ACCEL_BINS 7
-#define NUM_STEER_BINS 13
-
 // 2.5D Z estimation
 #define Z_BUFFER 4.0f
 #define Z_NUM_PT_AVG 30
 
-static const float ACCELERATION_VALUES[NUM_ACCEL_BINS]
-    = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
+// Dynamics Models
+#define CLASSIC 0
+#define JERK 1
+// Action Types
+#define DISCRETE 0
+#define CONTINUOUS 1
 
-static const float STEERING_VALUES[NUM_STEER_BINS]
-    = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
+static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+
+static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
+static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
 
 typedef struct {
     float z_dis;

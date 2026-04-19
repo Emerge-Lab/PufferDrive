@@ -644,7 +644,7 @@ EnvSpeedArgs* create_envspeed(int total_agents, int num_buffers, int num_threads
     args->num_threads = num_threads;
     args->horizon = horizon;
     args->obs_size = get_obs_size();
-    args->num_atns = get_num_atns();
+    args->num_atns = vec->num_atns;
     return args;
 }
 

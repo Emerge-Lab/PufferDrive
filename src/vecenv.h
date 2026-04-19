@@ -76,6 +76,8 @@ typedef struct StaticVec {
     int total_agents;
     int buffers;
     int agents_per_buffer;
+    int act_sizes[2];
+    int num_act_sizes;
     int* buffer_env_starts;
     int* buffer_env_counts;
     void* observations;
@@ -120,9 +122,6 @@ void static_vec_env_constants(StaticVec* vec, Dict* out);
 
 // Env info
 int get_obs_size(void);
-int get_num_atns(void);
-int* get_act_sizes(void);
-int get_num_act_sizes(void);
 const char* get_obs_dtype(void);
 size_t get_obs_elem_size(void);
 
@@ -162,6 +161,32 @@ const char dtype_symbol[] = STRINGIFY(OBS_TENSOR_T);
 #include <pthread.h>
 #include <stdbool.h>
 #include <time.h>
+
+static inline void static_vec_init_action_spec(StaticVec* vec, Dict* env_kwargs) {
+    int action_type = (int)dict_get(env_kwargs, "action_type")->value;
+    int dynamics_model = (int)dict_get(env_kwargs, "dynamics_model")->value;
+
+    if (action_type == CONTINUOUS) {
+        vec->num_atns = 2;
+        vec->num_act_sizes = 2;
+        vec->act_sizes[0] = 1;
+        vec->act_sizes[1] = 1;
+        return;
+    }
+
+    assert(action_type == DISCRETE);
+    vec->num_atns = 1;
+    vec->num_act_sizes = 1;
+    if (dynamics_model == CLASSIC) {
+        vec->act_sizes[0] = (int)(sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]))
+            * (int)(sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]));
+        return;
+    }
+
+    assert(dynamics_model == JERK);
+    vec->act_sizes[0] = (int)(sizeof(JERK_LONG) / sizeof(JERK_LONG[0]))
+        * (int)(sizeof(JERK_LAT) / sizeof(JERK_LAT[0]));
+}
 
 // Forward declare CUDA types and functions to avoid conflicts with raylib's float3
 typedef int cudaError_t;
@@ -254,9 +279,9 @@ static void* static_omp_threadmanager(void* arg) {
             net_callback(ctx, buf, t);
 
             cudaMemcpyAsync(
-                &vec->actions[agent_start * NUM_ATNS],
-                &vec->gpu_actions[agent_start * NUM_ATNS],
-                agents_per_buffer * NUM_ATNS * sizeof(float),
+                &vec->actions[(size_t)agent_start * vec->num_atns],
+                &vec->gpu_actions[(size_t)agent_start * vec->num_atns],
+                (size_t)agents_per_buffer * vec->num_atns * sizeof(float),
                 cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
             clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -375,7 +400,7 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
     vec->buffers = num_buffers;
     vec->agents_per_buffer = total_agents / num_buffers;
     vec->obs_size = OBS_SIZE;
-    vec->num_atns = NUM_ATNS;
+    static_vec_init_action_spec(vec, env_kwargs);
     vec->gpu = gpu;
 
     vec->buffer_env_starts = (int*)calloc(num_buffers, sizeof(int));
@@ -388,24 +413,25 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
     vec->size = num_envs;
 
     size_t obs_elem_size = obs_element_size();
+    size_t action_bytes = (size_t)total_agents * vec->num_atns * sizeof(float);
     if (gpu) {
         cudaHostAlloc((void**)&vec->observations, total_agents * OBS_SIZE * obs_elem_size, cudaHostAllocPortable);
-        cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->actions, action_bytes, cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
 
         cudaMalloc((void**)&vec->gpu_observations, total_agents * OBS_SIZE * obs_elem_size);
-        cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
+        cudaMalloc((void**)&vec->gpu_actions, action_bytes);
         cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
         cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
 
         cudaMemset(vec->gpu_observations, 0, total_agents * OBS_SIZE * obs_elem_size);
-        cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
+        cudaMemset(vec->gpu_actions, 0, action_bytes);
         cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
         cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
     } else {
         vec->observations = calloc(total_agents * OBS_SIZE, obs_elem_size);
-        vec->actions = (float*)calloc(total_agents * NUM_ATNS, sizeof(float));
+        vec->actions = (float*)calloc((size_t)total_agents * vec->num_atns, sizeof(float));
         vec->rewards = (float*)calloc(total_agents, sizeof(float));
         vec->terminals = (float*)calloc(total_agents, sizeof(float));
         // CPU mode: gpu pointers alias the same buffers (no copy needed)
@@ -430,7 +456,7 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
             Env* env = &envs[env_start + e];
             int slot = buf_start + buf_agent;
             env->observations = (void*)((char*)vec->observations + slot * OBS_SIZE * obs_elem_size);
-            env->actions = vec->actions + slot * NUM_ATNS;
+            env->actions = vec->actions + ((size_t)slot * vec->num_atns);
             env->rewards = vec->rewards + slot;
             env->terminals = vec->terminals + slot;
             buf_agent += env->num_agents;
@@ -602,10 +628,6 @@ void static_vec_render(StaticVec* vec, int env_id) {
 }
 
 int get_obs_size(void) { return OBS_SIZE; }
-int get_num_atns(void) { return NUM_ATNS; }
-static int _act_sizes[] = ACT_SIZES;
-int* get_act_sizes(void) { return _act_sizes; }
-int get_num_act_sizes(void) { return (int)(sizeof(_act_sizes) / sizeof(_act_sizes[0])); }
 const char* get_obs_dtype(void) { return dtype_symbol; }
 size_t get_obs_elem_size(void) { return obs_element_size(); }
 
@@ -622,7 +644,7 @@ static inline void _static_vec_env_step(StaticVec* vec) {
 void gpu_vec_step(StaticVec* vec) {
     assert(vec->buffers == 1);
     cudaMemcpy(vec->actions, vec->gpu_actions,
-        (size_t)vec->total_agents * NUM_ATNS * sizeof(float),
+        (size_t)vec->total_agents * vec->num_atns * sizeof(float),
         cudaMemcpyDeviceToHost);
     _static_vec_env_step(vec);
     cudaMemcpy(vec->gpu_observations, vec->observations,

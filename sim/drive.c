@@ -18,40 +18,42 @@ void demo() {
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
-    int logit_sizes[2] = {7, 13};
-    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 2);
+    int logit_sizes[1] = {action_dim_classic_discrete()};
+    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 1);
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
-        float (*actions)[2] = (float (*)[2]) env.actions;
+        float *actions = env.actions;
         forward_puffernet(net, env.observations, env.actions);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
-            actions[EGO_IDX][0] = 3;
-            actions[EGO_IDX][1] = 6;
+            int accel_idx = 3;
+            int steer_idx = 4;
             if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-                actions[EGO_IDX][0] += accel_delta;
-                if (actions[EGO_IDX][0] > 6) {
-                    actions[EGO_IDX][0] = 6;
+                accel_idx += accel_delta;
+                if (accel_idx > 6) {
+                    accel_idx = 6;
                 }
             }
             if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-                actions[EGO_IDX][0] -= accel_delta;
-                if (actions[EGO_IDX][0] < 0) {
-                    actions[EGO_IDX][0] = 0;
+                accel_idx -= accel_delta;
+                if (accel_idx < 0) {
+                    accel_idx = 0;
                 }
             }
             if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-                actions[EGO_IDX][1] += steer_delta;
-                if (actions[EGO_IDX][1] < 0) {
-                    actions[EGO_IDX][1] = 0;
+                steer_idx += steer_delta;
+                if (steer_idx < 0) {
+                    steer_idx = 0;
                 }
             }
             if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-                actions[EGO_IDX][1] -= steer_delta;
-                if (actions[EGO_IDX][1] > 12) {
-                    actions[EGO_IDX][1] = 12;
+                steer_idx -= steer_delta;
+                if (steer_idx > 8) {
+                    steer_idx = 8;
                 }
             }
+            actions[EGO_IDX]
+                = (float) (accel_idx * ((int) (sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]))) + steer_idx);
         }
         c_step(&env);
         c_render(&env);
@@ -75,8 +77,8 @@ void performance_test() {
     c_reset(&env);
 
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
-    int logit_sizes[2] = {7, 13};
-    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 2);
+    int logit_sizes[1] = {action_dim_classic_discrete()};
+    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 1);
 
     long start = time(NULL);
     int i = 0;

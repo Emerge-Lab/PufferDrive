@@ -228,7 +228,7 @@ StaticVec* create_environments(int num_buffers, int total_agents,
         .data = (decltype(env.obs.data))vec->gpu_observations,
         .shape = {total_agents, get_obs_size()},
     };
-    env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, get_num_atns()} };
+    env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, vec->num_atns} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };
     env.terminals = { .data = (float*)vec->gpu_terminals, .shape = {total_agents} };
     return vec;
@@ -1477,7 +1477,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Sanity check action space
     int num_action_heads = pufferl->env.actions.shape[1];
-    int* raw_act_sizes = get_act_sizes();  // CPU int32 pointer from env
+    int* raw_act_sizes = vec->act_sizes;
     int act_n = 0;
     int num_continuous = 0;
     int num_discrete = 0;
@@ -1600,7 +1600,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
     alloc_register(acts, &pufferl->rng_offset_puf);
 
-    pufferl->act_sizes_puf  = {.shape = {num_action_heads}};
+    pufferl->act_sizes_puf  = {.shape = {vec->num_act_sizes}};
     alloc_register(acts, &pufferl->act_sizes_puf);
 
     pufferl->losses_puf = {.shape = {NUM_LOSSES}};
@@ -1648,7 +1648,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     }
 
     // Post-create initialization
-    cudaMemcpy(pufferl->act_sizes_puf.data, raw_act_sizes, num_action_heads * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(pufferl->act_sizes_puf.data, raw_act_sizes, vec->num_act_sizes * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemset(pufferl->losses_puf.data, 0, NUM_LOSSES * sizeof(float));
     float one = 1.0f;
     cudaMemcpy(pufferl->ppo_bufs_puf.grad_loss.data, &one, sizeof(float), cudaMemcpyHostToDevice);

@@ -404,9 +404,7 @@ class Policy(nn.Module):
             logits = torch.distributions.Normal(action_mean, self.actor_logstd.expand_as(action_mean).exp())
         else:
             actor_logits = self.actor_head(actor_hidden)
-            logits = (
-                torch.split(actor_logits, self.action_sizes, dim=-1) if len(self.action_sizes) > 1 else actor_logits
-            )
+            logits = torch.split(actor_logits, self.action_sizes, dim=-1)
         return logits, self.critic_head(critic_hidden)
 
     def forward_eval(self, obs, state):

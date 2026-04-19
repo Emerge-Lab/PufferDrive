@@ -2,8 +2,6 @@
 
 #include <dirent.h>
 
-#define NUM_ATNS 2
-#define ACT_SIZES {7, 13}
 #define OBS_TENSOR_T FloatTensor
 
 #define MAP_BINARY_DIR "resources/drive/binaries"

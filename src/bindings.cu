@@ -289,12 +289,8 @@ std::unique_ptr<VecEnv> create_vec(py::dict args, int gpu) {
     }
     ve->total_agents  = total_agents;
     ve->obs_size      = get_obs_size();
-    ve->num_atns      = get_num_atns();
-    {
-        int* raw = get_act_sizes();
-        int  n   = get_num_act_sizes();
-        ve->act_sizes = std::vector<int>(raw, raw + n);
-    }
+    ve->num_atns      = ve->vec->num_atns;
+    ve->act_sizes = std::vector<int>(ve->vec->act_sizes, ve->vec->act_sizes + ve->vec->num_act_sizes);
     ve->obs_dtype     = std::string(get_obs_dtype());
     ve->obs_elem_size = get_obs_elem_size();
     return ve;
