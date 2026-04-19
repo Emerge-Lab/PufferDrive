@@ -269,26 +269,9 @@ void c_render(Drive *env) {
         (Vector3) {env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0},
         PUFF_CYAN);
 
-    for (int i = 0; i < env->num_total_agents; i++) {
-        bool is_active_agent = false;
-        bool is_log_agent = false;
-        int agent_index = -1;
-        for (int j = 0; j < env->active_agent_count; j++) {
-            if (env->active_agent_indices[j] == i) {
-                is_active_agent = true;
-                agent_index = j;
-                break;
-            }
-        }
-        for (int j = 0; j < env->log_agent_count; j++) {
-            if (env->log_agent_indices[j] == i) {
-                is_log_agent = true;
-                break;
-            }
-        }
-
-        if ((!is_active_agent && !is_log_agent) || env->agents[i].respawn_timestep != -1
-            || env->agents[i].sim_x == INVALID_POSITION) {
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        bool is_active_agent = i < env->num_agents;
+        if (env->agents[i].respawn_timestep != -1 || env->agents[i].sim_x == INVALID_POSITION) {
             continue;
         }
 
@@ -302,14 +285,14 @@ void c_render(Drive *env) {
 
         Model car_model = client->cars[5];
         if (is_active_agent) {
-            car_model = client->cars[client->car_assignments[i % MAX_CAR_ASSIGNMENTS]];
+            car_model = client->cars[client->car_assignments[env->agents[i].id % MAX_CAR_ASSIGNMENTS]];
         }
         if (is_active_agent && env->agents[i].collision_state > NO_COLLISION) {
             car_model = client->cars[0];
         }
 
-        if (agent_index == EGO_IDX && !env->agents[agent_index].reached_goal) {
-            draw_agent_obs(env, agent_index);
+        if (i == EGO_IDX && !env->agents[i].reached_goal) {
+            draw_agent_obs(env, i);
         }
 
         BoundingBox bounds = GetModelBoundingBox(car_model);
@@ -331,7 +314,7 @@ void c_render(Drive *env) {
             DrawLine3D(corners[j], corners[(j + 1) % 4], PURPLE);
         }
 
-        if (IsKeyDown(KEY_SPACE) && agent_index == EGO_IDX) {
+        if (IsKeyDown(KEY_SPACE) && i == EGO_IDX) {
             client->camera.position
                 = (Vector3) {position.x - 25.0f * cosf(heading), position.y - 25.0f * sinf(heading), position.z + 15};
             client->camera.target

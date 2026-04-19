@@ -65,7 +65,6 @@ int hyper_count = 25;
 char *hyper_key[25] = {
     "agent_steps",
     "uptime",
-    "env/perf",
     "env/score",
     "train/learning_rate",
     "train/ent_coef",
@@ -279,7 +278,7 @@ void draw_ticks(char x_ticks[][32], int x_n, char y_ticks[][32], int y_n, PlotAr
 
     float plot_width = width - args.left_margin - args.right_margin;
     float plot_height = height - args.top_margin - args.bottom_margin;
- 
+
     for (int i=0; i<x_n; i++) {
         char* label = x_ticks[i];
         float x_pos = args.left_margin + i*plot_width/(x_n - 1.0f);
@@ -372,7 +371,7 @@ void boxplot(Hyper* hyper, int x_scale, int i, int hyper_count, PlotArgs args, C
 
     float x_min = scale_val(x_scale, args.mmin[0]);
     float x_max = scale_val(x_scale, args.mmax[0]);
- 
+
     float dy = plot_height/((float)hyper_count);
 
     float* ary = hyper->ary;
@@ -450,7 +449,7 @@ void GuiDropdownFilter(int x, int y, char* options, int *selection, bool *dropdo
         *text2_val = atof(text2);
     }
 }
- 
+
 void apply_filter(bool* filter, Hyper* param, float min, float max) {
     for (int i=0; i<param->n; i++) {
         float val = param->ary[i];
@@ -630,7 +629,7 @@ float fast_atof(char **s) {
   *s = p;
   return sign * val;
 }
- 
+
 int main(void) {
     FILE *file = fopen("resources/constellation/experiments.json", "r");
     if (!file) {
@@ -905,7 +904,7 @@ int main(void) {
             apply_filter(filter, filter_param_1, fig_range1_min_val, fig_range1_max_val);
             Hyper* filter_param_2 = get_hyper(&data, env, hyper_key[fig_range2_idx]);
             apply_filter(filter, filter_param_2, fig_range2_min_val, fig_range2_max_val);
- 
+
             for (int j=0; j<x->n; j++) {
                 if (!filter[j]) {
                     continue;
@@ -968,7 +967,7 @@ int main(void) {
             apply_filter(filter, filter_param_1, fig_range1_min_val, fig_range1_max_val);
             Hyper* filter_param_2 = get_hyper(&data, env, hyper_key[fig_range2_idx]);
             apply_filter(filter, filter_param_2, fig_range2_min_val, fig_range2_max_val);
- 
+
             for (int j=0; j<x->n; j++) {
                 if (!filter[j]) {
                     continue;
@@ -1238,9 +1237,9 @@ int main(void) {
     UnloadRenderTexture(fig1);
     UnloadRenderTexture(fig1_overlay);
     UnloadRenderTexture(fig2);
-    UnloadRenderTexture(fig3);                                                                                                   
+    UnloadRenderTexture(fig3);
     UnloadRenderTexture(fig3_overlay);
-    UnloadRenderTexture(fig4);                                                                                                   
-    CloseWindow();  
+    UnloadRenderTexture(fig4);
+    CloseWindow();
     return 0;
 }

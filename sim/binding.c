@@ -121,7 +121,7 @@ Env *my_vec_init(
             c_close(&temp_env);
             continue;
         }
-        agents_per_map[m] = temp_env.active_agent_count;
+        agents_per_map[m] = temp_env.num_agents;
         c_close(&temp_env);
         if (agents_per_map[m] > 0) {
             valid_map_ids[num_valid_maps++] = m;
@@ -195,7 +195,7 @@ Env *my_vec_init(
         env->reward_collision_post_respawn = reward_collision_post_respawn;
         env->collision_behavior = collision_behavior;
         env->offroad_behavior = offroad_behavior;
-        env->num_max_active_agents = env_max_agents[i];
+        env->num_max_agents = env_max_agents[i];
         if (init(env) != 0) {
             printf("ERROR: Failed to initialize map %s\n", map_files[env_map_ids[i]]);
             for (int j = 0; j < i; j++) {
@@ -244,7 +244,7 @@ void my_init(Env *env, Dict *kwargs) {
         return;
     }
 
-    env->num_max_active_agents = num_max_active_agents;
+    env->num_max_agents = num_max_active_agents;
     env->map_name = strdup(map_files[map_id]);
     free_map_files(map_files, discovered_maps);
     if (init(env) != 0) {

@@ -33,7 +33,6 @@ METRICS = [
     "agent_steps",
     "uptime",
     "env/score",
-    "env/perf",
     "tsne1",
     "tsne2",
 ]
@@ -239,9 +238,9 @@ def compute_tsne(full_dataset=False):
             and (k == "train/max_grad_norm" or not k.endswith("_norm"))
         }
         all_data[env] = dat
-        print(f"Env {env} has {len(dat['env/perf'])} points")
+        print(f"Env {env} has {len(dat['env/score'])} points")
         for k, v in dat.items():
-            if "env/perf" in k or "score" in k:
+            if "score" in k:
                 print(f"{env}/{k}: min={min(v)}, max={max(v)}")
 
     for env in all_data:

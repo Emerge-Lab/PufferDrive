@@ -432,7 +432,7 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
             env->actions = vec->actions + slot * NUM_ATNS;
             env->rewards = vec->rewards + slot;
             env->terminals = vec->terminals + slot;
-            buf_agent += env->active_agent_count;
+            buf_agent += env->num_agents;
         }
     }
 

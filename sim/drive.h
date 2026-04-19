@@ -165,18 +165,13 @@ struct Drive {
     Agent *agents;
     RoadMapElement *road_elements;
     TrafficControlElement *traffic_elements;
-    int num_agents;       // Active + log agents
-    int num_total_agents; // Total agents in the scenario
+    int num_sim_agents;        // All valid agents: [active | moving_log | static_log]
+    int num_max_agents;        // Max agents to keep active in the simulation (0 for no limit)
+    int num_agents;            // Number of active agents in the simulation
+    int num_moving_log_agents; // Number of log agents that moves during the scenario
     int num_road_elements;
     int num_traffic_elements;
     int num_objects;
-    int num_max_active_agents;
-    int active_agent_count;
-    int *active_agent_indices;
-    int log_agent_count;
-    int *log_agent_indices;
-    int moving_log_agent_count;
-    int *moving_log_agent_indices;
     // Simulation state fields
     int timestep;
     int dynamics_model;
@@ -252,10 +247,6 @@ static void invalidate_agent(Agent *agent) {
     agent->sim_vx = 0.0f;
     agent->sim_vy = 0.0f;
     agent->sim_valid = 0;
-}
-
-static int get_agent_idx(Drive *env, Agent *agent) {
-    return (int) (agent - env->agents);
 }
 
 // ========================================
@@ -566,7 +557,7 @@ int load_map_binary(const char *filename, Drive *drive) {
     READ_OR_FAIL(&num_traffic, sizeof(int), 1);
     READ_OR_FAIL(&num_objects, sizeof(int), 1);
 
-    drive->num_total_agents = num_total_agents;
+    drive->num_sim_agents = num_total_agents;
     drive->num_road_elements = num_roads;
     drive->num_traffic_elements = num_traffic;
     drive->num_objects = num_objects;
@@ -583,11 +574,9 @@ int load_map_binary(const char *filename, Drive *drive) {
 
     for (int i = 0; i < num_total_agents; i++) {
         Agent *agent = &drive->agents[i];
-        int agent_id;
-
-        READ_OR_FAIL(&agent_id, sizeof(int), 1);
-        if (agent_id != i) {
-            printf("[ERROR] -> Agent id %d != idx %d. Binary must be reindexed (id == idx).\n", agent_id, i);
+        READ_OR_FAIL(&agent->id, sizeof(int), 1);
+        if (agent->id != i) {
+            printf("[ERROR] -> Agent id %d != idx %d. Binary must be reindexed (id == idx).\n", agent->id, i);
             fclose(file);
             return -1;
         }
@@ -926,24 +915,17 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
 }
 
 static int collision_check(Drive *env, Agent *agent) {
-    int agent_idx = get_agent_idx(env, agent);
     if (agent->sim_x == INVALID_POSITION || agent->removed) {
         return -1;
     }
 
     int car_collided_with_index = -1;
     // Linear over all actors; quick-check prunes at COLLISION_QUICK_CHECK_DIST.
-    for (int i = 0; i < env->num_agents; i++) {
-        int index = -1;
-        if (i < env->active_agent_count) {
-            index = env->active_agent_indices[i];
-        } else {
-            index = env->log_agent_indices[i - env->active_agent_count];
-        }
-        if (index == -1 || index == agent_idx) {
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        Agent *other_agent = &env->agents[i];
+        if (agent == other_agent) {
             continue;
         }
-        Agent *other_agent = &env->agents[index];
         if (other_agent->sim_x == INVALID_POSITION || other_agent->removed) {
             continue;
         }
@@ -954,7 +936,7 @@ static int collision_check(Drive *env, Agent *agent) {
             continue;
         }
         if (check_obb_collision(agent, other_agent)) {
-            car_collided_with_index = index;
+            car_collided_with_index = i;
             break;
         }
     }
@@ -963,8 +945,8 @@ static int collision_check(Drive *env, Agent *agent) {
 }
 
 static void add_log(Drive *env) {
-    for (int i = 0; i < env->active_agent_count; i++) {
-        Agent *e = &env->agents[env->active_agent_indices[i]];
+    for (int i = 0; i < env->num_agents; i++) {
+        Agent *e = &env->agents[i];
         if (e->reached_goal_this_episode) {
             env->log.completion_rate += 1.0f;
         }
@@ -989,10 +971,7 @@ static void add_log(Drive *env) {
 // ========================================
 
 static void set_start_position(Drive *env) {
-    for (int i = 0; i < env->num_total_agents; i++) {
-        if (env->agents[i].log_valid[0] != 1 || env->agents[i].type > CYCLIST || env->agents[i].type == UNKNOWN) {
-            continue;
-        }
+    for (int i = 0; i < env->num_sim_agents; i++) {
         Agent *agent = &env->agents[i];
         agent->sim_x = agent->log_trajectory_x[0];
         agent->sim_y = agent->log_trajectory_y[0];
@@ -1020,47 +999,82 @@ static void set_start_position(Drive *env) {
     }
 }
 
-void set_active_agents(Drive *env) {
-    env->active_agent_count = 0;
-    env->log_agent_count = 0;
-    env->moving_log_agent_count = 0;
-    env->num_agents = 0;
-
-    int *active_buf = (int *) malloc(env->num_total_agents * sizeof(int));
-    int *log_buf = (int *) malloc(env->num_total_agents * sizeof(int));
-    int *moving_buf = (int *) malloc(env->num_total_agents * sizeof(int));
-
-    int max_active = env->num_max_active_agents == 0 ? env->num_total_agents : env->num_max_active_agents;
-
-    for (int i = 0; i < env->num_total_agents; i++) {
-        Agent *agent = &env->agents[i];
-        if (agent->log_valid[0] != 1 || agent->type > CYCLIST || agent->type == UNKNOWN) {
-            continue;
-        }
-        env->num_agents++;
-
-        if (agent->control_state == CONTROL_STATE_ACTIVE && env->active_agent_count < max_active) {
-            active_buf[env->active_agent_count++] = i;
-        } else {
-            log_buf[env->log_agent_count++] = i;
-            if (agent->control_state == CONTROL_STATE_MOVING) {
-                moving_buf[env->moving_log_agent_count++] = i;
-            }
-        }
-    }
-
-    env->active_agent_indices = (int *) malloc(env->active_agent_count * sizeof(int));
-    env->log_agent_indices = (int *) malloc(env->log_agent_count * sizeof(int));
-    env->moving_log_agent_indices = (int *) malloc(env->moving_log_agent_count * sizeof(int));
-    memcpy(env->active_agent_indices, active_buf, env->active_agent_count * sizeof(int));
-    memcpy(env->log_agent_indices, log_buf, env->log_agent_count * sizeof(int));
-    memcpy(env->moving_log_agent_indices, moving_buf, env->moving_log_agent_count * sizeof(int));
-    free(active_buf);
-    free(log_buf);
-    free(moving_buf);
+static bool is_valid_agent(const Agent *agent) {
+    return agent->log_valid[0] == 1 && agent->type <= CYCLIST && agent->type != UNKNOWN;
 }
 
-static void move_expert(Drive *env, float *actions, int agent_idx) {
+void compact_agents(Drive *env) {
+    env->num_agents = 0;
+    env->num_moving_log_agents = 0;
+    int num_valid_agents = 0;
+
+    if (env->num_sim_agents == 0) {
+        free(env->agents);
+        env->agents = NULL;
+        return;
+    }
+
+    Agent *raw_agents = env->agents;
+    Agent *compacted_agents = (Agent *) calloc(env->num_sim_agents, sizeof(Agent));
+    int *kept = (int *) calloc(env->num_sim_agents, sizeof(int));
+    int max_active = env->num_max_agents == 0 ? env->num_sim_agents : env->num_max_agents;
+
+    // First pass: collect active agents up to the max_active limit
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        Agent *agent = &raw_agents[i];
+        if (!is_valid_agent(agent)) {
+            continue;
+        }
+        if (agent->control_state != CONTROL_STATE_ACTIVE || env->num_agents >= max_active) {
+            continue;
+        }
+        compacted_agents[num_valid_agents++] = *agent;
+        kept[i] = 1;
+        env->num_agents++;
+    }
+
+    // Second pass: collect moving-log agents
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        Agent *agent = &raw_agents[i];
+        if (!is_valid_agent(agent) || kept[i] || agent->control_state != CONTROL_STATE_MOVING) {
+            continue;
+        }
+        compacted_agents[num_valid_agents++] = *agent;
+        kept[i] = 1;
+        env->num_moving_log_agents++;
+    }
+
+    // Third pass: collect remaining valid log agents
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        Agent *agent = &raw_agents[i];
+        if (!is_valid_agent(agent) || kept[i]) {
+            continue;
+        }
+        compacted_agents[num_valid_agents++] = *agent;
+        kept[i] = 1;
+    }
+
+    for (int i = 0; i < env->num_sim_agents; i++) {
+        if (kept[i]) {
+            continue;
+        }
+        free_agent(&raw_agents[i]);
+    }
+
+    free(kept);
+    free(raw_agents);
+
+    if (num_valid_agents == 0) {
+        free(compacted_agents);
+        env->agents = NULL;
+        return;
+    }
+
+    env->agents = (Agent *) realloc(compacted_agents, num_valid_agents * sizeof(Agent));
+    env->num_sim_agents = num_valid_agents;
+}
+
+static void move_expert(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     int t = env->timestep;
     if (t < 0 || t >= agent->trajectory_length || agent->log_valid[t] == 0) {
@@ -1078,27 +1092,26 @@ static void move_expert(Drive *env, float *actions, int agent_idx) {
 
 static void remove_bad_trajectories(Drive *env) {
     set_start_position(env);
-    int collided_agents[env->active_agent_count];
-    int collided_with_indices[env->active_agent_count];
-    memset(collided_agents, 0, env->active_agent_count * sizeof(int));
-    for (int i = 0; i < env->active_agent_count; ++i) {
+    int collided_agents[env->num_agents];
+    int collided_with_indices[env->num_agents];
+    memset(collided_agents, 0, env->num_agents * sizeof(int));
+    for (int i = 0; i < env->num_agents; ++i) {
         collided_with_indices[i] = -1;
     }
 
     for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            move_expert(env, env->actions, env->active_agent_indices[i]);
+        for (int i = 0; i < env->num_agents; i++) {
+            move_expert(env, i);
         }
-        for (int i = 0; i < env->moving_log_agent_count; i++) {
-            int expert_idx = env->moving_log_agent_indices[i];
+        for (int i = 0; i < env->num_moving_log_agents; i++) {
+            int expert_idx = env->num_agents + i;
             if (env->agents[expert_idx].sim_x == INVALID_POSITION) {
                 continue;
             }
-            move_expert(env, env->actions, expert_idx);
+            move_expert(env, expert_idx);
         }
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            Agent *agent = &env->agents[agent_idx];
+        for (int i = 0; i < env->num_agents; i++) {
+            Agent *agent = &env->agents[i];
             int collided_with_index = collision_check(env, agent);
             if ((collided_with_index >= 0) && collided_agents[i] == 0) {
                 collided_agents[i] = 1;
@@ -1108,18 +1121,14 @@ static void remove_bad_trajectories(Drive *env) {
         env->timestep++;
     }
 
-    for (int i = 0; i < env->active_agent_count; i++) {
-        if (collided_with_indices[i] == -1) {
+    for (int i = 0; i < env->num_agents; i++) {
+        int collided_with_index = collided_with_indices[i];
+        // Layout after compact_agents is [active | log]; only invalidate log agents.
+        if (collided_with_index < env->num_agents || collided_with_index == -1) {
             continue;
         }
-        for (int j = 0; j < env->log_agent_count; j++) {
-            int static_idx = env->log_agent_indices[j];
-            if (static_idx != collided_with_indices[i]) {
-                continue;
-            }
-            env->agents[static_idx].log_trajectory_x[0] = INVALID_POSITION;
-            env->agents[static_idx].log_trajectory_y[0] = INVALID_POSITION;
-        }
+        env->agents[collided_with_index].log_trajectory_x[0] = INVALID_POSITION;
+        env->agents[collided_with_index].log_trajectory_y[0] = INVALID_POSITION;
     }
     env->timestep = 0;
 }
@@ -1134,15 +1143,15 @@ int init(Drive *env) {
     env->grid_map->vision_range = VISION_RANGE;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
-    set_active_agents(env);
+    compact_agents(env);
     remove_bad_trajectories(env);
     set_start_position(env);
-    env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
+    env->logs = (Log *) calloc(env->num_agents, sizeof(Log));
     return 0;
 }
 
 void free_env(Drive *env) {
-    for (int i = 0; i < env->num_total_agents; i++) {
+    for (int i = 0; i < env->num_sim_agents; i++) {
         free_agent(&env->agents[i]);
     }
     for (int i = 0; i < env->num_road_elements; i++) {
@@ -1154,9 +1163,6 @@ void free_env(Drive *env) {
     free(env->agents);
     free(env->road_elements);
     free(env->traffic_elements);
-    free(env->active_agent_indices);
-    free(env->log_agent_indices);
-    free(env->moving_log_agent_indices);
     free(env->logs);
     free(env->neighbor_offsets);
     if (env->grid_map) {
@@ -1184,10 +1190,10 @@ int allocate(Drive *env) {
     if (init(env) != 0) {
         return -1;
     }
-    env->observations = (float *) calloc(env->active_agent_count * OBS_SIZE, sizeof(float));
-    env->actions = (float *) calloc(env->active_agent_count * 2, sizeof(float));
-    env->rewards = (float *) calloc(env->active_agent_count, sizeof(float));
-    env->terminals = (float *) calloc(env->active_agent_count, sizeof(float));
+    env->observations = (float *) calloc(env->num_agents * OBS_SIZE, sizeof(float));
+    env->actions = (float *) calloc(env->num_agents * 2, sizeof(float));
+    env->rewards = (float *) calloc(env->num_agents, sizeof(float));
+    env->terminals = (float *) calloc(env->num_agents, sizeof(float));
     return 0;
 }
 
@@ -1451,8 +1457,7 @@ static void compute_metrics(Drive *env, Agent *agent) {
 }
 
 static void compute_rewards(Drive *env, int i) {
-    int agent_idx = env->active_agent_indices[i];
-    Agent *agent = &env->agents[agent_idx];
+    Agent *agent = &env->agents[i];
 
     // Collision reward
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
@@ -1469,31 +1474,31 @@ static void compute_rewards(Drive *env, int i) {
     }
 
     if (agent->metrics_array[COLLISION_IDX] + agent->metrics_array[OFFROAD_IDX] > 0.0f) {
-        if (!env->agents[agent_idx].reached_goal_this_episode) {
-            env->agents[agent_idx].collided_before_goal = 1;
+        if (!agent->reached_goal_this_episode) {
+            agent->collided_before_goal = 1;
         }
     }
 
     // Goal reward
     if (agent->metrics_array[REACH_GOAL_IDX] > 0.0f) {
-        if (env->agents[agent_idx].respawn_timestep != -1) {
+        if (agent->respawn_timestep != -1) {
             env->rewards[i] += env->reward_goal_post_respawn;
             env->logs[i].episode_return += env->reward_goal_post_respawn;
         } else {
             env->rewards[i] += 1.0f;
             env->logs[i].episode_return += 1.0f;
         }
-        env->agents[agent_idx].reached_goal = 1;
-        env->agents[agent_idx].reached_goal_this_episode = 1;
+        agent->reached_goal = 1;
+        agent->reached_goal_this_episode = 1;
     }
 }
 
 void compute_observations(Drive *env) {
-    memset(env->observations, 0, OBS_SIZE * env->active_agent_count * sizeof(float));
+    memset(env->observations, 0, OBS_SIZE * env->num_agents * sizeof(float));
     float (*observations)[OBS_SIZE] = (float (*)[OBS_SIZE]) env->observations;
-    for (int i = 0; i < env->active_agent_count; i++) {
+    for (int i = 0; i < env->num_agents; i++) {
         float *obs = &observations[i][0];
-        Agent *ego = &env->agents[env->active_agent_indices[i]];
+        Agent *ego = &env->agents[i];
         if (ego->type > CYCLIST) {
             break;
         }
@@ -1524,24 +1529,13 @@ void compute_observations(Drive *env) {
         int obs_idx = EGO_FEATURES;
         int max_partner_obs = MAX_AGENTS_OBSERVATIONS - 1;
         int cars_seen = 0;
-        for (int j = 0; j < env->num_agents && cars_seen < max_partner_obs; j++) {
-            int index = -1;
-            if (j < env->active_agent_count) {
-                index = env->active_agent_indices[j];
-            } else if (j < env->num_agents) {
-                index = env->log_agent_indices[j - env->active_agent_count];
-            }
-            if (index == -1) {
-                continue;
-            }
-            if (index == env->active_agent_indices[i]) {
+        int partner_scan_end = (ego->respawn_timestep != -1) ? 0 : env->num_sim_agents;
+        for (int j = 0; j < partner_scan_end && cars_seen < max_partner_obs; j++) {
+            if (j == i) {
                 continue;
             }
 
-            Agent *other = &env->agents[index];
-            if (ego->respawn_timestep != -1) {
-                continue;
-            }
+            Agent *other = &env->agents[j];
             if (other->respawn_timestep != -1) {
                 continue;
             }
@@ -1618,7 +1612,7 @@ void compute_observations(Drive *env) {
     }
 }
 
-static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
+static void move_dynamics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->removed) {
@@ -1635,8 +1629,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
     if (env->dynamics_model == CLASSIC) {
         float (*action_array)[2] = (float (*)[2]) env->actions;
-        int acceleration_index = action_array[action_idx][0];
-        int steering_index = action_array[action_idx][1];
+        int acceleration_index = action_array[agent_idx][0];
+        int steering_index = action_array[agent_idx][1];
         float acceleration = ACCELERATION_VALUES[acceleration_index];
         float steering = STEERING_VALUES[steering_index];
 
@@ -1672,10 +1666,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 void c_reset(Drive *env) {
     env->timestep = 0;
     set_start_position(env);
-    for (int i = 0; i < env->active_agent_count; i++) {
+    for (int i = 0; i < env->num_agents; i++) {
         env->logs[i] = (Log) {0};
-        int agent_idx = env->active_agent_indices[i];
-        Agent *agent = &env->agents[agent_idx];
+        Agent *agent = &env->agents[i];
         reset_agent_state(agent);
         compute_metrics(env, agent);
     }
@@ -1683,8 +1676,8 @@ void c_reset(Drive *env) {
 }
 
 void c_step(Drive *env) {
-    memset(env->rewards, 0, env->active_agent_count * sizeof(float));
-    memset(env->terminals, 0, env->active_agent_count * sizeof(float));
+    memset(env->rewards, 0, env->num_agents * sizeof(float));
+    memset(env->terminals, 0, env->num_agents * sizeof(float));
     env->timestep++;
 
     if (env->timestep == TRAJECTORY_LENGTH) {
@@ -1693,20 +1686,18 @@ void c_step(Drive *env) {
         return;
     }
 
-    for (int i = 0; i < env->moving_log_agent_count; i++) {
-        move_expert(env, env->actions, env->moving_log_agent_indices[i]);
+    for (int i = 0; i < env->num_moving_log_agents; i++) {
+        move_expert(env, env->num_agents + i);
     }
-    for (int i = 0; i < env->active_agent_count; i++) {
+    for (int i = 0; i < env->num_agents; i++) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
-        int agent_idx = env->active_agent_indices[i];
-        env->agents[agent_idx].collision_state = NO_COLLISION;
-        move_dynamics(env, i, agent_idx);
+        env->agents[i].collision_state = NO_COLLISION;
+        move_dynamics(env, i);
     }
 
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *agent = &env->agents[agent_idx];
+    for (int i = 0; i < env->num_agents; i++) {
+        Agent *agent = &env->agents[i];
 
         if (agent->stopped || agent->removed) {
             env->terminals[i] = 1;
@@ -1720,7 +1711,7 @@ void c_step(Drive *env) {
             env->terminals[i] = 1;
         }
         if (agent->reached_goal) {
-            respawn_agent(env, agent_idx);
+            respawn_agent(env, i);
         }
     }
 

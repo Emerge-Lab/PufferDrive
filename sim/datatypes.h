@@ -120,6 +120,7 @@ static inline int unnormalize_road_type(int norm_type) {
 #define LANE_ANGLE_IDX 4
 
 struct Agent {
+    int id;
     int type;
 
     // Log trajectory

@@ -19,7 +19,7 @@ void demo() {
     c_render(&env);
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
     int logit_sizes[2] = {7, 13};
-    PufferNet *net = make_puffernet(weights, env.active_agent_count, OBS_SIZE, 256, 4, logit_sizes, 2);
+    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 2);
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
@@ -76,7 +76,7 @@ void performance_test() {
 
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
     int logit_sizes[2] = {7, 13};
-    PufferNet *net = make_puffernet(weights, env.active_agent_count, OBS_SIZE, 256, 4, logit_sizes, 2);
+    PufferNet *net = make_puffernet(weights, env.num_agents, OBS_SIZE, 256, 4, logit_sizes, 2);
 
     long start = time(NULL);
     int i = 0;
@@ -86,7 +86,7 @@ void performance_test() {
         i++;
     }
     long end = time(NULL);
-    printf("SPS: %ld\n", (long) (i * env.active_agent_count) / (end - start));
+    printf("SPS: %ld\n", (long) (i * env.num_agents) / (end - start));
     free_allocated(&env);
     free_puffernet(net);
     free(weights);
