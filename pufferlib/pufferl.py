@@ -435,7 +435,9 @@ class PuffeRL:
                     num_agents=num_agents_render,
                     num_scenarios=self.config["eval"].get("multi_scenario_num_scenarios", 4),
                     map_dir=render_map_dir,
-                    num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                    num_carla_maps=self.config["env"].get("num_maps", 8),
+                    min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
+                    max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
                 )
                 render_args = load_eval_multi_scenarios_config(
                     env_name=self.config["env"],
@@ -535,7 +537,9 @@ class PuffeRL:
                 num_agents=num_agents_eval,
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=map_dir,
-                num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                num_carla_maps=self.config["env"].get("num_maps", 8),
+                min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
+                max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
             )
 
             # Build eval args by applying overrides to training config
@@ -593,7 +597,9 @@ class PuffeRL:
                 num_agents=num_agents_render,
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=render_map_dir,
-                num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                num_carla_maps=self.config["env"].get("num_maps", 8),
+                min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
+                max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
             )
 
             render_args = load_eval_multi_scenarios_config(
@@ -1892,13 +1898,23 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8):
+def build_eval_overrides(
+    simulation_mode,
+    num_agents,
+    num_scenarios,
+    map_dir=None,
+    num_carla_maps=8,
+    min_agents_per_env=50,
+    max_agents_per_env=50,
+):
     """Build evaluation overrides for a given simulation mode.
 
     Args:
         simulation_mode: "gigaflow" or "replay"
         num_agents: agent slot budget for evaluation
         map_dir: replay dataset directory, required for replay mode
+        min_agents_per_env: minimum agents per env (gigaflow only)
+        max_agents_per_env: maximum agents per env (gigaflow only)
     """
     # Common reward coefficients (same for both modes)
     common_env = {
@@ -1931,8 +1947,8 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             "env": {
                 **common_env,
                 "simulation_mode": "gigaflow",
-                "min_agents_per_env": 50,
-                "max_agents_per_env": 50,
+                "min_agents_per_env": min_agents_per_env,
+                "max_agents_per_env": max_agents_per_env,
                 "resample_frequency": 3000,
                 "scenario_length": 3000,
                 # Point at the py123d-converted CARLA towns added to this branch.
@@ -2131,6 +2147,8 @@ def eval_multi_scenarios(
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            min_agents_per_env=tmp_args["eval"].get("min_agents_per_env", 50),
+            max_agents_per_env=tmp_args["eval"].get("max_agents_per_env", 50),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 
@@ -2296,6 +2314,8 @@ def eval_multi_scenarios_render(
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            min_agents_per_env=tmp_args["eval"].get("min_agents_per_env", 50),
+            max_agents_per_env=tmp_args["eval"].get("max_agents_per_env", 50),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
 

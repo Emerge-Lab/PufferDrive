@@ -59,7 +59,7 @@ static void release_map_cache_internal(void) {
     reset_cache_globals();
 }
 
-static PyObject *release_map_cache_py(PyObject *self, PyObject *args) {
+static PyObject *release_map_cache_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
     release_map_cache_internal();
     Py_RETURN_NONE;
 }
