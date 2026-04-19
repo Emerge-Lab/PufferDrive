@@ -4848,8 +4848,11 @@ void c_step(Drive *env) {
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
-        env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
+        Agent *agent = &env->agents[agent_idx];
+        if (!(agent->stopped || agent->removed)) {
+            env->logs[i].episode_length += 1;
+        }
         move_dynamics(env, i, agent_idx);
         // move_expert(env, env->actions, agent_idx);
     }
