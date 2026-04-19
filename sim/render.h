@@ -138,19 +138,28 @@ void draw_agent_obs(Drive *env, int agent_index) {
     float goal_y = agent_obs[1] / OBS_GOAL_SCALE;
     DrawSphere((Vector3) {goal_x, goal_y, 1}, 0.5f, GREEN);
 
-    int obs_idx = EGO_FEATURES;
-    for (int j = 0; j < MAX_AGENTS_OBSERVATIONS - 1; j++) {
-        if (agent_obs[obs_idx] == 0 || agent_obs[obs_idx + 1] == 0) {
-            obs_idx += PARTNER_FEATURES;
-            continue;
-        }
+    int counts_idx = OBS_SIZE - OBS_COUNT_FEATURES;
+    int lane_count = (int) agent_obs[counts_idx];
+    int boundary_count = (int) agent_obs[counts_idx + 1];
+    int partner_count = (int) agent_obs[counts_idx + 2];
+    if (partner_count > OBS_PARTNER_SLOTS) {
+        partner_count = OBS_PARTNER_SLOTS;
+    }
+    if (lane_count > OBS_LANE_SLOTS) {
+        lane_count = OBS_LANE_SLOTS;
+    }
+    if (boundary_count > OBS_BOUNDARY_SLOTS) {
+        boundary_count = OBS_BOUNDARY_SLOTS;
+    }
 
+    int obs_idx = EGO_FEATURES;
+    for (int j = 0; j < partner_count; j++) {
         float x = agent_obs[obs_idx] / OBS_POSITION_SCALE;
         float y = agent_obs[obs_idx + 1] / OBS_POSITION_SCALE;
         DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x, y, 1}, ORANGE);
 
-        float theta_x = agent_obs[obs_idx + 4];
-        float theta_y = agent_obs[obs_idx + 5];
+        float theta_x = agent_obs[obs_idx + 5];
+        float theta_y = agent_obs[obs_idx + 6];
         float angle = atan2f(theta_y, theta_x);
         float arrow_length = 7.5f;
         float ax = x + arrow_length * cosf(angle);
@@ -178,26 +187,34 @@ void draw_agent_obs(Drive *env, int agent_index) {
         obs_idx += PARTNER_FEATURES;
     }
 
-    int map_start_idx = EGO_FEATURES + PARTNER_FEATURES * (MAX_AGENTS_OBSERVATIONS - 1);
-    for (int k = 0; k < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {
-        int idx = map_start_idx + k * ROAD_FEATURES;
-        if (agent_obs[idx] == 0 && agent_obs[idx + 1] == 0) {
-            continue;
-        }
-
-        int entity_type = (int) agent_obs[idx + 6];
-        if (entity_type == NORMALIZED_ROAD_NONE) {
-            continue;
-        }
-
+    int lane_start_idx = EGO_FEATURES + PARTNER_FEATURES * OBS_PARTNER_SLOTS;
+    for (int k = 0; k < lane_count; k++) {
+        int idx = lane_start_idx + k * ROAD_FEATURES;
         float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
         float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
         float rel_angle = atan2f(agent_obs[idx + 5], agent_obs[idx + 4]);
-        float seg_len = agent_obs[idx + 2] * MAX_ROAD_SEGMENT_LENGTH;
-        float x_start = x_mid - seg_len * cosf(rel_angle);
-        float y_start = y_mid - seg_len * sinf(rel_angle);
-        float x_end = x_mid + seg_len * cosf(rel_angle);
-        float y_end = y_mid + seg_len * sinf(rel_angle);
+        float half_len = 0.5f * agent_obs[idx + 3] * MAX_ROAD_SEGMENT_LENGTH;
+        float x_start = x_mid - half_len * cosf(rel_angle);
+        float y_start = y_mid - half_len * sinf(rel_angle);
+        float x_end = x_mid + half_len * cosf(rel_angle);
+        float y_end = y_mid + half_len * sinf(rel_angle);
+
+        DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x_mid, y_mid, 1}, PUFF_CYAN);
+        DrawCube((Vector3) {x_mid, y_mid, 1}, 0.5f, 0.5f, 0.5f, PUFF_CYAN);
+        DrawLine3D((Vector3) {x_start, y_start, 1}, (Vector3) {x_end, y_end, 1}, BLUE);
+    }
+
+    int boundary_start_idx = lane_start_idx + OBS_LANE_SLOTS * ROAD_FEATURES;
+    for (int k = 0; k < boundary_count; k++) {
+        int idx = boundary_start_idx + k * ROAD_FEATURES;
+        float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
+        float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
+        float rel_angle = atan2f(agent_obs[idx + 5], agent_obs[idx + 4]);
+        float half_len = 0.5f * agent_obs[idx + 3] * MAX_ROAD_SEGMENT_LENGTH;
+        float x_start = x_mid - half_len * cosf(rel_angle);
+        float y_start = y_mid - half_len * sinf(rel_angle);
+        float x_end = x_mid + half_len * cosf(rel_angle);
+        float y_end = y_mid + half_len * sinf(rel_angle);
 
         DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x_mid, y_mid, 1}, PUFF_CYAN);
         DrawCube((Vector3) {x_mid, y_mid, 1}, 0.5f, 0.5f, 0.5f, PUFF_CYAN);
