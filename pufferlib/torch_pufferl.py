@@ -226,7 +226,7 @@ class PuffeRL:
                 self.values[t] = value.flatten()
 
             prof.mark(2)
-            actions_flat = (action.T if action.dim() > 1 else action.unsqueeze(-1)).to(dtype=torch.float32).contiguous()
+            actions_flat = (action if action.dim() > 1 else action.unsqueeze(-1)).to(dtype=torch.float32).contiguous()
             if self.gpu:
                 actions_flat = actions_flat.cuda()
                 self._vec.gpu_step(actions_flat.data_ptr())
