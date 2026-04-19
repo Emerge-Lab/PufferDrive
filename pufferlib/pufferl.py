@@ -1065,8 +1065,9 @@ class PuffeRL:
 
         s = Table(box=None, expand=True)
         remaining = f"{b2}A hair past a freckle{c2}"
+        total_timesteps = config.get("global_total_timesteps", config["total_timesteps"])
         if sps != 0:
-            remaining = duration((config["total_timesteps"] - agent_steps) / sps, b2, c2)
+            remaining = duration((total_timesteps - agent_steps) / sps, b2, c2)
 
         s.add_column(f"{c1}Summary", justify="left", vertical="top", width=10)
         s.add_column(f"{c1}Value", justify="right", vertical="top", width=14)
@@ -1334,6 +1335,26 @@ class NoLogger:
         pass
 
 
+def _is_nonzero_distributed_rank():
+    return torch.distributed.is_initialized() and torch.distributed.get_rank() != 0
+
+
+def _get_shared_wandb_run_id():
+    run_id = None
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            import wandb
+
+            run_id = wandb.util.generate_id()
+        shared = [run_id]
+        torch.distributed.broadcast_object_list(shared, src=0)
+        return shared[0]
+
+    import wandb
+
+    return wandb.util.generate_id()
+
+
 class NeptuneLogger:
     def __init__(self, args, load_id=None, mode="async"):
         import neptune as nept
@@ -1475,6 +1496,9 @@ def _save_experiment_config(args, path):
     import yaml
     import json
 
+    if _is_nonzero_distributed_rank():
+        return
+
     experiment_dir = path
     os.makedirs(experiment_dir, exist_ok=True)
 
@@ -1573,7 +1597,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if args["neptune"]:
         logger = NeptuneLogger(args)
     elif args["wandb"]:
-        logger = WandbLogger(args)
+        run_id = _get_shared_wandb_run_id()
+        if _is_nonzero_distributed_rank():
+            logger = NoLogger(args, run_id=run_id)
+        else:
+            logger = WandbLogger(args, load_id=run_id)
     elif args["tb"]:
         date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
         experiment_dir = os.path.join(args["train"]["data_dir"], rf"{env_name}_" + date_time)
@@ -1588,8 +1616,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
 
-    # Sweep needs data for early stopped runs, so send data when steps > 100M
-    logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
+    # Sweep needs data for early stopped runs, so send data when steps > 100M.
+    # When using DDP, logs report globally aggregated agent_steps.
+    logging_total_timesteps = train_config.get("global_total_timesteps", train_config["total_timesteps"])
+    logging_threshold = min(0.20 * logging_total_timesteps, 100_000_000)
     all_logs = []
 
     while pufferl.global_step < train_config["total_timesteps"]:
@@ -1624,7 +1654,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                         {"environment/early_stop_threshold": logs["early_stop_threshold"]}, logs["agent_steps"]
                     )
 
-            if pufferl.global_step > logging_threshold:
+            if logs["agent_steps"] > logging_threshold:
                 all_logs.append(logs)
 
             if should_stop_early:
@@ -2918,7 +2948,9 @@ def load_policy(args, vecenv, env_name=""):
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
-        state_dict = torch.load(path, map_location=device)
+        # Load checkpoints on CPU first so torchrun ranks do not depend on the
+        # source CUDA device ids embedded in the serialized tensors.
+        state_dict = torch.load(path, map_location="cpu")
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         policy.load_state_dict(state_dict)
 
@@ -2927,7 +2959,9 @@ def load_policy(args, vecenv, env_name=""):
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
+        # Load checkpoints on CPU first so torchrun ranks do not depend on the
+        # source CUDA device ids embedded in the serialized tensors.
+        state_dict = torch.load(load_path, map_location="cpu")
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         policy.load_state_dict(state_dict)
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
@@ -3053,13 +3087,15 @@ def load_config(env_name, config_dir=None):
         prev[subkey] = value
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
+    args["train"]["global_total_timesteps"] = args["train"]["total_timesteps"]
 
-    # Use World size to divide Num_Agents / minibatch size in DDP
+    # Under DDP, keep the per-rank batch geometry unchanged so launching on
+    # N GPUs gives an N-times larger effective batch. Only divide the local
+    # training horizon so the globally aggregated agent_steps still reach the
+    # user-requested total.
     if "LOCAL_RANK" in os.environ:
         world_size = int(os.environ.get("WORLD_SIZE", 1))
-        args["env"]["num_agents"] = args["env"]["num_agents"] // world_size
-        args["train"]["minibatch_size"] = args["train"]["minibatch_size"] // world_size
-        args["train"]["max_minibatch_size"] = args["train"]["max_minibatch_size"] // world_size
+        args["train"]["world_size"] = world_size
         args["train"]["total_timesteps"] = args["train"]["total_timesteps"] // world_size
 
     return args
