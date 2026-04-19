@@ -32,8 +32,14 @@ def _load_simulated_trajectories(simulated_trajectory_file):
     with open(simulated_trajectory_file, "rb") as f:
         simulated = pickle.load(f)
 
+    for key in ("x", "y", "z", "heading"):
+        if simulated[key].ndim == 2:
+            simulated[key] = simulated[key][:, np.newaxis, :]
+
     if "dones" not in simulated:
         simulated["dones"] = np.zeros_like(simulated["x"], dtype=bool)
+    elif simulated["dones"].ndim == 2:
+        simulated["dones"] = simulated["dones"][:, np.newaxis, :]
 
     return simulated
 

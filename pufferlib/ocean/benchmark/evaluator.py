@@ -16,6 +16,7 @@ import pufferlib
 # WOSAC eval
 from pufferlib.ocean.benchmark import metrics
 from pufferlib.ocean.benchmark import estimators
+from pufferlib.ocean.benchmark import interaction_features
 
 
 _METRIC_FIELD_NAMES = [
@@ -326,7 +327,9 @@ class WOSACEvaluator:
         """
         # Ensure the id order matches exactly for simulated and ground truth
         simulated_ids = np.asarray(simulated_trajectories["id"])
-        if simulated_ids.ndim == 2:
+        if simulated_ids.ndim == 1:
+            simulated_ids = simulated_ids[:, None]
+        elif simulated_ids.ndim == 2:
             simulated_ids = simulated_ids[:, 0:1]
         else:
             simulated_ids = simulated_ids[:, 0:1, 0]
@@ -835,6 +838,177 @@ class PlanningEvaluator:
             return scenario_ids
         return scenario_ids[:, :, 0]
 
+    @staticmethod
+    def _compute_route_progress(sim_x, sim_y, sim_valid, gt_x, gt_y, gt_valid, reached_goal=None, chunk_size=1024):
+        """Compute normalized progress along the ground-truth route.
+
+        For each simulated position, find the closest valid point on the GT route
+        and report the maximum normalized GT arclength reached during the rollout.
+        """
+        sim_valid = sim_valid.astype(bool)
+        gt_valid = gt_valid.astype(bool)
+        num_agents, num_rollouts, _ = sim_x.shape
+        route_progress = np.zeros((num_agents, num_rollouts), dtype=np.float32)
+
+        for start in range(0, num_agents, chunk_size):
+            end = min(start + chunk_size, num_agents)
+            ref_x = gt_x[start:end, 0, :]
+            ref_y = gt_y[start:end, 0, :]
+            ref_valid = gt_valid[start:end, 0, :]
+            cur_sim_x = sim_x[start:end]
+            cur_sim_y = sim_y[start:end]
+            cur_sim_valid = sim_valid[start:end]
+
+            segment_valid = ref_valid[:, 1:] & ref_valid[:, :-1]
+            segment_lengths = np.sqrt(np.diff(ref_x, axis=1) ** 2 + np.diff(ref_y, axis=1) ** 2)
+            cumulative = np.concatenate(
+                [np.zeros((end - start, 1), dtype=np.float32), np.cumsum(segment_lengths * segment_valid, axis=1)],
+                axis=1,
+            )
+            route_length = cumulative[:, -1]
+            valid_route = route_length > 1e-3
+            progress_at_ref = np.divide(
+                cumulative,
+                route_length[:, None],
+                out=np.zeros_like(cumulative, dtype=np.float32),
+                where=valid_route[:, None],
+            )
+
+            dist_sq = (cur_sim_x[..., None] - ref_x[:, None, None, :]) ** 2 + (
+                cur_sim_y[..., None] - ref_y[:, None, None, :]
+            ) ** 2
+            dist_sq = np.where(ref_valid[:, None, None, :], dist_sq, np.inf)
+            closest_ref_idx = np.argmin(dist_sq, axis=3)
+            progress_samples = np.take_along_axis(
+                progress_at_ref[:, None, None, :],
+                closest_ref_idx[..., None],
+                axis=3,
+            )[..., 0]
+            progress_samples = np.where(cur_sim_valid, progress_samples, 0.0)
+            route_progress[start:end] = np.clip(np.max(progress_samples, axis=2), 0.0, 1.0)
+
+        if reached_goal is not None:
+            route_progress = np.where(reached_goal.astype(bool), 1.0, route_progress)
+        return route_progress
+
+    @staticmethod
+    def _compute_velocities(x, y, valid, seconds_per_step=0.1):
+        vx = np.zeros_like(x, dtype=np.float32)
+        vy = np.zeros_like(y, dtype=np.float32)
+        if x.shape[-1] <= 1:
+            return vx, vy
+
+        valid = valid.astype(bool)
+        step_valid = valid[..., 1:] & valid[..., :-1]
+        vx[..., 1:] = np.where(step_valid, (x[..., 1:] - x[..., :-1]) / seconds_per_step, 0.0)
+        vy[..., 1:] = np.where(step_valid, (y[..., 1:] - y[..., :-1]) / seconds_per_step, 0.0)
+        vx[..., 0] = vx[..., 1]
+        vy[..., 0] = vy[..., 1]
+        return vx, vy
+
+    @classmethod
+    def _compute_collision_fault_rates(
+        cls,
+        x,
+        y,
+        heading,
+        valid,
+        scenario_ids,
+        agent_length,
+        agent_width,
+        eval_mask,
+        device,
+        seconds_per_step=0.1,
+    ):
+        """Classify collision responsibility for evaluated agents.
+
+        Mirrors the simulator heuristic: an evaluated agent is at fault when it
+        collides with an object in front while moving toward it. A rear collision
+        is the converse case where the other object is moving toward the
+        evaluated agent from behind.
+        """
+        eval_indices = np.where(eval_mask)[0]
+        num_eval_agents = len(eval_indices)
+        num_rollouts = x.shape[1]
+        at_fault_collision = np.zeros((num_eval_agents, num_rollouts), dtype=np.float32)
+        rear_collision = np.zeros((num_eval_agents, num_rollouts), dtype=np.float32)
+        if num_eval_agents == 0:
+            return at_fault_collision, rear_collision
+
+        eval_to_result = {agent_idx: result_idx for result_idx, agent_idx in enumerate(eval_indices)}
+        valid = valid.astype(bool)
+        scenario_ids = np.asarray(scenario_ids)[:, 0]
+        agent_length = np.asarray(agent_length).reshape(-1)
+        agent_width = np.asarray(agent_width).reshape(-1)
+        vx, vy = cls._compute_velocities(x, y, valid, seconds_per_step=seconds_per_step)
+
+        for scenario_id in np.unique(scenario_ids):
+            scenario_mask_np = scenario_ids == scenario_id
+            scenario_eval_mask_np = eval_mask[scenario_mask_np]
+            if not np.any(scenario_eval_mask_np):
+                continue
+
+            agent_indices = np.where(scenario_mask_np)[0]
+            scenario_x = x[scenario_mask_np]
+            scenario_y = y[scenario_mask_np]
+            scenario_heading = heading[scenario_mask_np]
+            scenario_valid = valid[scenario_mask_np]
+            scenario_vx = vx[scenario_mask_np]
+            scenario_vy = vy[scenario_mask_np]
+            num_agents = scenario_x.shape[0]
+
+            length = np.broadcast_to(agent_length[agent_indices, None], (num_agents, num_rollouts)).copy()
+            width = np.broadcast_to(agent_width[agent_indices, None], (num_agents, num_rollouts)).copy()
+
+            signed_distances = interaction_features.compute_signed_distances(
+                center_x=torch.as_tensor(scenario_x, dtype=torch.float32, device=device),
+                center_y=torch.as_tensor(scenario_y, dtype=torch.float32, device=device),
+                length=torch.as_tensor(length, dtype=torch.float32, device=device),
+                width=torch.as_tensor(width, dtype=torch.float32, device=device),
+                heading=torch.as_tensor(scenario_heading, dtype=torch.float32, device=device),
+                valid=torch.as_tensor(scenario_valid, dtype=torch.bool, device=device),
+                evaluated_object_mask=torch.as_tensor(scenario_eval_mask_np, dtype=torch.bool, device=device),
+            )
+            colliding = (signed_distances < interaction_features.COLLISION_DISTANCE_THRESHOLD).cpu().numpy()
+
+            local_eval_indices = np.where(scenario_eval_mask_np)[0]
+            for eval_rank, local_eval_idx in enumerate(local_eval_indices):
+                global_eval_idx = agent_indices[local_eval_idx]
+                result_idx = eval_to_result[global_eval_idx]
+
+                for other_idx in range(num_agents):
+                    if other_idx == local_eval_idx:
+                        continue
+
+                    pair_collision = colliding[eval_rank, other_idx]
+                    if not np.any(pair_collision):
+                        continue
+
+                    dx = scenario_x[other_idx] - scenario_x[local_eval_idx]
+                    dy = scenario_y[other_idx] - scenario_y[local_eval_idx]
+                    eval_forward_dot = dx * np.cos(scenario_heading[local_eval_idx]) + dy * np.sin(
+                        scenario_heading[local_eval_idx]
+                    )
+                    eval_approach_dot = scenario_vx[local_eval_idx] * dx + scenario_vy[local_eval_idx] * dy
+                    at_fault = pair_collision & (eval_forward_dot > 0.0) & (eval_approach_dot > 0.0)
+
+                    dx_reverse = -dx
+                    dy_reverse = -dy
+                    other_forward_dot = dx_reverse * np.cos(scenario_heading[other_idx]) + dy_reverse * np.sin(
+                        scenario_heading[other_idx]
+                    )
+                    other_approach_dot = scenario_vx[other_idx] * dx_reverse + scenario_vy[other_idx] * dy_reverse
+                    rear = pair_collision & (other_forward_dot > 0.0) & (other_approach_dot > 0.0)
+
+                    at_fault_collision[result_idx] = np.maximum(
+                        at_fault_collision[result_idx], np.any(at_fault, axis=1).astype(np.float32)
+                    )
+                    rear_collision[result_idx] = np.maximum(
+                        rear_collision[result_idx], np.any(rear, axis=1).astype(np.float32)
+                    )
+
+        return at_fault_collision, rear_collision
+
     def compute_metrics(
         self,
         combined_trajectories,
@@ -869,6 +1043,17 @@ class PlanningEvaluator:
         _, collisions_per_step, _ = metrics.compute_interaction_features(
             x, y, heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
         )
+        at_fault_collision_rate, rear_collision_rate = self._compute_collision_fault_rates(
+            x,
+            y,
+            heading,
+            valid,
+            scenario_ids,
+            agent_length,
+            agent_width,
+            eval_mask,
+            device=self.device,
+        )
 
         _, offroad_per_step = metrics.compute_map_features(
             eval_x,
@@ -887,6 +1072,8 @@ class PlanningEvaluator:
 
         scene_level_results = {
             "collision_indication": collision_indication.flatten(),
+            "at_fault_collision_rate": at_fault_collision_rate.flatten(),
+            "rear_collision_rate": rear_collision_rate.flatten(),
             "offroad_indication": offroad_indication.flatten(),
             "accuracy": accuracy.flatten(),
         }
@@ -908,8 +1095,18 @@ class PlanningEvaluator:
                 np.where(np.isnan(linear_speed), False, linear_speed <= speed_threshold),
                 axis=2,
             ).astype(float)
+            route_progress = self._compute_route_progress(
+                eval_x,
+                eval_y,
+                eval_valid,
+                gt_x,
+                gt_y,
+                gt_valid,
+                reached_goal=reached_goal,
+            )
 
             scene_level_results["goal_reached"] = reached_goal.flatten()
+            scene_level_results["route_progress"] = route_progress.flatten()
             scene_level_results["score"] = (accuracy * reached_goal).flatten()
 
         scene_level_results = pd.DataFrame(scene_level_results, index=eval_scenario_ids[:, 0])
