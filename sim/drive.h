@@ -67,7 +67,6 @@
 #define OBS_POSITION_SCALE 0.02f
 
 // Distance thresholds
-#define MIN_DISTANCE_TO_GOAL 5.0f
 #define COLLISION_DIST_SQ (15.0f * 15.0f)
 #define OBS_DIST_SQ (100.0f * 100.0f)
 
@@ -75,37 +74,21 @@
 #define NUM_ACCEL_BINS 7
 #define NUM_STEER_BINS 13
 
+// 2.5D Z estimation
+#define Z_BUFFER 4.0f
+#define Z_NUM_PT_AVG 30
+
 static const float ACCELERATION_VALUES[NUM_ACCEL_BINS]
     = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 
 static const float STEERING_VALUES[NUM_STEER_BINS]
     = {-1.000f, -0.833f, -0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f, 0.833f, 1.000f};
 
-static const int collision_offsets[25][2]
-    = {{-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1},
-       {2, -1},  {-2, 0},  {-1, 0}, {0, 0},  {1, 0},  {2, 0},   {-2, 1},  {-1, 1}, {0, 1},
-       {1, 1},   {2, 1},   {-2, 2}, {-1, 2}, {0, 2},  {1, 2},   {2, 2}};
-#define Z_COMPUTATION_OFFSET_COUNT 9
-#define Z_BUFFER 4.0f
-#define Z_NUM_PT_AVG 30
-
 typedef struct {
     float z_dis;
     float euclidean_dis;
     float z;
 } DepthPoint;
-
-static const int z_computation_offsets[Z_COMPUTATION_OFFSET_COUNT][2] = {
-    {-1, -1},
-    {0, -1},
-    {1, -1},
-    {-1, 0},
-    {0, 0},
-    {1, 0},
-    {-1, 1},
-    {0, 1},
-    {1, 1},
-};
 
 typedef struct Drive Drive;
 typedef struct Client Client;
@@ -784,15 +767,21 @@ static DepthPoint compute_z_distance_to_road_segment(const Agent *agent, const R
 }
 
 static void update_agent_z(Drive *env, Agent *agent) {
-    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * Z_COMPUTATION_OFFSET_COUNT];
-    int list_size = get_neighbors_entities(
-        env,
-        agent->sim_x,
-        agent->sim_y,
-        entity_list,
-        MAX_ENTITIES_PER_CELL * Z_COMPUTATION_OFFSET_COUNT,
-        z_computation_offsets,
-        Z_COMPUTATION_OFFSET_COUNT);
+    static const int z_offsets[9][2] = {
+        {-1, -1},
+        {0, -1},
+        {1, -1},
+        {-1, 0},
+        {0, 0},
+        {1, 0},
+        {-1, 1},
+        {0, 1},
+        {1, 1},
+    };
+
+    GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 9];
+    int list_size
+        = get_neighbors_entities(env, agent->sim_x, agent->sim_y, entity_list, MAX_ENTITIES_PER_CELL * 9, z_offsets, 9);
     if (list_size <= 0) {
         return;
     }
@@ -1243,6 +1232,11 @@ static void compute_metrics(Drive *env, Agent *agent) {
     float corners[4][2];
     compute_agent_corners(agent, corners);
 
+    static const int road_offsets[25][2]
+        = {{-2, -2}, {-1, -2}, {0, -2}, {1, -2}, {2, -2}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1},
+           {2, -1},  {-2, 0},  {-1, 0}, {0, 0},  {1, 0},  {2, 0},   {-2, 1},  {-1, 1}, {0, 1},
+           {1, 1},   {2, 1},   {-2, 2}, {-1, 2}, {0, 2},  {1, 2},   {2, 2}};
+
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
     int list_size = get_neighbors_entities(
         env,
@@ -1250,7 +1244,7 @@ static void compute_metrics(Drive *env, Agent *agent) {
         agent->sim_y,
         entity_list,
         MAX_ENTITIES_PER_CELL * 25,
-        collision_offsets,
+        road_offsets,
         25);
 
     if (list_size <= 0) {
