@@ -161,12 +161,34 @@ class TrainableTorchActor:
 
 
 class TargetTorchActor:
-    def __init__(self, policy):
+    def __init__(self, policy, env):
         self.policy = policy
+        self.env = env
         self.hidden_size = getattr(policy, "hidden_size", None)
+        self.target_max_partner_obs_distance = float(getattr(env, "target_max_partner_obs_distance", 0.0))
+        self.partner_start = env.ego_features + env.num_reward_coefs + env.target_dim
+        self.max_partner_observations = env.max_partner_observations
+        self.partner_features = env.partner_features
+        self.max_position = env.max_position
 
     def prepare_observation(self, raw_observation):
-        return raw_observation
+        if self.target_max_partner_obs_distance <= 0.0 or self.max_partner_observations <= 0:
+            return raw_observation
+
+        partner_dim = self.max_partner_observations * self.partner_features
+        if partner_dim <= 0:
+            return raw_observation
+
+        observations = raw_observation.clone()
+        partner_observations = observations[:, self.partner_start : self.partner_start + partner_dim].view(
+            -1, self.max_partner_observations, self.partner_features
+        )
+
+        dx = partner_observations[..., 0] * self.max_position
+        dy = partner_observations[..., 1] * self.max_position
+        far_mask = dx.square() + dy.square() > self.target_max_partner_obs_distance**2
+        partner_observations[far_mask] = 0.0
+        return observations
 
     def act(self, raw_observation, state=None, deterministic=False):
         observation = self.prepare_observation(raw_observation)
@@ -343,7 +365,9 @@ class PuffeRL:
                 self.target_policy.forward_eval = torch.compile(target_policy, mode=config["compile_mode"])
 
         self.policy_actor = TrainableTorchActor(self.policy, vecenv.single_observation_space)
-        self.target_actor = TargetTorchActor(self.target_policy) if self.target_policy is not None else None
+        self.target_actor = (
+            TargetTorchActor(self.target_policy, vecenv.driver_env) if self.target_policy is not None else None
+        )
         obs_space = self.policy_actor.rollout_observation_space
 
         self.observations = torch.zeros(
@@ -1696,6 +1720,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "boundary_segment_dropout",
             "lane_segment_dropout",
             "max_partner_observations",
+            "target_max_partner_obs_distance",
             "max_traffic_control_observations",
             "traffic_control_scope",
         }
@@ -2761,7 +2786,7 @@ def render_adversarial(
     policy = policy or load_policy(args, vecenv, env_name)
     target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
     policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
-    target_actor = TargetTorchActor(target_policy)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
