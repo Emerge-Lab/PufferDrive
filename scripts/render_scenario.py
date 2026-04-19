@@ -62,6 +62,17 @@ def main():
         default=None,
         help="Override control mode (default: control_vehicles for gigaflow, control_sdc_only for replay)",
     )
+    parser.add_argument(
+        "--no-render",
+        action="store_true",
+        help="Skip video output and run eval_multi_scenarios to aggregate metrics across all bins in --map-dir. Ignores --map when set.",
+    )
+    parser.add_argument(
+        "--num-scenarios",
+        type=int,
+        default=None,
+        help="Number of scenarios to evaluate in --no-render mode (defaults to every bin in --map-dir)",
+    )
     cli = parser.parse_args()
 
     # Suppress argparse pollution from pufferl's load_config after our own parse
@@ -89,6 +100,11 @@ def main():
     # Set up a single-map directory if not provided
     if cli.map_dir:
         map_dir = os.path.abspath(cli.map_dir)
+    elif cli.no_render:
+        # No-render mode requires --map-dir explicitly (we aggregate across the
+        # whole directory rather than symlink a single bin).
+        print("Error: --no-render requires --map-dir pointing at a directory of .bin files.")
+        sys.exit(1)
     else:
         map_dir = tempfile.mkdtemp(prefix=f"render_{cli.map}_")
         # Search for the map .bin in known directories
@@ -116,6 +132,7 @@ def main():
 
     from pufferlib.pufferl import (
         build_eval_overrides,
+        eval_multi_scenarios,
         eval_multi_scenarios_render,
         load_config,
         load_eval_multi_scenarios_config,
@@ -124,30 +141,30 @@ def main():
     env_name = "puffer_drive"
     tmp_args = load_config(env_name)
 
+    if cli.no_render:
+        num_scenarios = cli.num_scenarios or len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+    else:
+        num_scenarios = 1
+
     eval_overrides = build_eval_overrides(
         simulation_mode=cli.simulation_mode,
         num_agents=cli.num_eval_agents,
-        num_scenarios=1,
+        num_scenarios=num_scenarios,
         map_dir=map_dir,
-        num_carla_maps=1,
+        num_carla_maps=num_scenarios if cli.no_render else 1,
+        clean=True,
     )
     # Override control_mode and init_steps after build_eval_overrides
     eval_overrides["env"]["control_mode"] = control_mode
     eval_overrides["env"]["init_steps"] = init_steps
-    # Disable robustness perturbations for eval renders — we want to see
-    # the policy's clean behavior, not randomly blinded or phantom-braking.
-    eval_overrides["env"]["partner_blindness_prob"] = 0.0
-    eval_overrides["env"]["phantom_braking_prob"] = 0.0
-    eval_overrides["env"]["phantom_braking_trigger_prob"] = 0.0
-    # Use all road segments at eval (no dropout). The obs vector is always
-    # max-sized now, so dropout=0 just fills more slots without changing shape.
-    eval_overrides["env"]["lane_segment_dropout"] = 0.0
-    eval_overrides["env"]["boundary_segment_dropout"] = 0.0
     if cli.simulation_mode == "replay":
-        # Don't stop/remove the SDC for offroad — let it drive freely so
-        # the video shows the full trajectory even with a mismatched policy.
-        eval_overrides["env"]["offroad_behavior"] = 0
-        eval_overrides["env"]["collision_behavior"] = 0
+        # For no-render metrics we want offroad/collision to TERMINATE so
+        # the SDC is penalized per the normal eval rules. For rendering we
+        # let the SDC keep driving so the video shows the full trajectory
+        # even when the policy is far off.
+        if not cli.no_render:
+            eval_overrides["env"]["offroad_behavior"] = 0
+            eval_overrides["env"]["collision_behavior"] = 0
         # Match scenario_length to requested steps so the render loop
         # doesn't cap at the default 91 from build_eval_overrides.
         eval_overrides["env"]["scenario_length"] = steps
@@ -155,11 +172,9 @@ def main():
 
     args = load_eval_multi_scenarios_config(env_name, cli.checkpoint, eval_overrides)
     args["load_model_path"] = cli.checkpoint
-    args["num_scenarios"] = 1
-    args["num_carla_maps"] = 1
+    args["num_scenarios"] = num_scenarios
+    args["num_carla_maps"] = num_scenarios if cli.no_render else 1
     args["eval_simulation"] = cli.simulation_mode
-    args["render"] = 1
-    args["render_obs"] = 0
     args["inline_eval"] = True
     args["eval_results_dir"] = cli.output_dir
 
@@ -172,6 +187,27 @@ def main():
     mode_desc = cli.simulation_mode
     if cli.simulation_mode == "replay":
         mode_desc += f" (control_mode={control_mode})"
+
+    if cli.no_render:
+        print(f"No-render eval | mode={mode_desc} | {steps} steps | {num_scenarios} scenarios")
+        print(f"Map dir: {map_dir}")
+        print(f"Checkpoint: {cli.checkpoint}")
+        print(f"Output: {cli.output_dir}/")
+        eval_multi_scenarios(
+            env_name=env_name,
+            args=dict(args),
+            vecenv=None,
+            policy=None,
+            logger=None,
+            metric_prefix="eval",
+            quiet=False,
+            clean=True,
+        )
+        print(f"\nDone. Summary CSV: {cli.output_dir}/evaluation_summary.csv")
+        return
+
+    args["render"] = 1
+    args["render_obs"] = 0
     print(f"Rendering {cli.map} | mode={mode_desc} | {steps} steps | view={cli.view}")
     print(f"Checkpoint: {cli.checkpoint}")
     print(f"Output: {cli.output_dir}/mp4/")
