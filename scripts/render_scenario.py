@@ -56,7 +56,9 @@ def main():
         choices=["gigaflow", "replay"],
         help="Simulation mode: gigaflow (random spawn) or replay (log trajectories, policy controls SDC)",
     )
-    parser.add_argument("--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)")
+    parser.add_argument(
+        "--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
+    )
     parser.add_argument(
         "--control-mode",
         default=None,
@@ -189,7 +191,16 @@ def main():
         mode_desc += f" (control_mode={control_mode})"
 
     if cli.no_render:
-        print(f"No-render eval | mode={mode_desc} | {steps} steps | {num_scenarios} scenarios")
+        # Cap vec workers at physical CPU count — pufferlib rejects
+        # num_workers > cores (emerge2 has 16 physical cores, ini default 20).
+        import psutil
+
+        cpu_cores = psutil.cpu_count(logical=False) or 8
+        cap = min(cpu_cores, num_scenarios)
+        args["vec"]["num_envs"] = cap
+        args["vec"]["num_workers"] = cap
+        args["vec"]["batch_size"] = cap
+        print(f"No-render eval | mode={mode_desc} | {steps} steps | {num_scenarios} scenarios | {cap} workers")
         print(f"Map dir: {map_dir}")
         print(f"Checkpoint: {cli.checkpoint}")
         print(f"Output: {cli.output_dir}/")
