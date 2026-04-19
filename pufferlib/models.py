@@ -4,12 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-try:
-    from pufferlib._C import SIM_CONSTANTS
-except Exception:
-    SIM_CONSTANTS = {}
-
-
 def _layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     nn.init.orthogonal_(layer.weight, std)
     if layer.bias is not None:
@@ -241,8 +235,9 @@ class VecEncoder(nn.Module):
 
     obs_stream_names = ["ego", "cond", "partner", "lane", "boundary", "tc", "counts"]
 
-    def __init__(self, **policy_kwargs):
+    def __init__(self, env_constants, **policy_kwargs):
         super().__init__()
+        self.env_constants = {k: int(v) for k, v in env_constants.items()}
         self.mask_padded = policy_kwargs["mask_padded_observations"]
         dropout = policy_kwargs["dropout"]
         self.activation_fn = _ACTIVATIONS[policy_kwargs["encoder_activation"]]
@@ -258,21 +253,20 @@ class VecEncoder(nn.Module):
             self.encoders[name] = self._create_encoder(in_features, hidden_size, num_layers, dropout)
             self.encoder_specs.append((name, in_features, num_slots, hidden_size))
 
-        get = lambda key: int(SIM_CONSTANTS.get(key, 0))
         self.obs_split_sizes = [
-            get("ego_features"),
-            get("num_reward_coefs") + get("target_dim"),
-            get("obs_partner_slots") * get("partner_features"),
-            get("obs_lane_slots") * get("road_features"),
-            get("obs_boundary_slots") * get("road_features"),
-            get("obs_traffic_control_slots") * get("traffic_control_features"),
-            get("obs_count_features"),
+            self.env_constants["ego_features"],
+            self.env_constants["num_reward_coefs"] + self.env_constants["target_dim"],
+            self.env_constants["obs_partner_slots"] * self.env_constants["partner_features"],
+            self.env_constants["obs_lane_slots"] * self.env_constants["road_features"],
+            self.env_constants["obs_boundary_slots"] * self.env_constants["road_features"],
+            self.env_constants["obs_traffic_control_slots"] * self.env_constants["traffic_control_features"],
+            self.env_constants["obs_count_features"],
         ]
         self._slot_caps = {
-            "partner": get("obs_partner_slots"),
-            "lane": get("obs_lane_slots"),
-            "boundary": get("obs_boundary_slots"),
-            "tc": get("obs_traffic_control_slots"),
+            "partner": self.env_constants["obs_partner_slots"],
+            "lane": self.env_constants["obs_lane_slots"],
+            "boundary": self.env_constants["obs_boundary_slots"],
+            "tc": self.env_constants["obs_traffic_control_slots"],
         }
         self.register_buffer("_slot_arange", torch.arange(max(self._slot_caps.values(), default=0)), persistent=False)
         self.out_size = sum(spec[3] for spec in self.encoder_specs)
@@ -280,14 +274,13 @@ class VecEncoder(nn.Module):
     @property
     def _encoder_descriptions(self):
         # (name, in_features, num_slots). num_slots is None for scalar streams (no pooling).
-        get = lambda key: int(SIM_CONSTANTS.get(key, 0))
         return [
-            ("ego", get("ego_features"), None),
-            ("cond", get("num_reward_coefs") + get("target_dim"), 0),
-            ("partner", get("partner_features"), get("obs_partner_slots")),
-            ("lane", get("road_features"), get("obs_lane_slots")),
-            ("boundary", get("road_features"), get("obs_boundary_slots")),
-            ("tc", get("traffic_control_features"), get("obs_traffic_control_slots")),
+            ("ego", self.env_constants["ego_features"], None),
+            ("cond", self.env_constants["num_reward_coefs"] + self.env_constants["target_dim"], 0),
+            ("partner", self.env_constants["partner_features"], self.env_constants["obs_partner_slots"]),
+            ("lane", self.env_constants["road_features"], self.env_constants["obs_lane_slots"]),
+            ("boundary", self.env_constants["road_features"], self.env_constants["obs_boundary_slots"]),
+            ("tc", self.env_constants["traffic_control_features"], self.env_constants["obs_traffic_control_slots"]),
         ]
 
     def _create_encoder(self, in_features, hidden_size, num_layers, dropout):
@@ -359,8 +352,8 @@ class Policy(nn.Module):
         self.shared_trunk = policy_kwargs["shared_trunk"]
         assert self.shared_encoder or not self.shared_trunk, "shared_trunk requires shared_encoder"
 
-        self.encoder = VecEncoder(**policy_kwargs)
-        self.critic_encoder = self.encoder if self.shared_encoder else VecEncoder(**policy_kwargs)
+        self.encoder = VecEncoder(vec.env_constants(), **policy_kwargs)
+        self.critic_encoder = self.encoder if self.shared_encoder else VecEncoder(vec.env_constants(), **policy_kwargs)
 
         trunk_type = policy_kwargs["trunk_type"]
         trunk_hidden_size = policy_kwargs["trunk_hidden_size"]
