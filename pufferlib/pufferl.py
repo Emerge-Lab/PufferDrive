@@ -501,13 +501,20 @@ class PuffeRL:
             num_agents_eval = self.config["eval"]["num_agents"]
             map_dir = self.config["eval"]["map_dir"]
 
-            # Build eval_overrides using helper function
+            # Inline eval runs "clean" by default — perturbations + dropout off,
+            # red-light stops enforced — so the logged validation metrics
+            # track progress under controlled conditions rather than noisy
+            # training perturbations. The live training policy's road slicing
+            # is re-aligned to the clean env at eval time via
+            # _swap_policy_obs_counts inside eval_multi_scenarios.
+            clean_eval = self.config["eval"].get("clean_eval", True)
             eval_overrides = build_eval_overrides(
                 simulation_mode=eval_simulation_mode,
                 num_agents=num_agents_eval,
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=map_dir,
                 num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                clean=clean_eval,
             )
 
             # Build eval args by applying overrides to training config
@@ -546,6 +553,7 @@ class PuffeRL:
                 logger=self.logger,  # Pass logger for TensorBoard logging
                 metric_prefix="validation",  # Use validation_ prefix
                 quiet=True,  # Suppress verbose output during inline eval
+                clean=clean_eval,
             )
 
         # Multi-scenario render — independent interval so the heavier render
@@ -1864,20 +1872,30 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8):
+def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8, clean=False):
     """Build evaluation overrides for a given simulation mode.
 
     Args:
         simulation_mode: "gigaflow" or "replay"
         num_agents: agent slot budget for evaluation
         map_dir: replay dataset directory, required for replay mode
+        clean: if True, run a "clean" eval — zero road-segment dropout and
+            enforce red-light stops. Only safe when the policy is rebuilt
+            from the eval env (standalone eval / render_scenario.py). Inline
+            eval during training reuses the live training policy, whose
+            encoder was built for the training obs shape; zeroing dropout
+            there changes the obs shape and triggers a CUDA device-side
+            assert. Perturbation probabilities (partner_blindness,
+            phantom_braking) are always forced to zero at eval — they're
+            pure randomness, they don't change the obs shape, and eval
+            should be deterministic regardless of clean mode.
     """
     # Common reward coefficients (same for both modes)
     common_env = {
         "eval_mode": 1,
         "collision_behavior": 1,
         "offroad_behavior": 1,
-        "traffic_light_behavior": 0,
+        "traffic_light_behavior": 1 if clean else 0,
         "reward_randomization": False,
         "reward_vehicle_collision": 3.0,
         "reward_offroad_collision": 3.0,
@@ -1889,14 +1907,21 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
         "reward_lane_align": 0.025,
         "reward_lane_center": 0.0038,
         "reward_timestep": 0.000025,
-        # NOTE: do not override lane_segment_dropout, boundary_segment_dropout,
-        # or max_{lane,boundary}_segment_observations here. All of these change
-        # the observation vector shape, and the render path reuses the live
-        # training policy which was built for the training obs sizes. Setting
-        # dropout to 0.0 here when training uses >0 causes the eval env to
-        # produce larger observations than the policy expects, triggering a
-        # CUDA device-side assert (scatter/gather index out of bounds).
+        # Always zero perturbations at eval. These don't change obs shape so
+        # it's safe to force even for inline eval, and a deterministic eval
+        # is what we want for tracking progress.
+        "partner_blindness_prob": 0.0,
+        "phantom_braking_prob": 0.0,
+        "phantom_braking_trigger_prob": 0.0,
     }
+
+    if clean:
+        # Dropout changes the obs shape. Only safe when the policy is
+        # rebuilt from the eval env (standalone eval / render_scenario).
+        # NEVER pass clean=True from an inline-eval call site — the live
+        # training policy's encoder was built for the training obs shape.
+        common_env["lane_segment_dropout"] = 0.0
+        common_env["boundary_segment_dropout"] = 0.0
 
     if simulation_mode == "gigaflow":
         eval_overrides = {
@@ -1936,6 +1961,46 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
         raise ValueError(f"Invalid simulation_mode: {simulation_mode}. Must be 'gigaflow' or 'replay'.")
 
     return eval_overrides
+
+
+@contextlib.contextmanager
+def _swap_policy_obs_counts(policy, vecenv):
+    """Temporarily align the policy's road-segment slicing with the eval env.
+
+    Training uses dropout > 0 → smaller obs_{lane,boundary}_segment_count.
+    Clean eval uses dropout = 0 → larger counts, larger obs buffer. The
+    GigaFlow encoder (lane_encoder / boundary_encoder) is a shared MLP
+    applied per-segment with max-pool — its weights are count-invariant.
+    Only the obs-buffer slicing in DriveBackbone.forward depends on these
+    counts, so we can just swap them for the duration of the eval and the
+    same training policy works on the larger clean obs.
+    """
+    try:
+        eval_env = vecenv.driver_env
+        new_lane = int(eval_env.obs_lane_segment_count)
+        new_boundary = int(eval_env.obs_boundary_segment_count)
+    except AttributeError:
+        # If the eval env doesn't expose these (unknown wrapper), skip the
+        # swap — forward will still work when training and eval obs shapes
+        # coincide (clean=False or no dropout configured).
+        yield
+        return
+
+    targets = []
+    for m in policy.modules():
+        if hasattr(m, "obs_lane_segment_count") and hasattr(m, "obs_boundary_segment_count"):
+            targets.append(m)
+
+    saved = [(m.obs_lane_segment_count, m.obs_boundary_segment_count) for m in targets]
+    try:
+        for m in targets:
+            m.obs_lane_segment_count = new_lane
+            m.obs_boundary_segment_count = new_boundary
+        yield
+    finally:
+        for m, (orig_lane, orig_boundary) in zip(targets, saved):
+            m.obs_lane_segment_count = orig_lane
+            m.obs_boundary_segment_count = orig_boundary
 
 
 def verify_scenario_coverage(csv_path: str, num_scenarios: int) -> dict:
@@ -2087,7 +2152,14 @@ def _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet):
 
 
 def eval_multi_scenarios(
-    env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    logger=None,
+    metric_prefix="validation",
+    quiet=False,
+    clean=False,
 ):
     t0 = time.time()
 
@@ -2097,14 +2169,20 @@ def eval_multi_scenarios(
         num_agents_eval = tmp_args["eval"]["num_agents"]
         map_dir = tmp_args["eval"]["map_dir"]
 
+        # CLI standalone entry point: read clean_eval from the eval section
+        # so users can enable it via --eval.clean-eval. Inline callers pass
+        # clean= directly and come in through the args-provided branch.
+        clean_from_config = tmp_args["eval"].get("clean_eval", False)
         eval_overrides = build_eval_overrides(
             simulation_mode=tmp_args["eval_simulation"],
             num_agents=num_agents_eval,
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            clean=clean_from_config,
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+        clean = clean or clean_from_config
 
     # Reproducibility — same approach as training
     seed = args["train"]["seed"] or 42
@@ -2183,7 +2261,11 @@ def eval_multi_scenarios(
     vecenv.async_reset(42)
 
     ob, _, _, _, infos, _, _ = vecenv.recv()
-    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+    # Clean eval may use different road-dropout than training. The shared
+    # training policy's obs slicing needs to be aligned with this env; see
+    # _swap_policy_obs_counts.
+    swap_ctx = _swap_policy_obs_counts(policy, vecenv) if clean else contextlib.nullcontext()
+    with swap_ctx, tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
         while scenarios_processed < num_scenarios:
             # Reset LSTM
             if args["train"]["use_rnn"]:
