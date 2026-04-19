@@ -140,6 +140,17 @@ static void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
     }
 }
 
+static py::dict vec_env_constants(VecEnv& ve) {
+    Dict* out = create_dict(32);
+    static_vec_env_constants(ve.vec, out);
+    py::dict result;
+    for (int i = 0; i < out->size; i++)
+        result[out->items[i].key] = out->items[i].value;
+    free(out->items);
+    free(out);
+    return result;
+}
+
 static py::dict vec_log(VecEnv& ve) {
     Dict* out = create_dict(32);
     static_vec_log(ve.vec, out);
@@ -184,5 +195,6 @@ PYBIND11_MODULE(_C, m) {
         .def("cpu_step", &cpu_vec_step_py)
         .def("render", [](VecEnv& ve, int env_id) { static_vec_render(ve.vec, env_id); })
         .def("log", &vec_log)
+        .def("env_constants", &vec_env_constants)
         .def("close", &vec_close);
 }

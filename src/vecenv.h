@@ -116,6 +116,7 @@ void static_vec_omp_step(StaticVec* vec);
 void static_vec_seq_step(StaticVec* vec);
 void static_vec_render(StaticVec* vec, int env_id);
 void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]);
+void static_vec_env_constants(StaticVec* vec, Dict* out);
 
 // Env info
 int get_obs_size(void);
@@ -191,7 +192,7 @@ extern const char* cudaGetErrorString(cudaError_t);
 // Forward declare env-provided functions (defined in binding.c after this include)
 void my_init(Env* env, Dict* kwargs);
 void my_log(Log* log, Dict* out);
-
+void my_env_constants(Dict* out);
 
 struct StaticThreading {
     atomic_int* buffer_states;
@@ -572,6 +573,11 @@ void static_vec_eval_log(StaticVec* vec, Dict* out) {
     }
     my_log(&aggregate, out);
     dict_set(out, "n", n);
+}
+
+void static_vec_env_constants(StaticVec* vec, Dict* out) {
+    (void)vec;
+    my_env_constants(out);
 }
 
 void static_vec_read_profile(StaticVec* vec, float out[NUM_EVAL_PROF]) {

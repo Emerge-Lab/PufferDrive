@@ -262,3 +262,17 @@ void my_log(Log *log, Dict *out) {
     dict_set(out, "n", log->n);
     dict_set(out, "completion_rate", log->completion_rate);
 }
+
+void my_env_constants(Dict *out) {
+    dict_set(out, "ego_features", EGO_FEATURES);
+    dict_set(out, "partner_features", PARTNER_FEATURES);
+    dict_set(out, "road_features", ROAD_FEATURES);
+    dict_set(out, "traffic_control_features", TRAFFIC_CONTROL_FEATURES);
+    dict_set(out, "obs_partner_slots", OBS_PARTNER_SLOTS);
+    dict_set(out, "obs_lane_slots", OBS_LANE_SLOTS);
+    dict_set(out, "obs_boundary_slots", OBS_BOUNDARY_SLOTS);
+    dict_set(out, "obs_traffic_control_slots", OBS_TRAFFIC_CONTROL_SLOTS);
+    dict_set(out, "obs_count_features", OBS_COUNT_FEATURES);
+    dict_set(out, "num_reward_coefs", 0);
+    dict_set(out, "target_dim", 0);
+}
