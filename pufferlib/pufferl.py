@@ -556,6 +556,62 @@ class PuffeRL:
                 clean=clean_eval,
             )
 
+        # Replay eval — sibling of multi_scenario_eval. Runs inline eval on
+        # replay scenarios (e.g. nuPlan mini train bins) with control_sdc_only
+        # so the policy drives the SDC while other agents follow their logged
+        # trajectories. Metrics logged under "validation_replay/".
+        if self.config["eval"].get("replay_eval") and (
+            self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
+        ):
+            clean_eval = self.config["eval"].get("clean_eval", True)
+            replay_num_scenarios = int(self.config["eval"]["replay_num_scenarios"])
+            replay_scenario_length = int(self.config["eval"]["replay_scenario_length"])
+            replay_overrides = build_eval_overrides(
+                simulation_mode="replay",
+                num_agents=self.config["eval"]["num_agents"],
+                num_scenarios=replay_num_scenarios,
+                map_dir=self.config["eval"]["replay_map_dir"],
+                clean=clean_eval,
+            )
+            # Override defaults that build_eval_overrides sets for WOMD replay
+            # (scenario_length=91) — nuPlan with duration_s=20 needs 201.
+            replay_overrides["env"]["scenario_length"] = replay_scenario_length
+            replay_overrides["env"]["resample_frequency"] = replay_scenario_length
+            replay_overrides["env"]["control_mode"] = self.config["eval"]["replay_control_mode"]
+            replay_overrides["env"]["init_steps"] = int(self.config["eval"]["replay_init_steps"])
+
+            replay_args = load_eval_multi_scenarios_config(
+                env_name=self.config["env"],
+                model_path=None,
+                eval_overrides=replay_overrides,
+            )
+            replay_args["global_step"] = self.global_step
+            replay_args["num_scenarios"] = replay_num_scenarios
+            replay_args["eval_simulation"] = "replay"
+            replay_args["inline_eval"] = True
+            experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+            replay_args["load_model_path"] = os.path.join(
+                self.config["data_dir"], experiment_name, "models", f"inline_epoch_{self.epoch}.pt"
+            )
+            replay_args["eval_results_dir"] = os.path.join(
+                self.config["data_dir"],
+                experiment_name,
+                "validation_replay",
+                f"epoch_{self.epoch}",
+                "replay",
+            )
+            print(f"\n🔄 Running replay eval at step {self.global_step}...")
+            eval_multi_scenarios(
+                env_name=self.config["env"],
+                args=replay_args,
+                vecenv=None,
+                policy=self.uncompiled_policy,
+                logger=self.logger,
+                metric_prefix="validation_replay",
+                quiet=True,
+                clean=clean_eval,
+            )
+
         # Multi-scenario render — independent interval so the heavier render
         # path doesn't have to fire every eval_interval. Mirrors the block
         # above but calls eval_multi_scenarios_render with render=True and
