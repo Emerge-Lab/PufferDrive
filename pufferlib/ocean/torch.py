@@ -44,17 +44,15 @@ class DriveBackbone(nn.Module):
         ego_dim,
         encoder_gigaflow,
         dropout,
-        strip_last_partner_feature=False,
+        strip_last_partner_features=0,
     ):
         super().__init__()
 
         # Observation dimensions from environment config
         self.max_partner_observations = env.max_partner_observations
         self.partner_features_count = env.partner_features
-        self.strip_last_partner_feature = strip_last_partner_feature
-        self.partner_encoder_features = (
-            self.partner_features_count - 1 if strip_last_partner_feature else self.partner_features_count
-        )
+        self.strip_last_partner_features = strip_last_partner_features
+        self.partner_encoder_features = self.partner_features_count - self.strip_last_partner_features
         # Road features size (lanes + boundaries)
         self.obs_lane_segment_count = env.obs_lane_segment_count
         self.obs_boundary_segment_count = env.obs_boundary_segment_count
@@ -165,8 +163,8 @@ class DriveBackbone(nn.Module):
         # Encode Partners
         if self.max_partner_observations > 0:
             partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
-            if self.strip_last_partner_feature:
-                partner_objects = partner_objects[..., :-1]
+            if self.strip_last_partner_features > 0:
+                partner_objects = partner_objects[..., : -self.strip_last_partner_features]
             partner_encoded = self.partner_encoder(partner_objects)
             partner_features, _ = partner_encoded.max(dim=1)
             feature_list.append(partner_features)
@@ -361,7 +359,7 @@ class TargetDrive(nn.Module):
             "ego_dim": self.ego_dim,
             "encoder_gigaflow": encoder_gigaflow,
             "dropout": dropout,
-            "strip_last_partner_feature": True,
+            "strip_last_partner_features": 2,
         }
 
         self.actor_backbone = DriveBackbone(**backbone_args)

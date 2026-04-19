@@ -90,7 +90,7 @@
 #define EGO_FEATURES_CLASSIC 7
 #define EGO_FEATURES_JERK 9
 #define ROAD_FEATURES 7
-#define PARTNER_FEATURES 9
+#define PARTNER_FEATURES 10
 #define TRAFFIC_CONTROL_FEATURES 7
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
@@ -4213,6 +4213,8 @@ static void compute_observations(Drive *env) {
                     obs[obs_idx++] = other_entity->sim_speed / MAX_SPEED;
                     // Target marker for adversarial policy.
                     obs[obs_idx++] = (index == env->active_agent_indices[0]) ? 1.0f : 0.0f;
+                    // Alive marker for adversarial policy.
+                    obs[obs_idx++] = (other_entity->stopped || other_entity->removed) ? 0.0f : 1.0f;
                     cars_seen++;
                 }
             }
