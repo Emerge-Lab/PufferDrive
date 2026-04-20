@@ -1949,6 +1949,11 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
     # Common reward coefficients (same for both modes)
     common_env = {
         "eval_mode": 1,
+        # Eval always runs at dt=0.1 (10Hz), the rate the logged trajectories
+        # were sampled at. Training may override dt for curriculum / speed
+        # experiments, but eval metrics need the logged-rate physics or
+        # replay positions drift against the real waypoints.
+        "dt": 0.1,
         "collision_behavior": 1,
         "offroad_behavior": 1,
         "traffic_light_behavior": 1 if clean else 0,

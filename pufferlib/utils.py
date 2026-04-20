@@ -231,6 +231,11 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                 "create_all_valid",
                 "--env.scenario-length",
                 str(scenario_length),
+                # Pin dt to 0.1 (10Hz). Training may override dt for curriculum
+                # / speed experiments, but eval metrics need the logged-rate
+                # physics or replay positions drift against the real waypoints.
+                "--env.dt",
+                "0.1",
                 # Clean-eval overrides. Mirrors build_eval_overrides(clean=True):
                 # deterministic TL cycle (eval_mode=1), red lights enforced,
                 # no road-segment dropout, no partner blindness or phantom
