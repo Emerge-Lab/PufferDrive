@@ -435,7 +435,7 @@ class PuffeRL:
                     num_agents=num_agents_render,
                     num_scenarios=self.config["eval"].get("multi_scenario_num_scenarios", 4),
                     map_dir=render_map_dir,
-                    num_carla_maps=self.config["env"].get("num_maps", 8),
+                    num_carla_maps=self.config["env_config"].get("num_maps", 8),
                     min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
                     max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
                 )
@@ -537,7 +537,7 @@ class PuffeRL:
                 num_agents=num_agents_eval,
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=map_dir,
-                num_carla_maps=self.config["env"].get("num_maps", 8),
+                num_carla_maps=self.config["env_config"].get("num_maps", 8),
                 min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
                 max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
             )
@@ -597,7 +597,7 @@ class PuffeRL:
                 num_agents=num_agents_render,
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=render_map_dir,
-                num_carla_maps=self.config["env"].get("num_maps", 8),
+                num_carla_maps=self.config["env_config"].get("num_maps", 8),
                 min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
                 max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
             )
@@ -1641,6 +1641,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     train_config = dict(
         **args["train"],
         env=env_name,
+        env_config=args.get("env", {}),
         eval=args.get("eval", {}),
         driving_behaviours_eval=args.get("driving_behaviours_eval"),
     )
