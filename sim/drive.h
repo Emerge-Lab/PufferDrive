@@ -3,6 +3,7 @@
 
 #include "datatypes.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,13 +13,6 @@
 #define INVALID_POSITION -10000.0f
 
 #define EGO_IDX 0
-
-// Simulation constants
-#define TRAJECTORY_LENGTH 91 // Discretized Waymo scenarios
-#define SIM_DT 0.1f
-
-// Dynamics models
-#define CLASSIC 0
 
 // Lane selection scoring
 #define LANE_SELECTION_DISTANCE_WEIGHT 0.7f
@@ -165,7 +159,12 @@ struct Drive {
     int num_objects;
     // Simulation state fields
     int timestep;
+    // Env parameters
+    float dt;
+    int init_step;
     int dynamics_model;
+    int action_type;
+    int episode_length;
     // Reward coefficients
     float reward_collision;
     float reward_offroad;
@@ -217,6 +216,41 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
+static inline void update_agent_rear_from_center(Agent *agent) {
+    float rear_offset = 0.5f * agent->wheelbase;
+    agent->rear_x = agent->sim_x - (rear_offset * agent->cos_heading);
+    agent->rear_y = agent->sim_y - (rear_offset * agent->sin_heading);
+}
+
+static inline void update_agent_center_from_rear(Agent *agent) {
+    float center_offset = 0.5f * agent->wheelbase;
+    agent->sim_x = agent->rear_x + (center_offset * agent->cos_heading);
+    agent->sim_y = agent->rear_y + (center_offset * agent->sin_heading);
+}
+
+static inline void zero_agent_velocity_state(Agent *agent) {
+    agent->rear_vx = 0.0f;
+    agent->rear_vy = 0.0f;
+    agent->sim_vx = 0.0f;
+    agent->sim_vy = 0.0f;
+    agent->yaw_rate = 0.0f;
+    agent->sim_speed = 0.0f;
+    agent->sim_speed_signed = 0.0f;
+    agent->a_long = 0.0f;
+    agent->a_lat = 0.0f;
+    agent->jerk_long = 0.0f;
+    agent->jerk_lat = 0.0f;
+}
+
+static inline int action_dim_classic_discrete(void) {
+    return (int) (sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]))
+        * (int) (sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]));
+}
+
+static inline int action_dim_jerk_discrete(void) {
+    return (int) (sizeof(JERK_LONG) / sizeof(JERK_LONG[0])) * (int) (sizeof(JERK_LAT) / sizeof(JERK_LAT[0]));
+}
+
 static void reset_agent_state(Agent *agent) {
     agent->stopped = 0;
     agent->removed = 0;
@@ -229,15 +263,92 @@ static void reset_agent_state(Agent *agent) {
 }
 
 static void invalidate_agent(Agent *agent) {
+    agent->rear_x = INVALID_POSITION;
+    agent->rear_y = INVALID_POSITION;
     agent->sim_x = INVALID_POSITION;
     agent->sim_y = INVALID_POSITION;
     agent->sim_z = 0.0f;
     agent->sim_heading = 0.0f;
     agent->cos_heading = 1.0f;
     agent->sin_heading = 0.0f;
-    agent->sim_vx = 0.0f;
-    agent->sim_vy = 0.0f;
+    zero_agent_velocity_state(agent);
+    agent->steering_angle = 0.0f;
     agent->sim_valid = 0;
+}
+
+static inline void update_agent_speed_from_center_velocity(Agent *agent) {
+    float center_offset = 0.5f * agent->wheelbase;
+    agent->rear_vx = agent->sim_vx + (agent->yaw_rate * center_offset * agent->sin_heading);
+    agent->rear_vy = agent->sim_vy - (agent->yaw_rate * center_offset * agent->cos_heading);
+    float speed = sqrtf(agent->rear_vx * agent->rear_vx + agent->rear_vy * agent->rear_vy);
+    float v_dot_heading = agent->rear_vx * agent->cos_heading + agent->rear_vy * agent->sin_heading;
+    agent->sim_speed = speed;
+    agent->sim_speed_signed = copysignf(speed, v_dot_heading);
+}
+
+static inline void update_agent_speed_from_rear_velocity(Agent *agent) {
+    float center_offset = 0.5f * agent->wheelbase;
+    agent->sim_vx = agent->rear_vx - (agent->yaw_rate * center_offset * agent->sin_heading);
+    agent->sim_vy = agent->rear_vy + (agent->yaw_rate * center_offset * agent->cos_heading);
+    float speed = sqrtf(agent->rear_vx * agent->rear_vx + agent->rear_vy * agent->rear_vy);
+    float v_dot_heading = agent->rear_vx * agent->cos_heading + agent->rear_vy * agent->sin_heading;
+    agent->sim_speed = speed;
+    agent->sim_speed_signed = copysignf(speed, v_dot_heading);
+}
+
+static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
+    int prev_t = timestep - 1;
+    int next_t = timestep + 1;
+    int has_prev = (prev_t >= 0) && (agent->log_valid[prev_t] == 1);
+    int has_next = (next_t < agent->trajectory_length) && (agent->log_valid[next_t] == 1);
+
+    if (has_prev && has_next) {
+        float dtheta = normalize_heading(agent->log_heading[next_t] - agent->log_heading[prev_t]);
+        return dtheta / (2.0f * dt);
+    }
+    if (has_next) {
+        float dtheta = normalize_heading(agent->log_heading[next_t] - agent->log_heading[timestep]);
+        return dtheta / dt;
+    }
+    if (has_prev) {
+        float dtheta = normalize_heading(agent->log_heading[timestep] - agent->log_heading[prev_t]);
+        return dtheta / dt;
+    }
+
+    return 0.0f;
+}
+
+static inline void initialize_agent_dynamics_from_log_step(Agent *agent, int step, float dt) {
+    assert(step >= 0);
+    assert(step < agent->trajectory_length);
+
+    agent->sim_x = agent->log_trajectory_x[step];
+    agent->sim_y = agent->log_trajectory_y[step];
+    agent->sim_z = agent->log_trajectory_z[step];
+    agent->sim_heading = agent->log_heading[step];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_valid = agent->log_valid[step];
+    agent->sim_length = agent->log_length[step];
+    agent->sim_width = agent->log_width[step];
+    agent->sim_height = agent->log_height[step];
+    agent->wheelbase = 0.6f * agent->sim_length;
+    agent->steering_angle = 0.0f;
+    agent->a_long = 0.0f;
+    agent->a_lat = 0.0f;
+    agent->jerk_long = 0.0f;
+    agent->jerk_lat = 0.0f;
+    update_agent_rear_from_center(agent);
+
+    if (agent->control_state == CONTROL_STATE_STATIC) {
+        zero_agent_velocity_state(agent);
+        return;
+    }
+
+    agent->yaw_rate = compute_log_yaw_rate(agent, step, dt);
+    agent->sim_vx = agent->log_velocity_x[step];
+    agent->sim_vy = agent->log_velocity_y[step];
+    update_agent_speed_from_center_velocity(agent);
 }
 
 // ========================================
@@ -797,8 +908,6 @@ static void update_agent_z(Drive *env, Agent *agent) {
     DepthPoint neighbors[list_size];
     int valid_count = 0;
     int current_lane_count = 0;
-    // Partition: current-lane points first, others after; swap-on-match keeps current-lane
-    // prefix without a second buffer.
     for (int i = 0; i < list_size; i++) {
         if (entity_list[i].entity_idx == -1) {
             continue;
@@ -943,18 +1052,18 @@ static int collision_check(Drive *env, Agent *agent) {
 
 static void add_log(Drive *env) {
     for (int i = 0; i < env->num_agents; i++) {
-        Agent *e = &env->agents[i];
-        if (e->reached_goal_this_episode) {
+        Agent *agent = &env->agents[i];
+        if (agent->reached_goal_this_episode) {
             env->log.completion_rate += 1.0f;
         }
         int offroad = env->logs[i].offroad_rate;
         env->log.offroad_rate += env->logs[i].offroad_rate;
         int collided = env->logs[i].collision_rate;
         env->log.collision_rate += collided;
-        if (e->reached_goal_this_episode && !e->collided_before_goal) {
+        if (agent->reached_goal_this_episode && !agent->collided_before_goal) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !e->reached_goal_this_episode) {
+        if (!offroad && !collided && !agent->reached_goal_this_episode) {
             env->log.dnf_rate += 1.0f;
         }
         env->log.episode_length += env->logs[i].episode_length;
@@ -967,28 +1076,13 @@ static void add_log(Drive *env) {
 // Initialization Functions
 // ========================================
 
-static void set_start_position(Drive *env) {
+static void set_agent_at_init_log_step(Drive *env) {
+    assert(env->init_step >= 0);
+    assert(env->init_step < env->log_length);
     for (int i = 0; i < env->num_sim_agents; i++) {
         Agent *agent = &env->agents[i];
-        agent->sim_x = agent->log_trajectory_x[0];
-        agent->sim_y = agent->log_trajectory_y[0];
-        agent->sim_z = agent->log_trajectory_z[0];
-        agent->sim_length = agent->log_length[0];
-        agent->sim_width = agent->log_width[0];
-        agent->sim_height = agent->log_height[0];
-
-        if (agent->control_state == CONTROL_STATE_STATIC) {
-            agent->sim_vx = 0.0f;
-            agent->sim_vy = 0.0f;
-        } else {
-            agent->sim_vx = agent->log_velocity_x[0];
-            agent->sim_vy = agent->log_velocity_y[0];
-        }
-
-        agent->sim_heading = agent->log_heading[0];
-        agent->cos_heading = cosf(agent->sim_heading);
-        agent->sin_heading = sinf(agent->sim_heading);
-        agent->sim_valid = agent->log_valid[0];
+        int step = env->init_step;
+        initialize_agent_dynamics_from_log_step(agent, step, env->dt);
         agent->collision_state = NO_COLLISION;
         agent->respawn_timestep = -1;
         agent->reached_goal = 0;
@@ -1085,10 +1179,15 @@ static void move_expert(Drive *env, int agent_idx) {
     agent->cos_heading = cosf(agent->sim_heading);
     agent->sin_heading = sinf(agent->sim_heading);
     agent->sim_valid = agent->log_valid[t];
+    agent->yaw_rate = compute_log_yaw_rate(agent, t, env->dt);
+    agent->sim_vx = agent->log_velocity_x[t];
+    agent->sim_vy = agent->log_velocity_y[t];
+    update_agent_rear_from_center(agent);
+    update_agent_speed_from_center_velocity(agent);
 }
 
 static void remove_bad_trajectories(Drive *env) {
-    set_start_position(env);
+    set_agent_at_init_log_step(env);
     int collided_agents[env->num_agents];
     int collided_with_indices[env->num_agents];
     memset(collided_agents, 0, env->num_agents * sizeof(int));
@@ -1096,7 +1195,7 @@ static void remove_bad_trajectories(Drive *env) {
         collided_with_indices[i] = -1;
     }
 
-    for (int t = 0; t < TRAJECTORY_LENGTH; t++) {
+    for (int t = 0; t < env->log_length; t++) {
         for (int i = 0; i < env->num_agents; i++) {
             move_expert(env, i);
         }
@@ -1135,14 +1234,13 @@ int init(Drive *env) {
     if (load_map_binary(env->map_name, env) != 0) {
         return -1;
     }
-    env->dynamics_model = CLASSIC;
     init_grid_map(env);
     env->grid_map->vision_range = VISION_RANGE;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     compact_agents(env);
     remove_bad_trajectories(env);
-    set_start_position(env);
+    set_agent_at_init_log_step(env);
     env->logs = (Log *) calloc(env->num_agents, sizeof(Log));
     return 0;
 }
@@ -1208,14 +1306,7 @@ void free_allocated(Drive *env) {
 
 void respawn_agent(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
-    agent->sim_x = agent->log_trajectory_x[0];
-    agent->sim_y = agent->log_trajectory_y[0];
-    agent->sim_z = agent->log_trajectory_z[0];
-    agent->sim_heading = agent->log_heading[0];
-    agent->cos_heading = cosf(agent->sim_heading);
-    agent->sin_heading = sinf(agent->sim_heading);
-    agent->sim_vx = agent->log_velocity_x[0];
-    agent->sim_vy = agent->log_velocity_y[0];
+    initialize_agent_dynamics_from_log_step(agent, env->init_step, env->dt);
     agent->reached_goal = 0;
     agent->respawn_timestep = env->timestep;
 }
@@ -1803,50 +1894,110 @@ static void move_dynamics(Drive *env, int agent_idx) {
     }
 
     if (agent->stopped) {
-        agent->sim_vx = 0.0f;
-        agent->sim_vy = 0.0f;
+        zero_agent_velocity_state(agent);
         return;
     }
 
+    float speed = agent->sim_speed_signed;
+    float steering = agent->steering_angle;
+    float a_long_new = 0.0f, a_lat_new = 0.0f;
+
     if (env->dynamics_model == CLASSIC) {
-        float (*action_array)[2] = (float (*)[2]) env->actions;
-        int acceleration_index = action_array[agent_idx][0];
-        int steering_index = action_array[agent_idx][1];
-        float acceleration = ACCELERATION_VALUES[acceleration_index];
-        float steering = STEERING_VALUES[steering_index];
+        float accel = 0.0f, steer_req = 0.0f;
 
-        float x = agent->sim_x;
-        float y = agent->sim_y;
-        float heading = agent->sim_heading;
-        float speed = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
+        if (env->action_type == DISCRETE) { // Discrete
+            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            int val = (int) env->actions[agent_idx];
+            assert(val >= 0);
+            assert(val < action_dim_classic_discrete());
+            accel = ACCELERATION_VALUES[val / num_steer];
+            steer_req = STEERING_VALUES[val % num_steer];
+        } else if (env->action_type == CONTINUOUS) { // Continuous
+            float (*act)[2] = (float (*)[2]) env->actions;
+            accel = act[agent_idx][0] * ACCELERATION_VALUES[6];
+            steer_req = act[agent_idx][1] * STEERING_VALUES[8];
+        }
 
-        speed = speed + 0.5f * acceleration * SIM_DT;
-        speed = clip(speed, -MAX_SPEED, MAX_SPEED);
+        // Steering rate and position limits
+        float delta_steer = clip(steer_req - steering, -0.6f * env->dt, 0.6f * env->dt);
+        steering = clip(steering + delta_steer, -0.667f, 0.667f);
+        // Update state
+        speed = clip(speed + accel * env->dt, -MAX_SPEED, MAX_SPEED);
+        float yaw_rate = (speed * tanf(steering)) / agent->wheelbase;
+        // Simple bicycle model kinematics
+        agent->rear_x += speed * agent->cos_heading * env->dt;
+        agent->rear_y += speed * agent->sin_heading * env->dt;
+        agent->sim_heading = normalize_heading(agent->sim_heading + yaw_rate * env->dt);
+        // Accelerations update (not used in kinematics)
+        a_long_new = accel;
+        a_lat_new = speed * yaw_rate;
 
-        float beta = tanh(0.5 * tanf(steering));
-        float yaw_rate = (speed * cosf(beta) * tanf(steering)) / agent->sim_length;
-        float new_vx = speed * cosf(heading + beta);
-        float new_vy = speed * sinf(heading + beta);
+    } else if (env->dynamics_model == JERK) {
+        float j_long = 0.0f, j_lat = 0.0f;
 
-        x += new_vx * SIM_DT;
-        y += new_vy * SIM_DT;
-        heading += yaw_rate * SIM_DT;
+        if (env->action_type == DISCRETE) { // Discrete
+            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+            int val = (int) env->actions[agent_idx];
+            assert(val >= 0);
+            assert(val < action_dim_jerk_discrete());
+            j_long = JERK_LONG[val / num_lat];
+            j_lat = JERK_LAT[val % num_lat];
+        } else if (env->action_type == CONTINUOUS) { // Continuous
+            float (*act)[2] = (float (*)[2]) env->actions;
+            float jl_act = act[agent_idx][0];
+            j_long = (jl_act < 0) ? jl_act * (-JERK_LONG[0]) : jl_act * JERK_LONG[3];
+            j_lat = act[agent_idx][1] * JERK_LAT[2];
+        }
 
-        agent->sim_x = x;
-        agent->sim_y = y;
-        agent->sim_heading = heading;
-        agent->cos_heading = cosf(heading);
-        agent->sin_heading = sinf(heading);
-        agent->sim_vx = new_vx;
-        agent->sim_vy = new_vy;
-
-        update_agent_z(env, agent);
+        // Integrate jerk to get new accelerations
+        a_long_new = agent->a_long + (j_long * env->dt);
+        a_long_new = (agent->a_long * a_long_new < 0) ? 0.0f : clip(a_long_new, -5.0f, 2.5f);
+        // Lateral acceleration update with steering influence
+        a_lat_new = agent->a_lat + (j_lat * env->dt);
+        a_lat_new = (agent->a_lat * a_lat_new < 0) ? 0.0f : clip(a_lat_new, -4.0f, 4.0f);
+        // Velocity (Trapezoidal)
+        float v_new = clip(speed + 0.5f * (a_long_new + agent->a_long) * env->dt, -2.0f, 20.0f);
+        if (speed * v_new < 0) {
+            v_new = 0.0f;
+        }
+        // Curvature and Steering
+        float v_eff = fmaxf(fabsf(v_new), 1.0f);
+        float curvature = a_lat_new / (v_eff * v_eff);
+        float steer_req = atanf(curvature * agent->wheelbase);
+        float delta_steer = clip(steer_req - steering, -0.6f * env->dt, 0.6f * env->dt);
+        steering = clip(steering + delta_steer, -0.55f, 0.55f);
+        // Recalculate based on limits
+        float final_curv = tanf(steering) / agent->wheelbase;
+        a_lat_new = v_new * v_new * final_curv;
+        float dist = 0.5f * (v_new + speed) * env->dt;
+        float theta = dist * final_curv;
+        // Local to Global translation
+        float dx_l = (fabsf(theta) < 1e-5f) ? dist : sinf(theta) / final_curv;
+        float dy_l = (fabsf(theta) < 1e-5f) ? 0.0f : (1.0f - cosf(theta)) / final_curv;
+        // Apply rotation to get global dx, dy
+        agent->rear_x += dx_l * agent->cos_heading - dy_l * agent->sin_heading;
+        agent->rear_y += dx_l * agent->sin_heading + dy_l * agent->cos_heading;
+        agent->sim_heading = normalize_heading(agent->sim_heading + theta);
+        speed = v_new;
     }
+    // Vehicle dynamics state update
+    agent->steering_angle = steering;
+    agent->jerk_long = (a_long_new - agent->a_long) / env->dt;
+    agent->jerk_lat = (a_lat_new - agent->a_lat) / env->dt;
+    agent->a_long = a_long_new;
+    agent->a_lat = a_lat_new;
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->rear_vx = speed * agent->cos_heading;
+    agent->rear_vy = speed * agent->sin_heading;
+    update_agent_center_from_rear(agent);
+    update_agent_speed_from_rear_velocity(agent);
+    update_agent_z(env, agent);
 }
 
 void c_reset(Drive *env) {
-    env->timestep = 0;
-    set_start_position(env);
+    env->timestep = env->init_step;
+    set_agent_at_init_log_step(env);
     for (int i = 0; i < env->num_agents; i++) {
         env->logs[i] = (Log) {0};
         Agent *agent = &env->agents[i];
@@ -1861,7 +2012,7 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->num_agents * sizeof(float));
     env->timestep++;
 
-    if (env->timestep == TRAJECTORY_LENGTH) {
+    if (env->timestep == env->episode_length) {
         add_log(env);
         c_reset(env);
         return;

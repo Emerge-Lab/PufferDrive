@@ -122,7 +122,6 @@ static inline int unnormalize_road_type(int norm_type) {
 struct Agent {
     int id;
     int type;
-
     // Log trajectory
     int trajectory_length;
     float log_trajectory_distance;
@@ -136,8 +135,9 @@ struct Agent {
     float *log_width;
     float *log_height;
     int *log_valid;
-
     // Simulation state
+    float rear_x;
+    float rear_y;
     float sim_x;
     float sim_y;
     float sim_z;
@@ -146,12 +146,23 @@ struct Agent {
     float sin_heading;
     float sim_vx;
     float sim_vy;
+    float rear_vx;
+    float rear_vy;
+    float yaw_rate;
+    float sim_speed;
+    float sim_speed_signed;
     float sim_length;
     float sim_width;
     float sim_height;
     int sim_valid;
     int collision_state;
-
+    // Kinematic state for dynamics model
+    float a_long;
+    float a_lat;
+    float jerk_long;
+    float jerk_lat;
+    float steering_angle;
+    float wheelbase;
     // Metrics and status tracking
     float metrics_array[NUM_METRICS];
     int current_lane_idx;
@@ -164,7 +175,6 @@ struct Agent {
     int control_state;
     int stopped;
     int removed;
-
     // Goal position
     float goal_position_x;
     float goal_position_y;
@@ -173,13 +183,12 @@ struct Agent {
 
 struct RoadMapElement {
     int type;
-
+    // Geometric info
     int segment_length;
     float *x;
     float *y;
     float *z;
     float *headings;
-
     // Lane specific info
     int num_entries;
     int *entry_lanes;
@@ -190,11 +199,13 @@ struct RoadMapElement {
 
 struct TrafficControlElement {
     int type;
-
-    int state_length;
-    int *states;
+    // Geometric info
     float stop_line[6]; // Two 3D endpoints: [x1,y1,z1, x2,y2,z2]
     float heading;
+    // State info for traffic lights
+    int state_length;
+    int *states;
+    // Controlled lanes for traffic lights and signs
     int num_controlled_lanes;
     int *controlled_lanes;
 };

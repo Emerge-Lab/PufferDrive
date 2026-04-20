@@ -7,6 +7,7 @@ import glob
 import os
 import time
 from collections import defaultdict
+from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -86,6 +87,16 @@ def sample_logits(logits, action=None):
     return action.T, logprob.sum(0), logits_entropy
 
 
+def logits_to_fp32(logits):
+    if isinstance(logits, torch.distributions.Normal):
+        return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
+
+    if isinstance(logits, torch.Tensor):
+        return logits.float()
+
+    return [l.float() for l in logits]
+
+
 class _CudaPtr:
     """Wraps a raw CUDA pointer so torch.as_tensor can consume it via
     __cuda_array_interface__ without any copy or C++ torch dependency."""
@@ -117,13 +128,16 @@ def _cpu_tensor(ptr, shape, dtype):
 
 class PuffeRL:
     def __init__(self, args, vec, policy, verbose=True):
-        config = args["train"]
+        train_config = args["train"]
+        torch_config = args["torch"]
         device = "cuda" if _C.gpu else "cpu"
         self.device = device
+        self.world_size = args["world_size"]
 
         torch.set_float32_matmul_precision("high")
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = True
+        deterministic = torch_config["torch_deterministic"]
+        torch.backends.cudnn.deterministic = deterministic
+        torch.backends.cudnn.benchmark = not deterministic
 
         self._vec = vec
         self.gpu = vec.gpu
@@ -141,7 +155,7 @@ class PuffeRL:
             self.vec_terminals = _cpu_tensor(vec.terminals_ptr, (total_agents,), torch.float32)
 
         vec.reset()
-        horizon = config["horizon"]
+        horizon = train_config["horizon"]
         num_atns = vec.num_atns
 
         self.observations = torch.zeros(horizon, total_agents, vec.obs_size, dtype=obs_dtype, device=device)
@@ -151,23 +165,48 @@ class PuffeRL:
         self.rewards = torch.zeros(horizon, total_agents, device=device)
         self.terminals = torch.zeros(horizon, total_agents, device=device)
         self.ratio = torch.ones(total_agents, horizon, device=device)
-        self.state = policy.initial_state(total_agents, device=device)
+        self.uncompiled_policy = policy
+        self.policy = policy
+        self.policy_forward_eval = policy.forward_eval
+        if torch_config["compile"] and self.world_size == 1:
+            self.policy = torch.compile(policy, mode=torch_config["compile_mode"])
+            self.policy_forward_eval = torch.compile(policy.forward_eval, mode=torch_config["compile_mode"])
+
+        self.state = self.uncompiled_policy.initial_state(total_agents, device=device)
 
         self.batch_size = total_agents * horizon
-        self.minibatch_segments = config["minibatch_size"] // horizon
-        self.total_epochs = max(1, config["total_timesteps"] // self.batch_size)
+        self.minibatch_segments = train_config["minibatch_size"] // horizon
+        self.total_epochs = max(1, train_config["total_timesteps"] // self.batch_size)
 
-        self.policy = policy
-        self.optimizer = Muon(
-            self.policy.parameters(),
-            lr=config["learning_rate"],
-            momentum=config["beta1"],
-            eps=config["eps"],
-        )
+        optimizer = str(train_config["optimizer"]).lower()
+        if optimizer == "muon":
+            self.optimizer = Muon(
+                self.policy.parameters(),
+                lr=train_config["learning_rate"],
+                momentum=train_config["beta1"],
+                eps=train_config["eps"],
+            )
+        elif optimizer == "adam":
+            self.optimizer = torch.optim.Adam(
+                self.policy.parameters(),
+                lr=train_config["learning_rate"],
+                betas=(train_config["beta1"], train_config["beta2"]),
+                eps=train_config["eps"],
+            )
+        elif optimizer == "adamw":
+            self.optimizer = torch.optim.AdamW(
+                self.policy.parameters(),
+                lr=train_config["learning_rate"],
+                betas=(train_config["beta1"], train_config["beta2"]),
+                eps=train_config["eps"],
+            )
+        else:
+            raise ValueError(f"Unsupported optimizer: {optimizer}")
+
+        self.amp_enabled = torch_config["amp"] and device == "cuda" and torch.cuda.is_bf16_supported()
 
         self.args = args
-        self.config = config
-        self.world_size = args["world_size"]
+        self.config = train_config
         self.epoch = 0
         self.global_step = 0
         self.last_log_step = 0
@@ -176,7 +215,7 @@ class PuffeRL:
         self.profile = Profile(gpu=self.gpu)
         self.verbose = verbose
 
-        self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+        self.model_size = sum(p.numel() for p in self.uncompiled_policy.parameters() if p.requires_grad)
         if verbose:
             pufferlib.pufferl.print_dashboard(args, self.model_size, {}, clear=True)
 
@@ -199,6 +238,10 @@ class PuffeRL:
         config = self.config
         device = self.device
         horizon = config["horizon"]
+        if self.amp_enabled:
+            amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+        else:
+            amp_context = nullcontext()
 
         self.state = tuple(torch.zeros_like(s) for s in self.state) if self.state else ()
         o = self.vec_obs
@@ -212,9 +255,12 @@ class PuffeRL:
 
             prof.mark(1)
             with torch.no_grad():
-                logits, value, state = self.policy.forward_eval(o_device, self.state)
+                with amp_context:
+                    logits, value, state = self.policy_forward_eval(o_device, self.state)
+                logits = logits_to_fp32(logits)
                 action, logprob, _ = sample_logits(logits)
-            prof.mark(2)
+                value = value.float()
+                logprob = logprob.float()
 
             with torch.no_grad():
                 self.state = state
@@ -249,6 +295,10 @@ class PuffeRL:
         losses = defaultdict(float)
         config = self.config
         device = self.device
+        if self.amp_enabled:
+            amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+        else:
+            amp_context = nullcontext()
 
         b0 = config["prio_beta0"]
         a = config["prio_alpha"]
@@ -303,11 +353,13 @@ class PuffeRL:
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
-            prof.mark(1)
-            logits, newvalue = self.policy(mb_obs)
+            with amp_context:
+                logits, newvalue = self.policy(mb_obs)
+            logits = logits_to_fp32(logits)
             _, newlogprob, entropy = sample_logits(logits, action=mb_actions)
-            prof.mark(2)
-            prof.elapsed(P.TRAIN_FORWARD, 1, 2)
+            newvalue = newvalue.float()
+            newlogprob = newlogprob.float()
+            entropy = entropy.float()
 
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
             logratio = newlogprob - mb_logprobs
@@ -345,7 +397,7 @@ class PuffeRL:
             losses["importance"] += ratio.mean()
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+            torch.nn.utils.clip_grad_norm_(self.uncompiled_policy.parameters(), config["max_grad_norm"])
             self.optimizer.step()
             self.optimizer.zero_grad()
 
@@ -389,12 +441,12 @@ class PuffeRL:
     eval_log = log
 
     def save_weights(self, path):
-        torch.save(self.policy.state_dict(), path)
+        torch.save(self.uncompiled_policy.state_dict(), path)
 
     def load_weights(self, path):
         state_dict = torch.load(path, map_location=self.device)
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        self.policy.load_state_dict(state_dict)
+        self.uncompiled_policy.load_state_dict(state_dict)
 
     def render(self, env_id=0):
         self._vec.render(env_id)
@@ -408,6 +460,7 @@ class PuffeRL:
     @classmethod
     def create_pufferl(cls, args):
         """Matches _C.create_pufferl(args) interface."""
+        args["torch"]["compile"] = args["torch"]["compile"] and "LOCAL_RANK" not in os.environ
         # DDP setup
         if "LOCAL_RANK" in os.environ:
             world_size = int(os.environ.get("WORLD_SIZE", 1))

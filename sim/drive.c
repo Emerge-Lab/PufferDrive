@@ -7,7 +7,10 @@
 
 void demo() {
     Drive env = {
+        .action_type = DISCRETE,
         .dynamics_model = CLASSIC,
+        .dt = 0.1f,
+        .episode_length = 91,
         .reward_collision = -0.1f,
         .reward_offroad = -0.1f,
         .map_name = "resources/drive/demo_replay_map.bin",
@@ -68,7 +71,10 @@ void demo() {
 void performance_test() {
     long test_time = 10;
     Drive env = {
+        .action_type = DISCRETE,
         .dynamics_model = CLASSIC,
+        .dt = 0.1f,
+        .episode_length = 91,
         .map_name = "resources/drive/demo_replay_map.bin",
     };
     if (allocate(&env) != 0) {

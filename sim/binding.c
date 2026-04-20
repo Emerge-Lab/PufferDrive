@@ -86,6 +86,11 @@ Env *my_vec_init(
     float reward_collision_post_respawn = dict_get(env_kwargs, "reward_collision_post_respawn")->value;
     int collision_behavior = (int) dict_get(env_kwargs, "collision_behavior")->value;
     int offroad_behavior = (int) dict_get(env_kwargs, "offroad_behavior")->value;
+    float dt = (float) dict_get(env_kwargs, "dt")->value;
+    int init_step = (int) dict_get(env_kwargs, "init_step")->value;
+    int dynamics_model = (int) dict_get(env_kwargs, "dynamics_model")->value;
+    int action_type = (int) dict_get(env_kwargs, "action_type")->value;
+    int episode_length = (int) dict_get(env_kwargs, "episode_length")->value;
 
     int discovered_maps = 0;
     char **map_files = discover_map_files(&discovered_maps);
@@ -193,6 +198,11 @@ Env *my_vec_init(
         env->reward_collision_post_respawn = reward_collision_post_respawn;
         env->collision_behavior = collision_behavior;
         env->offroad_behavior = offroad_behavior;
+        env->dt = dt;
+        env->init_step = init_step;
+        env->dynamics_model = dynamics_model;
+        env->action_type = action_type;
+        env->episode_length = episode_length;
         env->num_max_agents = env_max_agents[i];
         if (init(env) != 0) {
             printf("ERROR: Failed to initialize map %s\n", map_files[env_map_ids[i]]);
@@ -229,6 +239,11 @@ void my_init(Env *env, Dict *kwargs) {
     env->reward_collision_post_respawn = dict_get(kwargs, "reward_collision_post_respawn")->value;
     env->collision_behavior = (int) dict_get(kwargs, "collision_behavior")->value;
     env->offroad_behavior = (int) dict_get(kwargs, "offroad_behavior")->value;
+    env->dt = dict_get(kwargs, "dt")->value;
+    env->init_step = (int) dict_get(kwargs, "init_step")->value;
+    env->dynamics_model = (int) dict_get(kwargs, "dynamics_model")->value;
+    env->action_type = (int) dict_get(kwargs, "action_type")->value;
+    env->episode_length = (int) dict_get(kwargs, "episode_length")->value;
     int map_id = dict_get(kwargs, "map_id")->value;
     int num_max_active_agents = dict_get(kwargs, "num_max_active_agents")->value;
     int num_maps = (int) dict_get(kwargs, "num_maps")->value;
