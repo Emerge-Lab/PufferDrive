@@ -261,6 +261,7 @@ class PuffeRL:
                 action, logprob, _ = sample_logits(logits)
                 value = value.float()
                 logprob = logprob.float()
+            prof.mark(2)
 
             with torch.no_grad():
                 self.state = state
@@ -353,6 +354,7 @@ class PuffeRL:
             mb_returns = advantages[idx] + mb_values
             mb_advantages = advantages[idx]
 
+            prof.mark(1)
             with amp_context:
                 logits, newvalue = self.policy(mb_obs)
             logits = logits_to_fp32(logits)
@@ -360,6 +362,8 @@ class PuffeRL:
             newvalue = newvalue.float()
             newlogprob = newlogprob.float()
             entropy = entropy.float()
+            prof.mark(2)
+            prof.elapsed(P.TRAIN_FORWARD, 1, 2)
 
             newlogprob = newlogprob.reshape(mb_logprobs.shape)
             logratio = newlogprob - mb_logprobs
