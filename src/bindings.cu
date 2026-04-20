@@ -12,9 +12,11 @@
 
 namespace py = pybind11;
 
+#if !PUFFER_NATIVE_PUFFERL
 static const char* native_backend_error() {
     return "Native CUDA backend unavailable in this build. Rebuild with `./build.sh --cuda`.";
 }
+#endif
 
 // Wrapper functions for Python bindings
 pybind11::dict puf_log(pybind11::object pufferl_obj) {
