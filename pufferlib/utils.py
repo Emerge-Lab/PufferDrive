@@ -231,6 +231,27 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                 "create_all_valid",
                 "--env.scenario-length",
                 str(scenario_length),
+                # Clean-eval overrides. Mirrors build_eval_overrides(clean=True):
+                # deterministic TL cycle (eval_mode=1), red lights enforced,
+                # no road-segment dropout, no partner blindness or phantom
+                # braking, wider partner budget. Subprocess re-parses the ini
+                # so training-time CLI overrides don't leak in here.
+                "--env.eval-mode",
+                "1",
+                "--env.traffic-light-behavior",
+                "1",
+                "--env.lane-segment-dropout",
+                "0.0",
+                "--env.boundary-segment-dropout",
+                "0.0",
+                "--env.partner-blindness-prob",
+                "0.0",
+                "--env.phantom-braking-prob",
+                "0.0",
+                "--env.phantom-braking-trigger-prob",
+                "0.0",
+                "--env.max-partner-observations",
+                "32",
             ]
 
             print(f"DrivingBehavioursEval: running class '{short}' with map_dir={map_dir}")
