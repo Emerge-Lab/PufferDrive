@@ -1,73 +1,10 @@
 #include "drive.h"
 
-#include <dirent.h>
-
 #define OBS_TENSOR_T FloatTensor
-
-#define MAP_BINARY_DIR "resources/drive/binaries"
 
 #define MY_VEC_INIT
 #define Env Drive
 #include "vecenv.h"
-
-static int has_bin_suffix(const char *name) {
-    int len = strlen(name);
-    return len >= 4 && strcmp(name + len - 4, ".bin") == 0;
-}
-
-static int compare_map_paths(const void *lhs, const void *rhs) {
-    const char *const *left = lhs;
-    const char *const *right = rhs;
-    return strcmp(*left, *right);
-}
-
-static void free_map_files(char **map_files, int num_map_files) {
-    for (int i = 0; i < num_map_files; i++) {
-        free(map_files[i]);
-    }
-    free(map_files);
-}
-
-static char **discover_map_files(int *num_map_files_out) {
-    DIR *dir = opendir(MAP_BINARY_DIR);
-    if (!dir) {
-        *num_map_files_out = 0;
-        return NULL;
-    }
-
-    int capacity = 16;
-    int count = 0;
-    char **map_files = (char **) malloc(capacity * sizeof(char *));
-    struct dirent *entry = NULL;
-
-    while ((entry = readdir(dir)) != NULL) {
-        if (!has_bin_suffix(entry->d_name)) {
-            continue;
-        }
-
-        if (count == capacity) {
-            capacity *= 2;
-            map_files = (char **) realloc(map_files, capacity * sizeof(char *));
-        }
-
-        int path_len = snprintf(NULL, 0, "%s/%s", MAP_BINARY_DIR, entry->d_name);
-        char *map_path = (char *) malloc((path_len + 1) * sizeof(char));
-        snprintf(map_path, path_len + 1, "%s/%s", MAP_BINARY_DIR, entry->d_name);
-        map_files[count++] = map_path;
-    }
-
-    closedir(dir);
-
-    if (count == 0) {
-        free(map_files);
-        *num_map_files_out = 0;
-        return NULL;
-    }
-
-    qsort(map_files, count, sizeof(char *), compare_map_paths);
-    *num_map_files_out = count;
-    return map_files;
-}
 
 Env *my_vec_init(
     int *num_envs_out,
