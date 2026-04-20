@@ -180,6 +180,23 @@ if [ -z "$CUDNN_LFLAG" ]; then
     CUDNN_LFLAG=$(python -c "import nvidia.cudnn, os; print('-L' + os.path.join(nvidia.cudnn.__path__[0], 'lib'))" 2>/dev/null || echo "")
 fi
 
+# NCCL include/lib fallback (mirrors the cuDNN fallback above).
+# Needed when NCCL is provided by the nvidia-nccl-cu12 wheel in the active venv.
+NCCL_IFLAG=""
+NCCL_LFLAG=""
+for dir in /usr/include /usr/local/cuda/include; do
+    if [ -f "$dir/nccl.h" ]; then NCCL_IFLAG="-I$dir"; break; fi
+done
+for dir in /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64; do
+    if [ -f "$dir/libnccl.so" ] || [ -f "$dir/libnccl.so.2" ]; then NCCL_LFLAG="-L$dir"; break; fi
+done
+if [ -z "$NCCL_IFLAG" ]; then
+    NCCL_IFLAG=$(python -c "import nvidia.nccl, os; print('-I' + os.path.join(nvidia.nccl.__path__[0], 'include'))" 2>/dev/null || echo "")
+fi
+if [ -z "$NCCL_LFLAG" ]; then
+    NCCL_LFLAG=$(python -c "import nvidia.nccl, os; print('-L' + os.path.join(nvidia.nccl.__path__[0], 'lib'))" 2>/dev/null || echo "")
+fi
+
 export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
 export CCACHE_BASEDIR="$(pwd)"
 export CCACHE_COMPILERCHECK=content
