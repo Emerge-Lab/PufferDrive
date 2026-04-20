@@ -1215,8 +1215,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (!is_active_agent || agent->sim_valid == 0) {
             continue;
         }
-        if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
-            // Draw all target waypoints: brightest (first) to darkest (last)
+        if (!IsKeyDown(KEY_LEFT_CONTROL)) {
+            // Draw all target waypoints: brightest (first) to darkest (last).
+            // Drawn in BEV too (obs_only=1) since the goal trail is the main
+            // thing you want to see when labeling scenarios.
             int num_wp = env->num_target_waypoints;
             if (num_wp > MAX_TARGET_WAYPOINTS)
                 num_wp = MAX_TARGET_WAYPOINTS;
