@@ -1973,11 +1973,14 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
 
     if clean:
         # Dropout changes the obs shape. Only safe when the policy is
-        # rebuilt from the eval env (standalone eval / render_scenario).
-        # NEVER pass clean=True from an inline-eval call site — the live
-        # training policy's encoder was built for the training obs shape.
+        # rebuilt from the eval env (standalone eval / render_scenario),
+        # OR when the inline caller uses _swap_policy_obs_counts.
         common_env["lane_segment_dropout"] = 0.0
         common_env["boundary_segment_dropout"] = 0.0
+        # Clean eval gets a bigger partner budget too — mirrors the lane
+        # story. The partner encoder is shared-MLP + max-pool, so the same
+        # policy weights handle the larger count via _swap_policy_obs_counts.
+        common_env["max_partner_observations"] = 32
 
     if simulation_mode == "gigaflow":
         eval_overrides = {
@@ -2019,44 +2022,48 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
     return eval_overrides
 
 
+_SWAPPABLE_OBS_COUNTS = (
+    "obs_lane_segment_count",
+    "obs_boundary_segment_count",
+    "max_partner_observations",
+    "max_traffic_control_observations",
+)
+
+
 @contextlib.contextmanager
 def _swap_policy_obs_counts(policy, vecenv):
-    """Temporarily align the policy's road-segment slicing with the eval env.
+    """Temporarily align the policy's obs slicing with the eval env.
 
-    Training uses dropout > 0 → smaller obs_{lane,boundary}_segment_count.
-    Clean eval uses dropout = 0 → larger counts, larger obs buffer. The
-    GigaFlow encoder (lane_encoder / boundary_encoder) is a shared MLP
-    applied per-segment with max-pool — its weights are count-invariant.
+    Training may use dropout > 0 or tighter partner/traffic-control caps,
+    giving smaller counts. Clean eval (or an eval with --max-partner-observations
+    bumped) produces a larger obs buffer. The GigaFlow encoders for lanes,
+    boundaries, partners, and traffic controls are all shared MLPs with
+    max-pool over their element dimension — weights are count-invariant.
     Only the obs-buffer slicing in DriveBackbone.forward depends on these
-    counts, so we can just swap them for the duration of the eval and the
-    same training policy works on the larger clean obs.
+    counts, so we swap them for the duration of the eval and the same
+    training policy works on the larger clean obs.
     """
     try:
         eval_env = vecenv.driver_env
-        new_lane = int(eval_env.obs_lane_segment_count)
-        new_boundary = int(eval_env.obs_boundary_segment_count)
+        new_counts = {name: int(getattr(eval_env, name)) for name in _SWAPPABLE_OBS_COUNTS}
     except AttributeError:
         # If the eval env doesn't expose these (unknown wrapper), skip the
         # swap — forward will still work when training and eval obs shapes
-        # coincide (clean=False or no dropout configured).
+        # coincide (clean=False or no overrides).
         yield
         return
 
-    targets = []
-    for m in policy.modules():
-        if hasattr(m, "obs_lane_segment_count") and hasattr(m, "obs_boundary_segment_count"):
-            targets.append(m)
-
-    saved = [(m.obs_lane_segment_count, m.obs_boundary_segment_count) for m in targets]
+    targets = [m for m in policy.modules() if all(hasattr(m, n) for n in _SWAPPABLE_OBS_COUNTS)]
+    saved = [{n: getattr(m, n) for n in _SWAPPABLE_OBS_COUNTS} for m in targets]
     try:
         for m in targets:
-            m.obs_lane_segment_count = new_lane
-            m.obs_boundary_segment_count = new_boundary
+            for n, v in new_counts.items():
+                setattr(m, n, v)
         yield
     finally:
-        for m, (orig_lane, orig_boundary) in zip(targets, saved):
-            m.obs_lane_segment_count = orig_lane
-            m.obs_boundary_segment_count = orig_boundary
+        for m, orig in zip(targets, saved):
+            for n, v in orig.items():
+                setattr(m, n, v)
 
 
 def verify_scenario_coverage(csv_path: str, num_scenarios: int) -> dict:
