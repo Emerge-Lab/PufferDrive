@@ -3015,8 +3015,13 @@ def _render_adversarial_buffered(
         args["vec"]["seed"] = None
 
     backend = args["vec"]["backend"]
+    if backend == "PufferEnv":
+        backend = "Multiprocessing"
     num_scenarios = args["num_scenarios"]
     num_workers = min(args["vec"]["num_envs"], num_scenarios)
+    agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
+    if agents_per_scene is None:
+        agents_per_scene = args["env"].get("max_agents_per_env")
 
     scenarios_per_worker = num_scenarios // num_workers
     remainder = num_scenarios % num_workers
@@ -3027,6 +3032,7 @@ def _render_adversarial_buffered(
         worker_kwargs["capture_replay"] = bool(args["render"])
         worker_kwargs["capture_replay_keep_failed_only"] = bool(args.get("render_failures_only", 1))
         worker_kwargs["capture_replay_always_keep_first"] = bool(args.get("always_render_first", 1))
+        worker_kwargs["num_agents"] = int(agents_per_scene)
         worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
         worker_kwargs["starting_map"] = current_start
         worker_kwargs["num_eval_scenarios"] = worker_num_scenarios
@@ -3040,6 +3046,19 @@ def _render_adversarial_buffered(
         batch_size=num_workers,
         seed=args["vec"].get("seed"),
     )
+
+    if not quiet:
+        print("Buffered adversarial render configuration:")
+        print(f"  Workers: {num_workers}")
+        print(f"  Scenarios: {num_scenarios}")
+        print(f"  Agents per scene: {agents_per_scene}")
+        print(f"  Eval agent budget from config: {args['eval']['num_agents']}")
+        print(f"  Effective buffered worker agent budget: {agents_per_scene}")
+        print("  Internal scenarios per worker: 1")
+        print(f"  Replay capture enabled: {bool(args['render'])}")
+        print(f"  Replay obs capture enabled: {bool(args.get('render_obs'))}")
+        print(f"  Failure-only keep rule: {bool(args.get('render_failures_only', 1))}")
+        print(f"  Always keep first scenario: {bool(args.get('always_render_first', 1))}")
 
     if vecenv is None:
         package = args["package"]
