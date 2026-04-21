@@ -1,10 +1,12 @@
 import argparse
 from pathlib import Path
+import pickle
 import numpy as np
 import gymnasium
 import json
 import struct
 import os
+import zlib
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -201,6 +203,9 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration=10,
+        capture_replay=False,
+        capture_replay_keep_failed_only=True,
+        capture_replay_always_keep_first=True,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -250,6 +255,7 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
+        self.action_type_str = action_type
         self.dynamics_model = dynamics_model
         if dynamics_model == "classic":
             self.dynamics_model_flag = 0
@@ -304,6 +310,11 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration = int(phantom_braking_duration)
+        self.capture_replay = bool(capture_replay)
+        self.capture_replay_keep_failed_only = bool(capture_replay_keep_failed_only)
+        self.capture_replay_always_keep_first = bool(capture_replay_always_keep_first)
+        self._replay_buffers = []
+        self._replay_batch_start = starting_map
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
@@ -398,6 +409,7 @@ class Drive(pufferlib.PufferEnv):
             )
 
         # Iterate through all maps to count total agents that can be initialized for each map
+        self._replay_batch_start = self.starting_map_counter
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
@@ -439,6 +451,99 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, self.random_seed)
+        if self.capture_replay:
+            self._initialize_replay_buffers()
+
+    def _normalize_scenarios(self, scenarios):
+        if isinstance(scenarios, list):
+            return scenarios
+        if scenarios is None:
+            return []
+        return [scenarios]
+
+    def _build_replay_static_scenario(self, scenario):
+        return {
+            "map_name": scenario.get("map_name"),
+            "scenario_id": scenario.get("scenario_id"),
+            "dynamics_model": scenario.get("dynamics_model", 0),
+            "target_type": self.target_type_str,
+            "active_agent_indices": list(scenario.get("active_agent_indices", [])),
+            "road_elements": scenario.get("road_elements", []),
+        }
+
+    def _initialize_replay_buffers(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        self._replay_buffers = []
+        for env_idx, scenario in enumerate(scenarios):
+            self._replay_buffers.append(
+                {
+                    "episode_id": self._replay_batch_start + env_idx if self.eval_mode else env_idx,
+                    "static_scenario": self._build_replay_static_scenario(scenario),
+                    "agent_history": [],
+                    "traffic_history": [],
+                    "trajectory_history": [],
+                    "has_trajectory_history": "trajectory" in self.action_type_str,
+                }
+            )
+
+    def _capture_replay_step(self):
+        import pufferlib.viz
+
+        scenarios = self._normalize_scenarios(self.get_state())
+        if len(self._replay_buffers) != len(scenarios):
+            self._initialize_replay_buffers()
+
+        use_trajectory = "trajectory" in self.action_type_str
+        for env_idx, scenario in enumerate(scenarios):
+            buffer = self._replay_buffers[env_idx]
+            buffer["agent_history"].append(pufferlib.viz.fill_agents_state(scenario, use_trajectory=use_trajectory))
+            buffer["traffic_history"].append(pufferlib.viz.fill_traffics_state(scenario, self.tick))
+            if buffer["has_trajectory_history"]:
+                buffer["trajectory_history"].append(pufferlib.viz.fill_trajectories(scenario, self.tick))
+
+    def _compress_replay_bundle(self, bundle):
+        return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=6)
+
+    def _build_replay_summaries(self, log_summaries=None):
+        scenarios = self._normalize_scenarios(self.get_state())
+        summaries = []
+        for env_idx, scenario in enumerate(scenarios):
+            episode_id = self._replay_batch_start + env_idx if self.eval_mode else env_idx
+            if log_summaries is not None and env_idx < len(log_summaries):
+                did_target_fail = int(bool(log_summaries[env_idx].get("did_target_fail", 0)))
+            else:
+                did_target_fail = int(bool(scenario.get("did_target_fail", 0)))
+            should_keep = True
+            if self.capture_replay_keep_failed_only:
+                should_keep = did_target_fail == 1
+                if self.capture_replay_always_keep_first and episode_id == 0:
+                    should_keep = True
+
+            summary = {
+                "episode_id": episode_id,
+                "map_name": scenario.get("map_name"),
+                "scenario_id": scenario.get("scenario_id"),
+            }
+
+            if self.capture_replay and should_keep:
+                buffer = self._replay_buffers[env_idx]
+                bundle = {
+                    "episode_id": episode_id,
+                    "map_name": scenario.get("map_name"),
+                    "scenario_id": scenario.get("scenario_id"),
+                    "did_target_fail": did_target_fail,
+                    "static_scenario": buffer["static_scenario"],
+                    "agent_history": buffer["agent_history"],
+                    "traffic_history": buffer["traffic_history"],
+                    "trajectory_history": buffer["trajectory_history"],
+                    "all_agents_obs_history": [],
+                    "head_north": True,
+                }
+                summary["replay_bundle"] = self._compress_replay_bundle(bundle)
+
+            summaries.append(summary)
+
+        return summaries
 
     def _env_init_kwargs(self, map_file, max_agents):
         return {
@@ -526,22 +631,44 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, reset_seed)
         self.tick = 0
         self.truncations[:] = 0
+        if self.capture_replay:
+            self._initialize_replay_buffers()
         return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
+        if self.capture_replay:
+            self._capture_replay_step()
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
+        log_payload = None
         if self.tick % self.report_interval == 0:
-            log = binding.vec_log(self.c_envs, self.num_agents)
-            if log:
-                info.append(log)
-                # print(log)
+            log_payload = binding.vec_log(self.c_envs, self.num_agents)
+            if log_payload and not (
+                self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0
+            ):
+                info.append(log_payload)
+                # print(log_payload)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
             will_resample = 1
             if will_resample:
+                if log_payload:
+                    log_summaries = log_payload if isinstance(log_payload, list) else [log_payload]
+                else:
+                    log_summaries = None
+
+                summaries = self._build_replay_summaries(log_summaries=log_summaries)
+                if log_summaries is not None and len(log_summaries) == len(summaries):
+                    merged_summaries = []
+                    for log_summary, summary in zip(log_summaries, summaries):
+                        merged_summary = dict(log_summary)
+                        merged_summary.update(summary)
+                        merged_summaries.append(merged_summary)
+                    summaries = merged_summaries
+                info.extend(summaries)
+
                 # Calculate dynamic batch size for Eval + Replay mode
                 self.current_num_eval_scenarios = self.num_eval_scenarios
                 if self.eval_mode:
@@ -552,6 +679,7 @@ class Drive(pufferlib.PufferEnv):
                 if self.current_num_eval_scenarios == 0:
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
                 binding.vec_close(self.c_envs)
+                self._replay_batch_start = self.starting_map_counter
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
@@ -591,6 +719,8 @@ class Drive(pufferlib.PufferEnv):
                 self.c_envs = binding.vectorize(*env_ids)
 
                 binding.vec_reset(self.c_envs, self.random_seed)
+                if self.capture_replay:
+                    self._initialize_replay_buffers()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
         info.append({"agent_offsets": self.agent_offsets})

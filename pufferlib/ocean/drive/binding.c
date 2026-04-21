@@ -187,6 +187,25 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
+    float target_episode_length = 0.0f;
+    float target_episode_return = 0.0f;
+    float did_target_collide = 0.0f;
+    float did_target_offroad = 0.0f;
+    float did_target_fail = 0.0f;
+    if (env->active_agent_count > 0) {
+        target_episode_length = env->logs[0].episode_length;
+        target_episode_return = env->logs[0].episode_return;
+        did_target_collide = env->logs[0].collision_rate > 0.0f ? 1.0f : 0.0f;
+        did_target_offroad = env->logs[0].offroad_rate > 0.0f ? 1.0f : 0.0f;
+        did_target_fail = did_target_collide || did_target_offroad ? 1.0f : 0.0f;
+    }
+
+    assign_to_dict(dict, "target_episode_length", target_episode_length);
+    assign_to_dict(dict, "target_episode_return", target_episode_return);
+    assign_to_dict(dict, "did_target_collide", did_target_collide);
+    assign_to_dict(dict, "did_target_offroad", did_target_offroad);
+    assign_to_dict(dict, "did_target_fail", did_target_fail);
+
     /* objects_of_interest array */
     if (env->objects_of_interest && env->num_objects_of_interest > 0) {
         PyObject *lst = PyList_New(env->num_objects_of_interest);

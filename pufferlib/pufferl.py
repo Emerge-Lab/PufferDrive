@@ -7,6 +7,7 @@ import copy
 import numbers
 import warnings
 from dataclasses import dataclass
+import pickle
 
 import pandas as pd
 
@@ -28,7 +29,9 @@ import configparser
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor
 import yaml
+import zlib
 
 import numpy as np
 import psutil
@@ -2442,6 +2445,8 @@ def eval_multi_scenarios(
     torch.manual_seed(seed)
 
     backend = args["vec"]["backend"]
+    if backend == "PufferEnv":
+        backend = "Multiprocessing"
     num_scenarios = args["num_scenarios"]
 
     num_workers = min(args["vec"]["num_envs"], num_scenarios)
@@ -2740,7 +2745,7 @@ def eval_multi_scenarios_render(
     vecenv.close()
 
 
-def render_adversarial(
+def _render_adversarial_serial(
     env_name,
     args=None,
     vecenv=None,
@@ -2948,6 +2953,271 @@ def render_adversarial(
     )
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
     vecenv.close()
+
+
+def _decompress_replay_bundle(payload):
+    return pickle.loads(zlib.decompress(payload))
+
+
+def _render_replay_bundle_job(job):
+    bundle_payload, output_path = job
+    bundle = _decompress_replay_bundle(bundle_payload)
+    pufferlib.viz.generate_interactive_replay(
+        bundle["static_scenario"],
+        bundle["agent_history"],
+        bundle["traffic_history"],
+        bundle["trajectory_history"],
+        bundle["all_agents_obs_history"],
+        output_path,
+        head_north=bundle.get("head_north", True),
+    )
+    return output_path
+
+
+def _load_adversarial_render_args(env_name, args=None):
+    if args is not None:
+        return args
+
+    tmp_args = load_config(env_name)
+    model_path = tmp_args.get("load_model_path")
+    num_agents_eval = tmp_args["eval"]["num_agents"]
+    map_dir = tmp_args["eval"]["map_dir"]
+    eval_overrides = build_eval_overrides(
+        simulation_mode=tmp_args["eval_simulation"],
+        num_agents=num_agents_eval,
+        num_scenarios=tmp_args["num_scenarios"],
+        map_dir=map_dir,
+        maps=tmp_args.get("eval_maps"),
+        num_carla_maps=tmp_args.get("num_carla_maps", 8),
+        agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+        scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
+    )
+    return load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+
+
+def _render_adversarial_buffered(
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    target_policy=None,
+    logger=None,
+    metric_prefix="validation",
+    quiet=False,
+):
+    args = _load_adversarial_render_args(env_name, args)
+
+    if args.get("seed") is not None:
+        np.random.seed(args["seed"])
+        torch.manual_seed(args["seed"])
+        args["vec"]["seed"] = args["seed"]
+    else:
+        args["vec"]["seed"] = None
+
+    backend = args["vec"]["backend"]
+    num_scenarios = args["num_scenarios"]
+    num_workers = min(args["vec"]["num_envs"], num_scenarios)
+
+    scenarios_per_worker = num_scenarios // num_workers
+    remainder = num_scenarios % num_workers
+    current_start = 0
+    env_kwargs_list = []
+    for worker_idx in range(num_workers):
+        worker_kwargs = copy.deepcopy(args["env"])
+        worker_kwargs["capture_replay"] = bool(args["render"])
+        worker_kwargs["capture_replay_keep_failed_only"] = bool(args.get("render_failures_only", 1))
+        worker_kwargs["capture_replay_always_keep_first"] = bool(args.get("always_render_first", 1))
+        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
+        worker_kwargs["starting_map"] = current_start
+        worker_kwargs["num_eval_scenarios"] = worker_num_scenarios
+        env_kwargs_list.append(worker_kwargs)
+        current_start += worker_num_scenarios
+
+    args["vec"] = dict(
+        backend=backend,
+        num_envs=num_workers,
+        num_workers=num_workers,
+        batch_size=num_workers,
+        seed=args["vec"].get("seed"),
+    )
+
+    if vecenv is None:
+        package = args["package"]
+        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+        env_module = importlib.import_module(module_name)
+        make_env = env_module.env_creator(env_name)
+        env_creators = [make_env] * num_workers
+        env_args = [[]] * num_workers
+        vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs_list, **args["vec"])
+
+    policy = policy or load_policy(args, vecenv, env_name)
+    target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
+    policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    state = {}
+    target_state = {}
+    if args["train"]["use_rnn"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+        )
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+        )
+
+    eval_folder = _get_eval_folder(args, adversarial=True)
+    os.makedirs(eval_folder, exist_ok=True)
+    gif_folder = None
+    if args["render"]:
+        gif_folder = os.path.join(eval_folder, "gif")
+        os.makedirs(gif_folder, exist_ok=True)
+
+    filename_suffix = _get_random_eval_filename_suffix(args)
+    global_infos = {}
+    replay_jobs = []
+
+    vecenv.async_reset(args.get("seed"))
+    ob, _, _, _, infos, _, _ = vecenv.recv()
+    scenarios_processed = 0
+    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+        while scenarios_processed < num_scenarios:
+            if args["train"]["use_rnn"]:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+                )
+                target_state = dict(
+                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                )
+
+            for _ in range(args["env"]["scenario_length"]):
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(ob).to(device)
+                    target_mask = _build_eval_target_mask(infos, vecenv, device)
+                    step_context = dict(reward=None, done=None, env_id=None, mask=None)
+                    actor_output = _route_actor_actions(
+                        ob_tensor,
+                        target_mask,
+                        policy_actor,
+                        step_context,
+                        policy_recurrent_state=state if args["train"]["use_rnn"] else None,
+                        target_actor=target_actor,
+                        target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
+                        deterministic=True,
+                    )
+                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if actor_output.clip_actions:
+                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+                ob, _, _, _, infos = vecenv.step(action)
+                summaries = _extract_episode_summaries(infos)
+                if not summaries:
+                    continue
+
+                for summary in summaries:
+                    summary = dict(summary)
+                    replay_bundle = summary.pop("replay_bundle", None)
+                    env_map_name = os.path.basename(summary["map_name"]).split(".")[0]
+                    summary["map_name"] = env_map_name
+
+                    for key, value in summary.items():
+                        if key not in global_infos:
+                            global_infos[key] = []
+                        global_infos[key].append(value)
+
+                    if replay_bundle is not None and gif_folder is not None:
+                        global_episode_id = int(summary["episode_id"])
+                        failure_flag = int(summary.get("did_target_fail", 0))
+                        output_path = os.path.join(
+                            gif_folder,
+                            f"{env_map_name}{filename_suffix}_fail{failure_flag}_{global_episode_id:03d}.html",
+                        )
+                        replay_jobs.append((replay_bundle, output_path))
+
+                    scenarios_processed += 1
+                    pbar.update(1)
+
+                if scenarios_processed >= num_scenarios:
+                    break
+
+    vecenv.close()
+
+    if replay_jobs:
+        render_workers = int(args.get("replay_render_workers", 0) or 0)
+        if render_workers > 1:
+            with ProcessPoolExecutor(max_workers=render_workers) as executor:
+                list(
+                    tqdm(
+                        executor.map(_render_replay_bundle_job, replay_jobs),
+                        total=len(replay_jobs),
+                        desc="Rendering replays",
+                        disable=quiet,
+                    )
+                )
+        else:
+            for replay_job in tqdm(replay_jobs, desc="Rendering replays", disable=quiet):
+                _render_replay_bundle_job(replay_job)
+        pufferlib.viz.build_gallery_index(gif_folder)
+
+    if replay_jobs:
+        rendered_rows = []
+        for _, output_path in replay_jobs:
+            filename = os.path.basename(output_path)
+            rendered_rows.append({"filename": filename, "path": output_path})
+        rendered_df = pd.DataFrame(rendered_rows)
+        rendered_df.to_csv(os.path.join(eval_folder, f"rendered_replays{filename_suffix}.csv"), index=False)
+
+    avg_infos = _export_metrics(
+        global_infos,
+        eval_folder,
+        num_scenarios,
+        quiet,
+        verify_coverage=False,
+        simulation_mode=args["env"]["simulation_mode"],
+        filename_suffix=filename_suffix,
+    )
+    _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
+
+
+def render_adversarial(
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    target_policy=None,
+    logger=None,
+    metric_prefix="validation",
+    quiet=False,
+):
+    args = _load_adversarial_render_args(env_name, args)
+    if args.get("render_obs"):
+        return _render_adversarial_serial(
+            env_name,
+            args=args,
+            vecenv=vecenv,
+            policy=policy,
+            target_policy=target_policy,
+            logger=logger,
+            metric_prefix=metric_prefix,
+            quiet=quiet,
+        )
+
+    return _render_adversarial_buffered(
+        env_name,
+        args=args,
+        vecenv=vecenv,
+        policy=policy,
+        target_policy=target_policy,
+        logger=logger,
+        metric_prefix=metric_prefix,
+        quiet=quiet,
+    )
 
 
 def sweep(args=None, env_name=None):
@@ -3212,6 +3482,24 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument(
         "--render-obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"
+    )
+    parser.add_argument(
+        "--render-failures-only",
+        type=int,
+        default=1,
+        help="For buffered adversarial rendering, only keep episodes where the target failed",
+    )
+    parser.add_argument(
+        "--always-render-first",
+        type=int,
+        default=1,
+        help="For buffered adversarial rendering, always keep episode 0 even if the target does not fail",
+    )
+    parser.add_argument(
+        "--replay-render-workers",
+        type=int,
+        default=0,
+        help="Number of offline workers to use when materializing buffered replay HTML files",
     )
     parser.add_argument("--agent-index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
