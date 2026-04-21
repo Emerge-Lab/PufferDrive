@@ -427,65 +427,106 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                render_simulation_mode = self.config["eval"].get("multi_scenario_simulation_mode", "gigaflow")
-                num_agents_render = self.config["eval"]["num_agents"]
-                render_map_dir = self.config["eval"]["map_dir"]
-                render_overrides = build_eval_overrides(
-                    simulation_mode=render_simulation_mode,
-                    num_agents=num_agents_render,
-                    num_scenarios=self.config["eval"].get("multi_scenario_num_scenarios", 4),
-                    map_dir=render_map_dir,
-                    num_carla_maps=self.config["env_config"].get("num_maps", 8),
-                    min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
-                    max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
-                )
-                render_args = load_eval_multi_scenarios_config(
-                    env_name=self.config["env"],
-                    model_path=None,
-                    eval_overrides=render_overrides,
-                )
-                experiment_name = f"{self.config['env']}_{self.logger.run_id}"
-                render_args["global_step"] = self.global_step
-                render_args["num_scenarios"] = self.config["eval"].get("multi_scenario_num_scenarios", 4)
-                render_args["eval_simulation"] = render_simulation_mode
-                render_args["render"] = True
-                render_args["render_obs"] = False
-                render_args["inline_eval"] = True
-                render_args["load_model_path"] = os.path.join(
-                    self.config["data_dir"], experiment_name, "models", f"inline_epoch_{self.epoch}.pt"
-                )
-                render_args["eval_results_dir"] = os.path.join(
-                    self.config["data_dir"],
-                    experiment_name,
-                    "renders",
-                    f"epoch_{self.epoch:08d}",
-                )
-                backend_name = self.config["eval"].get("multi_scenario_render_backend", "egl")
-                _bev_views = (
-                    [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
-                )
-                for _vmode, _vsuffix, _vlabel in _bev_views:
+                # --- Traffic signal env: dedicated render path ---
+                if self.config["env"] == "puffer_traffic":
+                    experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+                    traffic_render_args = {
+                        "env": self.config.get("env_config", {}),
+                        "policy": self.config.get("policy", {}),
+                        "policy_name": self.config.get("policy_name", "Traffic"),
+                        "load_model_path": os.path.join(
+                            self.config["data_dir"],
+                            experiment_name,
+                            "models",
+                            f"inline_epoch_{self.epoch}.pt",
+                        ),
+                        "eval_results_dir": os.path.join(
+                            self.config["data_dir"],
+                            experiment_name,
+                            "renders",
+                            f"epoch_{self.epoch:08d}",
+                        ),
+                        "global_step": self.global_step,
+                        "num_scenarios": self.config.get("eval", {}).get("multi_scenario_num_scenarios", 4),
+                        "render_max_steps": self.config.get("eval", {}).get("render_max_steps", 100),
+                    }
                     try:
-                        eval_multi_scenarios_render(
+                        eval_traffic_render(
                             env_name=self.config["env"],
-                            args=dict(render_args),
-                            vecenv=None,
+                            args=traffic_render_args,
                             policy=self.uncompiled_policy,
                             logger=self.logger,
-                            metric_prefix=f"render_{_vlabel}",
+                            metric_prefix="render",
                             quiet=True,
-                            render_backend=backend_name,
-                            view_mode=_vmode,
-                            video_suffix=_vsuffix,
-                            log_view_label=_vlabel,
-                            render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
+                            view_mode=0,
+                            log_view_label="sim_state",
                         )
                     except Exception as e:
                         import traceback
 
-                        print(f"\n⚠️  render failed (view={_vlabel}) at epoch {self.epoch}: {type(e).__name__}: {e}")
+                        print(f"\n⚠️  Traffic render failed at epoch {self.epoch}: {type(e).__name__}: {e}")
                         traceback.print_exc()
                         print("Training continues.")
+                else:
+                    render_simulation_mode = self.config["eval"].get("multi_scenario_simulation_mode", "gigaflow")
+                    num_agents_render = self.config["eval"]["num_agents"]
+                    render_map_dir = self.config["eval"]["map_dir"]
+                    render_overrides = build_eval_overrides(
+                        simulation_mode=render_simulation_mode,
+                        num_agents=num_agents_render,
+                        num_scenarios=self.config["eval"].get("multi_scenario_num_scenarios", 4),
+                        map_dir=render_map_dir,
+                        num_carla_maps=self.config["env_config"].get("num_maps", 8),
+                        min_agents_per_env=self.config["eval"].get("min_agents_per_env", 50),
+                        max_agents_per_env=self.config["eval"].get("max_agents_per_env", 50),
+                    )
+                    render_args = load_eval_multi_scenarios_config(
+                        env_name=self.config["env"],
+                        model_path=None,
+                        eval_overrides=render_overrides,
+                    )
+                    experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+                    render_args["global_step"] = self.global_step
+                    render_args["num_scenarios"] = self.config["eval"].get("multi_scenario_num_scenarios", 4)
+                    render_args["eval_simulation"] = render_simulation_mode
+                    render_args["render"] = True
+                    render_args["render_obs"] = False
+                    render_args["inline_eval"] = True
+                    render_args["load_model_path"] = os.path.join(
+                        self.config["data_dir"], experiment_name, "models", f"inline_epoch_{self.epoch}.pt"
+                    )
+                    render_args["eval_results_dir"] = os.path.join(
+                        self.config["data_dir"],
+                        experiment_name,
+                        "renders",
+                        f"epoch_{self.epoch:08d}",
+                    )
+                    backend_name = self.config["eval"].get("multi_scenario_render_backend", "egl")
+                    _bev_views = (
+                        [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
+                    )
+                    for _vmode, _vsuffix, _vlabel in _bev_views:
+                        try:
+                            eval_multi_scenarios_render(
+                                env_name=self.config["env"],
+                                args=dict(render_args),
+                                vecenv=None,
+                                policy=self.uncompiled_policy,
+                                logger=self.logger,
+                                metric_prefix=f"render_{_vlabel}",
+                                quiet=True,
+                                render_backend=backend_name,
+                                view_mode=_vmode,
+                                video_suffix=_vsuffix,
+                                log_view_label=_vlabel,
+                                render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
+                            )
+                        except Exception as e:
+                            import traceback
+
+                            print(f"\n⚠️  render failed (view={_vlabel}) at epoch {self.epoch}: {type(e).__name__}: {e}")
+                            traceback.print_exc()
+                            print("Training continues.")
 
         if self.config["eval"]["wosac_realism_eval"] and (
             self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training
@@ -585,8 +626,10 @@ class PuffeRL:
         # above but calls eval_multi_scenarios_render with render=True and
         # the configured backend ("egl" by default on this branch, writes
         # one mp4 per scenario via the C render.h pipeline).
-        if self.config["eval"]["multi_scenario_render"] and (
-            self.epoch % self.config["eval"]["multi_scenario_render_interval"] == 0 or done_training
+        if (
+            self.config["eval"]["multi_scenario_render"]
+            and (self.epoch % self.config["eval"]["multi_scenario_render_interval"] == 0 or done_training)
+            and self.config["env"] != "puffer_traffic"
         ):
             render_simulation_mode = self.config["eval"]["multi_scenario_simulation_mode"]
             num_agents_render = self.config["eval"]["num_agents"]
@@ -2283,6 +2326,148 @@ def eval_multi_scenarios(
     vecenv.close()
     _sys_instr.stderr.write("[render-instr] vecenv.close() returned\n")
     _sys_instr.stderr.flush()
+
+
+def eval_traffic_render(
+    env_name,
+    args=None,
+    policy=None,
+    logger=None,
+    metric_prefix="render",
+    quiet=False,
+    render_backend="egl",
+    view_mode=0,
+    video_suffix="",
+    log_view_label="render",
+    render_max_steps=None,
+):
+    """Render a Traffic training rollout and upload mp4s to wandb.
+
+    Mirrors eval_multi_scenarios_render but is Traffic-specific:
+    - Creates a Traffic env with render_mode='headless' (EGL path only)
+    - Steps the Traffic signal policy each timestep
+    - Renders via env.drive (EGL → ffmpeg → .mp4)
+    - Uploads mp4s to wandb as wandb.Video
+    """
+    import os
+    import torch
+    import numpy as np
+
+    if args is None:
+        args = load_config(env_name)
+
+    device = args.get("device", "cpu")
+
+    # Always EGL for Traffic — no HTML viz support yet
+    render_backend = "egl"
+
+    # Point env to headless render
+    env_args = dict(args.get("env", {}))
+    env_args["render_mode"] = "headless"
+
+    # Build env and policy
+    from pufferlib.ocean.traffic.traffic import Traffic
+
+    env = Traffic(**env_args)
+    env.reset()
+
+    if policy is None:
+        from pufferlib.ocean.traffic import torch as traffic_torch
+
+        policy_cls = getattr(traffic_torch, args.get("policy_name", "Traffic"))
+        policy = policy_cls(env, **args.get("policy", {}))
+        load_path = args.get("load_model_path")
+        if load_path and os.path.exists(load_path):
+            ckpt = torch.load(load_path, map_location=device, weights_only=False)
+            state = ckpt.get("policy_state_dict", ckpt.get("model_state_dict", ckpt))
+            policy.load_state_dict(state, strict=False)
+    policy = policy.to(device)
+    policy.eval()
+
+    # LSTM state
+    lstm_h = lstm_c = None
+    if hasattr(policy, "hidden_size"):
+        n = env.num_agents
+        h = policy.hidden_size
+        lstm_h = torch.zeros(1, n, h, device=device)
+        lstm_c = torch.zeros(1, n, h, device=device)
+
+    # Output folder for mp4s
+    eval_results_dir = args.get("eval_results_dir", "renders/traffic")
+    mp4_folder = os.path.join(eval_results_dir, "mp4")
+    os.makedirs(mp4_folder, exist_ok=True)
+    saved_cwd = os.getcwd()
+    os.chdir(mp4_folder)
+
+    n_scenarios = args.get("num_scenarios", 4)
+    max_steps = render_max_steps or args.get("render_max_steps", 100)
+    _render_key = f"{metric_prefix}_{log_view_label}"
+
+    try:
+        for scenario_idx in range(n_scenarios):
+            env.reset()
+            # Filename: scenario_001.mp4, scenario_001_bev.mp4, etc.
+            suffix = f"_{scenario_idx:03d}{video_suffix}"
+            env.set_video_suffix(suffix, env_id=0)
+
+            ob = torch.as_tensor(env.observations, dtype=torch.float32).to(device)
+
+            for _ in range(max_steps):
+                with torch.no_grad():
+                    if lstm_h is not None:
+                        logits, value, lstm_h, lstm_c = policy(ob, (lstm_h, lstm_c))
+                    else:
+                        logits, value = policy(ob)
+                # logits is a tuple of tensors (one per action head)
+                actions = (
+                    torch.cat([t.argmax(dim=-1, keepdim=True) for t in logits], dim=-1)
+                    .squeeze(-1)
+                    .cpu()
+                    .numpy()
+                    .astype(np.int32)
+                )
+
+                ob_np, _, _, trunc, _ = env.step(actions)
+                ob = torch.as_tensor(ob_np, dtype=torch.float32).to(device)
+
+                env.render(view_mode=view_mode, env_id=0)
+
+                if trunc.any():
+                    break
+
+            env.close_client(env_id=0)
+
+        # Collect and upload mp4s
+        os.chdir(saved_cwd)
+        mp4_paths = sorted(
+            [
+                os.path.join(mp4_folder, f)
+                for f in os.listdir(mp4_folder)
+                if f.endswith(".mp4") and os.path.splitext(f)[0].endswith(video_suffix or "")
+            ]
+        )
+
+        if mp4_paths and logger is not None:
+            import wandb
+
+            step = args.get("global_step")
+            video_log = {
+                f"{_render_key}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=10, format="mp4")
+                for p in mp4_paths
+            }
+            if step is not None:
+                logger.log(video_log, step)
+            else:
+                logger.log(video_log)
+            if not quiet:
+                print(f"Uploaded {len(mp4_paths)} Traffic render mp4(s) to wandb [{_render_key}]")
+
+    except Exception as e:
+        os.chdir(saved_cwd)
+        print(f"⚠️  eval_traffic_render failed: {type(e).__name__}: {e}")
+
+    finally:
+        env.close()
 
 
 def eval_multi_scenarios_render(

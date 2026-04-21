@@ -291,5 +291,14 @@ class Traffic(pufferlib.PufferEnv):
     def render(self, view_mode=0, env_id=0):
         self.drive.render(view_mode=view_mode, env_id=env_id)
 
+    def set_video_suffix(self, suffix, env_id=0):
+        self.drive.set_video_suffix(suffix, env_id=env_id)
+
+    def close_client(self, env_id=0):
+        self.drive.close_client(env_id=env_id)
+
+    def get_state(self):
+        return self.drive.get_state()
+
     def close(self):
         self.drive.close()
