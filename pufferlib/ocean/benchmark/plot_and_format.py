@@ -1157,62 +1157,141 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     return fig
 
 
-def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_requirements.pdf"):
-    """Human-data sweep at fixed 10k metadata maps.
+# ---------------------------------------------------------------------------
+# SMART baseline loader (used by plot_human_data_requirements)
+# ---------------------------------------------------------------------------
 
-    Companion to plot_data_requirements: instead of sweeping self-play training
-    maps, this sweeps the amount of human demonstration data (anchor data) while
-    holding self-play training maps fixed at 10k.
+# Checkpoints that do NOT follow the smart_mini_vehicle_only_<N> naming and
+# need an explicit num_maps. smart_tiny_clsft_e9 was trained on the full
+# Waymo dataset (~500k maps → "52 days" on the plot's x-axis).
+_SMART_CHECKPOINT_NUM_MAPS = {
+    "smart_tiny_clsft_e9": 500_000,
+}
 
-    x-axis: human demonstration data in minutes (log scale).
-    4 line-plot subplots:
-        0) HR at-fault collision rate [%] (validation)
-        1) HR collision rate [%]          (validation)
-        2) SP collision rate [%]          (validation)
-        3) HR route progress [%]          (validation)
+# Pre-BC epoch-31 snapshot: explicitly excluded from the scaling study.
+_SMART_EXCLUDED_CHECKPOINTS = {"smart_tiny_pre_bc_e31"}
 
-    Series:
-        - Regularized (ours):   line through anchor-data points (pale purple)
-        - Best unregularized:   horizontal dashed blue line (10k-map unreg checkpoint)
-        - SMART baseline:       line across SMART checkpoints (pink, same style as reg)
-                                — plotted only where SMART data is available
+
+def _smart_ckpt_to_num_maps(ckpt: str) -> float:
+    """Map a SMART checkpoint name to its number of training maps."""
+    if ckpt in _SMART_CHECKPOINT_NUM_MAPS:
+        return _SMART_CHECKPOINT_NUM_MAPS[ckpt]
+    m = re.match(r"smart_mini_vehicle_only_(\d+)$", ckpt)
+    if m:
+        return int(m.group(1))
+    return np.nan
+
+
+def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
+    """Load the SMART baseline CSV and pivot into per-num_maps rows.
+
+    Returns a DataFrame with columns:
+        num_maps, minutes,
+        hr_atfault_pct, hr_coll_pct, hr_progress_pct, sp_coll_pct
+
+    Missing metrics are left as NaN so downstream `dropna(subset=[col])` skips
+    them cleanly. Returns an empty (but correctly-typed) DataFrame if the CSV
+    isn't present, which keeps the plotting code behaving as if no SMART data
+    were available.
     """
-    # ── Colours (kept local to avoid touching module-level constants) ───────
-    COLOR_OURS = "#CCCCFF"  # reg self-play RL (ours)
-    COLOR_OURS_EDGE = "#6B3FA0"  # darker purple edge for marker readability
-    COLOR_SELFPLAY = "#4A7FD4"  # unregularized self-play baseline
-    COLOR_SMART = "#E8609A"  # SMART baseline
-    COLOR_SMART_EDGE = "#B4437A"  # darker pink edge, matches the ours/edge pattern
+    cols = [
+        "num_maps",
+        "minutes",
+        "hr_atfault_pct",
+        "hr_coll_pct",
+        "hr_progress_pct",
+        "sp_coll_pct",
+        "sp_progress_pct",
+    ]
+    if not os.path.exists(csv_path):
+        print(f"  {csv_path} not found — SMART baseline will be omitted from the plot.")
+        return pd.DataFrame(columns=cols)
+
+    raw = pd.read_csv(csv_path)
+
+    # Drop explicitly-excluded checkpoints (e.g. the pre-BC snapshot).
+    raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
+
+    # Map each remaining checkpoint to a num_maps value; drop anything we
+    # don't recognise rather than silently plotting it at NaN.
+    raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
+    unknown = raw[raw["num_maps"].isna()]["checkpoint"].unique()
+    if len(unknown) > 0:
+        print(f"  Warning: SMART checkpoints with no num_maps mapping, skipping: {list(unknown)}")
+    raw = raw.dropna(subset=["num_maps"]).copy()
+    raw["num_maps"] = raw["num_maps"].astype(int)
+
+    # Pivot: one row per num_maps with HR + SP metrics side by side.
+    hr = (
+        raw[raw["mode"] == "scaling_hr_val"]
+        .set_index("num_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
+        .rename(
+            columns={
+                "at_fault_collision_rate": "hr_atfault_pct",
+                "collision_rate": "hr_coll_pct",
+                "route_progress": "hr_progress_pct",
+            }
+        )
+    )
+    sp = (
+        raw[raw["mode"] == "scaling_sp_val"]
+        .set_index("num_maps")[["collision_rate", "route_progress"]]
+        .rename(
+            columns={
+                "collision_rate": "sp_coll_pct",
+                "route_progress": "sp_progress_pct",
+            }
+        )
+    )
+
+    # Fractions → percentages (matches the *_mean_pct convention used
+    # elsewhere in the plotting code).
+    out = hr.join(sp, how="outer") * 100
+    out = out.reset_index().sort_values("num_maps").reset_index(drop=True)
+    out["minutes"] = out["num_maps"] * 9 / 60
+    return out[cols]
+
+
+def plot_human_data_requirements(
+    df,
+    save_path="results/figures/eval_human_data_requirements.pdf",
+    save_path_gains="results/figures/eval_human_data_gains.pdf",
+    smart_csv="results/smart_baseline_res.csv",
+):
+    """Human-data sweep at fixed 50k metadata maps.
+
+    Saves two PDFs:
+      - save_path:        1×4 line plots (HR at-fault / HR coll / SP coll / HR progress).
+                          HR at-fault is linear; others log; route progress clipped to [50, 110].
+      - save_path_gains:  1×4 categorical bar plots of reg-self-play's relative improvement
+                          vs SMART at each matched human-data amount, expressed as a ratio.
+                          Collision metrics: SMART / reg (lower is better). Route progress:
+                          reg / SMART. Reference line at y=1 marks parity; bars above 1 mean
+                          reg self-play wins. "52 days" is omitted from the x-axis.
+
+    Returns (fig_lines, fig_gains).
+    """
+    # ── Colours ─────────────────────────────────────────────────────────────
+    COLOR_OURS = "#CCCCFF"
+    COLOR_OURS_EDGE = "#6B3FA0"
+    COLOR_SELFPLAY = "#4A7FD4"
+    COLOR_SMART = "#E8609A"
+    COLOR_SMART_EDGE = "#B4437A"
 
     # ── SMART baseline data ─────────────────────────────────────────────────
-    # TODO: replace with `pd.read_csv("results/smart_baseline.csv")` once ready.
-    # Values stored in percent to match the y-axes; np.nan = not yet measured.
-    # NOTE: num_maps has a duplicate 12000 entry — one is a placeholder row
-    # that gets dropped by dropna before plotting. Confirm whether this is
-    # intentional or should be 1200 (which had 4.06% in earlier notes).
-    SMART_DATA = pd.DataFrame(
-        {
-            "num_maps": [67, 200, 1200, 12000, 500000],
-            "hr_atfault_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-            "hr_coll_pct": [17.25, 9.14, 5.0, 4.5, 3.91],
-            "sp_coll_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-            "hr_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-        }
-    )
-    # 9 seconds per scenario → minutes (same conversion as reg)
-    SMART_DATA["minutes"] = SMART_DATA["num_maps"] * 9 / 60
+    SMART_DATA = _load_smart_baseline(smart_csv)
 
-    # ── Filter to scaling modes and 50k metadata maps only ───────────────────
+    # ── Filter to scaling modes and 50k metadata maps only ──────────────────
     scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
     df = df[df["mode"].isin(scaling_modes)].copy()
     df = df[df["sp_maps"] == 50000]
     if df.empty:
-        print("  No 10k sp_maps data — skipping plot_human_data_requirements.")
+        print("  No 50k sp_maps data — skipping plot_human_data_requirements.")
         return None
 
     df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
 
-    # ── Aggregate per anchor_maps ────────────────────────────────────────────
+    # ── Aggregate per anchor_maps ───────────────────────────────────────────
     hr = df[df["mode"] == "scaling_hr_val"]
     hr_agg = (
         hr.groupby("anchor_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
@@ -1236,7 +1315,6 @@ def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_
     agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
     agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
 
-    # Convert fractional rates to percentages
     for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll"):
         agg[f"{col}_mean_pct"] = agg[f"{col}_mean"] * 100
         agg[f"{col}_sem_pct"] = agg[f"{col}_sem"] * 100
@@ -1244,20 +1322,79 @@ def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_
     unreg = agg[agg["anchor_maps"] == 0]
     reg = agg[agg["anchor_maps"] > 0].sort_values("anchor_minutes")
 
-    # ── Plot ─────────────────────────────────────────────────────────────────
-    _set_style(3)
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
-
-    # (y_mean_col, y_sem_col, ylabel, smart_col_in_SMART_DATA)
+    # (y_mean, y_sem, ylabel, smart_col, metric_label, lower_is_better, top_yscale)
     subplot_specs = [
-        ("hr_atfault_mean_pct", "hr_atfault_sem_pct", "Human-replay at-fault collision rate [%]", "hr_atfault_pct"),
-        ("hr_coll_mean_pct", "hr_coll_sem_pct", "Human-replay collision rate [%]", "hr_coll_pct"),
-        ("sp_coll_mean_pct", "sp_coll_sem_pct", "Self-play collision rate [%]", "sp_coll_pct"),
-        ("hr_progress_mean_pct", "hr_progress_sem_pct", "Human-replay route progress [%]", "hr_progress_pct"),
+        (
+            "hr_atfault_mean_pct",
+            "hr_atfault_sem_pct",
+            "Human-replay at-fault collision rate [%]",
+            "hr_atfault_pct",
+            "HR at-fault coll.",
+            True,
+            "linear",
+        ),
+        (
+            "hr_coll_mean_pct",
+            "hr_coll_sem_pct",
+            "Human-replay collision rate [%]",
+            "hr_coll_pct",
+            "HR collision",
+            True,
+            "linear",
+        ),
+        (
+            "sp_coll_mean_pct",
+            "sp_coll_sem_pct",
+            "Self-play collision rate [%]",
+            "sp_coll_pct",
+            "SP collision",
+            True,
+            "linear",
+        ),
+        (
+            "hr_progress_mean_pct",
+            "hr_progress_sem_pct",
+            "Human-replay route progress [%]",
+            "hr_progress_pct",
+            "HR route progress",
+            False,
+            "linear",
+        ),
     ]
 
-    for ax, (y_mean, y_sem, ylabel, smart_col) in zip(axes, subplot_specs):
-        # Regularized (ours) — connected line through anchor points
+    tick_positions = [10, 30, 180, 1800, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
+
+    # Labels excluded from the gains figure's x-axis (line plots still show them).
+    GAINS_EXCLUDED_LABELS = {"52 days"}
+
+    def _minutes_to_label(m):
+        for target, label in zip(tick_positions, tick_labels):
+            if abs(m - target) / target < 0.02:
+                return label
+        if m < 60:
+            return f"{m:.0f} min"
+        if m < 1440:
+            return f"{m / 60:.0f} hours"
+        return f"{m / 1440:.0f} days"
+
+    # Shared category order for the gains figure, driven by SMART's anchors.
+    if not SMART_DATA.empty:
+        category_order = [
+            _minutes_to_label(m)
+            for m in SMART_DATA.sort_values("minutes")["minutes"]
+            if _minutes_to_label(m) not in GAINS_EXCLUDED_LABELS
+        ]
+    else:
+        category_order = []
+
+    green_palette = sns.color_palette("Greens_d", n_colors=max(len(category_order), 1))
+
+    # ── FIGURE 1: line plots ────────────────────────────────────────────────
+    _set_style(3)
+    fig_lines, line_axes = plt.subplots(1, 4, figsize=(18, 4.5))
+
+    for ax, (y_mean, y_sem, ylabel, smart_col, _, _, top_yscale) in zip(line_axes, subplot_specs):
         if not reg.empty:
             ax.errorbar(
                 reg["anchor_minutes"],
@@ -1273,8 +1410,6 @@ def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_
                 label="regularized self-play (ours)",
                 zorder=4,
             )
-
-        # Best unregularized — horizontal dashed line at the 10k checkpoint's value
         if not unreg.empty:
             ax.axhline(
                 unreg[y_mean].iloc[0],
@@ -1285,9 +1420,7 @@ def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_
                 label="best unregularized self-play",
                 zorder=2,
             )
-
-        # SMART — same line style as reg, pink colour family
-        smart_valid = SMART_DATA.dropna(subset=[smart_col])
+        smart_valid = SMART_DATA.dropna(subset=[smart_col]) if smart_col in SMART_DATA.columns else SMART_DATA.iloc[0:0]
         if not smart_valid.empty:
             ax.plot(
                 smart_valid["minutes"],
@@ -1303,26 +1436,94 @@ def plot_human_data_requirements(df, save_path="results/figures/eval_human_data_
                 zorder=3,
             )
 
-        tick_positions = [10, 30, 180, 1800, 75000]
-        tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
         ax.set_xscale("symlog", linthresh=60, linscale=1.2)
         ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
         ax.minorticks_off()
-        ax.set_ylim(bottom=0)
+        ax.set_yscale(top_yscale)
+        if top_yscale == "linear":
+            ax.set_ylim(bottom=0)
+        if y_mean == "hr_progress_mean_pct":
+            ax.set_ylim(50, 110)
         ax.set_xlabel("Human demonstration data")
         ax.set_ylabel(ylabel)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
         ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
         sns.despine(ax=ax)
 
-    plt.tight_layout()
+    fig_lines.tight_layout()
     _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    fig_lines.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+
+    # ── FIGURE 2: relative-improvement bars ─────────────────────────────────
+    fig_gains, gain_axes = plt.subplots(1, 4, figsize=(18, 4.5), sharey=True)
+
+    for bax, (y_mean, _, _, smart_col, _, lower_better, _) in zip(gain_axes, subplot_specs):
+        # Parity line: ratio = 1 means reg and SMART are equal.
+        bax.axhline(1.0, color="black", linewidth=1.0, linestyle="--", zorder=1)
+
+        records = []
+        if not SMART_DATA.empty and smart_col in SMART_DATA.columns:
+            for _, s in SMART_DATA.sort_values("minutes").iterrows():
+                label = _minutes_to_label(s["minutes"])
+                if label in GAINS_EXCLUDED_LABELS:
+                    continue
+                matches = reg[np.isclose(reg["anchor_minutes"], s["minutes"], rtol=0.02)]
+                if matches.empty:
+                    continue
+                s_val = s[smart_col]
+                r_val = matches.iloc[0][y_mean]
+                if pd.isna(s_val) or pd.isna(r_val) or s_val == 0 or r_val == 0:
+                    continue
+                # Orient so "higher = reg self-play is better" in every metric.
+                ratio = s_val / r_val if lower_better else r_val / s_val
+                records.append({"human_data": label, "ratio": ratio})
+
+        if records:
+            gain_df = pd.DataFrame(records)
+            sns.barplot(
+                data=gain_df,
+                x="human_data",
+                y="ratio",
+                order=category_order,
+                color="g",
+                ax=bax,
+                zorder=2,
+            )
+            for container in bax.containers:
+                bax.bar_label(container, fmt="%.2fx", fontsize=8, padding=2)
+        else:
+            bax.text(
+                0.5,
+                0.5,
+                "no overlapping data",
+                ha="center",
+                va="center",
+                transform=bax.transAxes,
+                fontsize=10,
+                color="gray",
+            )
+
+        bax.set_xlabel("Human demonstration data")
+        bax.set_ylabel("Relative improvement \n of reg. self-play RL", fontsize=14)
+        bax.tick_params(axis="x", rotation=35)
+        for tick in bax.get_xticklabels():
+            tick.set_ha("right")
+        bax.grid(axis="y", alpha=0.3, linestyle="--")
+        sns.despine(ax=bax)
+
+    fig_gains.tight_layout()
+    _ensure_dir(save_path_gains)
+    fig_gains.savefig(save_path_gains, dpi=DPI, bbox_inches="tight", facecolor="white")
+
     plt.show()
-    return fig
+    return fig_lines, fig_gains
 
 
-def generate_human_data_latex_table(df, save_path="results/figures/eval_human_data_table.tex"):
+def generate_human_data_latex_table(
+    df,
+    save_path="results/figures/eval_human_data_table.tex",
+    smart_csv="results/smart_baseline_res.csv",
+):
     """Companion table to plot_human_data_requirements.
 
     Rows: one per (method, human-data-amount) pair.
@@ -1349,19 +1550,12 @@ def generate_human_data_latex_table(df, save_path="results/figures/eval_human_da
       \\usepackage{bm}
     """
 
-    # ── SMART baseline data (keep in sync with plot_human_data_requirements) ─
-    # TODO: replace with pd.read_csv("results/smart_baseline.csv") once ready.
-    SMART_DATA = pd.DataFrame(
-        {
-            "num_maps": [67, 200, 12000, 12000, 500000],
-            "hr_atfault_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-            "hr_coll_pct": [17.25, 9.14, 4.06, np.nan, 3.91],
-            "sp_coll_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-            "hr_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-            "sp_progress_pct": [np.nan, np.nan, np.nan, np.nan, np.nan],  # TODO
-        }
-    )
-    SMART_DATA["minutes"] = SMART_DATA["num_maps"] * 9 / 60
+    # ── SMART baseline data (loaded from CSV) ───────────────────────────────
+    # Uses the same loader as plot_human_data_requirements so the table and
+    # plot stay in sync. Returns columns hr_atfault_pct / hr_coll_pct /
+    # hr_progress_pct / sp_coll_pct / sp_progress_pct (plus num_maps and
+    # minutes); missing metrics stay NaN and render as "---" in the table.
+    SMART_DATA = _load_smart_baseline(smart_csv)
 
     # ── Filter to scaling modes and 50k metadata maps ───────────────────────
     scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
