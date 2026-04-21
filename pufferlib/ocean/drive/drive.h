@@ -287,6 +287,7 @@ struct Drive {
     float adv_reward_weight_offroad;
     float adv_reward_weight_drive;
     float adv_reward_weight_adversarial;
+    int adv_bonus_only;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -4889,7 +4890,8 @@ void c_step(Drive *env) {
             reward_terms[i].drive *= env->adv_reward_weight_drive;
 
             // Assign adversarial reward.
-            reward_terms[i].adversarial = -target_reward * env->adv_reward_weight_adversarial;
+            float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;
+            reward_terms[i].adversarial = adversarial_bonus * env->adv_reward_weight_adversarial;
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
             // reward_terms[i].offroad = 0.0f;
