@@ -567,6 +567,7 @@ class PuffeRL:
             render_simulation_mode = self.config["eval"]["multi_scenario_simulation_mode"]
             num_agents_render = self.config["eval"]["num_agents"]
             render_map_dir = self.config["eval"]["map_dir"]
+            clean_render = self.config["eval"].get("clean_eval", True)
 
             render_overrides = build_eval_overrides(
                 simulation_mode=render_simulation_mode,
@@ -574,6 +575,7 @@ class PuffeRL:
                 num_scenarios=self.config["eval"]["multi_scenario_num_scenarios"],
                 map_dir=render_map_dir,
                 num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
+                clean=clean_render,
             )
 
             render_args = load_eval_multi_scenarios_config(
@@ -634,6 +636,7 @@ class PuffeRL:
                         # the mystery ~500-c_render-call abort is properly diagnosed.
                         # Set to 0/negative to disable the cap entirely.
                         render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
+                        clean=clean_render,
                     )
                 except Exception as e:
                     import traceback
@@ -971,11 +974,17 @@ class PuffeRL:
 
             short = class_name[len(EVAL_SECTIONS_PREFIX) :]
             num_maps = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+            # Render under clean-eval conditions (zero dropout, zero
+            # perturbations, enforced red lights) so the mp4s show what
+            # the policy does under controlled eval, not the noisy
+            # training-time perturbations. Matches run_driving_behaviours
+            # _eval_in_subprocess, so the video matches the metric eval.
             render_overrides = build_eval_overrides(
                 simulation_mode="replay",
                 num_agents=1,
                 num_scenarios=1,
                 map_dir=map_dir,
+                clean=True,
             )
             render_overrides["env"]["control_mode"] = "control_sdc_only"
             render_overrides["env"]["num_maps"] = num_maps
@@ -1017,6 +1026,7 @@ class PuffeRL:
                         video_suffix=vsuffix,
                         log_view_label=vlabel,
                         render_max_steps=(self.config["eval"].get("render_max_steps", 50) or None),
+                        clean=True,
                     )
                 except Exception as e:
                     import traceback
@@ -2334,6 +2344,7 @@ def eval_multi_scenarios_render(
     log_view_label="render",
     render_max_steps=None,
     render_key_prefix=None,
+    clean=False,
 ):
     # Set fixed seed for reproducible evaluation
     np.random.seed(42)
@@ -2344,14 +2355,17 @@ def eval_multi_scenarios_render(
         model_path = tmp_args.get("load_model_path")
         num_agents_eval = tmp_args["eval"]["num_agents"]
         map_dir = tmp_args["eval"]["map_dir"]
+        clean_from_config = tmp_args["eval"].get("clean_eval", False)
         eval_overrides = build_eval_overrides(
             simulation_mode=tmp_args["eval_simulation"],
             num_agents=num_agents_eval,
             num_scenarios=tmp_args["num_scenarios"],
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            clean=clean_from_config,
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+        clean = clean or clean_from_config
 
     backend = args["vec"]["backend"]
     if backend != "PufferEnv":
@@ -2447,7 +2461,10 @@ def eval_multi_scenarios_render(
     # Serial/Multiprocessing: need vecenv.envs[0] to reach the underlying env.
     target_env = vecenv if not hasattr(vecenv, "envs") else vecenv.envs[0]
 
-    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+    # Align the live training policy's obs slicing with the (potentially
+    # clean) eval env for the render. Same swap as eval_multi_scenarios.
+    swap_ctx = _swap_policy_obs_counts(policy, vecenv) if clean else contextlib.nullcontext()
+    with swap_ctx, tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
         while scenarios_processed < num_scenarios:
             ob, _ = vecenv.reset()
 

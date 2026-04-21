@@ -2602,9 +2602,10 @@ static void add_log(Drive *env) {
         env->log.num_waypoints_reached += num_waypoints_reached;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
-        // TODO: define better scoring criteria ?
-        // FIXME
-        if (num_goals_reached >= 4 && !agent->removed && !agent->stopped) {
+        // Score: 1 per agent that reached all 3 target waypoints without
+        // being removed/stopped. Was hardcoded to >=4, unreachable given
+        // num_target_waypoints=3 in the ini, so score was always 0.
+        if (num_goals_reached >= 3 && !agent->removed && !agent->stopped) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && !red_light_violations && num_waypoints_reached < 1) {
