@@ -18,7 +18,7 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 # CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
-CPT_PATH = "models/scaling_cpts/unreg_classic_10k_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
+CPT_PATH = "models/reg_delta_check_gamma_0.99.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
@@ -30,10 +30,10 @@ OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 20
+NUM_ENVS_TO_RENDER = 0
 RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
 
-EPISODE_LENGTHS = [120]
+EPISODE_LENGTHS = [110, 120, 150, 200]
 
 METRICS = [
     "n",
@@ -82,6 +82,8 @@ def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behav
     config["env"]["goal_behavior"] = goal_behavior
     config["env"]["render_mode"] = 1
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
+
+    print(config["env"]["lambda_value"])
     return config
 
 
@@ -143,7 +145,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
     for mode_name, map_dir, control_mode, num_maps in [
         # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
         # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
-        # ("hr_train", TRAIN_MAP_DIR, "control_sdc_only", 50_000),
+        ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
         ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", 200),
     ]:
         print(f"\n{'─' * 60}")
@@ -153,7 +155,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         config = make_eval_config(
             cpt_config,
             map_dir,
-            episode_len=episode_len,  # <-- now variable
+            episode_len=episode_len,
             control_mode=control_mode,
             num_maps=num_maps,
         )
@@ -212,12 +214,12 @@ def main():
 
     if not df.empty:
         summary = df.groupby(["episode_len", "mode"]).agg(
-            scenes=("score", "count"),
-            score=("score", "mean"),
+            # scenes=("score", "count"),
+            # score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
             at_fault_collision_rate=("at_fault_collision_rate", "mean"),
             rear_collision_rate=("rear_collision_rate", "mean"),
-            offroad_rate=("offroad_rate", "mean"),
+            # offroad_rate=("offroad_rate", "mean"),
             route_progress=("route_progress", "mean"),
             lateral_error_avg=("lateral_error_avg", "mean"),
         )

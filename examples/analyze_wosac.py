@@ -37,7 +37,7 @@ OUTPUT_CSV = "results/checkpoint_wosac_results.csv"
 WOSAC_MAP_DIR = "resources/drive/binaries/validation"
 WOSAC_BATCH_SIZE = 64  # num_scenes_per_batch
 WOSAC_SCENARIO_POOL_SIZE = 10000
-WOSAC_MAX_BATCHES = 1
+WOSAC_MAX_BATCHES = 2
 WOSAC_NUM_ROLLOUTS = 32
 WOSAC_INIT_STEPS = 10
 WOSAC_CONTROL_MODE = "control_wosac"
@@ -146,6 +146,7 @@ def make_wosac_config(cpt_config):
     config["env"]["init_steps"] = WOSAC_INIT_STEPS
     config["env"]["goal_behavior"] = WOSAC_GOAL_BEHAVIOR
     config["env"]["goal_radius"] = WOSAC_GOAL_RADIUS
+    config["env"]["episode_length"] = 91
 
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
 
