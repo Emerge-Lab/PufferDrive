@@ -1,10 +1,10 @@
 #include <Python.h>
 #include "drive.h"
+#include "../traffic/traffic.h"
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
-#include "../env_binding.h"
 
 // Process-local map cache: indexed by map_id, populated by my_shared(), used by my_init().
 static SharedMapData **g_map_cache = NULL;
@@ -64,7 +64,157 @@ static PyObject *release_map_cache_py(PyObject *self __attribute__((unused)), Py
     Py_RETURN_NONE;
 }
 
-#define MY_METHODS {"release_map_cache", release_map_cache_py, METH_VARARGS, "Release the shared map data cache"}
+// PufferTraffic: forward-declare wrappers (VecEnv type comes from env_binding.h below)
+static PyObject *traffic_vec_init_signal_states_py(PyObject *self, PyObject *args);
+static PyObject *traffic_vec_set_signal_actions_py(PyObject *self, PyObject *args);
+static PyObject *traffic_vec_get_signal_observations_py(PyObject *self, PyObject *args);
+static PyObject *traffic_vec_get_signal_rewards_py(PyObject *self, PyObject *args);
+static PyObject *traffic_vec_count_signals_py(PyObject *self, PyObject *args);
+
+// MY_METHODS must be defined before env_binding.h so it lands in the methods table
+#define MY_METHODS                                                                                                     \
+    {"release_map_cache", release_map_cache_py, METH_VARARGS, "Release the shared map data cache"},                    \
+        {"traffic_init_signal_states", traffic_vec_init_signal_states_py, METH_VARARGS,                                \
+         "Init all TLs to GREEN (PufferTraffic)"},                                                                     \
+        {"traffic_set_signal_actions", traffic_vec_set_signal_actions_py, METH_VARARGS,                                \
+         "Write RL signal actions before vec_step"},                                                                   \
+        {"traffic_get_signal_observations", traffic_vec_get_signal_observations_py, METH_VARARGS,                      \
+         "Get per-TL observation vectors"},                                                                            \
+        {"traffic_get_signal_rewards", traffic_vec_get_signal_rewards_py, METH_VARARGS,                                \
+         "Get per-TL IntelliLight rewards"},                                                                           \
+        {"traffic_count_signals", traffic_vec_count_signals_py, METH_VARARGS, "Count traffic lights in first sub-env"}
+
+#include "../env_binding.h"
+
+// --------------------------------------------------------------------------
+// PufferTraffic signal wrapper implementations (VecEnv available from env_binding.h)
+// --------------------------------------------------------------------------
+
+static PyObject *traffic_vec_init_signal_states_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 1) {
+        PyErr_SetString(PyExc_TypeError, "traffic_init_signal_states requires vec_env handle");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++)
+        init_signal_states_green((Drive *)vec->envs[i]);
+    Py_RETURN_NONE;
+}
+
+static PyObject *traffic_vec_set_signal_actions_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 3) {
+        PyErr_SetString(PyExc_TypeError, "traffic_set_signal_actions requires (vec_env, actions_int32, n_per_env)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    PyObject *arr_obj = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(arr_obj, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "actions must be a numpy ndarray");
+        return NULL;
+    }
+    PyArrayObject *actions = (PyArrayObject *)arr_obj;
+    if (!PyArray_ISCONTIGUOUS(actions)) {
+        PyErr_SetString(PyExc_ValueError, "actions must be contiguous");
+        return NULL;
+    }
+    int n_per_env = (int)PyLong_AsLong(PyTuple_GetItem(args, 2));
+    int *action_data = (int *)PyArray_DATA(actions);
+    for (int i = 0; i < vec->num_envs; i++)
+        apply_signal_actions_next((Drive *)vec->envs[i], action_data + i * n_per_env, n_per_env);
+    Py_RETURN_NONE;
+}
+
+static PyObject *traffic_vec_get_signal_observations_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 3) {
+        PyErr_SetString(PyExc_TypeError, "traffic_get_signal_observations requires (vec_env, obs_float32, n_per_env)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    PyObject *arr_obj = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(arr_obj, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "obs must be a numpy ndarray");
+        return NULL;
+    }
+    PyArrayObject *obs_arr = (PyArrayObject *)arr_obj;
+    if (!PyArray_ISCONTIGUOUS(obs_arr)) {
+        PyErr_SetString(PyExc_ValueError, "obs must be contiguous");
+        return NULL;
+    }
+    int n_per_env = (int)PyLong_AsLong(PyTuple_GetItem(args, 2));
+    float *obs_data = (float *)PyArray_DATA(obs_arr);
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = (Drive *)vec->envs[i];
+        for (int j = 0; j < n_per_env; j++)
+            compute_signal_observation(env, j, obs_data + (i * n_per_env + j) * SIGNAL_OBS_DIM);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *traffic_vec_get_signal_rewards_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 6) {
+        PyErr_SetString(PyExc_TypeError,
+                        "traffic_get_signal_rewards requires (vec_env, rewards_float32, n_per_env, w_tp, w_q, w_fl)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    PyObject *arr_obj = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(arr_obj, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "rewards must be a numpy ndarray");
+        return NULL;
+    }
+    PyArrayObject *rew_arr = (PyArrayObject *)arr_obj;
+    if (!PyArray_ISCONTIGUOUS(rew_arr)) {
+        PyErr_SetString(PyExc_ValueError, "rewards must be contiguous");
+        return NULL;
+    }
+    int n_per_env = (int)PyLong_AsLong(PyTuple_GetItem(args, 2));
+    float w_tp = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 3));
+    float w_q = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 4));
+    float w_fl = (float)PyFloat_AsDouble(PyTuple_GetItem(args, 5));
+    float *rew_data = (float *)PyArray_DATA(rew_arr);
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = (Drive *)vec->envs[i];
+        for (int j = 0; j < n_per_env; j++)
+            rew_data[i * n_per_env + j] = compute_signal_reward(env, j, w_tp, w_q, w_fl);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *traffic_vec_count_signals_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 1) {
+        PyErr_SetString(PyExc_TypeError, "traffic_count_signals requires vec_env handle");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec || vec->num_envs == 0) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    Drive *env = (Drive *)vec->envs[0];
+    int count = 0;
+    for (int i = 0; i < env->num_traffic_elements; i++)
+        if (env->traffic_elements[i].type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
+            count++;
+    return PyLong_FromLong(count);
+}
+
+// --------------------------------------------------------------------------
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
