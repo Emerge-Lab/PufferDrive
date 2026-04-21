@@ -8,7 +8,8 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 
 # Observation and action constants (mirrored from traffic.h)
-SIGNAL_OBS_DIM = 61  # 5 + 8*4 + 4*6
+SIGNAL_OBS_DIM = 61  # per_lane=True:  5 + 8*4 + 4*6
+SIGNAL_OBS_DIM_AGG = 33  # per_lane=False: 5 + 4   + 4*6
 SIGNAL_N_ACTIONS = 3  # 0=RED, 1=YELLOW, 2=GREEN
 
 
@@ -41,6 +42,7 @@ class Traffic(pufferlib.PufferEnv):
         bg_policy_path=None,
         # --- Signal agents ---
         n_tls_per_env=36,  # Town01 default; auto-corrected after first reset
+        per_lane_obs=True,  # True=61-dim per-lane; False=33-dim aggregated
         # --- Rewards ---
         reward_throughput=0.5,
         reward_queue=0.25,
@@ -59,6 +61,7 @@ class Traffic(pufferlib.PufferEnv):
         self.report_interval = report_interval
         self.render_mode = render_mode
         self.n_tls_per_env = n_tls_per_env
+        self.per_lane_obs = bool(per_lane_obs)
         self.rng = np.random.default_rng(seed)
 
         # ---- Inner Drive env (background vehicle simulation) ----
@@ -84,14 +87,13 @@ class Traffic(pufferlib.PufferEnv):
         self.num_agents = total_signals
 
         # PufferEnv spaces (signal agents)
-        self.single_observation_space = gymnasium.spaces.Box(
-            low=-1.0, high=1.0, shape=(SIGNAL_OBS_DIM,), dtype=np.float32
-        )
+        obs_dim = SIGNAL_OBS_DIM if self.per_lane_obs else SIGNAL_OBS_DIM_AGG
+        self.single_observation_space = gymnasium.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
         # MultiDiscrete([3]) matches Drive's convention and gives nvec=[3]
         self.single_action_space = gymnasium.spaces.MultiDiscrete([SIGNAL_N_ACTIONS])
 
         # Working buffers for signal obs/rew/actions
-        self._sig_obs = np.zeros((total_signals, SIGNAL_OBS_DIM), dtype=np.float32)
+        self._sig_obs = np.zeros((total_signals, obs_dim), dtype=np.float32)
         self._sig_rew = np.zeros(total_signals, dtype=np.float32)
         self._sig_act = np.zeros(total_signals, dtype=np.int32)
 
@@ -107,6 +109,12 @@ class Traffic(pufferlib.PufferEnv):
     # ------------------------------------------------------------------
     # Background policy
     # ------------------------------------------------------------------
+
+    def _get_obs(self):
+        if self.per_lane_obs:
+            binding.traffic_get_signal_observations(self.drive.c_envs, self._sig_obs, self.n_tls_per_env)
+        else:
+            binding.traffic_get_signal_observations_agg(self.drive.c_envs, self._sig_obs, self.n_tls_per_env)
 
     def _load_bg_policy(self, path):
         from pufferlib.ocean.torch import Drive as DriveNet
@@ -159,7 +167,7 @@ class Traffic(pufferlib.PufferEnv):
         self.truncations[:] = 0
 
         # Populate initial signal observations
-        binding.traffic_get_signal_observations(self.drive.c_envs, self._sig_obs, self.n_tls_per_env)
+        self._get_obs()
         self.observations[:] = self._sig_obs
         return self.observations, []
 
@@ -196,7 +204,7 @@ class Traffic(pufferlib.PufferEnv):
         self.tick += 1
 
         # 4. Collect signal observations and rewards ---------------------
-        binding.traffic_get_signal_observations(self.drive.c_envs, self._sig_obs, self.n_tls_per_env)
+        self._get_obs()
         binding.traffic_get_signal_rewards(
             self.drive.c_envs,
             self._sig_rew,

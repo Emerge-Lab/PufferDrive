@@ -3,16 +3,18 @@
 #pragma once
 
 // --------------------------------------------------------------------------
-// Observation layout (SIGNAL_OBS_DIM = 61)
-//   [ego(5) | lane_stats(8*4=32) | partner_signals(4*6=24)]
+// Observation layout
+//   per_lane=1 (SIGNAL_OBS_DIM     = 61): ego(5) | lane_stats(8×4=32) | partners(4×6=24)
+//   per_lane=0 (SIGNAL_OBS_DIM_AGG = 33): ego(5) | lane_agg(4)        | partners(4×6=24)
 // --------------------------------------------------------------------------
 #define SIGNAL_EGO_DIM 5
 #define SIGNAL_LANE_FEATURES 4
 #define SIGNAL_PARTNER_FEATURES 6
 #define MAX_SIGNAL_LANES 8
 #define MAX_SIGNAL_PARTNERS 4
-#define SIGNAL_OBS_DIM 61  // 5 + 8*4 + 4*6
-#define SIGNAL_N_ACTIONS 3 // 0=RED, 1=YELLOW, 2=GREEN
+#define SIGNAL_OBS_DIM 61     // 5 + 8*4 + 4*6
+#define SIGNAL_OBS_DIM_AGG 33 // 5 + 4   + 4*6
+#define SIGNAL_N_ACTIONS 3    // 0=RED, 1=YELLOW, 2=GREEN
 
 // Reward / observation thresholds
 #define SIGNAL_STOPPED_SPEED 0.5f            // m/s below which agent counts as queued
@@ -226,6 +228,125 @@ static void compute_signal_observation(Drive *env, int sig_idx, float *obs) {
         }
     }
 
+    for (int p = 0; p < MAX_SIGNAL_PARTNERS; p++) {
+        if (partner_abs[p] < 0) {
+            off += SIGNAL_PARTNER_FEATURES;
+            continue;
+        }
+        TrafficControlElement *other = &env->traffic_elements[partner_abs[p]];
+        float ox = (other->stop_line[0] + other->stop_line[3]) * 0.5f;
+        float oy = (other->stop_line[1] + other->stop_line[4]) * 0.5f;
+        int o_state = (other->states && t < other->state_length) ? other->states[t] : TRAFFIC_CONTROL_STATE_GREEN;
+        obs[off++] = (ox - sl_x) / max_pos;
+        obs[off++] = (oy - sl_y) / max_pos;
+        obs[off++] = fminf(partner_dist[p] / max_pos, 1.0f);
+        obs[off++] = signal_state_to_float(o_state);
+        obs[off++] = fminf((float)signal_steps_in_phase(other, t) / max_t, 1.0f);
+        obs[off++] = fminf((float)signal_steps_since_green(other, t) / max_t, 1.0f);
+    }
+}
+
+// --------------------------------------------------------------------------
+// compute_signal_observation_agg
+// Aggregated (per_lane=False) variant — 33-dim obs.
+// Lane block: [total_count/10, overall_avg_speed, total_queue/10, n_valid_lanes/8]
+// --------------------------------------------------------------------------
+static void compute_signal_observation_agg(Drive *env, int sig_idx, float *obs) {
+    for (int i = 0; i < SIGNAL_OBS_DIM_AGG; i++)
+        obs[i] = 0.0f;
+
+    int tc_abs = signal_abs_idx(env, sig_idx);
+    if (tc_abs < 0)
+        return;
+
+    TrafficControlElement *tc = &env->traffic_elements[tc_abs];
+    int t = env->timestep;
+    float max_t = (float)(env->scenario_length > 1 ? env->scenario_length : 1);
+    float max_pos = env->max_position > 0.0f ? env->max_position : 100.0f;
+    float max_speed = env->goal_speed > 0.0f ? env->goal_speed : 10.0f;
+
+    float sl_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+    float sl_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+    int cur_state = (tc->states && t < tc->state_length) ? tc->states[t] : TRAFFIC_CONTROL_STATE_GREEN;
+
+    // --- Ego (5) ---
+    int off = 0;
+    obs[off++] = signal_state_to_float(cur_state);
+    obs[off++] = fminf((float)signal_steps_in_phase(tc, t) / max_t, 1.0f);
+    obs[off++] = fminf((float)signal_steps_since_green(tc, t) / max_t, 1.0f);
+    obs[off++] = sl_x / max_pos;
+    obs[off++] = sl_y / max_pos;
+
+    // --- Aggregated lane stats (4) ---
+    float dist_sq_thresh = SIGNAL_LANE_CHECK_DIST * SIGNAL_LANE_CHECK_DIST;
+    int n_lanes = tc->num_controlled_lanes < MAX_SIGNAL_LANES ? tc->num_controlled_lanes : MAX_SIGNAL_LANES;
+    int total_count = 0, total_queue = 0, n_valid = 0;
+    float total_speed = 0.0f;
+
+    for (int ai = 0; ai < env->num_total_agents; ai++) {
+        Agent *a = &env->agents[ai];
+        if (!a->sim_valid)
+            continue;
+        int on_any = 0;
+        for (int li = 0; li < n_lanes && !on_any; li++) {
+            int lane_idx = tc->controlled_lanes[li];
+            if (lane_idx < 0 || lane_idx >= env->num_road_elements)
+                continue;
+            RoadMapElement *lane = &env->road_elements[lane_idx];
+            for (int si = 0; si < lane->segment_length && !on_any; si++) {
+                float dx = a->sim_x - lane->x[si];
+                float dy = a->sim_y - lane->y[si];
+                if (dx * dx + dy * dy < dist_sq_thresh)
+                    on_any = 1;
+            }
+        }
+        if (!on_any)
+            continue;
+        total_count++;
+        total_speed += a->sim_speed;
+        float dx_sl = a->sim_x - sl_x, dy_sl = a->sim_y - sl_y;
+        if (a->sim_speed < SIGNAL_STOPPED_SPEED && sqrtf(dx_sl * dx_sl + dy_sl * dy_sl) < SIGNAL_QUEUE_RADIUS)
+            total_queue++;
+    }
+    for (int li = 0; li < n_lanes; li++) {
+        if (tc->controlled_lanes[li] >= 0 && tc->controlled_lanes[li] < env->num_road_elements)
+            n_valid++;
+    }
+
+    obs[off++] = fminf((float)total_count / SIGNAL_MAX_QUEUE, 1.0f);
+    obs[off++] = total_count > 0 ? fminf(total_speed / (float)total_count / max_speed, 1.0f) : 0.0f;
+    obs[off++] = fminf((float)total_queue / SIGNAL_MAX_QUEUE, 1.0f);
+    obs[off++] = (float)n_valid / (float)MAX_SIGNAL_LANES;
+
+    // --- Partner signals (4×6) --- identical to per-lane variant ---
+    float partner_dist[MAX_SIGNAL_PARTNERS];
+    int partner_abs[MAX_SIGNAL_PARTNERS];
+    for (int p = 0; p < MAX_SIGNAL_PARTNERS; p++) {
+        partner_dist[p] = 1e9f;
+        partner_abs[p] = -1;
+    }
+
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        if (i == tc_abs)
+            continue;
+        TrafficControlElement *other = &env->traffic_elements[i];
+        if (other->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
+            continue;
+        float ox = (other->stop_line[0] + other->stop_line[3]) * 0.5f;
+        float oy = (other->stop_line[1] + other->stop_line[4]) * 0.5f;
+        float dist = sqrtf((ox - sl_x) * (ox - sl_x) + (oy - sl_y) * (oy - sl_y));
+        for (int p = 0; p < MAX_SIGNAL_PARTNERS; p++) {
+            if (dist < partner_dist[p]) {
+                for (int q = MAX_SIGNAL_PARTNERS - 1; q > p; q--) {
+                    partner_dist[q] = partner_dist[q - 1];
+                    partner_abs[q] = partner_abs[q - 1];
+                }
+                partner_dist[p] = dist;
+                partner_abs[p] = i;
+                break;
+            }
+        }
+    }
     for (int p = 0; p < MAX_SIGNAL_PARTNERS; p++) {
         if (partner_abs[p] < 0) {
             off += SIGNAL_PARTNER_FEATURES;

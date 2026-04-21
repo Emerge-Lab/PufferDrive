@@ -70,6 +70,7 @@ static PyObject *traffic_vec_set_signal_actions_py(PyObject *self, PyObject *arg
 static PyObject *traffic_vec_get_signal_observations_py(PyObject *self, PyObject *args);
 static PyObject *traffic_vec_get_signal_rewards_py(PyObject *self, PyObject *args);
 static PyObject *traffic_vec_count_signals_py(PyObject *self, PyObject *args);
+static PyObject *traffic_vec_get_signal_observations_agg_py(PyObject *self, PyObject *args);
 
 // MY_METHODS must be defined before env_binding.h so it lands in the methods table
 #define MY_METHODS                                                                                                     \
@@ -79,7 +80,9 @@ static PyObject *traffic_vec_count_signals_py(PyObject *self, PyObject *args);
         {"traffic_set_signal_actions", traffic_vec_set_signal_actions_py, METH_VARARGS,                                \
          "Write RL signal actions before vec_step"},                                                                   \
         {"traffic_get_signal_observations", traffic_vec_get_signal_observations_py, METH_VARARGS,                      \
-         "Get per-TL observation vectors"},                                                                            \
+         "Get per-TL observation vectors (per_lane=True, 61-dim)"},                                                    \
+        {"traffic_get_signal_observations_agg", traffic_vec_get_signal_observations_agg_py, METH_VARARGS,              \
+         "Get per-TL observation vectors (per_lane=False, 33-dim)"},                                                   \
         {"traffic_get_signal_rewards", traffic_vec_get_signal_rewards_py, METH_VARARGS,                                \
          "Get per-TL IntelliLight rewards"},                                                                           \
         {"traffic_count_signals", traffic_vec_count_signals_py, METH_VARARGS, "Count traffic lights in first sub-env"}
@@ -212,6 +215,37 @@ static PyObject *traffic_vec_count_signals_py(PyObject *self, PyObject *args) {
         if (env->traffic_elements[i].type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
             count++;
     return PyLong_FromLong(count);
+}
+
+static PyObject *traffic_vec_get_signal_observations_agg_py(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) < 3) {
+        PyErr_SetString(PyExc_TypeError,
+                        "traffic_get_signal_observations_agg requires (vec_env, obs_float32, n_per_env)");
+        return NULL;
+    }
+    VecEnv *vec = (VecEnv *)PyLong_AsVoidPtr(PyTuple_GetItem(args, 0));
+    if (!vec) {
+        PyErr_SetString(PyExc_ValueError, "Invalid vec_env handle");
+        return NULL;
+    }
+    PyObject *arr_obj = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(arr_obj, &PyArray_Type)) {
+        PyErr_SetString(PyExc_TypeError, "obs must be a numpy ndarray");
+        return NULL;
+    }
+    PyArrayObject *obs_arr = (PyArrayObject *)arr_obj;
+    if (!PyArray_ISCONTIGUOUS(obs_arr)) {
+        PyErr_SetString(PyExc_ValueError, "obs must be contiguous");
+        return NULL;
+    }
+    int n_per_env = (int)PyLong_AsLong(PyTuple_GetItem(args, 2));
+    float *obs_data = (float *)PyArray_DATA(obs_arr);
+    for (int i = 0; i < vec->num_envs; i++) {
+        Drive *env = (Drive *)vec->envs[i];
+        for (int j = 0; j < n_per_env; j++)
+            compute_signal_observation_agg(env, j, obs_data + (i * n_per_env + j) * SIGNAL_OBS_DIM_AGG);
+    }
+    Py_RETURN_NONE;
 }
 
 // --------------------------------------------------------------------------

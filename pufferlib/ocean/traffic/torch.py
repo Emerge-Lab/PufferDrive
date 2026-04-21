@@ -1,6 +1,5 @@
 from torch import nn
 import torch
-import torch.nn.functional as F
 
 import pufferlib
 import pufferlib.models
@@ -10,9 +9,8 @@ from pufferlib.models import Default as Policy  # noqa: F401
 
 Recurrent = pufferlib.models.LSTMWrapper
 
-# Signal obs layout (must match traffic.h)
+# Signal obs layout constants (must match traffic.h)
 _EGO_DIM = 5
-_N_LANES = 8
 _LANE_FEAT = 4
 _N_PARTNERS = 4
 _PARTNER_FEAT = 6
@@ -21,12 +19,16 @@ _PARTNER_FEAT = 6
 class TrafficBackbone(nn.Module):
     """Per-entity MLP encoders → max-pool → trunk MLP.
 
-    Observation layout (61-dim):
-      ego(5) | lane_stats(8×4=32) | partner_signals(4×6=24)
+    Supports both obs layouts:
+      per_lane=True  (61-dim): ego(5) | lane_stats(8×4=32) | partner_signals(4×6=24)
+      per_lane=False (33-dim): ego(5) | lane_agg(1×4=4)    | partner_signals(4×6=24)
+
+    n_lanes is derived from obs_dim: (obs_dim - 5 - 24) // 4
     """
 
-    def __init__(self, input_size: int, backbone_hidden_size: int, backbone_num_layers: int):
+    def __init__(self, obs_dim: int, input_size: int, backbone_hidden_size: int, backbone_num_layers: int):
         super().__init__()
+        self.n_lanes = (obs_dim - _EGO_DIM - _N_PARTNERS * _PARTNER_FEAT) // _LANE_FEAT
 
         def _enc(in_dim):
             return nn.Sequential(
@@ -40,7 +42,6 @@ class TrafficBackbone(nn.Module):
         self.lane_encoder = _enc(_LANE_FEAT)
         self.partner_encoder = _enc(_PARTNER_FEAT)
 
-        # 3 entity streams
         trunk_in = 3 * input_size
         layers = []
         for _ in range(backbone_num_layers):
@@ -53,8 +54,8 @@ class TrafficBackbone(nn.Module):
     def forward(self, obs):
         B = obs.shape[0]
         ego = obs[:, :_EGO_DIM]
-        lanes = obs[:, _EGO_DIM : _EGO_DIM + _N_LANES * _LANE_FEAT].reshape(B, _N_LANES, _LANE_FEAT)
-        partners = obs[:, _EGO_DIM + _N_LANES * _LANE_FEAT :].reshape(B, _N_PARTNERS, _PARTNER_FEAT)
+        lanes = obs[:, _EGO_DIM : _EGO_DIM + self.n_lanes * _LANE_FEAT].reshape(B, self.n_lanes, _LANE_FEAT)
+        partners = obs[:, _EGO_DIM + self.n_lanes * _LANE_FEAT :].reshape(B, _N_PARTNERS, _PARTNER_FEAT)
 
         ego_enc = self.ego_encoder(ego)
         lane_enc, _ = self.lane_encoder(lanes).max(dim=1)
@@ -84,12 +85,12 @@ class Traffic(nn.Module):
     ):
         super().__init__()
 
-        self.backbone = TrafficBackbone(input_size, backbone_hidden_size, backbone_num_layers)
+        obs_dim = env.single_observation_space.shape[0]
+        self.backbone = TrafficBackbone(obs_dim, input_size, backbone_hidden_size, backbone_num_layers)
         self.atn_dim = env.single_action_space.nvec.tolist()  # [3]
 
         bb_dim = self.backbone.out_dim
 
-        # Actor head
         actor_layers, a_in = [], bb_dim
         for _ in range(actor_num_layers):
             actor_layers += [pufferlib.pytorch.layer_init(nn.Linear(a_in, actor_hidden_size)), nn.ReLU()]
@@ -97,7 +98,6 @@ class Traffic(nn.Module):
         actor_layers.append(pufferlib.pytorch.layer_init(nn.Linear(a_in, sum(self.atn_dim)), std=0.01))
         self.actor_head = nn.Sequential(*actor_layers)
 
-        # Critic head
         critic_layers, c_in = [], bb_dim
         for _ in range(critic_num_layers):
             critic_layers += [pufferlib.pytorch.layer_init(nn.Linear(c_in, critic_hidden_size)), nn.ReLU()]
