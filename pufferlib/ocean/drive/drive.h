@@ -3420,6 +3420,8 @@ SharedMapData *create_shared_map_data(const char *map_file_path, float road_obs_
 }
 
 void init_from_shared(Drive *env, SharedMapData *shared) {
+    fprintf(stderr, "[Drive.init_from_shared] pid=%d  cache hit (ref_count=%d)\n",
+            (int)getpid(), shared->ref_count); fflush(stderr);
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->shared_map = shared;
@@ -3593,15 +3595,21 @@ void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
     env->shared_map = NULL;
+    fprintf(stderr, "[Drive.init] pid=%d  load_map_binary(%s) ...\n", (int)getpid(), env->map_name); fflush(stderr);
     load_map_binary(env->map_name, env);
+    fprintf(stderr, "[Drive.init] pid=%d  load_map_binary done: agents=%d roads=%d traffic=%d\n",
+            (int)getpid(), env->num_total_agents, env->num_road_elements, env->num_traffic_elements); fflush(stderr);
     env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations) ||
                                 (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
+    fprintf(stderr, "[Drive.init] pid=%d  init_grid_map ...\n", (int)getpid()); fflush(stderr);
     init_grid_map(env);
     int vision_half_range = (int)ceilf(
         fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist) / GRID_CELL_SIZE);
     env->grid_map->vision_range = 2 * vision_half_range + 1;
+    fprintf(stderr, "[Drive.init] pid=%d  init_neighbor_offsets ...\n", (int)getpid()); fflush(stderr);
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
+    fprintf(stderr, "[Drive.init] pid=%d  init complete\n", (int)getpid()); fflush(stderr);
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;

@@ -8,6 +8,7 @@ from pufferlib.ocean.drive import binding
 
 from pufferlib.models import Default as Policy  # noqa: F401
 from pufferlib.models import Convolutional as Conv  # noqa: F401
+from pufferlib.ocean.traffic.torch import Traffic
 
 Recurrent = pufferlib.models.LSTMWrapper
 

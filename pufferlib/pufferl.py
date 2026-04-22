@@ -93,7 +93,9 @@ class PuffeRL:
         seed = config["seed"]
 
         # Vecenv info
+        print(f"[PuffeRL.__init__] Calling vecenv.async_reset(seed={seed}) ...")
         vecenv.async_reset(seed)
+        print("[PuffeRL.__init__] async_reset dispatched")
         obs_space = vecenv.single_observation_space
         atn_space = vecenv.single_action_space
         total_agents = vecenv.num_agents
@@ -170,6 +172,12 @@ class PuffeRL:
             raise pufferlib.APIUsageError(
                 f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
             )
+
+        print(
+            f"[PuffeRL.__init__] Experience buffers allocated — "
+            f"batch_size={batch_size}  horizon={horizon}  segments={segments}  "
+            f"total_agents={total_agents}"
+        )
 
         # Torch compile
         self.uncompiled_policy = policy
@@ -257,6 +265,7 @@ class PuffeRL:
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+        print(f"[PuffeRL.__init__] Done. model_size={self.model_size:,}  total_epochs={self.total_epochs}")
         self.print_dashboard(clear=True)
 
     @property
@@ -273,6 +282,8 @@ class PuffeRL:
     def evaluate(self):
         profile = self.profile
         epoch = self.epoch
+        if epoch == 0:
+            print(f"[PuffeRL.evaluate] First evaluate() — segments={self.segments}")
         profile("eval", epoch)
         profile("eval_misc", epoch, nest=True)
 
@@ -287,7 +298,11 @@ class PuffeRL:
         self.full_rows = 0
         while self.full_rows < self.segments:
             profile("env", epoch)
+            if epoch == 0 and self.full_rows == 0:
+                print("[PuffeRL.evaluate] Calling vecenv.recv() for first time ...")
             o, r, d, t, info, env_id, mask = self.vecenv.recv()
+            if epoch == 0 and self.full_rows == 0:
+                print(f"[PuffeRL.evaluate] vecenv.recv() returned — o.shape={o.shape}")
 
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
@@ -1669,10 +1684,13 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         model.forward_eval = policy.forward_eval
         policy = model.to(local_rank)
 
+    print("[train] Initializing logger ...")
     if args["neptune"]:
         logger = NeptuneLogger(args)
     elif args["wandb"]:
+        print("[train] Connecting to wandb ...")
         logger = WandbLogger(args)
+        print("[train] wandb ready")
     elif args["tb"]:
         date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
         experiment_dir = os.path.join(args["train"]["data_dir"], rf"{env_name}_" + date_time)
@@ -1688,7 +1706,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         eval=args.get("eval", {}),
         driving_behaviours_eval=args.get("driving_behaviours_eval"),
     )
+    print(f"[train] Building PuffeRL (total_agents={vecenv.num_agents}, device={train_config['device']}) ...")
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    print("[train] PuffeRL ready — entering training loop")
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
@@ -3083,9 +3103,28 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
 def load_env(env_name, args):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    print(f"[load_env] env_name={env_name}  module={module_name}  vec={args['vec']}")
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
+    print(f"[load_env] env_creator resolved to {make_env}  env_kwargs keys={list(args['env'].keys())}")
+
+    env_kwargs = dict(args["env"])
+
+    # Preload bg policy checkpoint once in the main process so worker subprocesses
+    # don't each hit the filesystem simultaneously (causes severe I/O contention).
+    bg_policy_path = env_kwargs.get("bg_policy_path")
+    if bg_policy_path is not None and env_name == "puffer_traffic":
+        print(f"[load_env] Preloading bg policy state dict from {bg_policy_path} ...")
+        import torch
+        ckpt = torch.load(bg_policy_path, map_location="cpu", weights_only=False)
+        state = ckpt.get("policy_state_dict", ckpt.get("model_state_dict", ckpt))
+        env_kwargs["_bg_policy_state_dict"] = state
+        print(f"[load_env] bg policy state dict preloaded — workers will reuse it")
+
+    vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **args["vec"])
+    nw = getattr(vecenv, "num_workers", "N/A")
+    print(f"[load_env] vecenv ready: type={type(vecenv).__name__}  num_workers={nw}  num_agents={vecenv.num_agents}")
+    return vecenv
 
 
 def load_policy(args, vecenv, env_name=""):
@@ -3097,14 +3136,17 @@ def load_policy(args, vecenv, env_name=""):
     if isinstance(device, int):
         device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
     policy_cls = getattr(env_module.torch, args["policy_name"])
+    print(f"[load_policy] policy_cls={policy_cls.__name__}  kwargs={args['policy']}  device={device}")
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
+        print(f"[load_policy] Wrapping with rnn_cls={rnn_cls.__name__}  rnn_kwargs={args['rnn']}")
         policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
 
     policy = policy.to(device)
+    print(f"[load_policy] Policy moved to {device}")
 
     load_id = args["load_id"]
     if load_id is not None:

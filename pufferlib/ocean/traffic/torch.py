@@ -29,6 +29,10 @@ class TrafficBackbone(nn.Module):
     def __init__(self, obs_dim: int, input_size: int, backbone_hidden_size: int, backbone_num_layers: int):
         super().__init__()
         self.n_lanes = (obs_dim - _EGO_DIM - _N_PARTNERS * _PARTNER_FEAT) // _LANE_FEAT
+        print(
+            f"[TrafficBackbone.__init__] obs_dim={obs_dim}  n_lanes={self.n_lanes}  "
+            f"input_size={input_size}  hidden={backbone_hidden_size}×{backbone_num_layers}"
+        )
 
         def _enc(in_dim):
             return nn.Sequential(
@@ -50,6 +54,7 @@ class TrafficBackbone(nn.Module):
         layers.append(nn.GELU())
         self.trunk = nn.Sequential(*layers)
         self.out_dim = backbone_hidden_size if backbone_num_layers > 0 else 3 * input_size
+        print(f"[TrafficBackbone.__init__] trunk out_dim={self.out_dim}")
 
     def forward(self, obs):
         B = obs.shape[0]
@@ -86,6 +91,11 @@ class Traffic(nn.Module):
         super().__init__()
 
         obs_dim = env.single_observation_space.shape[0]
+        print(
+            f"[Traffic(policy).__init__] obs_dim={obs_dim}  atn_nvec={env.single_action_space.nvec.tolist()}  "
+            f"actor_layers={actor_num_layers}  critic_layers={critic_num_layers}"
+        )
+        self.is_continuous = False
         self.backbone = TrafficBackbone(obs_dim, input_size, backbone_hidden_size, backbone_num_layers)
         self.atn_dim = env.single_action_space.nvec.tolist()  # [3]
 
@@ -104,9 +114,21 @@ class Traffic(nn.Module):
             c_in = critic_hidden_size
         critic_layers.append(pufferlib.pytorch.layer_init(nn.Linear(c_in, 1), std=1.0))
         self.critic_head = nn.Sequential(*critic_layers)
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f"[Traffic(policy).__init__] Built. total_params={total_params:,}")
 
     def forward(self, observations, state=None):
         hidden = self.backbone(observations)
+        actions = torch.split(self.actor_head(hidden), self.atn_dim, dim=1)
+        value = self.critic_head(hidden)
+        return actions, value
+
+    def encode_observations(self, observations, state=None):
+        """Required by LSTMWrapper — returns the backbone embedding."""
+        return self.backbone(observations)
+
+    def decode_actions(self, hidden, state=None):
+        """Required by LSTMWrapper — returns (actions, value) from LSTM output."""
         actions = torch.split(self.actor_head(hidden), self.atn_dim, dim=1)
         value = self.critic_head(hidden)
         return actions, value

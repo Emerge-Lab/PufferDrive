@@ -207,6 +207,20 @@ def _worker_process(
     is_native,
     seed,
 ):
+    # Force line-buffered stdout so worker print() calls appear in the parent terminal immediately
+    import sys, os
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+    sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)
+
+    # PyTorch + fork deadlock fix: OpenMP/MKL thread pools are not fork-safe.
+    # Restrict each worker to 1 torch thread to avoid deadlocks when multiple
+    # workers call DriveNet() / load_state_dict() simultaneously after fork.
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
+
     # Environments read and write directly to shared memory
     shape = (num_workers, num_envs * num_agents)
     atn_arr = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=shm["actions"])[worker_idx]
@@ -420,7 +434,19 @@ class Multiprocessing:
 
     def recv(self):
         recv_precheck(self)
+        _recv_start = time.time()
+        _recv_warned = False
         while True:
+            if not _recv_warned and time.time() - _recv_start > 10.0:
+                ready = len(self.ready_workers)
+                waiting = len(self.waiting_workers)
+                sems = list(self.buf["semaphores"][:])
+                print(
+                    f"[vecenv.recv] Waiting >10s for workers — "
+                    f"ready={ready}/{self.num_workers}  waiting={waiting}  semaphores={sems}",
+                    flush=True,
+                )
+                _recv_warned = True
             # Bandaid patch for new experience buffer desync
             if self.sync_traj:
                 worker = self.waiting_workers[0]
@@ -709,6 +735,9 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
     if "num_workers" in kwargs:
         if kwargs["num_workers"] == "auto":
             kwargs["num_workers"] = num_envs
+            print(f"[vector.make] num_workers=auto → resolved to {num_envs} (= num_envs)")
+        else:
+            print(f"[vector.make] num_workers={kwargs['num_workers']}  num_envs={num_envs}")
 
         # TODO: None?
         envs_per_worker = num_envs / kwargs["num_workers"]
