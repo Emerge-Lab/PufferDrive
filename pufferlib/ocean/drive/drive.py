@@ -194,6 +194,7 @@ class Drive(pufferlib.PufferEnv):
         max_traffic_control_distance=100.0,
         agent_obs_max_dist=100.0,
         target_max_partner_obs_distance=100.0,
+        strip_target_features_for_adv=False,
         road_obs_front_dist=120.0,
         road_obs_behind_dist=20.0,
         road_obs_side_dist=30.0,
@@ -293,6 +294,7 @@ class Drive(pufferlib.PufferEnv):
         self.max_traffic_control_distance = float(max_traffic_control_distance)
         self.agent_obs_max_dist = float(agent_obs_max_dist)
         self.target_max_partner_obs_distance = float(target_max_partner_obs_distance)
+        self.strip_target_features_for_adv = bool(strip_target_features_for_adv)
         self.road_obs_front_dist = float(road_obs_front_dist)
         self.road_obs_behind_dist = float(road_obs_behind_dist)
         self.road_obs_side_dist = float(road_obs_side_dist)

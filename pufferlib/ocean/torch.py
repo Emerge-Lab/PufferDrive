@@ -45,6 +45,7 @@ class DriveBackbone(nn.Module):
         encoder_gigaflow,
         dropout,
         strip_last_partner_features=0,
+        strip_last_conditioning_features=0,
     ):
         super().__init__()
 
@@ -68,6 +69,8 @@ class DriveBackbone(nn.Module):
         )
         # Conditioning size (reward coefficients + target info)
         self.conditioning_dim = env.num_reward_coefs + env.target_dim
+        self.strip_last_conditioning_features = strip_last_conditioning_features
+        self.conditioning_encoder_dim = self.conditioning_dim - self.strip_last_conditioning_features
 
         num_feature_sets = 1
 
@@ -104,8 +107,10 @@ class DriveBackbone(nn.Module):
                 encoder_gigaflow,
             )
             num_feature_sets += 1
-        if self.conditioning_dim > 0:
-            self.conditioning_encoder = self._create_encoder(self.conditioning_dim, input_size, encoder_gigaflow)
+        if self.conditioning_encoder_dim > 0:
+            self.conditioning_encoder = self._create_encoder(
+                self.conditioning_encoder_dim, input_size, encoder_gigaflow
+            )
             num_feature_sets += 1
 
         # 2. Main Backbone MLP
@@ -193,7 +198,9 @@ class DriveBackbone(nn.Module):
             feature_list.append(traffic_control_features)
 
         # Add optional features if enabled
-        if self.conditioning_dim > 0:
+        if self.conditioning_encoder_dim > 0:
+            if self.strip_last_conditioning_features > 0:
+                conditioning_observations = conditioning_observations[:, : -self.strip_last_conditioning_features]
             conditioning_features = self.conditioning_encoder(conditioning_observations)
             feature_list.append(conditioning_features)
 
@@ -232,6 +239,7 @@ class Drive(nn.Module):
             "ego_dim": self.ego_dim,
             "encoder_gigaflow": encoder_gigaflow,
             "dropout": dropout,
+            "strip_last_conditioning_features": env.target_dim if env.strip_target_features_for_adv else 0,
         }
 
         # Instantiate backbones
