@@ -159,7 +159,6 @@ struct Log {
     float target_episode_return_collision;
     float target_episode_return_offroad;
     float target_episode_return_drive;
-    float target_episode_return_adversarial;
     float episode_length;
     float target_episode_length;
     float expert_static_car_count;
@@ -2674,7 +2673,6 @@ static void add_log(Drive *env) {
         env->log.target_episode_return_collision += env->logs[0].episode_return_collision;
         env->log.target_episode_return_offroad += env->logs[0].episode_return_offroad;
         env->log.target_episode_return_drive += env->logs[0].episode_return_drive;
-        env->log.target_episode_return_adversarial += env->logs[0].episode_return_adversarial;
 
         if (env->logs[0].collision_rate > 0.0f) {
             env->log.did_target_collide += 1.0f;

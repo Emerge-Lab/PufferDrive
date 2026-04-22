@@ -105,12 +105,10 @@ def metric_log_key(metric_name):
         "target_episode_return_collision": "episode_return_collision",
         "target_episode_return_offroad": "episode_return_offroad",
         "target_episode_return_drive": "episode_return_drive",
-        "target_episode_return_adversarial": "episode_return_adversarial",
         "target_mean_reward": "mean_reward",
         "target_mean_reward_collision": "mean_reward_collision",
         "target_mean_reward_offroad": "mean_reward_offroad",
         "target_mean_reward_drive": "mean_reward_drive",
-        "target_mean_reward_adversarial": "mean_reward_adversarial",
     }
     overview_metrics = {
         "episode_length",
@@ -1211,7 +1209,13 @@ class PuffeRL:
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
 
-        current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
+        best_metric = self.config.get("best_model_metric", "puffer_score")
+        if best_metric in self.last_stats:
+            current_score = self.last_stats[best_metric]
+        elif best_metric != "puffer_score" and "puffer_score" in self.last_stats:
+            current_score = self.last_stats["puffer_score"]
+        else:
+            current_score = self.last_stats.get("score", -float("inf"))
 
         if current_score > self.best_score:
             self.best_score = current_score
@@ -1219,7 +1223,7 @@ class PuffeRL:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
-            print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
+            print(f"New best model saved at epoch {self.epoch} with {best_metric} {self.best_score:.4f}")
 
         return model_path
 

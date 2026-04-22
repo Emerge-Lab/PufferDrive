@@ -1865,14 +1865,11 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_episode_return_collision", log->target_episode_return_collision);
     assign_to_dict(dict, "target_episode_return_offroad", log->target_episode_return_offroad);
     assign_to_dict(dict, "target_episode_return_drive", log->target_episode_return_drive);
-    assign_to_dict(dict, "target_episode_return_adversarial", log->target_episode_return_adversarial);
     assign_to_dict(dict, "target_mean_reward", log->target_episode_return / safe_target_episode_length);
     assign_to_dict(dict, "target_mean_reward_collision",
                    log->target_episode_return_collision / safe_target_episode_length);
     assign_to_dict(dict, "target_mean_reward_offroad", log->target_episode_return_offroad / safe_target_episode_length);
     assign_to_dict(dict, "target_mean_reward_drive", log->target_episode_return_drive / safe_target_episode_length);
-    assign_to_dict(dict, "target_mean_reward_adversarial",
-                   log->target_episode_return_adversarial / safe_target_episode_length);
     assign_to_dict(dict, "did_target_collide", log->did_target_collide);
     assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);

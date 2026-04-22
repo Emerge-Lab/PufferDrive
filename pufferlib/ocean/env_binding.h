@@ -609,7 +609,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_episode_return_collision = env->log.target_episode_return_collision;
             float target_episode_return_offroad = env->log.target_episode_return_offroad;
             float target_episode_return_drive = env->log.target_episode_return_drive;
-            float target_episode_return_adversarial = env->log.target_episode_return_adversarial;
             float did_target_collide = env->log.did_target_collide;
             float did_target_offroad = env->log.did_target_offroad;
             float did_target_fail = env->log.did_target_fail;
@@ -623,7 +622,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_episode_return_collision = target_episode_return_collision / target_n;
                 env->log.target_episode_return_offroad = target_episode_return_offroad / target_n;
                 env->log.target_episode_return_drive = target_episode_return_drive / target_n;
-                env->log.target_episode_return_adversarial = target_episode_return_adversarial / target_n;
                 env->log.did_target_collide = did_target_collide / target_n;
                 env->log.did_target_offroad = did_target_offroad / target_n;
                 env->log.did_target_fail = did_target_fail / target_n;
@@ -639,9 +637,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 adversary_n > 0.0f ? (episode_return_offroad - target_episode_return_offroad) / adversary_n : 0.0f;
             env->log.episode_return_drive =
                 adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
-            env->log.episode_return_adversarial =
-                adversary_n > 0.0f ? (episode_return_adversarial - target_episode_return_adversarial) / adversary_n
-                                   : 0.0f;
+            env->log.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
             my_log(dict, env, &env->log, n);
             assign_to_dict(dict, "n", n);
             // Add map_name to dict
@@ -707,7 +703,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_episode_return_collision = aggregate.target_episode_return_collision;
         float target_episode_return_offroad = aggregate.target_episode_return_offroad;
         float target_episode_return_drive = aggregate.target_episode_return_drive;
-        float target_episode_return_adversarial = aggregate.target_episode_return_adversarial;
         float did_target_collide = aggregate.did_target_collide;
         float did_target_offroad = aggregate.did_target_offroad;
         float did_target_fail = aggregate.did_target_fail;
@@ -724,7 +719,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_episode_return_collision = target_episode_return_collision / target_n;
             aggregate.target_episode_return_offroad = target_episode_return_offroad / target_n;
             aggregate.target_episode_return_drive = target_episode_return_drive / target_n;
-            aggregate.target_episode_return_adversarial = target_episode_return_adversarial / target_n;
             aggregate.did_target_collide = did_target_collide / target_n;
             aggregate.did_target_offroad = did_target_offroad / target_n;
             aggregate.did_target_fail = did_target_fail / target_n;
@@ -738,8 +732,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             adversary_n > 0.0f ? (episode_return_offroad - target_episode_return_offroad) / adversary_n : 0.0f;
         aggregate.episode_return_drive =
             adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
-        aggregate.episode_return_adversarial =
-            adversary_n > 0.0f ? (episode_return_adversarial - target_episode_return_adversarial) / adversary_n : 0.0f;
+        aggregate.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
 
         // User populates dict
         my_log(dict, env, &aggregate, n);
