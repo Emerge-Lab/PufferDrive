@@ -14,7 +14,13 @@ import seaborn as sns
 import pandas as pd
 
 DPI = 600
-COLOR_SMART = "#F13E93"
+
+# ── Colours ─────────────────────────────────────────────────────────────
+COLOR_SMART = "#FFA8CC"
+COLOR_SMART_EDGE = "#C14B8A"
+COLOR_OURS = "#CCCCFF"
+COLOR_OURS_EDGE = "#6B3FA0"
+COLOR_SELFPLAY = "#4A7FD4"
 
 
 def _ensure_dir(path):
@@ -1271,13 +1277,6 @@ def plot_human_data_requirements(
 
     Returns (fig_lines, fig_gains).
     """
-    # ── Colours ─────────────────────────────────────────────────────────────
-    COLOR_OURS = "#CCCCFF"
-    COLOR_OURS_EDGE = "#6B3FA0"
-    COLOR_SELFPLAY = "#4A7FD4"
-    COLOR_SMART = "#E8609A"
-    COLOR_SMART_EDGE = "#B4437A"
-
     # ── SMART baseline data ─────────────────────────────────────────────────
     SMART_DATA = _load_smart_baseline(smart_csv)
 
@@ -1354,7 +1353,7 @@ def plot_human_data_requirements(
         (
             "hr_progress_mean_pct",
             "hr_progress_sem_pct",
-            "Human-replay route progress [%]",
+            "Route progress [%]",
             "hr_progress_pct",
             "HR route progress",
             False,
@@ -1526,21 +1525,12 @@ def generate_human_data_latex_table(
 ):
     """Companion table to plot_human_data_requirements.
 
-    Rows: one per (method, human-data-amount) pair.
-          Ordering: all SMART rows first, then all regularized self-play rows,
-          each sorted by increasing human data.
-    Columns:
-        - Human demonstrations (same units as plot: "10 min", "30 min", …)
-        - Method
-        - Self-play collision rate [%]                (test)
-        - Self-play route progress [%]                (test)
-        - Human-replay collision rate [%]             (test)
-        - Human-replay at-fault collision rate [%]    (test)
-        - Human-replay route progress [%]             (test)
-
-    Best value per metric column is bolded across both methods.
-    SMART uses pink row highlighting, regularized uses pale purple.
-    Missing values render as "---".
+    Top-3 values per metric column are highlighted with a three-tier pastel
+    colormap sampled from the Depth Pro paper screenshot:
+      - best   -> soft pastel green   (#6FCF6A)
+      - 2nd    -> soft chartreuse     (#DFF04B)
+      - 3rd    -> pale cream-yellow   (#FBF4D0)
+    Best value in each column is additionally bolded. Ties share a tier.
 
     Required LaTeX packages:
       \\usepackage{booktabs}
@@ -1550,14 +1540,8 @@ def generate_human_data_latex_table(
       \\usepackage{bm}
     """
 
-    # ── SMART baseline data (loaded from CSV) ───────────────────────────────
-    # Uses the same loader as plot_human_data_requirements so the table and
-    # plot stay in sync. Returns columns hr_atfault_pct / hr_coll_pct /
-    # hr_progress_pct / sp_coll_pct / sp_progress_pct (plus num_maps and
-    # minutes); missing metrics stay NaN and render as "---" in the table.
     SMART_DATA = _load_smart_baseline(smart_csv)
 
-    # ── Filter to scaling modes and 50k metadata maps ───────────────────────
     scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
     df = df[df["mode"].isin(scaling_modes)].copy()
     df = df[df["sp_maps"] == 50000]
@@ -1595,17 +1579,15 @@ def generate_human_data_latex_table(
     ]
 
     reg_agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
-    reg_agg = reg_agg[reg_agg["anchor_maps"] > 0].copy()  # drop unreg row
+    reg_agg = reg_agg[reg_agg["anchor_maps"] > 0].copy()
     reg_agg["minutes"] = reg_agg["anchor_maps"] * 9 / 60
 
-    # Convert fractional rates → percentages
     for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"):
         reg_agg[f"{col}_mean_pct"] = reg_agg[f"{col}_mean"] * 100
         reg_agg[f"{col}_sem_pct"] = reg_agg[f"{col}_sem"] * 100
 
-    # ── Build unified per-row structure: (method, minutes, metric dict) ─────
+    # ── Unified row structure ───────────────────────────────────────────────
     rows = []
-    # SMART rows, sorted by minutes
     smart_sorted = SMART_DATA.sort_values("minutes").reset_index(drop=True)
     for _, r in smart_sorted.iterrows():
         rows.append(
@@ -1624,7 +1606,6 @@ def generate_human_data_latex_table(
                 "hr_progress_sem": np.nan,
             }
         )
-    # Regularized rows, sorted by minutes
     reg_sorted = reg_agg.sort_values("minutes").reset_index(drop=True)
     for _, r in reg_sorted.iterrows():
         rows.append(
@@ -1646,7 +1627,6 @@ def generate_human_data_latex_table(
 
     table = pd.DataFrame(rows)
 
-    # ── Human-readable minute labels (match the plot's x-tick scheme) ───────
     def _fmt_minutes(minutes):
         if minutes < 60:
             return f"{int(round(minutes))} min"
@@ -1663,7 +1643,6 @@ def generate_human_data_latex_table(
     table["human_data_label"] = table["minutes"].apply(_fmt_minutes)
 
     # ── Metric metadata ──────────────────────────────────────────────────────
-    # (mean_col, sem_col, header, higher_is_better)
     metrics = [
         ("sp_coll_mean", "sp_coll_sem", "Coll. (\\%) $\\downarrow$", False),
         ("sp_progress_mean", "sp_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
@@ -1672,24 +1651,54 @@ def generate_human_data_latex_table(
         ("hr_progress_mean", "hr_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
     ]
 
-    # Best value per column, over all rows (both methods)
-    best = {}
-    for mean_col, _, _, higher_is_better in metrics:
-        vals = table[mean_col].dropna()
-        if vals.empty:
-            best[mean_col] = None
-        else:
-            best[mean_col] = vals.max() if higher_is_better else vals.min()
+    # ── Top-3 ranking per column ────────────────────────────────────────────
+    # Exact colors sampled from the Depth Pro screenshot.
+    TIER_COLORS = {
+        1: "tierbest",  # #6FCF6A — soft pastel green
+        2: "tiersecond",  # #DFF04B — soft chartreuse
+        3: "tierthird",  # #FBF4D0 — pale cream-yellow
+    }
 
-    def _fmt_cell(mean, sem, mean_col):
+    rank_lookup = {}
+    for mean_col, _, _, higher_is_better in metrics:
+        vals = table[mean_col]
+        finite = vals.dropna()
+        if finite.empty:
+            for i in range(len(table)):
+                rank_lookup[(mean_col, i)] = None
+            continue
+
+        distinct_sorted = sorted(finite.unique(), reverse=higher_is_better)
+        top3 = distinct_sorted[:3]
+        val_to_tier = {v: i + 1 for i, v in enumerate(top3)}
+
+        for i, v in enumerate(vals):
+            if pd.isna(v):
+                rank_lookup[(mean_col, i)] = None
+                continue
+            matched_tier = None
+            for tv, tier in val_to_tier.items():
+                if np.isclose(v, tv):
+                    matched_tier = tier
+                    break
+            rank_lookup[(mean_col, i)] = matched_tier
+
+    def _fmt_cell(mean, sem, mean_col, row_idx):
         if pd.isna(mean):
             return "---"
-        is_best = best[mean_col] is not None and np.isclose(mean, best[mean_col])
+        tier = rank_lookup.get((mean_col, row_idx))
+        is_best = tier == 1
+
         if pd.notna(sem) and sem != 0:
             body = f"{mean:.1f} \\pm {sem:.1f}"
-            return f"$\\bm{{{body}}}$" if is_best else f"${body}$"
-        body = f"{mean:.1f}"
-        return f"\\textbf{{{body}}}" if is_best else body
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
+        else:
+            body = f"{mean:.1f}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+
+        if tier is None:
+            return text
+        return f"\\cellcolor{{{TIER_COLORS[tier]}}} {text}"
 
     # ── Build LaTeX ──────────────────────────────────────────────────────────
     n_sp_cols = 2
@@ -1701,11 +1710,16 @@ def generate_human_data_latex_table(
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
         r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
     )
+    lines.append(r"\definecolor{tierbest}{HTML}{6FCF6A}")
+    lines.append(r"\definecolor{tiersecond}{HTML}{DFF04B}")
+    lines.append(r"\definecolor{tierthird}{HTML}{FBF4D0}")
     lines.append(r"\begin{table}[ht]")
     lines.append(r"\centering")
     lines.append(
         r"\caption{Performance vs.\ amount of human demonstration data at fixed 50k "
-        r"self-play training maps. Best value per column in bold. "
+        r"self-play training maps. Top-3 values per column are highlighted "
+        r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
+        r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
         r"SMART self-play metrics are not reported because SMART is a behaviour "
         r"model rather than an RL agent.}"
     )
@@ -1728,23 +1742,18 @@ def generate_human_data_latex_table(
     lines.append(header2)
     lines.append(r"\midrule")
 
-    # ── Emit rows, with a midrule between the SMART and regularized blocks ──
     prev_method = None
-    for _, row in table.iterrows():
+    for i, row in table.iterrows():
         if prev_method is not None and row["method"] != prev_method:
             lines.append(r"\midrule")
         prev_method = row["method"]
 
-        if row["method"] == "SMART":
-            data_cell = f"\\cellcolor[HTML]{{FDCFF1}} {row['human_data_label']}"
-            method_cell = r"\cellcolor[HTML]{FDCFF1} SMART"
-        else:
-            data_cell = f"\\cellcolor[HTML]{{E0E0FF}} {row['human_data_label']}"
-            method_cell = r"\cellcolor[HTML]{E0E0FF} reg. self-play"
+        data_cell = row["human_data_label"]
+        method_cell = "SMART" if row["method"] == "SMART" else "reg. self-play"
 
         cells = [data_cell, method_cell]
         for mean_col, sem_col, _, _ in metrics:
-            cells.append(_fmt_cell(row[mean_col], row[sem_col], mean_col))
+            cells.append(_fmt_cell(row[mean_col], row[sem_col], mean_col, i))
         lines.append(" & ".join(cells) + r" \\")
 
     lines.append(r"\bottomrule")
@@ -2369,6 +2378,192 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
     return latex_str
 
 
+def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
+    """Load WOSAC scores from the SMART baseline CSV.
+
+    Returns a DataFrame with columns:
+        num_maps, minutes,
+        wosac_score, wosac_kinematic_metrics,
+        wosac_interactive_metrics, wosac_map_based_metrics
+
+    WOSAC metrics in the SMART CSV are only populated in the scaling_sp_val
+    mode (the former `all_agents` rows). Missing values stay NaN; returns an
+    empty (correctly-typed) DataFrame if the CSV is absent.
+    """
+    cols = [
+        "num_maps",
+        "minutes",
+        "wosac_score",
+        "wosac_kinematic_metrics",
+        "wosac_interactive_metrics",
+        "wosac_map_based_metrics",
+    ]
+    if not os.path.exists(csv_path):
+        print(f"  {csv_path} not found — SMART WOSAC baseline will be omitted.")
+        return pd.DataFrame(columns=cols)
+
+    raw = pd.read_csv(csv_path)
+    raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
+    # WOSAC metrics only live in the scaling_sp_val rows.
+    raw = raw[raw["mode"] == "scaling_sp_val"].copy()
+
+    raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
+    raw = raw.dropna(subset=["num_maps"]).copy()
+    raw["num_maps"] = raw["num_maps"].astype(int)
+
+    metric_cols = [c for c in cols if c.startswith("wosac_") and c in raw.columns]
+    out = raw[["num_maps"] + metric_cols].sort_values("num_maps").reset_index(drop=True)
+    out["minutes"] = out["num_maps"] * 9 / 60
+    # Re-index to the full expected column list so missing WOSAC columns become NaN.
+    for c in cols:
+        if c not in out.columns:
+            out[c] = np.nan
+    return out[cols]
+
+
+def plot_human_data_requirements_wosac(
+    wosac_df,
+    save_path="results/figures/eval_human_data_requirements_wosac.pdf",
+    smart_csv="results/smart_baseline_res.csv",
+):
+    """WOSAC-score version of plot_human_data_requirements.
+
+    4 line-plot subplots, all higher-is-better WOSAC scores in [0, 1]:
+        0) WOSAC realism meta-score   (main: realism_meta_score,   SMART: wosac_score)
+        1) WOSAC kinematic metrics    (main: kinematic_metrics,    SMART: wosac_kinematic_metrics)
+        2) WOSAC interactive metrics  (main: interactive_metrics,  SMART: wosac_interactive_metrics)
+        3) WOSAC map-based metrics    (main: map_based_metrics,    SMART: wosac_map_based_metrics)
+
+    Series per panel:
+        - regularized self-play (ours):       line across anchor points (pale purple)
+        - best unregularized self-play:       horizontal dashed line (blue)
+        - SMART-tiny-CLSFT:                   line across SMART checkpoints (pink)
+        - Ground-truth (UB):                  dashed reference line (upper bound)
+        - Random:                             dashed reference line (lower bound)
+
+    Reference baselines for Ground-truth and Random are fixed per metric,
+    taken from the PufferDrive WOSAC baseline table (229 clean held-out
+    validation scenes).
+    """
+    # ── Colours ─────────────────────────────────────────────────────────────
+    COLOR_OURS = "#CCCCFF"
+    COLOR_OURS_EDGE = "#6B3FA0"
+    COLOR_SELFPLAY = "#4A7FD4"
+    COLOR_SMART = "#E8609A"
+    COLOR_SMART_EDGE = "#B4437A"
+
+    # ── Data sources ────────────────────────────────────────────────────────
+    if wosac_df is None or wosac_df.empty:
+        print("  No WOSAC data — skipping plot_human_data_requirements_wosac.")
+        return None
+
+    SMART_DATA = _load_smart_wosac_baseline(smart_csv)
+
+    wdf = wosac_df.copy()
+    wdf["anchor_maps"] = wdf["anchor_maps"].fillna(0).astype(int)
+    wdf = wdf[wdf["sp_maps"] == 50000]
+    if wdf.empty:
+        print("  No 50k sp_maps WOSAC data — skipping plot_human_data_requirements_wosac.")
+        return None
+
+    # (main_col, smart_col, ylabel, ub_score, random_score)
+    # UB and Random from PufferDrive WOSAC baselines on 229 clean held-out scenes.
+    subplot_specs = [
+        ("realism_meta_score", "wosac_score", "WOSAC realism meta-score", 0.8179, 0.4459),
+        ("kinematic_metrics", "wosac_kinematic_metrics", "WOSAC kinematic metrics", 0.6070, 0.0506),
+        ("interactive_metrics", "wosac_interactive_metrics", "WOSAC interactive metrics", 0.9590, 0.7843),
+        ("map_based_metrics", "wosac_map_based_metrics", "WOSAC map-based metrics", 0.8722, 0.4704),
+    ]
+
+    available_main = [m for m, _, _, _, _ in subplot_specs if m in wdf.columns]
+    if not available_main:
+        print("  WOSAC metric columns missing — skipping plot_human_data_requirements_wosac.")
+        return None
+
+    # ── Aggregate per anchor_maps ───────────────────────────────────────────
+    agg = wdf.groupby("anchor_maps")[available_main].agg(["mean", "sem"]).reset_index()
+    flat_cols = ["anchor_maps"]
+    for m in available_main:
+        flat_cols.extend([f"{m}_mean", f"{m}_sem"])
+    agg.columns = flat_cols
+    agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
+
+    unreg = agg[agg["anchor_maps"] == 0]
+    reg = agg[agg["anchor_maps"] > 0].sort_values("anchor_minutes")
+
+    tick_positions = [10, 30, 180, 1800, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
+
+    # ── Plot ────────────────────────────────────────────────────────────────
+    _set_style(3)
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
+
+    for ax, (main_col, smart_col, ylabel, ub, rand) in zip(axes, subplot_specs):
+        mean_col = f"{main_col}_mean"
+        sem_col = f"{main_col}_sem"
+
+        # Upper bound and random floor (drawn first so series lines sit on top).
+        _draw_upper_bound(ax, ub, label="Ground-truth (UB)")
+        # _draw_lower_bound(ax, rand, label="Random")
+
+        if mean_col in reg.columns and not reg.empty:
+            ax.errorbar(
+                reg["anchor_minutes"],
+                reg[mean_col],
+                yerr=reg[sem_col],
+                color=COLOR_OURS,
+                marker="o",
+                markersize=9,
+                linewidth=2.0,
+                capsize=3,
+                markeredgecolor=COLOR_OURS_EDGE,
+                markerfacecolor=COLOR_OURS,
+                label="regularized self-play (ours)",
+                zorder=4,
+            )
+        if mean_col in unreg.columns and not unreg.empty:
+            ax.axhline(
+                unreg[mean_col].iloc[0],
+                color=COLOR_SELFPLAY,
+                linestyle="--",
+                linewidth=2.0,
+                alpha=0.9,
+                label="best unregularized self-play",
+                zorder=2,
+            )
+        smart_valid = SMART_DATA.dropna(subset=[smart_col]) if smart_col in SMART_DATA.columns else SMART_DATA.iloc[0:0]
+        if not smart_valid.empty:
+            ax.plot(
+                smart_valid["minutes"],
+                smart_valid[smart_col],
+                color=COLOR_SMART,
+                marker="o",
+                markersize=9,
+                linewidth=2.0,
+                linestyle="-",
+                markeredgecolor=COLOR_SMART_EDGE,
+                markerfacecolor=COLOR_SMART,
+                label="SMART-tiny-CLSFT",
+                zorder=3,
+            )
+
+        ax.set_xscale("symlog", linthresh=60, linscale=1.2)
+        ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
+        ax.minorticks_off()
+        # ax.set_ylim(0, 1.02)  # WOSAC scores are in [0, 1]; leave a sliver above UB.
+        ax.set_xlabel("Human demonstration data")
+        ax.set_ylabel(ylabel)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.legend(fontsize=7, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -2423,6 +2618,7 @@ if __name__ == "__main__":
 
     if os.path.exists(WOSAC_CSV):
         wosac_df = pd.read_csv(WOSAC_CSV)
+        plot_human_data_requirements_wosac(wosac_df)
         print(f"Loaded {WOSAC_CSV} ({len(wosac_df)} rows)")
     else:
         print(f"{WOSAC_CSV} not found — skipping WOSAC figures.")

@@ -52,7 +52,7 @@ DETERMINISTIC = True
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 1024 * 10
+NUM_TOTAL_EVAL_AGENTS = 1024 * 5
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -375,7 +375,7 @@ def evaluate_scaling_checkpoints(base_config):
             TRAIN_MAP_DIR,
             control_mode="control_vehicles",
             num_maps=50_000,
-            lambda_value=0.15 if is_reg else 0.0,
+            lambda_value=0.1 if is_reg else 0.0,
         )
         sp_train_env = load_env(ENV_NAME, sp_train_config)
         policy = load_policy(cpt_config, sp_train_env, ENV_NAME)
