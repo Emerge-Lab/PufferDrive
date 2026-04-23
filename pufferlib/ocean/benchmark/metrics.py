@@ -305,6 +305,7 @@ def compute_map_features(
     road_edge_polylines: dict,
     device: torch.device,
     valid: np.ndarray | None = None,
+    agent_chunk_size: int | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Computes distance to road edge and offroad indication for each agent.
 
@@ -376,23 +377,29 @@ def compute_map_features(
         scenario_length = agent_length_t[agent_mask]
         scenario_width = agent_width_t[agent_mask]
 
-        for rollout_idx in range(num_rollouts):
-            distances = map_metric_features.compute_distance_to_road_edge(
-                center_x=scenario_x[:, rollout_idx, :],
-                center_y=scenario_y[:, rollout_idx, :],
-                length=scenario_length,
-                width=scenario_width,
-                heading=scenario_heading[:, rollout_idx, :],
-                valid=scenario_valid[:, rollout_idx, :],
-                polyline_x=scenario_polyline_x,
-                polyline_y=scenario_polyline_y,
-                polyline_lengths=scenario_lengths_t,
-            )
+        chunk_size = len(agent_indices) if agent_chunk_size is None else agent_chunk_size
+        chunk_size = max(1, int(chunk_size))
 
-            distances_np = distances.cpu().numpy()
-            result_distances[agent_mask_np, rollout_idx, :] = distances_np
-            result_offroad[agent_mask_np, rollout_idx, :] = (
-                distances_np > map_metric_features.OFFROAD_DISTANCE_THRESHOLD
-            )
+        for rollout_idx in range(num_rollouts):
+            for start in range(0, len(agent_indices), chunk_size):
+                end = min(start + chunk_size, len(agent_indices))
+                distances = map_metric_features.compute_distance_to_road_edge(
+                    center_x=scenario_x[start:end, rollout_idx, :],
+                    center_y=scenario_y[start:end, rollout_idx, :],
+                    length=scenario_length[start:end],
+                    width=scenario_width[start:end],
+                    heading=scenario_heading[start:end, rollout_idx, :],
+                    valid=scenario_valid[start:end, rollout_idx, :],
+                    polyline_x=scenario_polyline_x,
+                    polyline_y=scenario_polyline_y,
+                    polyline_lengths=scenario_lengths_t,
+                )
+
+                distances_np = distances.cpu().numpy()
+                result_indices = agent_indices[start:end]
+                result_distances[result_indices, rollout_idx, :] = distances_np
+                result_offroad[result_indices, rollout_idx, :] = (
+                    distances_np > map_metric_features.OFFROAD_DISTANCE_THRESHOLD
+                )
 
     return result_distances, result_offroad

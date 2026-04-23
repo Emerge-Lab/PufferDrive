@@ -163,6 +163,25 @@ class WOSACEvaluator:
             self.metrics_config.getboolean(metric_name, "independent_timesteps"),
         )
 
+    def _get_eval_mask(self, ground_truth_trajectories: Dict):
+        agent_filter = self.config.get("eval", {}).get("wosac_eval_agent_filter", "tracks_to_predict")
+
+        if agent_filter == "tracks_to_predict":
+            return ground_truth_trajectories["is_track_to_predict"][:, 0].astype(bool)
+
+        if agent_filter == "all":
+            return ground_truth_trajectories["valid"].any(axis=2)[:, 0].astype(bool)
+
+        if agent_filter == "sdc":
+            if "is_sdc" not in ground_truth_trajectories:
+                raise KeyError("wosac_eval_agent_filter=sdc requires is_sdc metadata")
+            return ground_truth_trajectories["is_sdc"][:, 0].astype(bool)
+
+        raise ValueError(
+            f"Unknown wosac_eval_agent_filter={agent_filter!r}. "
+            "Expected one of: tracks_to_predict, all, sdc."
+        )
+
     def collect_ground_truth_trajectories(self, puffer_env):
         """Collect ground truth data for evaluation.
         Returns:
@@ -338,7 +357,7 @@ class WOSACEvaluator:
             "Agent IDs don't match between simulated and ground truth trajectories"
         )
 
-        eval_mask = ground_truth_trajectories["is_track_to_predict"][:, 0]
+        eval_mask = self._get_eval_mask(ground_truth_trajectories)
 
         # Extract trajectories
         sim_x = simulated_trajectories["x"]
@@ -838,6 +857,27 @@ class PlanningEvaluator:
             return scenario_ids
         return scenario_ids[:, :, 0]
 
+    def _get_eval_mask(self, combined_trajectories):
+        agent_filter = self.config.get("eval", {}).get("planning_eval_agent_filter", "sdc")
+
+        if agent_filter == "sdc":
+            if "is_sdc" in combined_trajectories:
+                return combined_trajectories["is_sdc"][:, 0].astype(bool)
+            return combined_trajectories["id"][:, 0] <= -2
+
+        if agent_filter == "all":
+            return combined_trajectories["valid"].any(axis=2)[:, 0].astype(bool)
+
+        if agent_filter == "tracks_to_predict":
+            if "is_track_to_predict" not in combined_trajectories:
+                raise KeyError("planning_eval_agent_filter=tracks_to_predict requires is_track_to_predict metadata")
+            return combined_trajectories["is_track_to_predict"][:, 0].astype(bool)
+
+        raise ValueError(
+            f"Unknown planning_eval_agent_filter={agent_filter!r}. "
+            "Expected one of: sdc, all, tracks_to_predict."
+        )
+
     @staticmethod
     def _compute_route_progress(sim_x, sim_y, sim_valid, gt_x, gt_y, gt_valid, reached_goal=None, chunk_size=1024):
         """Compute normalized progress along the ground-truth route.
@@ -1019,11 +1059,7 @@ class PlanningEvaluator:
         goal_radius: float | None = None,
         goal_speed: float | None = None,
     ) -> Dict:
-        if "is_sdc" in combined_trajectories:
-            eval_mask = combined_trajectories["is_sdc"][:, 0]
-        else:
-            eval_mask = combined_trajectories["id"][:, 0] <= -2
-
+        eval_mask = self._get_eval_mask(combined_trajectories)
         x = combined_trajectories["x"]
         y = combined_trajectories["y"]
         heading = combined_trajectories["heading"]
@@ -1064,6 +1100,7 @@ class PlanningEvaluator:
             eval_agent_width,
             road_edge_polylines,
             device=self.device,
+            agent_chunk_size=self.config.get("eval", {}).get("planning_map_agent_chunk_size"),
         )
 
         collision_indication = np.any(np.where(eval_valid, collisions_per_step, False), axis=2).astype(float)

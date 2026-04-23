@@ -78,7 +78,8 @@ def _aggregate_scene_level_results(scene_level_results, wosac_enabled):
         aggregate_metrics["total_num_agents"] = int(scene_level_results["num_agents_per_scene"].sum())
         aggregate_metrics["realism_score_std"] = scene_level_results["realism_meta_score"].std()
     else:
-        aggregate_metrics["num_scenarios"] = int(scene_level_results.shape[0])
+        aggregate_metrics["num_eval_records"] = int(scene_level_results.shape[0])
+        aggregate_metrics["num_scenarios"] = int(scene_level_results.index.nunique())
 
     return aggregate_metrics
 
@@ -136,8 +137,9 @@ def align_trajectories(simulated, ground_truth):
 
     sim_traj = {k: v[indices] for k, v in simulated.items()}
     sim_traj["valid"] = ground_truth["valid"].copy()
-    if "is_sdc" in ground_truth:
-        sim_traj["is_sdc"] = ground_truth["is_sdc"].copy()
+    for key in ("is_sdc", "is_track_to_predict", "is_vehicle"):
+        if key in ground_truth:
+            sim_traj[key] = ground_truth[key].copy()
 
     return sim_traj
 
@@ -304,7 +306,6 @@ def evaluate_trajectories_chunked(simulated_trajectory_file, args, chunk_size):
             scene_level_results.append(chunk_results)
 
     combined_results = pd.concat(scene_level_results)
-    combined_results = combined_results[~combined_results.index.duplicated(keep="first")]
 
     if args["eval"]["wosac_aggregate_results"]:
         results = _aggregate_scene_level_results(combined_results, wosac_enabled)
@@ -353,6 +354,7 @@ def evaluate_trajectories(simulated_trajectory_file, args):
 if __name__ == "__main__":
     simulated_file = None
     chunk_size = None
+    planning_map_agent_chunk_size = None
     if "--simulated-file" in sys.argv:
         try:
             idx = sys.argv.index("--simulated-file")
@@ -377,7 +379,45 @@ if __name__ == "__main__":
             print("ERROR: --chunk-size argument found but no valid integer value was provided.")
             sys.exit(1)
 
+    if "--planning-map-agent-chunk-size" in sys.argv:
+        try:
+            idx = sys.argv.index("--planning-map-agent-chunk-size")
+            planning_map_agent_chunk_size = int(sys.argv[idx + 1])
+            sys.argv.pop(idx)
+            sys.argv.pop(idx)
+        except (ValueError, IndexError):
+            print("ERROR: --planning-map-agent-chunk-size argument found but no valid integer value was provided.")
+            sys.exit(1)
+
+    planning_eval_agent_filter = None
+    if "--planning-eval-agent-filter" in sys.argv:
+        try:
+            idx = sys.argv.index("--planning-eval-agent-filter")
+            planning_eval_agent_filter = sys.argv[idx + 1]
+            sys.argv.pop(idx)
+            sys.argv.pop(idx)
+        except (ValueError, IndexError):
+            print("ERROR: --planning-eval-agent-filter argument found but no value was provided.")
+            sys.exit(1)
+
+    wosac_eval_agent_filter = None
+    if "--wosac-eval-agent-filter" in sys.argv:
+        try:
+            idx = sys.argv.index("--wosac-eval-agent-filter")
+            wosac_eval_agent_filter = sys.argv[idx + 1]
+            sys.argv.pop(idx)
+            sys.argv.pop(idx)
+        except (ValueError, IndexError):
+            print("ERROR: --wosac-eval-agent-filter argument found but no value was provided.")
+            sys.exit(1)
+
     config = pufferl.load_config("puffer_drive")
+    if planning_eval_agent_filter is not None:
+        config["eval"]["planning_eval_agent_filter"] = planning_eval_agent_filter
+    if wosac_eval_agent_filter is not None:
+        config["eval"]["wosac_eval_agent_filter"] = wosac_eval_agent_filter
+    if planning_map_agent_chunk_size is not None:
+        config["eval"]["planning_map_agent_chunk_size"] = planning_map_agent_chunk_size
 
     if chunk_size is not None and chunk_size > 0:
         evaluate_trajectories_chunked(simulated_file, args=config, chunk_size=chunk_size)
