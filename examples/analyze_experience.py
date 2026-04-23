@@ -48,24 +48,24 @@ df = pd.DataFrame(
             "Method": "Self-play \n RL",
             "Total experience learned from": 5_000_000_000,
             "Human demonstrations used": 0,
-            "Self-play\ncollision rate": 0.2,
-            "Human-replay\ncollision rate": 5.0,
+            "Self-play\ncollision rate": 0.9,
+            "Human-replay at-fault\ncollision rate": 2.8,
             "Cumulative training time": 9.15,
         },
         {
             "Method": "Reg self-play \n RL (ours)",
-            "Total experience learned from": 5_000_000_000 + 45_000,
-            "Human demonstrations used": 108000,
+            "Total experience learned from": 5_000_000_000 + 1800,
+            "Human demonstrations used": 1800,
             "Self-play\ncollision rate": 0.1,
-            "Human-replay\ncollision rate": 0.5,
+            "Human-replay at-fault\ncollision rate": 0.01,
             "Cumulative training time": 9.45,
         },
         {
             "Method": "SMART \n (IL-based)",
             "Total experience learned from": 225_000_000,
             "Human demonstrations used": 225_000_000,
-            "Self-play\ncollision rate": 0.5,
-            "Human-replay\ncollision rate": 4.0,
+            "Self-play\ncollision rate": 6.1,
+            "Human-replay at-fault\ncollision rate": 1.6,
             "Cumulative training time": 281,  # 32 * 8 (IL) + 25 (finetune)
         },
     ]
@@ -148,7 +148,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     ax_demo.tick_params(labelleft=False)
     _bar(ax_time, "Cumulative training time", "GPU hours", log=False, lower_is_better=True)
     _bar(ax_sp, "Self-play\ncollision rate", "Collision rate (%)", log=False, lower_is_better=True)
-    _bar(ax_hr, "Human-replay\ncollision rate", "Collision rate (%)", log=False, lower_is_better=True)
+    _bar(ax_hr, "Human-replay at-fault\ncollision rate", "Collision rate (%)", log=False, lower_is_better=True)
 
     # ── Summary / ratio panel ────────────────────────────────────────────────
     ax_summ.axis("off")
@@ -171,8 +171,8 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
 
     sp_ours = ours["Self-play\ncollision rate"]
     sp_smart = smart["Self-play\ncollision rate"]
-    hr_ours = ours["Human-replay\ncollision rate"]
-    hr_smart = smart["Human-replay\ncollision rate"]
+    hr_ours = ours["Human-replay at-fault\ncollision rate"]
+    hr_smart = smart["Human-replay at-fault\ncollision rate"]
 
     GREEN = "#5cca61"
     # (label, value_str, detail_str, color)

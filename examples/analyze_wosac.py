@@ -39,9 +39,9 @@ SP_MAPS_FILTER = 50000
 
 # WOSAC eval settings (mirrors [eval] section defaults in the .ini)
 WOSAC_MAP_DIR = "resources/drive/binaries/validation"
-WOSAC_BATCH_SIZE = 64  # num_scenes_per_batch
+WOSAC_BATCH_SIZE = 256  # num_scenes_per_batch
 WOSAC_SCENARIO_POOL_SIZE = 10000
-WOSAC_MAX_BATCHES = 2
+WOSAC_MAX_BATCHES = 10
 WOSAC_NUM_ROLLOUTS = 32
 WOSAC_INIT_STEPS = 10
 WOSAC_CONTROL_MODE = "control_wosac"

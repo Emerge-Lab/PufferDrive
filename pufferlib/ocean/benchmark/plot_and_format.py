@@ -39,6 +39,8 @@ PALETTE = {
     "tier_best": "#6FCF6A",  # soft pastel green
     "tier_second": "#DFF04B",  # soft chartreuse
     "tier_third": "#FBF4D0",  # pale cream-yellow
+    # Best-per-column among unregularized rows. Overlays tier color when both apply.
+    "tier_unreg_best": "#A8C2E8",  # soft blue, tinted variant of PALETTE['selfplay']
 }
 
 # Back-compat aliases so existing references keep working without edits.
@@ -66,6 +68,7 @@ def _tier_latex_preamble():
         rf"\definecolor{{tierbest}}{{HTML}}{{{PALETTE['tier_best'].lstrip('#')}}}",
         rf"\definecolor{{tiersecond}}{{HTML}}{{{PALETTE['tier_second'].lstrip('#')}}}",
         rf"\definecolor{{tierthird}}{{HTML}}{{{PALETTE['tier_third'].lstrip('#')}}}",
+        rf"\definecolor{{tierunregbest}}{{HTML}}{{{PALETTE['tier_unreg_best'].lstrip('#')}}}",
     ]
 
 
@@ -265,6 +268,11 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
       - 3rd    -> pale cream-yellow   (#FBF4D0)
     Best value in each column is additionally bolded. Ties share a tier.
 
+    The best unregularized value per column is highlighted in blue
+    (#CFE0F7). Blue wins over tier color when a cell qualifies for both,
+    so the unreg signal stays visible even when unreg is competitive with
+    the overall top-3. Bold (for overall-best) is preserved regardless.
+
     Row layout: unregularized rows first, then regularized, each sorted by sp_maps.
 
     Required LaTeX packages:
@@ -354,11 +362,27 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 
     rank_lookup = _build_tier_rank_lookup(merged, all_specs)
 
+    # Per-column best among unregularized rows (anchor_maps == 0).
+    # Ties share the highlight. Stored as a set of (mean_col, row_idx).
+    unreg_mask = merged["anchor_maps"] == 0
+    unreg_best_cells = set()
+    for spec in all_specs:
+        mean_col = spec[0]
+        higher_is_better = spec[3]
+        unreg_vals = merged.loc[unreg_mask, mean_col].dropna()
+        if unreg_vals.empty:
+            continue
+        target = unreg_vals.max() if higher_is_better else unreg_vals.min()
+        for i, v in merged[mean_col].items():
+            if unreg_mask.iloc[i] and pd.notna(v) and np.isclose(v, target):
+                unreg_best_cells.add((mean_col, i))
+
     def _fmt_cell(mean, sem, mean_col, row_idx, as_pct, decimals):
         if pd.isna(mean):
             return "---"
         tier = rank_lookup.get((mean_col, row_idx))
         is_best = tier == 1
+        is_unreg_best = (mean_col, row_idx) in unreg_best_cells
         m_val = mean * 100 if as_pct else mean
         s_val = sem * 100 if (as_pct and pd.notna(sem)) else sem
         fmt = f".{decimals}f"
@@ -368,6 +392,10 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         else:
             body = f"{m_val:{fmt}}"
             text = f"\\textbf{{{body}}}" if is_best else body
+        # Unreg-best blue wins over tier color — otherwise the new signal
+        # would be invisible exactly when the unreg row is also top-3.
+        if is_unreg_best:
+            return f"\\cellcolor{{tierunregbest}} {text}"
         if tier is None:
             return text
         return f"\\cellcolor{{{_TIER_NAMES[tier]}}} {text}"
@@ -391,7 +419,9 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         r"scenarios; human-replay metrics on 200 interactive validation "
         r"scenarios. Top-3 values per column are highlighted "
         r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
-        r"\colorbox{tierthird}{3rd}); best value additionally in bold.}"
+        r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
+        r"\colorbox{tierunregbest}{Blue} marks the best unregularized "
+        r"value per column.}"
     )
     lines.append(r"\label{tab:scaling_results}")
     lines.append(r"\resizebox{\textwidth}{!}{%")
