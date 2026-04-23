@@ -2423,152 +2423,152 @@ def eval_multi_scenarios_render(
     #   are still open. Call close() on all Drive instances first.
     _rollout_exc = None
     try:
-      with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
-        while scenarios_processed < num_scenarios:
-            ob, _ = vecenv.reset()
+        with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+            while scenarios_processed < num_scenarios:
+                ob, _ = vecenv.reset()
 
-            # Get initial states for all environments in the batch
-            scenarios = vecenv.get_state()
-            num_envs_in_batch = len(scenarios)
-            batch_start = scenarios_processed
+                # Get initial states for all environments in the batch
+                scenarios = vecenv.get_state()
+                num_envs_in_batch = len(scenarios)
+                batch_start = scenarios_processed
 
-            # Prepare batch_size_eval for the resample that fires at end of the step loop.
-            # That resample will load the NEXT batch, so cap it at remaining_after_this.
-            remaining_after_this = num_scenarios - scenarios_processed - num_envs_in_batch
-            target_env.batch_size_eval = max(1, remaining_after_this)
+                # Prepare batch_size_eval for the resample that fires at end of the step loop.
+                # That resample will load the NEXT batch, so cap it at remaining_after_this.
+                remaining_after_this = num_scenarios - scenarios_processed - num_envs_in_batch
+                target_env.batch_size_eval = max(1, remaining_after_this)
 
-            map_names = []
-            for env_idx in range(num_envs_in_batch):
-                map_names.append(scenarios[env_idx]["map_name"].split("/")[-1].split(".")[0])
-
-            # Reset LSTM
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
-
-            # Initialize histories as lists of lists (one list per environment).
-            # Only needed for the HTML replay path — EGL writes mp4 frames
-            # directly to ffmpeg via c_render each step.
-            if html_mode:
-                agent_histories = [[] for _ in range(num_envs_in_batch)]
-                traffic_histories = [[] for _ in range(num_envs_in_batch)]
-                trajectory_histories = [[] for _ in range(num_envs_in_batch)]
-                all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
-
-            _render_steps = args["env"]["scenario_length"]
-            if render_max_steps is not None:
-                _render_steps = min(_render_steps, render_max_steps)
-            for t in range(_render_steps):
-                if html_mode:
-                    current_scenarios = vecenv.get_state()
-                    start_obs_index = 0
-
-                    # Loop through every environment in the batch to record its history
-                    for env_idx in range(num_envs_in_batch):
-                        env_scenario = current_scenarios[env_idx]
-
-                        agent_histories[env_idx].append(
-                            pufferlib.viz.fill_agents_state(
-                                env_scenario, use_trajectory="trajectory" in args["env"]["action_type"]
-                            )
-                        )
-                        traffic_histories[env_idx].append(pufferlib.viz.fill_traffics_state(env_scenario, t))
-
-                        if "trajectory" in args["env"]["action_type"]:
-                            trajectory_histories[env_idx].append(pufferlib.viz.fill_trajectories(env_scenario, t))
-
-                        # Collect observation dictionaries for ALL active agents in THIS environment at timestep t
-                        if args["render_obs"]:
-                            step_obs_dict = {}
-                            if env_idx > 0:
-                                start_obs_index += current_scenarios[env_idx - 1]["active_agent_count"]
-                            for agent_idx in range(env_scenario["active_agent_count"]):
-                                agent_id = env_scenario["active_agent_indices"][agent_idx]
-                                step_obs_dict[int(agent_id)] = pufferlib.viz.extract_obs_frame(
-                                    ob,
-                                    env_scenario,
-                                    args,
-                                    timestep=t,
-                                    obs_index=start_obs_index + agent_idx,
-                                    agent_idx=agent_idx,
-                                    head_north=True,
-                                )
-                            all_agents_obs_histories[env_idx].append(step_obs_dict)
-
-                with torch.no_grad():
-                    ob = torch.as_tensor(ob).to(device)
-                    logits, _ = policy.forward_eval(ob, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-                ob, _, _, _, infos = vecenv.step(action)
-
-                if egl_mode:
-                    # Flush one frame per env through c_render → client_record_frame
-                    # → PBO async readback → writev → ffmpeg pipe. make_client is
-                    # called lazily on the first render per env (sets up ffmpeg +
-                    # GPU context) and close_client at scenario end flushes the
-                    # trailing PBO frame.
-                    for e in range(num_envs_in_batch):
-                        target_env.render(env_id=e, view_mode=view_mode)
-
-                # Serial backend returns infos as single list (infos[0] is the env's info list)
-                if infos and infos[0]:
-                    for env_idx, summary in enumerate(infos[0]):
-                        env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
-                        summary["episode_id"] = batch_start + env_idx
-                        summary["env_id"] = env_idx
-                        summary["map_name"] = env_map_name
-
-                        for k, v in summary.items():
-                            if k not in global_infos:
-                                global_infos[k] = []
-                            global_infos[k].append(v)
-
-            if html_mode:
-                # Loop through every environment to generate its specific HTML replay
+                map_names = []
                 for env_idx in range(num_envs_in_batch):
-                    global_episode_id = batch_start + env_idx
-                    # Ensure we don't render padding environments if num_scenarios isn't perfectly divisible by batch_size
-                    if global_episode_id >= num_scenarios:
-                        break
-                    env_map_name = map_names[env_idx]
+                    map_names.append(scenarios[env_idx]["map_name"].split("/")[-1].split(".")[0])
 
-                    pufferlib.viz.generate_interactive_replay(
-                        current_scenarios[env_idx],
-                        agent_histories[env_idx],
-                        traffic_histories[env_idx],
-                        trajectory_histories[env_idx],
-                        all_agents_obs_histories[env_idx],
-                        f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
-                        head_north=True,
+                # Reset LSTM
+                if args["train"]["use_rnn"]:
+                    state = dict(
+                        lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                        lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
                     )
 
-            if egl_mode:
-                # Close every env's Client so ffmpeg gets EOF on its input pipe,
-                # the trailing PBO frame is flushed, and libx264 writes the mp4
-                # trailer. Without this, the mp4 files are either empty or one
-                # frame short.
-                import sys as _sys_cc
+                # Initialize histories as lists of lists (one list per environment).
+                # Only needed for the HTML replay path — EGL writes mp4 frames
+                # directly to ffmpeg via c_render each step.
+                if html_mode:
+                    agent_histories = [[] for _ in range(num_envs_in_batch)]
+                    traffic_histories = [[] for _ in range(num_envs_in_batch)]
+                    trajectory_histories = [[] for _ in range(num_envs_in_batch)]
+                    all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
 
-                _sys_cc.stderr.write(
-                    f"[render-instr] starting close_client loop num_envs_in_batch={num_envs_in_batch}\n"
-                )
-                _sys_cc.stderr.flush()
-                for e in range(num_envs_in_batch):
-                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n")
-                    _sys_cc.stderr.flush()
-                    target_env.close_client(env_id=e)
-                    _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n")
-                    _sys_cc.stderr.flush()
+                _render_steps = args["env"]["scenario_length"]
+                if render_max_steps is not None:
+                    _render_steps = min(_render_steps, render_max_steps)
+                for t in range(_render_steps):
+                    if html_mode:
+                        current_scenarios = vecenv.get_state()
+                        start_obs_index = 0
 
-            scenarios_processed += num_envs_in_batch
-            pbar.update(num_envs_in_batch)
+                        # Loop through every environment in the batch to record its history
+                        for env_idx in range(num_envs_in_batch):
+                            env_scenario = current_scenarios[env_idx]
+
+                            agent_histories[env_idx].append(
+                                pufferlib.viz.fill_agents_state(
+                                    env_scenario, use_trajectory="trajectory" in args["env"]["action_type"]
+                                )
+                            )
+                            traffic_histories[env_idx].append(pufferlib.viz.fill_traffics_state(env_scenario, t))
+
+                            if "trajectory" in args["env"]["action_type"]:
+                                trajectory_histories[env_idx].append(pufferlib.viz.fill_trajectories(env_scenario, t))
+
+                            # Collect observation dictionaries for ALL active agents in THIS environment at timestep t
+                            if args["render_obs"]:
+                                step_obs_dict = {}
+                                if env_idx > 0:
+                                    start_obs_index += current_scenarios[env_idx - 1]["active_agent_count"]
+                                for agent_idx in range(env_scenario["active_agent_count"]):
+                                    agent_id = env_scenario["active_agent_indices"][agent_idx]
+                                    step_obs_dict[int(agent_id)] = pufferlib.viz.extract_obs_frame(
+                                        ob,
+                                        env_scenario,
+                                        args,
+                                        timestep=t,
+                                        obs_index=start_obs_index + agent_idx,
+                                        agent_idx=agent_idx,
+                                        head_north=True,
+                                    )
+                                all_agents_obs_histories[env_idx].append(step_obs_dict)
+
+                    with torch.no_grad():
+                        ob = torch.as_tensor(ob).to(device)
+                        logits, _ = policy.forward_eval(ob, state)
+                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                    if isinstance(logits, torch.distributions.Normal):
+                        action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+                    ob, _, _, _, infos = vecenv.step(action)
+
+                    if egl_mode:
+                        # Flush one frame per env through c_render → client_record_frame
+                        # → PBO async readback → writev → ffmpeg pipe. make_client is
+                        # called lazily on the first render per env (sets up ffmpeg +
+                        # GPU context) and close_client at scenario end flushes the
+                        # trailing PBO frame.
+                        for e in range(num_envs_in_batch):
+                            target_env.render(env_id=e, view_mode=view_mode)
+
+                    # Serial backend returns infos as single list (infos[0] is the env's info list)
+                    if infos and infos[0]:
+                        for env_idx, summary in enumerate(infos[0]):
+                            env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
+                            summary["episode_id"] = batch_start + env_idx
+                            summary["env_id"] = env_idx
+                            summary["map_name"] = env_map_name
+
+                            for k, v in summary.items():
+                                if k not in global_infos:
+                                    global_infos[k] = []
+                                global_infos[k].append(v)
+
+                if html_mode:
+                    # Loop through every environment to generate its specific HTML replay
+                    for env_idx in range(num_envs_in_batch):
+                        global_episode_id = batch_start + env_idx
+                        # Ensure we don't render padding environments if num_scenarios isn't perfectly divisible by batch_size
+                        if global_episode_id >= num_scenarios:
+                            break
+                        env_map_name = map_names[env_idx]
+
+                        pufferlib.viz.generate_interactive_replay(
+                            current_scenarios[env_idx],
+                            agent_histories[env_idx],
+                            traffic_histories[env_idx],
+                            trajectory_histories[env_idx],
+                            all_agents_obs_histories[env_idx],
+                            f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
+                            head_north=True,
+                        )
+
+                if egl_mode:
+                    # Close every env's Client so ffmpeg gets EOF on its input pipe,
+                    # the trailing PBO frame is flushed, and libx264 writes the mp4
+                    # trailer. Without this, the mp4 files are either empty or one
+                    # frame short.
+                    import sys as _sys_cc
+
+                    _sys_cc.stderr.write(
+                        f"[render-instr] starting close_client loop num_envs_in_batch={num_envs_in_batch}\n"
+                    )
+                    _sys_cc.stderr.flush()
+                    for e in range(num_envs_in_batch):
+                        _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) calling\n")
+                        _sys_cc.stderr.flush()
+                        target_env.close_client(env_id=e)
+                        _sys_cc.stderr.write(f"[render-instr] close_client(env_idx={e}) returned\n")
+                        _sys_cc.stderr.flush()
+
+                scenarios_processed += num_envs_in_batch
+                pbar.update(num_envs_in_batch)
 
     except Exception as _rollout_exc_caught:
         _rollout_exc = _rollout_exc_caught
@@ -2649,6 +2649,7 @@ def eval_multi_scenarios_render(
         vecenv.close()
     except Exception as _close_exc:
         import sys as _sys_close
+
         _sys_close.stderr.write(f"[render-instr] vecenv.close() raised: {_close_exc}\n")
         _sys_close.stderr.flush()
 
@@ -2778,138 +2779,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
-
-
-def render(env_name, args=None):
-    """Render rollouts for a batch of maps using the in-process c_render pipeline.
-
-    Each map is loaded as a separate environment with render_mode="headless"
-    (EGL/ffmpeg). A policy rollout is run for max_frames steps, producing one
-    mp4 per map in output_dir.
-
-    Requires a [render] section in the config with:
-        map_dir, output_dir, num_maps, view_mode, max_frames
-    """
-    import glob as _glob
-    import shutil
-    import tempfile
-    from pufferlib.ocean.drive.drive import RenderView
-    from pufferlib.ocean.drive.rollout import RenderContext, rollout_loop
-
-    args = args or load_config(env_name)
-    render_configs = args.get("render", {})
-
-    try:
-        map_dir = render_configs["map_dir"]
-        num_maps = render_configs.get("num_maps", 1)
-        view_mode_str = str(render_configs.get("view_mode", "sim_state")).lower().strip('"').strip("'")
-        max_frames = render_configs.get("max_frames", 91)
-        output_dir = render_configs["output_dir"]
-        render_init_mode = (
-            str(render_configs["init_mode"]).strip('"').strip("'") if "init_mode" in render_configs else None
-        )
-        render_control_mode = (
-            str(render_configs["control_mode"]).strip('"').strip("'") if "control_mode" in render_configs else None
-        )
-    except KeyError as e:
-        raise pufferlib.APIUsageError(f"Missing render config: {e}")
-
-    _VIEW_MODE_MAP = {
-        "sim_state": [RenderView.FULL_SIM_STATE],
-        "topdown": [RenderView.TOPDOWN_SIM],
-        "bev": [RenderView.BEV_AGENT_OBS],
-        "both": [RenderView.FULL_SIM_STATE, RenderView.BEV_AGENT_OBS],
-        "all": [RenderView.FULL_SIM_STATE, RenderView.BEV_AGENT_OBS, RenderView.TOPDOWN_SIM],
-    }
-    view_modes = _VIEW_MODE_MAP.get(view_mode_str)
-    if view_modes is None:
-        raise pufferlib.APIUsageError(
-            f"Unknown view_mode '{view_mode_str}'. Choose from: sim_state, topdown, bev, both, all"
-        )
-
-    bin_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
-    if num_maps > len(bin_files):
-        num_maps = len(bin_files)
-    render_maps = [os.path.join(map_dir, f) for f in bin_files[:num_maps]]
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    configured_device = args["train"]["device"]
-    if configured_device == "cuda" and not torch.cuda.is_available():
-        print("Warning: CUDA not available, falling back to CPU for render.")
-        configured_device = "cpu"
-    args["train"]["device"] = configured_device
-    device = configured_device
-
-    _VIEW_SUFFIX = {
-        RenderView.FULL_SIM_STATE: "sim_state",
-        RenderView.BEV_AGENT_OBS: "bev",
-        RenderView.TOPDOWN_SIM: "topdown",
-    }
-
-    def render_one_map(map_path):
-        map_name = os.path.splitext(os.path.basename(map_path))[0]
-        multi = len(view_modes) > 1
-
-        for view_mode in view_modes:
-            with tempfile.TemporaryDirectory() as tmp_map_dir:
-                tmp_bin = os.path.join(tmp_map_dir, os.path.basename(map_path))
-                shutil.copy2(map_path, tmp_bin)
-
-                env_overrides = {
-                    **args["env"],
-                    "num_maps": 1,
-                    "map_dir": tmp_map_dir,
-                    "render_mode": "headless",
-                }
-                if render_init_mode is not None:
-                    env_overrides["init_mode"] = render_init_mode
-                if render_control_mode is not None:
-                    env_overrides["control_mode"] = render_control_mode
-
-                map_args = {
-                    **args,
-                    "env": env_overrides,
-                    "vec": {"backend": "Serial", "num_envs": 1},
-                }
-
-                env = load_env(env_name, map_args)
-                policy = load_policy(map_args, env, env_name)
-                policy.eval()
-
-                suffix = f"_{_VIEW_SUFFIX[view_mode]}" if multi else ""
-                before = set(_glob.glob(os.path.join(os.getcwd(), "*.mp4")))
-
-                rollout_loop(
-                    policy=policy,
-                    env=env,
-                    device=device,
-                    use_rnn=map_args["train"]["use_rnn"],
-                    max_steps=max_frames,
-                    render_ctx=RenderContext(
-                        view_mode=view_mode,
-                        env_id=0,
-                        video_suffix=suffix,
-                    ),
-                )
-
-                env.close()
-
-                after = set(_glob.glob(os.path.join(os.getcwd(), "*.mp4")))
-                new_mp4s = after - before
-                if new_mp4s:
-                    for src in sorted(new_mp4s):
-                        dst = os.path.join(output_dir, os.path.basename(src))
-                        shutil.move(src, dst)
-                        print(f"  Saved {dst}")
-                else:
-                    print(f"  Warning: no mp4 produced for {map_name} view={_VIEW_SUFFIX[view_mode]}")
-
-    if render_maps:
-        print(f"Rendering {len(render_maps)} map(s) from {map_dir} → {output_dir} ...")
-        for map_path in render_maps:
-            render_one_map(map_path)
-        print(f"Done. Videos written to {output_dir}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -3095,7 +2964,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, render, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -3105,8 +2974,6 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
-    elif mode == "render":
-        render(env_name=env_name)
     elif mode == "eval_multi_scenarios":
         eval_multi_scenarios(env_name=env_name)
     elif mode == "eval_multi_scenarios_render":
