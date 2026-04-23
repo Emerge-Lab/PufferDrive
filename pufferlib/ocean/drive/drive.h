@@ -288,6 +288,7 @@ struct SharedMapData {
     int num_tracks_to_predict;
 
     int ref_count;
+    int detached;  // set when released from g_map_cache while refs still live; c_close frees when ref_count reaches 0
 };
 
 struct Drive {
@@ -3689,6 +3690,8 @@ void c_close(Drive *env) {
     if (env->shared_map != NULL) {
         // road_elements, grid_map, neighbor_offsets, lane_graph are owned by SharedMapData
         env->shared_map->ref_count--;
+        if (env->shared_map->ref_count == 0 && env->shared_map->detached)
+            free_shared_map_data(env->shared_map);
         env->shared_map = NULL;
     } else {
         // This env owns all map data — free it

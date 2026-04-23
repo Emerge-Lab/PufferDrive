@@ -36,18 +36,14 @@ static void release_map_cache_internal(void) {
         reset_cache_globals();
         return;
     }
-    // Refuse to release if any envs still hold a reference
+    // Entries with live refs are detached: c_close will free them when ref_count reaches 0.
+    // Entries with no live refs are freed immediately.
     for (int i = 0; i < g_map_cache_size; i++) {
-        if (g_map_cache[i] != NULL && g_map_cache[i]->ref_count > 0) {
-            fprintf(stderr,
-                    "ERROR: cannot release map cache — entry %d still has %d live env(s). "
-                    "Close all Drive instances before changing map config.\n",
-                    i, g_map_cache[i]->ref_count);
-            return;
-        }
-    }
-    for (int i = 0; i < g_map_cache_size; i++) {
-        if (g_map_cache[i] != NULL)
+        if (g_map_cache[i] == NULL)
+            continue;
+        if (g_map_cache[i]->ref_count > 0)
+            g_map_cache[i]->detached = 1;
+        else
             free_shared_map_data(g_map_cache[i]);
     }
     free(g_map_cache);
@@ -1640,12 +1636,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     if (!reuse_cache) {
         release_map_cache_internal();
-        if (g_map_cache != NULL) {
-            PyErr_SetString(PyExc_RuntimeError,
-                            "Cannot change map cache config while Drive environments are still open. "
-                            "Call close() on all Drive instances first.");
-            return NULL;
-        }
         g_map_cache_size = num_maps;
         g_map_cache = (SharedMapData **)calloc(num_maps, sizeof(SharedMapData *));
         g_map_cache_pid = getpid();

@@ -2414,7 +2414,16 @@ def eval_multi_scenarios_render(
     # Serial/Multiprocessing: need vecenv.envs[0] to reach the underlying env.
     target_env = vecenv if not hasattr(vecenv, "envs") else vecenv.envs[0]
 
-    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
+    # Wrap rollout + post-processing in try/finally so vecenv.close() is
+    # guaranteed to run even if an exception fires mid-rollout.
+    # Without this, a crash inside the step loop leaves Drive C envs alive
+    # (ref_count > 0), which causes the next binding.shared() call with a
+    # different map_dir to raise:
+    #   RuntimeError: Cannot change map cache config while Drive environments
+    #   are still open. Call close() on all Drive instances first.
+    _rollout_exc = None
+    try:
+      with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
         while scenarios_processed < num_scenarios:
             ob, _ = vecenv.reset()
 
@@ -2561,6 +2570,9 @@ def eval_multi_scenarios_render(
             scenarios_processed += num_envs_in_batch
             pbar.update(num_envs_in_batch)
 
+    except Exception as _rollout_exc_caught:
+        _rollout_exc = _rollout_exc_caught
+
     import sys as _sys_instr
 
     _sys_instr.stderr.write("[render-instr] rollout loop done\n")
@@ -2627,8 +2639,22 @@ def eval_multi_scenarios_render(
             if not quiet:
                 print(f"Failed to upload render mp4s to wandb: {e}")
 
-    # Close vectorized environment to avoid file descriptor leaks
-    vecenv.close()
+    # Close vectorized environment to avoid file descriptor leaks.
+    # IMPORTANT: always run even if an exception occurred earlier in the rollout
+    # loop — skipping this leaves Drive C envs alive (ref_count > 0), which
+    # causes the next binding.shared() call with a different map_dir to raise
+    # RuntimeError("Cannot change map cache config while Drive environments are
+    # still open").
+    try:
+        vecenv.close()
+    except Exception as _close_exc:
+        import sys as _sys_close
+        _sys_close.stderr.write(f"[render-instr] vecenv.close() raised: {_close_exc}\n")
+        _sys_close.stderr.flush()
+
+    # Re-raise any rollout exception now that the cache is clean
+    if _rollout_exc is not None:
+        raise _rollout_exc
 
 
 def sweep(args=None, env_name=None):
