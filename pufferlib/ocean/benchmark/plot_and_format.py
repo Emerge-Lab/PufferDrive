@@ -15,17 +15,96 @@ import pandas as pd
 
 DPI = 600
 
-# ── Colours ─────────────────────────────────────────────────────────────
-COLOR_SMART = "#FFA8CC"
-COLOR_SMART_EDGE = "#C14B8A"
-COLOR_OURS = "#CCCCFF"
-COLOR_OURS_EDGE = "#6B3FA0"
-COLOR_SELFPLAY = "#4A7FD4"
+# ── Shared colour palette ───────────────────────────────────────────────────
+# Anything plot- or table-facing that references a method or reg/unreg policy
+# should read from here so the figures and tables stay in sync.
+PALETTE = {
+    # Methods (used across line plots and as LaTeX cell colours).
+    "smart": "#FFA8CC",  # pastel pink
+    "smart_edge": "#C14B8A",
+    "ours": "#CCCCFF",  # periwinkle (regularized self-play)
+    "ours_edge": "#6B3FA0",
+    # "selfplay" is the unregularized baseline colour everywhere — lines,
+    # markers, dashed reference lines, and unreg reg/unreg map entries.
+    "selfplay": "#4A7FD4",
+    # Regularized anchor runs: light → dark = less → more human data.
+    "reg_sequence": [
+        "#BCBDDC",
+        "#9E9AC8",
+        "#807DBA",
+        "#6A51A3",
+        "#4A1486",
+    ],
+    # LaTeX tier highlighting
+    "tier_best": "#6FCF6A",  # soft pastel green
+    "tier_second": "#DFF04B",  # soft chartreuse
+    "tier_third": "#FBF4D0",  # pale cream-yellow
+}
+
+# Back-compat aliases so existing references keep working without edits.
+# New code should prefer PALETTE[...] directly.
+COLOR_SMART = PALETTE["smart"]
+COLOR_SMART_EDGE = PALETTE["smart_edge"]
+COLOR_OURS = PALETTE["ours"]
+COLOR_OURS_EDGE = PALETTE["ours_edge"]
+COLOR_SELFPLAY = PALETTE["selfplay"]
 
 
 def _ensure_dir(path):
     """Create parent directories for *path* if they don't already exist."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+# ── Tier-colouring helpers for LaTeX tables ─────────────────────────────────
+
+_TIER_NAMES = {1: "tierbest", 2: "tiersecond", 3: "tierthird"}
+
+
+def _tier_latex_preamble():
+    """Return the \\definecolor lines shared by every tier-highlighted table."""
+    return [
+        rf"\definecolor{{tierbest}}{{HTML}}{{{PALETTE['tier_best'].lstrip('#')}}}",
+        rf"\definecolor{{tiersecond}}{{HTML}}{{{PALETTE['tier_second'].lstrip('#')}}}",
+        rf"\definecolor{{tierthird}}{{HTML}}{{{PALETTE['tier_third'].lstrip('#')}}}",
+    ]
+
+
+def _build_tier_rank_lookup(table, metrics):
+    """Compute per-column top-3 tier assignments.
+
+    `metrics` is a list of tuples whose first element is the mean-column name
+    and whose fourth element is `higher_is_better` (bool). Extra tuple
+    elements are allowed and ignored.
+
+    Returns a dict {(mean_col, row_idx): tier} where tier ∈ {1, 2, 3, None}.
+    Ties at a rank share that rank's tier.
+    """
+    rank_lookup = {}
+    for spec in metrics:
+        mean_col = spec[0]
+        higher_is_better = spec[3]
+        vals = table[mean_col]
+        finite = vals.dropna()
+        if finite.empty:
+            for i in range(len(table)):
+                rank_lookup[(mean_col, i)] = None
+            continue
+
+        distinct_sorted = sorted(finite.unique(), reverse=higher_is_better)
+        top3 = distinct_sorted[:3]
+        val_to_tier = {v: i + 1 for i, v in enumerate(top3)}
+
+        for i, v in enumerate(vals):
+            if pd.isna(v):
+                rank_lookup[(mean_col, i)] = None
+                continue
+            matched = None
+            for tv, tier in val_to_tier.items():
+                if np.isclose(v, tv):
+                    matched = tier
+                    break
+            rank_lookup[(mean_col, i)] = matched
+    return rank_lookup
 
 
 def _set_style(n_policies):
@@ -74,7 +153,7 @@ def _maps_to_human_time(maps):
         return f"{hours:.1f} hours"
     if minutes == int(minutes):
         return f"{int(minutes)} minutes"
-    return f"{minutes:.1f} minutes"
+    return f"{minutes:.0f} minutes"
 
 
 def _maps_to_human_hours(maps: int) -> float:
@@ -86,286 +165,23 @@ def _maps_to_human_hours(maps: int) -> float:
     return (maps * 9) / 3600
 
 
-# ---------------------------------------------------------------------------
-# Shared colour convention
-# ---------------------------------------------------------------------------
-
-UNREG_COLOR = "k"
-REG_COLORS = ["#ff7f0e", "#d62728", "#e377c2", "#9467bd", "#a8174a"]
-
-
 def _reg_unreg_colors(anchor_vals):
-    """Return a color dict mapping anchor_val -> color.
+    """Map each anchor value to a colour.
 
-    anchor_val == 0  ->  black (unregularized)
-    anchor_val  > 0  ->  successive entries from REG_COLORS
+    anchor == 0  -> blue   (PALETTE['selfplay']; unregularized baseline)
+    anchor  > 0  -> purples from PALETTE['reg_sequence'], assigned in
+                    ascending order of anchor size so darker = more human data.
     """
+    reg_seq = PALETTE["reg_sequence"]
     color_map = {}
     reg_idx = 0
     for v in sorted(anchor_vals):
         if v == 0:
-            color_map[v] = UNREG_COLOR
+            color_map[v] = PALETTE["selfplay"]
         else:
-            color_map[v] = REG_COLORS[reg_idx % len(REG_COLORS)]
+            color_map[v] = reg_seq[reg_idx % len(reg_seq)]
             reg_idx += 1
     return color_map
-
-
-def plot_scores(df, save_path="results/figures/eval_scores.pdf"):
-    """Figure 1: Self-play and human-replay scores on validation sets.
-
-    Three columns:
-      1) Self-play score (sp_val)
-      2) Human-replay score on full validation (hr_val)
-      3) Human-replay score on interactive scenes (hr_interactive)
-    """
-    df = df.copy()
-    df["policy"] = df["checkpoint"].apply(_short_name)
-    palette = _set_style(df["policy"].nunique())
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-
-    modes = ["sp_val", "hr_val", "hr_interactive"]
-    titles = [
-        "Self-play score (validation)",
-        "Human-replay score (validation)",
-        "Human-replay score (interactive)",
-    ]
-
-    for ax, mode, title in zip(axes, modes, titles):
-        subset = df[df["mode"] == mode]
-        sns.barplot(data=subset, x="policy", y="score", errorbar="se", palette=palette, ax=ax, alpha=0.8)
-        _draw_upper_bound(ax, 1.0, label="perfect score")
-        ax.set_title(title)
-        ax.set_xlabel("")
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.tick_params(axis="x", rotation=30)
-        ax.legend(fontsize=8, loc="lower right")
-        _format_percent(ax)
-        sns.despine(ax=ax)
-
-    plt.tight_layout()
-    _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    plt.show()
-    return fig
-
-
-def _prepare_scaling_metadata(df):
-    """Shared preprocessing for scaling plots. Returns None if data is missing."""
-    scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
-    scaling_df = df[df["mode"].isin(scaling_modes)].copy()
-    if scaling_df.empty:
-        return None
-    if "sp_maps" not in scaling_df.columns:
-        return None
-
-    scaling_df["collision_rate_pct"] = scaling_df["collision_rate"] * 100
-    return scaling_df
-
-
-def _scaling_scatter_common(
-    agg, subplot_specs, anchor_vals, color_map, marker_map, figsize, save_path, clip_y_zero=True, ref_lines=None
-):
-    """Shared logic for scaling scatter plots.
-
-    Args:
-        ref_lines: Optional list (one per subplot) of lists of (value, color, linestyle, label) tuples
-                   to draw as horizontal reference lines.
-    """
-    _set_style(len(anchor_vals))
-    fig, axes = plt.subplots(1, len(subplot_specs), figsize=figsize)
-    if len(subplot_specs) == 1:
-        axes = [axes]
-
-    for ax, (mode, y_col, yerr_col, ylabel, title) in zip(axes, subplot_specs):
-        mode_agg = agg[agg["mode"] == mode] if "mode" in agg.columns else agg
-        for anchor_val in anchor_vals:
-            grp = mode_agg[mode_agg["anchor_maps"] == anchor_val].sort_values("sp_maps")
-            if grp.empty:
-                continue
-            label = grp["anchor_label"].iloc[0]
-            ax.errorbar(
-                grp["sp_maps"],
-                grp[y_col],
-                yerr=grp[yerr_col],
-                marker=marker_map[anchor_val],
-                color=color_map[anchor_val],
-                capsize=3,
-                linewidth=1.5,
-                markersize=8,
-                label=label,
-            )
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
-        )
-        ax.set_xlabel("Self-play training maps")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        if clip_y_zero:
-            ax.set_ylim(bottom=0)
-        if ref_lines is not None:
-            subplot_idx = list(axes).index(ax)
-            for value, color, linestyle, label in ref_lines[subplot_idx]:
-                ax.axhline(value, color=color, linestyle=linestyle, linewidth=1.5, alpha=0.7, label=label)
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.legend(fontsize=9, title="Anchor data")
-        sns.despine(ax=ax)
-
-    plt.tight_layout()
-    _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    plt.show()
-    return fig
-
-
-def _build_anchor_style_maps(anchor_vals):
-    """Build consistent color and marker maps for anchor values."""
-    color_map = _reg_unreg_colors(anchor_vals)
-    markers = ["X", "o", "s", "D", "^", "v", "P", "*"]
-    marker_map = {v: markers[i % len(markers)] for i, v in enumerate(sorted(anchor_vals))}
-    return color_map, marker_map
-
-
-def plot_scaling_scatter(df, save_path="results/figures/eval_scaling_scatter.pdf"):
-    """Scaling scatter plot: 5-column layout.
-
-    x-axis: self-play training maps (sp_maps), log-scaled
-    color/shape: anchor maps
-
-    Subplots:
-      0) Self-play score (validation)
-      1) Self-play collision rate (validation)
-      2) Self-play offroad rate (validation)
-      3) Human-replay collision rate (interactive)
-      4) Human-replay at-fault collision rate (interactive)
-    """
-    scaling_df = _prepare_scaling_metadata(df)
-    if scaling_df is None:
-        print("  No scaling data found — skipping plot_scaling_scatter.")
-        return None
-
-    scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
-    scaling_df["at_fault_collision_rate_pct"] = scaling_df["at_fault_collision_rate"] * 100
-    scaling_df["offroad_rate_pct"] = scaling_df["offroad_rate"] * 100
-
-    if "dynamics" not in scaling_df.columns:
-        scaling_df["dynamics"] = "delta"
-
-    agg = (
-        scaling_df.groupby(["sp_maps", "anchor_maps", "dynamics", "mode"])[
-            ["collision_rate_pct", "score", "at_fault_collision_rate_pct", "offroad_rate_pct"]
-        ]
-        .agg(["mean", "sem"])
-        .reset_index()
-    )
-    agg.columns = [
-        "sp_maps",
-        "anchor_maps",
-        "dynamics",
-        "mode",
-        "coll_mean",
-        "coll_sem",
-        "score_mean",
-        "score_sem",
-        "at_fault_coll_mean",
-        "at_fault_coll_sem",
-        "offroad_mean",
-        "offroad_sem",
-    ]
-
-    agg["series_key"] = agg.apply(lambda r: f"{r['dynamics']}_anchor{r['anchor_maps']}", axis=1)
-    agg["anchor_label"] = agg.apply(
-        lambda r: (
-            f"regularized, anchor with {_maps_to_human_time(r['anchor_maps'])} of human data"
-            if r["anchor_maps"] > 0
-            else "unregularized"
-        ),
-        axis=1,
-    )
-
-    series_keys = sorted(agg["series_key"].unique())
-
-    # Build color map: series_key -> color, using shared reg/unreg convention
-    # Extract anchor_maps from each series_key to look up color
-    anchor_vals = sorted(agg["anchor_maps"].unique())
-    base_color_map = _reg_unreg_colors(anchor_vals)
-    color_map = {}
-    for sk in series_keys:
-        anchor_val = int(sk.split("anchor")[1])
-        color_map[sk] = base_color_map[anchor_val]
-
-    markers = ["X", "o", "s", "D", "^", "v", "P", "*"]
-    marker_map = {k: markers[i % len(markers)] for i, k in enumerate(series_keys)}
-
-    # (mode, y_col, yerr_col, ylabel, title)
-    subplot_specs = [
-        ("scaling_sp_val", "score_mean", "score_sem", "Score", "Self-play score — validation"),
-        ("scaling_sp_val", "coll_mean", "coll_sem", "Collision rate (%)", "Self-play collision rate (%) — validation"),
-        (
-            "scaling_sp_val",
-            "offroad_mean",
-            "offroad_sem",
-            "Offroad rate (%)",
-            "Self-play offroad rate (%) — validation",
-        ),
-        (
-            "scaling_hr_interactive",
-            "coll_mean",
-            "coll_sem",
-            "Collision rate (%)",
-            "Human-replay collision rate (%) — interactive",
-        ),
-        (
-            "scaling_hr_interactive",
-            "at_fault_coll_mean",
-            "at_fault_coll_sem",
-            "At-fault collision rate (%)",
-            "Human-replay at-fault collision rate (%) — interactive",
-        ),
-    ]
-
-    _set_style(len(series_keys))
-    fig, axes = plt.subplots(1, len(subplot_specs), figsize=(30, 5))
-
-    for ax, (mode, y_col, yerr_col, ylabel, title) in zip(axes, subplot_specs):
-        mode_agg = agg[agg["mode"] == mode]
-        for sk in series_keys:
-            grp = mode_agg[mode_agg["series_key"] == sk].sort_values("sp_maps")
-            if grp.empty:
-                continue
-            label = grp["anchor_label"].iloc[0]
-            ax.errorbar(
-                grp["sp_maps"],
-                grp[y_col],
-                yerr=grp[yerr_col],
-                marker=marker_map[sk],
-                color=color_map[sk],
-                capsize=3,
-                linewidth=1.5,
-                markersize=8,
-                label=label,
-            )
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
-        )
-        ax.set_xlabel("Self-play training maps")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_ylim(bottom=0)
-        if y_col == "score_mean":
-            _draw_upper_bound(ax, 1.0, label="perfect score")
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.legend(fontsize=8, title="Policy")
-        sns.despine(ax=ax)
-
-    plt.tight_layout()
-    _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    plt.show()
-    return fig
 
 
 def plot_scaling_barplot(df, save_path="results/figures/eval_scaling_barplot.pdf"):
@@ -441,19 +257,19 @@ def plot_scaling_barplot(df, save_path="results/figures/eval_scaling_barplot.pdf
 
 
 def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_table.tex"):
-    """Generate a LaTeX-formatted table with heatmap coloring.
+    """Scaling evaluation as a LaTeX table with Depth-Pro top-3 tier coloring.
 
-    Score columns use a Greens colormap (darker = higher = better).
-    Collision rate columns use a Reds colormap (lighter = lower = better).
-    Colors are normalized per column.
-    Unregularized rows come first and have a light-blue background in the anchor column.
+    Top-3 values per metric column are highlighted:
+      - best   -> soft pastel green   (#6FCF6A)
+      - 2nd    -> soft chartreuse     (#DFF04B)
+      - 3rd    -> pale cream-yellow   (#FBF4D0)
+    Best value in each column is additionally bolded. Ties share a tier.
+
+    Row layout: unregularized rows first, then regularized, each sorted by sp_maps.
 
     Required LaTeX packages:
-      \\usepackage{booktabs}
-      \\usepackage[table]{xcolor}
-      \\usepackage{graphicx}   % for \\resizebox
-      \\usepackage{makecell}
-      \\usepackage{bm}
+      \\usepackage{booktabs}, \\usepackage[table]{xcolor},
+      \\usepackage{graphicx}, \\usepackage{makecell}, \\usepackage{bm}
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     scaling_df = df[df["mode"].isin(scaling_modes)].copy()
@@ -463,8 +279,8 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
 
-    sp_metrics = ["score", "collision_rate", "offroad_rate"]
-    hr_metrics = [
+    sp_cols = ["score", "collision_rate", "offroad_rate"]
+    hr_cols = [
         "score",
         "collision_rate",
         "at_fault_collision_rate",
@@ -472,23 +288,18 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         "route_progress",
         "lateral_error_avg",
     ]
-    all_metrics = list(set(sp_metrics + hr_metrics))
-    available_metrics = [m for m in all_metrics if m in scaling_df.columns]
+    available = [m for m in set(sp_cols + hr_cols) if m in scaling_df.columns]
 
-    agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available_metrics].agg(["mean", "sem"]).reset_index()
+    agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available].agg(["mean", "sem"]).reset_index()
     flat_cols = ["sp_maps", "anchor_maps", "mode"]
-    for m in available_metrics:
+    for m in available:
         flat_cols.extend([f"{m}_mean", f"{m}_sem"])
     agg.columns = flat_cols
 
     sp = agg[agg["mode"] == "scaling_sp_val"].drop(columns=["mode"]).copy()
     hr = agg[agg["mode"] == "scaling_hr_interactive"].drop(columns=["mode"]).copy()
-
-    sp_rename = {c: f"sp_{c}" for c in sp.columns if c not in ("sp_maps", "anchor_maps")}
-    hr_rename = {c: f"hr_{c}" for c in hr.columns if c not in ("sp_maps", "anchor_maps")}
-    sp = sp.rename(columns=sp_rename)
-    hr = hr.rename(columns=hr_rename)
-
+    sp = sp.rename(columns={c: f"sp_{c}" for c in sp.columns if c not in ("sp_maps", "anchor_maps")})
+    hr = hr.rename(columns={c: f"hr_{c}" for c in hr.columns if c not in ("sp_maps", "anchor_maps")})
     merged = sp.merge(hr, on=["sp_maps", "anchor_maps"], how="outer")
 
     # unreg rows first, then reg rows, each sorted by sp_maps
@@ -496,234 +307,138 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
     reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
     merged = pd.concat([unreg, reg]).reset_index(drop=True)
 
-    has_offroad = "offroad_rate" in available_metrics
-    has_at_fault = "at_fault_collision_rate" in available_metrics
-    has_rear = "rear_collision_rate" in available_metrics
-    has_route_prog = "route_progress" in available_metrics
-    has_lateral = "lateral_error_avg" in available_metrics
+    # Metric specs: (mean_col, sem_col, header, higher_is_better, as_pct, decimals)
+    sp_specs = [
+        ("sp_score_mean", "sp_score_sem", r"Score $\uparrow$", True, False, 3),
+        ("sp_collision_rate_mean", "sp_collision_rate_sem", r"Coll. (\%) $\downarrow$", False, True, 1),
+    ]
+    if "offroad_rate" in available:
+        sp_specs.append(("sp_offroad_rate_mean", "sp_offroad_rate_sem", r"Off-road (\%) $\downarrow$", False, True, 1))
 
-    # higher is better -> green (max = best, darker = higher)
-    # lower is better  -> red   (min = best, lighter = lower)
-    score_mean_cols = ["sp_score_mean", "hr_score_mean"]
-    if has_route_prog:
-        score_mean_cols.append("hr_route_progress_mean")
+    hr_specs = [
+        ("hr_score_mean", "hr_score_sem", r"Score $\uparrow$", True, False, 3),
+        ("hr_collision_rate_mean", "hr_collision_rate_sem", r"Coll. (\%) $\downarrow$", False, True, 1),
+    ]
+    if "at_fault_collision_rate" in available:
+        hr_specs.append(
+            (
+                "hr_at_fault_collision_rate_mean",
+                "hr_at_fault_collision_rate_sem",
+                r"At-fault (\%) $\downarrow$",
+                False,
+                True,
+                1,
+            )
+        )
+    if "rear_collision_rate" in available:
+        hr_specs.append(
+            (
+                "hr_rear_collision_rate_mean",
+                "hr_rear_collision_rate_sem",
+                r"Rear coll. (\%) $\downarrow$",
+                False,
+                True,
+                1,
+            )
+        )
+    if "route_progress" in available:
+        hr_specs.append(("hr_route_progress_mean", "hr_route_progress_sem", r"Route prog. $\uparrow$", True, False, 3))
+    if "lateral_error_avg" in available:
+        hr_specs.append(
+            ("hr_lateral_error_avg_mean", "hr_lateral_error_avg_sem", r"Lateral L2 $\downarrow$", False, False, 2)
+        )
 
-    coll_mean_cols = ["sp_collision_rate_mean", "hr_collision_rate_mean"]
-    if has_offroad:
-        coll_mean_cols.append("sp_offroad_rate_mean")
-    if has_at_fault:
-        coll_mean_cols.append("hr_at_fault_collision_rate_mean")
-    if has_rear:
-        coll_mean_cols.append("hr_rear_collision_rate_mean")
-    if has_lateral:
-        coll_mean_cols.append("hr_lateral_error_avg_mean")
+    all_specs = [s for s in sp_specs + hr_specs if s[0] in merged.columns]
+    n_sp = sum(1 for s in all_specs if s[0].startswith("sp_"))
+    n_hr = sum(1 for s in all_specs if s[0].startswith("hr_"))
 
-    existing_score_cols = [c for c in score_mean_cols if c in merged.columns]
-    existing_coll_cols = [c for c in coll_mean_cols if c in merged.columns]
+    rank_lookup = _build_tier_rank_lookup(merged, all_specs)
 
-    # Per-column min/max for normalization
-    col_min = {}
-    col_max = {}
-    for c in existing_score_cols + existing_coll_cols:
-        vals = merged[c].dropna()
-        col_min[c] = vals.min() if not vals.empty else 0
-        col_max[c] = vals.max() if not vals.empty else 1
-
-    def _intensity(val, col, higher_is_better):
-        if np.isnan(val):
-            return 0
-        vmin, vmax = col_min.get(col, 0), col_max.get(col, 1)
-        if vmax == vmin:
-            return 25
-        t = (val - vmin) / (vmax - vmin)
-        # green: darker = higher = better -> t as-is
-        # red:   lighter = lower = better -> t as-is (low val -> light = low intensity)
-        return int(5 + t * 45)
-
-    def _fmt_score(mean, sem, col, is_best=False):
-        if np.isnan(mean):
+    def _fmt_cell(mean, sem, mean_col, row_idx, as_pct, decimals):
+        if pd.isna(mean):
             return "---"
-        intensity = _intensity(mean, col, higher_is_better=True)
-        if not (np.isnan(sem) or sem == 0):
-            text = f"$\\bm{{{mean:.3f} \\pm {sem:.3f}}}$" if is_best else f"${mean:.3f} \\pm {sem:.3f}$"
-        else:
-            text = f"\\textbf{{{mean:.3f}}}" if is_best else f"{mean:.3f}"
-        return f"\\cellcolor{{green!{intensity}}} {text}"
-
-    def _fmt_coll(mean, sem, col, is_best=False, as_pct=True, decimals=1):
-        if np.isnan(mean):
-            return "---"
-        intensity = _intensity(mean, col, higher_is_better=False)
+        tier = rank_lookup.get((mean_col, row_idx))
+        is_best = tier == 1
         m_val = mean * 100 if as_pct else mean
-        s_val = sem * 100 if as_pct else sem
+        s_val = sem * 100 if (as_pct and pd.notna(sem)) else sem
         fmt = f".{decimals}f"
-        if not (np.isnan(s_val) or s_val == 0):
-            text = f"$\\bm{{{m_val:{fmt}} \\pm {s_val:{fmt}}}}$" if is_best else f"${m_val:{fmt}} \\pm {s_val:{fmt}}$"
+        if pd.notna(s_val) and s_val != 0:
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
         else:
-            text = f"\\textbf{{{m_val:{fmt}}}}" if is_best else f"{m_val:{fmt}}"
-        return f"\\cellcolor{{red!{intensity}}} {text}"
+            body = f"{m_val:{fmt}}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+        if tier is None:
+            return text
+        return f"\\cellcolor{{{_TIER_NAMES[tier]}}} {text}"
 
     def _anchor_label(anchor_maps):
         return "0 (unreg.)" if anchor_maps == 0 else _maps_to_human_time(anchor_maps)
 
-    # best: max for score cols, min for coll cols
-    best = {}
-    for col in existing_score_cols:
-        best[col] = merged[col].max()
-    for col in existing_coll_cols:
-        best[col] = merged[col].min()
-
-    def _is_best(col, val):
-        if col not in best or np.isnan(val):
-            return False
-        return np.isclose(val, best[col])
-
-    n_sp_metric_cols = 2 + int(has_offroad)
-    n_hr_metric_cols = 2 + int(has_at_fault) + int(has_rear) + int(has_route_prog) + int(has_lateral)
-    col_spec = "rr" + "|" + "r" * n_sp_metric_cols + "|" + "r" * n_hr_metric_cols
+    col_spec = "rr" + "|" + "r" * n_sp + "|" + "r" * n_hr
 
     lines = []
     lines.append(
-        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
+        r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
     )
+    lines.extend(_tier_latex_preamble())
     lines.append(r"\begin{table}[ht]")
     lines.append(r"\centering")
     lines.append(
-        r"\caption{Scaling evaluation on held-out Waymo scenarios. Self-play scores are reported on 10k randomly sampled validation scenarios; human-replay metrics are reported on 200 interactive validation scenarios.}"
+        r"\caption{Scaling evaluation on held-out Waymo scenarios. "
+        r"Self-play metrics are reported on 10k randomly sampled validation "
+        r"scenarios; human-replay metrics on 200 interactive validation "
+        r"scenarios. Top-3 values per column are highlighted "
+        r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
+        r"\colorbox{tierthird}{3rd}); best value additionally in bold.}"
     )
     lines.append(r"\label{tab:scaling_results}")
     lines.append(r"\resizebox{\textwidth}{!}{%")
     lines.append(r"\begin{tabular}{" + col_spec + "}")
     lines.append(r"\toprule")
-
-    sp_header = r"\multicolumn{" + str(n_sp_metric_cols) + r"}{c|}{Self-play (test)}"
-    hr_header = r"\multicolumn{" + str(n_hr_metric_cols) + r"}{c}{Human-replay (test)}"
-    lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
-
-    sp_metric_headers = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
-    if has_offroad:
-        sp_metric_headers.append("Offroad (\\%) $\\downarrow$")
-    hr_metric_headers = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
-    if has_at_fault:
-        hr_metric_headers.append("At-fault (\\%) $\\downarrow$")
-    if has_rear:
-        hr_metric_headers.append("Rear coll. (\\%) $\\downarrow$")
-    if has_route_prog:
-        hr_metric_headers.append("Route prog. (\\%) $\\uparrow$")
-    if has_lateral:
-        hr_metric_headers.append("Lateral L2 $\\downarrow$")
-
-    header2 = (
-        "\\makecell{Self-play maps \\\\ (metadata)} & \\makecell{Anchor data \\\\ (human demonstrations)} & "
-        + " & ".join(sp_metric_headers)
-        + " & "
-        + " & ".join(hr_metric_headers)
+    lines.append(
+        r" & & "
+        + r"\multicolumn{"
+        + str(n_sp)
+        + r"}{c|}{Self-play (test)} & "
+        + r"\multicolumn{"
+        + str(n_hr)
+        + r"}{c}{Human-replay (test)}"
         + r" \\"
     )
-    lines.append(header2)
+
+    headers = [s[2] for s in all_specs]
+    header_row = (
+        r"\makecell{Self-play maps \\ (metadata)} & "
+        r"\makecell{Anchor data \\ (human demonstrations)} & "
+        + " & ".join(headers[:n_sp])
+        + " & "
+        + " & ".join(headers[n_sp:])
+        + r" \\"
+    )
+    lines.append(header_row)
     lines.append(r"\midrule")
 
     prev_was_unreg = None
-    for _, row in merged.iterrows():
+    for i, row in merged.iterrows():
         is_unreg = int(row["anchor_maps"]) == 0
-
-        # separator line between unreg and reg blocks
         if prev_was_unreg is True and not is_unreg:
             lines.append(r"\midrule")
         prev_was_unreg = is_unreg
 
-        anchor_cell = (
-            f"\\cellcolor{{blue!10}} {_anchor_label(int(row['anchor_maps']))}"
-            if is_unreg
-            else f"\\cellcolor[HTML]{{FDCFF1}} {_anchor_label(int(row['anchor_maps']))}"
-        )
-        cells = [_fmt_maps(int(row["sp_maps"])), anchor_cell]
-
-        # SP: score, collision rate, offroad
-        cells.append(
-            _fmt_score(
-                row.get("sp_score_mean", np.nan),
-                row.get("sp_score_sem", np.nan),
-                col="sp_score_mean",
-                is_best=_is_best("sp_score_mean", row.get("sp_score_mean", np.nan)),
-            )
-        )
-        cells.append(
-            _fmt_coll(
-                row.get("sp_collision_rate_mean", np.nan),
-                row.get("sp_collision_rate_sem", np.nan),
-                col="sp_collision_rate_mean",
-                is_best=_is_best("sp_collision_rate_mean", row.get("sp_collision_rate_mean", np.nan)),
-            )
-        )
-        if has_offroad:
+        cells = [_fmt_maps(int(row["sp_maps"])), _anchor_label(int(row["anchor_maps"]))]
+        for mean_col, sem_col, _h, _hib, as_pct, decimals in all_specs:
             cells.append(
-                _fmt_coll(
-                    row.get("sp_offroad_rate_mean", np.nan),
-                    row.get("sp_offroad_rate_sem", np.nan),
-                    col="sp_offroad_rate_mean",
-                    is_best=_is_best("sp_offroad_rate_mean", row.get("sp_offroad_rate_mean", np.nan)),
+                _fmt_cell(
+                    row.get(mean_col, np.nan),
+                    row.get(sem_col, np.nan),
+                    mean_col,
+                    i,
+                    as_pct,
+                    decimals,
                 )
             )
-
-        # HR: score, collision, at-fault, rear, route progress, lateral L2
-        cells.append(
-            _fmt_score(
-                row.get("hr_score_mean", np.nan),
-                row.get("hr_score_sem", np.nan),
-                col="hr_score_mean",
-                is_best=_is_best("hr_score_mean", row.get("hr_score_mean", np.nan)),
-            )
-        )
-        cells.append(
-            _fmt_coll(
-                row.get("hr_collision_rate_mean", np.nan),
-                row.get("hr_collision_rate_sem", np.nan),
-                col="hr_collision_rate_mean",
-                is_best=_is_best("hr_collision_rate_mean", row.get("hr_collision_rate_mean", np.nan)),
-            )
-        )
-        if has_at_fault:
-            cells.append(
-                _fmt_coll(
-                    row.get("hr_at_fault_collision_rate_mean", np.nan),
-                    row.get("hr_at_fault_collision_rate_sem", np.nan),
-                    col="hr_at_fault_collision_rate_mean",
-                    is_best=_is_best(
-                        "hr_at_fault_collision_rate_mean", row.get("hr_at_fault_collision_rate_mean", np.nan)
-                    ),
-                )
-            )
-        if has_rear:
-            cells.append(
-                _fmt_coll(
-                    row.get("hr_rear_collision_rate_mean", np.nan),
-                    row.get("hr_rear_collision_rate_sem", np.nan),
-                    col="hr_rear_collision_rate_mean",
-                    is_best=_is_best("hr_rear_collision_rate_mean", row.get("hr_rear_collision_rate_mean", np.nan)),
-                )
-            )
-        if has_route_prog:
-            cells.append(
-                _fmt_score(
-                    row.get("hr_route_progress_mean", np.nan),
-                    row.get("hr_route_progress_sem", np.nan),
-                    col="hr_route_progress_mean",
-                    is_best=_is_best("hr_route_progress_mean", row.get("hr_route_progress_mean", np.nan)),
-                )
-            )
-        if has_lateral:
-            cells.append(
-                _fmt_coll(
-                    row.get("hr_lateral_error_avg_mean", np.nan),
-                    row.get("hr_lateral_error_avg_sem", np.nan),
-                    col="hr_lateral_error_avg_mean",
-                    is_best=_is_best("hr_lateral_error_avg_mean", row.get("hr_lateral_error_avg_mean", np.nan)),
-                    as_pct=False,
-                    decimals=2,
-                )
-            )
-
         lines.append(" & ".join(cells) + r" \\")
 
     lines.append(r"\bottomrule")
@@ -819,7 +534,6 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
         linewidth=1.5,
         markersize=8,
     )
-    # ax.set_xscale("log")
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation loss")
     ax.set_title("Open-loop: validation loss")
@@ -847,7 +561,6 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
                 capsize=3,
                 markersize=8,
             )
-        # ax.set_xscale("log")
         ax.set_xlabel("Human driving demonstrations (hours)")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -870,9 +583,9 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
              | CL self-play route progress | CL self-play score
              | CL human-replay route progress | CL human-replay score
 
-    Uses the same green/red cellcolor heatmap convention as
-    generate_scaling_latex_table: green = higher is better (accuracy, progress,
-    score), red = lower is better (loss).
+    Uses the same green/red cellcolor heatmap convention as the legacy scaling
+    table (kept intentionally — this table has a single series per metric so
+    tier highlighting is less useful).
 
     Required LaTeX packages:
       \\usepackage{booktabs}
@@ -918,14 +631,7 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
     merged = merged.merge(hr, on=["checkpoint", "num_maps_trained"], how="left")
     merged = merged.sort_values("num_maps_trained").reset_index(drop=True)
 
-    # Colour intensity helpers (mirrors generate_scaling_latex_table)
     def _intensity(val, col_vals, higher_is_better=True):
-        """Map value to xcolor intensity 5-50.
-
-        For green (higher_is_better=True):  high value -> high intensity (dark green).
-        For red   (higher_is_better=False): low value  -> low intensity  (light red),
-                                            high value -> high intensity (dark red).
-        """
         finite = col_vals.dropna()
         if finite.empty or np.isnan(val):
             return 0
@@ -933,9 +639,6 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
         if vmax == vmin:
             return 25
         t = (val - vmin) / (vmax - vmin)
-        # t is already 0 for min, 1 for max.
-        # Green: darker = higher = better  -> use t as-is.
-        # Red:   lighter = lower  = better -> use t as-is too (low val -> light red).
         return int(5 + t * 45)
 
     def _fmt_green(val, col, sem=None, is_best=False, scale=1.0, decimals=3):
@@ -974,7 +677,6 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
     def _is_best(col, val):
         return not np.isnan(val) and np.isclose(val, best[col])
 
-    # Build LaTeX
     col_spec = "r|rr|rr|rr"
     lines = [
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{bm}",
@@ -1037,17 +739,14 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
 
 
 def plot_data_requirements(df, save_path="results/figures/eval_data_requirements.pdf"):
-    """Master summary figure: how much data is needed for human-compatible policies?
+    """How much data is needed for human-compatible policies?
 
-    3 subplots, all using scaling modes.
-    x-axis: self-play training maps (sp_maps), log scale
-    Color and shape both encode anchor maps (unreg = black).
-    All y-axes reported in percentage [%].
+    4 subplots, all using scaling modes; x-axis is self-play training maps
+    on a log scale; y-axes in percent.
 
-    Subplot 0: SP collision rate [%]
-    Subplot 1: HR at-fault collision rate [%]
-    Subplot 2: Delta at-fault = SP - HR [%] (positive = SP better = ZSC gap exists)
-               Green striped line at 0 = "no ZSC gap"
+    Colour convention (from module-level PALETTE via _reg_unreg_colors):
+      - unregularized runs: blue
+      - regularized runs:   shades of purple (darker = more anchor data)
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     df = df[df["mode"].isin(scaling_modes)].copy()
@@ -1086,18 +785,18 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     )
     agg = hr_agg.merge(sp_agg, on=["sp_maps", "anchor_maps"], how="left")
 
-    # Convert all metrics to percentage
+    # Convert to percentages (must come BEFORE computing delta so both sides
+    # of the subtraction are in the same units).
     agg["hr_atfault"] = agg["hr_atfault"] * 100
     agg["sp_atfault"] = agg["sp_atfault"] * 100
     agg["hr_collision_rate"] = agg["hr_collision_rate"] * 100
     agg["sp_collision_rate"] = agg["sp_collision_rate"] * 100
-    # Recompute delta after scaling to percentages
     agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)
+    color_map = _reg_unreg_colors(anchor_vals)  # blue for 0, purples for >0
 
-    markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
+    markers = ["s", "^", "o", "D", "P", "X", "v", "*"]
     marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
 
     def _anchor_label(a):
@@ -1112,7 +811,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
         ("delta_atfault", "\u0394 at-fault (SP \u2212 HR) [%]"),
     ]
 
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
 
     for ax, (y_col, ylabel) in zip(axes, subplot_specs):
         for anchor in anchor_vals:
@@ -1125,8 +824,12 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
                 color=color_map[anchor],
                 marker=marker_map[anchor],
                 markersize=8,
-                linewidth=1.2,
+                linewidth=1.5,
                 linestyle="-",
+                # Thin black edge on purples so the lightest shades stay
+                # visible against white; no edge needed for the blue unreg.
+                markeredgecolor="black" if anchor > 0 else color_map[anchor],
+                markeredgewidth=0.4 if anchor > 0 else 0,
                 zorder=3,
                 label=_anchor_label(anchor),
             )
@@ -1140,20 +843,20 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
         ax.grid(axis="y", alpha=0.3, linestyle="--")
 
         if y_col == "delta_atfault":
-            ax.axhline(0, color="#2e7cf8", linestyle="--", linewidth=2.0, alpha=0.9, zorder=2)
+            ax.axhline(0, color=PALETTE["tier_best"], linestyle="--", linewidth=2.0, alpha=0.9, zorder=2)
             ax.text(
                 min(agg["sp_maps"]) * 1.1,
                 0.2,
                 "No ZSC gap",
                 fontsize=14,
-                color="#2e7cf8",
+                color=PALETTE["tier_best"],
                 ha="left",
                 va="bottom",
             )
         else:
             ax.set_ylim(bottom=0)
 
-        ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+        ax.legend(fontsize=9, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
         sns.despine(ax=ax)
 
     plt.tight_layout()
@@ -1193,20 +896,22 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd
 
     Returns a DataFrame with columns:
         num_maps, minutes,
-        hr_atfault_pct, hr_coll_pct, hr_progress_pct, sp_coll_pct
+        hr_atfault_pct, hr_coll_pct, hr_offroad_pct, hr_progress_pct,
+        sp_coll_pct, sp_offroad_pct, sp_progress_pct
 
     Missing metrics are left as NaN so downstream `dropna(subset=[col])` skips
     them cleanly. Returns an empty (but correctly-typed) DataFrame if the CSV
-    isn't present, which keeps the plotting code behaving as if no SMART data
-    were available.
+    isn't present.
     """
     cols = [
         "num_maps",
         "minutes",
         "hr_atfault_pct",
         "hr_coll_pct",
+        "hr_offroad_pct",
         "hr_progress_pct",
         "sp_coll_pct",
+        "sp_offroad_pct",
         "sp_progress_pct",
     ]
     if not os.path.exists(csv_path):
@@ -1227,34 +932,38 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd
     raw = raw.dropna(subset=["num_maps"]).copy()
     raw["num_maps"] = raw["num_maps"].astype(int)
 
-    # Pivot: one row per num_maps with HR + SP metrics side by side.
-    hr = (
-        raw[raw["mode"] == "scaling_hr_val"]
-        .set_index("num_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
-        .rename(
-            columns={
-                "at_fault_collision_rate": "hr_atfault_pct",
-                "collision_rate": "hr_coll_pct",
-                "route_progress": "hr_progress_pct",
-            }
-        )
-    )
-    sp = (
-        raw[raw["mode"] == "scaling_sp_val"]
-        .set_index("num_maps")[["collision_rate", "route_progress"]]
-        .rename(
-            columns={
-                "collision_rate": "sp_coll_pct",
-                "route_progress": "sp_progress_pct",
-            }
-        )
-    )
+    # Build HR and SP pivots from the columns that are actually present in the
+    # CSV. `offroad_rate` is optional and will only show up if recorded.
+    hr_wanted = {
+        "at_fault_collision_rate": "hr_atfault_pct",
+        "collision_rate": "hr_coll_pct",
+        "offroad_rate": "hr_offroad_pct",
+        "route_progress": "hr_progress_pct",
+    }
+    sp_wanted = {
+        "collision_rate": "sp_coll_pct",
+        "offroad_rate": "sp_offroad_pct",
+        "route_progress": "sp_progress_pct",
+    }
 
-    # Fractions → percentages (matches the *_mean_pct convention used
-    # elsewhere in the plotting code).
+    hr_raw = raw[raw["mode"] == "scaling_hr_val"]
+    hr_present = [c for c in hr_wanted if c in hr_raw.columns]
+    hr = hr_raw.set_index("num_maps")[hr_present].rename(columns={c: hr_wanted[c] for c in hr_present})
+
+    sp_raw = raw[raw["mode"] == "scaling_sp_val"]
+    sp_present = [c for c in sp_wanted if c in sp_raw.columns]
+    sp = sp_raw.set_index("num_maps")[sp_present].rename(columns={c: sp_wanted[c] for c in sp_present})
+
+    # Fractions → percentages.
     out = hr.join(sp, how="outer") * 100
     out = out.reset_index().sort_values("num_maps").reset_index(drop=True)
     out["minutes"] = out["num_maps"] * 9 / 60
+
+    # Re-index to the full expected column list so any metric the CSV is
+    # missing surfaces as NaN rather than raising a KeyError.
+    for c in cols:
+        if c not in out.columns:
+            out[c] = np.nan
     return out[cols]
 
 
@@ -1442,7 +1151,7 @@ def plot_human_data_requirements(
         if top_yscale == "linear":
             ax.set_ylim(bottom=0)
         if y_mean == "hr_progress_mean_pct":
-            ax.set_ylim(50, 110)
+            ax.set_ylim(50, 102)
         ax.set_xlabel("Human demonstration data")
         ax.set_ylabel(ylabel)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -1454,7 +1163,7 @@ def plot_human_data_requirements(
     fig_lines.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
 
     # ── FIGURE 2: relative-improvement bars ─────────────────────────────────
-    fig_gains, gain_axes = plt.subplots(1, 4, figsize=(18, 4.5), sharey=True)
+    fig_gains, gain_axes = plt.subplots(1, 4, figsize=(18, 4.3), sharey=True)
 
     for bax, (y_mean, _, _, smart_col, _, lower_better, _) in zip(gain_axes, subplot_specs):
         # Parity line: ratio = 1 means reg and SMART are equal.
@@ -1527,29 +1236,17 @@ def generate_human_data_latex_table(
 
     Row layout:
       1) SMART rows, sorted by increasing human data.
-      2) A single "best unregularized self-play" row (the unreg checkpoint at
-         50k sp_maps -- same checkpoint the plot's dashed baseline uses).
+      2) A single unregularized self-play row (the 50k unreg checkpoint —
+         same checkpoint the plot's dashed baseline uses).
       3) Regularized self-play rows, sorted by increasing anchor data.
 
     Columns: self-play block (Coll., Off-road, Route prog.) and human-replay
     block (Coll., At-fault, Off-road, Route prog.). Off-road columns are
     emitted only if at least one row has non-NaN data for them.
 
-    Top-3 values per metric column are highlighted with a three-tier pastel
-    colormap sampled from the Depth Pro paper screenshot:
-      - best   -> soft pastel green   (#6FCF6A)
-      - 2nd    -> soft chartreuse     (#DFF04B)
-      - 3rd    -> pale cream-yellow   (#FBF4D0)
-    Best value in each column is additionally bolded. Ties share a tier.
-
-    Required LaTeX packages:
-      \\usepackage{booktabs}
-      \\usepackage[table]{xcolor}
-      \\usepackage{graphicx}
-      \\usepackage{makecell}
-      \\usepackage{bm}
+    Top-3 values per metric column are highlighted via the shared tier palette;
+    best value additionally bolded. Ties share a tier.
     """
-
     SMART_DATA = _load_smart_baseline(smart_csv)
 
     scaling_modes = ["scaling_sp_val", "scaling_hr_val"]
@@ -1561,19 +1258,19 @@ def generate_human_data_latex_table(
 
     df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
 
-    # ── Aggregate per anchor_maps (both modes), keeping anchor=0 this time ──
+    # Aggregate both modes, keeping anchor=0 this time so the unreg row survives.
     hr = df[df["mode"] == "scaling_hr_val"]
     hr_metrics = ["at_fault_collision_rate", "collision_rate", "route_progress"]
     if "offroad_rate" in hr.columns:
         hr_metrics.append("offroad_rate")
     hr_agg = hr.groupby("anchor_maps")[hr_metrics].agg(["mean", "sem"]).reset_index()
-    hr_col_names = ["anchor_maps"]
     hr_short = {
         "at_fault_collision_rate": "hr_atfault",
         "collision_rate": "hr_coll",
         "route_progress": "hr_progress",
         "offroad_rate": "hr_offroad",
     }
+    hr_col_names = ["anchor_maps"]
     for m in hr_metrics:
         short = hr_short[m]
         hr_col_names.extend([f"{short}_mean", f"{short}_sem"])
@@ -1584,23 +1281,21 @@ def generate_human_data_latex_table(
     if "offroad_rate" in sp.columns:
         sp_metrics.append("offroad_rate")
     sp_agg = sp.groupby("anchor_maps")[sp_metrics].agg(["mean", "sem"]).reset_index()
-    sp_col_names = ["anchor_maps"]
     sp_short = {
         "collision_rate": "sp_coll",
         "route_progress": "sp_progress",
         "offroad_rate": "sp_offroad",
     }
+    sp_col_names = ["anchor_maps"]
     for m in sp_metrics:
         short = sp_short[m]
         sp_col_names.extend([f"{short}_mean", f"{short}_sem"])
     sp_agg.columns = sp_col_names
 
     full_agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
-
     has_sp_offroad = "sp_offroad_mean" in full_agg.columns
     has_hr_offroad = "hr_offroad_mean" in full_agg.columns
 
-    # Convert fractional rates → percentages
     pct_cols = ["hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"]
     if has_sp_offroad:
         pct_cols.append("sp_offroad")
@@ -1610,17 +1305,15 @@ def generate_human_data_latex_table(
         full_agg[f"{col}_mean_pct"] = full_agg[f"{col}_mean"] * 100
         full_agg[f"{col}_sem_pct"] = full_agg[f"{col}_sem"] * 100
 
-    # Split into unreg (anchor=0) and reg (anchor>0) for ordered emission.
     unreg_agg = full_agg[full_agg["anchor_maps"] == 0].copy()
     reg_agg = full_agg[full_agg["anchor_maps"] > 0].copy()
     reg_agg["minutes"] = reg_agg["anchor_maps"] * 9 / 60
 
-    # ── Unified row structure ───────────────────────────────────────────────
+    # ── Build row structure ─────────────────────────────────────────────────
     rows = []
 
     # (1) SMART rows
-    smart_sorted = SMART_DATA.sort_values("minutes").reset_index(drop=True)
-    for _, r in smart_sorted.iterrows():
+    for _, r in SMART_DATA.sort_values("minutes").reset_index(drop=True).iterrows():
         rows.append(
             {
                 "method": "SMART",
@@ -1643,13 +1336,12 @@ def generate_human_data_latex_table(
         )
 
     # (2) Single unregularized self-play row (the 50k unreg checkpoint).
-    # Human-data label is "---" because unreg uses no human demonstrations.
     if not unreg_agg.empty:
         u = unreg_agg.iloc[0]
         rows.append(
             {
                 "method": "unreg. self-play",
-                "minutes": np.nan,
+                "minutes": np.nan,  # no human data used
                 "sp_coll_mean": u["sp_coll_mean_pct"],
                 "sp_coll_sem": u["sp_coll_sem_pct"],
                 "sp_progress_mean": u["sp_progress_mean_pct"],
@@ -1668,8 +1360,7 @@ def generate_human_data_latex_table(
         )
 
     # (3) Regularized rows, sorted by minutes
-    reg_sorted = reg_agg.sort_values("minutes").reset_index(drop=True)
-    for _, r in reg_sorted.iterrows():
+    for _, r in reg_agg.sort_values("minutes").reset_index(drop=True).iterrows():
         rows.append(
             {
                 "method": "regularized self-play",
@@ -1713,77 +1404,47 @@ def generate_human_data_latex_table(
     table["human_data_label"] = table["minutes"].apply(_fmt_minutes)
 
     # ── Metric metadata ──────────────────────────────────────────────────────
-    # Off-road columns are included only if at least one row actually has
-    # non-NaN off-road data, otherwise they would render as a column of "---".
+    # Off-road columns are included only if at least one row has non-NaN data.
     any_sp_offroad = "sp_offroad_mean" in table.columns and table["sp_offroad_mean"].notna().any()
     any_hr_offroad = "hr_offroad_mean" in table.columns and table["hr_offroad_mean"].notna().any()
 
-    sp_metrics_list = [
-        ("sp_coll_mean", "sp_coll_sem", "Coll. (\\%) $\\downarrow$", False),
-    ]
+    # (mean, sem, header, higher_is_better, as_pct, decimals)
+    sp_specs = [("sp_coll_mean", "sp_coll_sem", r"Coll. (\%) $\downarrow$", False, False, 1)]
     if any_sp_offroad:
-        sp_metrics_list.append(("sp_offroad_mean", "sp_offroad_sem", "Off-road (\\%) $\\downarrow$", False))
-    sp_metrics_list.append(("sp_progress_mean", "sp_progress_sem", "Route prog. (\\%) $\\uparrow$", True))
+        sp_specs.append(("sp_offroad_mean", "sp_offroad_sem", r"Off-road (\%) $\downarrow$", False, False, 1))
+    sp_specs.append(("sp_progress_mean", "sp_progress_sem", r"Route prog. (\%) $\uparrow$", True, False, 1))
 
-    hr_metrics_list = [
-        ("hr_coll_mean", "hr_coll_sem", "Coll. (\\%) $\\downarrow$", False),
-        ("hr_atfault_mean", "hr_atfault_sem", "At-fault (\\%) $\\downarrow$", False),
+    hr_specs = [
+        ("hr_coll_mean", "hr_coll_sem", r"Coll. (\%) $\downarrow$", False, False, 1),
+        ("hr_atfault_mean", "hr_atfault_sem", r"At-fault (\%) $\downarrow$", False, False, 1),
     ]
     if any_hr_offroad:
-        hr_metrics_list.append(("hr_offroad_mean", "hr_offroad_sem", "Off-road (\\%) $\\downarrow$", False))
-    hr_metrics_list.append(("hr_progress_mean", "hr_progress_sem", "Route prog. (\\%) $\\uparrow$", True))
+        hr_specs.append(("hr_offroad_mean", "hr_offroad_sem", r"Off-road (\%) $\downarrow$", False, False, 1))
+    hr_specs.append(("hr_progress_mean", "hr_progress_sem", r"Route prog. (\%) $\uparrow$", True, False, 1))
 
-    metrics = sp_metrics_list + hr_metrics_list
-    n_sp_cols = len(sp_metrics_list)
-    n_hr_cols = len(hr_metrics_list)
+    all_specs = sp_specs + hr_specs
+    n_sp_cols = len(sp_specs)
+    n_hr_cols = len(hr_specs)
 
-    # ── Top-3 ranking per column ────────────────────────────────────────────
-    TIER_COLORS = {
-        1: "tierbest",  # #6FCF6A — soft pastel green
-        2: "tiersecond",  # #DFF04B — soft chartreuse
-        3: "tierthird",  # #FBF4D0 — pale cream-yellow
-    }
+    rank_lookup = _build_tier_rank_lookup(table, all_specs)
 
-    rank_lookup = {}
-    for mean_col, _, _, higher_is_better in metrics:
-        vals = table[mean_col]
-        finite = vals.dropna()
-        if finite.empty:
-            for i in range(len(table)):
-                rank_lookup[(mean_col, i)] = None
-            continue
-
-        distinct_sorted = sorted(finite.unique(), reverse=higher_is_better)
-        top3 = distinct_sorted[:3]
-        val_to_tier = {v: i + 1 for i, v in enumerate(top3)}
-
-        for i, v in enumerate(vals):
-            if pd.isna(v):
-                rank_lookup[(mean_col, i)] = None
-                continue
-            matched_tier = None
-            for tv, tier in val_to_tier.items():
-                if np.isclose(v, tv):
-                    matched_tier = tier
-                    break
-            rank_lookup[(mean_col, i)] = matched_tier
-
-    def _fmt_cell(mean, sem, mean_col, row_idx):
+    def _fmt_cell(mean, sem, mean_col, row_idx, as_pct, decimals):
         if pd.isna(mean):
             return "---"
         tier = rank_lookup.get((mean_col, row_idx))
         is_best = tier == 1
-
-        if pd.notna(sem) and sem != 0:
-            body = f"{mean:.1f} \\pm {sem:.1f}"
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if (as_pct and pd.notna(sem)) else sem
+        fmt = f".{decimals}f"
+        if pd.notna(s_val) and s_val != 0:
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
             text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
         else:
-            body = f"{mean:.1f}"
+            body = f"{m_val:{fmt}}"
             text = f"\\textbf{{{body}}}" if is_best else body
-
         if tier is None:
             return text
-        return f"\\cellcolor{{{TIER_COLORS[tier]}}} {text}"
+        return f"\\cellcolor{{{_TIER_NAMES[tier]}}} {text}"
 
     # ── Build LaTeX ──────────────────────────────────────────────────────────
     col_spec = "ll" + "|" + "r" * n_sp_cols + "|" + "r" * n_hr_cols
@@ -1793,9 +1454,7 @@ def generate_human_data_latex_table(
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
         r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
     )
-    lines.append(r"\definecolor{tierbest}{HTML}{6FCF6A}")
-    lines.append(r"\definecolor{tiersecond}{HTML}{DFF04B}")
-    lines.append(r"\definecolor{tierthird}{HTML}{FBF4D0}")
+    lines.extend(_tier_latex_preamble())
     lines.append(r"\begin{table}[ht]")
     lines.append(r"\centering")
     lines.append(
@@ -1809,19 +1468,26 @@ def generate_human_data_latex_table(
     lines.append(r"\resizebox{\textwidth}{!}{%")
     lines.append(r"\begin{tabular}{" + col_spec + "}")
     lines.append(r"\toprule")
-
-    sp_header = r"\multicolumn{" + str(n_sp_cols) + r"}{c|}{Self-play (test)}"
-    hr_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c}{Human-replay (test)}"
-    lines.append(r" & & " + sp_header + " & " + hr_header + r" \\")
-
-    header2 = (
-        r"\makecell{Human demos \\ used} & Method & "
-        + " & ".join(m[2] for m in metrics[:n_sp_cols])
-        + " & "
-        + " & ".join(m[2] for m in metrics[n_sp_cols:])
+    lines.append(
+        r" & & "
+        + r"\multicolumn{"
+        + str(n_sp_cols)
+        + r"}{c|}{Self-play (test)} & "
+        + r"\multicolumn{"
+        + str(n_hr_cols)
+        + r"}{c}{Human-replay (test)}"
         + r" \\"
     )
-    lines.append(header2)
+
+    headers = [s[2] for s in all_specs]
+    header_row = (
+        r"\makecell{Human demos \\ used} & Method & "
+        + " & ".join(headers[:n_sp_cols])
+        + " & "
+        + " & ".join(headers[n_sp_cols:])
+        + r" \\"
+    )
+    lines.append(header_row)
     lines.append(r"\midrule")
 
     prev_method = None
@@ -1830,17 +1496,14 @@ def generate_human_data_latex_table(
             lines.append(r"\midrule")
         prev_method = row["method"]
 
-        data_cell = row["human_data_label"]
-        if row["method"] == "SMART":
-            method_cell = "SMART"
-        elif row["method"] == "unreg. self-play":
-            method_cell = "unreg. self-play"
-        else:
-            method_cell = "reg. self-play (ours)"
+        method_label = {
+            "SMART": "SMART",
+            "unreg. self-play": "unreg. self-play",
+        }.get(row["method"], "reg. self-play (ours)")
 
-        cells = [data_cell, method_cell]
-        for mean_col, sem_col, _, _ in metrics:
-            cells.append(_fmt_cell(row[mean_col], row[sem_col], mean_col, i))
+        cells = [row["human_data_label"], method_label]
+        for mean_col, sem_col, _h, _hib, as_pct, decimals in all_specs:
+            cells.append(_fmt_cell(row[mean_col], row[sem_col], mean_col, i, as_pct, decimals))
         lines.append(" & ".join(cells) + r" \\")
 
     lines.append(r"\bottomrule")
@@ -1889,10 +1552,10 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
     agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
     agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
-    # unreg first (black), reg second (pink)
+    # unreg first (blue), reg second (purple, matching the shared palette)
     agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
     agg = agg.sort_values("is_reg").reset_index(drop=True)
-    colors = ["black" if not r else "#d62728" for r in agg["is_reg"]]
+    colors = [PALETTE["selfplay"] if not r else PALETTE["ours_edge"] for r in agg["is_reg"]]
 
     subplot_specs = [
         ("collision_rate", "HR collision rate [%]", True),
@@ -2183,24 +1846,15 @@ def plot_wosac_submetrics(wosac_df, save_path="results/figures/eval_wosac_submet
 
 
 def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_comparison_table.tex"):
-    """LaTeX table comparing human-replay performance on the full validation set
-    vs. the interactive validation subset, for all scaling checkpoints.
+    """Human-replay: random-validation vs interactive-validation comparison table.
 
-    Rows: one per (sp_maps, anchor_maps) combination, unreg rows first.
-    Column groups:
-      - HR validation (scaling_hr_val):       score, collision, at-fault, rear, route progress, lateral L2
-      - HR interactive (scaling_hr_interactive): same metrics
-
-    Formatting identical to generate_scaling_latex_table: green cellcolor for
-    higher-is-better metrics, red for lower-is-better, intensity normalised
-    per column, best value in each column bold.
+    Row layout: unreg first, then reg, each sorted by sp_maps. The two column
+    groups (val / interactive) each carry the same metrics and each metric
+    column is tier-ranked independently with the Depth-Pro top-3 palette.
 
     Required LaTeX packages:
-      \\usepackage{booktabs}
-      \\usepackage[table]{xcolor}
-      \\usepackage{graphicx}
-      \\usepackage{makecell}
-      \\usepackage{bm}
+      \\usepackage{booktabs}, \\usepackage[table]{xcolor},
+      \\usepackage{graphicx}, \\usepackage{makecell}, \\usepackage{bm}
     """
     hr_modes = ["scaling_hr_val", "scaling_hr_interactive"]
     scaling_df = df[df["mode"].isin(hr_modes)].copy()
@@ -2210,7 +1864,7 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
 
     scaling_df["anchor_maps"] = scaling_df["anchor_maps"].fillna(0).astype(int)
 
-    hr_metrics = [
+    hr_metric_cols = [
         "score",
         "collision_rate",
         "at_fault_collision_rate",
@@ -2218,20 +1872,18 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
         "route_progress",
         "lateral_error_avg",
     ]
-    available_metrics = [m for m in hr_metrics if m in scaling_df.columns]
+    available = [m for m in hr_metric_cols if m in scaling_df.columns]
 
-    agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available_metrics].agg(["mean", "sem"]).reset_index()
+    agg = scaling_df.groupby(["sp_maps", "anchor_maps", "mode"])[available].agg(["mean", "sem"]).reset_index()
     flat_cols = ["sp_maps", "anchor_maps", "mode"]
-    for m in available_metrics:
+    for m in available:
         flat_cols.extend([f"{m}_mean", f"{m}_sem"])
     agg.columns = flat_cols
 
     val_df = agg[agg["mode"] == "scaling_hr_val"].drop(columns=["mode"]).copy()
     int_df = agg[agg["mode"] == "scaling_hr_interactive"].drop(columns=["mode"]).copy()
-
     val_df = val_df.rename(columns={c: f"val_{c}" for c in val_df.columns if c not in ("sp_maps", "anchor_maps")})
     int_df = int_df.rename(columns={c: f"int_{c}" for c in int_df.columns if c not in ("sp_maps", "anchor_maps")})
-
     merged = val_df.merge(int_df, on=["sp_maps", "anchor_maps"], how="outer")
 
     # unreg rows first, then reg, each sorted by sp_maps
@@ -2239,218 +1891,161 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
     reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
     merged = pd.concat([unreg, reg]).reset_index(drop=True)
 
-    # ── Colour helpers (identical logic to generate_scaling_latex_table) ────
-    has_at_fault = "at_fault_collision_rate" in available_metrics
-    has_rear = "rear_collision_rate" in available_metrics
-    has_route_prog = "route_progress" in available_metrics
-    has_lateral = "lateral_error_avg" in available_metrics
+    has_at_fault = "at_fault_collision_rate" in available
+    has_rear = "rear_collision_rate" in available
+    has_route = "route_progress" in available
+    has_lateral = "lateral_error_avg" in available
 
-    # higher-is-better -> green; lower-is-better -> red
-    green_cols = []
-    red_cols = []
-    for prefix in ("val", "int"):
-        green_cols.append(f"{prefix}_score_mean")
-        if has_route_prog:
-            green_cols.append(f"{prefix}_route_progress_mean")
-        red_cols.append(f"{prefix}_collision_rate_mean")
+    def _block_specs(prefix):
+        """(mean_col, sem_col, header, higher_is_better, as_pct, decimals) for one block."""
+        specs = [
+            (f"{prefix}_score_mean", f"{prefix}_score_sem", r"Score $\uparrow$", True, False, 3),
+            (
+                f"{prefix}_collision_rate_mean",
+                f"{prefix}_collision_rate_sem",
+                r"Coll. (\%) $\downarrow$",
+                False,
+                True,
+                1,
+            ),
+        ]
         if has_at_fault:
-            red_cols.append(f"{prefix}_at_fault_collision_rate_mean")
+            specs.append(
+                (
+                    f"{prefix}_at_fault_collision_rate_mean",
+                    f"{prefix}_at_fault_collision_rate_sem",
+                    r"At-fault (\%) $\downarrow$",
+                    False,
+                    True,
+                    1,
+                )
+            )
         if has_rear:
-            red_cols.append(f"{prefix}_rear_collision_rate_mean")
+            specs.append(
+                (
+                    f"{prefix}_rear_collision_rate_mean",
+                    f"{prefix}_rear_collision_rate_sem",
+                    r"Rear coll. (\%) $\downarrow$",
+                    False,
+                    True,
+                    1,
+                )
+            )
+        if has_route:
+            specs.append(
+                (
+                    f"{prefix}_route_progress_mean",
+                    f"{prefix}_route_progress_sem",
+                    r"Route prog. $\uparrow$",
+                    True,
+                    False,
+                    3,
+                )
+            )
         if has_lateral:
-            red_cols.append(f"{prefix}_lateral_error_avg_mean")
+            specs.append(
+                (
+                    f"{prefix}_lateral_error_avg_mean",
+                    f"{prefix}_lateral_error_avg_sem",
+                    r"Lateral L2 $\downarrow$",
+                    False,
+                    False,
+                    2,
+                )
+            )
+        return specs
 
-    existing_green = [c for c in green_cols if c in merged.columns]
-    existing_red = [c for c in red_cols if c in merged.columns]
+    val_specs = [s for s in _block_specs("val") if s[0] in merged.columns]
+    int_specs = [s for s in _block_specs("int") if s[0] in merged.columns]
+    all_specs = val_specs + int_specs
+    n_val, n_int = len(val_specs), len(int_specs)
 
-    col_min, col_max = {}, {}
-    for c in existing_green + existing_red:
-        vals = merged[c].dropna()
-        col_min[c] = vals.min() if not vals.empty else 0
-        col_max[c] = vals.max() if not vals.empty else 1
+    rank_lookup = _build_tier_rank_lookup(merged, all_specs)
 
-    def _intensity(val, col):
-        if np.isnan(val):
-            return 0
-        vmin, vmax = col_min.get(col, 0), col_max.get(col, 1)
-        if vmax == vmin:
-            return 25
-        return int(5 + (val - vmin) / (vmax - vmin) * 45)
-
-    def _fmt_green(mean, sem, col, is_best=False):
-        if np.isnan(mean):
+    def _fmt_cell(mean, sem, mean_col, row_idx, as_pct, decimals):
+        if pd.isna(mean):
             return "---"
-        intensity = _intensity(mean, col)
-        if not (np.isnan(sem) or sem == 0):
-            text = f"$\\bm{{{mean:.3f} \\pm {sem:.3f}}}$" if is_best else f"${mean:.3f} \\pm {sem:.3f}$"
-        else:
-            text = f"\\textbf{{{mean:.3f}}}" if is_best else f"{mean:.3f}"
-        return f"\\cellcolor{{green!{intensity}}} {text}"
-
-    def _fmt_red(mean, sem, col, is_best=False, as_pct=True, decimals=1):
-        if np.isnan(mean):
-            return "---"
-        intensity = _intensity(mean, col)
+        tier = rank_lookup.get((mean_col, row_idx))
+        is_best = tier == 1
         m_val = mean * 100 if as_pct else mean
-        s_val = sem * 100 if as_pct else sem
+        s_val = sem * 100 if (as_pct and pd.notna(sem)) else sem
         fmt = f".{decimals}f"
-        if not (np.isnan(s_val) or s_val == 0):
-            text = f"$\\bm{{{m_val:{fmt}} \\pm {s_val:{fmt}}}}$" if is_best else f"${m_val:{fmt}} \\pm {s_val:{fmt}}$"
+        if pd.notna(s_val) and s_val != 0:
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
         else:
-            text = f"\\textbf{{{m_val:{fmt}}}}" if is_best else f"{m_val:{fmt}}"
-        return f"\\cellcolor{{red!{intensity}}} {text}"
-
-    # best: max for green cols, min for red cols
-    best = {}
-    for c in existing_green:
-        best[c] = merged[c].max()
-    for c in existing_red:
-        best[c] = merged[c].min()
-
-    def _is_best(col, val):
-        return col in best and not np.isnan(val) and np.isclose(val, best[col])
+            body = f"{m_val:{fmt}}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+        if tier is None:
+            return text
+        return f"\\cellcolor{{{_TIER_NAMES[tier]}}} {text}"
 
     def _anchor_label(anchor_maps):
         return "0 (unreg.)" if anchor_maps == 0 else _maps_to_human_time(anchor_maps)
 
-    # ── Column spec ─────────────────────────────────────────────────────────
-    n_hr_cols = (
-        2  # score, collision
-        + int(has_at_fault)
-        + int(has_rear)
-        + int(has_route_prog)
-        + int(has_lateral)
-    )
-    col_spec = "rr" + "|" + "r" * n_hr_cols + "|" + "r" * n_hr_cols
+    col_spec = "rr" + "|" + "r" * n_val + "|" + "r" * n_int
 
-    # ── Build LaTeX ─────────────────────────────────────────────────────────
     lines = []
     lines.append(
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
         r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
     )
+    lines.extend(_tier_latex_preamble())
     lines.append(r"\begin{table}[ht]")
     lines.append(r"\centering")
     lines.append(
-        r"\caption{Human-replay performance on the randomly sampled validation set "
-        r"vs.\ the interactive validation subset for all scaling checkpoints. "
-        r"Metrics are averaged over all scenes in each split.}"
+        r"\caption{Human-replay performance on the randomly sampled validation "
+        r"set vs.\ the interactive validation subset for all scaling "
+        r"checkpoints. Top-3 values per column are highlighted "
+        r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
+        r"\colorbox{tierthird}{3rd}); best value additionally in bold.}"
     )
     lines.append(r"\label{tab:hr_comparison_results}")
     lines.append(r"\resizebox{\textwidth}{!}{%")
     lines.append(r"\begin{tabular}{" + col_spec + "}")
     lines.append(r"\toprule")
-
-    val_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c|}{HR — validation (random)}"
-    int_header = r"\multicolumn{" + str(n_hr_cols) + r"}{c}{HR — interactive}"
-    lines.append(r" & & " + val_header + " & " + int_header + r" \\")
-
-    def _metric_headers():
-        hdrs = ["Score $\\uparrow$", "Coll. (\\%) $\\downarrow$"]
-        if has_at_fault:
-            hdrs.append("At-fault (\\%) $\\downarrow$")
-        if has_rear:
-            hdrs.append("Rear coll. (\\%) $\\downarrow$")
-        if has_route_prog:
-            hdrs.append("Route prog. $\\uparrow$")
-        if has_lateral:
-            hdrs.append("Lateral L2 $\\downarrow$")
-        return hdrs
-
-    metric_headers = _metric_headers()
-    header2 = (
-        "\\makecell{Self-play maps \\\\ (metadata)} & "
-        "\\makecell{Anchor data \\\\ (human demonstrations)} & "
-        + " & ".join(metric_headers)
-        + " & "
-        + " & ".join(metric_headers)
+    lines.append(
+        r" & & "
+        + r"\multicolumn{"
+        + str(n_val)
+        + r"}{c|}{HR --- validation (random)} & "
+        + r"\multicolumn{"
+        + str(n_int)
+        + r"}{c}{HR --- interactive}"
         + r" \\"
     )
-    lines.append(header2)
+
+    headers = [s[2] for s in all_specs]
+    header_row = (
+        r"\makecell{Self-play maps \\ (metadata)} & "
+        r"\makecell{Anchor data \\ (human demonstrations)} & "
+        + " & ".join(headers[:n_val])
+        + " & "
+        + " & ".join(headers[n_val:])
+        + r" \\"
+    )
+    lines.append(header_row)
     lines.append(r"\midrule")
 
     prev_was_unreg = None
-    for _, row in merged.iterrows():
+    for i, row in merged.iterrows():
         is_unreg = int(row["anchor_maps"]) == 0
         if prev_was_unreg is True and not is_unreg:
             lines.append(r"\midrule")
         prev_was_unreg = is_unreg
 
-        anchor_cell = (
-            f"\\cellcolor{{blue!10}} {_anchor_label(int(row['anchor_maps']))}"
-            if is_unreg
-            else f"\\cellcolor[HTML]{{FDCFF1}} {_anchor_label(int(row['anchor_maps']))}"
-        )
-        cells = [_fmt_maps(int(row["sp_maps"])), anchor_cell]
-
-        for prefix in ("val", "int"):
-            # score (green)
-            s_col = f"{prefix}_score_mean"
+        cells = [_fmt_maps(int(row["sp_maps"])), _anchor_label(int(row["anchor_maps"]))]
+        for mean_col, sem_col, _h, _hib, as_pct, decimals in all_specs:
             cells.append(
-                _fmt_green(
-                    row.get(s_col, np.nan),
-                    row.get(f"{prefix}_score_sem", np.nan),
-                    col=s_col,
-                    is_best=_is_best(s_col, row.get(s_col, np.nan)),
+                _fmt_cell(
+                    row.get(mean_col, np.nan),
+                    row.get(sem_col, np.nan),
+                    mean_col,
+                    i,
+                    as_pct,
+                    decimals,
                 )
             )
-            # collision rate (red, %)
-            c_col = f"{prefix}_collision_rate_mean"
-            cells.append(
-                _fmt_red(
-                    row.get(c_col, np.nan),
-                    row.get(f"{prefix}_collision_rate_sem", np.nan),
-                    col=c_col,
-                    is_best=_is_best(c_col, row.get(c_col, np.nan)),
-                )
-            )
-            # at-fault (red, %)
-            if has_at_fault:
-                af_col = f"{prefix}_at_fault_collision_rate_mean"
-                cells.append(
-                    _fmt_red(
-                        row.get(af_col, np.nan),
-                        row.get(f"{prefix}_at_fault_collision_rate_sem", np.nan),
-                        col=af_col,
-                        is_best=_is_best(af_col, row.get(af_col, np.nan)),
-                    )
-                )
-            # rear collision (red, %)
-            if has_rear:
-                r_col = f"{prefix}_rear_collision_rate_mean"
-                cells.append(
-                    _fmt_red(
-                        row.get(r_col, np.nan),
-                        row.get(f"{prefix}_rear_collision_rate_sem", np.nan),
-                        col=r_col,
-                        is_best=_is_best(r_col, row.get(r_col, np.nan)),
-                    )
-                )
-            # route progress (green)
-            if has_route_prog:
-                rp_col = f"{prefix}_route_progress_mean"
-                cells.append(
-                    _fmt_green(
-                        row.get(rp_col, np.nan),
-                        row.get(f"{prefix}_route_progress_sem", np.nan),
-                        col=rp_col,
-                        is_best=_is_best(rp_col, row.get(rp_col, np.nan)),
-                    )
-                )
-            # lateral L2 (red, raw value, 2 decimals)
-            if has_lateral:
-                l_col = f"{prefix}_lateral_error_avg_mean"
-                cells.append(
-                    _fmt_red(
-                        row.get(l_col, np.nan),
-                        row.get(f"{prefix}_lateral_error_avg_sem", np.nan),
-                        col=l_col,
-                        is_best=_is_best(l_col, row.get(l_col, np.nan)),
-                        as_pct=False,
-                        decimals=2,
-                    )
-                )
-
         lines.append(" & ".join(cells) + r" \\")
 
     lines.append(r"\bottomrule")
@@ -2466,75 +2061,42 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
 
 
 def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
-    """Load the SMART baseline CSV and pivot into per-num_maps rows.
+    """Load WOSAC scores from the SMART baseline CSV.
 
     Returns a DataFrame with columns:
         num_maps, minutes,
-        hr_atfault_pct, hr_coll_pct, hr_offroad_pct, hr_progress_pct,
-        sp_coll_pct, sp_offroad_pct, sp_progress_pct
+        wosac_score, wosac_kinematic_metrics,
+        wosac_interactive_metrics, wosac_map_based_metrics
 
-    Missing metrics are left as NaN so downstream `dropna(subset=[col])` skips
-    them cleanly. Returns an empty (but correctly-typed) DataFrame if the CSV
-    isn't present.
+    WOSAC metrics in the SMART CSV are only populated in the scaling_sp_val
+    mode (the former `all_agents` rows). Missing values stay NaN; returns an
+    empty (correctly-typed) DataFrame if the CSV is absent.
     """
     cols = [
         "num_maps",
         "minutes",
-        "hr_atfault_pct",
-        "hr_coll_pct",
-        "hr_offroad_pct",
-        "hr_progress_pct",
-        "sp_coll_pct",
-        "sp_offroad_pct",
-        "sp_progress_pct",
+        "wosac_score",
+        "wosac_kinematic_metrics",
+        "wosac_interactive_metrics",
+        "wosac_map_based_metrics",
     ]
     if not os.path.exists(csv_path):
-        print(f"  {csv_path} not found — SMART baseline will be omitted from the plot.")
+        print(f"  {csv_path} not found — SMART WOSAC baseline will be omitted.")
         return pd.DataFrame(columns=cols)
 
     raw = pd.read_csv(csv_path)
-
-    # Drop explicitly-excluded checkpoints (e.g. the pre-BC snapshot).
     raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
+    # WOSAC metrics only live in the scaling_sp_val rows.
+    raw = raw[raw["mode"] == "scaling_sp_val"].copy()
 
-    # Map each remaining checkpoint to a num_maps value; drop anything we
-    # don't recognise rather than silently plotting it at NaN.
     raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
-    unknown = raw[raw["num_maps"].isna()]["checkpoint"].unique()
-    if len(unknown) > 0:
-        print(f"  Warning: SMART checkpoints with no num_maps mapping, skipping: {list(unknown)}")
     raw = raw.dropna(subset=["num_maps"]).copy()
     raw["num_maps"] = raw["num_maps"].astype(int)
 
-    # Build HR and SP pivots from the columns that are actually present in the
-    # CSV. `offroad_rate` is optional and will only show up if recorded.
-    hr_wanted = {
-        "at_fault_collision_rate": "hr_atfault_pct",
-        "collision_rate": "hr_coll_pct",
-        "offroad_rate": "hr_offroad_pct",
-        "route_progress": "hr_progress_pct",
-    }
-    sp_wanted = {
-        "collision_rate": "sp_coll_pct",
-        "offroad_rate": "sp_offroad_pct",
-        "route_progress": "sp_progress_pct",
-    }
-
-    hr_raw = raw[raw["mode"] == "scaling_hr_val"]
-    hr_present = [c for c in hr_wanted if c in hr_raw.columns]
-    hr = hr_raw.set_index("num_maps")[hr_present].rename(columns={c: hr_wanted[c] for c in hr_present})
-
-    sp_raw = raw[raw["mode"] == "scaling_sp_val"]
-    sp_present = [c for c in sp_wanted if c in sp_raw.columns]
-    sp = sp_raw.set_index("num_maps")[sp_present].rename(columns={c: sp_wanted[c] for c in sp_present})
-
-    # Fractions → percentages.
-    out = hr.join(sp, how="outer") * 100
-    out = out.reset_index().sort_values("num_maps").reset_index(drop=True)
+    metric_cols = [c for c in cols if c.startswith("wosac_") and c in raw.columns]
+    out = raw[["num_maps"] + metric_cols].sort_values("num_maps").reset_index(drop=True)
     out["minutes"] = out["num_maps"] * 9 / 60
-
-    # Re-index to the full expected column list so any metric the CSV is
-    # missing surfaces as NaN rather than raising a KeyError.
+    # Re-index to the full expected column list so missing WOSAC columns become NaN.
     for c in cols:
         if c not in out.columns:
             out[c] = np.nan
@@ -2565,13 +2127,6 @@ def plot_human_data_requirements_wosac(
     taken from the PufferDrive WOSAC baseline table (229 clean held-out
     validation scenes).
     """
-    # ── Colours ─────────────────────────────────────────────────────────────
-    COLOR_OURS = "#CCCCFF"
-    COLOR_OURS_EDGE = "#6B3FA0"
-    COLOR_SELFPLAY = "#4A7FD4"
-    COLOR_SMART = "#E8609A"
-    COLOR_SMART_EDGE = "#B4437A"
-
     # ── Data sources ────────────────────────────────────────────────────────
     if wosac_df is None or wosac_df.empty:
         print("  No WOSAC data — skipping plot_human_data_requirements_wosac.")
@@ -2670,7 +2225,6 @@ def plot_human_data_requirements_wosac(
         ax.set_xscale("symlog", linthresh=60, linscale=1.2)
         ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
         ax.minorticks_off()
-        # ax.set_ylim(0, 1.02)  # WOSAC scores are in [0, 1]; leave a sliver above UB.
         ax.set_xlabel("Human demonstration data")
         ax.set_ylabel(ylabel)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -2693,12 +2247,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
     """Generate all evaluation figures."""
     print("\nGenerating figures...")
     if df is not None and not df.empty:
-        plot_scores(df)
-        print("  Saved eval_scores.pdf")
         plot_scaling_barplot(df)
         print("  Saved eval_scaling_barplot.pdf")
-        plot_scaling_scatter(df)
-        print("  Saved eval_scaling_scatter.pdf")
         plot_data_requirements(df)
         print("  Saved eval_data_requirements.pdf")
         plot_human_data_requirements(df)

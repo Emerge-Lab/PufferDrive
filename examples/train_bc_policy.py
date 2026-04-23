@@ -52,7 +52,7 @@ TRAIN_DEFAULTS = {
     "batch_size": 2048,
     "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
     "epochs": 4000,
-    "num_maps": 200,
+    "num_maps": 50_000,
     "eval_frequency": 10,  # Validation dataset
     "val_patience": 40,  # Stop if val loss doesn't improve for this many eval checks
 }

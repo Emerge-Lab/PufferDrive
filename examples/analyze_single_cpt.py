@@ -18,7 +18,9 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 # CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
-CPT_PATH = "models/reg_delta_check_gamma_0.99.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
+CPT_PATH = (
+    "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
+)
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
@@ -30,10 +32,10 @@ OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 0
-RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
+NUM_ENVS_TO_RENDER = 50
+RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
-EPISODE_LENGTHS = [110, 120, 150, 200]
+EPISODE_LENGTHS = [150]
 
 METRICS = [
     "n",

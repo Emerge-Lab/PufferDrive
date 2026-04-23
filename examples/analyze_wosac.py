@@ -33,6 +33,10 @@ SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"
 ENV_NAME = "puffer_drive"
 OUTPUT_CSV = "results/checkpoint_wosac_results.csv"
 
+# Only evaluate checkpoints trained with this many metadata (sp) maps.
+# Set to None to evaluate every parsed checkpoint.
+SP_MAPS_FILTER = 50000
+
 # WOSAC eval settings (mirrors [eval] section defaults in the .ini)
 WOSAC_MAP_DIR = "resources/drive/binaries/validation"
 WOSAC_BATCH_SIZE = 64  # num_scenes_per_batch
@@ -235,6 +239,7 @@ def main():
 
     # Discover and parse scaling checkpoints
     scaling_entries = []
+    skipped_by_filter = 0
     for fname in sorted(os.listdir(SCALING_CHECKPOINTS_PATH)):
         if not fname.endswith(".pt"):
             continue
@@ -243,12 +248,21 @@ def main():
             print(f"  Warning: could not parse '{fname}', skipping.")
             continue
         sp_maps, is_reg, dynamics, anchor_maps = parsed
+
+        # Restrict to checkpoints trained on the requested number of metadata maps.
+        if SP_MAPS_FILTER is not None and sp_maps != SP_MAPS_FILTER:
+            skipped_by_filter += 1
+            continue
+
         scaling_entries.append((os.path.join(SCALING_CHECKPOINTS_PATH, fname), sp_maps, is_reg, dynamics, anchor_maps))
 
     scaling_entries.sort(key=lambda x: (x[1], x[2], x[4] or 0))
 
+    if SP_MAPS_FILTER is not None:
+        print(f"\nFilter: sp_maps == {SP_MAPS_FILTER} ({skipped_by_filter} checkpoints skipped).")
+
     if not scaling_entries:
-        print("No scaling checkpoints found — nothing to evaluate.")
+        print("No scaling checkpoints matched the filter — nothing to evaluate.")
         return
 
     print(f"\nFound {len(scaling_entries)} scaling checkpoints:")
