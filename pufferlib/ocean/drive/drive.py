@@ -485,6 +485,7 @@ class Drive(pufferlib.PufferEnv):
                     "traffic_history": [],
                     "trajectory_history": [],
                     "has_trajectory_history": "trajectory" in self.action_type_str,
+                    "window_has_any_target_failure": False,
                 }
             )
 
@@ -506,18 +507,40 @@ class Drive(pufferlib.PufferEnv):
     def _compress_replay_bundle(self, bundle):
         return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=6)
 
+    def _normalize_log_summaries(self, log_payload):
+        if not log_payload:
+            return []
+        if isinstance(log_payload, list):
+            return [summary for summary in log_payload if isinstance(summary, dict)]
+        if isinstance(log_payload, dict):
+            return [log_payload]
+        return []
+
+    def _accumulate_replay_window_logs(self, log_summaries):
+        if not self.capture_replay:
+            return
+
+        for env_idx, log_summary in enumerate(log_summaries):
+            if env_idx >= len(self._replay_buffers):
+                break
+            if bool(log_summary.get("did_target_fail", 0)):
+                self._replay_buffers[env_idx]["window_has_any_target_failure"] = True
+
     def _build_replay_summaries(self, log_summaries=None):
         scenarios = self._normalize_scenarios(self.get_state())
         summaries = []
         for env_idx, scenario in enumerate(scenarios):
             episode_id = self._replay_batch_start + env_idx if self.eval_mode else env_idx
-            if log_summaries is not None and env_idx < len(log_summaries):
-                did_target_fail = int(bool(log_summaries[env_idx].get("did_target_fail", 0)))
+            buffer = self._replay_buffers[env_idx] if self.capture_replay else None
+            if buffer is not None:
+                did_target_fail = int(bool(buffer["window_has_any_target_failure"]))
+            elif log_summaries is not None and env_idx < len(log_summaries):
+                did_target_fail = log_summaries[env_idx].get("did_target_fail", 0)
             else:
-                did_target_fail = int(bool(scenario.get("did_target_fail", 0)))
+                did_target_fail = scenario.get("did_target_fail", 0)
             should_keep = True
             if self.capture_replay_keep_failed_only:
-                should_keep = did_target_fail == 1
+                should_keep = bool(did_target_fail)
                 if self.capture_replay_always_keep_first and episode_id == 0:
                     should_keep = True
 
@@ -525,10 +548,11 @@ class Drive(pufferlib.PufferEnv):
                 "episode_id": episode_id,
                 "map_name": scenario.get("map_name"),
                 "scenario_id": scenario.get("scenario_id"),
+                "did_target_fail": did_target_fail,
+                "summary_type": "replay_window",
             }
 
             if self.capture_replay and should_keep:
-                buffer = self._replay_buffers[env_idx]
                 bundle = {
                     "episode_id": episode_id,
                     "map_name": scenario.get("map_name"),
@@ -645,24 +669,27 @@ class Drive(pufferlib.PufferEnv):
         self.tick += 1
         info = []
         log_payload = None
+        log_summaries = []
         if self.tick % self.report_interval == 0:
             log_payload = binding.vec_log(self.c_envs, self.num_agents)
+            log_summaries = self._normalize_log_summaries(log_payload)
             if log_payload and not (
                 self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0
             ):
-                info.append(log_payload)
+                if self.capture_replay:
+                    self._accumulate_replay_window_logs(log_summaries)
+                else:
+                    info.append(log_payload)
                 # print(log_payload)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
             will_resample = 1
             if will_resample:
-                if log_payload:
-                    log_summaries = log_payload if isinstance(log_payload, list) else [log_payload]
-                else:
-                    log_summaries = None
+                if self.capture_replay and log_summaries:
+                    self._accumulate_replay_window_logs(log_summaries)
 
                 summaries = self._build_replay_summaries(log_summaries=log_summaries)
-                if log_summaries is not None and len(log_summaries) == len(summaries):
+                if log_summaries and len(log_summaries) == len(summaries):
                     merged_summaries = []
                     for log_summary, summary in zip(log_summaries, summaries):
                         merged_summary = dict(log_summary)

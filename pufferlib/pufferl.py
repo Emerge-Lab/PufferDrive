@@ -3140,7 +3140,11 @@ def _render_adversarial_buffered(
                     action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
                 ob, _, _, _, infos = vecenv.step(action)
-                summaries = _extract_episode_summaries(infos)
+                summaries = [
+                    summary
+                    for summary in _extract_episode_summaries(infos)
+                    if summary.get("summary_type") == "replay_window"
+                ]
                 if not summaries:
                     continue
 
