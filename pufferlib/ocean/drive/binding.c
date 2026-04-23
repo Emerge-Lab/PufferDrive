@@ -1772,7 +1772,13 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
         SharedMapData *shared = g_map_cache[map_id];
 
-        // Count active agents using a lightweight temp env (no binary reload)
+        // Count active agents using a lightweight temp env (no binary reload).
+        // Shallow-copy the Agent structs so set_active_agents cannot mutate
+        // shared->template_agents (it writes active_agent and mark_as_expert).
+        // Do NOT call free_agent() on the copies — trajectory/route pointers
+        // inside still belong to shared and must not be freed here.
+        Agent *temp_agents = (Agent *)malloc(shared->num_total_agents * sizeof(Agent));
+        memcpy(temp_agents, shared->template_agents, shared->num_total_agents * sizeof(Agent));
         Drive temp_env = {0};
         temp_env.init_mode = init_mode;
         temp_env.control_mode = control_mode;
@@ -1780,7 +1786,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         temp_env.init_steps = init_steps;
         temp_env.num_max_agents = max_agents_per_env;
         temp_env.goal_radius = goal_radius;
-        temp_env.agents = shared->template_agents;
+        temp_env.agents = temp_agents;
         temp_env.num_total_agents = shared->num_total_agents;
         temp_env.grid_map = shared->grid_map;
         set_active_agents(&temp_env);
@@ -1788,6 +1794,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(temp_env.active_agent_indices);
         free(temp_env.static_agent_indices);
         free(temp_env.expert_static_agent_indices);
+        free(temp_agents);
 
         // Skip map if it has no controllable agents
         if (active_count == 0) {

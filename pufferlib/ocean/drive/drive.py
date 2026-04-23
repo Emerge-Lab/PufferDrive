@@ -6,14 +6,7 @@ import json
 import struct
 import os
 import pufferlib
-from enum import IntEnum
 from pufferlib.ocean.drive import binding
-
-
-class RenderView(IntEnum):
-    FULL_SIM_STATE = 0  # Fixed bird's-eye-ish perspective (legacy default)
-    BEV_AGENT_OBS = 1  # Top-down ortho centered on ego agent at vision-range zoom
-    TOPDOWN_SIM = 2  # Full-map orthographic top-down
 
 
 def compute_effective_road_obs_count(max_count, dropout):
@@ -466,6 +459,7 @@ class Drive(pufferlib.PufferEnv):
                     init_steps=self.init_steps,
                     map_files=self.map_files,
                     seed=self.random_seed,
+                    goal_radius=self.goal_radius,
                     min_agents_per_env=self.min_agents_per_env,
                     max_agents_per_env=self.max_agents_per_env,
                     num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
@@ -591,10 +585,10 @@ class Drive(pufferlib.PufferEnv):
 
         return polylines
 
-    def render(self, view_mode=RenderView.FULL_SIM_STATE, env_id=0):
-        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho, 2=full-map topdown.
+    def render(self, view_mode=0, env_id=0):
+        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
         # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
-        binding.vec_render(self.c_envs, int(view_mode), env_id)
+        binding.vec_render(self.c_envs, view_mode, env_id)
 
     def set_video_suffix(self, suffix, env_id=0):
         # Append `suffix` to the next mp4 filename for the given env.
