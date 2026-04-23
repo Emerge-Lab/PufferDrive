@@ -2430,6 +2430,43 @@ def _get_failure_mining_folder(args):
     return os.path.join("failure_runs", experiment_name, model_name, args["eval_simulation"])
 
 
+def _resolve_gigaflow_mining_maps(args):
+    map_dir = args["env"]["map_dir"]
+    all_map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+    if not all_map_files:
+        raise FileNotFoundError(f"No .bin files found in {map_dir}")
+
+    selectors = args.get("eval_maps")
+    if selectors is None:
+        num_carla_maps = args.get("num_carla_maps", len(all_map_files))
+        return [os.path.basename(path) for path in all_map_files[:num_carla_maps]]
+
+    selected = []
+    if isinstance(selectors, str):
+        raw_selectors = [part.strip() for part in selectors.split(",") if part.strip()]
+    elif isinstance(selectors, (list, tuple, set)):
+        raw_selectors = list(selectors)
+    else:
+        raw_selectors = [selectors]
+
+    available = {os.path.basename(path): path for path in all_map_files}
+    for selector in raw_selectors:
+        if isinstance(selector, int) or (isinstance(selector, str) and selector.isdigit()):
+            target_name = f"opendrive__Town{int(selector):02d}.bin"
+        else:
+            selector = str(selector).strip()
+            if selector.lower().startswith("town") and selector[4:].split(".")[0].isdigit():
+                target_name = f"opendrive__Town{int(selector[4:].split('.')[0]):02d}.bin"
+            else:
+                target_name = os.path.basename(selector)
+        if target_name not in available:
+            raise ValueError(f"Unknown gigaflow mining map selector {selector!r}")
+        if target_name not in selected:
+            selected.append(target_name)
+
+    return selected
+
+
 def _get_random_eval_filename_suffix(args):
     parts = []
 
@@ -2829,8 +2866,8 @@ def _render_adversarial_serial(
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
-    state = {}
-    target_state = {}
+    state = None
+    target_state = None
     if args["train"]["use_rnn"]:
         state = dict(
             lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
@@ -3110,8 +3147,8 @@ def _render_adversarial_buffered(
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
-    state = {}
-    target_state = {}
+    state = None
+    target_state = None
     if args["train"]["use_rnn"]:
         state = dict(
             lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
@@ -3251,6 +3288,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         num_agents_eval = tmp_args["eval"]["num_agents"]
         map_dir = tmp_args["eval"]["map_dir"]
         target_num_episodes = tmp_args.get("num_episodes") or tmp_args["num_scenarios"]
+        requested_agents_per_scene = tmp_args.get("eval_agents_per_scene")
+        requested_min_agents_per_env = tmp_args["env"].get("min_agents_per_env")
+        requested_max_agents_per_env = tmp_args["env"].get("max_agents_per_env")
         eval_overrides = build_eval_overrides(
             simulation_mode=tmp_args["eval_simulation"],
             num_agents=num_agents_eval,
@@ -3258,11 +3298,20 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             map_dir=map_dir,
             maps=tmp_args.get("eval_maps"),
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
-            agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+            agents_per_scene=requested_agents_per_scene or tmp_args["eval"].get("agents_per_scene", 30),
             scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
         args["num_episodes"] = target_num_episodes
+        if requested_agents_per_scene is None:
+            args["env"]["min_agents_per_env"] = requested_min_agents_per_env
+            args["env"]["max_agents_per_env"] = requested_max_agents_per_env
+
+    if args["eval_simulation"] != "gigaflow":
+        raise pufferlib.APIUsageError("mine_failures currently supports gigaflow only")
+
+    if args["train"]["use_rnn"]:
+        raise pufferlib.APIUsageError("mine_failures does not support RNN policies yet")
 
     if args.get("seed") is not None:
         np.random.seed(args["seed"])
@@ -3278,23 +3327,26 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
 
     num_workers = min(args["vec"]["num_envs"], target_num_episodes)
     agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
-    if agents_per_scene is None:
-        agents_per_scene = args["env"].get("max_agents_per_env")
+    min_agents_per_env = args["env"].get("min_agents_per_env")
+    max_agents_per_env = args["env"].get("max_agents_per_env")
+    worker_agent_budget = args["env"].get("num_agents")
 
-    scenarios_per_worker = target_num_episodes // num_workers
-    remainder = target_num_episodes % num_workers
-    current_start = 0
+    selected_map_names = _resolve_gigaflow_mining_maps(args)
+    if not selected_map_names:
+        raise pufferlib.APIUsageError("mine_failures requires at least one gigaflow map")
+
     env_kwargs_list = []
     for worker_idx in range(num_workers):
         worker_kwargs = copy.deepcopy(args["env"])
         worker_kwargs["emit_completed_episodes"] = True
         worker_kwargs["capture_replay"] = False
-        worker_kwargs["num_agents"] = int(agents_per_scene)
-        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
-        worker_kwargs["starting_map"] = current_start
-        worker_kwargs["num_eval_scenarios"] = worker_num_scenarios
+        worker_kwargs["eval_mode"] = 0
+        worker_kwargs["resample_frequency"] = 0
+        worker_kwargs["starting_map"] = 0
+        worker_kwargs["num_eval_scenarios"] = 1
+        worker_kwargs["num_maps"] = 1
+        worker_kwargs["maps"] = selected_map_names[worker_idx % len(selected_map_names)]
         env_kwargs_list.append(worker_kwargs)
-        current_start += worker_num_scenarios
 
     args["vec"] = dict(
         backend=backend,
@@ -3308,9 +3360,13 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print("Failure mining configuration:")
         print(f"  Target episodes: {target_num_episodes}")
         print(f"  Worker count: {num_workers}")
-        print(f"  Agents per scene: {agents_per_scene}")
-        print(f"  Scenario budget: {target_num_episodes}")
+        print(f"  Worker agent budget: {worker_agent_budget}")
+        print(f"  Min agents per env: {min_agents_per_env}")
+        print(f"  Max agents per env: {max_agents_per_env}")
+        if agents_per_scene is not None:
+            print(f"  Eval agents per scene override: {agents_per_scene}")
         print(f"  Eval simulation: {args['eval_simulation']}")
+        print(f"  Worker map assignment: {', '.join(selected_map_names)}")
 
     if vecenv is None:
         package = args["package"]
@@ -3328,17 +3384,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
-    state = {}
-    target_state = {}
-    if args["train"]["use_rnn"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
-        )
-        target_state = dict(
-            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-        )
+    state = None
+    target_state = None
 
     output_folder = _get_failure_mining_folder(args)
     os.makedirs(output_folder, exist_ok=True)
@@ -3349,52 +3396,38 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     completed_episode_rows = []
     with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
         while len(completed_episode_rows) < target_num_episodes:
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+            with torch.no_grad():
+                ob_tensor = torch.as_tensor(ob).to(device)
+                target_mask = _build_eval_target_mask(infos, vecenv, device)
+                step_context = dict(reward=None, done=None, env_id=None, mask=None)
+                actor_output = _route_actor_actions(
+                    ob_tensor,
+                    target_mask,
+                    policy_actor,
+                    step_context,
+                    policy_recurrent_state=state,
+                    target_actor=target_actor,
+                    target_recurrent_state=target_state,
+                    deterministic=True,
                 )
-                target_state = dict(
-                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-                )
+                action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
 
-            for _ in range(args["env"]["scenario_length"]):
-                with torch.no_grad():
-                    ob_tensor = torch.as_tensor(ob).to(device)
-                    target_mask = _build_eval_target_mask(infos, vecenv, device)
-                    step_context = dict(reward=None, done=None, env_id=None, mask=None)
-                    actor_output = _route_actor_actions(
-                        ob_tensor,
-                        target_mask,
-                        policy_actor,
-                        step_context,
-                        policy_recurrent_state=state if args["train"]["use_rnn"] else None,
-                        target_actor=target_actor,
-                        target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
-                        deterministic=True,
-                    )
-                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+            if actor_output.clip_actions:
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-                if actor_output.clip_actions:
-                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            ob, _, _, _, infos = vecenv.step(action)
+            summaries = _extract_completed_episode_summaries(infos)
+            if not summaries:
+                continue
 
-                ob, _, _, _, infos = vecenv.step(action)
-                summaries = _extract_completed_episode_summaries(infos)
-                if not summaries:
-                    continue
-
-                for summary in summaries:
-                    summary = dict(summary)
-                    summary.pop("summary_type", None)
-                    map_name = summary.get("map_name")
-                    if isinstance(map_name, str):
-                        summary["map_name"] = os.path.basename(map_name).split(".")[0]
-                    completed_episode_rows.append(summary)
-                    pbar.update(1)
-                    if len(completed_episode_rows) >= target_num_episodes:
-                        break
-
+            for summary in summaries:
+                summary = dict(summary)
+                summary.pop("summary_type", None)
+                map_name = summary.get("map_name")
+                if isinstance(map_name, str):
+                    summary["map_name"] = os.path.basename(map_name).split(".")[0]
+                completed_episode_rows.append(summary)
+                pbar.update(1)
                 if len(completed_episode_rows) >= target_num_episodes:
                     break
 
