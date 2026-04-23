@@ -772,6 +772,8 @@ static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
                 return NULL;
             }
 
+            assign_to_dict(dict, "env_slot", i);
+
             if (PyList_Append(list, dict) < 0) {
                 Py_DECREF(dict);
                 Py_DECREF(list);

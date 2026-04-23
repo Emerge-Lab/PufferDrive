@@ -3291,6 +3291,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         requested_agents_per_scene = tmp_args.get("eval_agents_per_scene")
         requested_min_agents_per_env = tmp_args["env"].get("min_agents_per_env")
         requested_max_agents_per_env = tmp_args["env"].get("max_agents_per_env")
+        capture_mining_replay = bool(tmp_args.get("capture_mining_replay", 0))
+        capture_mining_replay_failures_only = bool(tmp_args.get("capture_mining_replay_failures_only", 1))
         eval_overrides = build_eval_overrides(
             simulation_mode=tmp_args["eval_simulation"],
             num_agents=num_agents_eval,
@@ -3303,6 +3305,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
         args["num_episodes"] = target_num_episodes
+        args["capture_mining_replay"] = capture_mining_replay
+        args["capture_mining_replay_failures_only"] = capture_mining_replay_failures_only
         if requested_agents_per_scene is None:
             args["env"]["min_agents_per_env"] = requested_min_agents_per_env
             args["env"]["max_agents_per_env"] = requested_max_agents_per_env
@@ -3330,6 +3334,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     min_agents_per_env = args["env"].get("min_agents_per_env")
     max_agents_per_env = args["env"].get("max_agents_per_env")
     worker_agent_budget = args["env"].get("num_agents")
+    capture_mining_replay = bool(args.get("capture_mining_replay", 0))
+    capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
 
     selected_map_names = _resolve_gigaflow_mining_maps(args)
     if not selected_map_names:
@@ -3340,6 +3346,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs = copy.deepcopy(args["env"])
         worker_kwargs["emit_completed_episodes"] = True
         worker_kwargs["capture_replay"] = False
+        worker_kwargs["capture_compact_replay"] = capture_mining_replay
+        worker_kwargs["capture_compact_replay_failures_only"] = capture_mining_replay_failures_only
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0
@@ -3365,6 +3373,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"  Max agents per env: {max_agents_per_env}")
         if agents_per_scene is not None:
             print(f"  Eval agents per scene override: {agents_per_scene}")
+        print(f"  Capture compact replay: {capture_mining_replay}")
+        if capture_mining_replay:
+            print(f"  Capture failures only: {capture_mining_replay_failures_only}")
         print(f"  Eval simulation: {args['eval_simulation']}")
         print(f"  Worker map assignment: {', '.join(selected_map_names)}")
 
@@ -3390,10 +3401,14 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     output_folder = _get_failure_mining_folder(args)
     os.makedirs(output_folder, exist_ok=True)
     filename_suffix = _get_random_eval_filename_suffix(args)
+    replay_output_folder = os.path.join(output_folder, f"replays{filename_suffix}")
+    if capture_mining_replay:
+        os.makedirs(replay_output_folder, exist_ok=True)
 
     vecenv.async_reset(args.get("seed"))
     ob, _, _, _, infos, _, _ = vecenv.recv()
     completed_episode_rows = []
+    next_episode_id = 0
     with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
         while len(completed_episode_rows) < target_num_episodes:
             with torch.no_grad():
@@ -3423,9 +3438,20 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             for summary in summaries:
                 summary = dict(summary)
                 summary.pop("summary_type", None)
+                replay_bundle = summary.pop("compact_replay_bundle", None)
+                summary["episode_id"] = next_episode_id
+                next_episode_id += 1
                 map_name = summary.get("map_name")
                 if isinstance(map_name, str):
                     summary["map_name"] = os.path.basename(map_name).split(".")[0]
+                summary["has_replay"] = 0
+                summary["replay_path"] = None
+                if replay_bundle is not None:
+                    replay_path = os.path.join(replay_output_folder, f"episode_{summary['episode_id']:06d}.replay.zlib")
+                    with open(replay_path, "wb") as replay_file:
+                        replay_file.write(replay_bundle)
+                    summary["has_replay"] = 1
+                    summary["replay_path"] = replay_path
                 completed_episode_rows.append(summary)
                 pbar.update(1)
                 if len(completed_episode_rows) >= target_num_episodes:
@@ -3733,6 +3759,18 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
+    parser.add_argument(
+        "--capture-mining-replay",
+        type=int,
+        default=0,
+        help="Capture compact replay files during mine_failures",
+    )
+    parser.add_argument(
+        "--capture-mining-replay-failures-only",
+        type=int,
+        default=1,
+        help="When capturing compact mining replay, only keep episodes where the target failed",
+    )
     parser.add_argument(
         "--eval-agents-per-scene",
         type=int,

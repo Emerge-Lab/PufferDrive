@@ -207,6 +207,8 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         capture_replay_keep_failed_only=True,
         capture_replay_always_keep_first=True,
+        capture_compact_replay=False,
+        capture_compact_replay_failures_only=True,
         emit_completed_episodes=False,
     ):
         self.dt = dt
@@ -316,8 +318,11 @@ class Drive(pufferlib.PufferEnv):
         self.capture_replay = bool(capture_replay)
         self.capture_replay_keep_failed_only = bool(capture_replay_keep_failed_only)
         self.capture_replay_always_keep_first = bool(capture_replay_always_keep_first)
+        self.capture_compact_replay = bool(capture_compact_replay)
+        self.capture_compact_replay_failures_only = bool(capture_compact_replay_failures_only)
         self.emit_completed_episodes = bool(emit_completed_episodes)
         self._replay_buffers = []
+        self._compact_replay_buffers = []
         self._replay_batch_start = starting_map
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
@@ -457,6 +462,8 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, self.random_seed)
         if self.capture_replay:
             self._initialize_replay_buffers()
+        if self.capture_compact_replay:
+            self._initialize_compact_replay_buffers()
 
     def _normalize_scenarios(self, scenarios):
         if isinstance(scenarios, list):
@@ -508,6 +515,131 @@ class Drive(pufferlib.PufferEnv):
 
     def _compress_replay_bundle(self, bundle):
         return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=6)
+
+    def _build_compact_replay_metadata(self, env_idx, scenario):
+        map_idx = self.map_ids[env_idx] if env_idx < len(self.map_ids) else 0
+        map_path = self.map_files[map_idx] if map_idx < len(self.map_files) else None
+        raw_map_name = scenario.get("map_name") or map_path
+        if isinstance(raw_map_name, str):
+            map_name = os.path.basename(raw_map_name).split(".")[0]
+        else:
+            map_name = raw_map_name
+        return {
+            "map_name": map_name,
+            "map_path": map_path,
+            "scenario_id": scenario.get("scenario_id"),
+            "target_type": self.target_type_str,
+            "dynamics_model": self.dynamics_model,
+        }
+
+    def _initialize_compact_replay_buffers(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        self._compact_replay_buffers = []
+        for env_idx, scenario in enumerate(scenarios):
+            self._compact_replay_buffers.append(
+                {
+                    "metadata": self._build_compact_replay_metadata(env_idx, scenario),
+                    "agent_frames": [],
+                    "traffic_frames": [],
+                }
+            )
+
+    def _extract_compact_agents_frame(self, scenario):
+        frame = []
+        active_indices = set(scenario.get("active_agent_indices", []))
+        for idx, agent in enumerate(scenario.get("agents", [])):
+            if not agent.get("sim_valid"):
+                continue
+            frame.append(
+                {
+                    "id": int(agent.get("id", idx)),
+                    "type": int(agent.get("type", 1)),
+                    "is_target": idx == 0,
+                    "active": idx in active_indices,
+                    "stopped": bool(agent.get("stopped", False)),
+                    "x": round(float(agent.get("sim_x", 0.0)), 2),
+                    "y": round(float(agent.get("sim_y", 0.0)), 2),
+                    "z": round(float(agent.get("sim_z", 0.0)), 2),
+                    "heading": round(float(agent.get("sim_heading", 0.0)), 3),
+                    "length": round(float(agent.get("sim_length", 0.0)), 2),
+                    "width": round(float(agent.get("sim_width", 0.0)), 2),
+                }
+            )
+        return frame
+
+    def _extract_compact_traffic_frame(self, scenario, timestep):
+        frame = []
+        for elem in scenario.get("traffic_elements", []) or []:
+            if not isinstance(elem, dict):
+                continue
+            stop_line = elem.get("stop_line")
+            if stop_line is None or len(stop_line) < 6:
+                continue
+
+            control_type = int(elem.get("type", binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT))
+            entry = {
+                "type": control_type,
+                "stop_line": [round(float(v), 2) for v in stop_line[:6]],
+            }
+            states = elem.get("states", [])
+            if states and len(states) > timestep:
+                entry["state"] = int(states[timestep])
+            frame.append(entry)
+        return frame
+
+    def _capture_compact_replay_step(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        if len(self._compact_replay_buffers) != len(scenarios):
+            self._initialize_compact_replay_buffers()
+
+        for env_idx, scenario in enumerate(scenarios):
+            buffer = self._compact_replay_buffers[env_idx]
+            buffer["agent_frames"].append(self._extract_compact_agents_frame(scenario))
+            buffer["traffic_frames"].append(self._extract_compact_traffic_frame(scenario, self.tick))
+
+    def _reset_compact_replay_buffer(self, env_idx, scenario=None):
+        if env_idx < 0 or env_idx >= len(self._compact_replay_buffers):
+            return
+        if scenario is None:
+            scenarios = self._normalize_scenarios(self.get_state())
+            if env_idx >= len(scenarios):
+                return
+            scenario = scenarios[env_idx]
+
+        self._compact_replay_buffers[env_idx] = {
+            "metadata": self._build_compact_replay_metadata(env_idx, scenario),
+            "agent_frames": [],
+            "traffic_frames": [],
+        }
+
+    def _build_compact_replay_bundle(self, env_slot, summary):
+        if env_slot is None or env_slot < 0 or env_slot >= len(self._compact_replay_buffers):
+            return None
+
+        if self.capture_compact_replay_failures_only and not bool(summary.get("did_target_fail", 0)):
+            return None
+
+        buffer = self._compact_replay_buffers[env_slot]
+        if not buffer["agent_frames"]:
+            return None
+
+        metadata = dict(buffer["metadata"])
+        metadata.update(
+            {
+                "episode_length": int(summary.get("episode_length", len(buffer["agent_frames"]))),
+                "target_episode_length": int(summary.get("target_episode_length", 0) or 0),
+                "did_target_fail": float(summary.get("did_target_fail", 0)),
+                "did_target_collide": float(summary.get("did_target_collide", 0)),
+                "did_target_offroad": float(summary.get("did_target_offroad", 0)),
+            }
+        )
+        bundle = {
+            "schema_version": 1,
+            "metadata": metadata,
+            "agent_frames": buffer["agent_frames"],
+            "traffic_frames": buffer["traffic_frames"],
+        }
+        return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
 
     def _normalize_log_summaries(self, log_payload):
         if not log_payload:
@@ -661,11 +793,15 @@ class Drive(pufferlib.PufferEnv):
         self.truncations[:] = 0
         if self.capture_replay:
             self._initialize_replay_buffers()
+        if self.capture_compact_replay:
+            self._initialize_compact_replay_buffers()
         return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
         if self.capture_replay:
             self._capture_replay_step()
+        if self.capture_compact_replay:
+            self._capture_compact_replay_step()
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
@@ -673,17 +809,46 @@ class Drive(pufferlib.PufferEnv):
         if self.emit_completed_episodes:
             completed_episodes = binding.vec_pop_completed_episodes(self.c_envs)
             if completed_episodes:
+                scenarios_after_step = None
+                if self.capture_compact_replay:
+                    scenarios_after_step = self._normalize_scenarios(self.get_state())
                 if isinstance(completed_episodes, list):
                     tagged_summaries = []
                     for summary in completed_episodes:
                         if isinstance(summary, dict):
                             tagged_summary = dict(summary)
+                            env_slot = tagged_summary.get("env_slot")
+                            if env_slot is not None:
+                                tagged_summary["env_slot"] = int(env_slot)
+                            if self.capture_compact_replay:
+                                compact_replay_bundle = self._build_compact_replay_bundle(
+                                    tagged_summary.get("env_slot"), tagged_summary
+                                )
+                                if compact_replay_bundle is not None:
+                                    tagged_summary["compact_replay_bundle"] = compact_replay_bundle
+                                if scenarios_after_step is not None and tagged_summary.get("env_slot") is not None:
+                                    env_slot = tagged_summary["env_slot"]
+                                    if env_slot < len(scenarios_after_step):
+                                        self._reset_compact_replay_buffer(env_slot, scenarios_after_step[env_slot])
                             tagged_summary["summary_type"] = "completed_episode"
                             tagged_summaries.append(tagged_summary)
                     if tagged_summaries:
                         info.append(tagged_summaries)
                 elif isinstance(completed_episodes, dict):
                     tagged_summary = dict(completed_episodes)
+                    env_slot = tagged_summary.get("env_slot")
+                    if env_slot is not None:
+                        tagged_summary["env_slot"] = int(env_slot)
+                    if self.capture_compact_replay:
+                        compact_replay_bundle = self._build_compact_replay_bundle(
+                            tagged_summary.get("env_slot"), tagged_summary
+                        )
+                        if compact_replay_bundle is not None:
+                            tagged_summary["compact_replay_bundle"] = compact_replay_bundle
+                        if scenarios_after_step is not None and tagged_summary.get("env_slot") is not None:
+                            env_slot = tagged_summary["env_slot"]
+                            if env_slot < len(scenarios_after_step):
+                                self._reset_compact_replay_buffer(env_slot, scenarios_after_step[env_slot])
                     tagged_summary["summary_type"] = "completed_episode"
                     info.append(tagged_summary)
         log_payload = None
@@ -768,6 +933,8 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, self.random_seed)
                 if self.capture_replay:
                     self._initialize_replay_buffers()
+                if self.capture_compact_replay:
+                    self._initialize_compact_replay_buffers()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
         info.append({"agent_offsets": self.agent_offsets})
