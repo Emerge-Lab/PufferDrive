@@ -26,6 +26,7 @@ import subprocess
 import argparse
 import importlib
 import configparser
+import json
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -2382,6 +2383,19 @@ def _extract_episode_summaries(infos):
     return []
 
 
+def _extract_completed_episode_summaries(infos):
+    if not infos:
+        return []
+    if isinstance(infos, dict):
+        return [infos] if infos.get("summary_type") == "completed_episode" else []
+    if isinstance(infos, list):
+        summaries = []
+        for item in infos:
+            summaries.extend(_extract_completed_episode_summaries(item))
+        return summaries
+    return []
+
+
 def _get_eval_folder(args, adversarial=False):
     if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
         return args["eval_results_dir"]
@@ -2399,6 +2413,21 @@ def _get_eval_folder(args, adversarial=False):
 
     suffix = f"{args['eval_simulation']}_adversarial" if adversarial else args["eval_simulation"]
     return os.path.join("benchmark", experiment_name, model_name, suffix)
+
+
+def _get_failure_mining_folder(args):
+    model_path = args.get("load_model_path")
+    if model_path is None:
+        experiment_name = "manual"
+        model_name = "random_init"
+    else:
+        model_filename_with_ext = os.path.basename(model_path)
+        model_name = os.path.splitext(model_filename_with_ext)[0]
+        models_dir = os.path.dirname(model_path)
+        experiment_dir = os.path.dirname(models_dir)
+        experiment_name = os.path.basename(experiment_dir)
+
+    return os.path.join("failure_runs", experiment_name, model_name, args["eval_simulation"])
 
 
 def _get_random_eval_filename_suffix(args):
@@ -3213,6 +3242,190 @@ def _render_adversarial_buffered(
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
 
+def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=None, quiet=False):
+    t0 = time.time()
+
+    if args is None:
+        tmp_args = load_config(env_name)
+        model_path = tmp_args.get("load_model_path")
+        num_agents_eval = tmp_args["eval"]["num_agents"]
+        map_dir = tmp_args["eval"]["map_dir"]
+        target_num_episodes = tmp_args.get("num_episodes") or tmp_args["num_scenarios"]
+        eval_overrides = build_eval_overrides(
+            simulation_mode=tmp_args["eval_simulation"],
+            num_agents=num_agents_eval,
+            num_scenarios=target_num_episodes,
+            map_dir=map_dir,
+            maps=tmp_args.get("eval_maps"),
+            num_carla_maps=tmp_args.get("num_carla_maps", 8),
+            agents_per_scene=tmp_args.get("eval_agents_per_scene") or tmp_args["eval"].get("agents_per_scene", 30),
+            scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
+        )
+        args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+        args["num_episodes"] = target_num_episodes
+
+    if args.get("seed") is not None:
+        np.random.seed(args["seed"])
+        torch.manual_seed(args["seed"])
+        args["vec"]["seed"] = args["seed"]
+    else:
+        args["vec"]["seed"] = None
+
+    target_num_episodes = args.get("num_episodes") or args["num_scenarios"]
+    backend = args["vec"]["backend"]
+    if backend == "PufferEnv":
+        backend = "Multiprocessing"
+
+    num_workers = min(args["vec"]["num_envs"], target_num_episodes)
+    agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
+    if agents_per_scene is None:
+        agents_per_scene = args["env"].get("max_agents_per_env")
+
+    scenarios_per_worker = target_num_episodes // num_workers
+    remainder = target_num_episodes % num_workers
+    current_start = 0
+    env_kwargs_list = []
+    for worker_idx in range(num_workers):
+        worker_kwargs = copy.deepcopy(args["env"])
+        worker_kwargs["emit_completed_episodes"] = True
+        worker_kwargs["capture_replay"] = False
+        worker_kwargs["num_agents"] = int(agents_per_scene)
+        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
+        worker_kwargs["starting_map"] = current_start
+        worker_kwargs["num_eval_scenarios"] = worker_num_scenarios
+        env_kwargs_list.append(worker_kwargs)
+        current_start += worker_num_scenarios
+
+    args["vec"] = dict(
+        backend=backend,
+        num_envs=num_workers,
+        num_workers=num_workers,
+        batch_size=num_workers,
+        seed=args["vec"].get("seed"),
+    )
+
+    if not quiet:
+        print("Failure mining configuration:")
+        print(f"  Target episodes: {target_num_episodes}")
+        print(f"  Worker count: {num_workers}")
+        print(f"  Agents per scene: {agents_per_scene}")
+        print(f"  Scenario budget: {target_num_episodes}")
+        print(f"  Eval simulation: {args['eval_simulation']}")
+
+    if vecenv is None:
+        package = args["package"]
+        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+        env_module = importlib.import_module(module_name)
+        make_env = env_module.env_creator(env_name)
+        env_creators = [make_env] * num_workers
+        env_args = [[]] * num_workers
+        vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs_list, **args["vec"])
+
+    policy = policy or load_policy(args, vecenv, env_name)
+    target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
+    policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
+    num_agents = vecenv.observation_space.shape[0]
+    device = args["train"]["device"]
+
+    state = {}
+    target_state = {}
+    if args["train"]["use_rnn"]:
+        state = dict(
+            lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+        )
+        target_state = dict(
+            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+        )
+
+    output_folder = _get_failure_mining_folder(args)
+    os.makedirs(output_folder, exist_ok=True)
+    filename_suffix = _get_random_eval_filename_suffix(args)
+
+    vecenv.async_reset(args.get("seed"))
+    ob, _, _, _, infos, _, _ = vecenv.recv()
+    completed_episode_rows = []
+    with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
+        while len(completed_episode_rows) < target_num_episodes:
+            if args["train"]["use_rnn"]:
+                state = dict(
+                    lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
+                )
+                target_state = dict(
+                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                )
+
+            for _ in range(args["env"]["scenario_length"]):
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(ob).to(device)
+                    target_mask = _build_eval_target_mask(infos, vecenv, device)
+                    step_context = dict(reward=None, done=None, env_id=None, mask=None)
+                    actor_output = _route_actor_actions(
+                        ob_tensor,
+                        target_mask,
+                        policy_actor,
+                        step_context,
+                        policy_recurrent_state=state if args["train"]["use_rnn"] else None,
+                        target_actor=target_actor,
+                        target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
+                        deterministic=True,
+                    )
+                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+                if actor_output.clip_actions:
+                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+                ob, _, _, _, infos = vecenv.step(action)
+                summaries = _extract_completed_episode_summaries(infos)
+                if not summaries:
+                    continue
+
+                for summary in summaries:
+                    summary = dict(summary)
+                    summary.pop("summary_type", None)
+                    map_name = summary.get("map_name")
+                    if isinstance(map_name, str):
+                        summary["map_name"] = os.path.basename(map_name).split(".")[0]
+                    completed_episode_rows.append(summary)
+                    pbar.update(1)
+                    if len(completed_episode_rows) >= target_num_episodes:
+                        break
+
+                if len(completed_episode_rows) >= target_num_episodes:
+                    break
+
+    vecenv.close()
+
+    completed_episode_rows = completed_episode_rows[:target_num_episodes]
+    episodes_df = pd.DataFrame(completed_episode_rows)
+    episodes_csv_path = os.path.join(output_folder, f"episodes{filename_suffix}.csv")
+    episodes_df.to_csv(episodes_csv_path, index=False)
+
+    numeric_means = episodes_df.select_dtypes(include=[np.number]).mean(numeric_only=True).to_dict()
+    summary_path = os.path.join(output_folder, f"summary{filename_suffix}.json")
+    with open(summary_path, "w") as f:
+        json.dump(
+            {
+                "num_episodes": int(len(episodes_df)),
+                "elapsed_seconds": time.time() - t0,
+                "metrics_mean": {k: float(v) for k, v in numeric_means.items()},
+            },
+            f,
+            indent=2,
+        )
+
+    if not quiet:
+        print(f"\nWrote {len(episodes_df)} completed episodes to {episodes_csv_path}")
+        print(f"Wrote summary metrics to {summary_path}")
+        print(f"Total mining time: {time.time() - t0:.2f} seconds.")
+
+    return episodes_df
+
+
 def render_adversarial(
     env_name,
     args=None,
@@ -3486,6 +3699,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
     parser.add_argument(
         "--eval-agents-per-scene",
         type=int,
@@ -3612,7 +3826,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -3629,6 +3843,9 @@ def main():
         print("")
     elif mode == "render_adversarial":
         render_adversarial(env_name=env_name)
+        print("")
+    elif mode == "mine_failures":
+        mine_failures(env_name=env_name)
         print("")
     elif mode == "sweep":
         sweep(env_name=env_name)

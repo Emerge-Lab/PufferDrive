@@ -207,6 +207,7 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         capture_replay_keep_failed_only=True,
         capture_replay_always_keep_first=True,
+        emit_completed_episodes=False,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -315,6 +316,7 @@ class Drive(pufferlib.PufferEnv):
         self.capture_replay = bool(capture_replay)
         self.capture_replay_keep_failed_only = bool(capture_replay_keep_failed_only)
         self.capture_replay_always_keep_first = bool(capture_replay_always_keep_first)
+        self.emit_completed_episodes = bool(emit_completed_episodes)
         self._replay_buffers = []
         self._replay_batch_start = starting_map
         self.partner_features = binding.PARTNER_FEATURES
@@ -668,6 +670,22 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
+        if self.emit_completed_episodes:
+            completed_episodes = binding.vec_pop_completed_episodes(self.c_envs)
+            if completed_episodes:
+                if isinstance(completed_episodes, list):
+                    tagged_summaries = []
+                    for summary in completed_episodes:
+                        if isinstance(summary, dict):
+                            tagged_summary = dict(summary)
+                            tagged_summary["summary_type"] = "completed_episode"
+                            tagged_summaries.append(tagged_summary)
+                    if tagged_summaries:
+                        info.append(tagged_summaries)
+                elif isinstance(completed_episodes, dict):
+                    tagged_summary = dict(completed_episodes)
+                    tagged_summary["summary_type"] = "completed_episode"
+                    info.append(tagged_summary)
         log_payload = None
         log_summaries = []
         if self.tick % self.report_interval == 0:
