@@ -46,6 +46,7 @@ import pufferlib.sweep
 import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.viz
+import pufferlib.mining_viz
 
 import mediapy
 
@@ -2396,6 +2397,11 @@ def _extract_completed_episode_summaries(infos):
     return []
 
 
+def _render_compact_replay_job(job):
+    replay_path, output_path = job
+    return pufferlib.mining_viz.render_compact_replay_html(replay_path, output_path)
+
+
 def _get_eval_folder(args, adversarial=False):
     if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
         return args["eval_results_dir"]
@@ -3485,6 +3491,65 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     return episodes_df
 
 
+def render_mined_failures(env_name, args=None, quiet=False):
+    args = args or load_config(env_name)
+    episodes_csv_path = args.get("episodes_csv_path")
+    if not episodes_csv_path:
+        raise pufferlib.APIUsageError("render_mined_failures requires --episodes-csv-path")
+    if not os.path.exists(episodes_csv_path):
+        raise FileNotFoundError(f"Episodes CSV not found: {episodes_csv_path}")
+
+    episodes_df = pd.read_csv(episodes_csv_path)
+    if "has_replay" not in episodes_df.columns or "replay_path" not in episodes_df.columns:
+        raise pufferlib.APIUsageError(
+            "Episodes CSV does not contain replay columns. Re-run mine_failures with replay capture."
+        )
+
+    render_dir = os.path.join(
+        os.path.dirname(episodes_csv_path),
+        f"rendered_{os.path.splitext(os.path.basename(episodes_csv_path))[0]}",
+    )
+    os.makedirs(render_dir, exist_ok=True)
+
+    replay_rows = episodes_df[
+        episodes_df["has_replay"].fillna(0).astype(int).eq(1) & episodes_df["replay_path"].notna()
+    ].copy()
+    replay_rows = replay_rows[replay_rows["replay_path"].map(os.path.exists)]
+
+    jobs = []
+    render_lookup = {}
+    for row in replay_rows.to_dict(orient="records"):
+        episode_id = int(row["episode_id"])
+        output_path = os.path.join(render_dir, f"episode_{episode_id:06d}.html")
+        jobs.append((row["replay_path"], output_path))
+        render_lookup[episode_id] = os.path.relpath(output_path, render_dir)
+
+    render_workers = int(args.get("replay_render_workers", 0) or 0)
+    if jobs:
+        if render_workers > 0:
+            with ProcessPoolExecutor(max_workers=render_workers) as executor:
+                list(
+                    tqdm(
+                        executor.map(_render_compact_replay_job, jobs),
+                        total=len(jobs),
+                        desc="Rendering mining replays",
+                        disable=quiet,
+                    )
+                )
+        else:
+            for job in tqdm(jobs, total=len(jobs), desc="Rendering mining replays", disable=quiet):
+                _render_compact_replay_job(job)
+
+    index_path = os.path.join(render_dir, "index.html")
+    pufferlib.mining_viz.generate_failure_index(episodes_df, render_lookup, index_path)
+
+    if not quiet:
+        print(f"Rendered {len(jobs)} replay pages into {render_dir}")
+        print(f"Wrote failure index to {index_path}")
+
+    return render_dir
+
+
 def render_adversarial(
     env_name,
     args=None,
@@ -3759,6 +3824,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
+    parser.add_argument("--episodes-csv-path", type=str, default=None, help="Path to a mined episodes CSV")
     parser.add_argument(
         "--capture-mining-replay",
         type=int,
@@ -3897,7 +3963,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, render_mined_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -3917,6 +3983,9 @@ def main():
         print("")
     elif mode == "mine_failures":
         mine_failures(env_name=env_name)
+        print("")
+    elif mode == "render_mined_failures":
+        render_mined_failures(env_name=env_name)
         print("")
     elif mode == "sweep":
         sweep(env_name=env_name)
