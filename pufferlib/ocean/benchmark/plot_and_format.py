@@ -1525,6 +1525,16 @@ def generate_human_data_latex_table(
 ):
     """Companion table to plot_human_data_requirements.
 
+    Row layout:
+      1) SMART rows, sorted by increasing human data.
+      2) A single "best unregularized self-play" row (the unreg checkpoint at
+         50k sp_maps -- same checkpoint the plot's dashed baseline uses).
+      3) Regularized self-play rows, sorted by increasing anchor data.
+
+    Columns: self-play block (Coll., Off-road, Route prog.) and human-replay
+    block (Coll., At-fault, Off-road, Route prog.). Off-road columns are
+    emitted only if at least one row has non-NaN data for them.
+
     Top-3 values per metric column are highlighted with a three-tier pastel
     colormap sampled from the Depth Pro paper screenshot:
       - best   -> soft pastel green   (#6FCF6A)
@@ -1551,43 +1561,64 @@ def generate_human_data_latex_table(
 
     df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
 
-    # ── Aggregate regularized results ───────────────────────────────────────
+    # ── Aggregate per anchor_maps (both modes), keeping anchor=0 this time ──
     hr = df[df["mode"] == "scaling_hr_val"]
-    hr_agg = (
-        hr.groupby("anchor_maps")[["at_fault_collision_rate", "collision_rate", "route_progress"]]
-        .agg(["mean", "sem"])
-        .reset_index()
-    )
-    hr_agg.columns = [
-        "anchor_maps",
-        "hr_atfault_mean",
-        "hr_atfault_sem",
-        "hr_coll_mean",
-        "hr_coll_sem",
-        "hr_progress_mean",
-        "hr_progress_sem",
-    ]
+    hr_metrics = ["at_fault_collision_rate", "collision_rate", "route_progress"]
+    if "offroad_rate" in hr.columns:
+        hr_metrics.append("offroad_rate")
+    hr_agg = hr.groupby("anchor_maps")[hr_metrics].agg(["mean", "sem"]).reset_index()
+    hr_col_names = ["anchor_maps"]
+    hr_short = {
+        "at_fault_collision_rate": "hr_atfault",
+        "collision_rate": "hr_coll",
+        "route_progress": "hr_progress",
+        "offroad_rate": "hr_offroad",
+    }
+    for m in hr_metrics:
+        short = hr_short[m]
+        hr_col_names.extend([f"{short}_mean", f"{short}_sem"])
+    hr_agg.columns = hr_col_names
 
     sp = df[df["mode"] == "scaling_sp_val"]
-    sp_agg = sp.groupby("anchor_maps")[["collision_rate", "route_progress"]].agg(["mean", "sem"]).reset_index()
-    sp_agg.columns = [
-        "anchor_maps",
-        "sp_coll_mean",
-        "sp_coll_sem",
-        "sp_progress_mean",
-        "sp_progress_sem",
-    ]
+    sp_metrics = ["collision_rate", "route_progress"]
+    if "offroad_rate" in sp.columns:
+        sp_metrics.append("offroad_rate")
+    sp_agg = sp.groupby("anchor_maps")[sp_metrics].agg(["mean", "sem"]).reset_index()
+    sp_col_names = ["anchor_maps"]
+    sp_short = {
+        "collision_rate": "sp_coll",
+        "route_progress": "sp_progress",
+        "offroad_rate": "sp_offroad",
+    }
+    for m in sp_metrics:
+        short = sp_short[m]
+        sp_col_names.extend([f"{short}_mean", f"{short}_sem"])
+    sp_agg.columns = sp_col_names
 
-    reg_agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
-    reg_agg = reg_agg[reg_agg["anchor_maps"] > 0].copy()
+    full_agg = hr_agg.merge(sp_agg, on="anchor_maps", how="outer")
+
+    has_sp_offroad = "sp_offroad_mean" in full_agg.columns
+    has_hr_offroad = "hr_offroad_mean" in full_agg.columns
+
+    # Convert fractional rates → percentages
+    pct_cols = ["hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"]
+    if has_sp_offroad:
+        pct_cols.append("sp_offroad")
+    if has_hr_offroad:
+        pct_cols.append("hr_offroad")
+    for col in pct_cols:
+        full_agg[f"{col}_mean_pct"] = full_agg[f"{col}_mean"] * 100
+        full_agg[f"{col}_sem_pct"] = full_agg[f"{col}_sem"] * 100
+
+    # Split into unreg (anchor=0) and reg (anchor>0) for ordered emission.
+    unreg_agg = full_agg[full_agg["anchor_maps"] == 0].copy()
+    reg_agg = full_agg[full_agg["anchor_maps"] > 0].copy()
     reg_agg["minutes"] = reg_agg["anchor_maps"] * 9 / 60
-
-    for col in ("hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"):
-        reg_agg[f"{col}_mean_pct"] = reg_agg[f"{col}_mean"] * 100
-        reg_agg[f"{col}_sem_pct"] = reg_agg[f"{col}_sem"] * 100
 
     # ── Unified row structure ───────────────────────────────────────────────
     rows = []
+
+    # (1) SMART rows
     smart_sorted = SMART_DATA.sort_values("minutes").reset_index(drop=True)
     for _, r in smart_sorted.iterrows():
         rows.append(
@@ -1598,14 +1629,45 @@ def generate_human_data_latex_table(
                 "sp_coll_sem": np.nan,
                 "sp_progress_mean": r["sp_progress_pct"],
                 "sp_progress_sem": np.nan,
+                "sp_offroad_mean": r["sp_offroad_pct"] if "sp_offroad_pct" in r else np.nan,
+                "sp_offroad_sem": np.nan,
                 "hr_coll_mean": r["hr_coll_pct"],
                 "hr_coll_sem": np.nan,
                 "hr_atfault_mean": r["hr_atfault_pct"],
                 "hr_atfault_sem": np.nan,
                 "hr_progress_mean": r["hr_progress_pct"],
                 "hr_progress_sem": np.nan,
+                "hr_offroad_mean": r["hr_offroad_pct"] if "hr_offroad_pct" in r else np.nan,
+                "hr_offroad_sem": np.nan,
             }
         )
+
+    # (2) Single unregularized self-play row (the 50k unreg checkpoint).
+    # Human-data label is "---" because unreg uses no human demonstrations.
+    if not unreg_agg.empty:
+        u = unreg_agg.iloc[0]
+        rows.append(
+            {
+                "method": "unreg. self-play",
+                "minutes": np.nan,
+                "sp_coll_mean": u["sp_coll_mean_pct"],
+                "sp_coll_sem": u["sp_coll_sem_pct"],
+                "sp_progress_mean": u["sp_progress_mean_pct"],
+                "sp_progress_sem": u["sp_progress_sem_pct"],
+                "sp_offroad_mean": u["sp_offroad_mean_pct"] if has_sp_offroad else np.nan,
+                "sp_offroad_sem": u["sp_offroad_sem_pct"] if has_sp_offroad else np.nan,
+                "hr_coll_mean": u["hr_coll_mean_pct"],
+                "hr_coll_sem": u["hr_coll_sem_pct"],
+                "hr_atfault_mean": u["hr_atfault_mean_pct"],
+                "hr_atfault_sem": u["hr_atfault_sem_pct"],
+                "hr_progress_mean": u["hr_progress_mean_pct"],
+                "hr_progress_sem": u["hr_progress_sem_pct"],
+                "hr_offroad_mean": u["hr_offroad_mean_pct"] if has_hr_offroad else np.nan,
+                "hr_offroad_sem": u["hr_offroad_sem_pct"] if has_hr_offroad else np.nan,
+            }
+        )
+
+    # (3) Regularized rows, sorted by minutes
     reg_sorted = reg_agg.sort_values("minutes").reset_index(drop=True)
     for _, r in reg_sorted.iterrows():
         rows.append(
@@ -1616,22 +1678,30 @@ def generate_human_data_latex_table(
                 "sp_coll_sem": r["sp_coll_sem_pct"],
                 "sp_progress_mean": r["sp_progress_mean_pct"],
                 "sp_progress_sem": r["sp_progress_sem_pct"],
+                "sp_offroad_mean": r["sp_offroad_mean_pct"] if has_sp_offroad else np.nan,
+                "sp_offroad_sem": r["sp_offroad_sem_pct"] if has_sp_offroad else np.nan,
                 "hr_coll_mean": r["hr_coll_mean_pct"],
                 "hr_coll_sem": r["hr_coll_sem_pct"],
                 "hr_atfault_mean": r["hr_atfault_mean_pct"],
                 "hr_atfault_sem": r["hr_atfault_sem_pct"],
                 "hr_progress_mean": r["hr_progress_mean_pct"],
                 "hr_progress_sem": r["hr_progress_sem_pct"],
+                "hr_offroad_mean": r["hr_offroad_mean_pct"] if has_hr_offroad else np.nan,
+                "hr_offroad_sem": r["hr_offroad_sem_pct"] if has_hr_offroad else np.nan,
             }
         )
 
     table = pd.DataFrame(rows)
 
     def _fmt_minutes(minutes):
+        if pd.isna(minutes):
+            return "---"  # unreg row: no human demonstrations
         if minutes < 60:
             return f"{int(round(minutes))} min"
         hours = minutes / 60
-        if hours < 24:
+        # Keep "hours" format up through ~2 days so 30h reads as "30 hours",
+        # not "1.2 days". Only genuinely multi-day amounts use the days format.
+        if hours < 48:
             if hours == int(hours):
                 return f"{int(hours)} hours"
             return f"{hours:.1f} hours"
@@ -1643,16 +1713,31 @@ def generate_human_data_latex_table(
     table["human_data_label"] = table["minutes"].apply(_fmt_minutes)
 
     # ── Metric metadata ──────────────────────────────────────────────────────
-    metrics = [
+    # Off-road columns are included only if at least one row actually has
+    # non-NaN off-road data, otherwise they would render as a column of "---".
+    any_sp_offroad = "sp_offroad_mean" in table.columns and table["sp_offroad_mean"].notna().any()
+    any_hr_offroad = "hr_offroad_mean" in table.columns and table["hr_offroad_mean"].notna().any()
+
+    sp_metrics_list = [
         ("sp_coll_mean", "sp_coll_sem", "Coll. (\\%) $\\downarrow$", False),
-        ("sp_progress_mean", "sp_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
+    ]
+    if any_sp_offroad:
+        sp_metrics_list.append(("sp_offroad_mean", "sp_offroad_sem", "Off-road (\\%) $\\downarrow$", False))
+    sp_metrics_list.append(("sp_progress_mean", "sp_progress_sem", "Route prog. (\\%) $\\uparrow$", True))
+
+    hr_metrics_list = [
         ("hr_coll_mean", "hr_coll_sem", "Coll. (\\%) $\\downarrow$", False),
         ("hr_atfault_mean", "hr_atfault_sem", "At-fault (\\%) $\\downarrow$", False),
-        ("hr_progress_mean", "hr_progress_sem", "Route prog. (\\%) $\\uparrow$", True),
     ]
+    if any_hr_offroad:
+        hr_metrics_list.append(("hr_offroad_mean", "hr_offroad_sem", "Off-road (\\%) $\\downarrow$", False))
+    hr_metrics_list.append(("hr_progress_mean", "hr_progress_sem", "Route prog. (\\%) $\\uparrow$", True))
+
+    metrics = sp_metrics_list + hr_metrics_list
+    n_sp_cols = len(sp_metrics_list)
+    n_hr_cols = len(hr_metrics_list)
 
     # ── Top-3 ranking per column ────────────────────────────────────────────
-    # Exact colors sampled from the Depth Pro screenshot.
     TIER_COLORS = {
         1: "tierbest",  # #6FCF6A — soft pastel green
         2: "tiersecond",  # #DFF04B — soft chartreuse
@@ -1701,8 +1786,6 @@ def generate_human_data_latex_table(
         return f"\\cellcolor{{{TIER_COLORS[tier]}}} {text}"
 
     # ── Build LaTeX ──────────────────────────────────────────────────────────
-    n_sp_cols = 2
-    n_hr_cols = 3
     col_spec = "ll" + "|" + "r" * n_sp_cols + "|" + "r" * n_hr_cols
 
     lines = []
@@ -1720,8 +1803,7 @@ def generate_human_data_latex_table(
         r"self-play training maps. Top-3 values per column are highlighted "
         r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
         r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
-        r"SMART self-play metrics are not reported because SMART is a behaviour "
-        r"model rather than an RL agent.}"
+        r"The unregularized self-play row uses no human demonstrations.}"
     )
     lines.append(r"\label{tab:human_data_results}")
     lines.append(r"\resizebox{\textwidth}{!}{%")
@@ -1749,7 +1831,12 @@ def generate_human_data_latex_table(
         prev_method = row["method"]
 
         data_cell = row["human_data_label"]
-        method_cell = "SMART" if row["method"] == "SMART" else "reg. self-play"
+        if row["method"] == "SMART":
+            method_cell = "SMART"
+        elif row["method"] == "unreg. self-play":
+            method_cell = "unreg. self-play"
+        else:
+            method_cell = "reg. self-play (ours)"
 
         cells = [data_cell, method_cell]
         for mean_col, sem_col, _, _ in metrics:
@@ -2379,42 +2466,75 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
 
 
 def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
-    """Load WOSAC scores from the SMART baseline CSV.
+    """Load the SMART baseline CSV and pivot into per-num_maps rows.
 
     Returns a DataFrame with columns:
         num_maps, minutes,
-        wosac_score, wosac_kinematic_metrics,
-        wosac_interactive_metrics, wosac_map_based_metrics
+        hr_atfault_pct, hr_coll_pct, hr_offroad_pct, hr_progress_pct,
+        sp_coll_pct, sp_offroad_pct, sp_progress_pct
 
-    WOSAC metrics in the SMART CSV are only populated in the scaling_sp_val
-    mode (the former `all_agents` rows). Missing values stay NaN; returns an
-    empty (correctly-typed) DataFrame if the CSV is absent.
+    Missing metrics are left as NaN so downstream `dropna(subset=[col])` skips
+    them cleanly. Returns an empty (but correctly-typed) DataFrame if the CSV
+    isn't present.
     """
     cols = [
         "num_maps",
         "minutes",
-        "wosac_score",
-        "wosac_kinematic_metrics",
-        "wosac_interactive_metrics",
-        "wosac_map_based_metrics",
+        "hr_atfault_pct",
+        "hr_coll_pct",
+        "hr_offroad_pct",
+        "hr_progress_pct",
+        "sp_coll_pct",
+        "sp_offroad_pct",
+        "sp_progress_pct",
     ]
     if not os.path.exists(csv_path):
-        print(f"  {csv_path} not found — SMART WOSAC baseline will be omitted.")
+        print(f"  {csv_path} not found — SMART baseline will be omitted from the plot.")
         return pd.DataFrame(columns=cols)
 
     raw = pd.read_csv(csv_path)
-    raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
-    # WOSAC metrics only live in the scaling_sp_val rows.
-    raw = raw[raw["mode"] == "scaling_sp_val"].copy()
 
+    # Drop explicitly-excluded checkpoints (e.g. the pre-BC snapshot).
+    raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
+
+    # Map each remaining checkpoint to a num_maps value; drop anything we
+    # don't recognise rather than silently plotting it at NaN.
     raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
+    unknown = raw[raw["num_maps"].isna()]["checkpoint"].unique()
+    if len(unknown) > 0:
+        print(f"  Warning: SMART checkpoints with no num_maps mapping, skipping: {list(unknown)}")
     raw = raw.dropna(subset=["num_maps"]).copy()
     raw["num_maps"] = raw["num_maps"].astype(int)
 
-    metric_cols = [c for c in cols if c.startswith("wosac_") and c in raw.columns]
-    out = raw[["num_maps"] + metric_cols].sort_values("num_maps").reset_index(drop=True)
+    # Build HR and SP pivots from the columns that are actually present in the
+    # CSV. `offroad_rate` is optional and will only show up if recorded.
+    hr_wanted = {
+        "at_fault_collision_rate": "hr_atfault_pct",
+        "collision_rate": "hr_coll_pct",
+        "offroad_rate": "hr_offroad_pct",
+        "route_progress": "hr_progress_pct",
+    }
+    sp_wanted = {
+        "collision_rate": "sp_coll_pct",
+        "offroad_rate": "sp_offroad_pct",
+        "route_progress": "sp_progress_pct",
+    }
+
+    hr_raw = raw[raw["mode"] == "scaling_hr_val"]
+    hr_present = [c for c in hr_wanted if c in hr_raw.columns]
+    hr = hr_raw.set_index("num_maps")[hr_present].rename(columns={c: hr_wanted[c] for c in hr_present})
+
+    sp_raw = raw[raw["mode"] == "scaling_sp_val"]
+    sp_present = [c for c in sp_wanted if c in sp_raw.columns]
+    sp = sp_raw.set_index("num_maps")[sp_present].rename(columns={c: sp_wanted[c] for c in sp_present})
+
+    # Fractions → percentages.
+    out = hr.join(sp, how="outer") * 100
+    out = out.reset_index().sort_values("num_maps").reset_index(drop=True)
     out["minutes"] = out["num_maps"] * 9 / 60
-    # Re-index to the full expected column list so missing WOSAC columns become NaN.
+
+    # Re-index to the full expected column list so any metric the CSV is
+    # missing surfaces as NaN rather than raising a KeyError.
     for c in cols:
         if c not in out.columns:
             out[c] = np.nan
