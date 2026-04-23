@@ -3,6 +3,7 @@
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
+#define MY_COMPLETED_EPISODES
 #include "../env_binding.h"
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
@@ -1541,6 +1542,58 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
 
     return dict;
+}
+
+static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
+    if (my_log(dict, env, &summary->log, summary->n) != 0) {
+        return -1;
+    }
+
+    assign_to_dict(dict, "n", summary->n);
+    assign_to_dict(dict, "target_n", summary->target_n);
+    assign_to_dict(dict, "active_agent_count", summary->active_agent_count);
+    assign_to_dict(dict, "episode_timestep", summary->timestep);
+
+    if (summary->map_name[0] != '\0') {
+        PyObject *s = PyUnicode_FromString(summary->map_name);
+        if (!s)
+            return -1;
+        if (PyDict_SetItemString(dict, "map_name", s) < 0) {
+            Py_DECREF(s);
+            return -1;
+        }
+        Py_DECREF(s);
+    } else if (PyDict_SetItemString(dict, "map_name", Py_None) < 0) {
+        return -1;
+    }
+
+    if (summary->scenario_id[0] != '\0') {
+        PyObject *s = PyUnicode_FromString(summary->scenario_id);
+        if (!s)
+            return -1;
+        if (PyDict_SetItemString(dict, "scenario_id", s) < 0) {
+            Py_DECREF(s);
+            return -1;
+        }
+        Py_DECREF(s);
+    } else if (PyDict_SetItemString(dict, "scenario_id", Py_None) < 0) {
+        return -1;
+    }
+
+    if (summary->dataset_name[0] != '\0') {
+        PyObject *s = PyUnicode_FromString(summary->dataset_name);
+        if (!s)
+            return -1;
+        if (PyDict_SetItemString(dict, "dataset_name", s) < 0) {
+            Py_DECREF(s);
+            return -1;
+        }
+        Py_DECREF(s);
+    } else if (PyDict_SetItemString(dict, "dataset_name", Py_None) < 0) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {

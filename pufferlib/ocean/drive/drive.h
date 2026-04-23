@@ -147,6 +147,9 @@ typedef struct Agent Agent;
 typedef struct RoadMapElement RoadMapElement;
 typedef struct TrafficControlElement TrafficControlElement;
 
+#define COMPLETED_EPISODE_QUEUE_CAPACITY 256
+#define COMPLETED_EPISODE_MAP_NAME_SIZE 512
+
 struct Log {
     float n;
     float target_n;
@@ -197,6 +200,18 @@ struct Log {
     float multi_lane_score;
     float total_distance_travelled;
     float total_infractions;
+};
+
+typedef struct CompletedEpisodeSummary CompletedEpisodeSummary;
+struct CompletedEpisodeSummary {
+    Log log;
+    float n;
+    float target_n;
+    int active_agent_count;
+    int timestep;
+    char map_name[COMPLETED_EPISODE_MAP_NAME_SIZE];
+    char scenario_id[128];
+    char dataset_name[32];
 };
 
 typedef struct GridMapEntity GridMapEntity;
@@ -351,6 +366,10 @@ struct Drive {
     float road_obs_front_dist;
     float road_obs_behind_dist;
     float road_obs_side_dist;
+    CompletedEpisodeSummary completed_episode_queue[COMPLETED_EPISODE_QUEUE_CAPACITY];
+    int completed_episode_queue_head;
+    int completed_episode_queue_tail;
+    int completed_episode_queue_count;
 };
 
 // ========================================
@@ -377,6 +396,102 @@ static inline void apply_reward_terms(Drive *env, int i, const RewardTerms *term
     env->logs[i].episode_return_offroad += terms->offroad;
     env->logs[i].episode_return_drive += terms->drive;
     env->logs[i].episode_return_adversarial += terms->adversarial;
+}
+
+static inline void accumulate_log_totals(Log *dst, const Log *src) {
+    int num_keys = sizeof(Log) / sizeof(float);
+    for (int i = 0; i < num_keys; i++) {
+        ((float *)dst)[i] += ((const float *)src)[i];
+    }
+}
+
+static inline void normalize_log_for_output(Log *log, float n, float target_n) {
+    if (n <= 0.0f) {
+        return;
+    }
+
+    float episode_length = log->episode_length;
+    float target_episode_length = log->target_episode_length;
+    float episode_return = log->episode_return;
+    float episode_return_collision = log->episode_return_collision;
+    float episode_return_offroad = log->episode_return_offroad;
+    float episode_return_drive = log->episode_return_drive;
+    float episode_return_adversarial = log->episode_return_adversarial;
+    float target_episode_return = log->target_episode_return;
+    float target_episode_return_collision = log->target_episode_return_collision;
+    float target_episode_return_offroad = log->target_episode_return_offroad;
+    float target_episode_return_drive = log->target_episode_return_drive;
+    float did_target_collide = log->did_target_collide;
+    float did_target_offroad = log->did_target_offroad;
+    float did_target_fail = log->did_target_fail;
+
+    int num_keys = sizeof(Log) / sizeof(float);
+    for (int i = 0; i < num_keys; i++) {
+        ((float *)log)[i] /= n;
+    }
+
+    if (target_n > 0.0f) {
+        log->target_episode_length = target_episode_length / target_n;
+        log->target_episode_return = target_episode_return / target_n;
+        log->target_episode_return_collision = target_episode_return_collision / target_n;
+        log->target_episode_return_offroad = target_episode_return_offroad / target_n;
+        log->target_episode_return_drive = target_episode_return_drive / target_n;
+        log->did_target_collide = did_target_collide / target_n;
+        log->did_target_offroad = did_target_offroad / target_n;
+        log->did_target_fail = did_target_fail / target_n;
+    }
+
+    float adversary_n = n - target_n;
+    log->episode_length = adversary_n > 0.0f ? (episode_length - target_episode_length) / adversary_n : 0.0f;
+    log->episode_return = adversary_n > 0.0f ? (episode_return - target_episode_return) / adversary_n : 0.0f;
+    log->episode_return_collision =
+        adversary_n > 0.0f ? (episode_return_collision - target_episode_return_collision) / adversary_n : 0.0f;
+    log->episode_return_offroad =
+        adversary_n > 0.0f ? (episode_return_offroad - target_episode_return_offroad) / adversary_n : 0.0f;
+    log->episode_return_drive =
+        adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
+    log->episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+}
+
+static inline void enqueue_completed_episode_summary(Drive *env, const Log *episode_log) {
+    CompletedEpisodeSummary summary = {0};
+    summary.log = *episode_log;
+    summary.n = episode_log->n;
+    summary.target_n = episode_log->target_n;
+    summary.active_agent_count = env->active_agent_count;
+    summary.timestep = env->timestep;
+
+    if (env->map_name != NULL) {
+        snprintf(summary.map_name, sizeof(summary.map_name), "%s", env->map_name);
+    }
+    if (env->scenario_id[0] != '\0') {
+        snprintf(summary.scenario_id, sizeof(summary.scenario_id), "%s", env->scenario_id);
+    }
+    if (env->dataset_name[0] != '\0') {
+        snprintf(summary.dataset_name, sizeof(summary.dataset_name), "%s", env->dataset_name);
+    }
+
+    normalize_log_for_output(&summary.log, summary.n, summary.target_n);
+
+    if (env->completed_episode_queue_count == COMPLETED_EPISODE_QUEUE_CAPACITY) {
+        env->completed_episode_queue_head = (env->completed_episode_queue_head + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
+        env->completed_episode_queue_count--;
+    }
+
+    env->completed_episode_queue[env->completed_episode_queue_tail] = summary;
+    env->completed_episode_queue_tail = (env->completed_episode_queue_tail + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
+    env->completed_episode_queue_count++;
+}
+
+static inline int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *out_summary) {
+    if (env->completed_episode_queue_count <= 0) {
+        return 0;
+    }
+
+    *out_summary = env->completed_episode_queue[env->completed_episode_queue_head];
+    env->completed_episode_queue_head = (env->completed_episode_queue_head + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
+    env->completed_episode_queue_count--;
+    return 1;
 }
 static float compute_euclidean_distance(float x1, float y1, float x2, float y2) {
     float dx = x2 - x1;
@@ -2588,7 +2703,7 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
     return multiplier * (weighted_sum / total_weight);
 }
 
-static void add_log(Drive *env) {
+static void build_episode_log_contributions(Drive *env, Log *episode_log) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     const float progress_ref_speed = 10.0f;
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -2599,95 +2714,102 @@ static void add_log(Drive *env) {
         env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
 
         int offroad = env->logs[i].offroad_rate;
-        env->log.offroad_rate += offroad;
+        episode_log->offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
-        env->log.collision_rate += collided;
+        episode_log->collision_rate += collided;
         int red_light_violations = env->logs[i].red_light_violation_rate;
-        env->log.red_light_violation_rate += red_light_violations;
+        episode_log->red_light_violation_rate += red_light_violations;
         int total_infractions = (offroad || collided || red_light_violations) ? 1 : 0;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
-        env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
+        episode_log->avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_waypoints_reached = env->logs[i].num_waypoints_reached;
-        env->log.num_waypoints_reached += num_waypoints_reached;
+        episode_log->num_waypoints_reached += num_waypoints_reached;
         int num_goals_reached = env->logs[i].num_goals_reached;
-        env->log.num_goals_reached += num_goals_reached;
+        episode_log->num_goals_reached += num_goals_reached;
         // TODO: define better scoring criteria ?
         // FIXME
         if (num_goals_reached >= 4 && !agent->removed && !agent->stopped) {
-            env->log.score += 1.0f;
+            episode_log->score += 1.0f;
         }
         if (!offroad && !collided && !red_light_violations && num_waypoints_reached < 1) {
-            env->log.dnf_rate += 1.0f;
+            episode_log->dnf_rate += 1.0f;
         }
-        env->log.total_distance_travelled += agent->distance_since_spawn;
+        episode_log->total_distance_travelled += agent->distance_since_spawn;
         if (total_infractions > 0) {
-            env->log.total_infractions += 1.0f;
+            episode_log->total_infractions += 1.0f;
         }
         float displacement_error = env->logs[i].avg_displacement_error;
-        env->log.avg_displacement_error += displacement_error;
-        env->log.episode_length += env->logs[i].episode_length;
-        env->log.episode_return += env->logs[i].episode_return;
-        env->log.episode_return_collision += env->logs[i].episode_return_collision;
-        env->log.episode_return_offroad += env->logs[i].episode_return_offroad;
-        env->log.episode_return_drive += env->logs[i].episode_return_drive;
-        env->log.episode_return_adversarial += env->logs[i].episode_return_adversarial;
+        episode_log->avg_displacement_error += displacement_error;
+        episode_log->episode_length += env->logs[i].episode_length;
+        episode_log->episode_return += env->logs[i].episode_return;
+        episode_log->episode_return_collision += env->logs[i].episode_return_collision;
+        episode_log->episode_return_offroad += env->logs[i].episode_return_offroad;
+        episode_log->episode_return_drive += env->logs[i].episode_return_drive;
+        episode_log->episode_return_adversarial += env->logs[i].episode_return_adversarial;
         // Comfort and velocity metrics (normalized per timestep)
-        env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
-        env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
+        episode_log->comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
+        episode_log->velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
         // Lane metrics (normalized per timestep for average per episode)
-        env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
-        env->log.lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        episode_log->lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        episode_log->lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
-            env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
-            env->log.ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
-            env->log.wrong_way_distance += env->logs[i].wrong_way_distance;
-            env->log.speed_violation_sum += env->logs[i].speed_violation_sum;
-            env->log.progress_ratio += env->logs[i].progress_ratio;
-            env->log.comfort_score += env->logs[i].comfort_score;
-            env->log.ttc_violations += env->logs[i].ttc_violations;
-            env->log.ttc_samples += env->logs[i].ttc_samples;
-            env->log.multi_lane_time += env->logs[i].multi_lane_time;
-            env->log.multi_lane_score += env->logs[i].multi_lane_score;
+            episode_log->at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
+            episode_log->ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
+            episode_log->wrong_way_distance += env->logs[i].wrong_way_distance;
+            episode_log->speed_violation_sum += env->logs[i].speed_violation_sum;
+            episode_log->progress_ratio += env->logs[i].progress_ratio;
+            episode_log->comfort_score += env->logs[i].comfort_score;
+            episode_log->ttc_violations += env->logs[i].ttc_violations;
+            episode_log->ttc_samples += env->logs[i].ttc_samples;
+            episode_log->multi_lane_time += env->logs[i].multi_lane_time;
+            episode_log->multi_lane_score += env->logs[i].multi_lane_score;
 
             float wrong_dist = env->logs[i].wrong_way_distance;
             float direction_score = (wrong_dist <= 2.0f) ? 1.0f : (wrong_dist <= 6.0f) ? 0.5f : 0.0f;
-            env->log.driving_direction_score += direction_score;
+            episode_log->driving_direction_score += direction_score;
 
             float T = safe_timestep * env->dt;
             float speed_compliance = fmaxf(0.0f, 1.0f - env->logs[i].speed_violation_sum / fmaxf(T, 1e-3f));
-            env->log.speed_limit_compliance += speed_compliance;
+            episode_log->speed_limit_compliance += speed_compliance;
 
             float making_progress = (env->logs[i].progress_ratio > 0.2f) ? 1.0f : 0.0f;
-            env->log.making_progress_rate += making_progress;
-            env->log.puffer_score += calculate_puffer_score(&env->logs[i], safe_timestep, env->dt);
+            episode_log->making_progress_rate += making_progress;
+            episode_log->puffer_score += calculate_puffer_score(&env->logs[i], safe_timestep, env->dt);
         }
 
-        env->log.n += 1;
+        episode_log->n += 1;
     }
 
     if (env->active_agent_count > 0) {
-        env->log.target_n += 1.0f;
-        env->log.target_episode_length += env->logs[0].episode_length;
-        env->log.target_episode_return += env->logs[0].episode_return;
-        env->log.target_episode_return_collision += env->logs[0].episode_return_collision;
-        env->log.target_episode_return_offroad += env->logs[0].episode_return_offroad;
-        env->log.target_episode_return_drive += env->logs[0].episode_return_drive;
+        episode_log->target_n += 1.0f;
+        episode_log->target_episode_length += env->logs[0].episode_length;
+        episode_log->target_episode_return += env->logs[0].episode_return;
+        episode_log->target_episode_return_collision += env->logs[0].episode_return_collision;
+        episode_log->target_episode_return_offroad += env->logs[0].episode_return_offroad;
+        episode_log->target_episode_return_drive += env->logs[0].episode_return_drive;
 
         if (env->logs[0].collision_rate > 0.0f) {
-            env->log.did_target_collide += 1.0f;
-            env->log.did_target_fail += 1.0f;
+            episode_log->did_target_collide += 1.0f;
+            episode_log->did_target_fail += 1.0f;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {
-            env->log.did_target_offroad += 1.0f;
-            env->log.did_target_fail += 1.0f;
+            episode_log->did_target_offroad += 1.0f;
+            episode_log->did_target_fail += 1.0f;
         }
     }
 
     // Log composition counts per agent so vec_log averaging recovers the per-env value
-    env->log.expert_static_car_count += env->expert_static_agent_count;
-    env->log.static_car_count += env->static_agent_count;
+    episode_log->expert_static_car_count += env->expert_static_agent_count;
+    episode_log->static_car_count += env->static_agent_count;
+}
+
+static void add_log(Drive *env) {
+    Log episode_log = {0};
+    build_episode_log_contributions(env, &episode_log);
+    accumulate_log_totals(&env->log, &episode_log);
+    enqueue_completed_episode_summary(env, &episode_log);
 }
 
 // ========================================

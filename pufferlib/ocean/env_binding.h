@@ -4,6 +4,9 @@
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
+#ifdef MY_COMPLETED_EPISODES
+static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary);
+#endif
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
 #ifndef MY_SHARED
@@ -741,6 +744,47 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     }
 }
 
+#ifdef MY_COMPLETED_EPISODES
+static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *list = PyList_New(0);
+    if (!list) {
+        return NULL;
+    }
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        CompletedEpisodeSummary summary;
+        while (pop_completed_episode_summary(env, &summary)) {
+            PyObject *dict = PyDict_New();
+            if (!dict) {
+                Py_DECREF(list);
+                return NULL;
+            }
+
+            if (my_completed_episode_to_dict(dict, env, &summary) != 0) {
+                Py_DECREF(dict);
+                Py_DECREF(list);
+                return NULL;
+            }
+
+            if (PyList_Append(list, dict) < 0) {
+                Py_DECREF(dict);
+                Py_DECREF(list);
+                return NULL;
+            }
+            Py_DECREF(dict);
+        }
+    }
+
+    return list;
+}
+#endif
+
 static PyObject *vec_get(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1123,6 +1167,10 @@ static PyMethodDef methods[] = {
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
     {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
     {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
+#ifdef MY_COMPLETED_EPISODES
+    {"vec_pop_completed_episodes", vec_pop_completed_episodes, METH_VARARGS,
+     "Pop completed episode summaries from the vector of environments"},
+#endif
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
