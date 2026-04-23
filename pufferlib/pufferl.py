@@ -2402,6 +2402,26 @@ def _render_compact_replay_job(job):
     return pufferlib.mining_viz.render_compact_replay_html(replay_path, output_path)
 
 
+def _get_process_tree_rss_bytes():
+    process = psutil.Process(os.getpid())
+    try:
+        rss_bytes = process.memory_info().rss
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return 0
+
+    try:
+        children = process.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError):
+        return rss_bytes
+
+    for child in children:
+        try:
+            rss_bytes += child.memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return rss_bytes
+
+
 def _get_eval_folder(args, adversarial=False):
     if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
         return args["eval_results_dir"]
@@ -3342,6 +3362,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     worker_agent_budget = args["env"].get("num_agents")
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
+    mining_debug_interval = int(args.get("mining_debug_interval", 0) or 0)
 
     selected_map_names = _resolve_gigaflow_mining_maps(args)
     if not selected_map_names:
@@ -3354,6 +3375,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["capture_replay"] = False
         worker_kwargs["capture_compact_replay"] = capture_mining_replay
         worker_kwargs["capture_compact_replay_failures_only"] = capture_mining_replay_failures_only
+        worker_kwargs["compact_replay_debug_interval"] = mining_debug_interval
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0
@@ -3382,6 +3404,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"  Capture compact replay: {capture_mining_replay}")
         if capture_mining_replay:
             print(f"  Capture failures only: {capture_mining_replay_failures_only}")
+        if mining_debug_interval > 0:
+            print(f"  Debug interval: {mining_debug_interval}")
         print(f"  Eval simulation: {args['eval_simulation']}")
         print(f"  Worker map assignment: {', '.join(selected_map_names)}")
 
@@ -3415,6 +3439,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     ob, _, _, _, infos, _, _ = vecenv.recv()
     completed_episode_rows = []
     next_episode_id = 0
+    replay_files_written = 0
+    replay_bytes_written = 0
+    peak_process_tree_rss_bytes = _get_process_tree_rss_bytes()
     with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
         while len(completed_episode_rows) < target_num_episodes:
             with torch.no_grad():
@@ -3458,8 +3485,21 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                         replay_file.write(replay_bundle)
                     summary["has_replay"] = 1
                     summary["replay_path"] = replay_path
+                    replay_files_written += 1
+                    replay_bytes_written += len(replay_bundle)
                 completed_episode_rows.append(summary)
                 pbar.update(1)
+                if mining_debug_interval > 0 and len(completed_episode_rows) % mining_debug_interval == 0:
+                    process_tree_rss_bytes = _get_process_tree_rss_bytes()
+                    peak_process_tree_rss_bytes = max(peak_process_tree_rss_bytes, process_tree_rss_bytes)
+                    print(
+                        "[mine_failures_debug] "
+                        f"episodes={len(completed_episode_rows)} "
+                        f"replay_files={replay_files_written} "
+                        f"replay_mb={replay_bytes_written / (1024 * 1024):.2f} "
+                        f"rss_mb={process_tree_rss_bytes / (1024 * 1024):.2f} "
+                        f"peak_rss_mb={peak_process_tree_rss_bytes / (1024 * 1024):.2f}"
+                    )
                 if len(completed_episode_rows) >= target_num_episodes:
                     break
 
@@ -3477,6 +3517,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             {
                 "num_episodes": int(len(episodes_df)),
                 "elapsed_seconds": time.time() - t0,
+                "replay_files_written": int(replay_files_written),
+                "replay_megabytes_written": float(replay_bytes_written / (1024 * 1024)),
+                "peak_process_tree_rss_megabytes": float(peak_process_tree_rss_bytes / (1024 * 1024)),
                 "metrics_mean": {k: float(v) for k, v in numeric_means.items()},
             },
             f,
@@ -3825,6 +3868,12 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
     parser.add_argument("--episodes-csv-path", type=str, default=None, help="Path to a mined episodes CSV")
+    parser.add_argument(
+        "--mining-debug-interval",
+        type=int,
+        default=0,
+        help="Print mining and compact replay debug stats every N completed episodes / ticks",
+    )
     parser.add_argument(
         "--capture-mining-replay",
         type=int,

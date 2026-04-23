@@ -209,6 +209,7 @@ class Drive(pufferlib.PufferEnv):
         capture_replay_always_keep_first=True,
         capture_compact_replay=False,
         capture_compact_replay_failures_only=True,
+        compact_replay_debug_interval=0,
         emit_completed_episodes=False,
     ):
         self.dt = dt
@@ -320,10 +321,15 @@ class Drive(pufferlib.PufferEnv):
         self.capture_replay_always_keep_first = bool(capture_replay_always_keep_first)
         self.capture_compact_replay = bool(capture_compact_replay)
         self.capture_compact_replay_failures_only = bool(capture_compact_replay_failures_only)
+        self.compact_replay_debug_interval = int(compact_replay_debug_interval or 0)
         self.emit_completed_episodes = bool(emit_completed_episodes)
         self._replay_buffers = []
         self._compact_replay_buffers = []
         self._replay_batch_start = starting_map
+        self._compact_replay_emitted_count = 0
+        self._compact_replay_emitted_bytes = 0
+        self._compact_replay_discarded_count = 0
+        self._compact_replay_debug_last_tick = -1
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
@@ -617,6 +623,7 @@ class Drive(pufferlib.PufferEnv):
             return None
 
         if self.capture_compact_replay_failures_only and not bool(summary.get("did_target_fail", 0)):
+            self._compact_replay_discarded_count += 1
             return None
 
         buffer = self._compact_replay_buffers[env_slot]
@@ -639,7 +646,38 @@ class Drive(pufferlib.PufferEnv):
             "agent_frames": buffer["agent_frames"],
             "traffic_frames": buffer["traffic_frames"],
         }
-        return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
+        payload = zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
+        self._compact_replay_emitted_count += 1
+        self._compact_replay_emitted_bytes += len(payload)
+        return payload
+
+    def _maybe_print_compact_replay_debug(self):
+        if not self.capture_compact_replay or self.compact_replay_debug_interval <= 0:
+            return
+        if self.tick <= 0 or self.tick % self.compact_replay_debug_interval != 0:
+            return
+        if self._compact_replay_debug_last_tick == self.tick:
+            return
+        self._compact_replay_debug_last_tick = self.tick
+
+        total_agent_frames = sum(len(buffer["agent_frames"]) for buffer in self._compact_replay_buffers)
+        total_traffic_frames = sum(len(buffer["traffic_frames"]) for buffer in self._compact_replay_buffers)
+        max_agent_frames = max((len(buffer["agent_frames"]) for buffer in self._compact_replay_buffers), default=0)
+        approx_frame_objects = sum(
+            sum(len(frame) for frame in buffer["agent_frames"]) for buffer in self._compact_replay_buffers
+        )
+        print(
+            "[compact_replay_debug] "
+            f"tick={self.tick} "
+            f"envs={len(self._compact_replay_buffers)} "
+            f"total_agent_frames={total_agent_frames} "
+            f"total_traffic_frames={total_traffic_frames} "
+            f"max_agent_frames={max_agent_frames} "
+            f"approx_frame_objects={approx_frame_objects} "
+            f"emitted={self._compact_replay_emitted_count} "
+            f"discarded={self._compact_replay_discarded_count} "
+            f"emitted_mb={self._compact_replay_emitted_bytes / (1024 * 1024):.2f}"
+        )
 
     def _normalize_log_summaries(self, log_payload):
         if not log_payload:
@@ -805,6 +843,8 @@ class Drive(pufferlib.PufferEnv):
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
+        if self.capture_compact_replay:
+            self._maybe_print_compact_replay_debug()
         info = []
         if self.emit_completed_episodes:
             completed_episodes = binding.vec_pop_completed_episodes(self.c_envs)
