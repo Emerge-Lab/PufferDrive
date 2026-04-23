@@ -134,7 +134,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
     .layout {
       display: grid;
-      grid-template-columns: 340px minmax(0, 1fr);
+      grid-template-columns: 320px minmax(0, 1fr) 300px;
       min-height: 100vh;
       gap: 18px;
       padding: 18px;
@@ -167,6 +167,16 @@ HTML_TEMPLATE = """<!doctype html>
       display: grid;
       gap: 12px;
       margin-top: 16px;
+    }
+    .nav {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .nav a, .nav button {
+      text-align: center;
+      text-decoration: none;
     }
     .controls-row {
       display: grid;
@@ -204,6 +214,55 @@ HTML_TEMPLATE = """<!doctype html>
       grid-template-rows: auto minmax(0, 1fr);
       gap: 12px;
     }
+    .episode-list {
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
+      min-height: 0;
+    }
+    .episode-list h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+    .episode-scroll {
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+      padding-right: 4px;
+    }
+    .episode-link {
+      display: grid;
+      gap: 3px;
+      text-decoration: none;
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.72);
+    }
+    .episode-link.active {
+      border-color: rgba(18,97,160,0.35);
+      background: rgba(18,97,160,0.09);
+    }
+    .episode-link small {
+      color: var(--muted);
+    }
+    .badge {
+      justify-self: start;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(39,174,96,0.12);
+      color: #226a47;
+    }
+    .badge.fail {
+      background: rgba(214,69,69,0.12);
+      color: #8f2d2d;
+    }
     .viewer-head {
       display: flex;
       justify-content: space-between;
@@ -218,6 +277,11 @@ HTML_TEMPLATE = """<!doctype html>
       margin: 2px 0 0;
       color: var(--muted);
       font-size: 13px;
+    }
+    .viewer-tools {
+      display: flex;
+      gap: 8px;
+      align-items: center;
     }
     canvas {
       width: 100%;
@@ -242,6 +306,14 @@ HTML_TEMPLATE = """<!doctype html>
     .pill.ok {
       background: rgba(39,174,96,0.12);
       color: #226a47;
+    }
+    @media (max-width: 1280px) {
+      .layout {
+        grid-template-columns: 320px minmax(0, 1fr);
+      }
+      .episode-list {
+        grid-column: 1 / -1;
+      }
     }
   </style>
 </head>
@@ -268,6 +340,12 @@ HTML_TEMPLATE = """<!doctype html>
           <span id="speed-label">1.0x</span>
         </div>
       </div>
+      <div class="nav">
+        <a id="back-link" href="index.html">Back To Table</a>
+        <button id="focus-target" type="button">Focus Target</button>
+        <a id="prev-link" href="#">Previous</a>
+        <a id="next-link" href="#">Next</a>
+      </div>
       <div class="legend">
         <div class="legend-row"><span class="swatch" style="background: var(--target)"></span>Target</div>
         <div class="legend-row"><span class="swatch" style="background: var(--active)"></span>Active adversary</div>
@@ -281,10 +359,17 @@ HTML_TEMPLATE = """<!doctype html>
           <h2 class="viewer-title">Compact Replay</h2>
           <p class="viewer-subtitle">Lightweight mining viewer</p>
         </div>
-        <div id="status-pill" class="pill">Target failed</div>
+        <div class="viewer-tools">
+          <button id="reset-view" type="button">Reset View</button>
+          <div id="status-pill" class="pill">Target failed</div>
+        </div>
       </div>
       <canvas id="scene"></canvas>
     </main>
+    <aside class="panel episode-list">
+      <h3>Replay Episodes</h3>
+      <div class="episode-scroll" id="episode-list"></div>
+    </aside>
   </div>
   <script>
     const DATA = __DATA__;
@@ -296,8 +381,15 @@ HTML_TEMPLATE = """<!doctype html>
     const speedSlider = document.getElementById('speed-slider');
     const speedLabel = document.getElementById('speed-label');
     const statusPill = document.getElementById('status-pill');
+    const backLink = document.getElementById('back-link');
+    const prevLink = document.getElementById('prev-link');
+    const nextLink = document.getElementById('next-link');
+    const episodeList = document.getElementById('episode-list');
+    const focusTargetButton = document.getElementById('focus-target');
+    const resetViewButton = document.getElementById('reset-view');
 
     const metadata = DATA.metadata || {};
+    const navigation = DATA.navigation || {};
     const frames = DATA.agent_frames || [];
     const trafficFrames = DATA.traffic_frames || [];
     const roadElements = (DATA.map && DATA.map.road_elements) || [];
@@ -307,6 +399,18 @@ HTML_TEMPLATE = """<!doctype html>
     let playing = false;
     let lastTimestamp = 0;
     let speed = 1.0;
+    let camera = null;
+    let dragState = null;
+    let hitAgents = [];
+
+    function createDefaultCamera() {
+      const minX = bounds[0], minY = bounds[1], maxX = bounds[2], maxY = bounds[3];
+      return {
+        x: (minX + maxX) / 2,
+        y: (minY + maxY) / 2,
+        zoom: 1.0,
+      };
+    }
 
     function setMeta() {
       document.getElementById('title').innerText = metadata.map_name || 'Replay';
@@ -318,6 +422,19 @@ HTML_TEMPLATE = """<!doctype html>
       const failed = Number(metadata.did_target_fail || 0) > 0;
       statusPill.className = failed ? 'pill' : 'pill ok';
       statusPill.innerText = failed ? 'Target failed' : 'Target survived';
+      backLink.href = navigation.index_html || 'index.html';
+      prevLink.href = navigation.prev_html || '#';
+      nextLink.href = navigation.next_html || '#';
+      prevLink.style.pointerEvents = navigation.prev_html ? 'auto' : 'none';
+      nextLink.style.pointerEvents = navigation.next_html ? 'auto' : 'none';
+      prevLink.style.opacity = navigation.prev_html ? '1' : '0.4';
+      nextLink.style.opacity = navigation.next_html ? '1' : '0.4';
+      const items = navigation.episodes || [];
+      episodeList.innerHTML = items.map(item => {
+        const active = item.episode_id === metadata.episode_id ? 'episode-link active' : 'episode-link';
+        const badge = item.did_target_fail ? '<span class="badge fail">fail</span>' : '<span class="badge">ok</span>';
+        return `<a class="${active}" href="${item.href}">${badge}<strong>Episode ${item.episode_id}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
+      }).join('');
     }
 
     function resizeCanvas() {
@@ -337,14 +454,44 @@ HTML_TEMPLATE = """<!doctype html>
       const usableH = canvas.clientHeight - pad * 2;
       const spanX = Math.max(maxX - minX, 1);
       const spanY = Math.max(maxY - minY, 1);
-      const scale = Math.min(usableW / spanX, usableH / spanY);
-      const offsetX = pad + (usableW - spanX * scale) / 2;
-      const offsetY = pad + (usableH - spanY * scale) / 2;
+      const baseScale = Math.min(usableW / spanX, usableH / spanY);
+      const scale = baseScale * (camera ? camera.zoom : 1.0);
+      const centerX = canvas.clientWidth / 2;
+      const centerY = canvas.clientHeight / 2;
       return {
-        x: offsetX + (x - minX) * scale,
-        y: canvas.clientHeight - (offsetY + (y - minY) * scale),
+        x: centerX + (x - (camera ? camera.x : (minX + maxX) / 2)) * scale,
+        y: centerY - (y - (camera ? camera.y : (minY + maxY) / 2)) * scale,
         scale,
       };
+    }
+
+    function canvasToWorld(x, y) {
+      const minX = bounds[0], minY = bounds[1], maxX = bounds[2], maxY = bounds[3];
+      const pad = 22;
+      const usableW = canvas.clientWidth - pad * 2;
+      const usableH = canvas.clientHeight - pad * 2;
+      const spanX = Math.max(maxX - minX, 1);
+      const spanY = Math.max(maxY - minY, 1);
+      const baseScale = Math.min(usableW / spanX, usableH / spanY);
+      const scale = baseScale * (camera ? camera.zoom : 1.0);
+      const centerX = canvas.clientWidth / 2;
+      const centerY = canvas.clientHeight / 2;
+      return {
+        x: (x - centerX) / scale + camera.x,
+        y: (centerY - y) / scale + camera.y,
+      };
+    }
+
+    function findTarget(frame) {
+      return (frame || []).find(agent => agent.is_target);
+    }
+
+    function focusOnAgent(agent, zoom = 2.5) {
+      if (!agent) return;
+      camera.x = agent.x;
+      camera.y = agent.y;
+      camera.zoom = zoom;
+      draw();
     }
 
     function drawRoads() {
@@ -429,10 +576,18 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fill();
       ctx.restore();
+
+      hitAgents.push({
+        agent,
+        x: center.x,
+        y: center.y,
+        radius: Math.max(length, width) * 0.7,
+      });
     }
 
     function draw() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      hitAgents = [];
       drawRoads();
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
@@ -468,8 +623,49 @@ HTML_TEMPLATE = """<!doctype html>
       speed = Number(e.target.value || 6) / 6;
       speedLabel.innerText = `${speed.toFixed(1)}x`;
     });
+    focusTargetButton.addEventListener('click', () => focusOnAgent(findTarget(frames[frameIndex])));
+    resetViewButton.addEventListener('click', () => {
+      camera = createDefaultCamera();
+      draw();
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      dragState = { x: e.offsetX, y: e.offsetY, cameraX: camera.x, cameraY: camera.y };
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      if (!dragState) return;
+      const before = canvasToWorld(dragState.x, dragState.y);
+      const now = canvasToWorld(e.offsetX, e.offsetY);
+      camera.x = dragState.cameraX + (before.x - now.x);
+      camera.y = dragState.cameraY + (before.y - now.y);
+      draw();
+    });
+    window.addEventListener('mouseup', () => { dragState = null; });
+    canvas.addEventListener('mouseleave', () => { dragState = null; });
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const pointerBefore = canvasToWorld(e.offsetX, e.offsetY);
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.9;
+      camera.zoom = Math.min(20, Math.max(0.4, camera.zoom * zoomFactor));
+      const pointerAfter = canvasToWorld(e.offsetX, e.offsetY);
+      camera.x += pointerBefore.x - pointerAfter.x;
+      camera.y += pointerBefore.y - pointerAfter.y;
+      draw();
+    }, { passive: false });
+    canvas.addEventListener('click', (e) => {
+      const x = e.offsetX;
+      const y = e.offsetY;
+      for (const hit of hitAgents) {
+        const dx = x - hit.x;
+        const dy = y - hit.y;
+        if (dx * dx + dy * dy <= hit.radius * hit.radius) {
+          focusOnAgent(hit.agent, hit.agent.is_target ? 3.0 : 2.2);
+          break;
+        }
+      }
+    });
 
     setMeta();
+    camera = createDefaultCamera();
     speedLabel.innerText = `${speed.toFixed(1)}x`;
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
@@ -479,10 +675,11 @@ HTML_TEMPLATE = """<!doctype html>
 """
 
 
-def render_compact_replay_html(replay_path, output_path):
+def render_compact_replay_html(replay_path, output_path, render_context=None):
     replay_bundle = load_compact_replay(replay_path)
     payload = _build_render_payload(replay_bundle)
     payload["metadata"]["episode_id"] = payload["metadata"].get("episode_id", Path(output_path).stem)
+    payload["navigation"] = render_context or {}
     title = f"{payload['metadata'].get('map_name', 'Replay')} | {payload['metadata'].get('scenario_id', 'episode')}"
     html = HTML_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", json.dumps(payload, separators=(",", ":")))
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
