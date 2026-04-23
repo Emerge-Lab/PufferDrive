@@ -14,7 +14,18 @@ from pufferlib.ocean.drive.drive import Drive
 
 def load_compact_replay(path):
     with open(path, "rb") as f:
-        return pickle.loads(zlib.decompress(f.read()))
+        replay_bundle = pickle.loads(zlib.decompress(f.read()))
+
+    schema_version = int(replay_bundle.get("schema_version", 0) or 0)
+    if schema_version != 2:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=2.")
+
+    required_top_level = ("metadata", "agent_arrays", "traffic_arrays")
+    missing_top_level = [key for key in required_top_level if key not in replay_bundle]
+    if missing_top_level:
+        raise ValueError(f"Compact replay is missing required fields: {', '.join(missing_top_level)}")
+
+    return replay_bundle
 
 
 def _repo_root():
@@ -41,6 +52,69 @@ def _normalize_scenario(scenario):
     if isinstance(scenario, list):
         return scenario[0] if scenario else {}
     return scenario or {}
+
+
+def _ensure_python_scalar(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _materialize_agent_frames(replay_bundle):
+    agent_arrays = replay_bundle["agent_arrays"]
+    valid = agent_arrays["valid"]
+
+    frames = []
+    num_frames = int(valid.shape[0]) if hasattr(valid, "shape") and valid.ndim > 0 else 0
+    for frame_idx in range(num_frames):
+        frame = []
+        frame_valid = valid[frame_idx]
+        for slot_idx in np.flatnonzero(frame_valid):
+            frame.append(
+                {
+                    "id": int(agent_arrays["id"][frame_idx, slot_idx]),
+                    "type": int(agent_arrays["type"][frame_idx, slot_idx]),
+                    "is_target": bool(agent_arrays["is_target"][frame_idx, slot_idx]),
+                    "active": bool(agent_arrays["active"][frame_idx, slot_idx]),
+                    "stopped": bool(agent_arrays["stopped"][frame_idx, slot_idx]),
+                    "x": float(agent_arrays["x"][frame_idx, slot_idx]),
+                    "y": float(agent_arrays["y"][frame_idx, slot_idx]),
+                    "z": float(agent_arrays["z"][frame_idx, slot_idx]),
+                    "heading": float(agent_arrays["heading"][frame_idx, slot_idx]),
+                    "length": float(agent_arrays["length"][frame_idx, slot_idx]),
+                    "width": float(agent_arrays["width"][frame_idx, slot_idx]),
+                }
+            )
+        frames.append(frame)
+    return frames
+
+
+def _materialize_traffic_frames(replay_bundle):
+    traffic_arrays = replay_bundle["traffic_arrays"]
+    valid = traffic_arrays["valid"]
+
+    frames = []
+    num_frames = int(valid.shape[0]) if hasattr(valid, "shape") and valid.ndim > 0 else 0
+    for frame_idx in range(num_frames):
+        frame = []
+        frame_valid = valid[frame_idx]
+        for slot_idx in np.flatnonzero(frame_valid):
+            frame.append(
+                {
+                    "type": int(traffic_arrays["type"][frame_idx, slot_idx]),
+                    "state": int(traffic_arrays["state"][frame_idx, slot_idx]),
+                    "stop_line": [float(coord) for coord in traffic_arrays["stop_line"][frame_idx, slot_idx].tolist()],
+                }
+            )
+        frames.append(frame)
+    return frames
+
+
+def _materialize_replay_bundle(replay_bundle):
+    materialized = dict(replay_bundle)
+    materialized["agent_frames"] = _materialize_agent_frames(replay_bundle)
+    materialized["traffic_frames"] = _materialize_traffic_frames(replay_bundle)
+    return materialized
 
 
 @lru_cache(maxsize=16)
@@ -95,14 +169,15 @@ def _compute_bounds(map_static, replay_bundle):
 
 
 def _build_render_payload(replay_bundle):
-    metadata = dict(replay_bundle.get("metadata", {}))
+    materialized_bundle = _materialize_replay_bundle(replay_bundle)
+    metadata = {key: _ensure_python_scalar(value) for key, value in materialized_bundle.get("metadata", {}).items()}
     map_static = load_map_static(metadata["map_path"])
     return {
         "metadata": metadata,
         "map": map_static,
-        "bounds": _compute_bounds(map_static, replay_bundle),
-        "agent_frames": replay_bundle.get("agent_frames", []),
-        "traffic_frames": replay_bundle.get("traffic_frames", []),
+        "bounds": _compute_bounds(map_static, materialized_bundle),
+        "agent_frames": materialized_bundle.get("agent_frames", []),
+        "traffic_frames": materialized_bundle.get("traffic_frames", []),
     }
 
 
