@@ -3758,93 +3758,93 @@ static void compute_metrics(Drive *env, int agent_idx) {
     int current_lane_idx = agent->current_lane_idx;
     if (current_lane_idx != -1 && env->road_elements[current_lane_idx].speed_limit > 0)
         target_speed = env->road_elements[current_lane_idx].speed_limit;
-}
-// Binary overspeed metric, 1.0 if overspeeding by more than 2 m/s
-agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + 2.0f) ? 1.0f : 0.0f;
-if (env->compute_eval_metrics) {
-    agent->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
-}
 
-// Velocity metric (GIGAFLOW) - forward progress aligned with lane
-const float VELOCITY_MIN_SPEED = 2.5f; // m/s
-if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && best_candidate_entity_idx != -1) {
-    float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
-    agent->metrics_array[VELOCITY_PROGRESS_IDX] = fmaxf(cos_theta, 0.0f);
-    if (env->compute_eval_metrics && cos_theta < 0.0f) {
-        agent->wrong_way_distance += agent->sim_speed_signed * env->dt;
-    }
-} else {
-    agent->metrics_array[VELOCITY_PROGRESS_IDX] = 0.0f;
-}
-
-// Comfort metric (GIGAFLOW)
-const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
-const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
-int accel_violation =
-    (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
-int jerk_violation =
-    (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
-agent->metrics_array[COMFORT_VIOLATION_IDX] = (float)(accel_violation + jerk_violation);
-
-// Handle terminal events - NOTE: move it elsewhere?
-// IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
-// Order matters: offroad > collision > red_light.
-
-// Priority 1: Handle offroad
-if (is_offroad) {
-    agent->metrics_array[OFFROAD_IDX] = 1.0f;
-    if (env->offroad_behavior == STOP_AGENT && !agent->stopped) { // Stop
-        agent->stopped = 1;
-    } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
-        agent->removed = 1;
-    }
-    return; // early return: no other terminal flags set when offroad
-}
-
-// Priority 2: Handle vehicle collision
-agent->collided_with_agent_idx = -1;
-int car_collided_with_index = collision_check(env, agent_idx);
-
-if (car_collided_with_index != -1) {
-    agent->metrics_array[COLLISION_IDX] = 1.0f;
-    agent->collided_with_agent_idx = car_collided_with_index;
-    // Track at-fault collisions for evaluation metrics.
-    if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
-        agent->at_fault_collision = 1;
-        agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
-    }
-    if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
-        agent->stopped = 1;
-    } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
-        agent->removed = 1;
+    // Binary overspeed metric, 1.0 if overspeeding by more than 2 m/s
+    agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + 2.0f) ? 1.0f : 0.0f;
+    if (env->compute_eval_metrics) {
+        agent->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
     }
 
-    return; // early return: red_light not checked after collision
-}
-
-// Priority 3: Handle red light violation
-if (env->max_traffic_control_observations && check_red_light_violation(env, agent_idx)) {
-    agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
-    if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
-        agent->stopped = 1;
-    } else if (env->traffic_light_behavior == REMOVE_AGENT && !agent->removed) {
-        agent->removed = 1;
+    // Velocity metric (GIGAFLOW) - forward progress aligned with lane
+    const float VELOCITY_MIN_SPEED = 2.5f; // m/s
+    if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && best_candidate_entity_idx != -1) {
+        float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
+        agent->metrics_array[VELOCITY_PROGRESS_IDX] = fmaxf(cos_theta, 0.0f);
+        if (env->compute_eval_metrics && cos_theta < 0.0f) {
+            agent->wrong_way_distance += agent->sim_speed_signed * env->dt;
+        }
+    } else {
+        agent->metrics_array[VELOCITY_PROGRESS_IDX] = 0.0f;
     }
 
-    return; // early return: no goal reaching when red light violation
-}
+    // Comfort metric (GIGAFLOW)
+    const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
+    const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
+    int accel_violation =
+        (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
+    int jerk_violation =
+        (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
+    agent->metrics_array[COMFORT_VIOLATION_IDX] = (float)(accel_violation + jerk_violation);
 
-float distance_to_goal =
-    compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
-float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
+    // Handle terminal events - NOTE: move it elsewhere?
+    // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
+    // Order matters: offroad > collision > red_light.
 
-// Goal reaching
-if (distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
-    agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
-    agent->current_goal_idx++;
-}
+    // Priority 1: Handle offroad
+    if (is_offroad) {
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) { // Stop
+            agent->stopped = 1;
+        } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
+            agent->removed = 1;
+        }
+        return; // early return: no other terminal flags set when offroad
+    }
 
-return;
+    // Priority 2: Handle vehicle collision
+    agent->collided_with_agent_idx = -1;
+    int car_collided_with_index = collision_check(env, agent_idx);
+
+    if (car_collided_with_index != -1) {
+        agent->metrics_array[COLLISION_IDX] = 1.0f;
+        agent->collided_with_agent_idx = car_collided_with_index;
+        // Track at-fault collisions for evaluation metrics.
+        if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+            agent->at_fault_collision = 1;
+            agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
+        }
+        if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
+            agent->stopped = 1;
+        } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
+            agent->removed = 1;
+        }
+
+        return; // early return: red_light not checked after collision
+    }
+
+    // Priority 3: Handle red light violation
+    if (env->max_traffic_control_observations && check_red_light_violation(env, agent_idx)) {
+        agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
+        if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
+            agent->stopped = 1;
+        } else if (env->traffic_light_behavior == REMOVE_AGENT && !agent->removed) {
+            agent->removed = 1;
+        }
+
+        return; // early return: no goal reaching when red light violation
+    }
+
+    float distance_to_goal =
+        compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
+    float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
+
+    // Goal reaching
+    if (distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+        agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
+        agent->current_goal_idx++;
+    }
+
+    return;
 }
 
 static RewardTerms compute_rewards(Drive *env, int i) {
