@@ -1738,7 +1738,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         return tuple;
     }
 
-    // REPLAY mode: use SharedMapData cache for agent counting (avoids per-env binary load)
+    // REPLAY mode - existing logic with max_agents_per_env cap
     int total_agent_count = 0;
     int map_id = 0;
     int env_count = 0;
@@ -1759,63 +1759,62 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         if (eval_mode) {
             map_id = s_map_counter % num_maps;
-            s_map_counter += 1;
+            s_map_counter += 1; // This increments towards end_map_index
         } else {
             map_id = rand() % num_maps;
         }
 
-        // Lazily populate the shared map cache for this map_id
-        if (g_map_cache[map_id] == NULL) {
-            const char *map_file_path = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
-            g_map_cache[map_id] =
-                create_shared_map_data(map_file_path, road_obs_front_dist, road_obs_behind_dist, road_obs_side_dist);
-        }
-        SharedMapData *shared = g_map_cache[map_id];
+        const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
 
-        // Count active agents using a lightweight temp env (no binary reload).
-        // Shallow-copy the Agent structs so set_active_agents cannot mutate
-        // shared->template_agents (it writes active_agent and mark_as_expert).
-        // Do NOT call free_agent() on the copies — trajectory/route pointers
-        // inside still belong to shared and must not be freed here.
-        Agent *temp_agents = (Agent *)malloc(shared->num_total_agents * sizeof(Agent));
-        memcpy(temp_agents, shared->template_agents, shared->num_total_agents * sizeof(Agent));
-        Drive temp_env = {0};
-        temp_env.init_mode = init_mode;
-        temp_env.control_mode = control_mode;
-        temp_env.simulation_mode = simulation_mode;
-        temp_env.init_steps = init_steps;
-        temp_env.num_max_agents = max_agents_per_env;
-        temp_env.goal_radius = goal_radius;
-        temp_env.agents = temp_agents;
-        temp_env.num_total_agents = shared->num_total_agents;
-        temp_env.grid_map = shared->grid_map;
-        set_active_agents(&temp_env);
-        int active_count = temp_env.active_agent_count;
-        free(temp_env.active_agent_indices);
-        free(temp_env.static_agent_indices);
-        free(temp_env.expert_static_agent_indices);
-        free(temp_agents);
+        Drive *env = calloc(1, sizeof(Drive));
+        env->init_mode = init_mode;
+        env->control_mode = control_mode;
+        env->simulation_mode = simulation_mode;
+        env->init_steps = init_steps;
+        env->num_max_agents = max_agents_per_env;
+        env->goal_radius = goal_radius;
+        load_map_binary(map_file, env);
 
-        // Skip map if it has no controllable agents
-        if (active_count == 0) {
+        set_active_agents(env);
+
+        // Skip map if it doesn't contain any controllable agents
+        if (env->active_agent_count == 0) {
             maps_checked++;
-            if (maps_checked >= num_maps) {
-                Py_DECREF(agent_offsets);
-                Py_DECREF(map_ids);
-                char error_msg[256];
-                snprintf(error_msg, sizeof(error_msg),
-                         "No maps with controllable agents found after checking all %d maps.", num_maps);
-                PyErr_SetString(PyExc_ValueError, error_msg);
-                return NULL;
-            }
+            for (int j = 0; j < env->num_total_agents; j++)
+                free_agent(&env->agents[j]);
+            for (int j = 0; j < env->num_road_elements; j++)
+                free_road_element(&env->road_elements[j]);
+            for (int j = 0; j < env->num_traffic_elements; j++)
+                free_traffic_element(&env->traffic_elements[j]);
+            free(env->agents);
+            free(env->road_elements);
+            free(env->traffic_elements);
+            free(env->active_agent_indices);
+            free(env->static_agent_indices);
+            free(env->expert_static_agent_indices);
+            free(env);
             continue;
         }
 
-        // Store map_id and agent offset
+        // Store map_id
         PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
+        // Store agent offset
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
-        total_agent_count += active_count;
+        total_agent_count += env->active_agent_count;
         env_count++;
+        for (int j = 0; j < env->num_total_agents; j++)
+            free_agent(&env->agents[j]);
+        for (int j = 0; j < env->num_road_elements; j++)
+            free_road_element(&env->road_elements[j]);
+        for (int j = 0; j < env->num_traffic_elements; j++)
+            free_traffic_element(&env->traffic_elements[j]);
+        free(env->agents);
+        free(env->road_elements);
+        free(env->traffic_elements);
+        free(env->active_agent_indices);
+        free(env->static_agent_indices);
+        free(env->expert_static_agent_indices);
+        free(env);
     }
 
     if (total_agent_count >= num_agents) {
