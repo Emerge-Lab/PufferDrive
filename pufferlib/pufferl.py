@@ -3559,34 +3559,33 @@ def render_mined_failures(env_name, args=None, quiet=False):
     replay_records = []
     for row in replay_rows.to_dict(orient="records"):
         episode_id = int(row["episode_id"])
-        replay_records.append(
-            {
-                "episode_id": episode_id,
-                "replay_path": row["replay_path"],
-                "href": render_lookup[episode_id],
-                "map_name": row.get("map_name"),
-                "scenario_id": row.get("scenario_id"),
-                "did_target_fail": int(bool(row.get("did_target_fail", 0))),
-            }
-        )
+        record = dict(row)
+        record["episode_id"] = episode_id
+        record["replay_path"] = row["replay_path"]
+        record["href"] = render_lookup[episode_id]
+        record["did_target_fail"] = int(bool(row.get("did_target_fail", 0)))
+        replay_records.append(record)
     replay_records.sort(key=lambda item: item["episode_id"])
 
     for idx, record in enumerate(replay_records):
         output_path = os.path.join(render_dir, f"episode_{record['episode_id']:06d}.html")
         render_context = {
-            "index_html": "index.html",
-            "prev_html": replay_records[idx - 1]["href"] if idx > 0 else None,
-            "next_html": replay_records[idx + 1]["href"] if idx + 1 < len(replay_records) else None,
-            "episodes": [
-                {
-                    "episode_id": item["episode_id"],
-                    "href": item["href"],
-                    "map_name": item.get("map_name"),
-                    "scenario_id": item.get("scenario_id"),
-                    "did_target_fail": item.get("did_target_fail", 0),
-                }
-                for item in replay_records
-            ],
+            "navigation": {
+                "index_html": "index.html",
+                "prev_html": replay_records[idx - 1]["href"] if idx > 0 else None,
+                "next_html": replay_records[idx + 1]["href"] if idx + 1 < len(replay_records) else None,
+                "episodes": [
+                    {
+                        "episode_id": item["episode_id"],
+                        "href": item["href"],
+                        "map_name": item.get("map_name"),
+                        "scenario_id": item.get("scenario_id"),
+                        "did_target_fail": item.get("did_target_fail", 0),
+                    }
+                    for item in replay_records
+                ],
+            },
+            "summary": dict(record),
         }
         jobs.append((record["replay_path"], output_path, render_context))
 

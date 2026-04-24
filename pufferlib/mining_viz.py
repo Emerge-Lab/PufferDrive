@@ -60,6 +60,29 @@ def _ensure_python_scalar(value):
     return value
 
 
+def _impact_zone_label(value):
+    zone_code = int(float(value or 0))
+    return {
+        0: "none",
+        1: "front",
+        2: "rear",
+        3: "left",
+        4: "right",
+    }.get(zone_code, f"unknown[{zone_code}]")
+
+
+def _format_summary_for_render(summary):
+    if not summary:
+        return {}
+
+    formatted = {key: _ensure_python_scalar(value) for key, value in summary.items()}
+    if "target_collision_impact_zone" in formatted:
+        formatted["target_collision_impact_zone_label"] = _impact_zone_label(
+            formatted.get("target_collision_impact_zone", 0)
+        )
+    return formatted
+
+
 def _materialize_agent_frames(replay_bundle):
     agent_arrays = replay_bundle["agent_arrays"]
     valid = agent_arrays["valid"]
@@ -402,6 +425,10 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
         <div class="meta-item"><span class="meta-label">Scenario</span><span class="meta-value" id="meta-scenario"></span></div>
         <div class="meta-item"><span class="meta-label">Episode Length</span><span class="meta-value" id="meta-length"></span></div>
+        <div class="meta-item"><span class="meta-label">Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
+        <div class="meta-item"><span class="meta-label">Impact Zone</span><span class="meta-value" id="meta-impact-zone"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
       </div>
       <div class="controls">
         <div class="controls-row">
@@ -464,6 +491,7 @@ HTML_TEMPLATE = """<!doctype html>
     const resetViewButton = document.getElementById('reset-view');
 
     const metadata = DATA.metadata || {};
+    const summary = DATA.summary || {};
     const navigation = DATA.navigation || {};
     const frames = DATA.agent_frames || [];
     const trafficFrames = DATA.traffic_frames || [];
@@ -478,6 +506,18 @@ HTML_TEMPLATE = """<!doctype html>
     let dragState = null;
     let hitAgents = [];
     let followTarget = false;
+
+    function summaryValue(key, fallback=null) {
+      if (summary[key] != null) return summary[key];
+      if (metadata[key] != null) return metadata[key];
+      return fallback;
+    }
+
+    function formatMetric(value, digits=3) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return 'n/a';
+      return num.toFixed(digits);
+    }
 
     function createDefaultCamera() {
       const minX = bounds[0], minY = bounds[1], maxX = bounds[2], maxY = bounds[3];
@@ -495,7 +535,11 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById('meta-map').innerText = metadata.map_name || 'N/A';
       document.getElementById('meta-scenario').innerText = metadata.scenario_id || 'N/A';
       document.getElementById('meta-length').innerText = metadata.episode_length ?? frames.length;
-      const failed = Number(metadata.did_target_fail || 0) > 0;
+      document.getElementById('meta-run-light').innerText = Number(summaryValue('did_target_run_light', 0) || 0) > 0 ? 'yes' : 'no';
+      document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
+      document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
+      document.getElementById('meta-collision-responsibility').innerText = formatMetric(summaryValue('target_collision_responsibility', 0));
+      const failed = Number(summaryValue('did_target_fail', 0) || 0) > 0;
       statusPill.className = failed ? 'pill' : 'pill ok';
       statusPill.innerText = failed ? 'Target failed' : 'Target survived';
       backLink.href = navigation.index_html || 'index.html';
@@ -782,8 +826,10 @@ HTML_TEMPLATE = """<!doctype html>
 def render_compact_replay_html(replay_path, output_path, render_context=None):
     replay_bundle = load_compact_replay(replay_path)
     payload = _build_render_payload(replay_bundle)
+    render_context = render_context or {}
     payload["metadata"]["episode_id"] = payload["metadata"].get("episode_id", Path(output_path).stem)
-    payload["navigation"] = render_context or {}
+    payload["navigation"] = render_context.get("navigation", {})
+    payload["summary"] = _format_summary_for_render(render_context.get("summary", {}))
     title = f"{payload['metadata'].get('map_name', 'Replay')} | {payload['metadata'].get('scenario_id', 'episode')}"
     html = HTML_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", json.dumps(payload, separators=(",", ":")))
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -813,6 +859,10 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "did_target_fail",
         "did_target_collide",
         "did_target_offroad",
+        "did_target_run_light",
+        "target_collision_impact_zone",
+        "target_collision_responsibility",
+        "target_collision_severity",
         "target_episode_return",
         "episode_return_adversarial",
         "target_episode_length",
@@ -823,6 +873,11 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     for row in episodes_df.to_dict(orient="records"):
         replay_html = render_lookup.get(row.get("episode_id"))
         out = {key: _safe_value(row.get(key)) for key in existing_columns}
+        if "target_collision_impact_zone" in out:
+            out["target_collision_impact_zone"] = (
+                f"{_impact_zone_label(out['target_collision_impact_zone'])}"
+                f" [{int(float(out['target_collision_impact_zone'] or 0))}]"
+            )
         out["rendered_html"] = replay_html
         rows.append(out)
 
