@@ -41,6 +41,8 @@ import torch
 import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
+import gymnasium
+
 import pufferlib
 import pufferlib.sweep
 import pufferlib.vector
