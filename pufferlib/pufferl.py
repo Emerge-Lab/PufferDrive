@@ -214,6 +214,23 @@ class TargetTorchActor:
         )
 
 
+def _make_target_policy_env_view(env):
+    target_env = copy.copy(env)
+    removed_features = int(getattr(env, "num_adv_drive_features", 0) or 0)
+    target_env.adv_drive_conditioning = False
+    target_env.num_adv_drive_features = 0
+    if hasattr(env, "num_obs"):
+        target_env.num_obs = int(env.num_obs) - removed_features
+    if hasattr(env, "single_observation_space") and hasattr(env.single_observation_space, "dtype"):
+        target_env.single_observation_space = gymnasium.spaces.Box(
+            low=-1,
+            high=1,
+            shape=(target_env.num_obs,),
+            dtype=env.single_observation_space.dtype,
+        )
+    return target_env
+
+
 def _index_batch(batch, indices):
     if batch is None:
         return None
@@ -1789,7 +1806,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         target_args = copy.deepcopy(args)
         target_args["load_model_path"] = target_policy_path
         target_args["policy_name"] = "TargetDrive"
-        target_policy = load_policy(target_args, vecenv, env_name)
+        target_env = _make_target_policy_env_view(vecenv.driver_env)
+        target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
         for param in target_policy.parameters():
             param.requires_grad = False
         target_policy.eval()
@@ -2336,7 +2354,8 @@ def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
     target_args = copy.deepcopy(args)
     target_args["load_model_path"] = target_policy_path
     target_args["policy_name"] = "TargetDrive"
-    target_policy = load_policy(target_args, vecenv, env_name)
+    target_env = _make_target_policy_env_view(vecenv.driver_env)
+    target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
     target_policy.eval()
     return target_policy
 
@@ -3836,7 +3855,7 @@ def load_env(env_name, args):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
 
 
-def load_policy(args, vecenv, env_name=""):
+def load_policy(args, vecenv, env_name="", policy_env=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
@@ -3844,13 +3863,14 @@ def load_policy(args, vecenv, env_name=""):
     device = args["train"]["device"]
     if isinstance(device, int):
         device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
+    policy_env = vecenv.driver_env if policy_env is None else policy_env
     policy_cls = getattr(env_module.torch, args["policy_name"])
-    policy = policy_cls(vecenv.driver_env, **args["policy"])
+    policy = policy_cls(policy_env, **args["policy"])
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
+        policy = rnn_cls(policy_env, policy, **args["rnn"])
 
     policy = policy.to(device)
 
