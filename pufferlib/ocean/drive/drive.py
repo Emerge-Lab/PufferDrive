@@ -147,6 +147,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         traffic_light_behavior=0,
+        deterministic_traffic_lights=False,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -256,6 +257,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
+        self.deterministic_traffic_lights = deterministic_traffic_lights
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -794,6 +796,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "deterministic_traffic_lights": self.deterministic_traffic_lights,
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,

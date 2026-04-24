@@ -331,6 +331,7 @@ struct Drive {
     int collision_behavior;     // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int deterministic_traffic_lights;
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
@@ -745,9 +746,10 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
 static void generate_traffic_light_states(Drive *env) {
     int steps = env->scenario_length;
     float dt = env->dt;
+    int deterministic_traffic_lights = env->eval_mode || env->deterministic_traffic_lights;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (!deterministic_traffic_lights) && (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *traffic = &env->traffic_elements[i];
@@ -765,7 +767,7 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        if (!env->eval_mode) {
+        if (!deterministic_traffic_lights) {
             // Individual removal
             if (random_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++)
@@ -782,7 +784,7 @@ static void generate_traffic_light_states(Drive *env) {
 
         // Compute phase durations
         float dur_green, dur_yellow, dur_red;
-        if (env->eval_mode) {
+        if (deterministic_traffic_lights) {
             dur_green = TL_DEFAULT_GREEN_DURATION;
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;

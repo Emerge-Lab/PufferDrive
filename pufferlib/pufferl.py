@@ -3357,6 +3357,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["capture_compact_replay"] = capture_mining_replay
         worker_kwargs["capture_compact_replay_failures_only"] = capture_mining_replay_failures_only
         worker_kwargs["compute_eval_metrics"] = True
+        worker_kwargs["deterministic_traffic_lights"] = True
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0
@@ -3380,6 +3381,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"  Worker agent budget: {worker_agent_budget}")
         print(f"  Min agents per env: {min_agents_per_env}")
         print(f"  Max agents per env: {max_agents_per_env}")
+        print("  Compute eval metrics: True (forced in mine_failures)")
+        print("  Deterministic traffic lights: True (forced in mine_failures)")
         if agents_per_scene is not None:
             print(f"  Eval agents per scene override: {agents_per_scene}")
         print(f"  Capture compact replay: {capture_mining_replay}")

@@ -1845,6 +1845,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
+    env->deterministic_traffic_lights = (bool)unpack(kwargs, "deterministic_traffic_lights");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->min_waypoint_spacing = (float)unpack(kwargs, "min_waypoint_spacing");
     env->max_waypoint_spacing = (float)unpack(kwargs, "max_waypoint_spacing");
