@@ -429,6 +429,12 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">Impact Zone</span><span class="meta-value" id="meta-impact-zone"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
+        <div class="meta-item"><span class="meta-label">Made Progress</span><span class="meta-value" id="meta-made-progress"></span></div>
+        <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
+        <div class="meta-item"><span class="meta-label">Goals Reached</span><span class="meta-value" id="meta-goals"></span></div>
+        <div class="meta-item"><span class="meta-label">TTC Within Bound</span><span class="meta-value" id="meta-ttc"></span></div>
+        <div class="meta-item"><span class="meta-label">Progress Ratio</span><span class="meta-value" id="meta-progress-ratio"></span></div>
+        <div class="meta-item"><span class="meta-label">Puffer Score</span><span class="meta-value" id="meta-puffer-score"></span></div>
       </div>
       <div class="controls">
         <div class="controls-row">
@@ -539,6 +545,12 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
       document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
       document.getElementById('meta-collision-responsibility').innerText = formatMetric(summaryValue('target_collision_responsibility', 0));
+      document.getElementById('meta-made-progress').innerText = Number(summaryValue('did_target_make_progress', 0) || 0) > 0 ? 'yes' : 'no';
+      document.getElementById('meta-at-fault').innerText = Number(summaryValue('did_target_have_at_fault_collision', 0) || 0) > 0 ? 'yes' : 'no';
+      document.getElementById('meta-goals').innerText = String(summaryValue('target_num_goals_reached', 0));
+      document.getElementById('meta-ttc').innerText = formatMetric(summaryValue('target_ttc_within_bound_rate', 0));
+      document.getElementById('meta-progress-ratio').innerText = formatMetric(summaryValue('target_progress_ratio', 0));
+      document.getElementById('meta-puffer-score').innerText = formatMetric(summaryValue('target_puffer_score', 0));
       const failed = Number(summaryValue('did_target_fail', 0) || 0) > 0;
       statusPill.className = failed ? 'pill' : 'pill ok';
       statusPill.innerText = failed ? 'Target failed' : 'Target survived';
@@ -860,13 +872,17 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "did_target_collide",
         "did_target_offroad",
         "did_target_run_light",
+        "did_target_make_progress",
+        "did_target_have_at_fault_collision",
+        "target_num_goals_reached",
+        "target_ttc_within_bound_rate",
+        "target_progress_ratio",
+        "target_puffer_score",
         "target_collision_impact_zone",
         "target_collision_responsibility",
         "target_collision_severity",
         "target_episode_return",
-        "episode_return_adversarial",
         "target_episode_length",
-        "active_agent_count",
         "has_replay",
     ]
     existing_columns = [col for col in preferred_columns if col in episodes_df.columns]

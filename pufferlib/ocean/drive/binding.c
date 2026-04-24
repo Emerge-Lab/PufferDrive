@@ -1939,6 +1939,12 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
     assign_to_dict(dict, "did_target_run_light", log->did_target_run_light);
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);
+    assign_to_dict(dict, "did_target_make_progress", log->did_target_make_progress);
+    assign_to_dict(dict, "did_target_have_at_fault_collision", log->did_target_have_at_fault_collision);
+    assign_to_dict(dict, "target_num_goals_reached", log->target_num_goals_reached);
+    assign_to_dict(dict, "target_ttc_within_bound_rate", log->target_ttc_within_bound_rate);
+    assign_to_dict(dict, "target_progress_ratio", log->target_progress_ratio);
+    assign_to_dict(dict, "target_puffer_score", log->target_puffer_score);
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);

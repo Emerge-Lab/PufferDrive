@@ -173,6 +173,12 @@ struct Log {
     float did_target_offroad;
     float did_target_run_light;
     float did_target_fail;
+    float did_target_make_progress;
+    float did_target_have_at_fault_collision;
+    float target_num_goals_reached;
+    float target_ttc_within_bound_rate;
+    float target_progress_ratio;
+    float target_puffer_score;
     float target_collision_severity;
     float target_collision_responsibility;
     float target_collision_impact_zone;
@@ -429,6 +435,12 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float did_target_offroad = log->did_target_offroad;
     float did_target_run_light = log->did_target_run_light;
     float did_target_fail = log->did_target_fail;
+    float did_target_make_progress = log->did_target_make_progress;
+    float did_target_have_at_fault_collision = log->did_target_have_at_fault_collision;
+    float target_num_goals_reached = log->target_num_goals_reached;
+    float target_ttc_within_bound_rate = log->target_ttc_within_bound_rate;
+    float target_progress_ratio = log->target_progress_ratio;
+    float target_puffer_score = log->target_puffer_score;
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
     float target_collision_impact_zone = log->target_collision_impact_zone;
@@ -448,6 +460,12 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->did_target_offroad = did_target_offroad / target_n;
         log->did_target_run_light = did_target_run_light / target_n;
         log->did_target_fail = did_target_fail / target_n;
+        log->did_target_make_progress = did_target_make_progress / target_n;
+        log->did_target_have_at_fault_collision = did_target_have_at_fault_collision / target_n;
+        log->target_num_goals_reached = target_num_goals_reached / target_n;
+        log->target_ttc_within_bound_rate = target_ttc_within_bound_rate / target_n;
+        log->target_progress_ratio = target_progress_ratio / target_n;
+        log->target_puffer_score = target_puffer_score / target_n;
         log->target_collision_severity = target_collision_severity / target_n;
         log->target_collision_responsibility = target_collision_responsibility / target_n;
         log->target_collision_impact_zone = target_collision_impact_zone / target_n;
@@ -2957,21 +2975,31 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
     }
 
     if (env->active_agent_count > 0) {
+        int target_agent_idx = env->active_agent_indices[0];
+        Agent *target_agent = &env->agents[target_agent_idx];
         episode_log->target_n += 1.0f;
         episode_log->target_episode_length += env->logs[0].episode_length;
         episode_log->target_episode_return += env->logs[0].episode_return;
         episode_log->target_episode_return_collision += env->logs[0].episode_return_collision;
         episode_log->target_episode_return_offroad += env->logs[0].episode_return_offroad;
         episode_log->target_episode_return_drive += env->logs[0].episode_return_drive;
+        episode_log->target_num_goals_reached += env->logs[0].num_goals_reached;
+
+        if (env->compute_eval_metrics) {
+            float target_progress_ratio = env->logs[0].progress_ratio;
+            episode_log->target_progress_ratio += target_progress_ratio;
+            episode_log->did_target_make_progress += (target_progress_ratio > 0.2f) ? 1.0f : 0.0f;
+            episode_log->did_target_have_at_fault_collision += env->logs[0].at_fault_collision_rate;
+            episode_log->target_ttc_within_bound_rate += env->logs[0].ttc_within_bound_rate;
+            episode_log->target_puffer_score += calculate_puffer_score(&env->logs[0], safe_timestep, env->dt);
+        }
 
         if (env->logs[0].collision_rate > 0.0f) {
             episode_log->did_target_collide += 1.0f;
             episode_log->did_target_fail += 1.0f;
-            episode_log->target_collision_severity += env->agents[env->active_agent_indices[0]].collision_severity;
-            episode_log->target_collision_responsibility +=
-                env->agents[env->active_agent_indices[0]].collision_responsibility;
-            episode_log->target_collision_impact_zone +=
-                (float)env->agents[env->active_agent_indices[0]].collision_impact_zone;
+            episode_log->target_collision_severity += target_agent->collision_severity;
+            episode_log->target_collision_responsibility += target_agent->collision_responsibility;
+            episode_log->target_collision_impact_zone += (float)target_agent->collision_impact_zone;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {
