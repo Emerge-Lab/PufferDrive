@@ -616,6 +616,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float did_target_offroad = env->log.did_target_offroad;
             float did_target_run_light = env->log.did_target_run_light;
             float did_target_fail = env->log.did_target_fail;
+            float target_collision_severity = env->log.target_collision_severity;
+            float target_collision_responsibility = env->log.target_collision_responsibility;
+            float target_collision_impact_zone = env->log.target_collision_impact_zone;
             // Average across agents
             for (int i = 0; i < num_keys; i++) {
                 ((float *)&env->log)[i] /= n;
@@ -630,6 +633,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.did_target_offroad = did_target_offroad / target_n;
                 env->log.did_target_run_light = did_target_run_light / target_n;
                 env->log.did_target_fail = did_target_fail / target_n;
+                env->log.target_collision_severity = target_collision_severity / target_n;
+                env->log.target_collision_responsibility = target_collision_responsibility / target_n;
+                env->log.target_collision_impact_zone = target_collision_impact_zone / target_n;
             }
             float adversary_n = n - target_n;
             env->log.episode_length =
@@ -712,6 +718,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float did_target_offroad = aggregate.did_target_offroad;
         float did_target_run_light = aggregate.did_target_run_light;
         float did_target_fail = aggregate.did_target_fail;
+        float target_collision_severity = aggregate.target_collision_severity;
+        float target_collision_responsibility = aggregate.target_collision_responsibility;
+        float target_collision_impact_zone = aggregate.target_collision_impact_zone;
 
         // Average across agents
         for (int i = 0; i < num_keys; i++) {
@@ -729,6 +738,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.did_target_offroad = did_target_offroad / target_n;
             aggregate.did_target_run_light = did_target_run_light / target_n;
             aggregate.did_target_fail = did_target_fail / target_n;
+            aggregate.target_collision_severity = target_collision_severity / target_n;
+            aggregate.target_collision_responsibility = target_collision_responsibility / target_n;
+            aggregate.target_collision_impact_zone = target_collision_impact_zone / target_n;
         }
         float adversary_n = n - target_n;
         aggregate.episode_length = adversary_n > 0.0f ? (episode_length - target_episode_length) / adversary_n : 0.0f;

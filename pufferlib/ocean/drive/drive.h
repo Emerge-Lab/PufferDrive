@@ -173,6 +173,9 @@ struct Log {
     float did_target_offroad;
     float did_target_run_light;
     float did_target_fail;
+    float target_collision_severity;
+    float target_collision_responsibility;
+    float target_collision_impact_zone;
     float red_light_violation_rate;
     float num_waypoints_reached;
     float num_goals_reached;
@@ -426,6 +429,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float did_target_offroad = log->did_target_offroad;
     float did_target_run_light = log->did_target_run_light;
     float did_target_fail = log->did_target_fail;
+    float target_collision_severity = log->target_collision_severity;
+    float target_collision_responsibility = log->target_collision_responsibility;
+    float target_collision_impact_zone = log->target_collision_impact_zone;
 
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < num_keys; i++) {
@@ -442,6 +448,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->did_target_offroad = did_target_offroad / target_n;
         log->did_target_run_light = did_target_run_light / target_n;
         log->did_target_fail = did_target_fail / target_n;
+        log->target_collision_severity = target_collision_severity / target_n;
+        log->target_collision_responsibility = target_collision_responsibility / target_n;
+        log->target_collision_impact_zone = target_collision_impact_zone / target_n;
     }
 
     float adversary_n = n - target_n;
@@ -548,6 +557,9 @@ static void invalidate_agent(Agent *agent) {
     agent->sim_x = INVALID_POSITION;
     agent->sim_y = INVALID_POSITION;
     agent->sim_z = 0.0f;
+    agent->prev_sim_x = INVALID_POSITION;
+    agent->prev_sim_y = INVALID_POSITION;
+    agent->prev_sim_heading = 0.0f;
     agent->sim_heading = 0.0f;
     agent->cos_heading = 1.0f;
     agent->sin_heading = 0.0f;
@@ -608,6 +620,12 @@ static inline void clamp_nonneg_speed(float *v, float *a) {
         *v = 0.0f;
         *a = 0.0f;
     }
+}
+
+static inline void snapshot_previous_pose(Agent *agent) {
+    agent->prev_sim_x = agent->sim_x;
+    agent->prev_sim_y = agent->sim_y;
+    agent->prev_sim_heading = agent->sim_heading;
 }
 
 // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
@@ -2399,8 +2417,9 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
 
 // OBB collision via SAT (Separating Axis Theorem).
 // Projects both boxes onto 4 axes (2 per car) and checks for overlap on all axes.
-// No epsilon tolerance: exact boundary contact may flicker across steps.
-static bool check_obb_collision(Agent *car1, Agent *car2) {
+// When intersecting, returns the minimum-penetration axis oriented from car1 toward car2.
+static bool check_obb_collision_with_normal(Agent *car1, Agent *car2, float *normal_x, float *normal_y,
+                                            float *penetration_depth) {
     // Get car corners in world space
     float cos1 = car1->cos_heading;
     float sin1 = car1->sin_heading;
@@ -2440,6 +2459,10 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         {-sin2, cos2}  // Car2's width axis
     };
 
+    float best_overlap = INFINITY;
+    float best_axis_x = 0.0f;
+    float best_axis_y = 0.0f;
+
     // Check each axis
     for (int i = 0; i < 4; i++) {
         float min1 = INFINITY, max1 = -INFINITY;
@@ -2463,10 +2486,34 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         if (max1 < min2 || min1 > max2) {
             return false; // No collision
         }
+
+        float overlap = fminf(max1, max2) - fmaxf(min1, min2);
+        if (overlap < best_overlap) {
+            best_overlap = overlap;
+            best_axis_x = axes[i][0];
+            best_axis_y = axes[i][1];
+        }
     }
 
     // If we get here, there's no separating axis, so the boxes intersect
+    float center_dx = car2->sim_x - car1->sim_x;
+    float center_dy = car2->sim_y - car1->sim_y;
+    if (center_dx * best_axis_x + center_dy * best_axis_y < 0.0f) {
+        best_axis_x = -best_axis_x;
+        best_axis_y = -best_axis_y;
+    }
+
+    if (normal_x != NULL)
+        *normal_x = best_axis_x;
+    if (normal_y != NULL)
+        *normal_y = best_axis_y;
+    if (penetration_depth != NULL)
+        *penetration_depth = best_overlap;
     return true;
+}
+
+static bool check_obb_collision(Agent *car1, Agent *car2) {
+    return check_obb_collision_with_normal(car1, car2, NULL, NULL, NULL);
 }
 
 static bool check_z_collision_possibility(const Agent *car1, const Agent *car2) {
@@ -2478,7 +2525,123 @@ static bool check_z_collision_possibility(const Agent *car1, const Agent *car2) 
     return !(car1_top < car2_bottom || car2_top < car1_bottom);
 }
 
-static int collision_check(Drive *env, int agent_idx) {
+static bool compute_previous_face_normal(const Agent *wall, const Agent *dart, float *normal_x, float *normal_y) {
+    if (wall->prev_sim_x == INVALID_POSITION || dart->prev_sim_x == INVALID_POSITION) {
+        return false;
+    }
+
+    float wall_heading = wall->prev_sim_heading;
+    float wall_cos = cosf(wall_heading);
+    float wall_sin = sinf(wall_heading);
+    float dx = dart->prev_sim_x - wall->prev_sim_x;
+    float dy = dart->prev_sim_y - wall->prev_sim_y;
+    float half_length = fmaxf(wall->sim_length * 0.5f, 1e-3f);
+    float half_width = fmaxf(wall->sim_width * 0.5f, 1e-3f);
+    float local_long = dx * wall_cos + dy * wall_sin;
+    float local_lat = -dx * wall_sin + dy * wall_cos;
+    float norm_long = local_long / half_length;
+    float norm_lat = local_lat / half_width;
+
+    if (fabsf(norm_long) >= fabsf(norm_lat)) {
+        if (norm_long >= 0.0f) {
+            *normal_x = wall_cos;
+            *normal_y = wall_sin;
+        } else {
+            *normal_x = -wall_cos;
+            *normal_y = -wall_sin;
+        }
+    } else {
+        if (norm_lat >= 0.0f) {
+            *normal_x = -wall_sin;
+            *normal_y = wall_cos;
+        } else {
+            *normal_x = wall_sin;
+            *normal_y = -wall_cos;
+        }
+    }
+
+    return true;
+}
+
+static int classify_impact_zone_from_normal(const Agent *agent, float normal_x, float normal_y) {
+    float heading = (agent->prev_sim_x != INVALID_POSITION) ? agent->prev_sim_heading : agent->sim_heading;
+    float heading_cos = cosf(heading);
+    float heading_sin = sinf(heading);
+    float local_long = normal_x * heading_cos + normal_y * heading_sin;
+    float local_lat = -normal_x * heading_sin + normal_y * heading_cos;
+
+    if (fabsf(local_long) >= fabsf(local_lat)) {
+        return (local_long >= 0.0f) ? COLLISION_IMPACT_ZONE_FRONT : COLLISION_IMPACT_ZONE_REAR;
+    }
+
+    return (local_lat >= 0.0f) ? COLLISION_IMPACT_ZONE_LEFT : COLLISION_IMPACT_ZONE_RIGHT;
+}
+
+static void evaluate_collision_pair(const Agent *agent_a, const Agent *agent_b, float normal_x, float normal_y,
+                                    float *severity, float *responsibility) {
+    float mass_a = fmaxf(agent_a->sim_length * agent_a->sim_width, 1e-6f);
+    float mass_b = fmaxf(agent_b->sim_length * agent_b->sim_width, 1e-6f);
+    float rel_vx = agent_a->sim_vx - agent_b->sim_vx;
+    float rel_vy = agent_a->sim_vy - agent_b->sim_vy;
+    float closing_speed = fmaxf(0.0f, rel_vx * normal_x + rel_vy * normal_y);
+    float reduced_mass = (mass_a * mass_b) / fmaxf(mass_a + mass_b, 1e-6f);
+    float contrib_a = fmaxf(0.0f, agent_a->sim_vx * normal_x + agent_a->sim_vy * normal_y);
+    float contrib_b = fmaxf(0.0f, -(agent_b->sim_vx * normal_x + agent_b->sim_vy * normal_y));
+
+    if (severity != NULL) {
+        *severity = reduced_mass * closing_speed * closing_speed;
+    }
+    if (responsibility != NULL) {
+        *responsibility = contrib_a / fmaxf(contrib_a + contrib_b, 1e-6f);
+    }
+}
+
+static void compute_collision_normal(Agent *agent_a, Agent *agent_b, float sat_normal_x, float sat_normal_y,
+                                     float *normal_x, float *normal_y) {
+    float prev_from_a_x = 0.0f;
+    float prev_from_a_y = 0.0f;
+    float prev_from_b_x = 0.0f;
+    float prev_from_b_y = 0.0f;
+    int has_prev_from_a = compute_previous_face_normal(agent_a, agent_b, &prev_from_a_x, &prev_from_a_y);
+    int has_prev_from_b = compute_previous_face_normal(agent_b, agent_a, &prev_from_b_x, &prev_from_b_y);
+    float rel_vx = agent_a->sim_vx - agent_b->sim_vx;
+    float rel_vy = agent_a->sim_vy - agent_b->sim_vy;
+    float best_prev_x = sat_normal_x;
+    float best_prev_y = sat_normal_y;
+    float best_prev_score = -1.0f;
+    float sat_score = fmaxf(0.0f, rel_vx * sat_normal_x + rel_vy * sat_normal_y);
+
+    if (has_prev_from_a) {
+        float score = fmaxf(0.0f, rel_vx * prev_from_a_x + rel_vy * prev_from_a_y);
+        if (score > best_prev_score) {
+            best_prev_score = score;
+            best_prev_x = prev_from_a_x;
+            best_prev_y = prev_from_a_y;
+        }
+    }
+
+    if (has_prev_from_b) {
+        float candidate_x = -prev_from_b_x;
+        float candidate_y = -prev_from_b_y;
+        float score = fmaxf(0.0f, rel_vx * candidate_x + rel_vy * candidate_y);
+        if (score > best_prev_score) {
+            best_prev_score = score;
+            best_prev_x = candidate_x;
+            best_prev_y = candidate_y;
+        }
+    }
+
+    if (best_prev_score >= sat_score) {
+        *normal_x = best_prev_x;
+        *normal_y = best_prev_y;
+    } else {
+        *normal_x = sat_normal_x;
+        *normal_y = sat_normal_y;
+    }
+}
+
+static int collision_check(Drive *env, int agent_idx, float *collision_normal_x, float *collision_normal_y,
+                           float *penetration_depth) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->sim_x == INVALID_POSITION || agent->removed)
@@ -2509,8 +2672,17 @@ static int collision_check(Drive *env, int agent_idx) {
             continue;
         if (!check_z_collision_possibility(agent, other_agent))
             continue;
-        if (check_obb_collision(agent, other_agent)) {
+        float sat_normal_x = 0.0f;
+        float sat_normal_y = 0.0f;
+        float sat_penetration = 0.0f;
+        if (check_obb_collision_with_normal(agent, other_agent, &sat_normal_x, &sat_normal_y, &sat_penetration)) {
             car_collided_with_index = index;
+            if (collision_normal_x != NULL && collision_normal_y != NULL) {
+                compute_collision_normal(agent, other_agent, sat_normal_x, sat_normal_y, collision_normal_x,
+                                         collision_normal_y);
+            }
+            if (penetration_depth != NULL)
+                *penetration_depth = sat_penetration;
             break;
         }
     }
@@ -2795,6 +2967,11 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         if (env->logs[0].collision_rate > 0.0f) {
             episode_log->did_target_collide += 1.0f;
             episode_log->did_target_fail += 1.0f;
+            episode_log->target_collision_severity += env->agents[env->active_agent_indices[0]].collision_severity;
+            episode_log->target_collision_responsibility +=
+                env->agents[env->active_agent_indices[0]].collision_responsibility;
+            episode_log->target_collision_impact_zone +=
+                (float)env->agents[env->active_agent_indices[0]].collision_impact_zone;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {
@@ -2855,6 +3032,11 @@ static void reset_agent_state(Agent *agent) {
     agent->ttc_samples = 0;
     agent->at_fault_collision = 0;
     agent->collided_with_agent_idx = -1;
+    agent->collision_normal_x = 0.0f;
+    agent->collision_normal_y = 0.0f;
+    agent->collision_severity = 0.0f;
+    agent->collision_responsibility = 0.0f;
+    agent->collision_impact_zone = COLLISION_IMPACT_ZONE_NONE;
     agent->multi_lane_time = 0.0f;
     agent->phantom_braking_counter = 0;
     agent->is_blind_partner = 0;
@@ -3212,6 +3394,9 @@ static void set_start_position(Drive *env) {
             agent->sim_x = agent->log_trajectory_x[step];
             agent->sim_y = agent->log_trajectory_y[step];
             agent->sim_z = agent->log_trajectory_z[step];
+            agent->prev_sim_x = agent->sim_x;
+            agent->prev_sim_y = agent->sim_y;
+            agent->prev_sim_heading = agent->log_heading[step];
             agent->sim_heading = agent->log_heading[step];
             agent->cos_heading = cosf(agent->sim_heading);
             agent->sin_heading = sinf(agent->sim_heading);
@@ -3449,6 +3634,9 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
     agent->sim_x = agent->log_trajectory_x[t];
     agent->sim_y = agent->log_trajectory_y[t];
     agent->sim_z = agent->log_trajectory_z[t];
+    agent->prev_sim_x = agent->sim_x;
+    agent->prev_sim_y = agent->sim_y;
+    agent->prev_sim_heading = agent->log_heading[t];
     agent->sim_heading = agent->log_heading[t];
     agent->cos_heading = cosf(agent->sim_heading);
     agent->sin_heading = sinf(agent->sim_heading);
@@ -3497,7 +3685,7 @@ void remove_bad_trajectories(Drive *env) {
         // check collisions
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            int collided_with_index = collision_check(env, agent_idx);
+            int collided_with_index = collision_check(env, agent_idx, NULL, NULL, NULL);
             if ((collided_with_index >= 0) && collided_agents[i] == 0) {
                 collided_agents[i] = 1;
                 collided_with_indices[i] = collided_with_index;
@@ -3933,11 +4121,25 @@ static void compute_metrics(Drive *env, int agent_idx) {
 
     // Priority 2: Handle vehicle collision
     agent->collided_with_agent_idx = -1;
-    int car_collided_with_index = collision_check(env, agent_idx);
+    float collision_normal_x = 0.0f;
+    float collision_normal_y = 0.0f;
+    float collision_penetration = 0.0f;
+    int car_collided_with_index =
+        collision_check(env, agent_idx, &collision_normal_x, &collision_normal_y, &collision_penetration);
 
     if (car_collided_with_index != -1) {
         agent->metrics_array[COLLISION_IDX] = 1.0f;
         agent->collided_with_agent_idx = car_collided_with_index;
+        if (env->compute_eval_metrics) {
+            Agent *other_agent = &env->agents[car_collided_with_index];
+            agent->collision_normal_x = collision_normal_x;
+            agent->collision_normal_y = collision_normal_y;
+            agent->collision_impact_zone =
+                classify_impact_zone_from_normal(agent, collision_normal_x, collision_normal_y);
+            evaluate_collision_pair(agent, other_agent, collision_normal_x, collision_normal_y,
+                                    &agent->collision_severity, &agent->collision_responsibility);
+            (void)collision_penetration;
+        }
         // Track at-fault collisions for evaluation metrics.
         if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
             agent->at_fault_collision = 1;
@@ -4970,6 +5172,10 @@ void c_step(Drive *env) {
         } else {
             env->masks[i] = 1;
         }
+    }
+
+    for (int i = 0; i < env->num_agents; i++) {
+        snapshot_previous_pose(&env->agents[i]);
     }
 
     env->timestep++;

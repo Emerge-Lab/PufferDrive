@@ -64,6 +64,12 @@
 #define TRAFFIC_CONTROL_STATE_OFF 4
 #define NUM_TRAFFIC_CONTROL_STATES 5
 
+#define COLLISION_IMPACT_ZONE_NONE 0
+#define COLLISION_IMPACT_ZONE_FRONT 1
+#define COLLISION_IMPACT_ZONE_REAR 2
+#define COLLISION_IMPACT_ZONE_LEFT 3
+#define COLLISION_IMPACT_ZONE_RIGHT 4
+
 // Metrics array indices
 #define NUM_METRICS 18
 #define COLLISION_IDX 0
@@ -171,6 +177,9 @@ struct Agent {
     float sim_x; // Vehicle center x-coordinate
     float sim_y; // Vehicle center y-coordinate
     float sim_z;
+    float prev_sim_x;
+    float prev_sim_y;
+    float prev_sim_heading;
     float sim_heading;
     float cos_heading; // Cached cosf(sim_heading) - updated in move_dynamics
     float sin_heading; // Cached sinf(sim_heading) - updated in move_dynamics
@@ -236,13 +245,18 @@ struct Agent {
     float reward_coefs[NUM_REWARD_COEFS];
 
     // Puffer score tracking (per-episode accumulators)
-    struct ttc_result cached_ttc;    // Filled once per step before reward computation
-    float wrong_way_distance;        // Accumulated wrong-way distance
-    float speed_violation_sum;       // For nuPlan speed compliance formula
-    int ttc_violations;              // Count of TTC < 0.95s violations
-    int ttc_samples;                 // Total TTC samples for rate
-    int at_fault_collision;          // 1 if at-fault collision occurred this episode
-    int collided_with_agent_idx;     // Last collision partner index for reward shaping / analysis
+    struct ttc_result cached_ttc; // Filled once per step before reward computation
+    float wrong_way_distance;     // Accumulated wrong-way distance
+    float speed_violation_sum;    // For nuPlan speed compliance formula
+    int ttc_violations;           // Count of TTC < 0.95s violations
+    int ttc_samples;              // Total TTC samples for rate
+    int at_fault_collision;       // 1 if at-fault collision occurred this episode
+    int collided_with_agent_idx;  // Last collision partner index for reward shaping / analysis
+    float collision_normal_x;     // Collision normal pointing from this agent to the other agent
+    float collision_normal_y;
+    float collision_severity;        // Reduced-mass * closing-speed^2 proxy
+    float collision_responsibility;  // Responsibility share in [0, 1]
+    int collision_impact_zone;       // COLLISION_IMPACT_ZONE_* enum
     float multi_lane_time;           // Accumulated time (s) on multiple lanes
     int phantom_braking_counter;     // >0 means currently phantom braking
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
