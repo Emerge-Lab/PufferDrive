@@ -1950,6 +1950,12 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);
+    assign_to_dict(dict, "adv_drive_reward_low", log->adv_drive_reward_low);
+    assign_to_dict(dict, "adv_drive_reward_mid", log->adv_drive_reward_mid);
+    assign_to_dict(dict, "adv_drive_reward_high", log->adv_drive_reward_high);
+    assign_to_dict(dict, "adv_adversarial_reward_low", log->adv_adversarial_reward_low);
+    assign_to_dict(dict, "adv_adversarial_reward_mid", log->adv_adversarial_reward_mid);
+    assign_to_dict(dict, "adv_adversarial_reward_high", log->adv_adversarial_reward_high);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);

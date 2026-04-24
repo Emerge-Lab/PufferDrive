@@ -182,6 +182,15 @@ struct Log {
     float target_collision_severity;
     float target_collision_responsibility;
     float target_collision_impact_zone;
+    float adv_drive_reward_low;
+    float adv_drive_reward_mid;
+    float adv_drive_reward_high;
+    float adv_adversarial_reward_low;
+    float adv_adversarial_reward_mid;
+    float adv_adversarial_reward_high;
+    float adv_bucket_count_low;
+    float adv_bucket_count_mid;
+    float adv_bucket_count_high;
     float red_light_violation_rate;
     float num_waypoints_reached;
     float num_goals_reached;
@@ -446,6 +455,15 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
     float target_collision_impact_zone = log->target_collision_impact_zone;
+    float adv_drive_reward_low = log->adv_drive_reward_low;
+    float adv_drive_reward_mid = log->adv_drive_reward_mid;
+    float adv_drive_reward_high = log->adv_drive_reward_high;
+    float adv_adversarial_reward_low = log->adv_adversarial_reward_low;
+    float adv_adversarial_reward_mid = log->adv_adversarial_reward_mid;
+    float adv_adversarial_reward_high = log->adv_adversarial_reward_high;
+    float adv_bucket_count_low = log->adv_bucket_count_low;
+    float adv_bucket_count_mid = log->adv_bucket_count_mid;
+    float adv_bucket_count_high = log->adv_bucket_count_high;
 
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < num_keys; i++) {
@@ -471,6 +489,19 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_severity = target_collision_severity / target_n;
         log->target_collision_responsibility = target_collision_responsibility / target_n;
         log->target_collision_impact_zone = target_collision_impact_zone / target_n;
+    }
+
+    if (adv_bucket_count_low > 0.0f) {
+        log->adv_drive_reward_low = adv_drive_reward_low / adv_bucket_count_low;
+        log->adv_adversarial_reward_low = adv_adversarial_reward_low / adv_bucket_count_low;
+    }
+    if (adv_bucket_count_mid > 0.0f) {
+        log->adv_drive_reward_mid = adv_drive_reward_mid / adv_bucket_count_mid;
+        log->adv_adversarial_reward_mid = adv_adversarial_reward_mid / adv_bucket_count_mid;
+    }
+    if (adv_bucket_count_high > 0.0f) {
+        log->adv_drive_reward_high = adv_drive_reward_high / adv_bucket_count_high;
+        log->adv_adversarial_reward_high = adv_adversarial_reward_high / adv_bucket_count_high;
     }
 
     float adversary_n = n - target_n;
@@ -2911,6 +2942,8 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
 static void build_episode_log_contributions(Drive *env, Log *episode_log) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     const float progress_ref_speed = 10.0f;
+    const float low_bucket_max = 1.0f / 3.0f;
+    const float mid_bucket_max = 2.0f / 3.0f;
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
         float episode_duration_s = env->logs[i].episode_length * env->dt;
@@ -2951,6 +2984,22 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         episode_log->episode_return_offroad += env->logs[i].episode_return_offroad;
         episode_log->episode_return_drive += env->logs[i].episode_return_drive;
         episode_log->episode_return_adversarial += env->logs[i].episode_return_adversarial;
+        if (i > 0) {
+            float adv_drive_weight = agent->adv_drive_weight;
+            if (adv_drive_weight < low_bucket_max) {
+                episode_log->adv_drive_reward_low += env->logs[i].episode_return_drive;
+                episode_log->adv_adversarial_reward_low += env->logs[i].episode_return_adversarial;
+                episode_log->adv_bucket_count_low += 1.0f;
+            } else if (adv_drive_weight < mid_bucket_max) {
+                episode_log->adv_drive_reward_mid += env->logs[i].episode_return_drive;
+                episode_log->adv_adversarial_reward_mid += env->logs[i].episode_return_adversarial;
+                episode_log->adv_bucket_count_mid += 1.0f;
+            } else {
+                episode_log->adv_drive_reward_high += env->logs[i].episode_return_drive;
+                episode_log->adv_adversarial_reward_high += env->logs[i].episode_return_adversarial;
+                episode_log->adv_bucket_count_high += 1.0f;
+            }
+        }
         // Comfort and velocity metrics (normalized per timestep)
         episode_log->comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log->velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;

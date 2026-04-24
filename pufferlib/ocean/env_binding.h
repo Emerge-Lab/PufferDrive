@@ -625,6 +625,15 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_collision_severity = env->log.target_collision_severity;
             float target_collision_responsibility = env->log.target_collision_responsibility;
             float target_collision_impact_zone = env->log.target_collision_impact_zone;
+            float adv_drive_reward_low = env->log.adv_drive_reward_low;
+            float adv_drive_reward_mid = env->log.adv_drive_reward_mid;
+            float adv_drive_reward_high = env->log.adv_drive_reward_high;
+            float adv_adversarial_reward_low = env->log.adv_adversarial_reward_low;
+            float adv_adversarial_reward_mid = env->log.adv_adversarial_reward_mid;
+            float adv_adversarial_reward_high = env->log.adv_adversarial_reward_high;
+            float adv_bucket_count_low = env->log.adv_bucket_count_low;
+            float adv_bucket_count_mid = env->log.adv_bucket_count_mid;
+            float adv_bucket_count_high = env->log.adv_bucket_count_high;
             // Average across agents
             for (int i = 0; i < num_keys; i++) {
                 ((float *)&env->log)[i] /= n;
@@ -648,6 +657,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_collision_severity = target_collision_severity / target_n;
                 env->log.target_collision_responsibility = target_collision_responsibility / target_n;
                 env->log.target_collision_impact_zone = target_collision_impact_zone / target_n;
+            }
+            if (adv_bucket_count_low > 0.0f) {
+                env->log.adv_drive_reward_low = adv_drive_reward_low / adv_bucket_count_low;
+                env->log.adv_adversarial_reward_low = adv_adversarial_reward_low / adv_bucket_count_low;
+            }
+            if (adv_bucket_count_mid > 0.0f) {
+                env->log.adv_drive_reward_mid = adv_drive_reward_mid / adv_bucket_count_mid;
+                env->log.adv_adversarial_reward_mid = adv_adversarial_reward_mid / adv_bucket_count_mid;
+            }
+            if (adv_bucket_count_high > 0.0f) {
+                env->log.adv_drive_reward_high = adv_drive_reward_high / adv_bucket_count_high;
+                env->log.adv_adversarial_reward_high = adv_adversarial_reward_high / adv_bucket_count_high;
             }
             float adversary_n = n - target_n;
             env->log.episode_length =
@@ -739,6 +760,15 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_collision_severity = aggregate.target_collision_severity;
         float target_collision_responsibility = aggregate.target_collision_responsibility;
         float target_collision_impact_zone = aggregate.target_collision_impact_zone;
+        float adv_drive_reward_low = aggregate.adv_drive_reward_low;
+        float adv_drive_reward_mid = aggregate.adv_drive_reward_mid;
+        float adv_drive_reward_high = aggregate.adv_drive_reward_high;
+        float adv_adversarial_reward_low = aggregate.adv_adversarial_reward_low;
+        float adv_adversarial_reward_mid = aggregate.adv_adversarial_reward_mid;
+        float adv_adversarial_reward_high = aggregate.adv_adversarial_reward_high;
+        float adv_bucket_count_low = aggregate.adv_bucket_count_low;
+        float adv_bucket_count_mid = aggregate.adv_bucket_count_mid;
+        float adv_bucket_count_high = aggregate.adv_bucket_count_high;
 
         // Average across agents
         for (int i = 0; i < num_keys; i++) {
@@ -765,6 +795,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_collision_severity = target_collision_severity / target_n;
             aggregate.target_collision_responsibility = target_collision_responsibility / target_n;
             aggregate.target_collision_impact_zone = target_collision_impact_zone / target_n;
+        }
+        if (adv_bucket_count_low > 0.0f) {
+            aggregate.adv_drive_reward_low = adv_drive_reward_low / adv_bucket_count_low;
+            aggregate.adv_adversarial_reward_low = adv_adversarial_reward_low / adv_bucket_count_low;
+        }
+        if (adv_bucket_count_mid > 0.0f) {
+            aggregate.adv_drive_reward_mid = adv_drive_reward_mid / adv_bucket_count_mid;
+            aggregate.adv_adversarial_reward_mid = adv_adversarial_reward_mid / adv_bucket_count_mid;
+        }
+        if (adv_bucket_count_high > 0.0f) {
+            aggregate.adv_drive_reward_high = adv_drive_reward_high / adv_bucket_count_high;
+            aggregate.adv_adversarial_reward_high = adv_adversarial_reward_high / adv_bucket_count_high;
         }
         float adversary_n = n - target_n;
         aggregate.episode_length = adversary_n > 0.0f ? (episode_length - target_episode_length) / adversary_n : 0.0f;
