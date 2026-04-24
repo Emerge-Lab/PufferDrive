@@ -1547,15 +1547,18 @@ def _is_nonzero_distributed_rank():
 
 
 def _get_shared_wandb_run_id():
-    run_id = None
+    run_id = os.environ.get("WANDB_RUN_ID")
     if torch.distributed.is_initialized():
-        if torch.distributed.get_rank() == 0:
+        if torch.distributed.get_rank() == 0 and run_id is None:
             import wandb
 
             run_id = wandb.util.generate_id()
         shared = [run_id]
         torch.distributed.broadcast_object_list(shared, src=0)
         return shared[0]
+
+    if run_id is not None:
+        return run_id
 
     import wandb
 
@@ -1606,8 +1609,9 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        run_id = load_id or os.environ.get("WANDB_RUN_ID") or wandb.util.generate_id()
         wandb.init(
-            id=load_id or wandb.util.generate_id(),
+            id=run_id,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
