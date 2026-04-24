@@ -477,6 +477,7 @@ HTML_TEMPLATE = """<!doctype html>
     let camera = null;
     let dragState = null;
     let hitAgents = [];
+    let followTarget = false;
 
     function createDefaultCamera() {
       const minX = bounds[0], minY = bounds[1], maxX = bounds[2], maxY = bounds[3];
@@ -566,6 +567,20 @@ HTML_TEMPLATE = """<!doctype html>
       camera.x = agent.x;
       camera.y = agent.y;
       camera.zoom = zoom;
+      draw();
+    }
+
+    function setFollowTarget(enabled) {
+      followTarget = !!enabled;
+      focusTargetButton.innerText = followTarget ? 'Unlock Target' : 'Focus Target';
+      if (followTarget) {
+        const target = findTarget(frames[frameIndex]);
+        if (target) {
+          camera.x = target.x;
+          camera.y = target.y;
+          camera.zoom = Math.max(camera.zoom, 3.0);
+        }
+      }
       draw();
     }
 
@@ -663,6 +678,13 @@ HTML_TEMPLATE = """<!doctype html>
     function draw() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
+      if (followTarget) {
+        const target = findTarget(frames[frameIndex]);
+        if (target) {
+          camera.x = target.x;
+          camera.y = target.y;
+        }
+      }
       drawRoads();
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
@@ -698,12 +720,15 @@ HTML_TEMPLATE = """<!doctype html>
       speed = Number(e.target.value || 6) / 6;
       speedLabel.innerText = `${speed.toFixed(1)}x`;
     });
-    focusTargetButton.addEventListener('click', () => focusOnAgent(findTarget(frames[frameIndex])));
+    focusTargetButton.addEventListener('click', () => setFollowTarget(!followTarget));
     resetViewButton.addEventListener('click', () => {
+      followTarget = false;
+      focusTargetButton.innerText = 'Focus Target';
       camera = createDefaultCamera();
       draw();
     });
     canvas.addEventListener('mousedown', (e) => {
+      if (followTarget) setFollowTarget(false);
       dragState = { x: e.offsetX, y: e.offsetY, cameraX: camera.x, cameraY: camera.y };
     });
     canvas.addEventListener('mousemove', (e) => {
@@ -718,6 +743,7 @@ HTML_TEMPLATE = """<!doctype html>
     canvas.addEventListener('mouseleave', () => { dragState = null; });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (followTarget) setFollowTarget(false);
       const pointerBefore = canvasToWorld(e.offsetX, e.offsetY);
       const zoomFactor = e.deltaY < 0 ? 1.12 : 0.9;
       camera.zoom = Math.min(20, Math.max(0.4, camera.zoom * zoomFactor));
@@ -733,6 +759,7 @@ HTML_TEMPLATE = """<!doctype html>
         const dx = x - hit.x;
         const dy = y - hit.y;
         if (dx * dx + dy * dy <= hit.radius * hit.radius) {
+          if (followTarget && !hit.agent.is_target) setFollowTarget(false);
           focusOnAgent(hit.agent, hit.agent.is_target ? 3.0 : 2.2);
           break;
         }
@@ -811,12 +838,30 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     .head {{ margin-bottom: 18px; }}
     .head h1 {{ margin: 0 0 6px; font-size: 28px; }}
     .head p {{ margin: 0; color: #5b6570; }}
-    .controls {{ margin: 14px 0 18px; display: flex; gap: 12px; align-items: center; }}
+    .controls {{ margin: 14px 0 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
     input {{ border: 1px solid rgba(31,41,51,0.16); border-radius: 10px; padding: 8px 12px; min-width: 280px; }}
+    .toggle {{
+      border: 1px solid rgba(31,41,51,0.14);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+      color: #334155;
+    }}
+    .toggle.active {{
+      background: #1261a0;
+      color: white;
+      border-color: #1261a0;
+    }}
     table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 28px rgba(28,38,51,0.08); }}
     thead {{ background: #eaf0f6; }}
     th, td {{ padding: 10px 12px; border-bottom: 1px solid rgba(31,41,51,0.08); text-align: left; font-size: 14px; }}
     th {{ cursor: pointer; user-select: none; }}
+    th.active {{ color: #1261a0; }}
+    th .sort-indicator {{ margin-left: 6px; color: #7b8794; font-size: 12px; }}
+    th.active .sort-indicator {{ color: #1261a0; }}
+    thead th {{ position: sticky; top: 0; z-index: 1; background: #eaf0f6; }}
     tbody tr:hover {{ background: #f8fbff; }}
     a {{ color: #1261a0; text-decoration: none; font-weight: 600; }}
     .muted {{ color: #7b8794; }}
@@ -830,10 +875,12 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     </div>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter rows">
+      <button id="filter-replay" class="toggle" type="button">Replay Only</button>
+      <button id="filter-failures" class="toggle" type="button">Failures Only</button>
       <span class="muted" id="count"></span>
     </div>
     <table id="failure-table">
-      <thead><tr><th data-key='rendered_html'>render</th>{"".join(f"<th data-key='{col}'>{col}</th>" for col in existing_columns)}</tr></thead>
+      <thead><tr><th data-key='rendered_html'>render<span class='sort-indicator'></span></th>{"".join(f"<th data-key='{col}'>{col}<span class='sort-indicator'></span></th>" for col in existing_columns)}</tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -843,26 +890,65 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     const tbody = document.querySelector('#failure-table tbody');
     const count = document.getElementById('count');
     const search = document.getElementById('search');
+    const replayFilter = document.getElementById('filter-replay');
+    const failuresFilter = document.getElementById('filter-failures');
     let sortKey = 'did_target_fail';
     let sortDir = -1;
+    let replayOnly = false;
+    let failuresOnly = false;
+
+    function compareValues(a, b, key, dir) {{
+      if (key === 'rendered_html') {{
+        const av = a.rendered_html ? 1 : 0;
+        const bv = b.rendered_html ? 1 : 0;
+        if (av === bv) return 0;
+        return av > bv ? dir : -dir;
+      }}
+
+      const av = a[key];
+      const bv = b[key];
+      if (av === bv) return 0;
+      if (av == null || av === '') return 1;
+      if (bv == null || bv === '') return -1;
+
+      const an = Number(av);
+      const bn = Number(bv);
+      const bothNumeric = !Number.isNaN(an) && !Number.isNaN(bn);
+      if (bothNumeric) {{
+        if (an === bn) return 0;
+        return an > bn ? dir : -dir;
+      }}
+
+      const as = String(av).toLowerCase();
+      const bs = String(bv).toLowerCase();
+      const cmp = as.localeCompare(bs);
+      return cmp === 0 ? 0 : cmp * dir;
+    }}
 
     function renderTable() {{
       const term = (search.value || '').toLowerCase();
-      const filtered = ROWS.filter(row => JSON.stringify(row).toLowerCase().includes(term));
-      filtered.sort((a, b) => {{
-        const av = a[sortKey];
-        const bv = b[sortKey];
-        if (av === bv) return 0;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        return av > bv ? sortDir : -sortDir;
+      const filtered = ROWS.filter(row => {{
+        if (replayOnly && !row.rendered_html) return false;
+        if (failuresOnly && !(Number(row.did_target_fail || 0) > 0)) return false;
+        return JSON.stringify(row).toLowerCase().includes(term);
       }});
+      filtered.sort((a, b) => compareValues(a, b, sortKey, sortDir));
       tbody.innerHTML = filtered.map(row => {{
         const cells = COLS.map(col => `<td>${{row[col] == null ? '' : row[col]}}</td>`).join('');
         const link = row.rendered_html ? `<a href="${{row.rendered_html}}">open</a>` : '<span class="muted">n/a</span>';
         return `<tr><td>${{link}}</td>${{cells}}</tr>`;
       }}).join('');
       count.innerText = `${{filtered.length}} rows`;
+      document.querySelectorAll('th[data-key]').forEach(th => {{
+        const active = th.dataset.key === sortKey;
+        th.classList.toggle('active', active);
+        const indicator = th.querySelector('.sort-indicator');
+        if (indicator) {{
+          indicator.textContent = active ? (sortDir > 0 ? '▲' : '▼') : '';
+        }}
+      }});
+      replayFilter.classList.toggle('active', replayOnly);
+      failuresFilter.classList.toggle('active', failuresOnly);
     }}
 
     document.querySelectorAll('th[data-key]').forEach(th => {{
@@ -877,6 +963,14 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       }});
     }});
     search.addEventListener('input', renderTable);
+    replayFilter.addEventListener('click', () => {{
+      replayOnly = !replayOnly;
+      renderTable();
+    }});
+    failuresFilter.addEventListener('click', () => {{
+      failuresOnly = !failuresOnly;
+      renderTable();
+    }});
     renderTable();
   </script>
 </body>
