@@ -3342,6 +3342,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     worker_agent_budget = args["env"].get("num_agents")
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
+    append_mining_run = bool(args.get("append_mining_run", 0))
 
     selected_map_names = _resolve_gigaflow_mining_maps(args)
     if not selected_map_names:
@@ -3407,14 +3408,29 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     output_folder = _get_failure_mining_folder(args)
     os.makedirs(output_folder, exist_ok=True)
     filename_suffix = _get_random_eval_filename_suffix(args)
+    episodes_csv_path = os.path.join(output_folder, f"episodes{filename_suffix}.csv")
+    summary_path = os.path.join(output_folder, f"summary{filename_suffix}.json")
     replay_output_folder = os.path.join(output_folder, f"replays{filename_suffix}")
     if capture_mining_replay:
         os.makedirs(replay_output_folder, exist_ok=True)
 
+    existing_episodes_df = None
+    existing_episode_count = 0
+    next_episode_id = 0
+    if append_mining_run and os.path.exists(episodes_csv_path):
+        existing_episodes_df = pd.read_csv(episodes_csv_path)
+        existing_episode_count = int(len(existing_episodes_df))
+        if "episode_id" not in existing_episodes_df.columns:
+            raise pufferlib.APIUsageError(f"Cannot append to {episodes_csv_path}: missing required 'episode_id' column")
+        existing_episode_ids = pd.to_numeric(existing_episodes_df["episode_id"], errors="coerce").dropna()
+        if not existing_episode_ids.empty:
+            next_episode_id = int(existing_episode_ids.max()) + 1
+        else:
+            next_episode_id = existing_episode_count
+
     vecenv.async_reset(args.get("seed"))
     ob, _, _, _, infos, _, _ = vecenv.recv()
     completed_episode_rows = []
-    next_episode_id = 0
     replay_files_written = 0
     replay_bytes_written = 0
     with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
@@ -3470,15 +3486,20 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     vecenv.close()
 
     completed_episode_rows = completed_episode_rows[:target_num_episodes]
-    episodes_df = pd.DataFrame(completed_episode_rows)
-    episodes_csv_path = os.path.join(output_folder, f"episodes{filename_suffix}.csv")
+    new_episodes_df = pd.DataFrame(completed_episode_rows)
+    if existing_episodes_df is not None:
+        episodes_df = pd.concat([existing_episodes_df, new_episodes_df], ignore_index=True, sort=False)
+    else:
+        episodes_df = new_episodes_df
     episodes_df.to_csv(episodes_csv_path, index=False)
 
     numeric_means = episodes_df.select_dtypes(include=[np.number]).mean(numeric_only=True).to_dict()
-    summary_path = os.path.join(output_folder, f"summary{filename_suffix}.json")
     with open(summary_path, "w") as f:
         json.dump(
             {
+                "append_mode": bool(append_mining_run),
+                "existing_episodes_before_append": int(existing_episode_count),
+                "new_episodes_written": int(len(new_episodes_df)),
                 "num_episodes": int(len(episodes_df)),
                 "elapsed_seconds": time.time() - t0,
                 "replay_files_written": int(replay_files_written),
@@ -3490,7 +3511,13 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         )
 
     if not quiet:
-        print(f"\nWrote {len(episodes_df)} completed episodes to {episodes_csv_path}")
+        if append_mining_run and existing_episode_count > 0:
+            print(
+                f"\nAppended {len(new_episodes_df)} completed episodes to {episodes_csv_path} "
+                f"(total={len(episodes_df)})"
+            )
+        else:
+            print(f"\nWrote {len(episodes_df)} completed episodes to {episodes_csv_path}")
         print(f"Wrote summary metrics to {summary_path}")
         print(f"Total mining time: {time.time() - t0:.2f} seconds.")
 
@@ -3863,6 +3890,12 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
+    parser.add_argument(
+        "--append-mining-run",
+        type=int,
+        default=0,
+        help="Append new mined episodes to an existing mining CSV instead of overwriting it",
+    )
     parser.add_argument("--episodes-csv-path", type=str, default=None, help="Path to a mined episodes CSV")
     parser.add_argument(
         "--capture-mining-replay",
