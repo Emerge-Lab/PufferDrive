@@ -349,6 +349,7 @@ struct Drive {
     int adversarial_termination_mode;
     int reward_conditioning;
     int reward_randomization;
+    int adv_drive_conditioning;
     int compute_eval_metrics;
     int max_boundary_segment_observations;
     int max_lane_segment_observations;
@@ -740,6 +741,15 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
     }
+}
+
+static inline void generate_adv_drive_weight(Drive *env, Agent *agent, int agent_idx) {
+    if (!env->adv_drive_conditioning || agent_idx == 0) {
+        agent->adv_drive_weight = 1.0f;
+        return;
+    }
+
+    agent->adv_drive_weight = random_uniform(0.0f, 1.0f);
 }
 
 // Generate procedural traffic light states for GIGAFLOW mode
@@ -3071,6 +3081,7 @@ static void reset_agent_state(Agent *agent) {
     agent->phantom_braking_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
+    agent->adv_drive_weight = 1.0f;
 }
 
 // Check if a spawn position collides with any existing agent
@@ -3842,6 +3853,9 @@ static int compute_observation_size(Drive *env) {
     if (env->reward_conditioning) {
         max_obs += NUM_REWARD_COEFS;
     }
+    if (env->adv_drive_conditioning) {
+        max_obs += 1;
+    }
     if (env->target_type == TARGET_STATIC) {
         max_obs += num_target_waypoints * STATIC_TARGET_FEATURES;
     } else if (env->target_type == TARGET_DYNAMIC) {
@@ -4437,6 +4451,10 @@ static void compute_observations(Drive *env) {
                 // Scale to [-1, 1]
                 obs[obs_idx++] = 2.0f * normalized - 1.0f;
             }
+        }
+        if (env->adv_drive_conditioning) {
+            float normalized = fmaxf(0.0f, fminf(1.0f, ego_entity->adv_drive_weight));
+            obs[obs_idx++] = 2.0f * normalized - 1.0f;
         }
         // Target observations (static or dynamic)
         if (env->target_type == TARGET_STATIC) {
@@ -5159,6 +5177,7 @@ void c_reset(Drive *env) {
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
+            generate_adv_drive_weight(env, agent, agent_idx);
             initialize_agent_progression(env, agent_idx);
             compute_metrics(env, agent_idx);
         }
@@ -5177,6 +5196,7 @@ void c_reset(Drive *env) {
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
+        generate_adv_drive_weight(env, agent, agent_idx);
 
         compute_goals(env, agent_idx);
         initialize_agent_progression(env, agent_idx);
@@ -5251,7 +5271,8 @@ void c_step(Drive *env) {
             reward_terms[i].offroad *= env->adv_reward_weight_offroad;
 
             // Weight given to the "base" = drive reward. 0 is full adversarial mode.
-            reward_terms[i].drive *= env->adv_reward_weight_drive;
+            reward_terms[i].drive *=
+                env->adv_reward_weight_drive * env->agents[env->active_agent_indices[i]].adv_drive_weight;
 
             // Assign adversarial reward.
             float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;

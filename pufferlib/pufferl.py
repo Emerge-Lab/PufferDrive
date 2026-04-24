@@ -169,20 +169,31 @@ class TargetTorchActor:
         self.env = env
         self.hidden_size = getattr(policy, "hidden_size", None)
         self.target_max_partner_obs_distance = float(getattr(env, "target_max_partner_obs_distance", 0.0))
+        self.adv_drive_conditioning = bool(getattr(env, "adv_drive_conditioning", False))
+        self.adv_drive_feature_start = env.ego_features + env.num_reward_coefs
         self.partner_start = env.ego_features + env.num_reward_coefs + env.target_dim
         self.max_partner_observations = env.max_partner_observations
         self.partner_features = env.partner_features
         self.max_position = env.max_position
 
     def prepare_observation(self, raw_observation):
+        observations = raw_observation.clone()
+        if self.adv_drive_conditioning:
+            observations = torch.cat(
+                [
+                    observations[:, : self.adv_drive_feature_start],
+                    observations[:, self.adv_drive_feature_start + 1 :],
+                ],
+                dim=-1,
+            )
+
         if self.target_max_partner_obs_distance <= 0.0 or self.max_partner_observations <= 0:
-            return raw_observation
+            return observations
 
         partner_dim = self.max_partner_observations * self.partner_features
         if partner_dim <= 0:
-            return raw_observation
+            return observations
 
-        observations = raw_observation.clone()
         partner_observations = observations[:, self.partner_start : self.partner_start + partner_dim].view(
             -1, self.max_partner_observations, self.partner_features
         )
@@ -1721,6 +1732,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "num_target_waypoints",
             "reward_conditioning",
             "reward_randomization",
+            "adv_drive_conditioning",
             "trajectory_prediction_length",
             "num_trajectory_scaling_factors",
             "trajectory_scaling_factors",
