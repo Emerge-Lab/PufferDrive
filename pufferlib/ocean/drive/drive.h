@@ -171,6 +171,7 @@ struct Log {
     float collision_rate;
     float did_target_collide;
     float did_target_offroad;
+    float did_target_run_light;
     float did_target_fail;
     float red_light_violation_rate;
     float num_waypoints_reached;
@@ -423,6 +424,7 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_episode_return_drive = log->target_episode_return_drive;
     float did_target_collide = log->did_target_collide;
     float did_target_offroad = log->did_target_offroad;
+    float did_target_run_light = log->did_target_run_light;
     float did_target_fail = log->did_target_fail;
 
     int num_keys = sizeof(Log) / sizeof(float);
@@ -438,6 +440,7 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_episode_return_drive = target_episode_return_drive / target_n;
         log->did_target_collide = did_target_collide / target_n;
         log->did_target_offroad = did_target_offroad / target_n;
+        log->did_target_run_light = did_target_run_light / target_n;
         log->did_target_fail = did_target_fail / target_n;
     }
 
@@ -2796,6 +2799,11 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
 
         if (env->logs[0].offroad_rate > 0.0f) {
             episode_log->did_target_offroad += 1.0f;
+            episode_log->did_target_fail += 1.0f;
+        }
+
+        if (env->logs[0].red_light_violation_rate > 0.0f) {
+            episode_log->did_target_run_light += 1.0f;
             episode_log->did_target_fail += 1.0f;
         }
     }

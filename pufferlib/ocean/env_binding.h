@@ -614,6 +614,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_episode_return_drive = env->log.target_episode_return_drive;
             float did_target_collide = env->log.did_target_collide;
             float did_target_offroad = env->log.did_target_offroad;
+            float did_target_run_light = env->log.did_target_run_light;
             float did_target_fail = env->log.did_target_fail;
             // Average across agents
             for (int i = 0; i < num_keys; i++) {
@@ -627,6 +628,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_episode_return_drive = target_episode_return_drive / target_n;
                 env->log.did_target_collide = did_target_collide / target_n;
                 env->log.did_target_offroad = did_target_offroad / target_n;
+                env->log.did_target_run_light = did_target_run_light / target_n;
                 env->log.did_target_fail = did_target_fail / target_n;
             }
             float adversary_n = n - target_n;
@@ -708,6 +710,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_episode_return_drive = aggregate.target_episode_return_drive;
         float did_target_collide = aggregate.did_target_collide;
         float did_target_offroad = aggregate.did_target_offroad;
+        float did_target_run_light = aggregate.did_target_run_light;
         float did_target_fail = aggregate.did_target_fail;
 
         // Average across agents
@@ -724,6 +727,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_episode_return_drive = target_episode_return_drive / target_n;
             aggregate.did_target_collide = did_target_collide / target_n;
             aggregate.did_target_offroad = did_target_offroad / target_n;
+            aggregate.did_target_run_light = did_target_run_light / target_n;
             aggregate.did_target_fail = did_target_fail / target_n;
         }
         float adversary_n = n - target_n;

@@ -621,6 +621,8 @@ HTML_TEMPLATE = """<!doctype html>
           if (state === 1) color = '#d64545';
           else if (state === 2) color = '#f1c40f';
           else if (state === 3) color = '#27ae60';
+          else if (state === 4) color = '#94a3b8';
+          else color = '#888';
         } else if (Number(control.type) === 2) {
           color = '#d64545';
         } else if (Number(control.type) === 3) {

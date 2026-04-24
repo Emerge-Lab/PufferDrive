@@ -192,19 +192,22 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     float target_episode_return = 0.0f;
     float did_target_collide = 0.0f;
     float did_target_offroad = 0.0f;
+    float did_target_run_light = 0.0f;
     float did_target_fail = 0.0f;
     if (env->active_agent_count > 0) {
         target_episode_length = env->logs[0].episode_length;
         target_episode_return = env->logs[0].episode_return;
         did_target_collide = env->logs[0].collision_rate > 0.0f ? 1.0f : 0.0f;
         did_target_offroad = env->logs[0].offroad_rate > 0.0f ? 1.0f : 0.0f;
-        did_target_fail = did_target_collide || did_target_offroad ? 1.0f : 0.0f;
+        did_target_run_light = env->logs[0].red_light_violation_rate > 0.0f ? 1.0f : 0.0f;
+        did_target_fail = did_target_collide || did_target_offroad || did_target_run_light ? 1.0f : 0.0f;
     }
 
     assign_to_dict(dict, "target_episode_length", target_episode_length);
     assign_to_dict(dict, "target_episode_return", target_episode_return);
     assign_to_dict(dict, "did_target_collide", did_target_collide);
     assign_to_dict(dict, "did_target_offroad", did_target_offroad);
+    assign_to_dict(dict, "did_target_run_light", did_target_run_light);
     assign_to_dict(dict, "did_target_fail", did_target_fail);
 
     /* objects_of_interest array */
@@ -1925,6 +1928,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_mean_reward_drive", log->target_episode_return_drive / safe_target_episode_length);
     assign_to_dict(dict, "did_target_collide", log->did_target_collide);
     assign_to_dict(dict, "did_target_offroad", log->did_target_offroad);
+    assign_to_dict(dict, "did_target_run_light", log->did_target_run_light);
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
