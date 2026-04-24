@@ -126,6 +126,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
+    v = PyLong_FromLong(env->timestep);
+    if (!v)
+        return NULL;
+    if (PyDict_SetItemString(dict, "episode_timestep", v) < 0) {
+        Py_DECREF(v);
+        return NULL;
+    }
+    Py_DECREF(v);
+
     /* Map name / string fields */
     if (env->map_name) {
         PyObject *s = PyUnicode_FromString(env->map_name);

@@ -3343,6 +3343,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
+    args["env"]["compute_eval_metrics"] = True
 
     selected_map_names = _resolve_gigaflow_mining_maps(args)
     if not selected_map_names:
@@ -3355,6 +3356,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["capture_replay"] = False
         worker_kwargs["capture_compact_replay"] = capture_mining_replay
         worker_kwargs["capture_compact_replay_failures_only"] = capture_mining_replay_failures_only
+        worker_kwargs["compute_eval_metrics"] = True
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0

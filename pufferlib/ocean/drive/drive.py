@@ -647,8 +647,9 @@ class Drive(pufferlib.PufferEnv):
 
         for env_idx, scenario in enumerate(scenarios):
             buffer = self._compact_replay_buffers[env_idx]
+            episode_timestep = int(scenario.get("episode_timestep", self.tick) or 0)
             agent_frame = self._extract_compact_agents_frame(scenario, buffer["agent_capacity"])
-            traffic_frame = self._extract_compact_traffic_frame(scenario, self.tick, buffer["traffic_capacity"])
+            traffic_frame = self._extract_compact_traffic_frame(scenario, episode_timestep, buffer["traffic_capacity"])
             for key, value in agent_frame.items():
                 buffer["agent_frames"][key].append(value)
             for key, value in traffic_frame.items():
