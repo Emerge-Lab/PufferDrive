@@ -359,6 +359,7 @@ struct Drive {
     int reward_conditioning;
     int reward_randomization;
     int adv_drive_conditioning;
+    float adv_drive_weight_override;
     int compute_eval_metrics;
     int max_boundary_segment_observations;
     int max_lane_segment_observations;
@@ -777,6 +778,11 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
 static inline void generate_adv_drive_weight(Drive *env, Agent *agent, int agent_idx) {
     if (!env->adv_drive_conditioning || agent_idx == 0) {
         agent->adv_drive_weight = 1.0f;
+        return;
+    }
+
+    if (env->adv_drive_weight_override >= 0.0f) {
+        agent->adv_drive_weight = fmaxf(0.0f, fminf(1.0f, env->adv_drive_weight_override));
         return;
     }
 

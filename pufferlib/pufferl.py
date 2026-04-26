@@ -3324,37 +3324,44 @@ def _render_adversarial_buffered(
     _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
 
 
+def _prepare_mine_failures_args(env_name, tmp_args):
+    model_path = tmp_args.get("load_model_path")
+    num_agents_eval = tmp_args["eval"]["num_agents"]
+    map_dir = tmp_args["eval"]["map_dir"]
+    target_num_episodes = tmp_args.get("num_episodes") or tmp_args["num_scenarios"]
+    requested_agents_per_scene = tmp_args.get("eval_agents_per_scene")
+    requested_min_agents_per_env = tmp_args["env"].get("min_agents_per_env")
+    requested_max_agents_per_env = tmp_args["env"].get("max_agents_per_env")
+    capture_mining_replay = bool(tmp_args.get("capture_mining_replay", 0))
+    capture_mining_replay_failures_only = bool(tmp_args.get("capture_mining_replay_failures_only", 1))
+    eval_overrides = build_eval_overrides(
+        simulation_mode=tmp_args["eval_simulation"],
+        num_agents=num_agents_eval,
+        num_scenarios=target_num_episodes,
+        map_dir=map_dir,
+        maps=tmp_args.get("eval_maps"),
+        num_carla_maps=tmp_args.get("num_carla_maps", 8),
+        agents_per_scene=requested_agents_per_scene or tmp_args["eval"].get("agents_per_scene", 30),
+        scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
+    )
+    args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
+    args["num_episodes"] = target_num_episodes
+    args["capture_mining_replay"] = capture_mining_replay
+    args["capture_mining_replay_failures_only"] = capture_mining_replay_failures_only
+    args["append_mining_run"] = bool(tmp_args.get("append_mining_run", 0))
+    args["adv_drive_lambda"] = tmp_args.get("adv_drive_lambda")
+    args["adv_drive_lambda_bin"] = tmp_args.get("adv_drive_lambda_bin")
+    if requested_agents_per_scene is None:
+        args["env"]["min_agents_per_env"] = requested_min_agents_per_env
+        args["env"]["max_agents_per_env"] = requested_max_agents_per_env
+    return args
+
+
 def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=None, quiet=False):
     t0 = time.time()
 
     if args is None:
-        tmp_args = load_config(env_name)
-        model_path = tmp_args.get("load_model_path")
-        num_agents_eval = tmp_args["eval"]["num_agents"]
-        map_dir = tmp_args["eval"]["map_dir"]
-        target_num_episodes = tmp_args.get("num_episodes") or tmp_args["num_scenarios"]
-        requested_agents_per_scene = tmp_args.get("eval_agents_per_scene")
-        requested_min_agents_per_env = tmp_args["env"].get("min_agents_per_env")
-        requested_max_agents_per_env = tmp_args["env"].get("max_agents_per_env")
-        capture_mining_replay = bool(tmp_args.get("capture_mining_replay", 0))
-        capture_mining_replay_failures_only = bool(tmp_args.get("capture_mining_replay_failures_only", 1))
-        eval_overrides = build_eval_overrides(
-            simulation_mode=tmp_args["eval_simulation"],
-            num_agents=num_agents_eval,
-            num_scenarios=target_num_episodes,
-            map_dir=map_dir,
-            maps=tmp_args.get("eval_maps"),
-            num_carla_maps=tmp_args.get("num_carla_maps", 8),
-            agents_per_scene=requested_agents_per_scene or tmp_args["eval"].get("agents_per_scene", 30),
-            scenario_length=tmp_args.get("eval_scenario_length") or tmp_args["eval"].get("scenario_length"),
-        )
-        args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
-        args["num_episodes"] = target_num_episodes
-        args["capture_mining_replay"] = capture_mining_replay
-        args["capture_mining_replay_failures_only"] = capture_mining_replay_failures_only
-        if requested_agents_per_scene is None:
-            args["env"]["min_agents_per_env"] = requested_min_agents_per_env
-            args["env"]["max_agents_per_env"] = requested_max_agents_per_env
+        args = _prepare_mine_failures_args(env_name, load_config(env_name))
 
     if args["eval_simulation"] != "gigaflow":
         raise pufferlib.APIUsageError("mine_failures currently supports gigaflow only")
@@ -3382,6 +3389,12 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
+    adv_drive_lambda = args.get("adv_drive_lambda")
+    adv_drive_lambda_bin = args.get("adv_drive_lambda_bin")
+    if adv_drive_lambda is not None:
+        adv_drive_lambda = float(adv_drive_lambda)
+        if not 0.0 <= adv_drive_lambda <= 1.0:
+            raise pufferlib.APIUsageError("--adv-drive-lambda must be in [0, 1]")
     args["env"]["compute_eval_metrics"] = True
 
     selected_map_names = _resolve_gigaflow_mining_maps(args)
@@ -3397,6 +3410,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["capture_compact_replay_failures_only"] = capture_mining_replay_failures_only
         worker_kwargs["compute_eval_metrics"] = True
         worker_kwargs["deterministic_traffic_lights"] = True
+        if adv_drive_lambda is not None:
+            worker_kwargs["adv_drive_conditioning"] = True
+            worker_kwargs["adv_drive_weight_override"] = adv_drive_lambda
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0
@@ -3427,6 +3443,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"  Capture compact replay: {capture_mining_replay}")
         if capture_mining_replay:
             print(f"  Capture failures only: {capture_mining_replay_failures_only}")
+        if adv_drive_lambda is not None:
+            print(f"  Adv drive lambda: {adv_drive_lambda:.6g}")
         print(f"  Eval simulation: {args['eval_simulation']}")
         print(f"  Worker map assignment: {', '.join(selected_map_names)}")
 
@@ -3512,6 +3530,10 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                 map_name = summary.get("map_name")
                 if isinstance(map_name, str):
                     summary["map_name"] = os.path.basename(map_name).split(".")[0]
+                if adv_drive_lambda is not None:
+                    summary["adv_drive_lambda"] = adv_drive_lambda
+                    if adv_drive_lambda_bin is not None:
+                        summary["adv_drive_lambda_bin"] = int(adv_drive_lambda_bin)
                 summary["has_replay"] = 0
                 summary["replay_path"] = None
                 if replay_bundle is not None:
@@ -3566,6 +3588,37 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"Total mining time: {time.time() - t0:.2f} seconds.")
 
     return episodes_df
+
+
+def mine_adv_drive_lambda_sweep(env_name, args=None, quiet=False):
+    base_args = args or load_config(env_name)
+    n_bins = int(base_args.get("adv_drive_lambda_bins", 10))
+    episodes_per_bin = int(base_args.get("episodes_per_lambda_bin") or base_args.get("num_episodes") or 1000)
+    if n_bins < 1:
+        raise pufferlib.APIUsageError("--adv-drive-lambda-bins must be >= 1")
+    if episodes_per_bin < 1:
+        raise pufferlib.APIUsageError("--episodes-per-lambda-bin must be >= 1")
+
+    lambda_values = [idx / n_bins for idx in range(n_bins + 1)]
+    merged_df = None
+    if not quiet:
+        print("Adv drive lambda sweep:")
+        print(f"  Lambda bins: {n_bins} ({len(lambda_values)} values)")
+        print(f"  Episodes per lambda: {episodes_per_bin}")
+        print(f"  Total episodes: {episodes_per_bin * len(lambda_values)}")
+
+    for bin_idx, lambda_value in enumerate(lambda_values):
+        run_args = copy.deepcopy(base_args)
+        run_args["num_episodes"] = episodes_per_bin
+        run_args["adv_drive_lambda"] = float(lambda_value)
+        run_args["adv_drive_lambda_bin"] = bin_idx
+        run_args["append_mining_run"] = bool(base_args.get("append_mining_run", 0)) or bin_idx > 0
+        prepared_args = _prepare_mine_failures_args(env_name, run_args)
+        if not quiet:
+            print(f"\nLambda bin {bin_idx}/{n_bins}: adv_drive_lambda={lambda_value:.6g}")
+        merged_df = mine_failures(env_name, args=prepared_args, quiet=quiet)
+
+    return merged_df
 
 
 def render_mined_failures(env_name, args=None, quiet=False):
@@ -3935,6 +3988,24 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
     parser.add_argument(
+        "--adv-drive-lambda",
+        type=float,
+        default=None,
+        help="Fixed adversarial drive weight for mine_failures. If unset, adversaries use env sampling.",
+    )
+    parser.add_argument(
+        "--adv-drive-lambda-bins",
+        type=int,
+        default=10,
+        help="Number of intervals for mine_adv_drive_lambda_sweep; values include both 0 and 1.",
+    )
+    parser.add_argument(
+        "--episodes-per-lambda-bin",
+        type=int,
+        default=None,
+        help="Completed episodes to mine for each lambda value in mine_adv_drive_lambda_sweep.",
+    )
+    parser.add_argument(
         "--append-mining-run",
         type=int,
         default=0,
@@ -4079,7 +4150,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, render_mined_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, mine_adv_drive_lambda_sweep, render_mined_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -4099,6 +4170,9 @@ def main():
         print("")
     elif mode == "mine_failures":
         mine_failures(env_name=env_name)
+        print("")
+    elif mode == "mine_adv_drive_lambda_sweep":
+        mine_adv_drive_lambda_sweep(env_name=env_name)
         print("")
     elif mode == "render_mined_failures":
         render_mined_failures(env_name=env_name)

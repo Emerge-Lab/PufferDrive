@@ -179,6 +179,7 @@ class Drive(pufferlib.PufferEnv):
         reward_conditioning=False,
         reward_randomization=False,
         adv_drive_conditioning=False,
+        adv_drive_weight_override=-1.0,
         compute_eval_metrics=True,
         split_network=False,
         max_lane_segment_observations=32,
@@ -219,6 +220,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.adv_drive_conditioning = bool(adv_drive_conditioning)
+        self.adv_drive_weight_override = float(adv_drive_weight_override)
         self.compute_eval_metrics = compute_eval_metrics
         self.split_network = split_network
         self.render_mode = render_mode
@@ -831,6 +833,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
             "adv_drive_conditioning": self.adv_drive_conditioning,
+            "adv_drive_weight_override": self.adv_drive_weight_override,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "max_goal_position": self.max_goal_position,
