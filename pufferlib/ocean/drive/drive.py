@@ -178,8 +178,8 @@ class Drive(pufferlib.PufferEnv):
         target_type="static",
         reward_conditioning=False,
         reward_randomization=False,
-        adv_drive_conditioning=False,
-        adv_drive_weight_override=-1.0,
+        adv_reward_weight_drive_conditioning=False,
+        adv_reward_weight_drive_override=-1.0,
         compute_eval_metrics=True,
         split_network=False,
         max_lane_segment_observations=32,
@@ -219,8 +219,8 @@ class Drive(pufferlib.PufferEnv):
         self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
-        self.adv_drive_conditioning = bool(adv_drive_conditioning)
-        self.adv_drive_weight_override = float(adv_drive_weight_override)
+        self.adv_reward_weight_drive_conditioning = bool(adv_reward_weight_drive_conditioning)
+        self.adv_reward_weight_drive_override = float(adv_reward_weight_drive_override)
         self.compute_eval_metrics = compute_eval_metrics
         self.split_network = split_network
         self.render_mode = render_mode
@@ -334,7 +334,7 @@ class Drive(pufferlib.PufferEnv):
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
-        self.num_adv_drive_features = 1 if self.adv_drive_conditioning else 0
+        self.num_adv_reward_weight_drive_features = 1 if self.adv_reward_weight_drive_conditioning else 0
 
         # Target features based on target_type
         if target_type == "static":
@@ -346,7 +346,7 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
-            + self.num_adv_drive_features
+            + self.num_adv_reward_weight_drive_features
             + self.target_dim
             + self.max_partner_observations * self.partner_features
             + self.obs_lane_segment_count * self.road_features
@@ -832,8 +832,8 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
-            "adv_drive_conditioning": self.adv_drive_conditioning,
-            "adv_drive_weight_override": self.adv_drive_weight_override,
+            "adv_reward_weight_drive_conditioning": self.adv_reward_weight_drive_conditioning,
+            "adv_reward_weight_drive_override": self.adv_reward_weight_drive_override,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "max_goal_position": self.max_goal_position,
