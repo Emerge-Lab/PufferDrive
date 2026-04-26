@@ -189,6 +189,7 @@ def compute_interaction_features(
     valid: np.ndarray | None = None,
     corner_rounding_factor: float = 0.7,
     seconds_per_step: float = 0.1,
+    eval_agent_chunk_size: int | None = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Computes distance to nearest object for each agent, grouped by scenario.
 
@@ -255,42 +256,47 @@ def compute_interaction_features(
         scenario_valid = valid_t[scenario_mask]
 
         scenario_eval_mask_np = eval_mask[scenario_mask_np]
-        scenario_eval_mask = torch.as_tensor(scenario_eval_mask_np, dtype=torch.bool, device=x_t.device)
+        local_eval_indices = np.where(scenario_eval_mask_np)[0]
+        if local_eval_indices.size == 0:
+            continue
 
-        distances_to_objects = interaction_features.compute_distance_to_nearest_object(
-            center_x=scenario_x,
-            center_y=scenario_y,
-            length=episode_length,
-            width=scenario_width,
-            heading=scenario_heading,
-            valid=scenario_valid,
-            corner_rounding_factor=corner_rounding_factor,
-            evaluated_object_mask=scenario_eval_mask,
-        )
+        chunk_size = local_eval_indices.size if eval_agent_chunk_size is None else max(1, int(eval_agent_chunk_size))
+        for start in range(0, local_eval_indices.size, chunk_size):
+            chunk_local_indices = local_eval_indices[start : start + chunk_size]
+            chunk_eval_mask_np = np.zeros_like(scenario_eval_mask_np, dtype=bool)
+            chunk_eval_mask_np[chunk_local_indices] = True
+            scenario_eval_mask = torch.as_tensor(chunk_eval_mask_np, dtype=torch.bool, device=x_t.device)
 
-        is_colliding_per_step = distances_to_objects < interaction_features.COLLISION_DISTANCE_THRESHOLD
+            distances_to_objects = interaction_features.compute_distance_to_nearest_object(
+                center_x=scenario_x,
+                center_y=scenario_y,
+                length=episode_length,
+                width=scenario_width,
+                heading=scenario_heading,
+                valid=scenario_valid,
+                corner_rounding_factor=corner_rounding_factor,
+                evaluated_object_mask=scenario_eval_mask,
+            )
 
-        times_to_collision = interaction_features.compute_time_to_collision(
-            center_x=scenario_x,
-            center_y=scenario_y,
-            length=episode_length,
-            width=scenario_width,
-            heading=scenario_heading,
-            valid=scenario_valid,
-            seconds_per_step=seconds_per_step,
-            evaluated_object_mask=scenario_eval_mask,
-        )
+            is_colliding_per_step = distances_to_objects < interaction_features.COLLISION_DISTANCE_THRESHOLD
 
-        eval_agents_in_scenario = agent_indices[scenario_eval_mask_np]
-        result_indices = [eval_to_result[idx] for idx in eval_agents_in_scenario]
+            times_to_collision = interaction_features.compute_time_to_collision(
+                center_x=scenario_x,
+                center_y=scenario_y,
+                length=episode_length,
+                width=scenario_width,
+                heading=scenario_heading,
+                valid=scenario_valid,
+                seconds_per_step=seconds_per_step,
+                evaluated_object_mask=scenario_eval_mask,
+            )
 
-        distances_np = distances_to_objects.cpu().numpy()
-        collisions_np = is_colliding_per_step.cpu().numpy()
-        ttc_np = times_to_collision.cpu().numpy()
+            eval_agents_in_scenario = agent_indices[chunk_local_indices]
+            result_indices = [eval_to_result[idx] for idx in eval_agents_in_scenario]
 
-        result_distances[result_indices] = distances_np
-        result_collisions[result_indices] = collisions_np
-        result_ttc[result_indices] = ttc_np
+            result_distances[result_indices] = distances_to_objects.cpu().numpy()
+            result_collisions[result_indices] = is_colliding_per_step.cpu().numpy()
+            result_ttc[result_indices] = times_to_collision.cpu().numpy()
 
     return result_distances, result_collisions, result_ttc
 

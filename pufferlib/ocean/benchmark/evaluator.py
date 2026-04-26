@@ -959,6 +959,7 @@ class PlanningEvaluator:
         eval_mask,
         device,
         seconds_per_step=0.1,
+        eval_agent_chunk_size=None,
     ):
         """Classify collision responsibility for evaluated agents.
 
@@ -1000,52 +1001,58 @@ class PlanningEvaluator:
             length = np.broadcast_to(agent_length[agent_indices, None], (num_agents, num_rollouts)).copy()
             width = np.broadcast_to(agent_width[agent_indices, None], (num_agents, num_rollouts)).copy()
 
-            signed_distances = interaction_features.compute_signed_distances(
-                center_x=torch.as_tensor(scenario_x, dtype=torch.float32, device=device),
-                center_y=torch.as_tensor(scenario_y, dtype=torch.float32, device=device),
-                length=torch.as_tensor(length, dtype=torch.float32, device=device),
-                width=torch.as_tensor(width, dtype=torch.float32, device=device),
-                heading=torch.as_tensor(scenario_heading, dtype=torch.float32, device=device),
-                valid=torch.as_tensor(scenario_valid, dtype=torch.bool, device=device),
-                evaluated_object_mask=torch.as_tensor(scenario_eval_mask_np, dtype=torch.bool, device=device),
-            )
-            colliding = (signed_distances < interaction_features.COLLISION_DISTANCE_THRESHOLD).cpu().numpy()
-
             local_eval_indices = np.where(scenario_eval_mask_np)[0]
-            for eval_rank, local_eval_idx in enumerate(local_eval_indices):
-                global_eval_idx = agent_indices[local_eval_idx]
-                result_idx = eval_to_result[global_eval_idx]
+            chunk_size = local_eval_indices.size if eval_agent_chunk_size is None else max(1, int(eval_agent_chunk_size))
+            for start in range(0, local_eval_indices.size, chunk_size):
+                chunk_local_indices = local_eval_indices[start : start + chunk_size]
+                chunk_eval_mask_np = np.zeros_like(scenario_eval_mask_np, dtype=bool)
+                chunk_eval_mask_np[chunk_local_indices] = True
 
-                for other_idx in range(num_agents):
-                    if other_idx == local_eval_idx:
-                        continue
+                signed_distances = interaction_features.compute_signed_distances(
+                    center_x=torch.as_tensor(scenario_x, dtype=torch.float32, device=device),
+                    center_y=torch.as_tensor(scenario_y, dtype=torch.float32, device=device),
+                    length=torch.as_tensor(length, dtype=torch.float32, device=device),
+                    width=torch.as_tensor(width, dtype=torch.float32, device=device),
+                    heading=torch.as_tensor(scenario_heading, dtype=torch.float32, device=device),
+                    valid=torch.as_tensor(scenario_valid, dtype=torch.bool, device=device),
+                    evaluated_object_mask=torch.as_tensor(chunk_eval_mask_np, dtype=torch.bool, device=device),
+                )
+                colliding = (signed_distances < interaction_features.COLLISION_DISTANCE_THRESHOLD).cpu().numpy()
 
-                    pair_collision = colliding[eval_rank, other_idx]
-                    if not np.any(pair_collision):
-                        continue
+                for eval_rank, local_eval_idx in enumerate(chunk_local_indices):
+                    global_eval_idx = agent_indices[local_eval_idx]
+                    result_idx = eval_to_result[global_eval_idx]
 
-                    dx = scenario_x[other_idx] - scenario_x[local_eval_idx]
-                    dy = scenario_y[other_idx] - scenario_y[local_eval_idx]
-                    eval_forward_dot = dx * np.cos(scenario_heading[local_eval_idx]) + dy * np.sin(
-                        scenario_heading[local_eval_idx]
-                    )
-                    eval_approach_dot = scenario_vx[local_eval_idx] * dx + scenario_vy[local_eval_idx] * dy
-                    at_fault = pair_collision & (eval_forward_dot > 0.0) & (eval_approach_dot > 0.0)
+                    for other_idx in range(num_agents):
+                        if other_idx == local_eval_idx:
+                            continue
 
-                    dx_reverse = -dx
-                    dy_reverse = -dy
-                    other_forward_dot = dx_reverse * np.cos(scenario_heading[other_idx]) + dy_reverse * np.sin(
-                        scenario_heading[other_idx]
-                    )
-                    other_approach_dot = scenario_vx[other_idx] * dx_reverse + scenario_vy[other_idx] * dy_reverse
-                    rear = pair_collision & (other_forward_dot > 0.0) & (other_approach_dot > 0.0)
+                        pair_collision = colliding[eval_rank, other_idx]
+                        if not np.any(pair_collision):
+                            continue
 
-                    at_fault_collision[result_idx] = np.maximum(
-                        at_fault_collision[result_idx], np.any(at_fault, axis=1).astype(np.float32)
-                    )
-                    rear_collision[result_idx] = np.maximum(
-                        rear_collision[result_idx], np.any(rear, axis=1).astype(np.float32)
-                    )
+                        dx = scenario_x[other_idx] - scenario_x[local_eval_idx]
+                        dy = scenario_y[other_idx] - scenario_y[local_eval_idx]
+                        eval_forward_dot = dx * np.cos(scenario_heading[local_eval_idx]) + dy * np.sin(
+                            scenario_heading[local_eval_idx]
+                        )
+                        eval_approach_dot = scenario_vx[local_eval_idx] * dx + scenario_vy[local_eval_idx] * dy
+                        at_fault = pair_collision & (eval_forward_dot > 0.0) & (eval_approach_dot > 0.0)
+
+                        dx_reverse = -dx
+                        dy_reverse = -dy
+                        other_forward_dot = dx_reverse * np.cos(scenario_heading[other_idx]) + dy_reverse * np.sin(
+                            scenario_heading[other_idx]
+                        )
+                        other_approach_dot = scenario_vx[other_idx] * dx_reverse + scenario_vy[other_idx] * dy_reverse
+                        rear = pair_collision & (other_forward_dot > 0.0) & (other_approach_dot > 0.0)
+
+                        at_fault_collision[result_idx] = np.maximum(
+                            at_fault_collision[result_idx], np.any(at_fault, axis=1).astype(np.float32)
+                        )
+                        rear_collision[result_idx] = np.maximum(
+                            rear_collision[result_idx], np.any(rear, axis=1).astype(np.float32)
+                        )
 
         return at_fault_collision, rear_collision
 
@@ -1064,6 +1071,7 @@ class PlanningEvaluator:
         y = combined_trajectories["y"]
         heading = combined_trajectories["heading"]
         valid = combined_trajectories["valid"]
+        num_rollouts = x.shape[1]
         agent_length = agent_state["length"]
         agent_width = agent_state["width"]
         scenario_ids = self._normalize_scenario_ids(combined_trajectories["scenario_id"])
@@ -1077,7 +1085,15 @@ class PlanningEvaluator:
         eval_scenario_ids = scenario_ids[eval_mask]
 
         _, collisions_per_step, _ = metrics.compute_interaction_features(
-            x, y, heading, scenario_ids, agent_length, agent_width, eval_mask, device=self.device
+            x,
+            y,
+            heading,
+            scenario_ids,
+            agent_length,
+            agent_width,
+            eval_mask,
+            device=self.device,
+            eval_agent_chunk_size=self.config.get("eval", {}).get("planning_interaction_eval_chunk_size"),
         )
         at_fault_collision_rate, rear_collision_rate = self._compute_collision_fault_rates(
             x,
@@ -1089,6 +1105,7 @@ class PlanningEvaluator:
             agent_width,
             eval_mask,
             device=self.device,
+            eval_agent_chunk_size=self.config.get("eval", {}).get("planning_interaction_eval_chunk_size"),
         )
 
         _, offroad_per_step = metrics.compute_map_features(
@@ -1146,15 +1163,18 @@ class PlanningEvaluator:
             scene_level_results["route_progress"] = route_progress.flatten()
             scene_level_results["score"] = (accuracy * reached_goal).flatten()
 
-        scene_level_results = pd.DataFrame(scene_level_results, index=eval_scenario_ids[:, 0])
+        result_index = np.repeat(eval_scenario_ids[:, 0], num_rollouts)
+        scene_level_results = pd.DataFrame(scene_level_results, index=result_index)
 
         if aggregate_results:
             aggregate_metrics = scene_level_results.mean().to_dict()
             aggregate_metrics["num_scenarios"] = scene_level_results.shape[0]
             return {k: v.item() if hasattr(v, "item") else v for k, v in aggregate_metrics.items()}
 
-        print("\n Scene-level results:\n")
-        print(scene_level_results)
+        print(
+            "\n Scene-level results: "
+            f"{scene_level_results.shape[0]} records x {scene_level_results.shape[1]} metrics\n"
+        )
         return scene_level_results
 
 

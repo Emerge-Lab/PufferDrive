@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 from collections import OrderedDict
 from datetime import datetime
@@ -19,7 +20,6 @@ if str(REPO_ROOT) not in sys.path:
 
 import pufferlib.pufferl as pufferl
 from pufferlib.ocean.benchmark.evaluate_imported_trajectories import (
-    _load_simulated_trajectories,
     evaluate_trajectories,
     evaluate_trajectories_chunked,
 )
@@ -60,6 +60,12 @@ def parse_args():
         help="Optional per-scenario agent chunk size for planning map metrics. Use 0 to disable chunking.",
     )
     parser.add_argument(
+        "--planning-interaction-eval-chunk-size",
+        type=int,
+        default=16,
+        help="Optional per-scenario evaluated-agent chunk size for planning interaction metrics. Use 0 to disable.",
+    )
+    parser.add_argument(
         "--map-dir",
         type=Path,
         default=None,
@@ -86,13 +92,20 @@ def parse_args():
 
 def infer_export_metadata(path: Path):
     stem = path.stem
+    export_variant = ""
+    rollout_match = re.search(r"_r\d+$", stem)
+    if rollout_match:
+        export_variant = rollout_match.group(0).lstrip("_")
+        stem = stem[: rollout_match.start()]
+
     for suffix, metadata in EXPORT_SUFFIXES.items():
         if stem.endswith(suffix):
             model = stem[: -len(suffix)]
-            return model, metadata
+            model = re.sub(r"_val\d+k?$", "", model)
+            return model, metadata, export_variant
     raise ValueError(
         f"Could not infer eval mode from {path.name}. Expected one of: "
-        + ", ".join(f"*{suffix}.pkl" for suffix in EXPORT_SUFFIXES)
+        + ", ".join(f"*{suffix}[_rN].pkl" for suffix in EXPORT_SUFFIXES)
     )
 
 
@@ -104,7 +117,13 @@ def list_exports(input_dir: Path):
 
 
 def make_config(args, *, wosac_enabled: bool, planning_filter: str | None = None, wosac_filter: str | None = None):
-    config = pufferl.load_config("puffer_drive")
+    original_argv = sys.argv
+    try:
+        sys.argv = [original_argv[0]]
+        config = pufferl.load_config("puffer_drive")
+    finally:
+        sys.argv = original_argv
+
     config["eval"]["wosac_aggregate_results"] = True
     config["eval"]["wosac_realism_eval"] = wosac_enabled
 
@@ -124,6 +143,8 @@ def make_config(args, *, wosac_enabled: bool, planning_filter: str | None = None
 
     if args.planning_map_agent_chunk_size and args.planning_map_agent_chunk_size > 0:
         config["eval"]["planning_map_agent_chunk_size"] = int(args.planning_map_agent_chunk_size)
+    if args.planning_interaction_eval_chunk_size and args.planning_interaction_eval_chunk_size > 0:
+        config["eval"]["planning_interaction_eval_chunk_size"] = int(args.planning_interaction_eval_chunk_size)
 
     return config
 
@@ -162,6 +183,22 @@ def build_wide_rows(long_rows):
     return list(result.values())
 
 
+def write_outputs(output_dir: Path, long_rows, raw_metrics):
+    long_df = pd.DataFrame(long_rows)
+    long_csv = output_dir / "summary_full_with_wosac.csv"
+    long_df.to_csv(long_csv, index=False)
+
+    wide_df = pd.DataFrame(build_wide_rows(long_rows))
+    wide_csv = output_dir / "summary_model_wide.csv"
+    wide_df.to_csv(wide_csv, index=False)
+
+    raw_json = output_dir / "summary_raw_metrics.json"
+    with raw_json.open("w") as f:
+        json.dump(raw_metrics, f, indent=2)
+
+    return long_csv, wide_csv, raw_json
+
+
 def main():
     args = parse_args()
     exports = list_exports(args.input_dir)
@@ -172,17 +209,29 @@ def main():
 
     long_rows = []
     raw_metrics = OrderedDict()
+    long_csv = output_dir / "summary_full_with_wosac.csv"
+    raw_json = output_dir / "summary_raw_metrics.json"
+    if long_csv.exists():
+        existing_df = pd.read_csv(long_csv)
+        long_rows = existing_df.to_dict("records")
+        print(f"Resuming from {long_csv}; found {len(long_rows)} completed rows.")
+    if raw_json.exists():
+        with raw_json.open() as f:
+            raw_metrics = OrderedDict(json.load(f))
+
+    completed_files = {row["source_file"] for row in long_rows if "source_file" in row}
 
     for export_path in exports:
-        model, metadata = infer_export_metadata(export_path)
+        if export_path.name in completed_files:
+            print(f"Skipping completed export {export_path.name}")
+            continue
+
+        model, metadata, export_variant = infer_export_metadata(export_path)
         eval_scope = metadata["eval_scope"]
         planning_filter = metadata["planning_filter"]
 
-        simulated = _load_simulated_trajectories(str(export_path))
-        num_rollouts = int(simulated["x"].shape[1])
-        num_agents = int(simulated["x"].shape[0])
         print(f"\n=== {export_path.name} ===")
-        print(f"model={model} eval_scope={eval_scope} num_agents={num_agents} num_rollouts={num_rollouts}")
+        print(f"model={model} eval_scope={eval_scope} export_variant={export_variant or 'default'}")
 
         planning_config = make_config(args, wosac_enabled=False, planning_filter=planning_filter)
         planning_metrics = run_eval(export_path, planning_config, args.chunk_size)
@@ -190,6 +239,7 @@ def main():
         row = {
             "model": model,
             "eval_scope": eval_scope,
+            "export_variant": export_variant,
             "source_file": export_path.name,
             **prefixed(planning_metrics, "planning_"),
         }
@@ -203,21 +253,12 @@ def main():
             raw_metrics[export_path.name]["wosac"] = wosac_metrics
 
         long_rows.append(row)
-
-    long_df = pd.DataFrame(long_rows)
-    long_csv = output_dir / "summary_full_with_wosac.csv"
-    long_df.to_csv(long_csv, index=False)
-
-    wide_df = pd.DataFrame(build_wide_rows(long_rows))
-    wide_csv = output_dir / "summary_model_wide.csv"
-    wide_df.to_csv(wide_csv, index=False)
-
-    with (output_dir / "summary_raw_metrics.json").open("w") as f:
-        json.dump(raw_metrics, f, indent=2)
+        long_csv, wide_csv, raw_json = write_outputs(output_dir, long_rows, raw_metrics)
+        print(f"Wrote incremental summaries to {output_dir}")
 
     print(f"\nWrote long summary to {long_csv}")
     print(f"Wrote wide summary to {wide_csv}")
-    print(f"Wrote raw metrics to {output_dir / 'summary_raw_metrics.json'}")
+    print(f"Wrote raw metrics to {raw_json}")
 
 
 if __name__ == "__main__":

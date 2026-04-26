@@ -312,8 +312,10 @@ def evaluate_trajectories_chunked(simulated_trajectory_file, args, chunk_size):
         _print_results(results, wosac_enabled)
         return results
 
-    print("\n Scene-level results:\n")
-    print(combined_results)
+    print(
+        "\n Scene-level results: "
+        f"{combined_results.shape[0]} records x {combined_results.shape[1]} metrics\n"
+    )
     return combined_results
 
 
@@ -346,8 +348,10 @@ def evaluate_trajectories(simulated_trajectory_file, args):
         _print_results(results, wosac_enabled)
         return results
 
-    print("\n Scene-level results:\n")
-    print(scene_level_results)
+    print(
+        "\n Scene-level results: "
+        f"{scene_level_results.shape[0]} records x {scene_level_results.shape[1]} metrics\n"
+    )
     return scene_level_results
 
 
