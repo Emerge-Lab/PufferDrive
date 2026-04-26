@@ -1842,6 +1842,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
     env->adv_reward_weight_adversarial = (float)unpack(kwargs, "adv_reward_weight_adversarial");
     env->adv_bonus_only = (bool)unpack(kwargs, "adv_bonus_only");
+    env->normalize_adv_reward_by_gamma = (bool)unpack(kwargs, "normalize_adv_reward_by_gamma");
+    env->gamma = (float)unpack(kwargs, "gamma");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");

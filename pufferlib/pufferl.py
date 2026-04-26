@@ -4139,6 +4139,7 @@ def load_config(env_name, config_dir=None):
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
     args["train"]["global_total_timesteps"] = args["train"]["total_timesteps"]
+    args["env"]["gamma"] = args["train"]["gamma"]
 
     # Under DDP, keep the per-rank batch geometry unchanged so launching on
     # N GPUs gives an N-times larger effective batch. Only divide the local

@@ -263,6 +263,7 @@ struct GridMap {
 typedef struct {
     float collision;
     float offroad;
+    float red_light;
     float drive;
     float adversarial;
 } RewardTerms;
@@ -322,6 +323,8 @@ struct Drive {
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
     float current_adv_reward_weight_drive;
+    float gamma;
+    int normalize_adv_reward_by_gamma;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -408,7 +411,7 @@ typedef struct {
 } AgentDistance;
 
 static inline float total_reward_terms(const RewardTerms *terms) {
-    return terms->collision + terms->offroad + terms->drive + terms->adversarial;
+    return terms->collision + terms->offroad + terms->red_light + terms->drive + terms->adversarial;
 }
 
 static inline void apply_reward_terms(Drive *env, int i, const RewardTerms *terms) {
@@ -4322,7 +4325,7 @@ static RewardTerms compute_rewards(Drive *env, int i) {
     if (agent->metrics_array[RED_LIGHT_IDX] > 0.0f) {
         float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
 
-        terms.drive += reward_red_light;
+        terms.red_light += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
     }
 
@@ -5326,22 +5329,31 @@ void c_step(Drive *env) {
 
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
-        float target_reward = total_reward_terms(&reward_terms[0]);
+        RewardTerms *target_terms = &reward_terms[0];
+        float gamma_scale = env->normalize_adv_reward_by_gamma ? fmaxf(0.0f, 1.0f - env->gamma) : 1.0f;
+        float target_terminal_penalty = target_terms->collision + target_terms->offroad + target_terms->red_light;
+        float target_dense_reward = target_terms->drive + target_terms->adversarial;
+        float target_adversarial_value = target_terminal_penalty + gamma_scale * target_dense_reward;
 
         for (int i = 1; i < env->active_agent_count; i++) {
             reward_terms[i].collision *= env->adv_reward_weight_collision;
             reward_terms[i].offroad *= env->adv_reward_weight_offroad;
 
-            // With conditioning enabled, adv_reward_weight_drive is the drive reward
-            // coefficient itself. Otherwise keep the legacy fixed coefficient.
             float drive_weight = env->adv_reward_weight_drive_conditioning
                                      ? env->agents[env->active_agent_indices[i]].adv_reward_weight_drive
                                      : env->adv_reward_weight_drive;
-            reward_terms[i].drive *= drive_weight;
+            float drive_scale = drive_weight;
+            if (env->adv_reward_weight_drive_conditioning && env->normalize_adv_reward_by_gamma) {
+                drive_scale *= gamma_scale;
+            }
+            reward_terms[i].drive *= drive_scale;
 
             // Assign adversarial reward.
-            float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;
-            reward_terms[i].adversarial = adversarial_bonus * env->adv_reward_weight_adversarial;
+            float adversarial_bonus =
+                env->adv_bonus_only ? fmaxf(-target_adversarial_value, 0.0f) : -target_adversarial_value;
+            float adversarial_weight =
+                env->adv_reward_weight_drive_conditioning ? 1.0f - drive_weight : env->adv_reward_weight_adversarial;
+            reward_terms[i].adversarial = adversarial_bonus * adversarial_weight;
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
             // reward_terms[i].offroad = 0.0f;
