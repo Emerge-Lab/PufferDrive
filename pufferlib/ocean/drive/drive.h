@@ -321,6 +321,7 @@ struct Drive {
     float adv_reward_weight_drive;
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
+    float current_adv_reward_weight_drive;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -775,18 +776,22 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
-static inline void generate_adv_reward_weight_drive(Drive *env, Agent *agent, int agent_idx) {
+static inline void generate_env_adv_reward_weight_drive(Drive *env) {
+    if (env->adv_reward_weight_drive_override >= 0.0f) {
+        env->current_adv_reward_weight_drive = fmaxf(0.0f, fminf(1.0f, env->adv_reward_weight_drive_override));
+        return;
+    }
+
+    env->current_adv_reward_weight_drive = random_uniform(0.0f, 1.0f);
+}
+
+static inline void assign_adv_reward_weight_drive(Drive *env, Agent *agent, int agent_idx) {
     if (!env->adv_reward_weight_drive_conditioning || agent_idx == 0) {
         agent->adv_reward_weight_drive = 1.0f;
         return;
     }
 
-    if (env->adv_reward_weight_drive_override >= 0.0f) {
-        agent->adv_reward_weight_drive = fmaxf(0.0f, fminf(1.0f, env->adv_reward_weight_drive_override));
-        return;
-    }
-
-    agent->adv_reward_weight_drive = random_uniform(0.0f, 1.0f);
+    agent->adv_reward_weight_drive = env->current_adv_reward_weight_drive;
 }
 
 // Generate procedural traffic light states for GIGAFLOW mode
@@ -5222,6 +5227,7 @@ void c_reset(Drive *env) {
 
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.
         // Only need to generate reward coefs and compute initial metrics.
+        generate_env_adv_reward_weight_drive(env);
         for (int x = 0; x < env->active_agent_count; x++) {
             env->logs[x] = (Log){0};
             int agent_idx = env->active_agent_indices[x];
@@ -5232,7 +5238,7 @@ void c_reset(Drive *env) {
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
-            generate_adv_reward_weight_drive(env, agent, agent_idx);
+            assign_adv_reward_weight_drive(env, agent, agent_idx);
             initialize_agent_progression(env, agent_idx);
             compute_metrics(env, agent_idx);
         }
@@ -5241,6 +5247,7 @@ void c_reset(Drive *env) {
     }
 
     set_start_position(env);
+    generate_env_adv_reward_weight_drive(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
@@ -5251,7 +5258,7 @@ void c_reset(Drive *env) {
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
-        generate_adv_reward_weight_drive(env, agent, agent_idx);
+        assign_adv_reward_weight_drive(env, agent, agent_idx);
 
         compute_goals(env, agent_idx);
         initialize_agent_progression(env, agent_idx);
