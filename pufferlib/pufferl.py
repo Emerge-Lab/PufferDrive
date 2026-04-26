@@ -748,7 +748,11 @@ class PuffeRL:
             self.last_log_step = self.global_step
             profile.clear()
 
-        if self.epoch % config["checkpoint_interval"] == 0 or done_training:
+        # The final checkpoint is written by close(), after all ranks have
+        # finished the last distributed logging/dashboard reductions. Saving
+        # here can leave nonzero ranks waiting in the next all_reduce while
+        # rank 0 is still doing slow filesystem or artifact work.
+        if not done_training and self.epoch % config["checkpoint_interval"] == 0:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
@@ -1905,11 +1909,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     #     stats = pufferl.evaluate()
     #     i += 1
 
-    logs = pufferl.mean_and_log()
-    if logs is not None:
-        all_logs.append(logs)
-
-    pufferl.print_dashboard()
+    # train() already logs and prints on the update that reaches done_training.
+    # Avoid another final distributed logging pass before rank 0 does the
+    # shutdown checkpoint and artifact handling.
     model_path = pufferl.close()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
