@@ -1769,7 +1769,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "lane_segment_dropout",
             "max_partner_observations",
             "target_max_partner_obs_distance",
-            "strip_target_features_for_adv",
             "max_traffic_control_observations",
             "traffic_control_scope",
         }
