@@ -170,8 +170,6 @@ struct Drive {
     // Reward coefficients
     float reward_collision;
     float reward_offroad;
-    float reward_goal_post_respawn;
-    float reward_collision_post_respawn;
     // Infraction behaviors (0=none, STOP_AGENT, REMOVE_AGENT)
     int collision_behavior;
     int offroad_behavior;
@@ -260,7 +258,6 @@ static void reset_agent_state(Agent *agent) {
     agent->removed = 0;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
-    agent->respawn_timestep = -1;
     agent->reached_goal = 0;
     agent->collided_before_goal = 0;
     agent->reached_goal_this_episode = 0;
@@ -1033,13 +1030,6 @@ void free_allocated(Drive *env) {
 // Core Simulation Functions
 // ========================================
 
-void respawn_agent(Drive *env, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    initialize_agent_dynamics_from_log_step(agent, env->init_step, env->dt);
-    agent->reached_goal = 0;
-    agent->respawn_timestep = env->timestep;
-}
-
 static void compute_metrics(Drive *env, Agent *agent) {
     for (int i = 0; i < NUM_METRICS; i++) {
         agent->metrics_array[i] = 0.0f;
@@ -1253,12 +1243,7 @@ static void compute_metrics(Drive *env, Agent *agent) {
     }
 
     int car_collided_with_index = collision_check(env, agent);
-    if (car_collided_with_index != -1
-        && (agent->respawn_timestep != -1 || env->agents[car_collided_with_index].respawn_timestep != -1)) {
-        car_collided_with_index = -1;
-    }
     if (car_collided_with_index != -1) {
-        agent->collision_state = VEHICLE_COLLISION;
         agent->metrics_array[COLLISION_IDX] = 1.0f;
         if (env->collision_behavior == STOP_AGENT) {
             agent->stopped = 1;
@@ -1303,13 +1288,8 @@ static void compute_rewards(Drive *env, int i) {
 
     // Goal reward
     if (agent->metrics_array[REACH_GOAL_IDX] > 0.0f) {
-        if (agent->respawn_timestep != -1) {
-            env->rewards[i] += env->reward_goal_post_respawn;
-            env->logs[i].episode_return += env->reward_goal_post_respawn;
-        } else {
-            env->rewards[i] += 1.0f;
-            env->logs[i].episode_return += 1.0f;
-        }
+        env->rewards[i] += 1.0f;
+        env->logs[i].episode_return += 1.0f;
         agent->reached_goal = 1;
         agent->reached_goal_this_episode = 1;
     }
@@ -1338,7 +1318,6 @@ void compute_observations(Drive *env) {
         obs[obs_idx++] = ego->sim_width / MAX_VEH_WIDTH;
         obs[obs_idx++] = ego->sim_length / MAX_VEH_LEN;
         obs[obs_idx++] = (ego->collision_state > NO_COLLISION) ? 1 : 0;
-        obs[obs_idx++] = (ego->respawn_timestep != -1) ? 1 : 0;
 
         // ====== Reward conditioning and target observations ======
         // To fill
@@ -1358,9 +1337,6 @@ void compute_observations(Drive *env) {
                 continue;
             }
             Agent *other_entity = &env->agents[j];
-            if (other_entity->respawn_timestep != -1) {
-                continue;
-            }
             float dx = other_entity->sim_x - ego->sim_x;
             float dy = other_entity->sim_y - ego->sim_y;
             float dz = other_entity->sim_z - ego->sim_z;
@@ -1772,9 +1748,6 @@ void c_step(Drive *env) {
 
         if (agent->stopped || agent->removed) {
             env->terminals[i] = 1;
-        }
-        if (agent->reached_goal) {
-            respawn_agent(env, i);
         }
     }
 

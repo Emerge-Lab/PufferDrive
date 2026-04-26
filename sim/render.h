@@ -496,7 +496,7 @@ void c_render(Drive *env) {
 
     for (int i = 0; i < env->num_sim_agents; i++) {
         bool is_active_agent = i < env->num_agents;
-        if (env->agents[i].respawn_timestep != -1 || env->agents[i].sim_x == INVALID_POSITION) {
+        if (env->agents[i].removed) {
             continue;
         }
         if (draw_obs && i != EGO_IDX) {

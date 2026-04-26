@@ -19,8 +19,6 @@ Env *my_vec_init(
 
     float reward_collision = dict_get(env_kwargs, "reward_collision")->value;
     float reward_offroad = dict_get(env_kwargs, "reward_offroad")->value;
-    float reward_goal_post_respawn = dict_get(env_kwargs, "reward_goal_post_respawn")->value;
-    float reward_collision_post_respawn = dict_get(env_kwargs, "reward_collision_post_respawn")->value;
     int collision_behavior = (int) dict_get(env_kwargs, "collision_behavior")->value;
     int offroad_behavior = (int) dict_get(env_kwargs, "offroad_behavior")->value;
     float dt = (float) dict_get(env_kwargs, "dt")->value;
@@ -131,8 +129,6 @@ Env *my_vec_init(
         env->map_name = strdup(map_files[env_map_ids[i]]);
         env->reward_collision = reward_collision;
         env->reward_offroad = reward_offroad;
-        env->reward_goal_post_respawn = reward_goal_post_respawn;
-        env->reward_collision_post_respawn = reward_collision_post_respawn;
         env->collision_behavior = collision_behavior;
         env->offroad_behavior = offroad_behavior;
         env->dt = dt;
@@ -172,8 +168,6 @@ Env *my_vec_init(
 void my_init(Env *env, Dict *kwargs) {
     env->reward_collision = dict_get(kwargs, "reward_collision")->value;
     env->reward_offroad = dict_get(kwargs, "reward_offroad")->value;
-    env->reward_goal_post_respawn = dict_get(kwargs, "reward_goal_post_respawn")->value;
-    env->reward_collision_post_respawn = dict_get(kwargs, "reward_collision_post_respawn")->value;
     env->collision_behavior = (int) dict_get(kwargs, "collision_behavior")->value;
     env->offroad_behavior = (int) dict_get(kwargs, "offroad_behavior")->value;
     env->dt = dict_get(kwargs, "dt")->value;
