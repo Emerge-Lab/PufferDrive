@@ -39,6 +39,8 @@ class Traffic(pufferlib.PufferEnv):
         num_bg_agents=256,
         min_agents_per_env=16,
         max_agents_per_env=64,
+        collision_behavior=1,
+        offroad_behavior=1,
         bg_policy_path=None,
         _bg_policy_state_dict=None,  # preloaded state dict to avoid repeated disk I/O in workers
         # --- Signal agents ---
@@ -87,6 +89,8 @@ class Traffic(pufferlib.PufferEnv):
             max_agents_per_env=max_agents_per_env,
             resample_frequency=resample_frequency,
             scenario_length=scenario_length,
+            collision_behavior=collision_behavior,
+            offroad_behavior=offroad_behavior,
             traffic_light_behavior=traffic_light_behavior,
             simulation_mode=simulation_mode,
             seed=0,   # fixed — keeps n_drive_envs identical across all workers
@@ -370,7 +374,7 @@ class Traffic(pufferlib.PufferEnv):
         agent_offsets, map_ids, num_envs = binding.shared(
             num_agents=self.drive.num_agents,
             num_maps=self.drive.num_maps,
-            starting_map_counter=self.drive.starting_map_counter,
+            starting_map_counter=self.drive.starting_map_counter_init,
             eval_mode=self.drive.eval_mode,
             init_mode=self.drive.init_mode,
             control_mode=self.drive.control_mode,

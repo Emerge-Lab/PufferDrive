@@ -641,6 +641,53 @@ class PuffeRL:
         # above but calls eval_multi_scenarios_render with render=True and
         # the configured backend ("egl" by default on this branch, writes
         # one mp4 per scenario via the C render.h pipeline).
+        # For puffer_traffic the Drive-specific eval_multi_scenarios_render path
+        # is skipped (it injects num_eval_scenarios which Traffic doesn't accept);
+        # the traffic-specific eval_traffic_render is called instead below.
+        if (
+            self.config["eval"]["multi_scenario_render"]
+            and (self.epoch % self.config["eval"]["multi_scenario_render_interval"] == 0 or done_training)
+            and self.config["env"] == "puffer_traffic"
+        ):
+            experiment_name = f"{self.config['env']}_{self.logger.run_id}"
+            traffic_render_args = {
+                "env": self.config.get("env_config", {}),
+                "policy": self.config.get("policy", {}),
+                "policy_name": self.config.get("policy_name", "Traffic"),
+                "load_model_path": os.path.join(
+                    self.config["data_dir"],
+                    experiment_name,
+                    "models",
+                    f"inline_epoch_{self.epoch}.pt",
+                ),
+                "eval_results_dir": os.path.join(
+                    self.config["data_dir"],
+                    experiment_name,
+                    "renders",
+                    f"epoch_{self.epoch:08d}",
+                ),
+                "global_step": self.global_step,
+                "num_scenarios": self.config.get("eval", {}).get("multi_scenario_num_scenarios", 4),
+                "render_max_steps": self.config.get("eval", {}).get("render_max_steps", 100),
+            }
+            print(f"\n🎬 Running Traffic render at step {self.global_step} (epoch {self.epoch})...")
+            try:
+                eval_traffic_render(
+                    env_name=self.config["env"],
+                    args=traffic_render_args,
+                    policy=self.uncompiled_policy,
+                    logger=self.logger,
+                    metric_prefix="render",
+                    quiet=True,
+                    view_mode=0,
+                    log_view_label="sim_state",
+                )
+            except Exception as e:
+                import traceback
+                print(f"\n⚠️  Traffic render failed at epoch {self.epoch}: {type(e).__name__}: {e}")
+                traceback.print_exc()
+                print("Training continues.")
+
         if (
             self.config["eval"]["multi_scenario_render"]
             and (self.epoch % self.config["eval"]["multi_scenario_render_interval"] == 0 or done_training)
@@ -2376,8 +2423,6 @@ def eval_traffic_render(
     if args is None:
         args = load_config(env_name)
 
-    device = args.get("device", "cpu")
-
     # Always EGL for Traffic — no HTML viz support yet
     render_backend = "egl"
 
@@ -2391,7 +2436,9 @@ def eval_traffic_render(
     env = Traffic(**env_args)
     env.reset()
 
+    _policy_was_external = policy is not None
     if policy is None:
+        device = args.get("device", "cpu")
         from pufferlib.ocean.traffic import torch as traffic_torch
 
         policy_cls = getattr(traffic_torch, args.get("policy_name", "Traffic"))
@@ -2401,16 +2448,19 @@ def eval_traffic_render(
             ckpt = torch.load(load_path, map_location=device, weights_only=False)
             state = ckpt.get("policy_state_dict", ckpt.get("model_state_dict", ckpt))
             policy.load_state_dict(state, strict=False)
-    policy = policy.to(device)
+        policy = policy.to(device)
+    else:
+        # Use the policy's current device — never move a shared training policy
+        device = next(policy.parameters()).device
     policy.eval()
 
-    # LSTM state
+    # LSTM state — shape (n_agents, hidden_size) for LSTMCell used in forward_eval
     lstm_h = lstm_c = None
     if hasattr(policy, "hidden_size"):
         n = env.num_agents
         h = policy.hidden_size
-        lstm_h = torch.zeros(1, n, h, device=device)
-        lstm_c = torch.zeros(1, n, h, device=device)
+        lstm_h = torch.zeros(n, h, device=device)
+        lstm_c = torch.zeros(n, h, device=device)
 
     # Output folder for mp4s
     eval_results_dir = args.get("eval_results_dir", "renders/traffic")
@@ -2434,10 +2484,10 @@ def eval_traffic_render(
 
             for _ in range(max_steps):
                 with torch.no_grad():
-                    if lstm_h is not None:
-                        logits, value, lstm_h, lstm_c = policy(ob, (lstm_h, lstm_c))
-                    else:
-                        logits, value = policy(ob)
+                    lstm_state = {"lstm_h": lstm_h, "lstm_c": lstm_c}
+                    logits, _ = policy.forward_eval(ob, lstm_state)
+                    lstm_h = lstm_state["lstm_h"]
+                    lstm_c = lstm_state["lstm_c"]
                 # logits is a tuple of tensors (one per action head)
                 actions = (
                     torch.cat([t.argmax(dim=-1, keepdim=True) for t in logits], dim=-1)
@@ -2488,6 +2538,8 @@ def eval_traffic_render(
 
     finally:
         env.close()
+        if _policy_was_external:
+            policy.train()
 
 
 def eval_multi_scenarios_render(
