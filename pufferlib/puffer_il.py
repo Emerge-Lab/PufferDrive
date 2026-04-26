@@ -28,11 +28,15 @@ import pufferlib.spaces
 
 IL_DEFAULTS = {
     "method": "dagger",
+    "updates": 1,
     "expert_data": None,
+    "save_expert_data": None,
     "teacher_load_model_path": None,
     "teacher_load_id": None,
     "bc_batch_size": 256,
     "bc_epochs": 4,
+    "bc_rollout_steps": 8,
+    "bc_teacher_target_samples": 131072,
     "dagger_iters": 10,
     "dagger_rollout_steps": 2048,
     "dagger_beta_start": 1.0,
@@ -246,12 +250,41 @@ class ImitationTrainer:
         return loss.mean(), entropy.mean()
 
     def train_bc(self):
+        logs = {}
+        if len(self.expert_bank) == 0:
+            if self.teacher is None:
+                raise pufferlib.APIUsageError("BC requires expert_data or a teacher policy/checkpoint")
+
+            target_samples = int(self.config["il"].get("bc_teacher_target_samples", 0))
+            if target_samples <= 0:
+                raise pufferlib.APIUsageError("--il.bc-teacher-target-samples must be > 0 when using teacher-generated BC data")
+
+            chunk_steps = int(self.config["il"].get("bc_rollout_steps", 0))
+            if chunk_steps <= 0:
+                raise pufferlib.APIUsageError("--il.bc-rollout-steps must be > 0")
+
+            generated = 0
+            chunks = 0
+            while generated < target_samples:
+                rollout = self._rollout_policy(
+                    chunk_steps,
+                    beta=1.0,
+                    teacher=self.teacher,
+                    collect_expert_labels=True,
+                )
+                self.expert_bank.extend(rollout.observations, rollout.actions)
+                generated += int(len(rollout.actions))
+                chunks += 1
+
+            logs["bc/generated_samples"] = generated
+            logs["bc/generated_chunks"] = chunks
+            logs["bc/generated_target_samples"] = target_samples
+
         observations, actions = self._stack_bank(self.expert_bank)
         batch_size = self.config["il"]["bc_batch_size"]
         epochs = self.config["il"]["bc_epochs"]
 
         self.policy.train()
-        logs = {}
         for _ in range(epochs):
             permutation = torch.randperm(observations.shape[0])
             for start in range(0, observations.shape[0], batch_size):
@@ -382,26 +415,47 @@ class ImitationTrainer:
 
     def close(self):
         self.vecenv.close()
+        save_expert_path = self.config["il"].get("save_expert_data")
+        if save_expert_path:
+            save_transition_bank(self.expert_bank, save_expert_path)
+
         model_path = self.save_checkpoint()
         final_path = os.path.join(self.data_dir, f"{self.env_name}_{self.run_id}.pt")
         if model_path is not None:
             shutil.copy2(model_path, final_path)
         return final_path
 
-    def train(self):
-        if self.method == "bc":
-            logs = self.train_bc()
-        elif self.method == "dagger":
-            logs = self.train_dagger()
-        elif self.method in {"gail", "airl"}:
-            logs = self.train_gail()
-        else:
-            raise pufferlib.APIUsageError(f"Unknown imitation method: {self.method}")
+    def train(self, updates=1):
+        if updates <= 0:
+            raise pufferlib.APIUsageError("--il.updates must be > 0")
 
-        if self.logger is not None:
-            self.logger.log({f"il/{k}": v for k, v in logs.items()}, self.global_step)
+        checkpoint_interval = int(self.config["train"].get("checkpoint_interval", 0))
+        last_logs = {}
+        for update in range(updates):
+            if self.method == "bc":
+                logs = self.train_bc()
+            elif self.method == "dagger":
+                logs = self.train_dagger()
+            elif self.method in {"gail", "airl"}:
+                logs = self.train_gail()
+            else:
+                raise pufferlib.APIUsageError(f"Unknown imitation method: {self.method}")
 
-        return logs
+            logs["update"] = self.epoch
+            logs["update_idx"] = update + 1
+            logs["updates_total"] = updates
+
+            if checkpoint_interval > 0 and self.epoch % checkpoint_interval == 0:
+                checkpoint_path = self.save_checkpoint()
+                if checkpoint_path is not None:
+                    logs["checkpoint/model_path"] = checkpoint_path
+
+            if self.logger is not None:
+                self.logger.log({f"il/{k}": v for k, v in logs.items()}, self.global_step)
+
+            last_logs = logs
+
+        return last_logs
 
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None):
@@ -423,7 +477,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
         logger = pufferl.WandbLogger(args)
 
     trainer = ImitationTrainer(args, vecenv, policy, teacher=teacher, logger=logger)
-    logs = trainer.train()
+    logs = trainer.train(updates=args["il"]["updates"])
     model_path = trainer.close()
     if trainer.logger is not None:
         trainer.logger.close(model_path)
@@ -536,11 +590,17 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--sanity-maps", nargs="*", default=None)
 
     parser.add_argument("--il.method", type=str, default=IL_DEFAULTS["method"], choices=["bc", "dagger", "gail", "airl"])
+    parser.add_argument("--il.updates", type=int, default=IL_DEFAULTS["updates"])
     parser.add_argument("--il.expert-data", nargs="*", default=None)
+    parser.add_argument("--il.save-expert-data", type=str, default=IL_DEFAULTS["save_expert_data"])
     parser.add_argument("--il.teacher-load-model-path", type=str, default=IL_DEFAULTS["teacher_load_model_path"])
     parser.add_argument("--il.teacher-load-id", type=str, default=IL_DEFAULTS["teacher_load_id"])
     parser.add_argument("--il.bc-batch-size", type=int, default=IL_DEFAULTS["bc_batch_size"])
     parser.add_argument("--il.bc-epochs", type=int, default=IL_DEFAULTS["bc_epochs"])
+    parser.add_argument("--il.bc-rollout-steps", type=int, default=IL_DEFAULTS["bc_rollout_steps"])
+    parser.add_argument(
+        "--il.bc-teacher-target-samples", type=int, default=IL_DEFAULTS["bc_teacher_target_samples"]
+    )
     parser.add_argument("--il.dagger-iters", type=int, default=IL_DEFAULTS["dagger_iters"])
     parser.add_argument("--il.dagger-rollout-steps", type=int, default=IL_DEFAULTS["dagger_rollout_steps"])
     parser.add_argument("--il.dagger-beta-start", type=float, default=IL_DEFAULTS["dagger_beta_start"])
@@ -631,6 +691,31 @@ def load_transition_bank(paths):
             bank.extend(observations, actions)
 
     return bank
+
+
+def save_transition_bank(bank, path):
+    observations, actions = bank.tensors()
+    if observations is None or actions is None:
+        raise pufferlib.APIUsageError("No expert data available to save")
+
+    path = Path(path)
+    if path.suffix == "":
+        path.mkdir(parents=True, exist_ok=True)
+        path = path / "expert_data.npz"
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.suffix == ".npz":
+        np.savez(path, observations=observations.numpy(), actions=actions.numpy())
+    elif path.suffix == ".npy":
+        payload = np.array([observations.numpy(), actions.numpy()], dtype=object)
+        np.save(path, payload, allow_pickle=True)
+    elif path.suffix in {".pt", ".pth"}:
+        torch.save({"observations": observations, "actions": actions}, path)
+    else:
+        raise pufferlib.APIUsageError(
+            f"Unsupported expert data save file: {path}. Use .npz, .npy, .pt, or .pth"
+        )
 
 
 def load_transition_file(path):
