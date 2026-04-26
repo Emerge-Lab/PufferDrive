@@ -187,6 +187,8 @@ PYBIND11_MODULE(_C, m) {
         .def_property_readonly("obs_ptr", [](VecEnv& ve) { return (long long)ve.vec->observations; })
         .def_property_readonly("rewards_ptr", [](VecEnv& ve) { return (long long)ve.vec->rewards; })
         .def_property_readonly("terminals_ptr", [](VecEnv& ve) { return (long long)ve.vec->terminals; })
+        .def_property_readonly("truncations_ptr", [](VecEnv& ve) { return (long long)ve.vec->truncations; })
+        .def_property_readonly("masks_ptr", [](VecEnv& ve) { return (long long)ve.vec->masks; })
         .def("reset", &vec_reset)
         .def("cpu_step", &cpu_vec_step_py)
         .def("render", [](VecEnv& ve, int env_id) { static_vec_render(ve.vec, env_id); })

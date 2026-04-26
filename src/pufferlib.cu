@@ -215,10 +215,12 @@ inline PrecisionTensor puf_slice(PrecisionTensor& p, int t, int start, int count
 }
 
 struct EnvBuf {
-    OBS_TENSOR_T obs;      // (total_agents, obs_size) - type defined per-env in binding.c
-    FloatTensor actions;   // (total_agents, num_atns)
-    FloatTensor rewards;   // (total_agents,)
-    FloatTensor terminals; // (total_agents,)
+    OBS_TENSOR_T obs;       // (total_agents, obs_size) - type defined per-env in binding.c
+    FloatTensor actions;    // (total_agents, num_atns)
+    FloatTensor rewards;    // (total_agents,)
+    ByteTensor  terminals;  // (total_agents,)
+    ByteTensor  truncations;// (total_agents,)
+    ByteTensor  masks;      // (total_agents,)
 };
 
 StaticVec* create_environments(int num_buffers, int total_agents,
@@ -230,7 +232,9 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     };
     env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, vec->num_atns} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };
-    env.terminals = { .data = (float*)vec->gpu_terminals, .shape = {total_agents} };
+    env.terminals = { .data = (unsigned char*)vec->gpu_terminals, .shape = {total_agents} };
+    env.truncations = { .data = (unsigned char*)vec->gpu_truncations, .shape = {total_agents} };
+    env.masks = { .data = (unsigned char*)vec->gpu_masks, .shape = {total_agents} };
     return vec;
 }
 

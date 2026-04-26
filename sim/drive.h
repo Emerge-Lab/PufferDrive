@@ -142,7 +142,9 @@ struct Drive {
     float *observations;
     float *actions;
     float *rewards;
-    float *terminals;
+    unsigned char *terminals;
+    unsigned char *truncations;
+    unsigned char *masks;
     // Grid map fields
     GridMap *grid_map;
     int *neighbor_offsets;
@@ -1011,7 +1013,9 @@ int allocate(Drive *env) {
     env->observations = (float *) calloc(env->num_agents * OBS_SIZE, sizeof(float));
     env->actions = (float *) calloc(env->num_agents * 2, sizeof(float));
     env->rewards = (float *) calloc(env->num_agents, sizeof(float));
-    env->terminals = (float *) calloc(env->num_agents, sizeof(float));
+    env->terminals = (unsigned char *) calloc(env->num_agents, sizeof(unsigned char));
+    env->truncations = (unsigned char *) calloc(env->num_agents, sizeof(unsigned char));
+    env->masks = (unsigned char *) calloc(env->num_agents, sizeof(unsigned char));
     return 0;
 }
 
@@ -1020,6 +1024,8 @@ void free_allocated(Drive *env) {
     free(env->actions);
     free(env->rewards);
     free(env->terminals);
+    free(env->truncations);
+    free(env->masks);
     c_close(env);
 }
 
@@ -1732,7 +1738,9 @@ void c_reset(Drive *env) {
 
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->num_agents * sizeof(float));
-    memset(env->terminals, 0, env->num_agents * sizeof(float));
+    memset(env->terminals, 0, env->num_agents * sizeof(unsigned char));
+    memset(env->truncations, 0, env->num_agents * sizeof(unsigned char));
+    memset(env->masks, 0, env->num_agents * sizeof(unsigned char));
     env->timestep++;
 
     if (env->timestep == env->episode_length) {

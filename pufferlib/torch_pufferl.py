@@ -148,11 +148,15 @@ class PuffeRL:
         if self.gpu:
             self.vec_obs = torch.as_tensor(_CudaPtr(vec.gpu_obs_ptr, (total_agents, vec.obs_size), obs_dtype))
             self.vec_rewards = torch.as_tensor(_CudaPtr(vec.gpu_rewards_ptr, (total_agents,), torch.float32))
-            self.vec_terminals = torch.as_tensor(_CudaPtr(vec.gpu_terminals_ptr, (total_agents,), torch.float32))
+            self.vec_terminals = torch.as_tensor(_CudaPtr(vec.gpu_terminals_ptr, (total_agents,), torch.uint8))
+            self.vec_truncations = torch.as_tensor(_CudaPtr(vec.gpu_truncations_ptr, (total_agents,), torch.uint8))
+            self.vec_masks = torch.as_tensor(_CudaPtr(vec.gpu_masks_ptr, (total_agents,), torch.uint8))
         else:
             self.vec_obs = _cpu_tensor(vec.obs_ptr, (total_agents, vec.obs_size), obs_dtype)
             self.vec_rewards = _cpu_tensor(vec.rewards_ptr, (total_agents,), torch.float32)
-            self.vec_terminals = _cpu_tensor(vec.terminals_ptr, (total_agents,), torch.float32)
+            self.vec_terminals = _cpu_tensor(vec.terminals_ptr, (total_agents,), torch.uint8)
+            self.vec_truncations = _cpu_tensor(vec.truncations_ptr, (total_agents,), torch.uint8)
+            self.vec_masks = _cpu_tensor(vec.masks_ptr, (total_agents,), torch.uint8)
 
         vec.reset()
         horizon = train_config["horizon"]
@@ -459,6 +463,8 @@ class PuffeRL:
         self.vec_obs = None
         self.vec_rewards = None
         self.vec_terminals = None
+        self.vec_truncations = None
+        self.vec_masks = None
         self._vec.close()
 
     @classmethod
