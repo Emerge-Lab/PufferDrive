@@ -953,49 +953,6 @@ static void move_expert(Drive *env, int agent_idx) {
     update_agent_speed_from_center_velocity(agent);
 }
 
-static void remove_bad_trajectories(Drive *env) {
-    set_agent_at_init_log_step(env);
-    int collided_agents[env->num_agents];
-    int collided_with_indices[env->num_agents];
-    memset(collided_agents, 0, env->num_agents * sizeof(int));
-    for (int i = 0; i < env->num_agents; ++i) {
-        collided_with_indices[i] = -1;
-    }
-
-    for (int t = 0; t < env->log_length; t++) {
-        for (int i = 0; i < env->num_agents; i++) {
-            move_expert(env, i);
-        }
-        for (int i = 0; i < env->num_moving_log_agents; i++) {
-            int expert_idx = env->num_agents + i;
-            if (env->agents[expert_idx].sim_x == INVALID_POSITION) {
-                continue;
-            }
-            move_expert(env, expert_idx);
-        }
-        for (int i = 0; i < env->num_agents; i++) {
-            Agent *agent = &env->agents[i];
-            int collided_with_index = collision_check(env, agent);
-            if ((collided_with_index >= 0) && collided_agents[i] == 0) {
-                collided_agents[i] = 1;
-                collided_with_indices[i] = collided_with_index;
-            }
-        }
-        env->timestep++;
-    }
-
-    for (int i = 0; i < env->num_agents; i++) {
-        int collided_with_index = collided_with_indices[i];
-        // Layout after compact_agents is [active | log]; only invalidate log agents.
-        if (collided_with_index < env->num_agents || collided_with_index == -1) {
-            continue;
-        }
-        env->agents[collided_with_index].log_trajectory_x[0] = INVALID_POSITION;
-        env->agents[collided_with_index].log_trajectory_y[0] = INVALID_POSITION;
-    }
-    env->timestep = 0;
-}
-
 int init(Drive *env) {
     env->timestep = 0;
     if (load_map_binary(env->map_name, env) != 0) {
@@ -1006,7 +963,6 @@ int init(Drive *env) {
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
     compact_agents(env);
-    remove_bad_trajectories(env);
     set_agent_at_init_log_step(env);
     env->logs = (Log *) calloc(env->num_agents, sizeof(Log));
     return 0;
