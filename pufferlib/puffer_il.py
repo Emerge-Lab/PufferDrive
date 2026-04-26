@@ -141,6 +141,7 @@ class ImitationTrainer:
         self.run_id = self.logger.run_id
         self.epoch = 0
         self.global_step = 0
+        self.log_step = 0
         self.start_time = time.time()
 
         self.expert_bank = load_transition_bank(config["il"]["expert_data"])
@@ -444,6 +445,7 @@ class ImitationTrainer:
             logs["update"] = self.epoch
             logs["update_idx"] = update + 1
             logs["updates_total"] = updates
+            logs["global_step"] = self.global_step
 
             if checkpoint_interval > 0 and self.epoch % checkpoint_interval == 0:
                 checkpoint_path = self.save_checkpoint()
@@ -451,7 +453,8 @@ class ImitationTrainer:
                     logs["checkpoint/model_path"] = checkpoint_path
 
             if self.logger is not None:
-                self.logger.log({f"il/{k}": v for k, v in logs.items()}, self.global_step)
+                self.log_step += 1
+                self.logger.log({f"il/{k}": v for k, v in logs.items()}, self.log_step)
 
             last_logs = logs
 
