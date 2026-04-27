@@ -228,7 +228,7 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     StaticVec* vec = create_static_vec(total_agents, num_buffers, 1, vec_kwargs, env_kwargs);
     env.obs = {
         .data = (decltype(env.obs.data))vec->gpu_observations,
-        .shape = {total_agents, get_obs_size()},
+        .shape = {total_agents, vec->obs_size},
     };
     env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, vec->num_atns} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };

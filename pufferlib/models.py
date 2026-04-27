@@ -233,7 +233,7 @@ class Trunk(nn.Module):
 class VecEncoder(nn.Module):
     """Per-stream MLP + masked max-pool; concat to [B, sum_H]."""
 
-    obs_stream_names = ["ego", "cond", "partner", "lane", "boundary", "tc", "counts"]
+    obs_stream_names = ["ego", "target", "partner", "lane", "boundary", "tc", "counts"]
 
     def __init__(self, env_constants, **policy_kwargs):
         super().__init__()
@@ -253,9 +253,10 @@ class VecEncoder(nn.Module):
             self.encoders[name] = self._create_encoder(in_features, hidden_size, num_layers, dropout)
             self.encoder_specs.append((name, in_features, num_slots, hidden_size))
 
+        target_total = self.env_constants["target_features"] * self.env_constants["num_target_waypoints"]
         self.obs_split_sizes = [
             self.env_constants["ego_features"],
-            self.env_constants["num_reward_coefs"] + self.env_constants["target_dim"],
+            self.env_constants["num_reward_coefs"] + target_total,
             self.env_constants["obs_partner_slots"] * self.env_constants["partner_features"],
             self.env_constants["obs_lane_slots"] * self.env_constants["road_features"],
             self.env_constants["obs_boundary_slots"] * self.env_constants["road_features"],
@@ -264,6 +265,7 @@ class VecEncoder(nn.Module):
         ]
         self._slot_caps = {
             "partner": self.env_constants["obs_partner_slots"],
+            "target": self.env_constants["num_target_waypoints"],
             "lane": self.env_constants["obs_lane_slots"],
             "boundary": self.env_constants["obs_boundary_slots"],
             "tc": self.env_constants["obs_traffic_control_slots"],
@@ -274,9 +276,10 @@ class VecEncoder(nn.Module):
     @property
     def _encoder_descriptions(self):
         # (name, in_features, num_slots). num_slots is None for scalar streams (no pooling).
+        target_total = self.env_constants["target_features"] * self.env_constants["num_target_waypoints"]
         return [
             ("ego", self.env_constants["ego_features"], None),
-            ("cond", self.env_constants["num_reward_coefs"] + self.env_constants["target_dim"], 0),
+            ("target", target_total, None),
             ("partner", self.env_constants["partner_features"], self.env_constants["obs_partner_slots"]),
             ("lane", self.env_constants["road_features"], self.env_constants["obs_lane_slots"]),
             ("boundary", self.env_constants["road_features"], self.env_constants["obs_boundary_slots"]),
@@ -352,8 +355,9 @@ class Policy(nn.Module):
         self.shared_trunk = policy_kwargs["shared_trunk"]
         assert self.shared_encoder or not self.shared_trunk, "shared_trunk requires shared_encoder"
 
-        self.encoder = VecEncoder(vec.env_constants(), **policy_kwargs)
-        self.critic_encoder = self.encoder if self.shared_encoder else VecEncoder(vec.env_constants(), **policy_kwargs)
+        env_constants = vec.env_constants()
+        self.encoder = VecEncoder(env_constants, **policy_kwargs)
+        self.critic_encoder = self.encoder if self.shared_encoder else VecEncoder(env_constants, **policy_kwargs)
 
         trunk_type = policy_kwargs["trunk_type"]
         trunk_hidden_size = policy_kwargs["trunk_hidden_size"]

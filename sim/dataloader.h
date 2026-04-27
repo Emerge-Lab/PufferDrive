@@ -8,8 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAP_BINARY_DIR "resources/drive/binaries"
-
 static inline int has_bin_suffix(const char *name) {
     int len = strlen(name);
     return len >= 4 && strcmp(name + len - 4, ".bin") == 0;
@@ -28,8 +26,8 @@ static inline void free_map_files(char **map_files, int num_map_files) {
     free(map_files);
 }
 
-static inline char **discover_map_files(int *num_map_files_out) {
-    DIR *dir = opendir(MAP_BINARY_DIR);
+static inline char **discover_map_files(const char *map_binary_dir, int *num_map_files_out) {
+    DIR *dir = opendir(map_binary_dir);
     if (!dir) {
         *num_map_files_out = 0;
         return NULL;
@@ -50,9 +48,9 @@ static inline char **discover_map_files(int *num_map_files_out) {
             map_files = (char **) realloc(map_files, capacity * sizeof(char *));
         }
 
-        int path_len = snprintf(NULL, 0, "%s/%s", MAP_BINARY_DIR, entry->d_name);
+        int path_len = snprintf(NULL, 0, "%s/%s", map_binary_dir, entry->d_name);
         char *map_path = (char *) malloc((path_len + 1) * sizeof(char));
-        snprintf(map_path, path_len + 1, "%s/%s", MAP_BINARY_DIR, entry->d_name);
+        snprintf(map_path, path_len + 1, "%s/%s", map_binary_dir, entry->d_name);
         map_files[count++] = map_path;
     }
 

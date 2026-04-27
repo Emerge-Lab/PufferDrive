@@ -34,12 +34,6 @@
 #define MISC_CROSSWALK 31
 #define MISC_SPEED_BUMP 32
 
-// -- NORMALIZED ROAD TYPE (returned by normalize_road_type)
-#define NORMALIZED_ROAD_NONE 0
-#define NORMALIZED_ROAD_LANE 1
-#define NORMALIZED_ROAD_LINE 2
-#define NORMALIZED_ROAD_EDGE 3
-
 // -- AGENT CONTROL STATE
 #define CONTROL_STATE_ACTIVE 0
 #define CONTROL_STATE_MOVING 1
@@ -58,6 +52,26 @@
 #define TRAFFIC_CONTROL_STATE_GREEN 3
 #define TRAFFIC_CONTROL_STATE_OFF 4
 #define NUM_TRAFFIC_CONTROL_STATES 5
+
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
+#define TRAFFIC_CONTROL_SCOPE_ALL 2
+
+// Metrics array indices
+#define NUM_METRICS 9
+#define COLLISION_IDX 0
+#define OFFROAD_IDX 1
+#define RED_LIGHT_IDX 2
+#define REACH_GOAL_IDX 3
+#define LANE_DIST_IDX 4
+#define LANE_ANGLE_IDX 5
+#define COMFORT_VIOLATION_IDX 6
+#define VELOCITY_PROGRESS_IDX 7
+#define SPEED_LIMIT_IDX 8
+
+// Path
+#define MAX_NUM_WP_PATH 500
+#define MAX_TARGET_POINTS 20
 
 static inline int is_road_lane(int type) {
     return (type >= 0 && type <= 9);
@@ -87,37 +101,32 @@ static inline int is_controllable_agent(int type) {
     return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
 }
 
-static inline int normalize_road_type(int type) {
-    if (is_road_lane(type)) {
-        return NORMALIZED_ROAD_LANE;
-    } else if (is_road_line(type)) {
-        return NORMALIZED_ROAD_LINE;
-    } else if (is_road_edge(type)) {
-        return NORMALIZED_ROAD_EDGE;
-    } else {
-        return NORMALIZED_ROAD_NONE;
+static inline int traffic_control_in_scope(int type, int scope) {
+    if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_ALL) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN
+            || type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN;
     }
+    return 0;
 }
 
-static inline int unnormalize_road_type(int norm_type) {
-    if (norm_type == NORMALIZED_ROAD_LANE) {
-        return LANE_SURFACE_STREET;
-    } else if (norm_type == NORMALIZED_ROAD_LINE) {
-        return ROAD_LINE_SOLID_SINGLE_WHITE;
-    } else if (norm_type == NORMALIZED_ROAD_EDGE) {
-        return ROAD_EDGE_BOUNDARY;
-    } else {
-        return 0;
-    }
-}
-
-// Metrics array indices
-#define NUM_METRICS 5
-#define COLLISION_IDX 0
-#define OFFROAD_IDX 1
-#define REACH_GOAL_IDX 2
-#define LANE_DIST_IDX 3
-#define LANE_ANGLE_IDX 4
+struct Waypoint {
+    float s;           // Arc length (cumulative distance from the start) - init position
+    float x;           // Global x-coordinate
+    float y;           // Global y-coordinate
+    float z;           // Global z-coordinate
+    float heading;     // Global heading (tangent angle) in radians
+    float cos_heading; // Cached cosf(heading) - set in build_path
+    float sin_heading; // Cached sinf(heading) - set in build_path
+    int lane_idx;      // Index of the lane this waypoint
+};
+struct Path {
+    struct Waypoint waypoints[MAX_NUM_WP_PATH];
+    int num_waypoints;
+};
 
 struct Agent {
     int id;
@@ -136,29 +145,29 @@ struct Agent {
     float *log_height;
     int *log_valid;
     // Simulation state
-    float rear_x;
-    float rear_y;
-    float sim_x;
-    float sim_y;
-    float sim_z;
-    float sim_heading;
+    float sim_x;       // Bounding box center x
+    float sim_y;       // Bounding box center y
+    float rear_x;      // Rear axle center x
+    float rear_y;      // Rear axle center y
+    float sim_z;       // Bounding box center z
+    float sim_heading; // Bounding box heading
     float cos_heading;
     float sin_heading;
-    float sim_vx;
-    float sim_vy;
-    float rear_vx;
-    float rear_vy;
-    float yaw_rate;
-    float sim_speed;
-    float sim_speed_signed;
-    float sim_length;
-    float sim_width;
-    float sim_height;
+    float rear_vx;          // Rear axle velocity x
+    float rear_vy;          // Rear axle velocity y
+    float sim_vx;           // Bounding box velocity x
+    float sim_vy;           // Bounding box velocity y
+    float yaw_rate;         // Angular velocity used to convert between rear and center velocity
+    float sim_speed;        // Rear-axle speed magnitude
+    float sim_speed_signed; // Rear-axle signed longitudinal speed
+    float sim_length;       // Bounding box length
+    float sim_width;        // Bounding box width
+    float sim_height;       // Bounding box height
+    float radius;           // Cached 0.5 * sqrt(L^2 + W^2); refreshed when L/W change
     int sim_valid;
-    int collision_state;
-    // Kinematic state for dynamics model
-    float a_long;
-    float a_lat;
+    // Kinematic state
+    float accel_long;
+    float accel_lat;
     float jerk_long;
     float jerk_lat;
     float steering_angle;
@@ -167,24 +176,33 @@ struct Agent {
     float metrics_array[NUM_METRICS];
     int current_lane_idx;
     int previous_lane_idx;
-    int respawn_timestep;
-    int reached_goal_this_episode;
-    int collided_before_goal;
-    int reached_goal;
-    int active_agent;
+    int num_goals_reached;
     int control_state;
+    float distance_since_spawn;
     int stopped;
     int removed;
-    // Goal position
-    float goal_position_x;
-    float goal_position_y;
-    float goal_position_z;
+    // Goal positions
+    float goal_positions_x[MAX_TARGET_POINTS];
+    float goal_positions_y[MAX_TARGET_POINTS];
+    float goal_positions_z[MAX_TARGET_POINTS];
+    float goal_position_x; // alias = goal_positions_x[current_goal_idx]
+    float goal_position_y; // alias = goal_positions_y[current_goal_idx]
+    float goal_position_z; // alias = goal_positions_z[current_goal_idx]
+    int current_goal_idx;  // index of next goal to reach (0..N-1)
+    // Route information
+    int route_length;
+    int *route;
+    int current_route_index; // Tracks progress through route array
+    // Path
+    struct Path *path;
+    int closest_path_idx_wp;
 };
 
 struct RoadMapElement {
     int type;
     // Geometric info
     int segment_length;
+    float length; // Cumulative arc length, set once at map load
     float *x;
     float *y;
     float *z;
@@ -221,6 +239,8 @@ static inline void free_agent(struct Agent *agent) {
     free(agent->log_width);
     free(agent->log_height);
     free(agent->log_valid);
+    free(agent->route);
+    free(agent->path);
 }
 
 static inline void free_road_element(struct RoadMapElement *element) {

@@ -250,7 +250,11 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
         try {
             dict_set(c_dict, key, item.second.cast<double>());
         } catch (const py::cast_error&) {
-            // Skip non-numeric values
+            try {
+                dict_set_str(c_dict, key, item.second.cast<std::string>().c_str());
+            } catch (const py::cast_error&) {
+                // Skip values that aren't numeric or string
+            }
         }
     }
     return c_dict;
@@ -290,7 +294,7 @@ std::unique_ptr<VecEnv> create_vec(py::dict args, int gpu) {
         ve->vec = create_static_vec(total_agents, num_buffers, gpu, vec_dict, env_dict);
     }
     ve->total_agents  = total_agents;
-    ve->obs_size      = get_obs_size();
+    ve->obs_size      = ve->vec->obs_size;
     ve->num_atns      = ve->vec->num_atns;
     ve->act_sizes = std::vector<int>(ve->vec->act_sizes, ve->vec->act_sizes + ve->vec->num_act_sizes);
     ve->obs_dtype     = std::string(get_obs_dtype());

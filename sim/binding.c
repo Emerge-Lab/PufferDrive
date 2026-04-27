@@ -2,8 +2,10 @@
 
 #define OBS_TENSOR_T FloatTensor
 
+#define STATIC_VEC_IMPL
 #define MY_VEC_INIT
 #define Env Drive
+#include "env_fields.h"
 #include "vecenv.h"
 
 Env *my_vec_init(
@@ -16,21 +18,12 @@ Env *my_vec_init(
     int num_buffers = (int) dict_get(vec_kwargs, "num_buffers")->value;
     int num_maps = (int) dict_get(env_kwargs, "num_maps")->value;
     int agents_per_buffer = total_agents / num_buffers;
-
-    float reward_collision = dict_get(env_kwargs, "reward_collision")->value;
-    float reward_offroad = dict_get(env_kwargs, "reward_offroad")->value;
-    int collision_behavior = (int) dict_get(env_kwargs, "collision_behavior")->value;
-    int offroad_behavior = (int) dict_get(env_kwargs, "offroad_behavior")->value;
-    float dt = (float) dict_get(env_kwargs, "dt")->value;
-    int init_step = (int) dict_get(env_kwargs, "init_step")->value;
-    int dynamics_model = (int) dict_get(env_kwargs, "dynamics_model")->value;
-    int action_type = (int) dict_get(env_kwargs, "action_type")->value;
-    int episode_length = (int) dict_get(env_kwargs, "episode_length")->value;
+    const char *map_binary_dir = dict_get_str(env_kwargs, "map_binary_dir");
 
     int discovered_maps = 0;
-    char **map_files = discover_map_files(&discovered_maps);
+    char **map_files = discover_map_files(map_binary_dir, &discovered_maps);
     if (!map_files) {
-        printf("ERROR: Cannot find .bin files at %s/\n", MAP_BINARY_DIR);
+        printf("ERROR: Cannot find .bin files at %s/\n", map_binary_dir);
         *num_envs_out = 0;
         return NULL;
     }
@@ -39,7 +32,7 @@ Env *my_vec_init(
     if (map_count <= 0) {
         printf(
             "ERROR: No map files selected from %s/ (discovered %d, num_maps %d)\n",
-            MAP_BINARY_DIR,
+            map_binary_dir,
             discovered_maps,
             num_maps);
         free_map_files(map_files, discovered_maps);
@@ -54,6 +47,7 @@ Env *my_vec_init(
     for (int m = 0; m < map_count; m++) {
         Env temp_env = {0};
         temp_env.map_name = map_files[m];
+        apply_env_kwargs(&temp_env, env_kwargs);
         if (init(&temp_env) != 0) {
             agents_per_map[m] = 0;
             c_close(&temp_env);
@@ -68,7 +62,7 @@ Env *my_vec_init(
     printf(
         "Scanned %d map binaries from %s/ (%d discovered), %d valid\n",
         map_count,
-        MAP_BINARY_DIR,
+        map_binary_dir,
         discovered_maps,
         num_valid_maps);
 
@@ -127,15 +121,7 @@ Env *my_vec_init(
         Env *env = &envs[i];
         memset(env, 0, sizeof(Env));
         env->map_name = strdup(map_files[env_map_ids[i]]);
-        env->reward_collision = reward_collision;
-        env->reward_offroad = reward_offroad;
-        env->collision_behavior = collision_behavior;
-        env->offroad_behavior = offroad_behavior;
-        env->dt = dt;
-        env->init_step = init_step;
-        env->dynamics_model = dynamics_model;
-        env->action_type = action_type;
-        env->episode_length = episode_length;
+        apply_env_kwargs(env, env_kwargs);
         env->num_max_agents = env_max_agents[i];
         if (init(env) != 0) {
             printf("ERROR: Failed to initialize map %s\n", map_files[env_map_ids[i]]);
@@ -166,24 +152,18 @@ Env *my_vec_init(
 }
 
 void my_init(Env *env, Dict *kwargs) {
-    env->reward_collision = dict_get(kwargs, "reward_collision")->value;
-    env->reward_offroad = dict_get(kwargs, "reward_offroad")->value;
-    env->collision_behavior = (int) dict_get(kwargs, "collision_behavior")->value;
-    env->offroad_behavior = (int) dict_get(kwargs, "offroad_behavior")->value;
-    env->dt = dict_get(kwargs, "dt")->value;
-    env->init_step = (int) dict_get(kwargs, "init_step")->value;
-    env->dynamics_model = (int) dict_get(kwargs, "dynamics_model")->value;
-    env->action_type = (int) dict_get(kwargs, "action_type")->value;
-    env->episode_length = (int) dict_get(kwargs, "episode_length")->value;
+    apply_env_kwargs(env, kwargs);
     int map_id = dict_get(kwargs, "map_id")->value;
     int num_max_active_agents = dict_get(kwargs, "num_max_active_agents")->value;
     int num_maps = (int) dict_get(kwargs, "num_maps")->value;
 
+    const char *map_binary_dir = dict_get_str(kwargs, "map_binary_dir");
+
     int discovered_maps = 0;
-    char **map_files = discover_map_files(&discovered_maps);
+    char **map_files = discover_map_files(map_binary_dir, &discovered_maps);
     int map_count = num_maps < discovered_maps ? num_maps : discovered_maps;
     if (!map_files || map_id < 0 || map_id >= map_count) {
-        printf("ERROR: Invalid map_id %d for %d selected .bin files in %s/\n", map_id, map_count, MAP_BINARY_DIR);
+        printf("ERROR: Invalid map_id %d for %d selected .bin files in %s/\n", map_id, map_count, map_binary_dir);
         free_map_files(map_files, discovered_maps);
         return;
     }
@@ -204,19 +184,20 @@ void my_log(Log *log, Dict *out) {
     dict_set(out, "collision_rate", log->collision_rate);
     dict_set(out, "dnf_rate", log->dnf_rate);
     dict_set(out, "n", log->n);
-    dict_set(out, "completion_rate", log->completion_rate);
 }
 
-void my_env_constants(Dict *out) {
+void my_env_constants(void *env_ptr, Dict *out) {
+    Drive *env = (Drive *) env_ptr;
     dict_set(out, "ego_features", EGO_FEATURES);
+    dict_set(out, "target_features", STATIC_TARGET_FEATURES);
     dict_set(out, "partner_features", PARTNER_FEATURES);
     dict_set(out, "road_features", ROAD_FEATURES);
     dict_set(out, "traffic_control_features", TRAFFIC_CONTROL_FEATURES);
-    dict_set(out, "obs_partner_slots", OBS_PARTNER_SLOTS);
-    dict_set(out, "obs_lane_slots", OBS_LANE_SLOTS);
-    dict_set(out, "obs_boundary_slots", OBS_BOUNDARY_SLOTS);
-    dict_set(out, "obs_traffic_control_slots", OBS_TRAFFIC_CONTROL_SLOTS);
+    dict_set(out, "obs_partner_slots", env->max_partner_observations);
+    dict_set(out, "obs_lane_slots", env->max_lane_segment_observations);
+    dict_set(out, "obs_boundary_slots", env->max_boundary_segment_observations);
+    dict_set(out, "obs_traffic_control_slots", env->max_traffic_control_observations);
     dict_set(out, "obs_count_features", OBS_COUNT_FEATURES);
+    dict_set(out, "num_target_waypoints", env->num_target_waypoints);
     dict_set(out, "num_reward_coefs", 0);
-    dict_set(out, "target_dim", 0);
 }
