@@ -323,8 +323,6 @@ struct Drive {
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
     float current_adv_reward_weight_drive;
-    float gamma;
-    int normalize_adv_reward_by_gamma;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -360,6 +358,7 @@ struct Drive {
     int termination_mode;
     float inactive_agent_threshold;
     int adversarial_termination_mode;
+    int terminate_ep_on_target_failure;
     int reward_conditioning;
     int reward_randomization;
     int adv_reward_weight_drive_conditioning;
@@ -5329,11 +5328,7 @@ void c_step(Drive *env) {
 
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
-        RewardTerms *target_terms = &reward_terms[0];
-        float gamma_scale = env->normalize_adv_reward_by_gamma ? fmaxf(0.0f, 1.0f - env->gamma) : 1.0f;
-        float target_terminal_penalty = target_terms->collision + target_terms->offroad + target_terms->red_light;
-        float target_dense_reward = target_terms->drive + target_terms->adversarial;
-        float target_adversarial_value = target_terminal_penalty + gamma_scale * target_dense_reward;
+        float target_reward = total_reward_terms(&reward_terms[0]);
 
         for (int i = 1; i < env->active_agent_count; i++) {
             reward_terms[i].collision *= env->adv_reward_weight_collision;
@@ -5342,18 +5337,11 @@ void c_step(Drive *env) {
             float drive_weight = env->adv_reward_weight_drive_conditioning
                                      ? env->agents[env->active_agent_indices[i]].adv_reward_weight_drive
                                      : env->adv_reward_weight_drive;
-            float drive_scale = drive_weight;
-            if (env->adv_reward_weight_drive_conditioning && env->normalize_adv_reward_by_gamma) {
-                drive_scale *= gamma_scale;
-            }
-            reward_terms[i].drive *= drive_scale;
+            reward_terms[i].drive *= drive_weight;
 
             // Assign adversarial reward.
-            float adversarial_bonus =
-                env->adv_bonus_only ? fmaxf(-target_adversarial_value, 0.0f) : -target_adversarial_value;
-            float adversarial_weight =
-                env->adv_reward_weight_drive_conditioning ? 1.0f - drive_weight : env->adv_reward_weight_adversarial;
-            reward_terms[i].adversarial = adversarial_bonus * adversarial_weight;
+            float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;
+            reward_terms[i].adversarial = adversarial_bonus * env->adv_reward_weight_adversarial;
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
             // reward_terms[i].offroad = 0.0f;
@@ -5389,6 +5377,7 @@ void c_step(Drive *env) {
     }
 
     int adversarial_early_reset = 0;
+    int target_failure_early_reset = 0;
     if (env->active_agent_count > 0 && env->adversarial_termination_mode > 0) {
         int target_agent_idx = env->active_agent_indices[0];
         int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
@@ -5408,9 +5397,11 @@ void c_step(Drive *env) {
             break;
         case 2:
             adversarial_early_reset = target_inactive;
+            target_failure_early_reset = target_inactive;
             break;
         case 3:
             adversarial_early_reset = no_adversaries_alive || target_inactive;
+            target_failure_early_reset = target_inactive;
             break;
         default:
             adversarial_early_reset = 0;
@@ -5420,7 +5411,11 @@ void c_step(Drive *env) {
 
     if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            env->truncations[i] = 1;
+            if (env->terminate_ep_on_target_failure && target_failure_early_reset) {
+                env->terminals[i] = 1;
+            } else {
+                env->truncations[i] = 1;
+            }
         }
         add_log(env);
         c_reset(env);

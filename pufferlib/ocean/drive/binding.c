@@ -1842,8 +1842,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
     env->adv_reward_weight_adversarial = (float)unpack(kwargs, "adv_reward_weight_adversarial");
     env->adv_bonus_only = (bool)unpack(kwargs, "adv_bonus_only");
-    env->normalize_adv_reward_by_gamma = (bool)unpack(kwargs, "normalize_adv_reward_by_gamma");
-    env->gamma = (float)unpack(kwargs, "gamma");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
@@ -1868,6 +1866,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->termination_mode = (int)unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float)unpack(kwargs, "inactive_agent_threshold");
     env->adversarial_termination_mode = (int)unpack(kwargs, "adversarial_termination_mode");
+    env->terminate_ep_on_target_failure = (bool)unpack(kwargs, "terminate_ep_on_target_failure");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
     env->num_controllable_agents = (int)unpack(kwargs, "max_agents");

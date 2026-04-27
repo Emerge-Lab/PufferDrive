@@ -513,7 +513,7 @@ class PuffeRL:
             self.logger = NoLogger(config)
 
         # Learning rate scheduler
-        epochs = config["total_timesteps"] // config["batch_size"]
+        epochs = (config["total_timesteps"] + config["batch_size"] - 1) // config["batch_size"]
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         self.total_epochs = epochs
 
@@ -738,7 +738,7 @@ class PuffeRL:
         profile.end()
         logs = None
         self.epoch += 1
-        done_training = self.global_step >= config["total_timesteps"]
+        done_training = self.epoch >= self.total_epochs
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             self.losses = losses
             logs = self.mean_and_log()
@@ -1206,8 +1206,12 @@ class PuffeRL:
     def close(self):
         self.vecenv.close()
         self.utilization.stop()
-        if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
-            return
+        distributed = torch.distributed.is_initialized()
+        rank = torch.distributed.get_rank() if distributed else 0
+        if distributed:
+            torch.distributed.destroy_process_group()
+            if rank != 0:
+                return
         model_path = self.save_checkpoint()
         run_id = self.logger.run_id
         run_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
@@ -1859,7 +1863,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     logging_threshold = min(0.20 * logging_total_timesteps, 100_000_000)
     all_logs = []
 
-    while pufferl.global_step < train_config["total_timesteps"]:
+    while pufferl.epoch < pufferl.total_epochs:
         if train_config["device"] == "cuda":
             torch.compiler.cudagraph_mark_step_begin()
         try:
@@ -2481,6 +2485,8 @@ def _resolve_gigaflow_mining_maps(args):
         raise FileNotFoundError(f"No .bin files found in {map_dir}")
 
     selectors = args.get("eval_maps")
+    if selectors is None:
+        selectors = args.get("env", {}).get("maps")
     if selectors is None:
         num_carla_maps = args.get("num_carla_maps", len(all_map_files))
         return [os.path.basename(path) for path in all_map_files[:num_carla_maps]]
@@ -4139,8 +4145,6 @@ def load_config(env_name, config_dir=None):
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
     args["train"]["global_total_timesteps"] = args["train"]["total_timesteps"]
-    args["env"]["gamma"] = args["train"]["gamma"]
-
     # Under DDP, keep the per-rank batch geometry unchanged so launching on
     # N GPUs gives an N-times larger effective batch. Only divide the local
     # training horizon so the globally aggregated agent_steps still reach the
