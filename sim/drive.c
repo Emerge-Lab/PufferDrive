@@ -21,7 +21,7 @@ void demo() {
     c_reset(&env);
     c_render(&env);
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
-    int logit_sizes[1] = {action_dim_classic_discrete()};
+    int logit_sizes[1] = {63};
     PufferNet *net = make_puffernet(weights, env.num_agents, env.obs_size, 256, 4, logit_sizes, 1);
     int accel_delta = 2;
     int steer_delta = 4;
@@ -83,7 +83,7 @@ void performance_test() {
     c_reset(&env);
 
     Weights *weights = load_weights("resources/drive/drive_weights.bin");
-    int logit_sizes[1] = {action_dim_classic_discrete()};
+    int logit_sizes[1] = {63};
     PufferNet *net = make_puffernet(weights, env.num_agents, env.obs_size, 256, 4, logit_sizes, 1);
 
     long start = time(NULL);

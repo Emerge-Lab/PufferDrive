@@ -163,7 +163,7 @@ struct Agent {
     float sim_length;       // Bounding box length
     float sim_width;        // Bounding box width
     float sim_height;       // Bounding box height
-    float radius;           // Cached 0.5 * sqrt(L^2 + W^2); refreshed when L/W change
+    float radius;           // 0.5 * sqrt(L^2 + W^2); refreshed when L/W change
     int sim_valid;
     // Kinematic state
     float accel_long;

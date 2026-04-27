@@ -116,7 +116,6 @@ struct Log {
     float red_light_violation_rate;
     float num_goals_reached;
     float comfort_violation_count;
-
     float velocity_progress_sum;
     float lane_center_rate;
     float dnf_rate;
@@ -290,15 +289,6 @@ static inline void zero_agent_velocity_state(Agent *agent) {
     agent->accel_lat = 0.0f;
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
-}
-
-static inline int action_dim_classic_discrete(void) {
-    return (int) (sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]))
-        * (int) (sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]));
-}
-
-static inline int action_dim_jerk_discrete(void) {
-    return (int) (sizeof(JERK_LONG) / sizeof(JERK_LONG[0])) * (int) (sizeof(JERK_LAT) / sizeof(JERK_LAT[0]));
 }
 
 static void reset_agent_state(Agent *agent) {
@@ -1301,53 +1291,45 @@ static bool check_agent_corners_cross_stop_line(float corners[4][2], TrafficCont
     return false;
 }
 
-static bool red_light_for_lane_in_range(
-    Drive *env,
-    TrafficControlElement *traffic,
-    int lane_idx,
-    float agent_x,
-    float agent_y) {
-    if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
-        return false;
-    }
-    if (traffic->num_controlled_lanes == 0) {
-        return false;
-    }
-    if (env->timestep >= traffic->state_length) {
-        return false;
-    }
-    if (traffic->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
-        return false;
-    }
-    int controls_lane = 0;
-    for (int j = 0; j < traffic->num_controlled_lanes; j++) {
-        if (traffic->controlled_lanes[j] == lane_idx) {
-            controls_lane = 1;
-            break;
-        }
-    }
-    if (!controls_lane) {
-        return false;
-    }
-    float mid_x = (traffic->stop_line[0] + traffic->stop_line[3]) * 0.5f;
-    float mid_y = (traffic->stop_line[1] + traffic->stop_line[4]) * 0.5f;
-    float dx = agent_x - mid_x;
-    float dy = agent_y - mid_y;
-    return (dx * dx + dy * dy) <= STOP_LINE_DIST_SQ;
-}
-
 static bool check_stop_line_crossing(Drive *env, Agent *agent, int current_lane_idx, float corners[4][2]) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
-        TrafficControlElement *traffic = &env->traffic_elements[i];
-        if (!red_light_for_lane_in_range(env, traffic, current_lane_idx, agent->sim_x, agent->sim_y)) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        if (tc->num_controlled_lanes == 0) {
+            continue;
+        }
+        int controls_lane = 0;
+        for (int j = 0; j < tc->num_controlled_lanes; j++) {
+            if (tc->controlled_lanes[j] == current_lane_idx) {
+                controls_lane = 1;
+                break;
+            }
+        }
+        if (!controls_lane) {
+            continue;
+        }
+        if (env->timestep >= tc->state_length) {
+            continue;
+        }
+        if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
+            continue;
+        }
+        // Pre-filter: distance to stop line midpoint
+        float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+        float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+        float dx = agent->sim_x - mid_x;
+        float dy = agent->sim_y - mid_y;
+        if (dx * dx + dy * dy > STOP_LINE_DIST_SQ) {
             continue;
         }
         // Heading check: agent must be heading towards the stop line
-        float heading_diff = compute_heading_diff(agent->sim_heading, traffic->heading);
+        float heading_diff = compute_heading_diff(agent->sim_heading, tc->heading);
         if (fabsf(heading_diff) > STOP_LINE_HEADING_THRESHOLD) {
             continue;
         }
-        if (check_agent_corners_cross_stop_line(corners, traffic)) {
+        if (check_agent_corners_cross_stop_line(corners, tc)) {
             return true;
         }
     }
@@ -1362,8 +1344,30 @@ static bool check_lane_change_red_light(Drive *env, Agent *agent) {
         return false;
     }
     for (int i = 0; i < env->num_traffic_elements; i++) {
-        TrafficControlElement *traffic = &env->traffic_elements[i];
-        if (red_light_for_lane_in_range(env, traffic, agent->current_lane_idx, agent->sim_x, agent->sim_y)) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        if (tc->num_controlled_lanes == 0) {
+            continue;
+        }
+        if (env->timestep >= tc->state_length) {
+            continue;
+        }
+        if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
+            continue;
+        }
+        for (int j = 0; j < tc->num_controlled_lanes; j++) {
+            if (tc->controlled_lanes[j] != agent->current_lane_idx) {
+                continue;
+            }
+            float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
+            float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
+            float dx = agent->sim_x - mid_x;
+            float dy = agent->sim_y - mid_y;
+            if (dx * dx + dy * dy > STOP_LINE_DIST_SQ) {
+                continue;
+            }
             return true;
         }
     }
@@ -1375,18 +1379,14 @@ static bool check_red_light_violation(Drive *env, Agent *agent) {
     if (current_lane_idx == -1) {
         return false;
     }
-
     float corners[4][2];
     compute_agent_corners(agent, corners);
-
     if (check_stop_line_crossing(env, agent, current_lane_idx, corners)) {
         return true;
     }
-
     if (check_lane_change_red_light(env, agent)) {
         return true;
     }
-
     return false;
 }
 
@@ -1406,7 +1406,6 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
     compute_agent_corners(car1, car1_corners);
     float car2_corners[4][2];
     compute_agent_corners(car2, car2_corners);
-
     float axes[4][2] = {{cos1, sin1}, {-sin1, cos1}, {cos2, sin2}, {-sin2, cos2}};
 
     for (int i = 0; i < 4; i++) {
@@ -1471,10 +1470,10 @@ static void add_log(Drive *env) {
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
         if (!agent->removed && !agent->stopped) {
-            if (num_goals_reached >= 1) {
-                env->log.score += 1.0f;
-            } else {
+            if (num_goals_reached == 0) {
                 env->log.dnf_rate += 1.0f;
+            } else {
+                env->log.score += 1.0f;
             }
         }
         env->log.total_distance_travelled += agent->distance_since_spawn;
@@ -2376,7 +2375,6 @@ static void compute_rewards(Drive *env, int i) {
         // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
         float reward_collision = -(env->reward_collision + 0.1f * agent->sim_speed);
         env->rewards[i] += reward_collision;
-        env->logs[i].episode_return += reward_collision;
         env->logs[i].collision_rate = 1.0f;
     }
 
@@ -2384,7 +2382,6 @@ static void compute_rewards(Drive *env, int i) {
     if (agent->metrics_array[OFFROAD_IDX] > 0.0f) {
         float reward_offroad = -env->reward_offroad;
         env->rewards[i] += reward_offroad;
-        env->logs[i].episode_return += reward_offroad;
         env->logs[i].offroad_rate = 1.0f;
     }
 
@@ -2393,14 +2390,13 @@ static void compute_rewards(Drive *env, int i) {
         float reward_red_light = -env->reward_stop_line;
         env->rewards[i] += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
-        env->logs[i].episode_return += reward_red_light;
     }
 
     // Goal reward
     if (agent->metrics_array[REACH_GOAL_IDX] > 0.0f) {
         float reward_goal = env->reward_goal;
         env->rewards[i] += reward_goal;
-        env->logs[i].episode_return += reward_goal;
+        env->logs[i].num_goals_reached += 1;
     }
 
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
@@ -2414,7 +2410,6 @@ static void compute_rewards(Drive *env, int i) {
     float lane_align_reward
         = env->reward_lane_align * env->dt * (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
     env->rewards[i] += lane_align_reward;
-    env->logs[i].episode_return += lane_align_reward;
 
     // Rl-center: -α * dt * (|x_f - bias| - 0.05 / exp(|x_f - bias| - 0.5))
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
@@ -2423,42 +2418,39 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_reward = -env->reward_lane_center * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
     env->rewards[i] += lane_center_reward;
     env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
-    env->logs[i].episode_return += lane_center_reward;
 
     // Comfort reward
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
     float comfort_penalty = -env->reward_comfort * comfort_violations;
     env->rewards[i] += comfort_penalty;
     env->logs[i].comfort_violation_count += comfort_violations;
-    env->logs[i].episode_return += comfort_penalty;
 
     // Velocity reward
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
     float velocity_reward = env->reward_velocity * env->dt * velocity_progress;
     env->rewards[i] += velocity_reward;
     env->logs[i].velocity_progress_sum += velocity_progress;
-    env->logs[i].episode_return += velocity_reward;
 
     // Timestep reward
     float accel = sqrtf(agent->accel_long * agent->accel_long + agent->accel_lat * agent->accel_lat);
     if (agent->sim_speed > 0.01f || accel > 0.01f) {
         float timestep_penalty = -env->reward_timestep * env->dt;
         env->rewards[i] += timestep_penalty;
-        env->logs[i].episode_return += timestep_penalty;
     }
 
     // Reverse reward
     if (agent->sim_speed_signed < -0.01f) {
         float reverse_penalty = -env->reward_reverse * env->dt;
         env->rewards[i] += reverse_penalty;
-        env->logs[i].episode_return += reverse_penalty;
     }
 
     // Speed limit reward
     float speed_reward = -env->reward_overspeed * agent->metrics_array[SPEED_LIMIT_IDX];
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
-    env->logs[i].episode_return += speed_reward;
+
+    // Update episode return
+    env->logs[i].episode_return += env->rewards[i];
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
@@ -2793,8 +2785,6 @@ static void move_dynamics(Drive *env, int agent_idx) {
         if (env->action_type == DISCRETE) {
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             int val = (int) env->actions[agent_idx];
-            assert(val >= 0);
-            assert(val < action_dim_classic_discrete());
             accel = ACCELERATION_VALUES[val / num_steer];
             steer_req = STEERING_VALUES[val % num_steer];
         } else if (env->action_type == CONTINUOUS) {
@@ -2823,8 +2813,6 @@ static void move_dynamics(Drive *env, int agent_idx) {
         if (env->action_type == DISCRETE) {
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
             int val = (int) env->actions[agent_idx];
-            assert(val >= 0);
-            assert(val < action_dim_jerk_discrete());
             j_long = JERK_LONG[val / num_lat];
             j_lat = JERK_LAT[val % num_lat];
         } else if (env->action_type == CONTINUOUS) {
@@ -2966,7 +2954,6 @@ void c_step(Drive *env) {
         }
         agent->current_goal_idx++;
         if (agent->current_goal_idx == env->num_target_waypoints) {
-            env->logs[i].num_goals_reached += 1;
             if (!compute_goals(env, agent)) {
                 env->truncations[i] = 1;
             }

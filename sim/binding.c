@@ -188,6 +188,8 @@ void my_log(Log *log, Dict *out) {
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "offroad_rate", log->offroad_rate);
     dict_set(out, "collision_rate", log->collision_rate);
+    dict_set(out, "num_goals_reached", log->num_goals_reached);
+    dict_set(out, "avg_speed_per_agent", log->avg_speed_per_agent);
     dict_set(out, "dnf_rate", log->dnf_rate);
     dict_set(out, "n", log->n);
 }

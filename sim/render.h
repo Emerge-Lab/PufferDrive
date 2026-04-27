@@ -20,12 +20,6 @@ const Color ROAD_LINE_WHITE = (Color) {230, 230, 220, 255};
 const Color ROAD_LINE_YELLOW = (Color) {230, 190, 40, 255};
 const Color CROSSWALK_COLOR = (Color) {245, 245, 230, 255};
 
-// Observation scaling factors
-#define OBS_GOAL_SCALE 0.005f
-#define OBS_SPEED_SCALE 0.01f
-#define OBS_POSITION_SCALE 0.02f
-#define OBS_DIST_SQ (100.0f * 100.0f)
-
 struct Client {
     float width;
     float height;
@@ -324,7 +318,7 @@ void draw_agent_obs(Drive *env, int agent_index) {
         return;
     }
 
-    float vision_radius = sqrtf(OBS_DIST_SQ);
+    float vision_radius = env->obs_range_partner_m;
     for (int k = 0; k < 48; k++) {
         float a0 = (2.0f * M_PI * k) / 48.0f;
         float a1 = (2.0f * M_PI * (k + 1)) / 48.0f;
@@ -335,14 +329,17 @@ void draw_agent_obs(Drive *env, int agent_index) {
     }
 
     float *agent_obs = ((float *) env->observations) + (size_t) agent_index * env->obs_size;
-    float goal_x = agent_obs[0] / OBS_GOAL_SCALE;
-    float goal_y = agent_obs[1] / OBS_GOAL_SCALE;
-    DrawSphere((Vector3) {goal_x, goal_y, 1}, 0.5f, GREEN);
+    int target_features = (env->target_type == TARGET_STATIC) ? STATIC_TARGET_FEATURES : DYNAMIC_TARGET_FEATURES;
+    int partner_start = EGO_FEATURES + target_features * env->num_target_waypoints;
+    int lane_start = partner_start + PARTNER_FEATURES * env->obs_slots_partners;
+    int boundary_start = lane_start + ROAD_FEATURES * env->obs_slots_lane;
+    int tc_start = boundary_start + ROAD_FEATURES * env->obs_slots_boundary;
 
     int counts_idx = env->obs_size - OBS_COUNT_FEATURES;
     int lane_count = (int) agent_obs[counts_idx];
     int boundary_count = (int) agent_obs[counts_idx + 1];
     int partner_count = (int) agent_obs[counts_idx + 2];
+    int traffic_control_count = (int) agent_obs[counts_idx + 3];
     if (partner_count > env->obs_slots_partners) {
         partner_count = env->obs_slots_partners;
     }
@@ -352,14 +349,17 @@ void draw_agent_obs(Drive *env, int agent_index) {
     if (boundary_count > env->obs_slots_boundary) {
         boundary_count = env->obs_slots_boundary;
     }
+    if (traffic_control_count > env->obs_slots_traffic_controls) {
+        traffic_control_count = env->obs_slots_traffic_controls;
+    }
 
-    int obs_idx = EGO_FEATURES;
+    int obs_idx = partner_start;
     for (int j = 0; j < partner_count; j++) {
-        float x = agent_obs[obs_idx] / OBS_POSITION_SCALE;
-        float y = agent_obs[obs_idx + 1] / OBS_POSITION_SCALE;
+        float x = agent_obs[obs_idx] * env->norm_xy_offset_m;
+        float y = agent_obs[obs_idx + 1] * env->norm_xy_offset_m;
         float z = 1.0f + agent_obs[obs_idx + 2] * Z_BUFFER;
-        float width = fmaxf(agent_obs[obs_idx + 3] * env->norm_vehicle_width_m, 0.4f);
-        float length = fmaxf(agent_obs[obs_idx + 4] * env->norm_vehicle_length_m, 0.4f);
+        float length = fmaxf(agent_obs[obs_idx + 3] * env->norm_vehicle_length_m, 0.4f);
+        float width = fmaxf(agent_obs[obs_idx + 4] * env->norm_vehicle_width_m, 0.4f);
 
         float theta_x = agent_obs[obs_idx + 5];
         float theta_y = agent_obs[obs_idx + 6];
@@ -392,11 +392,10 @@ void draw_agent_obs(Drive *env, int agent_index) {
         obs_idx += PARTNER_FEATURES;
     }
 
-    int lane_start_idx = EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners;
     for (int k = 0; k < lane_count; k++) {
-        int idx = lane_start_idx + k * ROAD_FEATURES;
-        float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
-        float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
+        int idx = lane_start + k * ROAD_FEATURES;
+        float x_mid = agent_obs[idx] * env->norm_xy_offset_m;
+        float y_mid = agent_obs[idx + 1] * env->norm_xy_offset_m;
         float z_mid = 1.0f + agent_obs[idx + 2] * Z_BUFFER;
         float rel_angle = atan2f(agent_obs[idx + 6], agent_obs[idx + 5]);
         float half_len = 0.5f * agent_obs[idx + 3] * env->norm_road_segment_length_m;
@@ -409,11 +408,10 @@ void draw_agent_obs(Drive *env, int agent_index) {
         DrawLine3D((Vector3) {x_start, y_start, z_mid}, (Vector3) {x_end, y_end, z_mid}, LANE_CENTER_COLOR);
     }
 
-    int boundary_start_idx = lane_start_idx + env->obs_slots_lane * ROAD_FEATURES;
     for (int k = 0; k < boundary_count; k++) {
-        int idx = boundary_start_idx + k * ROAD_FEATURES;
-        float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
-        float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
+        int idx = boundary_start + k * ROAD_FEATURES;
+        float x_mid = agent_obs[idx] * env->norm_xy_offset_m;
+        float y_mid = agent_obs[idx + 1] * env->norm_xy_offset_m;
         float z_mid = 1.0f + agent_obs[idx + 2] * Z_BUFFER;
         float rel_angle = atan2f(agent_obs[idx + 6], agent_obs[idx + 5]);
         float half_len = 0.5f * agent_obs[idx + 3] * env->norm_road_segment_length_m;
@@ -424,6 +422,23 @@ void draw_agent_obs(Drive *env, int agent_index) {
 
         DrawCube((Vector3) {x_mid, y_mid, z_mid}, 0.5f, 0.5f, 0.5f, PUFF_CYAN);
         DrawLine3D((Vector3) {x_start, y_start, z_mid}, (Vector3) {x_end, y_end, z_mid}, PUFF_WHITE);
+    }
+
+    for (int k = 0; k < traffic_control_count; k++) {
+        int idx = tc_start + k * TRAFFIC_CONTROL_FEATURES;
+        float x1 = agent_obs[idx] * env->norm_xy_offset_m;
+        float y1 = agent_obs[idx + 1] * env->norm_xy_offset_m;
+        float x2 = agent_obs[idx + 2] * env->norm_xy_offset_m;
+        float y2 = agent_obs[idx + 3] * env->norm_xy_offset_m;
+        float z = 1.0f + agent_obs[idx + 4] * Z_BUFFER;
+        int type = (int) agent_obs[idx + 5];
+        Color color = traffic_state_color((int) agent_obs[idx + 6]);
+        if (type == TRAFFIC_CONTROL_TYPE_STOP_SIGN) {
+            color = PUFF_RED;
+        } else if (type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN) {
+            color = ROAD_LINE_YELLOW;
+        }
+        DrawLine3D((Vector3) {x1, y1, z}, (Vector3) {x2, y2, z}, color);
     }
 }
 

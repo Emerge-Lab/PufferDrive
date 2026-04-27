@@ -137,11 +137,13 @@ int load_map_binary(const char *filename, Drive *drive) {
         READ_OR_FAIL(agent->log_height, sizeof(float), tlen);
         READ_OR_FAIL(agent->log_valid, sizeof(int), tlen);
 
-        int route_length;
-        READ_OR_FAIL(&route_length, sizeof(int), 1);
+        READ_OR_FAIL(&agent->route_length, sizeof(int), 1);
 
-        if (route_length > 0) {
-            fseek(file, (long) ((size_t) route_length * sizeof(int)), SEEK_CUR);
+        if (agent->route_length > 0) {
+            agent->route = (int *) malloc(agent->route_length * sizeof(int));
+            READ_OR_FAIL(agent->route, sizeof(int), agent->route_length);
+        } else {
+            agent->route = NULL;
         }
 
         int route_gt_len;
