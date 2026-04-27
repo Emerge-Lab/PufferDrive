@@ -8,6 +8,12 @@
 #include "env_fields.h"
 #include "vecenv.h"
 
+static inline void apply_env_kwargs(Env *env, Dict *kwargs) {
+#define APPLY(type, name) env->name = (type) dict_get(kwargs, #name)->value;
+    ENV_FIELDS(APPLY)
+#undef APPLY
+}
+
 Env *my_vec_init(
     int *num_envs_out,
     int *buffer_env_starts,
@@ -193,10 +199,10 @@ void my_env_constants(void *env_ptr, Dict *out) {
     dict_set(out, "partner_features", PARTNER_FEATURES);
     dict_set(out, "road_features", ROAD_FEATURES);
     dict_set(out, "traffic_control_features", TRAFFIC_CONTROL_FEATURES);
-    dict_set(out, "obs_partner_slots", env->max_partner_observations);
-    dict_set(out, "obs_lane_slots", env->max_lane_segment_observations);
-    dict_set(out, "obs_boundary_slots", env->max_boundary_segment_observations);
-    dict_set(out, "obs_traffic_control_slots", env->max_traffic_control_observations);
+    dict_set(out, "obs_partner_slots", env->obs_slots_partners);
+    dict_set(out, "obs_lane_slots", env->obs_slots_lane);
+    dict_set(out, "obs_boundary_slots", env->obs_slots_boundary);
+    dict_set(out, "obs_traffic_control_slots", env->obs_slots_traffic_controls);
     dict_set(out, "obs_count_features", OBS_COUNT_FEATURES);
     dict_set(out, "num_target_waypoints", env->num_target_waypoints);
     dict_set(out, "num_reward_coefs", 0);

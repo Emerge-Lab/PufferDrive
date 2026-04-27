@@ -343,14 +343,14 @@ void draw_agent_obs(Drive *env, int agent_index) {
     int lane_count = (int) agent_obs[counts_idx];
     int boundary_count = (int) agent_obs[counts_idx + 1];
     int partner_count = (int) agent_obs[counts_idx + 2];
-    if (partner_count > env->max_partner_observations) {
-        partner_count = env->max_partner_observations;
+    if (partner_count > env->obs_slots_partners) {
+        partner_count = env->obs_slots_partners;
     }
-    if (lane_count > env->max_lane_segment_observations) {
-        lane_count = env->max_lane_segment_observations;
+    if (lane_count > env->obs_slots_lane) {
+        lane_count = env->obs_slots_lane;
     }
-    if (boundary_count > env->max_boundary_segment_observations) {
-        boundary_count = env->max_boundary_segment_observations;
+    if (boundary_count > env->obs_slots_boundary) {
+        boundary_count = env->obs_slots_boundary;
     }
 
     int obs_idx = EGO_FEATURES;
@@ -358,8 +358,8 @@ void draw_agent_obs(Drive *env, int agent_index) {
         float x = agent_obs[obs_idx] / OBS_POSITION_SCALE;
         float y = agent_obs[obs_idx + 1] / OBS_POSITION_SCALE;
         float z = 1.0f + agent_obs[obs_idx + 2] * Z_BUFFER;
-        float width = fmaxf(agent_obs[obs_idx + 3] * env->max_veh_width, 0.4f);
-        float length = fmaxf(agent_obs[obs_idx + 4] * env->max_veh_len, 0.4f);
+        float width = fmaxf(agent_obs[obs_idx + 3] * env->norm_vehicle_width_m, 0.4f);
+        float length = fmaxf(agent_obs[obs_idx + 4] * env->norm_vehicle_length_m, 0.4f);
 
         float theta_x = agent_obs[obs_idx + 5];
         float theta_y = agent_obs[obs_idx + 6];
@@ -392,14 +392,14 @@ void draw_agent_obs(Drive *env, int agent_index) {
         obs_idx += PARTNER_FEATURES;
     }
 
-    int lane_start_idx = EGO_FEATURES + PARTNER_FEATURES * env->max_partner_observations;
+    int lane_start_idx = EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners;
     for (int k = 0; k < lane_count; k++) {
         int idx = lane_start_idx + k * ROAD_FEATURES;
         float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
         float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
         float z_mid = 1.0f + agent_obs[idx + 2] * Z_BUFFER;
         float rel_angle = atan2f(agent_obs[idx + 6], agent_obs[idx + 5]);
-        float half_len = 0.5f * agent_obs[idx + 3] * env->max_road_segment_length;
+        float half_len = 0.5f * agent_obs[idx + 3] * env->norm_road_segment_length_m;
         float x_start = x_mid - half_len * cosf(rel_angle);
         float y_start = y_mid - half_len * sinf(rel_angle);
         float x_end = x_mid + half_len * cosf(rel_angle);
@@ -409,14 +409,14 @@ void draw_agent_obs(Drive *env, int agent_index) {
         DrawLine3D((Vector3) {x_start, y_start, z_mid}, (Vector3) {x_end, y_end, z_mid}, LANE_CENTER_COLOR);
     }
 
-    int boundary_start_idx = lane_start_idx + env->max_lane_segment_observations * ROAD_FEATURES;
+    int boundary_start_idx = lane_start_idx + env->obs_slots_lane * ROAD_FEATURES;
     for (int k = 0; k < boundary_count; k++) {
         int idx = boundary_start_idx + k * ROAD_FEATURES;
         float x_mid = agent_obs[idx] / OBS_POSITION_SCALE;
         float y_mid = agent_obs[idx + 1] / OBS_POSITION_SCALE;
         float z_mid = 1.0f + agent_obs[idx + 2] * Z_BUFFER;
         float rel_angle = atan2f(agent_obs[idx + 6], agent_obs[idx + 5]);
-        float half_len = 0.5f * agent_obs[idx + 3] * env->max_road_segment_length;
+        float half_len = 0.5f * agent_obs[idx + 3] * env->norm_road_segment_length_m;
         float x_start = x_mid - half_len * cosf(rel_angle);
         float y_start = y_mid - half_len * sinf(rel_angle);
         float x_end = x_mid + half_len * cosf(rel_angle);

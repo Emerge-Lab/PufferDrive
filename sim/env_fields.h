@@ -46,29 +46,23 @@
     F(float, reward_timestep)                                                                                          \
     F(float, reward_overspeed)                                                                                         \
     /* Observation limits */                                                                                           \
-    F(int, max_lane_segment_observations)                                                                              \
-    F(int, max_boundary_segment_observations)                                                                          \
-    F(int, max_partner_observations)                                                                                   \
-    F(int, max_traffic_control_observations)                                                                           \
+    F(int, obs_slots_lane)                                                                                             \
+    F(int, obs_slots_boundary)                                                                                         \
+    F(int, obs_slots_partners)                                                                                         \
+    F(int, obs_slots_traffic_controls)                                                                                 \
     F(int, traffic_control_scope)                                                                                      \
     /* Observation normalization */                                                                                    \
-    F(float, max_goal_position)                                                                                        \
-    F(float, max_position)                                                                                             \
-    F(float, max_veh_len)                                                                                              \
-    F(float, max_veh_width)                                                                                            \
-    F(float, max_road_segment_length)                                                                                  \
-    F(float, max_road_segment_width)                                                                                   \
+    F(float, norm_goal_offset_m)                                                                                       \
+    F(float, norm_xy_offset_m)                                                                                         \
+    F(float, norm_vehicle_length_m)                                                                                    \
+    F(float, norm_vehicle_width_m)                                                                                     \
+    F(float, norm_road_segment_length_m)                                                                               \
+    F(float, norm_road_segment_width_m)                                                                                \
     /* Observation distances */                                                                                        \
-    F(float, max_traffic_control_distance)                                                                             \
-    F(float, agent_obs_max_dist)                                                                                       \
-    F(float, road_obs_front_dist)                                                                                      \
-    F(float, road_obs_behind_dist)                                                                                     \
-    F(float, road_obs_side_dist)
-
-static inline void apply_env_kwargs(Env *env, Dict *kwargs) {
-#define APPLY(type, name) env->name = (type) dict_get(kwargs, #name)->value;
-    ENV_FIELDS(APPLY)
-#undef APPLY
-}
+    F(float, obs_range_road_front_m)                                                                                   \
+    F(float, obs_range_road_behind_m)                                                                                  \
+    F(float, obs_range_road_side_m)                                                                                    \
+    F(float, obs_range_partner_m)                                                                                      \
+    F(float, obs_range_traffic_control_m)
 
 #endif
