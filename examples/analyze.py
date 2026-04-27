@@ -394,7 +394,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_train",
             num_maps=50_000,
-            lambda_value=0.15 if is_reg else 0.0,
+            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Self-play on validation ──────────────────────────────────────
@@ -407,7 +407,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_val",
             num_maps=10_000,
-            lambda_value=0.15 if is_reg else 0.0,
+            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Human-replay on randomly sampled validation scenes ───────────
@@ -420,7 +420,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_val",
             num_maps=10_000,
-            lambda_value=0.15 if is_reg else 0.0,  # TODO: Fix this
+            lambda_value=0.1 if is_reg else 0.0,  # TODO: Fix this
         )
 
         # ── Human-replay on interactive scenes ───────────────────────────
@@ -433,7 +433,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_interactive",
             num_maps=200,
-            lambda_value=0.15 if is_reg else 0.0,
+            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # Attach scaling metadata to every row

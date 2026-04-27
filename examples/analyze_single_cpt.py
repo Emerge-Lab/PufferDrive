@@ -19,20 +19,22 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 # CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
 CPT_PATH = (
-    "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
+    # "models/reg_delta_50k_maps_anchor_200_maps_99.pt"
+    "models/reg_delta_50k_maps_anchor_200_maps_995.pt"
+    # "models/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
 )
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_AGENTS_PER_VECENV = 1024
+NUM_AGENTS_PER_VECENV = 256 * 10
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 50
+NUM_ENVS_TO_RENDER = 25
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
 EPISODE_LENGTHS = [150]
@@ -147,7 +149,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
     for mode_name, map_dir, control_mode, num_maps in [
         # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
         # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
-        ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
+        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
         ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", 200),
     ]:
         print(f"\n{'─' * 60}")
