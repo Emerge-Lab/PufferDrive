@@ -3687,6 +3687,8 @@ def render_mined_failures(env_name, args=None, quiet=False):
                         "map_name": item.get("map_name"),
                         "scenario_id": item.get("scenario_id"),
                         "did_target_fail": item.get("did_target_fail", 0),
+                        "adv_reward_weight_drive": item.get("adv_reward_weight_drive"),
+                        "adv_drive_weight": item.get("adv_drive_weight"),
                     }
                     for item in replay_records
                 ],
