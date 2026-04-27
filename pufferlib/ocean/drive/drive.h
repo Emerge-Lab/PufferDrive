@@ -319,6 +319,7 @@ struct Drive {
     float reward_ade;
     float adv_reward_weight_collision;
     float adv_reward_weight_offroad;
+    float adv_reward_weight_traffic_light;
     float adv_reward_weight_drive;
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
@@ -5339,6 +5340,7 @@ void c_step(Drive *env) {
         for (int i = 1; i < env->active_agent_count; i++) {
             reward_terms[i].collision *= env->adv_reward_weight_collision;
             reward_terms[i].offroad *= env->adv_reward_weight_offroad;
+            reward_terms[i].red_light *= env->adv_reward_weight_traffic_light;
 
             float drive_weight = env->adv_reward_weight_drive_conditioning
                                      ? env->agents[env->active_agent_indices[i]].adv_reward_weight_drive

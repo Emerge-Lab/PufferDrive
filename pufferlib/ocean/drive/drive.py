@@ -137,6 +137,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         adv_reward_weight_collision=0.5,
         adv_reward_weight_offroad=0.5,
+        adv_reward_weight_traffic_light=0.5,
         adv_reward_weight_drive=0.5,
         adv_reward_weight_adversarial=1.0,
         adv_bonus_only=False,
@@ -242,6 +243,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.adv_reward_weight_collision = adv_reward_weight_collision
         self.adv_reward_weight_offroad = adv_reward_weight_offroad
+        self.adv_reward_weight_traffic_light = adv_reward_weight_traffic_light
         self.adv_reward_weight_drive = adv_reward_weight_drive
         self.adv_reward_weight_adversarial = adv_reward_weight_adversarial
         self.adv_bonus_only = adv_bonus_only
@@ -796,6 +798,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_ade": self.reward_ade,
             "adv_reward_weight_collision": self.adv_reward_weight_collision,
             "adv_reward_weight_offroad": self.adv_reward_weight_offroad,
+            "adv_reward_weight_traffic_light": self.adv_reward_weight_traffic_light,
             "adv_reward_weight_drive": self.adv_reward_weight_drive,
             "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
             "adv_bonus_only": self.adv_bonus_only,
