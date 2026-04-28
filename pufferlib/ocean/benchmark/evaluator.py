@@ -1118,18 +1118,14 @@ class Evaluator:
         if self.human_replay_stats is not None:
             populated = [log for log in self.human_replay_stats if log and log.get("n", 0) > 0]
             if populated:
-                collisions_per_agent = np.array([log["collisions_per_agent"] for log in populated])
                 did_collide = np.array([log["collision_rate"] for log in populated])
-                stats["eval/hr_mean_collisions_per_agent"] = float(np.mean(collisions_per_agent))
                 stats["eval/hr_mean_did_collide"] = float(np.mean(did_collide))
                 stats["eval/hr_score"] = float(np.mean([log["score"] for log in populated]))
 
         if self.self_play_stats is not None:
             populated = [log for log in self.self_play_stats if log and log.get("n", 0) > 0]
             if populated:
-                collisions_per_agent = np.array([log["collisions_per_agent"] for log in populated])
                 did_collide = np.array([log["collision_rate"] for log in populated])
-                stats["eval/sp_mean_collisions_per_agent"] = float(np.mean(collisions_per_agent))
                 stats["eval/sp_mean_did_collide"] = float(np.mean(did_collide))
                 stats["eval/sp_score"] = float(np.mean([log["score"] for log in populated]))
                 stats["eval/sp_num_agents"] = float(np.mean([log["n"] for log in populated]))
