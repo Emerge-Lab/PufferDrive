@@ -85,6 +85,7 @@ METRICS = [
     "episode_length",
     "episode_return",
     "perc_controlled",
+    "longitudinal_error_avg",
 ]
 
 
