@@ -27,7 +27,7 @@ import pufferlib.models
 
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
-NUM_MAPS = 1200
+NUM_MAPS = 67
 MAP_DIR = "resources/drive/binaries/training_50k"
 
 # Defined in drive.h
@@ -54,8 +54,8 @@ TRAIN_DEFAULTS = {
     "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
-    "epochs": 10_000,
+    "resample_every_n_epochs": 100,  # Resample after k full passes through the dataset
+    "epochs": 1000,
     "num_maps": NUM_MAPS,
     "eval_frequency": 100,  # Validation dataset
     "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
@@ -845,12 +845,6 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     # On train maps
     try:
         record_rollout_video(policy, dynamics_model, device, map_dir=map_dir)
-    except Exception as e:
-        print(f"Video recording failed (non-fatal): {e}")
-
-    # On test maps
-    try:
-        record_rollout_video(policy, dynamics_model, device, map_dir="resources/drive/binaries/validation")
     except Exception as e:
         print(f"Video recording failed (non-fatal): {e}")
 
