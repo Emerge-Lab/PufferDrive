@@ -247,13 +247,38 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                     else:
                         print(f"DrivingBehavioursEval [{short}]: no metrics found in output")
                 else:
-                    print(
-                        f"DrivingBehavioursEval [{short}]: subprocess failed (exit {result.returncode}): {result.stderr[-500:]}"
-                    )
+                    exit_code = result.returncode
+                    # Decode common negative exit codes (Unix signals: returncode = -signal)
+                    import signal as _signal
+
+                    signal_explanations = {
+                        -9: "SIGKILL — process forcibly killed by OS (likely OOM / memory limit exceeded)",
+                        -11: "SIGSEGV — segmentation fault",
+                        -6: "SIGABRT — process aborted (assert / abort() called)",
+                        -15: "SIGTERM — process terminated externally",
+                    }
+                    signal_note = signal_explanations.get(exit_code, "")
+                    if not signal_note and exit_code < 0:
+                        try:
+                            sig = _signal.Signals(-exit_code)
+                            signal_note = f"{sig.name} — signal {-exit_code}"
+                        except ValueError:
+                            signal_note = f"unknown signal {-exit_code}"
+                    note_str = f" ({signal_note})" if signal_note else ""
+                    print(f"DrivingBehavioursEval [{short}]: subprocess failed (exit {exit_code}){note_str}")
+                    if result.stderr:
+                        print(f"DrivingBehavioursEval [{short}]: stderr (last 1000 chars):\n{result.stderr[-1000:]}")
+                    else:
+                        print(f"DrivingBehavioursEval [{short}]: stderr was empty")
+                    if result.stdout:
+                        print(f"DrivingBehavioursEval [{short}]: stdout (last 500 chars):\n{result.stdout[-500:]}")
             except subprocess.TimeoutExpired:
-                print(f"DrivingBehavioursEval [{short}]: timed out")
+                print(f"DrivingBehavioursEval [{short}]: timed out after 600s (cmd: {' '.join(cmd)})")
             except Exception as e:
-                print(f"DrivingBehavioursEval [{short}]: error: {e}")
+                import traceback
+
+                print(f"DrivingBehavioursEval [{short}]: error: {type(e).__name__}: {e}")
+                print(traceback.format_exc())
 
         # Log all class results to wandb
         if hasattr(logger, "wandb") and logger.wandb and all_results:
