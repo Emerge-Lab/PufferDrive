@@ -30,6 +30,20 @@ os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 NUM_MAPS = 1200
 MAP_DIR = "resources/drive/binaries/training_50k"
 
+# Defined in drive.h
+NUM_DX = binding.NUM_DX_BINS
+NUM_DY = binding.NUM_DY_BINS
+NUM_YAW = binding.NUM_YAW_BINS
+MAX_DX = 3.0
+MAX_DY = 0.1
+MAX_DYAW = np.pi / 6.0
+
+DX_STEP = 2 * MAX_DX / (NUM_DX - 1)
+DY_STEP = 2 * MAX_DY / (NUM_DY - 1)
+YAW_STEP = 2 * MAX_DYAW / (NUM_YAW - 1)
+
+HEAD_STEP_SIZES = {"dx": DX_STEP, "dy": DY_STEP, "dyaw": YAW_STEP}
+
 # ---------------------------------------------------------------------------
 # Multi-run config
 # ---------------------------------------------------------------------------
@@ -301,6 +315,28 @@ def load_data(driver_env):
     return TensorDataset(obs, actions)
 
 
+def compute_head_metrics(policy, batch_obs, batch_actions, bin_tolerance=5):
+    """Per-head accuracy within k bins and mean absolute error in physical units."""
+    head_names = ["dx", "dy", "dyaw"]
+    with torch.no_grad():
+        dists = policy.dist(batch_obs)
+        result = {}
+        for i, d in enumerate(dists):
+            name = head_names[i] if i < len(head_names) else f"head_{i}"
+            step = HEAD_STEP_SIZES.get(name, 1.0)
+
+            pred = d.logits.argmax(dim=-1)
+            target = batch_actions[:, i] if batch_actions.dim() > 1 else batch_actions.squeeze(-1)
+            abs_bin_err = (pred - target.long()).abs().float()
+
+            # Tolerance is in bin space; label shows equivalent physical value
+            phys_tol = bin_tolerance * step
+            result[f"acc_within_{bin_tolerance}bins_{name}"] = (abs_bin_err <= bin_tolerance).float().mean().item()
+            result[f"mean_abs_err_{name}"] = (abs_bin_err * step).mean().item()
+
+    return result
+
+
 def compute_accuracy(policy, batch_obs, batch_actions):
     with torch.no_grad():
         pred = policy(batch_obs, deterministic=True)
@@ -407,10 +443,11 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
     plt.close(fig)
 
 
-def evaluate(policy, dataloader, device):
+def evaluate(policy, dataloader, device, bin_tolerance=5):
     policy.eval()
     losses, accuracies = [], []
     entropy_accum = {}
+    head_metrics_accum = {}
 
     with torch.no_grad():
         for batch_obs, batch_actions in dataloader:
@@ -420,6 +457,7 @@ def evaluate(policy, dataloader, device):
             loss = -policy._log_prob(batch_obs, batch_actions.float())
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
             entropy = policy._entropy(batch_obs)
+            head_metrics = compute_head_metrics(policy, batch_obs, batch_actions, bin_tolerance)
 
             losses.append(loss.item())
             accuracies.append(accuracy)
@@ -428,14 +466,16 @@ def evaluate(policy, dataloader, device):
                     entropy_accum.setdefault(k, []).append(v)
             else:
                 entropy_accum.setdefault("entropy", []).append(entropy)
+            for k, v in head_metrics.items():
+                head_metrics_accum.setdefault(k, []).append(v)
 
     policy.train()
-    metrics = {
+    return {
         "loss": np.mean(losses),
         "accuracy": np.mean(accuracies),
         **{k: np.mean(v) for k, v in entropy_accum.items()},
+        **{k: np.mean(v) for k, v in head_metrics_accum.items()},
     }
-    return metrics
 
 
 def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos", map_dir=MAP_DIR):
@@ -678,10 +718,12 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
             optimizer.step()
 
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
+
             epoch_losses.append(loss.item())
             epoch_accuracies.append(accuracy)
 
             # Log statistics
+            head_metrics = compute_head_metrics(policy, batch_obs, batch_actions)
             wandb.log(
                 {
                     f"train/{k}": v
@@ -691,6 +733,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
                         "epoch": epoch,
                         "global_step": global_step,
                         **(entropy if isinstance(entropy, dict) else {"entropy": entropy}),
+                        **head_metrics,
                     }.items()
                 }
             )
