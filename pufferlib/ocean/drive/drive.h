@@ -469,6 +469,10 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float adv_bucket_count_low = log->adv_bucket_count_low;
     float adv_bucket_count_mid = log->adv_bucket_count_mid;
     float adv_bucket_count_high = log->adv_bucket_count_high;
+    float num_goals_reached = log->num_goals_reached;
+    float ttc_within_bound_rate = log->ttc_within_bound_rate;
+    float progress_ratio = log->progress_ratio;
+    float puffer_score = log->puffer_score;
 
     int num_keys = sizeof(Log) / sizeof(float);
     for (int i = 0; i < num_keys; i++) {
@@ -519,6 +523,11 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     log->episode_return_drive =
         adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
     log->episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+    log->num_goals_reached = adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
+    log->ttc_within_bound_rate =
+        adversary_n > 0.0f ? (ttc_within_bound_rate - target_ttc_within_bound_rate) / adversary_n : 0.0f;
+    log->progress_ratio = adversary_n > 0.0f ? (progress_ratio - target_progress_ratio) / adversary_n : 0.0f;
+    log->puffer_score = adversary_n > 0.0f ? (puffer_score - target_puffer_score) / adversary_n : 0.0f;
 }
 
 static inline void enqueue_completed_episode_summary(Drive *env, const Log *episode_log) {
