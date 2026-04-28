@@ -132,10 +132,10 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_STEER_BINS 31
 #define STEER_MIN -1.0f // radians
 #define STEER_MAX 1.0f
-#define NUM_DX_BINS 51
-#define NUM_DY_BINS 51
-#define NUM_YAW_BINS 127
-#define DELTA_MAX_DX 2.5f
+#define NUM_DX_BINS 127
+#define NUM_DY_BINS 127
+#define NUM_YAW_BINS 256
+#define DELTA_MAX_DX 2.0f
 #define DELTA_MAX_DY 2.0f
 #define DELTA_MAX_DYAW 3.14159265 / 4.0
 
@@ -279,6 +279,10 @@ struct Entity {
     float reward_collision_cond;
     float reward_offroad_cond;
     float reward_goal_cond;
+    float prev_action_dx;
+    float prev_action_dy;
+    float prev_action_dyaw;
+    float jerk_yaw;
 };
 
 void free_entity(Entity *entity) {
@@ -699,6 +703,9 @@ void set_start_position(Drive *env) {
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = e->length;
+        e->prev_action_dx = 0.0f;
+        e->prev_action_dy = 0.0f;
+        e->prev_action_dyaw = 0.0f;
     }
 }
 
@@ -1687,11 +1694,11 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // New heading
         // Note: uses agent->length directly, must match wheelbase used in infer_human_actions()
         // Currently wheelbase == length (set in set_start_position)
-        float yaw_rate = (signed_speed * cosf(beta) * tanf(steering)) / agent->length;
-
+        // Remove slip angle β to match the rear-axle inverse in infer_human_actions
+        float yaw_rate = (signed_speed * tanf(steering)) / agent->length;
         // New velocity
-        float new_vx = signed_speed * cosf(heading + beta);
-        float new_vy = signed_speed * sinf(heading + beta);
+        float new_vx = signed_speed * cosf(heading);
+        float new_vy = signed_speed * sinf(heading);
 
         // Update position
         x = x + (new_vx * env->dt);
@@ -1735,6 +1742,18 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         action_dx = clip(action_dx, -DELTA_MAX_DX, DELTA_MAX_DX);
         action_dy = clip(action_dy, -DELTA_MAX_DY, DELTA_MAX_DY);
         action_dyaw = normalize_heading(action_dyaw);
+
+        float jerk_dx = action_dx - agent->prev_action_dx;
+        float jerk_dy = action_dy - agent->prev_action_dy;
+        float jerk_dyaw = normalize_heading(action_dyaw - agent->prev_action_dyaw);
+
+        agent->jerk_long = jerk_dx;
+        agent->jerk_lat = jerk_dy;
+        agent->jerk_yaw = jerk_dyaw;
+
+        agent->prev_action_dx = action_dx;
+        agent->prev_action_dy = action_dy;
+        agent->prev_action_dyaw = action_dyaw;
 
         float cos_h = agent->heading_x;
         float sin_h = agent->heading_y;
@@ -2415,6 +2434,21 @@ void c_step(Drive *env) {
 
         float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
                                     env->entities[agent_idx].vy * env->entities[agent_idx].vy);
+
+        // if (env->dynamics_model == DELTA_LOCAL && !agent_is_done && !env->entities[agent_idx].removed &&
+        //     env->control_mode != CONTROL_REPLAY_LOGS && env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
+        //     Entity *e = &env->entities[agent_idx];
+        //     // Normalize each component to roughly [-1, 1] so the coefficient is interpretable
+        //     float jx = e->jerk_long / DELTA_MAX_DX;
+        //     float jy = e->jerk_lat  / DELTA_MAX_DY;
+        //     float jw = e->jerk_yaw  / (float)DELTA_MAX_DYAW;
+        //     float jerk_sq = jx*jx + jy*jy + jw*jw;
+
+        //     const float jerk_penalty_coef = 0.001f;  // start small; tune up if motion is still jittery
+        //     float r_jerk = -jerk_penalty_coef * jerk_sq;
+        //     env->rewards[i]             += r_jerk;
+        //     env->logs[i].episode_return += r_jerk;
+        // }
 
         // Reward agent if it is within X meters of goal and speed is below threshold
         bool within_distance = distance_to_goal < env->goal_radius;
