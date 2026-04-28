@@ -864,6 +864,7 @@ class Evaluator:
         self.render_select_mode = self.configs["eval"]["render_select_mode"]
         self.render_sp_rollout = self.configs["eval"]["render_self_play_eval"]
         self.render_hr_rollout = self.configs["eval"]["render_human_replay_eval"]
+        self.save_render_videos = bool(self.configs["eval"].get("save_render_videos", False))
 
     def select_render_env(self, env_logs):
         """Select which environment to render based on per-env rollout statistics.
@@ -1090,9 +1091,10 @@ class Evaluator:
         import glob
 
         if not (self.logger and hasattr(self.logger, "wandb") and self.logger.wandb):
-            # Still clean up even if not logging
-            for p in glob.glob("*.mp4"):
-                os.remove(p)
+            # Still clean up even if not logging unless local inspection is requested.
+            if not self.save_render_videos:
+                for p in glob.glob("*.mp4"):
+                    os.remove(p)
             return
 
         import wandb
@@ -1108,9 +1110,9 @@ class Evaluator:
             caption = f"scene_{scenario_id}_epoch_{epoch}_select_{render_mode}"
             self.logger.wandb.log({f"render/{eval_mode}": wandb.Video(p, format="mp4", caption=caption)})
 
-        # Clean up
-        for p in video_files:
-            os.remove(p)
+        if not self.save_render_videos:
+            for p in video_files:
+                os.remove(p)
 
     def collect_stats(self):
         stats = {}
