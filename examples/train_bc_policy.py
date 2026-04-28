@@ -41,10 +41,10 @@ TRAIN_DEFAULTS = {
     "hidden_size": 512,
     "batch_size": 2048,
     "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
-    "epochs": 4000,
+    "epochs": 10_000,
     "num_maps": NUM_MAPS,
     "eval_frequency": 100,  # Validation dataset
-    "val_patience": 20,  # Stop if val loss doesn't improve for this many eval checks
+    "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -595,6 +595,8 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
     effective_map_dir = args["env"]["map_dir"]
     run.name = f"{dynamics_model}_{os.path.basename(effective_map_dir)}_{num_maps}maps"
+    checkpoint_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
+    checkpoint_save_frequency = 500
 
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
@@ -739,6 +741,19 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
         print(f"Epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}  best={best_avg_loss:.4f}")
 
+        # Periodic checkpoint save (overwrites previous)
+        if (epoch + 1) % checkpoint_save_frequency == 0:
+            periodic_metrics = {
+                "num_maps": num_maps,
+                "val_accuracy": last_val_accuracy,
+                "train_accuracy": last_train_accuracy,
+                "train_loss": last_train_loss,
+                "val_loss": last_val_loss,
+                "epoch": epoch + 1,
+            }
+            save_checkpoint(checkpoint_path, policy, periodic_metrics)
+            print(f"  [checkpoint] saved at epoch {epoch + 1} -> {checkpoint_path}")
+
         if stop_training:
             break
 
@@ -763,11 +778,10 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         "val_loss": last_val_loss,
     }
 
-    save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
-    save_checkpoint(save_path, policy, checkpoint_metrics)
-    wandb.save(save_path, base_path=".")
+    save_checkpoint(checkpoint_path, policy, checkpoint_metrics)
+    wandb.save(checkpoint_path, base_path=".")
     print(
-        f"Saved checkpoint: {save_path}\n"
+        f"Saved final checkpoint: {checkpoint_path}\n"
         f"  num_maps={num_maps}  val_acc={last_val_accuracy:.4f}  val_loss={last_val_loss:.4f}  "
         f"  train_acc={last_train_accuracy:.4f}  train_loss={last_train_loss:.4f}"
     )
