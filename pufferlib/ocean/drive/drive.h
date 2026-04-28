@@ -340,7 +340,8 @@ struct Drive {
     int logs_capacity;
     int target_type;
     char *ini_file;
-    int collision_behavior;     // 0 = none, 1=stop, 2 = remove
+    int collision_behavior; // 0 = none, 1=stop, 2 = remove
+    int ignore_target_collision_behavior;
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
     int deterministic_traffic_lights;
@@ -4267,10 +4268,15 @@ static void compute_metrics(Drive *env, int agent_idx) {
             agent->at_fault_collision = 1;
             agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
         }
-        if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
-            agent->stopped = 1;
-        } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
-            agent->removed = 1;
+        int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
+        bool target_involved_collision = env->ignore_target_collision_behavior &&
+                                         (agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx);
+        if (!target_involved_collision) {
+            if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
+                agent->stopped = 1;
+            } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
+                agent->removed = 1;
+            }
         }
 
         return; // early return: red_light not checked after collision

@@ -146,6 +146,7 @@ class Drive(pufferlib.PufferEnv):
         num_target_waypoints=3,
         goal_radius=2.0,
         collision_behavior=0,
+        ignore_target_collision_behavior=False,
         offroad_behavior=0,
         traffic_light_behavior=0,
         deterministic_traffic_lights=False,
@@ -261,6 +262,7 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
         self.collision_behavior = collision_behavior
+        self.ignore_target_collision_behavior = ignore_target_collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
         self.deterministic_traffic_lights = deterministic_traffic_lights
@@ -803,6 +805,7 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
             "adv_bonus_only": self.adv_bonus_only,
             "collision_behavior": self.collision_behavior,
+            "ignore_target_collision_behavior": bool(self.ignore_target_collision_behavior),
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "deterministic_traffic_lights": self.deterministic_traffic_lights,
