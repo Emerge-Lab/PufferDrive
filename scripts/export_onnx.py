@@ -4,15 +4,29 @@ Produces a single .onnx file with external weights (.onnx.data),
 plus example_input.pt and example_output.pt for verification.
 
 Args:
-    --env          Environment name used to look up the ini config (default: puffer_drive)
-    --checkpoint   Path to the .pt checkpoint file
-    --output_dir   Directory where .onnx, .onnx.data, and example .pt files are written
+    --env             Environment name used to look up the ini config (default: puffer_drive)
+    --checkpoint      Path to the .pt checkpoint file
+    --output_dir      Directory where .onnx, .onnx.data, and example .pt files are written
+    --fake_trajectory Wrap model to also output a (n_step, 3) x/y/heading trajectory.
+                      Step 0 uses the argmax action; remaining steps use zero jerk.
+    --traj_steps      Number of trajectory rollout steps (default: 80)
+    --traj_dt         Timestep in seconds for the trajectory rollout (default: 0.1)
 
 Usage:
+    # Standard export
     python -m scripts.export_onnx \
         --env puffer_drive \
         --checkpoint pufferlib/resources/drive/onnx_files/model_puffer_drive_011500.pt \
         --output_dir pufferlib/resources/drive/onnx_files
+
+    # Export with fake trajectory output
+    python -m scripts.export_onnx \
+        --env puffer_drive \
+        --checkpoint pufferlib/resources/drive/onnx_files/model_puffer_drive_011500.pt \
+        --output_dir pufferlib/resources/drive/onnx_files \
+        --fake_trajectory \
+        --traj_steps 80 \
+        --traj_dt 0.1
 """
 
 import argparse
@@ -30,6 +44,142 @@ import pufferlib
 
 from pufferlib.ocean.torch import Drive as DrivePolicy
 from pufferlib.ocean.drive import binding
+
+
+JERK_LONG = torch.tensor([-15.0, -4.0, 0.0, 4.0])
+JERK_LAT = torch.tensor([-4.0, 0.0, 4.0])
+NUM_LAT = 3
+
+
+class JerkDynamicsRollout(torch.nn.Module):
+    """Roll out the argmax action through jerk bicycle dynamics for N steps.
+
+    Step 0 applies the chosen jerk; steps 1..N-1 apply zero jerk (constant
+    acceleration coast), producing the "fake trajectory" in ego frame.
+    """
+
+    def __init__(self, num_steps=80, dt=0.1):
+        super().__init__()
+        self.num_steps = num_steps
+        self.dt = dt
+        self.register_buffer("jerk_long_table", JERK_LONG)
+        self.register_buffer("jerk_lat_table", JERK_LAT)
+
+    def forward(self, logits, speed, a_long, a_lat, steering_angle, wheelbase):
+        """
+        Args:
+            logits:         [B, num_actions]
+            speed:          [B]
+            a_long:         [B]
+            a_lat:          [B]
+            steering_angle: [B]
+            wheelbase:      [B]
+        Returns:
+            trajectory: [B, num_steps, 3]  — (x, y, heading) in ego frame
+        """
+        B = logits.shape[0]
+        action = logits.argmax(dim=-1)
+        jerk_long_val = self.jerk_long_table[action // NUM_LAT]
+        jerk_lat_val = self.jerk_lat_table[action % NUM_LAT]
+
+        x = torch.zeros(B, device=logits.device)
+        y = torch.zeros(B, device=logits.device)
+        heading = torch.zeros(B, device=logits.device)
+        v = speed.clone()
+        al = a_long.clone()
+        at = a_lat.clone()
+        steer = steering_angle.clone()
+
+        dt = self.dt
+        trajectory = torch.zeros(B, self.num_steps, 3, device=logits.device)
+
+        # Apply chosen jerk only on step 0; zero jerk thereafter
+        jl_schedule = torch.zeros(self.num_steps, B, device=logits.device)
+        jt_schedule = torch.zeros(self.num_steps, B, device=logits.device)
+        jl_schedule[0] = jerk_long_val
+        jt_schedule[0] = jerk_lat_val
+
+        for t in range(self.num_steps):
+            al_new = al + jl_schedule[t] * dt
+            at_new = at + jt_schedule[t] * dt
+
+            al_new = torch.clamp(al_new, -5.0, 2.5)
+            at_new = torch.clamp(at_new, -4.0, 4.0)
+
+            al_new = torch.where(al * al_new < 0, torch.zeros_like(al_new), al_new)
+            at_new = torch.where(at * at_new < 0, torch.zeros_like(at_new), at_new)
+
+            v_new = v + 0.5 * (al_new + al) * dt
+            v_new = torch.where(v * v_new < 0, torch.zeros_like(v_new), v_new)
+            v_new = torch.clamp(v_new, -2.0, 20.0)
+
+            signed_curvature = at_new / torch.clamp(v_new * v_new, min=1e-5)
+            steer_target = torch.atan(signed_curvature * wheelbase)
+            delta_steer = torch.clamp(steer_target - steer, -0.6 * dt, 0.6 * dt)
+            steer_new = torch.clamp(steer + delta_steer, -0.55, 0.55)
+
+            signed_curvature = torch.tan(steer_new) / wheelbase
+            at_new = v_new * v_new * signed_curvature
+
+            d = 0.5 * (v_new + v) * dt
+            theta = d * signed_curvature
+
+            small = signed_curvature.abs() < 1e-5
+            dx_local = torch.where(small, d, torch.sin(theta) / (signed_curvature + 1e-10))
+            dy_local = torch.where(small, torch.zeros_like(d), (1 - torch.cos(theta)) / (signed_curvature + 1e-10))
+
+            cos_h = torch.cos(heading)
+            sin_h = torch.sin(heading)
+            x = x + dx_local * cos_h - dy_local * sin_h
+            y = y + dx_local * sin_h + dy_local * cos_h
+            heading = heading + theta
+            v, al, at, steer = v_new, al_new, at_new, steer_new
+
+            trajectory[:, t, 0] = x
+            trajectory[:, t, 1] = y
+            trajectory[:, t, 2] = heading
+
+        return trajectory
+
+
+class OnnxWrapper(torch.nn.Module):
+    """Thin wrapper around the Drive policy for ONNX export.
+
+    Without --fake_trajectory: outputs (logits, value).
+    With    --fake_trajectory: outputs (logits, value, trajectory),
+            where trajectory is [B, traj_steps, 3] (x, y, heading in ego frame).
+    """
+
+    def __init__(self, policy, fake_trajectory=False, traj_steps=80, dt=0.1):
+        super().__init__()
+        self.policy = policy
+        self.fake_trajectory = fake_trajectory
+        if fake_trajectory:
+            self.rollout = JerkDynamicsRollout(num_steps=traj_steps, dt=dt)
+
+    def forward(self, observation):
+        actions, value = self.policy(observation)
+        # actions is a tuple of per-head logit tensors; cat for a single tensor
+        logits = torch.cat(actions, dim=1) if isinstance(actions, tuple) else actions
+
+        if self.fake_trajectory:
+            # Ego features are the first slice of the observation (jerk model layout):
+            #   obs[:, 3] = signed_speed / MAX_SPEED  (MAX_SPEED = 100)
+            #   obs[:, 5] = vehicle_length / MAX_VEH_LEN  (proxy for wheelbase, ~5.5 m)
+            #   obs[:, 7] = steering_angle / pi
+            #   obs[:, 8] = a_long (asymmetrically normalised: neg→/15, pos→/4)
+            #   obs[:, 9] = a_lat / 4.0
+            speed = observation[:, 3] * 100.0
+            wheelbase = observation[:, 5] * 5.5
+            steering_angle = observation[:, 7] * 3.14159265
+            a_long_norm = observation[:, 8]
+            a_long = torch.where(a_long_norm < 0, a_long_norm * 15.0, a_long_norm * 4.0)
+            a_lat = observation[:, 9] * 4.0
+
+            trajectory = self.rollout(logits, speed, a_long, a_lat, steering_angle, wheelbase)
+            return logits, value, trajectory
+
+        return logits, value
 
 
 def _read_ini(env_name):
@@ -272,20 +422,29 @@ def export(args):
     policy.load_state_dict(state_dict)
     policy.eval()
 
+    # Wrap policy for export
+    wrapped = OnnxWrapper(
+        policy,
+        fake_trajectory=args.fake_trajectory,
+        traj_steps=args.traj_steps,
+        dt=args.traj_dt,
+    )
+    wrapped.eval()
+
     # Build example input
     example_input = _make_example_input(env, batch_size=1)
     print(f"Example input shape: {example_input.shape}")
     print(f"Example input (first 12 values): {example_input[0, :12].tolist()}")
 
-    # Run PyTorch forward pass
+    # Run PyTorch forward pass through the wrapper
     with torch.no_grad():
-        actions, value = policy(example_input)
+        torch_outs = wrapped(example_input)
 
-    # actions is a tuple of logit tensors for MultiDiscrete
-    if isinstance(actions, tuple):
-        logits = torch.cat(actions, dim=1)
+    if args.fake_trajectory:
+        logits, value, trajectory = torch_outs
+        print(f"PyTorch trajectory shape: {trajectory.shape}")
     else:
-        logits = actions
+        logits, value = torch_outs
 
     print(f"PyTorch logits shape: {logits.shape}, value shape: {value.shape}")
     print(f"PyTorch logits sample: {logits[0].tolist()}")
@@ -295,22 +454,36 @@ def export(args):
     input_path = os.path.join(output_dir, "example_input.pt")
     output_path = os.path.join(output_dir, "example_output.pt")
     torch.save(example_input, input_path)
-    torch.save({"logits": logits, "value": value}, output_path)
+    saved = {"logits": logits, "value": value}
+    if args.fake_trajectory:
+        saved["trajectory"] = trajectory
+    torch.save(saved, output_path)
     print(f"Saved example_input.pt -> {input_path}")
     print(f"Saved example_output.pt -> {output_path}")
+
+    # Build ONNX export names / dynamic axes
+    output_names = ["logits", "value"]
+    dynamic_axes = {
+        "observation": {0: "batch_size"},
+        "logits": {0: "batch_size"},
+        "value": {0: "batch_size"},
+    }
+    if args.fake_trajectory:
+        output_names.append("trajectory")
+        dynamic_axes["trajectory"] = {0: "batch_size"}
 
     # Export to ONNX with external data (single .onnx.data file)
     print(f"\nExporting to ONNX: {onnx_path}")
     torch.onnx.export(
-        policy,
+        wrapped,
         example_input,
         onnx_path,
         export_params=True,
         opset_version=18,
         do_constant_folding=True,
         input_names=["observation"],
-        output_names=["logits", "value"],
-        dynamic_axes={"observation": {0: "batch_size"}, "logits": {0: "batch_size"}, "value": {0: "batch_size"}},
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
     )
 
     # Convert inline weights to external data file
@@ -329,29 +502,41 @@ def export(args):
     onnx.save_model(model_proto, onnx_path)
     print(f"Weights saved to: {os.path.join(output_dir, data_file)}")
 
-    # Quick ONNX runtime verification
-    # Load with external data merged so ort can find everything
+    # Quick ONNX runtime verification — merge external data into memory first
     print("\nVerifying ONNX output with onnxruntime...")
     import onnx
     from onnx.external_data_helper import load_external_data_for_model
 
     verify_proto = onnx.load(onnx_path, load_external_data=False)
     load_external_data_for_model(verify_proto, output_dir)
-    model_bytes = verify_proto.SerializeToString()
-    sess = ort.InferenceSession(model_bytes)
+    sess = ort.InferenceSession(verify_proto.SerializeToString())
     ort_outs = sess.run(None, {"observation": example_input.numpy()})
 
-    ort_logits = ort_outs[0]
-    ort_value = ort_outs[1]
-
     np.testing.assert_allclose(
-        logits.numpy(), ort_logits, rtol=1e-3, atol=1e-4, err_msg="Logits mismatch between PyTorch and ONNX Runtime"
+        logits.numpy(),
+        ort_outs[0],
+        rtol=1e-3,
+        atol=1e-4,
+        err_msg="Logits mismatch between PyTorch and ONNX Runtime",
     )
     np.testing.assert_allclose(
-        value.numpy(), ort_value, rtol=1e-3, atol=1e-4, err_msg="Value mismatch between PyTorch and ONNX Runtime"
+        value.numpy(),
+        ort_outs[1],
+        rtol=1e-3,
+        atol=1e-4,
+        err_msg="Value mismatch between PyTorch and ONNX Runtime",
     )
-    print("  logits:  MATCH")
-    print("  value:   MATCH")
+    print("  logits:     MATCH")
+    print("  value:      MATCH")
+    if args.fake_trajectory:
+        np.testing.assert_allclose(
+            trajectory.numpy(),
+            ort_outs[2],
+            rtol=1e-3,
+            atol=1e-4,
+            err_msg="Trajectory mismatch between PyTorch and ONNX Runtime",
+        )
+        print("  trajectory: MATCH")
     print("\nExport complete.")
     print(f"  ONNX model:    {onnx_path}")
     print(f"  Weights data:  {os.path.join(output_dir, data_file)}")
@@ -370,4 +555,11 @@ if __name__ == "__main__":
         "--output_dir",
         default="pufferlib/resources/drive/onnx_files",
     )
+    parser.add_argument(
+        "--fake_trajectory",
+        action="store_true",
+        help="Add trajectory output: step 0 uses argmax action, remaining steps use zero jerk",
+    )
+    parser.add_argument("--traj_steps", type=int, default=80, help="Number of trajectory rollout steps")
+    parser.add_argument("--traj_dt", type=float, default=0.1, help="Timestep in seconds for trajectory rollout")
     export(parser.parse_args())

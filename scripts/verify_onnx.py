@@ -64,19 +64,39 @@ def verify(args):
 
     try:
         np.testing.assert_allclose(ref_logits.numpy(), ort_logits, rtol=rtol, atol=atol)
-        print("\n  logits:  MATCH")
+        print("\n  logits:     MATCH")
     except AssertionError as e:
-        print("\n  logits:  MISMATCH")
+        print("\n  logits:     MISMATCH")
         print(f"  {e}")
         passed = False
 
     try:
         np.testing.assert_allclose(ref_value.numpy(), ort_value, rtol=rtol, atol=atol)
-        print("  value:   MATCH")
+        print("  value:      MATCH")
     except AssertionError as e:
-        print("  value:   MISMATCH")
+        print("  value:      MISMATCH")
         print(f"  {e}")
         passed = False
+
+    if "trajectory" in saved:
+        ref_traj = saved["trajectory"]
+        print(f"\nRef trajectory: {ref_traj.shape}  first point: {ref_traj[0, 0].tolist()}")
+        if len(ort_outs) < 3:
+            print("  trajectory: MISMATCH — ONNX model has no trajectory output")
+            passed = False
+        else:
+            ort_traj = ort_outs[2]
+            print(f"ONNX trajectory:{ort_traj.shape}  first point: {ort_traj[0, 0].tolist()}")
+            try:
+                np.testing.assert_allclose(ref_traj.numpy(), ort_traj, rtol=rtol, atol=atol)
+                print("  trajectory: MATCH")
+            except AssertionError as e:
+                print("  trajectory: MISMATCH")
+                print(f"  {e}")
+                passed = False
+    else:
+        if len(ort_outs) > 2:
+            print(f"\n  WARNING: ONNX model has {len(ort_outs)} outputs but example_output.pt has no trajectory key")
 
     if passed:
         print("\nAll outputs verified successfully.")
