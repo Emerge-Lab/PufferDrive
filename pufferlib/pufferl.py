@@ -559,17 +559,23 @@ class PuffeRL:
                 # Compute per-sample KL summed across all independent action heads
                 num_heads = len(anchor_logits_list)
                 per_sample_kl = torch.zeros(anchor_obs.shape[0], device=device)
-                anchor_entropy_accum = 0.0
 
-                for h in range(num_heads):
-                    with torch.no_grad():
-                        anchor_lp = torch.log_softmax(anchor_logits_list[h], dim=-1)
-                        anchor_entropy_accum += pufferlib.pytorch.entropy(anchor_lp).mean().item()
+                if num_heads > 1:  # TODO: Hacky, do not hardcode this.
+                    anchor_entropy_per_head = {}
+                    head_names = ["dx", "dy", "dyaw"]
 
-                    cur_lp = torch.log_softmax(logits[h].reshape(-1, logits[h].shape[-1]), dim=-1)
-                    per_sample_kl = per_sample_kl + torch.nn.functional.kl_div(
-                        cur_lp, anchor_lp, reduction="none", log_target=True
-                    ).sum(dim=-1)
+                    for h in range(num_heads):
+                        with torch.no_grad():
+                            anchor_lp = torch.log_softmax(anchor_logits_list[h], dim=-1)
+                            head_name = head_names[h] if h < len(head_names) else f"head_{h}"
+                            anchor_entropy_per_head[f"anchor/entropy_{head_name}"] = (
+                                pufferlib.pytorch.entropy(anchor_lp).mean().item()
+                            )
+
+                        cur_lp = torch.log_softmax(logits[h].reshape(-1, logits[h].shape[-1]), dim=-1)
+                        per_sample_kl = per_sample_kl + torch.nn.functional.kl_div(
+                            cur_lp, anchor_lp, reduction="none", log_target=True
+                        ).sum(dim=-1)
 
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
                 self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
@@ -580,7 +586,8 @@ class PuffeRL:
                 reg_loss = (per_sample_kl * self.sampled_lambdas.squeeze(-1)).mean()
 
                 with torch.no_grad():
-                    self.data["data/anchor_entropy"] = anchor_entropy_accum / num_heads
+                    self.data.update(anchor_entropy_per_head)
+                    self.data["anchor/entropy_mean"] = sum(anchor_entropy_per_head.values()) / num_heads
 
             elif self.reg_mode == "log_prob_direct":
                 discrete_human_actions, continuous_human_actions, human_observations = (
@@ -697,7 +704,7 @@ class PuffeRL:
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
 
             # Show agent view with sensor noise
-            # sensor_noise_eval = self.epoch % 1000 == 0
+            # sensor_noise_eval = (self.epoch + 1) % 200 == 0
             # if sensor_noise_eval:
             #     self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
             #     try:
@@ -764,15 +771,15 @@ class PuffeRL:
             **{f"environment/{k}": v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            "data/anchor_entropy": self.data.get("data/anchor_entropy", 0),
+            **{k: self.data.get(k, 0) for k in self.data if k.startswith("anchor/entropy")},
         }
 
         if self.eval_stats:
             logs.update(self.eval_stats)
 
-        if hasattr(self, "sampled_lambdas"):
-            logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
-            logs["data/lambda_std"] = float(self.sampled_lambdas.std())
+        # if hasattr(self, "sampled_lambdas"):
+        #     logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
+        #     logs["data/lambda_std"] = float(self.sampled_lambdas.std())
 
         if isinstance(self.logger, WandbLogger):
             import wandb
@@ -1400,7 +1407,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
             frame_count = 0
 
         while True:
-            driver.render(env_id=0)
+            driver.render(env_idx=0)
 
             with torch.no_grad():
                 ob = torch.as_tensor(ob).to(device)
@@ -1430,7 +1437,7 @@ def verify(env_name, args=None, vecenv=None):
     args["env"]["termination_mode"] = 0
 
     # Determine verification mode: "bc_policy", "expert_replay", or "inferred_expert_actions"
-    verify_mode = "inferred_expert_actions"  # args.get("verify_mode", "inferred_expert_actions")
+    verify_mode = "bc_policy"  # args.get("verify_mode", "inferred_expert_actions")
 
     if verify_mode == "bc_policy":
         # BC policy controls all agents directly
