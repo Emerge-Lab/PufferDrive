@@ -27,7 +27,7 @@ import pufferlib.models
 
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
-NUM_MAPS = 12_000
+NUM_MAPS = 1200
 MAP_DIR = "resources/drive/binaries/training_50k"
 
 # ---------------------------------------------------------------------------
@@ -361,9 +361,9 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         NUM_DX = binding.NUM_DX_BINS
         NUM_DY = binding.NUM_DY_BINS
         NUM_YAW = binding.NUM_YAW_BINS
-        MAX_DX = 2.0
+        MAX_DX = 3.0
         MAX_DY = 0.1
-        MAX_DYAW = np.pi / 12.0
+        MAX_DYAW = np.pi / 6.0
 
         dx_step = 2 * MAX_DX / (NUM_DX - 1)
         dy_step = 2 * MAX_DY / (NUM_DY - 1)
@@ -438,13 +438,13 @@ def evaluate(policy, dataloader, device):
     return metrics
 
 
-def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos"):
+def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos", map_dir=MAP_DIR):
     """Run one closed-loop rollout with headless rendering and log an mp4 per map to wandb."""
     import glob
     import shutil
 
     args = build_env_args(dynamics_model, num_maps=1)
-    args["env"]["map_dir"] = MAP_DIR
+    args["env"]["map_dir"] = map_dir
     args["env"]["control_mode"] = "control_sdc_only"
     args["env"]["termination_mode"] = 1
     args["env"]["obs_partner_noise_speed"] = 0.0
@@ -785,8 +785,15 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     )
 
     # Visual sanity check rollout
+    # On train maps
     try:
-        record_rollout_video(policy, dynamics_model, device)
+        record_rollout_video(policy, dynamics_model, device, map_dir=map_dir)
+    except Exception as e:
+        print(f"Video recording failed (non-fatal): {e}")
+
+    # On test maps
+    try:
+        record_rollout_video(policy, dynamics_model, device, map_dir="resources/drive/binaries/validation")
     except Exception as e:
         print(f"Video recording failed (non-fatal): {e}")
 
