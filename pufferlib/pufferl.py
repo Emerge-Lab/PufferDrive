@@ -971,7 +971,7 @@ class PuffeRL:
             )
             render_overrides["env"]["control_mode"] = "control_sdc_only"
             render_overrides["env"]["num_maps"] = num_maps
-            render_overrides["env"]["scenario_length"] = class_cfg.get("scenario_length", 91)
+            render_overrides["env"]["scenario_length"] = class_cfg.get("scenario_length", 101)
 
             render_args = load_eval_multi_scenarios_config(
                 env_name=self.config["env"],

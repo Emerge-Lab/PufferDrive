@@ -204,7 +204,7 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                     f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: no .bin files in {map_dir}, skipping"
                 )
                 continue
-            scenario_length = class_cfg.get("scenario_length", 91)
+            scenario_length = class_cfg.get("scenario_length", 101)
             short = class_name[len(EVAL_SECTIONS_PREFIX) :]
 
             cmd = [
