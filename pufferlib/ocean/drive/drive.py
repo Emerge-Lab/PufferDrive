@@ -11,6 +11,10 @@ from enum import IntEnum
 from pufferlib.ocean.drive import binding
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import matplotlib
+
+matplotlib.use("Agg")  # non-interactive backend
 
 
 class RenderView(IntEnum):
@@ -701,8 +705,10 @@ def infer_human_actions(obj):
         local_dy = -sin_h * global_dx + cos_h * global_dy
 
         # Clip to bounds
-        local_dx = max(-6.0, min(6.0, local_dx))
-        local_dy = max(-6.0, min(6.0, local_dy))
+        local_dx = max(-3.0, min(3.0, local_dx))
+        local_dy = max(-0.1, min(0.1, local_dy))
+        local_dyaw = max(-math.pi / 6, min(math.pi / 6, heading_diff))
+        expert_delta_yaw.append(local_dyaw)
 
         expert_delta_x.append(local_dx)
         expert_delta_y.append(local_dy)
@@ -933,6 +939,95 @@ def save_map_binary(map_data, output_file, unique_map_id):
             f.write(struct.pack("i", road.get("mark_as_expert", 0)))
 
 
+def _collect_stats_single_map(args):
+    i, map_path = args
+    dx_vals, dy_vals, dyaw_vals = [], [], []
+    try:
+        with open(map_path, "r") as f:
+            map_data = json.load(f)
+        for obj in map_data.get("objects", []):
+            _, _, dx, dy, dyaw = infer_human_actions(obj)
+            dx_vals.extend([v for v in dx if v != 0.0])
+            dy_vals.extend([v for v in dy if v != 0.0])
+            dyaw_vals.extend([v for v in dyaw if v != 0.0])
+    except Exception as e:
+        print(f"Error processing {map_path}: {e}")
+    return dx_vals, dy_vals, dyaw_vals
+
+
+def analyze_action_space(
+    data_folder="data/processed/training",
+    max_maps=1000,
+    num_workers=None,
+):
+    from pathlib import Path
+
+    if num_workers is None:
+        num_workers = cpu_count()
+
+    data_dir = Path(data_folder)
+    json_files = sorted(data_dir.glob("*.json"))[:max_maps]
+    tasks = [(i, map_path) for i, map_path in enumerate(json_files)]
+
+    all_dx, all_dy, all_dyaw = [], [], []
+    with Pool(num_workers) as pool:
+        results = list(
+            tqdm(pool.imap(_collect_stats_single_map, tasks), total=len(tasks), desc="Analyzing actions", unit="map")
+        )
+    for dx, dy, dyaw in results:
+        all_dx.extend(dx)
+        all_dy.extend(dy)
+        all_dyaw.extend(dyaw)
+
+    print(f"\nAnalyzed {len(all_dx):,} valid action timesteps across {len(json_files)} maps\n")
+
+    configs = [
+        ("dx", all_dx, (-3.0, 3.0), "DELTA_MAX_DX = 3.0"),
+        ("dy", all_dy, (-0.1, 0.1), "DELTA_MAX_DY = 0.1"),
+        ("dyaw", all_dyaw, (-math.pi / 6, math.pi / 6), "DELTA_MAX_DYAW = π/6"),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle("Human Action Distributions", fontsize=14, fontweight="bold")
+
+    for ax, (name, arr, bounds, bound_label) in zip(axes, configs):
+        arr = np.array(arr)
+        p1, p99 = np.percentile(arr, 1), np.percentile(arr, 99)
+
+        ax.hist(arr, bins=200, color="steelblue", alpha=0.7, density=True)
+        ax.axvline(bounds[0], color="red", linestyle="--", linewidth=1.5, label=f"bound: {bound_label}")
+        ax.axvline(bounds[1], color="red", linestyle="--", linewidth=1.5)
+        ax.axvline(p1, color="orange", linestyle=":", linewidth=1.2, label=f"p1={p1:.3f}")
+        ax.axvline(p99, color="orange", linestyle=":", linewidth=1.2, label=f"p99={p99:.3f}")
+
+        ax.set_title(name)
+        ax.set_xlabel("value")
+        ax.set_ylabel("density")
+        ax.legend(fontsize=8)
+
+        print(f"{name}: p1={p1:.4f}, p99={p99:.4f}, min={arr.min():.4f}, max={arr.max():.4f}, std={arr.std():.4f}")
+
+    plt.tight_layout()
+    plt.savefig("action_distributions.png", dpi=150, bbox_inches="tight")
+    print("\nSaved action_distributions.png")
+
+    print("\nOutlier analysis (before clipping):")
+    for name, arr, bounds in [("dx", all_dx, 3.0), ("dy", all_dy, 0.1), ("dyaw", all_dyaw, math.pi / 6)]:
+        arr = np.array(arr)
+        n_total = len(arr)
+        n_outliers = np.sum(np.abs(arr) > bounds)
+        n_at_clip = np.sum(np.abs(arr) >= 6.0)  # old clipping artifacts
+        print(
+            f"  {name}: {n_outliers:,} / {n_total:,} outside ±{bounds} ({100 * n_outliers / n_total:.2f}%)"
+            f" | {n_at_clip:,} at old ±6.0 clip boundary ({100 * n_at_clip / n_total:.3f}%)"
+        )
+
+    for name, arr, bounds in [("dyaw", all_dyaw, b) for b in [0.4, 0.5, 0.6]]:
+        arr = np.array(arr)
+        n_outliers = np.sum(np.abs(arr) > bounds)
+        print(f"  dyaw outside ±{bounds}: {n_outliers:,} / {len(arr):,} ({100 * n_outliers / len(arr):.2f}%)")
+
+
 def load_map(map_name, unique_map_id, binary_output=None):
     """Loads a JSON map and optionally saves it as binary"""
     with open(map_name, "r") as f:
@@ -1047,9 +1142,10 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 
 if __name__ == "__main__":
+    # analyze_action_space(data_folder="data/processed/training_50k", max_maps=10000)
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_validation")
+    process_all_maps(data_folder="data/processed/training_50k")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset

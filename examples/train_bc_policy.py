@@ -5,7 +5,6 @@ Usage:
     python examples/train_bc_policy.py train                        # single run, default config
     python examples/train_bc_policy.py train --dynamics classic     # single run, classic dynamics
     python examples/train_bc_policy.py train --map-dir path/to/maps --num-maps 25000
-    python examples/train_bc_policy.py sweep                        # launch sweep + agent
     python examples/train_bc_policy.py --dynamics classic
 """
 
@@ -28,33 +27,24 @@ import pufferlib.models
 
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
+NUM_MAPS = 12_000
+MAP_DIR = "resources/drive/binaries/training_50k"
 
 # ---------------------------------------------------------------------------
-# Sweep config
+# Multi-run config
 # ---------------------------------------------------------------------------
-SWEEP_CONFIG = {
-    "method": "grid",
-    "metric": {"name": "best_avg_loss", "goal": "minimize"},
-    "parameters": {
-        "learning_rate": {"values": [1e-4]},
-        "input_size": {"values": [128]},
-        "hidden_size": {"values": [512]},
-        "batch_size": {"values": [2048]},
-        "resample_every_n_epochs": {"values": [1]},
-        "num_maps": {"values": [67, 200, 1200, 12_000]},  # 10 min, 30 min, 3 hr, 30 hr
-    },
-}
+NUM_MAPS_SWEEP = [67, 200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
     "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
+    "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
     "epochs": 4000,
-    "num_maps": 50_000,
-    "eval_frequency": 10,  # Validation dataset
-    "val_patience": 40,  # Stop if val loss doesn't improve for this many eval checks
+    "num_maps": NUM_MAPS,
+    "eval_frequency": 100,  # Validation dataset
+    "val_patience": 20,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -271,7 +261,7 @@ def build_env_args(dynamics_model, num_maps):
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
     args["env"]["num_maps"] = num_maps
-    args["env"]["map_dir"] = "resources/drive/binaries/training_50k"
+    args["env"]["map_dir"] = MAP_DIR
     args["env"]["reg_mode"] = "log_prob_direct"
     args["env"]["dynamics_model"] = dynamics_model
     args["base"]["rnn_name"] = "none"
@@ -279,7 +269,7 @@ def build_env_args(dynamics_model, num_maps):
     args["env"]["fix_rewards"] = True
     args["env"]["lambda_value"] = 0.0
     args["env"]["control_mode"] = "control_sdc_only"
-    args["env"]["num_agents"] = 128
+    args["env"]["num_agents"] = 256
     return args
 
 
@@ -372,8 +362,8 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         NUM_DY = binding.NUM_DY_BINS
         NUM_YAW = binding.NUM_YAW_BINS
         MAX_DX = 2.0
-        MAX_DY = 2.0
-        MAX_DYAW = np.pi / 4.0
+        MAX_DY = 0.1
+        MAX_DYAW = np.pi / 12.0
 
         dx_step = 2 * MAX_DX / (NUM_DX - 1)
         dy_step = 2 * MAX_DY / (NUM_DY - 1)
@@ -404,7 +394,7 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
             (axes[2, 1], pred_yaw_vals, "Learned ΔYaw", "orange", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
         ]
         for ax, vals, title, color, bins, rng, xlabel in plot_configs:
-            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
+            ax.hist(vals, bins=bins, range=rng, alpha=0.7, color=color)
             ax.set_xlabel(xlabel)
             ax.set_ylabel("Count")
             ax.set_title(title)
@@ -448,6 +438,122 @@ def evaluate(policy, dataloader, device):
     return metrics
 
 
+def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos"):
+    """Run one closed-loop rollout with headless rendering and log an mp4 per map to wandb."""
+    import glob
+    import shutil
+
+    args = build_env_args(dynamics_model, num_maps=1)
+    args["env"]["map_dir"] = MAP_DIR
+    args["env"]["control_mode"] = "control_sdc_only"
+    args["env"]["termination_mode"] = 1
+    args["env"]["obs_partner_noise_speed"] = 0.0
+    args["env"]["obs_partner_noise_pos"] = 0.0
+    args["env"]["async_resets"] = False
+    args["env"]["resample_frequency"] = 0
+    args["env"]["fix_lambdas"] = True
+    args["env"]["fix_rewards"] = True
+    args["env"]["num_agents"] = 128
+    args["env"]["num_maps"] = NUM_MAPS
+    args["vec"] = dict(backend="PufferEnv", num_envs=1)
+
+    env = load_env("puffer_drive", args)
+
+    episode_length = env.driver_env.episode_length or 91
+    num_maps = min(NUM_MAPS, 15)
+
+    os.makedirs(video_dir, exist_ok=True)
+    logged = 0
+
+    # Collect (timestep, entropy) across all maps for the scatterplot
+    all_timesteps = []
+    all_entropies = []
+
+    for map_idx in range(num_maps):
+        obs, info = env.reset()
+        print(f"Rendering map {map_idx}")
+        before = set(glob.glob("*.mp4"))
+
+        for t in range(episode_length):
+            with torch.no_grad():
+                obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=device)
+                actions = policy(obs_tensor, deterministic=True)
+                # Entropy of the actor distribution at this timestep (mean over agents/heads)
+                entropy = policy._entropy(obs_tensor)
+                if isinstance(entropy, dict):
+                    step_entropy = float(np.mean(list(entropy.values())))
+                else:
+                    step_entropy = float(entropy)
+            all_timesteps.append(t)
+            all_entropies.append(step_entropy)
+
+            action_np = actions.cpu().numpy()
+            if action_np.ndim == 1:
+                action_np = action_np[:, None]
+
+            obs, _, terminated, truncated, _ = env.step(action_np)
+
+            if not terminated[map_idx]:
+                env.driver_env.render(env_idx=map_idx)
+
+            if truncated.all() or terminated.all():
+                break
+
+        env.driver_env.stop_recorder(map_idx)  # flushes ffmpeg before we look for the file
+
+        new_files = sorted(set(glob.glob("*.mp4")) - before)
+        if not new_files:
+            print(f"  Warning: no video produced for map_idx={map_idx}")
+            continue
+
+        for mp4_path in new_files:
+            dest = os.path.join(video_dir, os.path.basename(mp4_path))
+            shutil.move(mp4_path, dest)
+            scenario_id = os.path.splitext(os.path.basename(mp4_path))[0]
+            caption = f"map_{map_idx}_scenario_{scenario_id}"
+
+            # wandb.Video copies/encodes the file at log time, so it's safe
+            # to delete `dest` once wandb.log returns.
+            wandb.log({"rollout_video": wandb.Video(dest, format="mp4", caption=caption)})
+            print(f"  Logged map_idx={map_idx}: {dest}")
+            logged += 1
+
+            try:
+                os.remove(dest)
+            except OSError as e:
+                print(f"  Warning: could not delete {dest}: {e}")
+
+    # ------------------------------------------------------------------
+    # Log timestep vs entropy scatterplot across all rollout maps
+    # ------------------------------------------------------------------
+    if all_timesteps:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.scatter(all_timesteps, all_entropies, alpha=0.2, s=10, color="steelblue")
+        ax.set_xlabel("t")
+        ax.set_ylabel("Entropy")
+        ax.set_title(f"Policy entropy vs time ({num_maps} maps; {len(all_timesteps)} steps)")
+        wandb.log({"entropy_vs_timestep": wandb.Image(fig)})
+        plt.close(fig)
+
+    env.close()
+
+    # Sweep up anything left behind: the moved-and-deleted dir, plus any
+    # stray mp4s ffmpeg may have left in the cwd.
+    if os.path.isdir(video_dir):
+        try:
+            shutil.rmtree(video_dir)
+        except OSError as e:
+            print(f"Warning: could not remove {video_dir}: {e}")
+
+    for stray in glob.glob("*.mp4"):
+        try:
+            os.remove(stray)
+        except OSError as e:
+            print(f"Warning: could not delete {stray}: {e}")
+
+    print(f"Logged {logged} videos across {num_maps} maps")
+
+
 # ---------------------------------------------------------------------------
 # Core training loop (called by both single-run and sweep agent)
 # ---------------------------------------------------------------------------
@@ -455,7 +561,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     output_sizes = get_output_sizes(dynamics_model)
 
     run = wandb.init(
-        project="bc_anchor_policy",
+        project="clean_delta",
         tags=["bc_policy", dynamics_model],
         config={**TRAIN_DEFAULTS, "dynamics_model": dynamics_model, "output_sizes": output_sizes},
     )
@@ -601,7 +707,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         # ------------------------------------------------------------------
         # Validation + patience-based early stopping
         # ------------------------------------------------------------------
-        if epoch % eval_frequency == 0:
+        if epoch % eval_frequency == 0 or stop_training:
             val_metrics = evaluate(policy, val_dataloader, device)
             last_val_loss = val_metrics["loss"]
             last_val_accuracy = val_metrics["accuracy"]
@@ -645,7 +751,6 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     final_val_metrics = evaluate(policy, val_dataloader, device)
     last_val_loss = final_val_metrics["loss"]
     last_val_accuracy = final_val_metrics["accuracy"]
-    wandb.log({"val/final_" + k: v for k, v in final_val_metrics.items()})
 
     # ------------------------------------------------------------------
     # Save checkpoint: weights + performance metrics
@@ -679,6 +784,12 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         device=device,
     )
 
+    # Visual sanity check rollout
+    try:
+        record_rollout_video(policy, dynamics_model, device)
+    except Exception as e:
+        print(f"Video recording failed (non-fatal): {e}")
+
     env.close()
     val_env.close()
     wandb.finish()
@@ -693,7 +804,7 @@ def parse_args():
 
     for name, help_text in [
         ("train", "Single training run"),
-        ("sweep", "Create a new sweep and attach an agent"),
+        ("multi", "Sequentially train one run per value in NUM_MAPS_SWEEP"),
     ]:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--dynamics", choices=["classic", "delta_local"], default="delta_local")
@@ -701,8 +812,8 @@ def parse_args():
             p.add_argument("--map-dir", type=str, default=None, help="Override map_dir")
             p.add_argument("--num-maps", type=int, default=None, help="Override num_maps")
             p.add_argument("--val-patience", type=int, default=None, help="Override val_patience")
-        if name == "sweep":
-            p.add_argument("--count", type=int, default=50, help="Number of sweep runs")
+        if name == "multi":
+            p.add_argument("--map-dir", type=str, default=None, help="Override map_dir for all runs")
 
     return parser.parse_args()
 
@@ -720,6 +831,11 @@ if __name__ == "__main__":
             num_maps_override=args.num_maps,
         )
 
-    elif args.mode == "sweep":
-        sweep_id = wandb.sweep(SWEEP_CONFIG, project="bc_anchor_policy")
-        wandb.agent(sweep_id, function=lambda: train(args.dynamics), count=args.count)
+    elif args.mode == "multi":
+        for i, n in enumerate(NUM_MAPS_SWEEP, start=1):
+            print(f"\n{'=' * 60}\nRun {i}/{len(NUM_MAPS_SWEEP)}: num_maps={n}\n{'=' * 60}")
+            train(
+                dynamics_model=args.dynamics,
+                map_dir=args.map_dir,
+                num_maps_override=n,
+            )
