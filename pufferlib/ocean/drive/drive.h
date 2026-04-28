@@ -136,8 +136,8 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_DY_BINS 127
 #define NUM_YAW_BINS 256
 #define DELTA_MAX_DX 2.0f
-#define DELTA_MAX_DY 2.0f
-#define DELTA_MAX_DYAW 3.14159265 / 4.0
+#define DELTA_MAX_DY 0.1f
+#define DELTA_MAX_DYAW 3.14159265 / 12.0
 
 static int COLLECT_EXPERT_TELEPORT = 1;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
