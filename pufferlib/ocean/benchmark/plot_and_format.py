@@ -921,7 +921,7 @@ def _smart_ckpt_to_num_maps(ckpt: str) -> float:
     return np.nan
 
 
-def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
+def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv") -> pd.DataFrame:
     """Load the SMART baseline CSV and pivot into per-num_maps rows.
 
     Returns a DataFrame with columns:
