@@ -3682,8 +3682,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 // Draw a compact heading marker that reads well in 2D top-down eval videos.
                 Vector3 arrowStart = position;
                 Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f,
-                                    position.y + sin_heading * half_len * 1.5f,
-                                    position.z};
+                                    position.y + sin_heading * half_len * 1.5f, position.z};
 
                 DrawLine3D(arrowStart, arrowEnd, agent_color);
                 DrawSphere(arrowEnd, 0.2f, agent_color);
@@ -4102,18 +4101,28 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            // Orthographic bird's-eye view over the entire map.
-            float map_width = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
-            float map_height = fabsf(env->grid_map->top_left_y - env->grid_map->bottom_right_y);
-            float map_center_x = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) * 0.5f;
-            float map_center_y = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) * 0.5f;
-            float aspect = client->width / client->height;
-            float fovy = fmaxf(map_height, map_width / aspect) * 1.05f;
-            camera.position = (Vector3){map_center_x, map_center_y, 400.0f};
-            camera.target = (Vector3){map_center_x, map_center_y, 0.0f};
-            camera.up = (Vector3){0.0f, -1.0f, 0.0f};
-            camera.projection = CAMERA_ORTHOGRAPHIC;
-            camera.fovy = fovy;
+            if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY) {
+                // Follow the SDC agent (zoomed-in tracking shot)
+                Entity *sdc = &env->entities[env->sdc_track_index];
+                camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
+                camera.target = (Vector3){sdc->x, sdc->y, 0.0f};
+                camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+                camera.projection = CAMERA_ORTHOGRAPHIC;
+                camera.fovy = 100.0f;
+            } else {
+                // Orthographic bird's-eye view over the entire map.
+                float map_width = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
+                float map_height = fabsf(env->grid_map->top_left_y - env->grid_map->bottom_right_y);
+                float map_center_x = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) * 0.5f;
+                float map_center_y = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) * 0.5f;
+                float aspect = client->width / client->height;
+                float fovy = fmaxf(map_height, map_width / aspect) * 1.05f;
+                camera.position = (Vector3){map_center_x, map_center_y, 400.0f};
+                camera.target = (Vector3){map_center_x, map_center_y, 0.0f};
+                camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+                camera.projection = CAMERA_ORTHOGRAPHIC;
+                camera.fovy = fovy;
+            }
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
