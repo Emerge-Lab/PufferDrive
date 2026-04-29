@@ -3652,19 +3652,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 // Draw the agent bounding boxes
                 Color agent_color = GRAY;
                 if (is_expert) {
-                    if (env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST)
-                        agent_color = EXPERT_REPLAY_SMALL;
-                    else
-                        agent_color = EXPERT_REPLAY;
+                    agent_color = GOLD;
                 }
                 if (is_active_agent) {
                     if (env->control_mode == CONTROL_REPLAY_LOGS)
                         agent_color = EXPERT_REPLAY;
                     else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS)
-                        agent_color = LIGHT_PURPLE;
-                    else if (env->entities[i].type == PEDESTRIAN)
-                        agent_color = LIGHT_ORANGE;
-                    else if (env->entities[i].type == CYCLIST)
                         agent_color = LIGHT_PURPLE;
                     else
                         agent_color = GREEN;
@@ -3673,7 +3666,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     agent_color = RED;
 
                 if (is_active_agent && env->entities[i].offroad_state > 0)
-                    agent_color = LIGHTYELLOW;
+                    agent_color = RED;
 
                 if (is_active_agent && agent_color.r == GREEN.r && agent_color.g == GREEN.g) {
                     DrawTriangle3D(corners[0], corners[1], corners[2], Fade(GREEN, 0.7f));
@@ -3793,18 +3786,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0 && env->control_mode != CONTROL_REPLAY_LOGS &&
                 env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
-                Color goal_color = DEEPBLUE;
-                if (env->entities[i].type == PEDESTRIAN)
-                    goal_color = LIGHT_ORANGE;
-                else if (env->entities[i].type == CYCLIST)
-                    goal_color = LIGHT_PURPLE;
-
-                DrawSphere(
-                    (Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS},
-                    0.5f, goal_color);
+                // Match clean-eval: goal markers are bright lime, with a faint
+                // radius circle on the road surface.
+                Color goal_color = LIME;
+                DrawSphere((Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENTS},
+                           1.5f, goal_color);
                 DrawCircle3D(
-                    (Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_AGENT_DETAILS},
-                    env->goal_radius, (Vector3){0, 0, Z_AGENT_DETAILS}, 90.0f, Fade(goal_color, 0.9f));
+                    (Vector3){env->entities[i].goal_position_x, env->entities[i].goal_position_y, Z_ROAD_MARKINGS},
+                    env->goal_radius, (Vector3){0, 0, 1}, 90.0f, Fade(goal_color, 0.3f));
             }
         }
         // Draw road elements
