@@ -2481,7 +2481,7 @@ void c_step(Drive *env) {
             float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
             float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-            const float jerk_penalty_coef = 0.0075f;
+            const float jerk_penalty_coef = 0.007f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
             env->rewards[i] += r_jerk;
