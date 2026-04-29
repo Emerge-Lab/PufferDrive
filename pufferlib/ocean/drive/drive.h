@@ -795,13 +795,7 @@ static inline void generate_env_adv_reward_weight_drive(Drive *env) {
         return;
     }
 
-    const float low_weight_mixture_probability = 0.5f;
-    const float low_weight_max = 0.25f;
-    if (random_uniform(0.0f, 1.0f) < low_weight_mixture_probability) {
-        env->current_adv_reward_weight_drive = random_uniform(0.0f, low_weight_max);
-    } else {
-        env->current_adv_reward_weight_drive = random_uniform(0.0f, 1.0f);
-    }
+    env->current_adv_reward_weight_drive = random_uniform(0.0f, 1.0f);
 }
 
 static inline void assign_adv_reward_weight_drive(Drive *env, Agent *agent, int agent_idx) {
