@@ -2490,7 +2490,7 @@ void c_step(Drive *env) {
         }
 
         // Reward agent if it is within X meters of goal and speed is below threshold
-        bool within_distance = distance_to_goal < env->goal_radius;
+        bool within_distance = distance_to_goal <= env->goal_radius;
         bool within_speed = current_speed <= env->goal_speed;
 
         if (within_distance && within_speed && !env->entities[agent_idx].current_goal_reached) {
