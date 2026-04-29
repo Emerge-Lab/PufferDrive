@@ -1921,10 +1921,10 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             "env": {
                 **common_env,
                 "simulation_mode": "replay",
-                "resample_frequency": 91,
-                "scenario_length": 91,
+                "resample_frequency": 101,
+                "scenario_length": 101,
                 "max_agents_per_env": 64,
-                "map_dir": map_dir or "pufferlib/resources/drive/binaries/womd",
+                "map_dir": map_dir,
                 "num_maps": num_scenarios,
                 "num_agents": num_agents,
                 "min_agents_per_env": 1,
