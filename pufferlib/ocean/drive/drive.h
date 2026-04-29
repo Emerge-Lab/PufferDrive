@@ -2890,15 +2890,10 @@ Client *make_client(Drive *env) {
         SetTraceLogLevel(LOG_WARNING); // Only show warnings and errors
         InitWindow(client->width, client->height, "PufferDrive");
     } else { // Headless rendering
-        // Full-map render size, matching the upstream GPU headless renderer.
-        float map_width = env->grid_map->bottom_right_x - env->grid_map->top_left_x;
-        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-        float scale = 6.0f; // Controls the resolution of the output video
-        int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
-        int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
-
-        client->width = img_width;
-        client->height = img_height;
+        // Clean-eval videos use a fixed 16:9 frame. This also matches the
+        // persistent EGL pbuffer model: every env records into the same size.
+        client->width = 1920;
+        client->height = 1080;
 
         if (!g_glfw_ready) {
             if (getenv("DISPLAY") == NULL) {
@@ -3672,7 +3667,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     else if (env->entities[i].type == CYCLIST)
                         agent_color = LIGHT_PURPLE;
                     else
-                        agent_color = BLUE;
+                        agent_color = GREEN;
                 }
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     agent_color = RED;
@@ -3680,37 +3675,25 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (is_active_agent && env->entities[i].offroad_state > 0)
                     agent_color = LIGHTYELLOW;
 
-                rlPushMatrix();
-                rlTranslatef(position.x, position.y, position.z);
-                rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
-                DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(agent_color, 0.5f));
-                DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
-                rlPopMatrix();
+                if (is_active_agent && agent_color.r == GREEN.r && agent_color.g == GREEN.g) {
+                    DrawTriangle3D(corners[0], corners[1], corners[2], Fade(GREEN, 0.7f));
+                    DrawTriangle3D(corners[0], corners[2], corners[3], Fade(GREEN, 0.7f));
+                }
 
-                // Draw a heading arrow pointing forward, scaled by speed so we can see how fast the agent is going
-                float agent_speed =
-                    sqrtf(env->entities[i].vx * env->entities[i].vx + env->entities[i].vy * env->entities[i].vy);
-                float speed_frac = fminf(agent_speed / MAX_SPEED, 1.0f);
-                float arrow_len = half_len * 1.5f + speed_frac * 15.0f;
-                float arrow_head_size = 0.85f;
+                rlSetLineWidth(3.0f);
+                for (int j = 0; j < 4; j++) {
+                    DrawLine3D(corners[j], corners[(j + 1) % 4], agent_color);
+                }
+                rlSetLineWidth(1.0f);
 
+                // Draw a compact heading marker that reads well in 2D top-down eval videos.
                 Vector3 arrowStart = position;
-                Vector3 arrowEnd = {position.x + cos_heading * arrow_len, position.y + sin_heading * arrow_len,
+                Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f,
+                                    position.y + sin_heading * half_len * 1.5f,
                                     position.z};
 
-                rlSetLineWidth(2.5f);
                 DrawLine3D(arrowStart, arrowEnd, agent_color);
-
-                // Arrowhead wings
-                float perp_x = -sin_heading * arrow_head_size;
-                float perp_y = cos_heading * arrow_head_size;
-                Vector3 wing1 = {arrowEnd.x - cos_heading * arrow_head_size + perp_x,
-                                 arrowEnd.y - sin_heading * arrow_head_size + perp_y, position.z};
-                Vector3 wing2 = {arrowEnd.x - cos_heading * arrow_head_size - perp_x,
-                                 arrowEnd.y - sin_heading * arrow_head_size - perp_y, position.z};
-                DrawLine3D(arrowEnd, wing1, agent_color);
-                DrawLine3D(arrowEnd, wing2, agent_color);
-                rlSetLineWidth(1.0f);
+                DrawSphere(arrowEnd, 0.2f, agent_color);
 
             } else { // Agent view
                 rlPushMatrix();
@@ -3890,7 +3873,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
     }
 
-    if (mode == 1) {
+    if (mode == 1 && env->render_mode != RENDER_HEADLESS) {
         float cam_x = 0.0f, cam_y = 0.0f;
         float fovy = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
 
@@ -4127,17 +4110,21 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
     }
 
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
-        float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
-
         Camera3D camera = {0};
 
         if (view_mode == VIEW_MODE_SIM_STATE) {
             // Orthographic bird's-eye view over the entire map.
-            camera.position = (Vector3){0.0, 0.0, 400.0f};
-            camera.target = (Vector3){0.0, 0.0, 0.0};
+            float map_width = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
+            float map_height = fabsf(env->grid_map->top_left_y - env->grid_map->bottom_right_y);
+            float map_center_x = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) * 0.5f;
+            float map_center_y = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) * 0.5f;
+            float aspect = client->width / client->height;
+            float fovy = fmaxf(map_height, map_width / aspect) * 1.05f;
+            camera.position = (Vector3){map_center_x, map_center_y, 400.0f};
+            camera.target = (Vector3){map_center_x, map_center_y, 0.0f};
             camera.up = (Vector3){0.0f, -1.0f, 0.0f};
             camera.projection = CAMERA_ORTHOGRAPHIC;
-            camera.fovy = map_height;
+            camera.fovy = fovy;
             BeginDrawing();
             ClearBackground(ROAD_COLOR);
             BeginMode3D(camera);
@@ -4179,13 +4166,6 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             }
 
             draw_scene(env, client, 1, 0, 0, 0);
-            DrawText(TextFormat("t=%d", env->timestep), 10, 10, 20, PUFF_WHITE);
-            for (int i = 0; i < env->active_agent_count; i++) {
-                int idx = env->active_agent_indices[i];
-                if (env->entities[idx].collision_state > 0) {
-                    DrawText(TextFormat("COLLISION agent %d at t=%d", idx, env->timestep), 10, 30, 20, PUFF_RED);
-                }
-            }
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,
