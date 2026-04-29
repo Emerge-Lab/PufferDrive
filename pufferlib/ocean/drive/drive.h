@@ -342,6 +342,7 @@ struct Drive {
     char *ini_file;
     int collision_behavior; // 0 = none, 1=stop, 2 = remove
     int ignore_target_collision_behavior;
+    int remove_target_on_collision_or_offroad;
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
     int deterministic_traffic_lights;
@@ -4228,7 +4229,10 @@ static void compute_metrics(Drive *env, int agent_idx) {
     // Priority 1: Handle offroad
     if (is_offroad) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) { // Stop
+        int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
+        if (env->remove_target_on_collision_or_offroad && agent_idx == target_agent_idx) {
+            agent->removed = 1;
+        } else if (env->offroad_behavior == STOP_AGENT && !agent->stopped) { // Stop
             agent->stopped = 1;
         } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
             agent->removed = 1;
@@ -4263,9 +4267,13 @@ static void compute_metrics(Drive *env, int agent_idx) {
             agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
         }
         int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
-        bool target_involved_collision = env->ignore_target_collision_behavior &&
-                                         (agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx);
-        if (!target_involved_collision) {
+        bool target_involved_collision = agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx;
+        if (env->remove_target_on_collision_or_offroad && target_involved_collision && target_agent_idx >= 0) {
+            env->agents[target_agent_idx].removed = 1;
+        }
+        bool ignore_collision_behavior = target_involved_collision && (env->ignore_target_collision_behavior ||
+                                                                       env->remove_target_on_collision_or_offroad);
+        if (!ignore_collision_behavior) {
             if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
                 agent->stopped = 1;
             } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {

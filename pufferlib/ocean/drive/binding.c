@@ -1845,6 +1845,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_bonus_only = (bool)unpack(kwargs, "adv_bonus_only");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->ignore_target_collision_behavior = (bool)unpack(kwargs, "ignore_target_collision_behavior");
+    env->remove_target_on_collision_or_offroad = (bool)unpack(kwargs, "remove_target_on_collision_or_offroad");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
     env->deterministic_traffic_lights = (bool)unpack(kwargs, "deterministic_traffic_lights");
