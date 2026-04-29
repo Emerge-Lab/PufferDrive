@@ -2455,20 +2455,20 @@ void c_step(Drive *env) {
         float current_speed = sqrtf(env->entities[agent_idx].vx * env->entities[agent_idx].vx +
                                     env->entities[agent_idx].vy * env->entities[agent_idx].vy);
 
-        // if (env->dynamics_model == DELTA_LOCAL && !agent_is_done && !env->entities[agent_idx].removed &&
-        //     env->control_mode != CONTROL_REPLAY_LOGS && env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
-        //     Entity *e = &env->entities[agent_idx];
-        //     // Normalize each component to roughly [-1, 1] so the coefficient is interpretable
-        //     float jx = e->jerk_long / DELTA_MAX_DX;
-        //     float jy = e->jerk_lat  / DELTA_MAX_DY;
-        //     float jw = e->jerk_yaw  / (float)DELTA_MAX_DYAW;
-        //     float jerk_sq = jx*jx + jy*jy + jw*jw;
+        if (env->dynamics_model == DELTA_LOCAL && !agent_is_done && !env->entities[agent_idx].removed &&
+            env->control_mode != CONTROL_REPLAY_LOGS && env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
+            Entity *e = &env->entities[agent_idx];
+            // Normalize each component to roughly [-1, 1] so the coefficient is interpretable
+            float jx = e->jerk_long / DELTA_MAX_DX;
+            float jy = e->jerk_lat / DELTA_MAX_DY;
+            float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
+            float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-        //     const float jerk_penalty_coef = 0.001f;  // start small; tune up if motion is still jittery
-        //     float r_jerk = -jerk_penalty_coef * jerk_sq;
-        //     env->rewards[i]             += r_jerk;
-        //     env->logs[i].episode_return += r_jerk;
-        // }
+            const float jerk_penalty_coef = 0.002f; // start small; tune up if motion is still jittery
+            float r_jerk = -jerk_penalty_coef * jerk_sq;
+            env->rewards[i] += r_jerk;
+            env->logs[i].episode_return += r_jerk;
+        }
 
         // Reward agent if it is within X meters of goal and speed is below threshold
         bool within_distance = distance_to_goal < env->goal_radius;
