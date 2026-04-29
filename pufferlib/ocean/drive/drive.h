@@ -46,7 +46,7 @@
 #define Z_ROAD_SURFACE 0.0f
 #define Z_ROAD_MARKINGS 0.05f // Lane lines, road lines, traces
 #define Z_AGENT_DETAILS 0.2f  // Arrow, goal markers, obs overlays
-#define Z_AGENTS 0.6f         // Vehicles, cyclists, pedestrians
+#define Z_AGENTS 2.0f         // Vehicles, cyclists, pedestrians
 
 // Entity Types
 #define NONE 0
@@ -3649,43 +3649,62 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     continue;
                 }
 
-                // Draw the agent bounding boxes
+                // Pick agent color (reference scheme)
                 Color agent_color = GRAY;
                 if (is_expert) {
-                    agent_color = GOLD;
+                    if (env->entities[i].type == PEDESTRIAN || env->entities[i].type == CYCLIST)
+                        agent_color = EXPERT_REPLAY_SMALL;
+                    else
+                        agent_color = EXPERT_REPLAY;
                 }
                 if (is_active_agent) {
                     if (env->control_mode == CONTROL_REPLAY_LOGS)
                         agent_color = EXPERT_REPLAY;
                     else if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS)
                         agent_color = LIGHT_PURPLE;
+                    else if (env->entities[i].type == PEDESTRIAN)
+                        agent_color = LIGHT_ORANGE;
+                    else if (env->entities[i].type == CYCLIST)
+                        agent_color = LIGHT_PURPLE;
                     else
-                        agent_color = GREEN;
+                        agent_color = BLUE;
                 }
                 if (is_active_agent && env->entities[i].collision_state > 0)
                     agent_color = RED;
-
                 if (is_active_agent && env->entities[i].offroad_state > 0)
-                    agent_color = RED;
+                    agent_color = LIGHTYELLOW;
 
-                if (is_active_agent && agent_color.r == GREEN.r && agent_color.g == GREEN.g) {
-                    DrawTriangle3D(corners[0], corners[1], corners[2], Fade(GREEN, 0.7f));
-                    DrawTriangle3D(corners[0], corners[2], corners[3], Fade(GREEN, 0.7f));
-                }
+                // Filled cube + wireframe outline at the same color
+                rlPushMatrix();
+                rlTranslatef(position.x, position.y, position.z);
+                rlRotatef(heading * RAD2DEG, 0.0f, 0.0f, 1.0f);
+                DrawCube((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, Fade(agent_color, 0.5f));
+                DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
+                rlPopMatrix();
 
-                rlSetLineWidth(3.0f);
-                for (int j = 0; j < 4; j++) {
-                    DrawLine3D(corners[j], corners[(j + 1) % 4], agent_color);
-                }
-                rlSetLineWidth(1.0f);
+                // Heading arrow scaled by speed, with arrowhead wings
+                float agent_speed =
+                    sqrtf(env->entities[i].vx * env->entities[i].vx + env->entities[i].vy * env->entities[i].vy);
+                float speed_frac = fminf(agent_speed / MAX_SPEED, 1.0f);
+                float arrow_len = half_len * 1.5f + speed_frac * 15.0f;
+                float arrow_head_size = 0.85f;
 
-                // Draw a compact heading marker that reads well in 2D top-down eval videos.
                 Vector3 arrowStart = position;
-                Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f,
-                                    position.y + sin_heading * half_len * 1.5f, position.z};
+                Vector3 arrowEnd = {position.x + cos_heading * arrow_len, position.y + sin_heading * arrow_len,
+                                    position.z};
 
+                rlSetLineWidth(2.5f);
                 DrawLine3D(arrowStart, arrowEnd, agent_color);
-                DrawSphere(arrowEnd, 0.2f, agent_color);
+
+                float perp_x = -sin_heading * arrow_head_size;
+                float perp_y = cos_heading * arrow_head_size;
+                Vector3 wing1 = {arrowEnd.x - cos_heading * arrow_head_size + perp_x,
+                                 arrowEnd.y - sin_heading * arrow_head_size + perp_y, position.z};
+                Vector3 wing2 = {arrowEnd.x - cos_heading * arrow_head_size - perp_x,
+                                 arrowEnd.y - sin_heading * arrow_head_size - perp_y, position.z};
+                DrawLine3D(arrowEnd, wing1, agent_color);
+                DrawLine3D(arrowEnd, wing2, agent_color);
+                rlSetLineWidth(1.0f);
 
             } else { // Agent view
                 rlPushMatrix();
@@ -4108,7 +4127,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 camera.target = (Vector3){sdc->x, sdc->y, 0.0f};
                 camera.up = (Vector3){0.0f, -1.0f, 0.0f};
                 camera.projection = CAMERA_ORTHOGRAPHIC;
-                camera.fovy = 100.0f;
+                camera.fovy = 75.0f;
             } else {
                 // Orthographic bird's-eye view over the entire map.
                 float map_width = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
