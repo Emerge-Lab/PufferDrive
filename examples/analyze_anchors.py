@@ -35,7 +35,7 @@ from pufferlib.pufferl import load_config, load_env
 from pufferlib.ocean.drive import binding
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-ANCHOR_DIR = "models/anchors_v2"
+ANCHOR_DIR = "models/anchors"
 VAL_MAP_DIR = "resources/drive/binaries/validation"
 VAL_NUM_MAPS = 10_000
 OUTPUT_CSV = "results/anchor_eval.csv"

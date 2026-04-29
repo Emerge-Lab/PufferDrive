@@ -488,15 +488,88 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 # ---------------------------------------------------------------------------
 
 
-def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
-    """Three-subplot summary figure for BC anchor evaluation.
+# ---------------------------------------------------------------------------
+# Helper: final-step within-5-bin accuracy from wandb training-curve CSVs
+# ---------------------------------------------------------------------------
+
+
+def _load_final_within5_accuracy(
+    dx_csv="results/anchor_train_dx.csv",
+    dy_csv="results/anchor_train_dy.csv",
+    dyaw_csv="results/anchor_train_dyaw.csv",
+):
+    """Return a DataFrame [num_maps_trained, within5_avg_pct] from the wandb CSVs.
+
+    For each run (one column per axis CSV), takes the last non-NaN value of the
+    mean column, then averages across the three axes per num_maps. Drops runs
+    that don't have all three axes available so the "average" means the same
+    thing on every row. Returns an empty (correctly-typed) frame if none of
+    the CSVs are present.
+    """
+    axis_files = [("dx", dx_csv), ("dy", dy_csv), ("dyaw", dyaw_csv)]
+    rows = []  # (num_maps, axis, final_acc)
+
+    for axis, path in axis_files:
+        if not os.path.exists(path):
+            print(f"  {path} not found — skipping {axis} for within-5-bin overlay.")
+            continue
+        df = pd.read_csv(path)
+        metric = f"val/acc_within_5bins_{axis}"
+        for col in df.columns:
+            # Match the mean column only; skip wandb's __MIN/__MAX siblings.
+            if not col.endswith(f" - {metric}") or col.endswith("__MIN") or col.endswith("__MAX"):
+                continue
+            run = col.split(" - ")[0]
+            m = re.search(r"_(\d+)maps", run)
+            if not m:
+                continue
+            num_maps = int(m.group(1))
+            series = df[col].dropna()
+            if series.empty:
+                continue
+            rows.append({"num_maps_trained": num_maps, "axis": axis, "final_acc": series.iloc[-1]})
+
+    if not rows:
+        return pd.DataFrame(columns=["num_maps_trained", "within5_avg_pct"])
+
+    long_df = pd.DataFrame(rows)
+    counts = long_df.groupby("num_maps_trained")["axis"].nunique()
+    complete = counts[counts == 3].index
+    incomplete = sorted(set(long_df["num_maps_trained"]) - set(complete))
+    if incomplete:
+        print(f"  Skipping within-5-bin overlay for runs missing axes: {incomplete}")
+    long_df = long_df[long_df["num_maps_trained"].isin(complete)]
+
+    out = (
+        long_df.groupby("num_maps_trained")["final_acc"]
+        .mean()
+        .reset_index()
+        .rename(columns={"final_acc": "within5_avg_pct"})
+    )
+    out["within5_avg_pct"] = out["within5_avg_pct"] * 100  # to %
+    return out.sort_values("num_maps_trained").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Updated: BC anchor figure (subplot 0 now overlays within-5-bin accuracy)
+# ---------------------------------------------------------------------------
+
+
+def plot_anchor_eval(
+    anchor_df,
+    save_path="results/figures/eval_anchor.pdf",
+    within5_csvs=("results/anchor_train_dx.csv", "results/anchor_train_dy.csv", "results/anchor_train_dyaw.csv"),
+):
+    """Four-subplot summary figure for BC anchor evaluation.
 
     All subplots share the same x-axis: hours of human driving data used to
     train the anchor (num_maps_trained via _maps_to_human_hours).
 
-    Subplot 0 — Open-loop: validation accuracy (one point per checkpoint).
-    Subplot 1 — Closed-loop: route progress, self-play vs human-replay.
-    Subplot 2 — Closed-loop: score, self-play vs human-replay.
+    Subplot 0 — Open-loop: argmax accuracy + final within-5-bin accuracy
+                (averaged across dx/dy/dyaw, taken at last training step).
+    Subplot 1 — Open-loop: validation loss.
+    Subplot 2 — Closed-loop: route progress, self-play vs human-replay.
+    Subplot 3 — Closed-loop: score, self-play vs human-replay.
     """
     if anchor_df is None or anchor_df.empty:
         print("  No anchor eval data — skipping plot_anchor_eval.")
@@ -515,6 +588,12 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     )
     ol_df["human_hours"] = ol_df["num_maps_trained"].apply(_maps_to_human_hours)
     ol_df = ol_df.sort_values("human_hours")
+
+    # Within-5-bin: average final-step accuracy across dx/dy/dyaw, joined by num_maps.
+    w5_df = _load_final_within5_accuracy(*within5_csvs) if within5_csvs else pd.DataFrame()
+    if not w5_df.empty:
+        w5_df["human_hours"] = w5_df["num_maps_trained"].apply(_maps_to_human_hours)
+        w5_df = w5_df.sort_values("human_hours")
 
     # Closed-loop: mean ± SEM per (checkpoint, mode)
     cl_df = (
@@ -538,7 +617,7 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     _set_style(len(MODE_STYLES))
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
-    # ── Subplot 0: open-loop validation accuracy (%) ─────────────────────────
+    # ── Subplot 0: open-loop accuracy + within-5-bin avg ─────────────────────
     ax = axes[0]
     ax.plot(
         ol_df["human_hours"],
@@ -547,11 +626,23 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
         marker="D",
         linewidth=1.5,
         markersize=8,
+        label="Argmax accuracy",
     )
+    if not w5_df.empty:
+        ax.plot(
+            w5_df["human_hours"],
+            w5_df["within5_avg_pct"],
+            color="#9467bd",
+            marker="s",
+            linewidth=1.5,
+            markersize=8,
+            label=r"Within-5-bin accuracy (avg over $\Delta x, \Delta y, \Delta\mathrm{yaw}$)",
+        )
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation accuracy (%)")
     ax.set_title("Open-loop: validation accuracy")
     ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.legend(fontsize=9, loc="best")
     sns.despine(ax=ax)
 
     # ── Subplot 1: open-loop validation loss ──────────────────────────────────
@@ -605,17 +696,27 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     return fig
 
 
-def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eval_table.tex"):
+# ---------------------------------------------------------------------------
+# Updated: BC anchor LaTeX table (now includes within-5-bin accuracy column)
+# ---------------------------------------------------------------------------
+
+
+def generate_anchor_latex_table(
+    anchor_df,
+    save_path="results/figures/anchor_eval_table.tex",
+    within5_csvs=("results/anchor_train_dx.csv", "results/anchor_train_dy.csv", "results/anchor_train_dyaw.csv"),
+):
     """LaTeX table for BC anchor evaluation results.
 
     Rows:    one per checkpoint (num_maps_trained), sorted ascending.
-    Columns: Human data (hours) | OL val accuracy (%) | OL val loss
+    Columns: Human data (hours)
+             | OL argmax accuracy (%) | OL within-5-bin accuracy (%) | OL val loss
              | CL self-play route progress | CL self-play score
              | CL human-replay route progress | CL human-replay score
 
-    Uses the same green/red cellcolor heatmap convention as the legacy scaling
-    table (kept intentionally — this table has a single series per metric so
-    tier highlighting is less useful).
+    Within-5-bin accuracy is the final-step value averaged across dx/dy/dyaw
+    from the wandb training-curve CSVs. Pass `within5_csvs=None` to skip the
+    column entirely (e.g. if the CSVs aren't available on a given run).
 
     Required LaTeX packages:
       \\usepackage{booktabs}
@@ -634,6 +735,21 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
         .copy()
     )
     ol["human_hours"] = ol["num_maps_trained"].apply(_maps_to_human_hours)
+
+    # Within-5-bin column. Stored as a fraction (0-1) here so it shares the
+    # same `scale=100` formatting path as ol_val_accuracy below.
+    if within5_csvs:
+        w5 = _load_final_within5_accuracy(*within5_csvs)
+        if not w5.empty:
+            w5 = w5.rename(columns={"within5_avg_pct": "ol_within5_acc"}).copy()
+            w5["ol_within5_acc"] = w5["ol_within5_acc"] / 100.0
+            ol = ol.merge(w5[["num_maps_trained", "ol_within5_acc"]], on="num_maps_trained", how="left")
+        else:
+            ol["ol_within5_acc"] = np.nan
+    else:
+        ol["ol_within5_acc"] = np.nan
+
+    has_within5 = ol["ol_within5_acc"].notna().any()
 
     # Closed-loop: mean +/- SEM per (checkpoint, mode)
     cl = (
@@ -703,22 +819,38 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
         "hr_route_progress_mean": merged["hr_route_progress_mean"].max(),
         "hr_score_mean": merged["hr_score_mean"].max(),
     }
+    if has_within5:
+        best["ol_within5_acc"] = merged["ol_within5_acc"].max()
 
     def _is_best(col, val):
+        if col not in best:
+            return False
         return not np.isnan(val) and np.isclose(val, best[col])
 
-    col_spec = "r|rr|rr|rr"
+    n_ol = 3 if has_within5 else 2
+    col_spec = "r|" + "r" * n_ol + "|rr|rr"
+
+    ol_header_cells = [r"Acc. (\%)"]
+    if has_within5:
+        ol_header_cells.append(r"Acc. $\pm 5$ bins (\%)")
+    ol_header_cells.append("Loss")
+
     lines = [
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{bm}",
         r"\begin{table}[ht]",
         r"\centering",
-        r"\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; closed-loop metrics averaged over validation scenes.}",
+        r"\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; "
+        r"closed-loop metrics averaged over validation scenes. "
+        r"Within-5-bin accuracy is the average of $\Delta x$, $\Delta y$, "
+        r"$\Delta\mathrm{yaw}$ accuracies at the final training step.}",
         r"\label{tab:anchor_results}",
         r"\resizebox{\textwidth}{!}{%",
         r"\begin{tabular}{" + col_spec + "}",
         r"\toprule",
-        r" & \multicolumn{2}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\",
-        r"Human data (h) & Acc. (\%) & Loss & Route prog. & Score & Route prog. & Score \\",
+        r" & \multicolumn{" + str(n_ol) + r"}{c|}{Open-loop} & "
+        r"\multicolumn{2}{c|}{Closed-loop self-play} & "
+        r"\multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\",
+        r"Human data (h) & " + " & ".join(ol_header_cells) + r" & Route prog. & Score & Route prog. & Score \\",
         r"\midrule",
     ]
 
@@ -733,6 +865,16 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
                 is_best=_is_best("ol_val_accuracy", row["ol_val_accuracy"]),
             )
         )
+        if has_within5:
+            cells.append(
+                _fmt_green(
+                    row["ol_within5_acc"],
+                    "ol_within5_acc",
+                    scale=100,
+                    decimals=1,
+                    is_best=_is_best("ol_within5_acc", row["ol_within5_acc"]),
+                )
+            )
         cells.append(
             _fmt_red(
                 row["ol_val_loss"],
