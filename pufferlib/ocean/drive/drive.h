@@ -3682,29 +3682,37 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 DrawCubeWires((Vector3){0.0f, 0.0f, 0.0f}, size.x, size.y, 1.0f, agent_color);
                 rlPopMatrix();
 
-                // Heading arrow scaled by speed, with arrowhead wings
+                // Heading arrow scaled by speed
                 float agent_speed =
                     sqrtf(env->entities[i].vx * env->entities[i].vx + env->entities[i].vy * env->entities[i].vy);
                 float speed_frac = fminf(agent_speed / MAX_SPEED, 1.0f);
                 float arrow_len = half_len * 1.5f + speed_frac * 15.0f;
-                float arrow_head_size = 0.85f;
+                float shaft_w = 0.4f;
+                float head_len = 1.0f;
+                float head_w = 1.4f;
+                float az = position.z + 0.51f;
 
-                Vector3 arrowStart = position;
-                Vector3 arrowEnd = {position.x + cos_heading * arrow_len, position.y + sin_heading * arrow_len,
-                                    position.z};
+                float shaft_end = arrow_len - head_len;
+                Vector3 s_start_l = {position.x - sin_heading * shaft_w * 0.5f,
+                                     position.y + cos_heading * shaft_w * 0.5f, az};
+                Vector3 s_start_r = {position.x + sin_heading * shaft_w * 0.5f,
+                                     position.y - cos_heading * shaft_w * 0.5f, az};
+                Vector3 s_end_l = {position.x + cos_heading * shaft_end - sin_heading * shaft_w * 0.5f,
+                                   position.y + sin_heading * shaft_end + cos_heading * shaft_w * 0.5f, az};
+                Vector3 s_end_r = {position.x + cos_heading * shaft_end + sin_heading * shaft_w * 0.5f,
+                                   position.y + sin_heading * shaft_end - cos_heading * shaft_w * 0.5f, az};
+                DrawTriangle3D(s_start_l, s_start_r, s_end_r, agent_color);
+                DrawTriangle3D(s_start_l, s_end_r, s_end_l, agent_color);
+                DrawTriangle3D(s_end_r, s_start_r, s_start_l, agent_color);
+                DrawTriangle3D(s_end_l, s_end_r, s_start_l, agent_color);
 
-                rlSetLineWidth(2.5f);
-                DrawLine3D(arrowStart, arrowEnd, agent_color);
-
-                float perp_x = -sin_heading * arrow_head_size;
-                float perp_y = cos_heading * arrow_head_size;
-                Vector3 wing1 = {arrowEnd.x - cos_heading * arrow_head_size + perp_x,
-                                 arrowEnd.y - sin_heading * arrow_head_size + perp_y, position.z};
-                Vector3 wing2 = {arrowEnd.x - cos_heading * arrow_head_size - perp_x,
-                                 arrowEnd.y - sin_heading * arrow_head_size - perp_y, position.z};
-                DrawLine3D(arrowEnd, wing1, agent_color);
-                DrawLine3D(arrowEnd, wing2, agent_color);
-                rlSetLineWidth(1.0f);
+                Vector3 tip = {position.x + cos_heading * arrow_len, position.y + sin_heading * arrow_len, az};
+                Vector3 head_l = {position.x + cos_heading * shaft_end - sin_heading * head_w * 0.5f,
+                                  position.y + sin_heading * shaft_end + cos_heading * head_w * 0.5f, az};
+                Vector3 head_r = {position.x + cos_heading * shaft_end + sin_heading * head_w * 0.5f,
+                                  position.y + sin_heading * shaft_end - cos_heading * head_w * 0.5f, az};
+                DrawTriangle3D(head_l, head_r, tip, agent_color);
+                DrawTriangle3D(tip, head_r, head_l, agent_color);
 
             } else { // Agent view
                 rlPushMatrix();
