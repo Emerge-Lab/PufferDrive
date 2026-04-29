@@ -209,6 +209,7 @@ struct Log {
     float rear_collision_rate; // Fraction of steps with a rear collision event
     float longitudinal_error_avg;
     float displacement_error_avg; // ADE
+    float jerk_penalty;
     float n;
 };
 
@@ -510,6 +511,7 @@ void add_log(Drive *env) {
             env->log.route_progress += compute_route_progress_and_errors(e, e->x, e->y, env->init_steps, env->timestep,
                                                                          &unused_lateral, &unused_long, &unused_disp);
         }
+        env->log.jerk_penalty += env->logs[i].jerk_penalty;
 
         if (env->logs[i].l2_samples > 0.0f) {
             env->log.lateral_error_avg += env->logs[i].lateral_error_avg / env->logs[i].l2_samples;
@@ -2464,10 +2466,12 @@ void c_step(Drive *env) {
             float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
             float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-            const float jerk_penalty_coef = 0.002f; // start small; tune up if motion is still jittery
+            const float jerk_penalty_coef = 0.008f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
+
             env->rewards[i] += r_jerk;
             env->logs[i].episode_return += r_jerk;
+            env->logs[i].jerk_penalty += r_jerk;
         }
 
         // Reward agent if it is within X meters of goal and speed is below threshold

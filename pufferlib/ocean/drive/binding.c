@@ -300,6 +300,7 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "rear_collision_rate", log->rear_collision_rate);
     assign_to_dict(dict, "lateral_error_avg", log->lateral_error_avg);
     assign_to_dict(dict, "longitudinal_error_avg", log->longitudinal_error_avg);
+    assign_to_dict(dict, "rew_jerk_penalty", log->jerk_penalty);
     // assign_to_dict(dict, "ADE", log->displacement_error_avg);
     //   assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     //  assign_to_dict(dict, "perc_other", log->perc_other);
