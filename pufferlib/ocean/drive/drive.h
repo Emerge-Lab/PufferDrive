@@ -4145,25 +4145,35 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             if (draw_traces) { // Show logged trajectories of active agents and expert static agents
                 for (int i = 0; i < env->active_agent_count; i++) {
                     int idx = env->active_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
+                    int t_end = env->episode_length;
+                    if (t_end > env->entities[idx].array_size)
+                        t_end = env->entities[idx].array_size;
+                    for (int t = env->init_steps; t < t_end; t++) {
+                        if (env->entities[idx].traj_valid && !env->entities[idx].traj_valid[t])
+                            continue;
                         Color agent_color = LIGHTBLUE;
                         if (env->entities[idx].type == PEDESTRIAN) {
                             agent_color = LIGHT_ORANGE;
                         } else if (env->entities[idx].type == CYCLIST) {
                             agent_color = LIGHT_PURPLE;
                         }
-                        DrawSphere(
+                        DrawPoint3D(
                             (Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], Z_AGENT_DETAILS},
-                            0.15f, agent_color);
+                            agent_color);
                     }
                 }
 
                 for (int i = 0; i < env->expert_static_agent_count; i++) {
                     int idx = env->expert_static_agent_indices[i];
-                    for (int t = env->init_steps; t < env->episode_length; t++) {
-                        DrawSphere(
+                    int t_end = env->episode_length;
+                    if (t_end > env->entities[idx].array_size)
+                        t_end = env->entities[idx].array_size;
+                    for (int t = env->init_steps; t < t_end; t++) {
+                        if (env->entities[idx].traj_valid && !env->entities[idx].traj_valid[t])
+                            continue;
+                        DrawPoint3D(
                             (Vector3){env->entities[idx].traj_x[t], env->entities[idx].traj_y[t], Z_AGENT_DETAILS},
-                            0.15f, Fade(EXPERT_REPLAY, 0.5));
+                            EXPERT_REPLAY);
                     }
                 }
             }
