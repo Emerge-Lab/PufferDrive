@@ -4196,6 +4196,9 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
             draw_scene(env, client, 1, 0, 0, 0);
 
+            // Draw timestep
+            DrawText(TextFormat("t=%d", env->timestep), 10, 10, 26, PUFF_WHITE);
+
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,
             // showing only that agent's observations
