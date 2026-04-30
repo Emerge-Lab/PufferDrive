@@ -2751,6 +2751,8 @@ static int collision_check(Drive *env, int agent_idx, float *collision_normal_x,
             continue;
 
         Agent *other_agent = &env->agents[index];
+        if (other_agent->removed || other_agent->sim_x == INVALID_POSITION)
+            continue;
 
         float dist_sq = ((other_agent->sim_x - agent->sim_x) * (other_agent->sim_x - agent->sim_x) +
                          (other_agent->sim_y - agent->sim_y) * (other_agent->sim_y - agent->sim_y));
@@ -4055,13 +4057,20 @@ static void compute_metrics(Drive *env, int agent_idx) {
     if (agent->sim_x == INVALID_POSITION)
         return; // invalid agent position
 
+    bool episode_started = env->timestep > env->init_steps;
+
     // Current agent is offgrid, treat as offroad
     if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        if (env->offroad_behavior == STOP_AGENT && !agent->stopped) {
-            agent->stopped = 1;
-        } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
-            agent->removed = 1;
+        if (episode_started) {
+            int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
+            if (env->remove_target_on_collision_or_offroad && agent_idx == target_agent_idx) {
+                agent->removed = 1;
+            } else if (env->offroad_behavior == STOP_AGENT && !agent->stopped) {
+                agent->stopped = 1;
+            } else if (env->offroad_behavior == REMOVE_AGENT && !agent->removed) {
+                agent->removed = 1;
+            }
         }
         return;
     }
@@ -4230,7 +4239,9 @@ static void compute_metrics(Drive *env, int agent_idx) {
     if (is_offroad) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
         int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
-        if (env->remove_target_on_collision_or_offroad && agent_idx == target_agent_idx) {
+        if (!episode_started) {
+            return;
+        } else if (env->remove_target_on_collision_or_offroad && agent_idx == target_agent_idx) {
             agent->removed = 1;
         } else if (env->offroad_behavior == STOP_AGENT && !agent->stopped) { // Stop
             agent->stopped = 1;
@@ -4268,12 +4279,13 @@ static void compute_metrics(Drive *env, int agent_idx) {
         }
         int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
         bool target_involved_collision = agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx;
-        if (env->remove_target_on_collision_or_offroad && target_involved_collision && target_agent_idx >= 0) {
+        if (episode_started && env->remove_target_on_collision_or_offroad && target_involved_collision &&
+            target_agent_idx >= 0) {
             env->agents[target_agent_idx].removed = 1;
         }
         bool ignore_collision_behavior = target_involved_collision && (env->ignore_target_collision_behavior ||
                                                                        env->remove_target_on_collision_or_offroad);
-        if (!ignore_collision_behavior) {
+        if (episode_started && !ignore_collision_behavior) {
             if (env->collision_behavior == STOP_AGENT && !agent->stopped) { // Stop
                 agent->stopped = 1;
             } else if (env->collision_behavior == REMOVE_AGENT && !agent->removed) {
@@ -4287,10 +4299,12 @@ static void compute_metrics(Drive *env, int agent_idx) {
     // Priority 3: Handle red light violation
     if (env->max_traffic_control_observations && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
-        if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
-            agent->stopped = 1;
-        } else if (env->traffic_light_behavior == REMOVE_AGENT && !agent->removed) {
-            agent->removed = 1;
+        if (episode_started) {
+            if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
+                agent->stopped = 1;
+            } else if (env->traffic_light_behavior == REMOVE_AGENT && !agent->removed) {
+                agent->removed = 1;
+            }
         }
 
         return; // early return: no goal reaching when red light violation
