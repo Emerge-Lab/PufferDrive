@@ -141,6 +141,10 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_drive=0.5,
         adv_reward_weight_adversarial=1.0,
         adv_bonus_only=False,
+        adv_target_hit_responsibility_reward=False,
+        adv_target_hit_reward_min_responsibility=0.0,
+        adv_target_hit_low_responsibility_threshold=-1.0,
+        adv_target_hit_low_responsibility_behavior=0,
         min_waypoint_spacing=20.0,
         max_waypoint_spacing=60.0,
         num_target_waypoints=3,
@@ -249,6 +253,10 @@ class Drive(pufferlib.PufferEnv):
         self.adv_reward_weight_drive = adv_reward_weight_drive
         self.adv_reward_weight_adversarial = adv_reward_weight_adversarial
         self.adv_bonus_only = adv_bonus_only
+        self.adv_target_hit_responsibility_reward = bool(adv_target_hit_responsibility_reward)
+        self.adv_target_hit_reward_min_responsibility = float(adv_target_hit_reward_min_responsibility)
+        self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
+        self.adv_target_hit_low_responsibility_behavior = int(adv_target_hit_low_responsibility_behavior)
         self.goal_radius = goal_radius
         self.min_waypoint_spacing = min_waypoint_spacing
         self.max_waypoint_spacing = max_waypoint_spacing
@@ -806,6 +814,10 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_drive": self.adv_reward_weight_drive,
             "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
             "adv_bonus_only": self.adv_bonus_only,
+            "adv_target_hit_responsibility_reward": self.adv_target_hit_responsibility_reward,
+            "adv_target_hit_reward_min_responsibility": self.adv_target_hit_reward_min_responsibility,
+            "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
+            "adv_target_hit_low_responsibility_behavior": self.adv_target_hit_low_responsibility_behavior,
             "collision_behavior": self.collision_behavior,
             "ignore_target_collision_behavior": bool(self.ignore_target_collision_behavior),
             "remove_target_on_collision_or_offroad": bool(self.remove_target_on_collision_or_offroad),
