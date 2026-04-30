@@ -1843,6 +1843,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
     env->adv_reward_weight_adversarial = (float)unpack(kwargs, "adv_reward_weight_adversarial");
     env->adv_bonus_only = (bool)unpack(kwargs, "adv_bonus_only");
+    env->adv_target_hit_responsibility_reward = (bool)unpack(kwargs, "adv_target_hit_responsibility_reward");
+    env->adv_target_hit_reward_min_responsibility = (float)unpack(kwargs, "adv_target_hit_reward_min_responsibility");
+    env->adv_target_hit_low_responsibility_threshold =
+        (float)unpack(kwargs, "adv_target_hit_low_responsibility_threshold");
+    env->adv_target_hit_low_responsibility_behavior = (int)unpack(kwargs, "adv_target_hit_low_responsibility_behavior");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->ignore_target_collision_behavior = (bool)unpack(kwargs, "ignore_target_collision_behavior");
     env->remove_target_on_collision_or_offroad = (bool)unpack(kwargs, "remove_target_on_collision_or_offroad");
@@ -1955,6 +1960,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);
+    assign_to_dict(dict, "target_hit_count", log->target_hit_count);
+    assign_to_dict(dict, "target_hit_responsibility", log->target_hit_responsibility);
+    assign_to_dict(dict, "target_hit_low_responsibility_rate", log->target_hit_low_responsibility_rate);
     assign_to_dict(dict, "adv_drive_reward_low", log->adv_drive_reward_low);
     assign_to_dict(dict, "adv_drive_reward_mid", log->adv_drive_reward_mid);
     assign_to_dict(dict, "adv_drive_reward_high", log->adv_drive_reward_high);

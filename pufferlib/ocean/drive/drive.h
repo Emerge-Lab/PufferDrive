@@ -182,6 +182,9 @@ struct Log {
     float target_collision_severity;
     float target_collision_responsibility;
     float target_collision_impact_zone;
+    float target_hit_count;
+    float target_hit_responsibility;
+    float target_hit_low_responsibility_rate;
     float adv_drive_reward_low;
     float adv_drive_reward_mid;
     float adv_drive_reward_high;
@@ -323,6 +326,16 @@ struct Drive {
     float adv_reward_weight_drive;
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
+    int adv_target_hit_responsibility_reward;
+    float adv_target_hit_reward_min_responsibility;
+    float adv_target_hit_low_responsibility_threshold;
+    int adv_target_hit_low_responsibility_behavior;
+    int target_hit_this_step;
+    int target_hit_hitter_idx_this_step;
+    float target_hit_responsibility_this_step;
+    float target_hit_count_episode;
+    float target_hit_responsibility_episode;
+    float target_hit_low_responsibility_count_episode;
     float current_adv_reward_weight_drive;
     char *map_name;
     float world_mean_x;
@@ -462,6 +475,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
     float target_collision_impact_zone = log->target_collision_impact_zone;
+    float target_hit_count = log->target_hit_count;
+    float target_hit_responsibility = log->target_hit_responsibility;
+    float target_hit_low_responsibility_rate = log->target_hit_low_responsibility_rate;
     float adv_drive_reward_low = log->adv_drive_reward_low;
     float adv_drive_reward_mid = log->adv_drive_reward_mid;
     float adv_drive_reward_high = log->adv_drive_reward_high;
@@ -501,6 +517,12 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_responsibility = target_collision_responsibility / target_n;
         log->target_collision_impact_zone = target_collision_impact_zone / target_n;
     }
+
+    if (target_hit_count > 0.0f) {
+        log->target_hit_responsibility = target_hit_responsibility / target_hit_count;
+        log->target_hit_low_responsibility_rate = target_hit_low_responsibility_rate / target_hit_count;
+    }
+    log->target_hit_count = target_hit_count;
 
     if (adv_bucket_count_low > 0.0f) {
         log->adv_drive_reward_low = adv_drive_reward_low / adv_bucket_count_low;
@@ -3110,6 +3132,9 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
 static void add_log(Drive *env) {
     Log episode_log = {0};
     build_episode_log_contributions(env, &episode_log);
+    episode_log.target_hit_count += env->target_hit_count_episode;
+    episode_log.target_hit_responsibility += env->target_hit_responsibility_episode;
+    episode_log.target_hit_low_responsibility_rate += env->target_hit_low_responsibility_count_episode;
     accumulate_log_totals(&env->log, &episode_log);
     enqueue_completed_episode_summary(env, &episode_log);
 }
@@ -4055,6 +4080,9 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // Core Simulation Functions
 // ========================================
 
+static void record_target_hit_responsibility(Drive *env, int agent_idx, int other_agent_idx, float normal_x,
+                                             float normal_y);
+
 static void compute_metrics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
@@ -4285,6 +4313,10 @@ static void compute_metrics(Drive *env, int agent_idx) {
         }
         int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
         bool target_involved_collision = agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx;
+        if (episode_started && target_involved_collision) {
+            record_target_hit_responsibility(env, agent_idx, car_collided_with_index, collision_normal_x,
+                                             collision_normal_y);
+        }
         if (episode_started && env->remove_target_on_collision_or_offroad && target_involved_collision &&
             target_agent_idx >= 0) {
             env->agents[target_agent_idx].removed = 1;
@@ -4327,6 +4359,37 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     return;
+}
+
+static void record_target_hit_responsibility(Drive *env, int agent_idx, int other_agent_idx, float normal_x,
+                                             float normal_y) {
+    if (env->active_agent_count <= 0)
+        return;
+
+    int target_agent_idx = env->active_agent_indices[0];
+    if (agent_idx != target_agent_idx && other_agent_idx != target_agent_idx)
+        return;
+
+    int hitter_idx = (agent_idx == target_agent_idx) ? other_agent_idx : agent_idx;
+    if (!is_adversarial_agent(env, hitter_idx))
+        return;
+
+    Agent *hitter = &env->agents[hitter_idx];
+    Agent *target = &env->agents[target_agent_idx];
+    float hitter_responsibility = 0.0f;
+    if (agent_idx == hitter_idx) {
+        evaluate_collision_pair(hitter, target, normal_x, normal_y, NULL, &hitter_responsibility);
+    } else {
+        evaluate_collision_pair(target, hitter, normal_x, normal_y, NULL, &hitter_responsibility);
+        hitter_responsibility = 1.0f - hitter_responsibility;
+    }
+
+    float target_responsibility = fmaxf(0.0f, fminf(1.0f, 1.0f - hitter_responsibility));
+    if (!env->target_hit_this_step || target_responsibility > env->target_hit_responsibility_this_step) {
+        env->target_hit_this_step = 1;
+        env->target_hit_hitter_idx_this_step = hitter_idx;
+        env->target_hit_responsibility_this_step = target_responsibility;
+    }
 }
 
 static RewardTerms compute_rewards(Drive *env, int i) {
@@ -5234,6 +5297,13 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
 }
 
 void c_reset(Drive *env) {
+    env->target_hit_this_step = 0;
+    env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_responsibility_this_step = 0.0f;
+    env->target_hit_count_episode = 0.0f;
+    env->target_hit_responsibility_episode = 0.0f;
+    env->target_hit_low_responsibility_count_episode = 0.0f;
+
     // Replay envs should expose the constructor-time initial state on the first reset.
     // Gigaflow envs need to fully respawn so explicit reset seeds affect the first scenario.
     if (env->timestep == 0 && env->simulation_mode != SIMULATION_GIGAFLOW) {
@@ -5319,6 +5389,9 @@ void c_step(Drive *env) {
     memset(reward_terms, 0, env->active_agent_count * sizeof(RewardTerms));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    env->target_hit_this_step = 0;
+    env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_responsibility_this_step = 0.0f;
 
     // Update masks: exclude stopped/removed agents AND erratic drivers (blind/phantom-braker)
     // from the training rollout buffer, per GIGAFLOW paper Appendix B.4.
@@ -5370,9 +5443,24 @@ void c_step(Drive *env) {
         reward_terms[i] = compute_rewards(env, i);
     }
 
+    if (env->target_hit_this_step) {
+        env->target_hit_count_episode += 1.0f;
+        env->target_hit_responsibility_episode += env->target_hit_responsibility_this_step;
+        if (env->adv_target_hit_low_responsibility_threshold >= 0.0f &&
+            env->target_hit_responsibility_this_step < env->adv_target_hit_low_responsibility_threshold) {
+            env->target_hit_low_responsibility_count_episode += 1.0f;
+        }
+    }
+
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
         float target_reward = total_reward_terms(&reward_terms[0]);
+        float target_hit_reward_multiplier = 1.0f;
+        if (env->adv_target_hit_responsibility_reward && env->target_hit_this_step) {
+            float responsibility = env->target_hit_responsibility_this_step;
+            target_hit_reward_multiplier =
+                (responsibility >= env->adv_target_hit_reward_min_responsibility) ? responsibility : 0.0f;
+        }
 
         for (int i = 1; i < env->active_agent_count; i++) {
             reward_terms[i].collision *= env->adv_reward_weight_collision;
@@ -5386,6 +5474,7 @@ void c_step(Drive *env) {
 
             // Assign adversarial reward.
             float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;
+            adversarial_bonus *= target_hit_reward_multiplier;
             reward_terms[i].adversarial = adversarial_bonus * env->adv_reward_weight_adversarial;
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
@@ -5403,6 +5492,29 @@ void c_step(Drive *env) {
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             env->terminals[i] = 1;
         }
+    }
+
+    int bad_target_hit = env->target_hit_this_step && env->adv_target_hit_low_responsibility_threshold >= 0.0f &&
+                         env->target_hit_responsibility_this_step < env->adv_target_hit_low_responsibility_threshold;
+    if (bad_target_hit && (env->adv_target_hit_low_responsibility_behavior == 1 ||
+                           env->adv_target_hit_low_responsibility_behavior == 2)) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            env->truncations[i] = 0;
+            env->terminals[i] = 0;
+            if (env->adv_target_hit_low_responsibility_behavior == 1) {
+                env->terminals[i] = 1;
+            } else if (env->adv_target_hit_low_responsibility_behavior == 2) {
+                if (agent_idx == env->target_hit_hitter_idx_this_step) {
+                    env->terminals[i] = 1;
+                } else {
+                    env->truncations[i] = 1;
+                }
+            }
+        }
+        add_log(env);
+        c_reset(env);
+        return;
     }
 
     // -> 3. Check for episode truncation
