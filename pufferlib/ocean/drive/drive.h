@@ -2234,7 +2234,7 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
-static void compute_goals(Drive *env, int agent_idx) {
+static int compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     struct Path *path = agent->path;
 
@@ -2242,7 +2242,7 @@ static void compute_goals(Drive *env, int agent_idx) {
     if (path == NULL || path->num_waypoints == 0) {
         printf("[GIGAFLOW WARNING] -> Agent %d has no valid path\n", agent_idx);
         agent->removed = 1;
-        return;
+        return 0;
     }
 
     int num_target_waypoints = env->num_target_waypoints;
@@ -2273,13 +2273,13 @@ static void compute_goals(Drive *env, int agent_idx) {
             if (iter > 3) {
                 printf("[GIGAFLOW WARNING] -> Max iterations in compute_goals for agent %d\n", agent_idx);
                 agent->removed = 1;
-                return;
+                return 0;
             }
             if (env->simulation_mode == SIMULATION_GIGAFLOW) {
                 int route_ok = compute_new_route(env, agent_idx, path->waypoints[base_idx].lane_idx);
                 if (route_ok == 0) {
                     agent->removed = 1;
-                    return;
+                    return 0;
                 }
                 path = agent->path;
                 continue;
@@ -2309,11 +2309,12 @@ static void compute_goals(Drive *env, int agent_idx) {
         agent->goal_position_x = agent->goal_positions_x[0];
         agent->goal_position_y = agent->goal_positions_y[0];
         agent->goal_position_z = agent->goal_positions_z[0];
-        return;
+        return 1;
     }
 
     printf("[GIGAFLOW ERROR] -> Failed to compute goals for agent %d after multiple attempts\n", agent_idx);
     agent->removed = 1;
+    return 0;
 }
 
 // ========================================
@@ -3363,6 +3364,8 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->type = VEHICLE;
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
+    agent->stopped = 0;
+    agent->removed = 0;
 
     // Default vehicle dimensions
     // length: [0.8, 7.0] m
@@ -3471,7 +3474,10 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     }
 
     // Compute initial goal
-    compute_goals(env, agent_idx);
+    if (!compute_goals(env, agent_idx) || agent->removed) {
+        printf("[GIGAFLOW WARNING] -> Failed to compute initial goals for agent %d\n", agent_idx);
+        return 0;
+    }
 
     return 1; // Success
 }
