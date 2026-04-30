@@ -21,7 +21,7 @@ from copy import deepcopy
 import numpy as np
 
 import pufferlib
-
+import torch
 
 try:
     from pufferlib import _C
@@ -452,31 +452,104 @@ def sweep(env_name, args=None, pareto=False):
 def eval(env_name, args=None, load_path=None):
     """Evaluate a trained policy. Supports both default torch and explicit --cuda backends."""
     args = args or load_config(env_name)
-    args["reset_state"] = False
-    args["train"]["horizon"] = 1
+    args["env"]["termination_mode"] = 0
 
-    backend = _resolve_backend(args)
-    pufferl = backend.create_pufferl(args)
+    wosac_enabled = args["eval"]["wosac_realism_eval"]
+    human_replay_enabled = args["eval"]["human_replay_eval"]
 
-    # Resolve load path
-    load_path = load_path or args.get("load_model_path")
-    if load_path == "latest":
-        checkpoint_dir = args["checkpoint_dir"]
-        pattern = os.path.join(checkpoint_dir, args["env_name"], "**", "*.bin")
-        candidates = glob.glob(pattern, recursive=True)
-        if not candidates:
-            raise FileNotFoundError(f"No .bin checkpoints found in {checkpoint_dir}/{args['env_name']}/")
-        load_path = max(candidates, key=os.path.getctime)
+    if wosac_enabled:
+        # TODO: port over from latest in 3.0
+        pass
 
-    if load_path is not None:
-        backend.load_weights(pufferl, load_path)
-        print(f"Loaded weights from {load_path}")
+    elif human_replay_enabled:
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        dataset_name = args["env"]["map_dir"].split("/")[-1]
+        print(f"Running human replay evaluation with {dataset_name} dataset.\n")
+        from pufferlib.ocean.benchmark.evaluator import HumanReplayEvaluator
 
-    while True:
-        backend.render(pufferl, 0)
-        backend.rollouts(pufferl)
+        backend = args["eval"].get("backend", "PufferEnv")
+        args["env"]["map_dir"] = args["eval"]["map_dir"]
+        args["env"]["num_agents"] = args["eval"]["human_replay_num_agents"]
+        args["env"]["num_maps"] = len([f for f in os.listdir(args["env"]["map_dir"]) if f.endswith(".bin")])
 
-    backend.close(pufferl)
+        args["vec"] = dict(backend=backend, num_envs=1)
+        args["env"]["control_mode"] = args["eval"]["human_replay_control_mode"]
+        args["env"]["scenario_length"] = 91  # WOMD scenario length
+
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        print(f"Effective number of scenarios used: {len(vecenv.driver_env.agent_offsets) - 1}")
+
+        evaluator = HumanReplayEvaluator(args)
+
+        # Run rollouts with human replays
+        results = evaluator.rollout(args, vecenv, policy)
+
+        import json
+
+        print("HUMAN_REPLAY_METRICS_START")
+        print(json.dumps(results))
+        print("HUMAN_REPLAY_METRICS_END")
+
+        return results
+
+    else:  # Standard evaluation: Render
+        backend = args["vec"]["backend"]
+        if backend != "PufferEnv":
+            backend = "Serial"
+
+        args["vec"] = dict(backend=backend, num_envs=1)
+        vecenv = vecenv or load_env(env_name, args)
+        policy = policy or load_policy(args, vecenv, env_name)
+
+        ob, info = vecenv.reset()
+        driver = vecenv.driver_env
+        num_agents = vecenv.observation_space.shape[0]
+        device = args["train"]["device"]
+
+        state = {}
+        if args["train"]["use_rnn"]:
+            state = dict(
+                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
+            )
+
+        frames = []
+        while True:
+            render = driver.render()
+            if len(frames) < args["save_frames"]:
+                frames.append(render)
+
+            # Screenshot Ocean envs with F12, gifs with control + F12
+            if driver.render_mode == "ansi":
+                print("\033[0;0H" + render + "\n")
+                time.sleep(1 / args["fps"])
+            elif driver.render_mode == "rgb_array":
+                pass
+                # import cv2
+                # render = cv2.cvtColor(render, cv2.COLOR_RGB2BGR)
+                # cv2.imshow('frame', render)
+                # cv2.waitKey(1)
+                # time.sleep(1/args['fps'])
+
+            with torch.no_grad():
+                ob = torch.as_tensor(ob).to(device)
+                logits, value = policy.forward_eval(ob, state)
+                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            ob = vecenv.step(action)[0]
+
+            if len(frames) > 0 and len(frames) == args["save_frames"]:
+                import imageio
+
+                imageio.mimsave(args["gif_path"], frames, fps=args["fps"], loop=0)
+                frames.append("Done")
+
 
 
 def load_config(env_name):
