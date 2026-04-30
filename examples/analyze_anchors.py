@@ -228,7 +228,7 @@ def evaluate_anchors(anchor_dir: str, out_path: str, val_maps: int = VAL_NUM_MAP
 
     # Compute obs_dim from binding constants (same formula as Drive.__init__)
     obs_dim = (
-        binding.EGO_FEATURES
+        binding.EGO_FEATURES_DELTA_LOCAL
         + (binding.MAX_AGENTS - 1) * binding.PARTNER_FEATURES
         + binding.MAX_ROAD_SEGMENT_OBSERVATIONS * binding.ROAD_FEATURES
     )
@@ -257,7 +257,7 @@ def evaluate_anchors(anchor_dir: str, out_path: str, val_maps: int = VAL_NUM_MAP
             partner_features=binding.PARTNER_FEATURES,
             max_road_objects=binding.MAX_ROAD_SEGMENT_OBSERVATIONS,
             road_features=binding.ROAD_FEATURES,
-            ego_dim=binding.EGO_FEATURES,
+            ego_dim=binding.EGO_FEATURES_DELTA_LOCAL,
             hidden_size=512,
             output_sizes=output_sizes,
             device=str(device),

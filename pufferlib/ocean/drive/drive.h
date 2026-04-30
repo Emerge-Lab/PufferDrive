@@ -112,6 +112,7 @@
 // Ego features depend on dynamics model
 #define EGO_FEATURES 12
 #define EGO_FEATURES_JERK 15
+#define EGO_FEATURES_DELTA_LOCAL 14
 
 #define LAMBDA_CONDITIONING_IDX 0
 #define REWARD_COLLISION_IDX 1
@@ -1631,7 +1632,14 @@ void c_close(Drive *env) {
 
 void allocate(Drive *env) {
     init(env);
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
+    int ego_dim;
+    if (env->dynamics_model == JERK)
+        ego_dim = EGO_FEATURES_JERK;
+    else if (env->dynamics_model == DELTA_LOCAL)
+        ego_dim = EGO_FEATURES_DELTA_LOCAL;
+    else
+        ego_dim = EGO_FEATURES;
+
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     env->observations = (float *)calloc(env->active_agent_count * max_obs, sizeof(float));
 
@@ -2011,7 +2019,14 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 }
 
 void compute_observations(Drive *env) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
+    int ego_dim;
+    if (env->dynamics_model == JERK)
+        ego_dim = EGO_FEATURES_JERK;
+    else if (env->dynamics_model == DELTA_LOCAL)
+        ego_dim = EGO_FEATURES_DELTA_LOCAL;
+    else
+        ego_dim = EGO_FEATURES;
+
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
@@ -2058,6 +2073,12 @@ void compute_observations(Drive *env) {
             obs[13] = 0.0f;
             // Add normalized entity type (VEHICLE=1, PEDESTRIAN=2, CYCLIST=3)
             obs[14] = ego_entity->type / 3.0f;
+        } else if (env->dynamics_model == DELTA_LOCAL) {
+            obs[10] = ego_entity->type / 3.0f;
+            // Previous action conditioning, normalized to roughly [-1, 1]
+            obs[11] = ego_entity->prev_action_dx / DELTA_MAX_DX;
+            obs[12] = ego_entity->prev_action_dy / DELTA_MAX_DY;
+            obs[13] = ego_entity->prev_action_dyaw / (float)DELTA_MAX_DYAW;
         } else {
             obs[10] = 0.0f; // Can be deleted later
             obs[11] = ego_entity->type / 3.0f;
@@ -2481,7 +2502,7 @@ void c_step(Drive *env) {
             float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
             float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-            const float jerk_penalty_coef = 0.007f;
+            const float jerk_penalty_coef = 0.01f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
             env->rewards[i] += r_jerk;
@@ -2581,7 +2602,13 @@ void c_step(Drive *env) {
 }
 
 void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float *expert_obs_out) {
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
+    int ego_dim;
+    if (env->dynamics_model == JERK)
+        ego_dim = EGO_FEATURES_JERK;
+    else if (env->dynamics_model == DELTA_LOCAL)
+        ego_dim = EGO_FEATURES_DELTA_LOCAL;
+    else
+        ego_dim = EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     int saved_control_mode = env->control_mode;
@@ -3076,7 +3103,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES;
+    int ego_dim;
+    if (env->dynamics_model == JERK)
+        ego_dim = EGO_FEATURES_JERK;
+    else if (env->dynamics_model == DELTA_LOCAL)
+        ego_dim = EGO_FEATURES_DELTA_LOCAL;
+    else
+        ego_dim = EGO_FEATURES;
     int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     float *agent_obs = &observations[agent_index][0];

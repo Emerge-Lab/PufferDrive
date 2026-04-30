@@ -111,7 +111,13 @@ class Drive(pufferlib.PufferEnv):
         self.async_resets = bool(async_resets)
 
         # Observation space calculation
-        self.ego_features = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES
+
+        if dynamics_model == "jerk":
+            self.ego_features = binding.EGO_FEATURES_JERK
+        elif dynamics_model == "delta_local":
+            self.ego_features = binding.EGO_FEATURES_DELTA_LOCAL
+        else:
+            self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
         # These need to be defined in C, since they determine the shape of the arrays
@@ -537,6 +543,12 @@ class Drive(pufferlib.PufferEnv):
         act_np = self.expert_actions_discrete.numpy()
         self.total_unique_samples = len({self._hash_pair(obs_np[i], act_np[i]) for i in range(len(obs_np))})
         self.total_num_samples = self.expert_actions_discrete.shape[0]
+        print("trajectory_length:", trajectory_length)
+        print("num_agents:", self.num_agents)
+        print("num_obs:", self.num_obs)
+        print("ego_features:", self.ego_features)
+        print("expected buffer floats:", trajectory_length * self.num_agents * self.num_obs)
+        print("expert_obs shape:", expert_observations_full.shape, "nbytes:", expert_observations_full.nbytes)
 
         return self.total_num_samples, self.total_unique_samples
 
@@ -1143,9 +1155,9 @@ def test_performance(timeout=10, atn_cache=12, num_agents=12):
 
 if __name__ == "__main__":
     # analyze_action_space(data_folder="data/processed/training_50k", max_maps=10000)
-    # test_performance()
+    test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training_50k")
+    # process_all_maps(data_folder="data/processed/training_50k")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
