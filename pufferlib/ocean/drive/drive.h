@@ -158,6 +158,11 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define DELTA_MAX_DY 0.1f
 #define DELTA_MAX_DYAW M_PI / 6.0
 
+// Kinematic constraint parameters for delta-local model
+#define A_LONG_MAX 8.0f    // m/s^2  — max longitudinal accel/brake
+#define MAX_STEER 0.55f    // rad    — max effective steering angle
+#define YAW_ACCEL_MAX 4.0f // rad/s^2 — max change in yaw rate per second
+
 static int COLLECT_EXPERT_TELEPORT = 1;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
 static float STEERING_VALUES[NUM_STEER_BINS];
@@ -744,7 +749,10 @@ void set_start_position(Drive *env) {
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = e->length;
-        e->prev_action_dx = 0.0f;
+        // Initialize prev_action_* from the agent's actual starting motion so the
+        // kinematic constraints don't artificially throttle step 1.
+        float speed_init = e->vx * e->heading_x + e->vy * e->heading_y;
+        e->prev_action_dx = speed_init * env->dt;
         e->prev_action_dy = 0.0f;
         e->prev_action_dyaw = 0.0f;
     }
@@ -1788,6 +1796,47 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         action_dy = clip(action_dy, -DELTA_MAX_DY, DELTA_MAX_DY);
         action_dyaw = normalize_heading(action_dyaw);
 
+        // ----- Kinematic constraints (delta-local) -----
+        // Each constraint operates on the action AFTER prior constraints have clipped it.
+        // prev_action_* stores the previously-executed (post-constraint) values.
+
+        // A. Longitudinal acceleration bound.
+        //    Implied previous speed = prev_action_dx / dt. Limit change to ±A_LONG_MAX*dt.
+        {
+            float prev_speed = agent->prev_action_dx / env->dt;
+            float speed_lo = prev_speed - A_LONG_MAX * env->dt;
+            float speed_hi = prev_speed + A_LONG_MAX * env->dt;
+            float new_speed_proposed = action_dx / env->dt;
+            float new_speed = clip(new_speed_proposed, speed_lo, speed_hi);
+            action_dx = new_speed * env->dt;
+        }
+
+        // B. Lateral motion bicycle envelope: |dy| ≤ |dx| * tan(MAX_STEER).
+        //    Eliminates lateral sliding and side-shimmy at low / zero forward speed.
+        {
+            float max_dy = fabsf(action_dx) * tanf(MAX_STEER);
+            action_dy = clip(action_dy, -max_dy, max_dy);
+        }
+
+        // C. Yaw rate kinematic envelope: |dyaw| ≤ |dx / wheelbase| * tan(MAX_STEER).
+        //    Yaw scales with forward motion — no standing-still pivots.
+        {
+            float max_dyaw = fabsf(action_dx / agent->wheelbase) * tanf(MAX_STEER);
+            action_dyaw = clip(action_dyaw, -max_dyaw, max_dyaw);
+        }
+
+        // D. Yaw acceleration bound.
+        //    Implied previous yaw rate = prev_action_dyaw / dt. Limit change to ±YAW_ACCEL_MAX*dt.
+        //    Prevents rapid left-right flip-flop within the kinematic envelope.
+        {
+            float prev_yaw_rate = agent->prev_action_dyaw / env->dt;
+            float yr_lo = prev_yaw_rate - YAW_ACCEL_MAX * env->dt;
+            float yr_hi = prev_yaw_rate + YAW_ACCEL_MAX * env->dt;
+            float new_yaw_rate_proposed = action_dyaw / env->dt;
+            float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
+            action_dyaw = new_yaw_rate * env->dt;
+        }
+
         float jerk_dx = action_dx - agent->prev_action_dx;
         float jerk_dy = action_dy - agent->prev_action_dy;
         float jerk_dyaw = normalize_heading(action_dyaw - agent->prev_action_dyaw);
@@ -2502,7 +2551,7 @@ void c_step(Drive *env) {
             float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
             float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-            const float jerk_penalty_coef = 0.01f;
+            const float jerk_penalty_coef = 0.008f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
             env->rewards[i] += r_jerk;
