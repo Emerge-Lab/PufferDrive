@@ -677,7 +677,7 @@ class PuffeRL:
         done_training = self.global_step >= config["total_timesteps"]
 
         # Intermittent evaluations
-        if self.epoch > 250 and self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
+        if self.epoch > 100 and self.epoch % self.config["eval"]["eval_interval"] == 0 or done_training:
             human_replay_eval = self.config["eval"]["human_replay_eval"]
             self_play_eval = self.config["eval"]["self_play_eval"]
 
