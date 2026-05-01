@@ -4213,6 +4213,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
         Camera3D camera = {0};
 
+        bool sdc_zoom = false;
         if (view_mode == VIEW_MODE_SIM_STATE) {
             if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY) {
                 // Follow the SDC agent (zoomed-in tracking shot)
@@ -4222,6 +4223,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 camera.up = (Vector3){0.0f, -1.0f, 0.0f};
                 camera.projection = CAMERA_ORTHOGRAPHIC;
                 camera.fovy = 75.0f;
+                sdc_zoom = true;
             } else {
                 // Orthographic bird's-eye view over the entire map.
                 float map_width = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
@@ -4280,6 +4282,35 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
             // Draw timestep
             DrawText(TextFormat("t=%d", env->timestep), 10, 10, 26, PUFF_WHITE);
+
+            // Velocity bar for SDC zoom view
+            if (sdc_zoom) {
+                Entity *sdc = &env->entities[env->sdc_track_index];
+                float speed = sqrtf(sdc->vx * sdc->vx + sdc->vy * sdc->vy);
+                float speed_frac = speed / (MAX_SPEED - 40);
+                if (speed_frac > 1.0f)
+                    speed_frac = 1.0f;
+                if (speed_frac < 0.0f)
+                    speed_frac = 0.0f;
+
+                int bar_w = 30;
+                int bar_h = 260;
+                int bar_x = (int)client->width - bar_w - 60;
+                int bar_y = ((int)client->height - bar_h) / 2;
+                int fill_h = (int)(bar_h * speed_frac);
+
+                // Background track + border
+                DrawRectangle(bar_x, bar_y, bar_w, bar_h, Fade(PUFF_WHITE, 0.15f));
+                DrawRectangleLines(bar_x, bar_y, bar_w, bar_h, PUFF_WHITE);
+                // Fill from bottom up, in the same blue used for the SDC agent
+                DrawRectangle(bar_x, bar_y + bar_h - fill_h, bar_w, fill_h, BLUE);
+
+                // Speed label below bar (m/s)
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.1f m/s", speed);
+                int tw = MeasureText(buf, 27);
+                DrawText(buf, bar_x + bar_w / 2 - tw / 2, bar_y + bar_h + 10, 27, PUFF_WHITE);
+            }
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,
