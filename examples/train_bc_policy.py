@@ -27,7 +27,7 @@ import pufferlib.models
 
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
-NUM_MAPS = 67
+NUM_MAPS = 12000
 MAP_DIR = "resources/drive/binaries/training_50k"
 
 # Defined in drive.h
@@ -54,8 +54,8 @@ TRAIN_DEFAULTS = {
     "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 100,  # Resample after k full passes through the dataset
-    "epochs": 1000,
+    "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
+    "epochs": 2000,
     "num_maps": NUM_MAPS,
     "eval_frequency": 100,  # Validation dataset
     "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
