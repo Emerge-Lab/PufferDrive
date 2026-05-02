@@ -781,6 +781,20 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
+            tmp = PyLong_FromLong(a->controller);
+            if (!tmp) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "controller", tmp) < 0) {
+                Py_DECREF(tmp);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(tmp);
+
             tmp = PyLong_FromLong(a->mark_as_expert);
             if (!tmp) {
                 Py_DECREF(agent);
@@ -1887,6 +1901,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->timestep = init_steps;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->sdc_controller = (int)unpack(kwargs, "sdc_controller");
+    env->non_sdc_controller = (int)unpack(kwargs, "non_sdc_controller");
     env->simulation_mode = (int)unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");

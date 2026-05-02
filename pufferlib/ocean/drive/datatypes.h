@@ -216,6 +216,7 @@ struct Agent {
     int num_goals_reached;
     int active_agent;
     int mark_as_expert;
+    int controller;
     float cumulative_displacement;
     int displacement_sample_count;
     float path_progression;

@@ -178,6 +178,8 @@ class Drive(pufferlib.PufferEnv):
         num_eval_scenarios=16,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        sdc_controller="policy",
+        non_sdc_controller="policy",
         map_dir=None,
         maps=None,
         targeted_spawn_mode=0,
@@ -373,6 +375,8 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.sdc_controller_str = sdc_controller
+        self.non_sdc_controller_str = non_sdc_controller
         self.simulation_mode_str = simulation_mode
         self.map_dir = map_dir
         self.maps = maps
@@ -401,6 +405,24 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"control_mode must be one of 'control_vehicles', 'control_wosac', or 'control_agents'. Got: {self.control_mode_str}"
             )
+
+        controller_values = {
+            "static": binding.CONTROLLER_STATIC,
+            "policy": binding.CONTROLLER_POLICY,
+            "replay": binding.CONTROLLER_REPLAY,
+            "idm": binding.CONTROLLER_IDM,
+        }
+        if self.sdc_controller_str not in controller_values:
+            raise ValueError(
+                f"sdc_controller must be one of 'static', 'policy', 'replay', or 'idm'. Got: {self.sdc_controller_str}"
+            )
+        if self.non_sdc_controller_str not in controller_values:
+            raise ValueError(
+                f"non_sdc_controller must be one of 'static', 'policy', 'replay', or 'idm'. Got: {self.non_sdc_controller_str}"
+            )
+        self.sdc_controller = controller_values[self.sdc_controller_str]
+        self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
+
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
@@ -851,6 +873,8 @@ class Drive(pufferlib.PufferEnv):
             "init_steps": self.init_steps,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
+            "sdc_controller": self.sdc_controller,
+            "non_sdc_controller": self.non_sdc_controller,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
