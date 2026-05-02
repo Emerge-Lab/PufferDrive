@@ -704,7 +704,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
     # Validation env: same config but uses a held-out set of maps
     val_args = build_env_args(dynamics_model, num_maps=10000)
-    val_args["env"]["map_dir"] = "resources/drive/binaries/validation"
+    val_args["env"]["map_dir"] = "resources/drive/binaries/training"  # TODO: Temp
     val_env = load_env("puffer_drive", val_args)
     val_driver_env = val_env.driver_env
 
