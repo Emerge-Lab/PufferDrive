@@ -21,6 +21,15 @@ typedef struct {
     float leader_speed;
 } IDMLeader;
 
+typedef struct {
+    int valid;
+    int route_idx;
+    int lane_idx;
+    int segment_idx;
+    float t;
+    float dist_sq;
+} IDMLaneProjection;
+
 static inline IDMLeader idm_no_leader(void) {
     IDMLeader leader = {0};
     leader.leader_agent_idx = -1;
@@ -185,14 +194,30 @@ static IDMLeader idm_find_leader_by_corridor(Drive *env, int ego_idx) {
     return best;
 }
 
-static float idm_desired_speed(Drive *env, Agent *agent) {
-    float desired_speed = IDM_DEFAULT_DESIRED_SPEED;
-    if (agent->current_lane_idx != -1) {
-        float lane_speed_limit = env->road_elements[agent->current_lane_idx].speed_limit;
-        if (lane_speed_limit > 0.0f) {
-            desired_speed = lane_speed_limit;
-        }
+static inline float idm_lane_speed_limit(Drive *env, int lane_idx) {
+    if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+        return 0.0f;
     }
+    return env->road_elements[lane_idx].speed_limit;
+}
+
+static float idm_desired_speed(Drive *env, Agent *agent) {
+    float desired_speed = idm_lane_speed_limit(env, agent->current_lane_idx);
+
+    if (desired_speed <= 0.0f && agent->route != NULL && agent->route_length > 0) {
+        int route_idx = agent->current_route_index;
+        if (route_idx < 0) {
+            route_idx = 0;
+        } else if (route_idx >= agent->route_length) {
+            route_idx = agent->route_length - 1;
+        }
+        desired_speed = idm_lane_speed_limit(env, agent->route[route_idx]);
+    }
+
+    if (desired_speed <= 0.0f) {
+        desired_speed = IDM_DEFAULT_DESIRED_SPEED;
+    }
+
     return clip(desired_speed, 1.0f, MAX_SPEED);
 }
 
@@ -212,6 +237,194 @@ static float idm_compute_acceleration(Drive *env, Agent *agent, IDMLeader leader
     }
 
     return IDM_MAX_ACCEL * (1.0f - free_road_term - leader_term);
+}
+
+static IDMLaneProjection idm_project_to_route_lanes(Drive *env, Agent *agent) {
+    IDMLaneProjection best = {0};
+    best.route_idx = 0;
+    best.lane_idx = -1;
+    best.segment_idx = 0;
+    best.t = 0.0f;
+    best.dist_sq = INFINITY;
+
+    if (agent->route == NULL || agent->route_length <= 0) {
+        return best;
+    }
+
+    int start_route = agent->current_route_index - 1;
+    if (start_route < 0) {
+        start_route = 0;
+    }
+    int end_route = agent->current_route_index + 4;
+    if (end_route > agent->route_length) {
+        end_route = agent->route_length;
+    }
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (int route_idx = start_route; route_idx < end_route; route_idx++) {
+            int lane_idx = agent->route[route_idx];
+            if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+                continue;
+            }
+            RoadMapElement *lane = &env->road_elements[lane_idx];
+            if (lane->segment_length < 2) {
+                continue;
+            }
+            for (int seg_idx = 0; seg_idx < lane->segment_length - 1; seg_idx++) {
+                float dx = lane->x[seg_idx + 1] - lane->x[seg_idx];
+                float dy = lane->y[seg_idx + 1] - lane->y[seg_idx];
+                float dz = lane->z[seg_idx + 1] - lane->z[seg_idx];
+                float seg_len_sq = dx * dx + dy * dy + dz * dz;
+                if (seg_len_sq < 1e-6f) {
+                    continue;
+                }
+
+                float ax = agent->sim_x - lane->x[seg_idx];
+                float ay = agent->sim_y - lane->y[seg_idx];
+                float az = agent->sim_z - lane->z[seg_idx];
+                float t = (ax * dx + ay * dy + az * dz) / seg_len_sq;
+                t = clip(t, 0.0f, 1.0f);
+
+                float px = lane->x[seg_idx] + t * dx;
+                float py = lane->y[seg_idx] + t * dy;
+                float pz = lane->z[seg_idx] + t * dz;
+                float err_x = agent->sim_x - px;
+                float err_y = agent->sim_y - py;
+                float err_z = agent->sim_z - pz;
+                float dist_sq = err_x * err_x + err_y * err_y + err_z * err_z;
+
+                if (dist_sq < best.dist_sq) {
+                    best.valid = 1;
+                    best.route_idx = route_idx;
+                    best.lane_idx = lane_idx;
+                    best.segment_idx = seg_idx;
+                    best.t = t;
+                    best.dist_sq = dist_sq;
+                }
+            }
+        }
+
+        if (best.valid) {
+            break;
+        }
+
+        start_route = 0;
+        end_route = agent->route_length;
+    }
+
+    return best;
+}
+
+static float idm_lane_segment_length(RoadMapElement *lane, int seg_idx) {
+    float dx = lane->x[seg_idx + 1] - lane->x[seg_idx];
+    float dy = lane->y[seg_idx + 1] - lane->y[seg_idx];
+    float dz = lane->z[seg_idx + 1] - lane->z[seg_idx];
+    return sqrtf(dx * dx + dy * dy + dz * dz);
+}
+
+static int idm_set_pose_on_lane_segment(Drive *env, Agent *agent, int route_idx, int lane_idx, int seg_idx, float t,
+                                        float *old_heading_out) {
+    if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+        return 0;
+    }
+    RoadMapElement *lane = &env->road_elements[lane_idx];
+    if (seg_idx < 0 || seg_idx >= lane->segment_length - 1) {
+        return 0;
+    }
+    t = clip(t, 0.0f, 1.0f);
+
+    if (old_heading_out != NULL) {
+        *old_heading_out = agent->sim_heading;
+    }
+
+    agent->sim_x = lane->x[seg_idx] + t * (lane->x[seg_idx + 1] - lane->x[seg_idx]);
+    agent->sim_y = lane->y[seg_idx] + t * (lane->y[seg_idx + 1] - lane->y[seg_idx]);
+    agent->sim_z = lane->z[seg_idx] + t * (lane->z[seg_idx + 1] - lane->z[seg_idx]);
+    agent->sim_heading = normalize_heading(lane->headings[seg_idx]);
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->current_route_index = route_idx;
+    agent->current_lane_idx = lane_idx;
+    agent->current_lane_geometry_idx = seg_idx;
+    return 1;
+}
+
+static int idm_refresh_route_at_lane_end(Drive *env, int agent_idx, int lane_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    if (lane_idx == -1) {
+        lane_idx = agent->current_lane_idx;
+    }
+    if (lane_idx == -1) {
+        return 0;
+    }
+
+    if (!compute_new_route(env, agent_idx, lane_idx)) {
+        return 0;
+    }
+    return compute_goals(env, agent_idx);
+}
+
+static int idm_advance_along_route_lanes(Drive *env, int agent_idx, float distance, float *old_heading_out) {
+    Agent *agent = &env->agents[agent_idx];
+    if (distance <= 0.0f) {
+        if (old_heading_out != NULL) {
+            *old_heading_out = agent->sim_heading;
+        }
+        return 1;
+    }
+
+    for (int attempt = 0; attempt < 4; attempt++) {
+        IDMLaneProjection projection = idm_project_to_route_lanes(env, agent);
+        if (!projection.valid) {
+            return 0;
+        }
+
+        int route_idx = projection.route_idx;
+        int seg_idx = projection.segment_idx;
+        float t = projection.t;
+        int lane_idx = projection.lane_idx;
+
+        while (route_idx < agent->route_length) {
+            lane_idx = agent->route[route_idx];
+            if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+                return 0;
+            }
+            RoadMapElement *lane = &env->road_elements[lane_idx];
+            if (lane->segment_length < 2) {
+                return 0;
+            }
+
+            while (seg_idx < lane->segment_length - 1) {
+                float seg_len = idm_lane_segment_length(lane, seg_idx);
+                if (seg_len < 1e-6f) {
+                    seg_idx++;
+                    t = 0.0f;
+                    continue;
+                }
+
+                float remaining = (1.0f - t) * seg_len;
+                if (distance <= remaining) {
+                    float next_t = t + distance / seg_len;
+                    return idm_set_pose_on_lane_segment(env, agent, route_idx, lane_idx, seg_idx, next_t,
+                                                        old_heading_out);
+                }
+
+                distance -= remaining;
+                seg_idx++;
+                t = 0.0f;
+            }
+
+            route_idx++;
+            seg_idx = 0;
+            t = 0.0f;
+        }
+
+        if (!idm_refresh_route_at_lane_end(env, agent_idx, lane_idx)) {
+            return 0;
+        }
+    }
+
+    return 0;
 }
 
 static void move_idm(Drive *env, int agent_idx) {
@@ -248,18 +461,21 @@ static void move_idm(Drive *env, int agent_idx) {
     }
     accel = (new_speed - current_speed) / env->dt;
 
-    agent->sim_x += new_speed * env->dt * agent->cos_heading;
-    agent->sim_y += new_speed * env->dt * agent->sin_heading;
-    agent->sim_heading = normalize_heading(agent->sim_heading);
-    agent->cos_heading = cosf(agent->sim_heading);
-    agent->sin_heading = sinf(agent->sim_heading);
+    float old_heading = agent->sim_heading;
+    float distance = new_speed * env->dt;
+    if (!idm_advance_along_route_lanes(env, agent_idx, distance, &old_heading)) {
+        agent->stopped = 1;
+        new_speed = 0.0f;
+        accel = (new_speed - current_speed) / env->dt;
+    }
     agent->sim_vx = new_speed * agent->cos_heading;
     agent->sim_vy = new_speed * agent->sin_heading;
-    agent->yaw_rate = 0.0f;
+    agent->yaw_rate = compute_heading_diff(agent->sim_heading, old_heading) / env->dt;
     agent->jerk_long = (accel - old_a_long) / env->dt;
-    agent->jerk_lat = -agent->a_lat / env->dt;
+    float new_a_lat = new_speed * agent->yaw_rate;
+    agent->jerk_lat = (new_a_lat - agent->a_lat) / env->dt;
     agent->a_long = accel;
-    agent->a_lat = 0.0f;
+    agent->a_lat = new_a_lat;
     agent->steering_angle = 0.0f;
     update_agent_speed(agent);
 }

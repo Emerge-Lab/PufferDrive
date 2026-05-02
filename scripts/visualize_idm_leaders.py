@@ -20,6 +20,14 @@ IDM_MAX_LOOKAHEAD = 80.0
 INVALID_POSITION = -10000.0
 Z_BUFFER = 4.0
 
+TRAFFIC_LIGHT_COLORS = {
+    binding.TRAFFIC_CONTROL_STATE_UNKNOWN: "#808080",
+    binding.TRAFFIC_CONTROL_STATE_RED: "#ff0000",
+    binding.TRAFFIC_CONTROL_STATE_YELLOW: "#f2c300",
+    binding.TRAFFIC_CONTROL_STATE_GREEN: "#00a651",
+    binding.TRAFFIC_CONTROL_STATE_OFF: "#808080",
+}
+
 
 def normalize_scenarios(state):
     if isinstance(state, list):
@@ -172,6 +180,40 @@ def draw_roads(ax, scenario):
         ax.plot(xs, ys, color=color, linewidth=lw, alpha=0.75, zorder=1)
 
 
+def traffic_light_color(state):
+    return TRAFFIC_LIGHT_COLORS.get(int(state), "#808080")
+
+
+def draw_traffic_lights(ax, scenario, timestep, leader=None):
+    for traffic_idx, traffic in enumerate(scenario.get("traffic_elements") or []):
+        if traffic.get("type") != binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
+            continue
+        stop_line = traffic.get("stop_line") or []
+        if len(stop_line) < 6:
+            continue
+
+        state = traffic_state_at(traffic, timestep)
+        is_leader = leader and leader["kind"] == "red_light" and leader["idx"] == traffic_idx
+        ax.plot(
+            [stop_line[0], stop_line[3]],
+            [stop_line[1], stop_line[4]],
+            color="black",
+            linewidth=5.0 if is_leader else 3.5,
+            solid_capstyle="butt",
+            alpha=0.95,
+            zorder=13,
+        )
+        ax.plot(
+            [stop_line[0], stop_line[3]],
+            [stop_line[1], stop_line[4]],
+            color=traffic_light_color(state),
+            linewidth=3.2 if is_leader else 2.0,
+            solid_capstyle="butt",
+            alpha=0.95,
+            zorder=14,
+        )
+
+
 def draw_agent(ax, agent, color, label=None, alpha=0.85, zorder=5):
     if agent.get("sim_x") == INVALID_POSITION:
         return
@@ -212,6 +254,7 @@ def plot_scenario_frame(scenario, timestep, leader, corridor, out_path):
     fig, ax = plt.subplots(figsize=(8, 8), dpi=140)
     ax.set_aspect("equal")
     draw_roads(ax, scenario)
+    draw_traffic_lights(ax, scenario, timestep, leader)
     draw_corridor(ax, ego, corridor)
 
     for idx in candidate_indices(scenario):
