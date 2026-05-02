@@ -29,7 +29,7 @@ import pufferlib.models
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 NUM_MAPS = 12000
-MAP_DIR = "resources/drive/binaries/training_50k"
+MAP_DIR = "resources/drive/binaries/training"
 
 # Defined in drive.h
 NUM_DX = binding.NUM_DX_BINS
@@ -48,7 +48,7 @@ HEAD_STEP_SIZES = {"dx": DX_STEP, "dy": DY_STEP, "dyaw": YAW_STEP}
 # ---------------------------------------------------------------------------
 # Multi-run config
 # ---------------------------------------------------------------------------
-NUM_MAPS_SWEEP = [1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
+NUM_MAPS_SWEEP = [67, 200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
