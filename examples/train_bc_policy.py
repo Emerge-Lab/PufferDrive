@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from pufferlib.pufferl import load_config, load_env
 from pufferlib.ocean.drive import binding
@@ -47,7 +48,7 @@ HEAD_STEP_SIZES = {"dx": DX_STEP, "dy": DY_STEP, "dyaw": YAW_STEP}
 # ---------------------------------------------------------------------------
 # Multi-run config
 # ---------------------------------------------------------------------------
-NUM_MAPS_SWEEP = [67, 200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
+NUM_MAPS_SWEEP = [1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
@@ -283,6 +284,7 @@ def build_env_args(dynamics_model, num_maps):
     args["env"]["fix_rewards"] = True
     args["env"]["lambda_value"] = 0.0
     args["env"]["control_mode"] = "control_sdc_only"
+    args["env"]["episode_length"] = 91
     args["env"]["num_agents"] = 256
     return args
 
@@ -350,6 +352,33 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         all_obs = batch_obs
         all_actions = batch_actions.numpy()
 
+    EXPERT_COLOR = "tab:green"
+    LEARNED_COLOR = "tab:blue"
+    GRID_KW = dict(alpha=0.25, linestyle="--", linewidth=0.6)
+
+    sns.set_theme(style="white", context="notebook")
+
+    def style_axis(ax, title, xlabel, color):
+        ax.set_title(title, fontsize=11, color=color, pad=8)
+        ax.set_xlabel(xlabel, fontsize=11)
+        ax.set_ylabel("Count", fontsize=11)
+        ax.axvline(x=0, color="#888", linestyle=":", linewidth=1, alpha=0.7, zorder=1)
+        ax.grid(True, **GRID_KW)
+        ax.set_axisbelow(True)
+        ax.tick_params(labelsize=11)
+
+    def plot_dist(ax, vals, color, bins, rng):
+        ax.hist(
+            vals,
+            bins=bins,
+            range=rng,
+            color=color,
+            alpha=1.0,
+            edgecolor="white",
+            linewidth=0.2,
+            zorder=2,
+        )
+
     if dynamics_model == "classic":
         NUM_STEER = binding.NUM_STEER_BINS
         NUM_ACCEL = binding.NUM_ACCEL_BINS
@@ -369,29 +398,41 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         pred_accel_vals = -4.0 + pred_accel_idx * accel_step
         pred_steer_vals = -1.0 + pred_steer_idx * steer_step
 
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        n_expert_steer = (steer_idx != NUM_STEER // 2).sum()
+        n_pred_steer = (pred_steer_idx != NUM_STEER // 2).sum()
+
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8.5), constrained_layout=True)
         fig.suptitle(
-            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
-            fontsize=14,
+            f"Expert vs Learned Action Distributions  ·  {len(all_actions):,} samples  ·  "
+            f"{dynamics_model}  ·  {num_maps} maps",
+            fontsize=13,
+            weight="semibold",
         )
-        for ax, vals, title, color in [
-            (axes[0, 0], steer_vals, f"Expert Steering (non-zero: {(steer_idx != NUM_STEER // 2).sum()})", "steelblue"),
+
+        rows = [
             (
-                axes[0, 1],
+                "Steering",
+                "Steering (rad)",
+                NUM_STEER,
+                (-1.0, 1.0),
+                steer_vals,
                 pred_steer_vals,
-                f"Learned Steering (non-zero: {(pred_steer_idx != NUM_STEER // 2).sum()})",
-                "orange",
+                f"non-zero: {n_expert_steer:,}",
+                f"non-zero: {n_pred_steer:,}",
             ),
-            (axes[1, 0], accel_vals, "Expert Acceleration", "steelblue"),
-            (axes[1, 1], pred_accel_vals, "Learned Acceleration", "orange"),
-        ]:
-            bins, rng = (NUM_STEER, (-1.0, 1.0)) if "Steer" in title else (NUM_ACCEL, (-4.0, 4.0))
-            xlabel = "Steering (rad)" if "Steer" in title else "Acceleration (m/s²)"
-            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Count")
-            ax.set_title(title)
-            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+            ("Acceleration", "Acceleration (m/s²)", NUM_ACCEL, (-4.0, 4.0), accel_vals, pred_accel_vals, "", ""),
+        ]
+        for r, (name, xlabel, bins, rng, ev, lv, e_extra, l_extra) in enumerate(rows):
+            e_title = f"Expert · {name}" + (f"  ({e_extra})" if e_extra else "")
+            l_title = f"Learned · {name}" + (f"  ({l_extra})" if l_extra else "")
+            plot_dist(axes[r, 0], ev, EXPERT_COLOR, bins, rng)
+            plot_dist(axes[r, 1], lv, LEARNED_COLOR, bins, rng)
+            style_axis(axes[r, 0], e_title, xlabel, EXPERT_COLOR)
+            style_axis(axes[r, 1], l_title, xlabel, LEARNED_COLOR)
+            # match y-limits across the row for a fair visual comparison
+            ymax = max(axes[r, 0].get_ylim()[1], axes[r, 1].get_ylim()[1])
+            axes[r, 0].set_ylim(0, ymax)
+            axes[r, 1].set_ylim(0, ymax)
 
     elif dynamics_model == "delta_local":
         NUM_DX = binding.NUM_DX_BINS
@@ -416,29 +457,31 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         pred_dy_vals = -MAX_DY + pred[:, 1].astype(int) * dy_step
         pred_yaw_vals = -MAX_DYAW + pred[:, 2].astype(int) * yaw_step
 
-        fig, axes = plt.subplots(3, 2, figsize=(14, 14))
+        fig, axes = plt.subplots(3, 2, figsize=(13, 11), constrained_layout=True)
         fig.suptitle(
-            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
-            fontsize=14,
+            f"Expert vs Learned Action Distributions  ·  {len(all_actions):,} samples  ·  "
+            f"{dynamics_model}  ·  {num_maps} maps",
+            fontsize=13,
         )
-        plot_configs = [
-            (axes[0, 0], expert_dx_vals, "Expert ΔX", "steelblue", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
-            (axes[0, 1], pred_dx_vals, "Learned ΔX", "orange", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
-            (axes[1, 0], expert_dy_vals, "Expert ΔY", "steelblue", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
-            (axes[1, 1], pred_dy_vals, "Learned ΔY", "orange", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
-            (axes[2, 0], expert_yaw_vals, "Expert ΔYaw", "steelblue", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
-            (axes[2, 1], pred_yaw_vals, "Learned ΔYaw", "orange", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
+
+        rows = [
+            ("ΔX", "ΔX (m)", NUM_DX, (-MAX_DX, MAX_DX), expert_dx_vals, pred_dx_vals),
+            ("ΔY", "ΔY (m)", NUM_DY, (-MAX_DY, MAX_DY), expert_dy_vals, pred_dy_vals),
+            ("ΔYaw", "ΔYaw (rad)", NUM_YAW, (-MAX_DYAW, MAX_DYAW), expert_yaw_vals, pred_yaw_vals),
         ]
-        for ax, vals, title, color, bins, rng, xlabel in plot_configs:
-            ax.hist(vals, bins=bins, range=rng, alpha=0.7, color=color)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Count")
-            ax.set_title(title)
-            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+        for r, (name, xlabel, bins, rng, ev, lv) in enumerate(rows):
+            plot_dist(axes[r, 0], ev, EXPERT_COLOR, bins, rng)
+            plot_dist(axes[r, 1], lv, LEARNED_COLOR, bins, rng)
+            style_axis(axes[r, 0], f"Expert · {name}", xlabel, EXPERT_COLOR)
+            style_axis(axes[r, 1], f"Learned · {name}", xlabel, LEARNED_COLOR)
+            ymax = max(axes[r, 0].get_ylim()[1], axes[r, 1].get_ylim()[1])
+            axes[r, 0].set_ylim(0, ymax)
+            axes[r, 1].set_ylim(0, ymax)
 
     else:
         return
 
+    sns.despine(fig=fig)
     wandb.log({"action_distribution": wandb.Image(fig)})
     plt.close(fig)
 
@@ -478,13 +521,13 @@ def evaluate(policy, dataloader, device, bin_tolerance=5):
     }
 
 
-def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos", map_dir=MAP_DIR):
+def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos"):
     """Run one closed-loop rollout with headless rendering and log an mp4 per map to wandb."""
     import glob
     import shutil
 
     args = build_env_args(dynamics_model, num_maps=1)
-    args["env"]["map_dir"] = map_dir
+    args["env"]["map_dir"] = MAP_DIR
     args["env"]["control_mode"] = "control_sdc_only"
     args["env"]["termination_mode"] = 1
     args["env"]["obs_partner_noise_speed"] = 0.0
@@ -494,6 +537,7 @@ def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_vide
     args["env"]["fix_lambdas"] = True
     args["env"]["fix_rewards"] = True
     args["env"]["num_agents"] = 128
+    args["env"]["episode_length"] = 91
     args["env"]["num_maps"] = NUM_MAPS
     args["vec"] = dict(backend="PufferEnv", num_envs=1)
 
@@ -601,7 +645,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     output_sizes = get_output_sizes(dynamics_model)
 
     run = wandb.init(
-        project="clean_delta",
+        project="delta_bc_debug",
         tags=["bc_policy", dynamics_model],
         config={**TRAIN_DEFAULTS, "dynamics_model": dynamics_model, "output_sizes": output_sizes},
     )
@@ -640,6 +684,23 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
+
+    driver_env = env.driver_env
+    print("=" * 60)
+    print("OBS LAYOUT SANITY CHECK")
+    print("=" * 60)
+    print(f"dynamics_model:          {driver_env.dynamics_model}")
+    print(f"ego_features (Python):   {driver_env.ego_features}")
+    print(f"EGO_FEATURES_DELTA_LOCAL:{binding.EGO_FEATURES_DELTA_LOCAL}")
+    print(f"num_obs:                 {driver_env.num_obs}")
+    print(
+        f"  expected = {driver_env.ego_features} ego + "
+        f"{driver_env.max_partner_objects}*{driver_env.partner_features} partner + "
+        f"{driver_env.max_road_objects}*{driver_env.road_features} road = "
+        f"{driver_env.ego_features + driver_env.max_partner_objects * driver_env.partner_features + driver_env.max_road_objects * driver_env.road_features}"
+    )
+    print(f"prev_action indices: {11}, {12}, {13} (within ego section [0:{driver_env.ego_features}])")
+    print("=" * 60)
 
     # Validation env: same config but uses a held-out set of maps
     val_args = build_env_args(dynamics_model, num_maps=10000)
@@ -844,7 +905,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     # Visual sanity check rollout
     # On train maps
     try:
-        record_rollout_video(policy, dynamics_model, device, map_dir=map_dir)
+        record_rollout_video(policy, dynamics_model, device)
     except Exception as e:
         print(f"Video recording failed (non-fatal): {e}")
 
