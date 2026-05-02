@@ -1796,45 +1796,47 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         action_dy = clip(action_dy, -DELTA_MAX_DY, DELTA_MAX_DY);
         action_dyaw = normalize_heading(action_dyaw);
 
-        // ----- Kinematic constraints (delta-local) -----
-        // Each constraint operates on the action AFTER prior constraints have clipped it.
-        // prev_action_* stores the previously-executed (post-constraint) values.
+        if (env->control_mode != CONTROL_INFERRED_EXPERT_ACTIONS) {
+            // ----- Kinematic constraints (delta-local) -----
+            // Each constraint operates on the action AFTER prior constraints have clipped it.
+            // prev_action_* stores the previously-executed (post-constraint) values.
 
-        // A. Longitudinal acceleration bound.
-        //    Implied previous speed = prev_action_dx / dt. Limit change to ±A_LONG_MAX*dt.
-        {
-            float prev_speed = agent->prev_action_dx / env->dt;
-            float speed_lo = prev_speed - A_LONG_MAX * env->dt;
-            float speed_hi = prev_speed + A_LONG_MAX * env->dt;
-            float new_speed_proposed = action_dx / env->dt;
-            float new_speed = clip(new_speed_proposed, speed_lo, speed_hi);
-            action_dx = new_speed * env->dt;
-        }
+            // A. Longitudinal acceleration bound.
+            //    Implied previous speed = prev_action_dx / dt. Limit change to ±A_LONG_MAX*dt.
+            {
+                float prev_speed = agent->prev_action_dx / env->dt;
+                float speed_lo = prev_speed - A_LONG_MAX * env->dt;
+                float speed_hi = prev_speed + A_LONG_MAX * env->dt;
+                float new_speed_proposed = action_dx / env->dt;
+                float new_speed = clip(new_speed_proposed, speed_lo, speed_hi);
+                action_dx = new_speed * env->dt;
+            }
 
-        // B. Lateral motion bicycle envelope: |dy| ≤ |dx| * tan(MAX_STEER).
-        //    Eliminates lateral sliding and side-shimmy at low / zero forward speed.
-        {
-            float max_dy = fabsf(action_dx) * tanf(MAX_STEER);
-            action_dy = clip(action_dy, -max_dy, max_dy);
-        }
+            // B. Lateral motion bicycle envelope: |dy| ≤ |dx| * tan(MAX_STEER).
+            //    Eliminates lateral sliding and side-shimmy at low / zero forward speed.
+            {
+                float max_dy = fabsf(action_dx) * tanf(MAX_STEER);
+                action_dy = clip(action_dy, -max_dy, max_dy);
+            }
 
-        // C. Yaw rate kinematic envelope: |dyaw| ≤ |dx / wheelbase| * tan(MAX_STEER).
-        //    Yaw scales with forward motion — no standing-still pivots.
-        {
-            float max_dyaw = fabsf(action_dx / agent->wheelbase) * tanf(MAX_STEER);
-            action_dyaw = clip(action_dyaw, -max_dyaw, max_dyaw);
-        }
+            // C. Yaw rate kinematic envelope: |dyaw| ≤ |dx / wheelbase| * tan(MAX_STEER).
+            //    Yaw scales with forward motion — no standing-still pivots.
+            {
+                float max_dyaw = fabsf(action_dx / agent->wheelbase) * tanf(MAX_STEER);
+                action_dyaw = clip(action_dyaw, -max_dyaw, max_dyaw);
+            }
 
-        // D. Yaw acceleration bound.
-        //    Implied previous yaw rate = prev_action_dyaw / dt. Limit change to ±YAW_ACCEL_MAX*dt.
-        //    Prevents rapid left-right flip-flop within the kinematic envelope.
-        {
-            float prev_yaw_rate = agent->prev_action_dyaw / env->dt;
-            float yr_lo = prev_yaw_rate - YAW_ACCEL_MAX * env->dt;
-            float yr_hi = prev_yaw_rate + YAW_ACCEL_MAX * env->dt;
-            float new_yaw_rate_proposed = action_dyaw / env->dt;
-            float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
-            action_dyaw = new_yaw_rate * env->dt;
+            // D. Yaw acceleration bound.
+            //    Implied previous yaw rate = prev_action_dyaw / dt. Limit change to ±YAW_ACCEL_MAX*dt.
+            //    Prevents rapid left-right flip-flop within the kinematic envelope.
+            {
+                float prev_yaw_rate = agent->prev_action_dyaw / env->dt;
+                float yr_lo = prev_yaw_rate - YAW_ACCEL_MAX * env->dt;
+                float yr_hi = prev_yaw_rate + YAW_ACCEL_MAX * env->dt;
+                float new_yaw_rate_proposed = action_dyaw / env->dt;
+                float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
+                action_dyaw = new_yaw_rate * env->dt;
+            }
         }
 
         float jerk_dx = action_dx - agent->prev_action_dx;
@@ -4287,7 +4289,7 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             if (sdc_zoom) {
                 Entity *sdc = &env->entities[env->sdc_track_index];
                 float speed = sqrtf(sdc->vx * sdc->vx + sdc->vy * sdc->vy);
-                float speed_frac = speed / (MAX_SPEED - 40);
+                float speed_frac = speed / (MAX_SPEED - 20);
                 if (speed_frac > 1.0f)
                     speed_frac = 1.0f;
                 if (speed_frac < 0.0f)
