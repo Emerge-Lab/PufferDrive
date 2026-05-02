@@ -720,11 +720,10 @@ def infer_human_actions(obj):
         local_dx = max(-3.0, min(3.0, local_dx))
         local_dy = max(-0.1, min(0.1, local_dy))
         local_dyaw = max(-math.pi / 6, min(math.pi / 6, heading_diff))
-        expert_delta_yaw.append(local_dyaw)
 
+        expert_delta_yaw.append(local_dyaw)
         expert_delta_x.append(local_dx)
         expert_delta_y.append(local_dy)
-        expert_delta_yaw.append(heading_diff)  # already wrapped above
 
     # Pad/truncate to exact trajectory_length
     for arr, pad_val in [
@@ -1157,7 +1156,7 @@ if __name__ == "__main__":
     # analyze_action_space(data_folder="data/processed/training_50k", max_maps=10000)
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/training")
+    process_all_maps(data_folder="data/processed/interactive_data_validation_50")
     # Process the validation/test dataset
     # process_all_maps(data_folder="data/processed/validation")
     # # Process the validation_interactive dataset
