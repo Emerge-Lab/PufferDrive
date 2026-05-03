@@ -195,4 +195,5 @@ logs/*
 
 eval_videos/*
 results/*
+videos/*
 anchor_videos/*
