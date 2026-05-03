@@ -72,11 +72,22 @@ class CheckpointEvaluator:
                     else:
                         action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
 
+                    if isinstance(logits, torch.distributions.Normal):
+                        action = np.clip(action, driver.action_space.low, driver.action_space.high)
+
                     action_np = action.cpu().numpy().reshape(env.action_space.shape)
                 else:  # Take random actions
-                    action_np = np.random.randint(
-                        low=0, high=env.action_space.shape[0], size=env.action_space.shape, dtype=env.action_space.dtype
-                    )
+                    if driver._action_type_flag == 1:  # Continuous
+                        action_np = np.random.uniform(low=-1.0, high=1.0, size=env.action_space.shape).astype(
+                            env.action_space.dtype
+                        )
+                    else:  # Discrete
+                        action_np = np.random.randint(
+                            low=0,
+                            high=env.action_space.shape[0],
+                            size=env.action_space.shape,
+                            dtype=env.action_space.dtype,
+                        )
 
                 # print(action_np[0])
                 # print(action_np.shape)

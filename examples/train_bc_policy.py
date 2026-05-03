@@ -35,7 +35,7 @@ MAP_DIR = "resources/drive/binaries/training"
 NUM_DX = binding.NUM_DX_BINS
 NUM_DY = binding.NUM_DY_BINS
 NUM_YAW = binding.NUM_YAW_BINS
-MAX_DX = 3.0
+MAX_DX = 3.5
 MAX_DY = 0.1
 MAX_DYAW = np.pi / 6.0
 
@@ -48,18 +48,18 @@ HEAD_STEP_SIZES = {"dx": DX_STEP, "dy": DY_STEP, "dyaw": YAW_STEP}
 # ---------------------------------------------------------------------------
 # Multi-run config
 # ---------------------------------------------------------------------------
-NUM_MAPS_SWEEP = [67, 200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
+NUM_MAPS_SWEEP = [200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
     "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 2000,
+    "resample_every_n_epochs": 500,  # Resample after k full passes through the dataset
+    "epochs": 1500,
     "num_maps": NUM_MAPS,
     "eval_frequency": 100,  # Validation dataset
-    "val_patience": 10,  # Stop if val loss doesn't improve for this many eval checks
+    "val_patience": 5,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -536,7 +536,7 @@ def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_vide
     args["env"]["resample_frequency"] = 0
     args["env"]["fix_lambdas"] = True
     args["env"]["fix_rewards"] = True
-    args["env"]["num_agents"] = 128
+    args["env"]["num_agents"] = 64
     args["env"]["episode_length"] = 91
     args["env"]["num_maps"] = NUM_MAPS
     args["vec"] = dict(backend="PufferEnv", num_envs=1)
@@ -680,7 +680,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     effective_map_dir = args["env"]["map_dir"]
     run.name = f"{dynamics_model}_{os.path.basename(effective_map_dir)}_{num_maps}maps"
     checkpoint_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
-    checkpoint_save_frequency = 500
+    checkpoint_save_frequency = 250
 
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
