@@ -181,6 +181,7 @@ struct Agent {
     float distance_since_spawn;
     int stopped;
     int removed;
+    int is_blind_partner; // Episode-level flag: agent sees no other agents
     // Goal positions
     float goal_positions_x[MAX_TARGET_POINTS];
     float goal_positions_y[MAX_TARGET_POINTS];
