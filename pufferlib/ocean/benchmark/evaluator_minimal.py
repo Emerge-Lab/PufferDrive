@@ -50,7 +50,8 @@ class CheckpointEvaluator:
         for time_idx in range(env.episode_length):
             if render_env_idx is not None:
                 cur = driver.agent_offsets[render_env_idx]
-                render_env_done = terminals[cur].all()
+                nxt = driver.agent_offsets[render_env_idx + 1]
+                render_env_done = terminals[cur:nxt].all()
                 if not render_env_done:
                     driver.render(view_mode=view_mode, env_idx=render_env_idx)
 
