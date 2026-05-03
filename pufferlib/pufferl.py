@@ -1316,6 +1316,33 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None):
     if logs is not None:
         all_logs.append(logs)
 
+    # --- Full human-replay dataset eval ---
+    final_eval = run_final_eval(pufferl, args, env_name)
+
+    if final_eval is not None:
+        sp_pct = 100.0 * final_eval["self_play"]["rate"]
+        hr_pct = 100.0 * final_eval["human_replay"]["rate"]
+        sp_score = final_eval["self_play"]["score"]
+        hr_score = final_eval["human_replay"]["score"]
+        sp_n = final_eval["self_play"]["num_scenes"]
+        hr_n = final_eval["human_replay"]["num_scenes"]
+        print(f"\n{'=' * 50}")
+        print(f"Final eval (full human-replay dataset)")
+        print(f"  Self-play    collision={sp_pct:.2f}%  score={sp_score:.4f}  (n={sp_n})")
+        print(f"  Human-replay collision={hr_pct:.2f}%  score={hr_score:.4f}  (n={hr_n})")
+        print(f"{'=' * 50}\n")
+
+        pufferl.logger.log(
+            {
+                "eval/final_self_play_coll_rate_pct": sp_pct,
+                "eval/final_human_replay_coll_rate_pct": hr_pct,
+                "eval/final_self_play_score": sp_score,
+                "eval/final_human_replay_score": hr_score,
+                "eval/final_self_play_num_scenes": sp_n,
+                "eval/final_human_replay_num_scenes": hr_n,
+            },
+            pufferl.global_step,
+        )
     pufferl.print_dashboard()
     model_path = pufferl.close()
     pufferl.logger.close(model_path)
@@ -1875,6 +1902,100 @@ def load_config(env_name, config_dir=None):
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
     return args
+
+
+def run_final_eval(pufferl, args, env_name):
+    """Evaluate the trained policy on the full human-replay dataset.
+
+    Runs multiple rollout passes per mode and averages collision rates
+    across iterations. Returns a dict mapping mode name to
+    {'rate': float, 'num_scenes': int}, or None if eval cannot be run.
+    """
+    import copy
+    from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
+
+    # Only run on rank 0 in distributed training
+    if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+        return None
+
+    eval_cfg = args.get("eval", {})
+    map_dir = eval_cfg.get("final_eval_map_dir", eval_cfg.get("map_dir"))
+
+    num_maps = 10_000
+    episode_length = 200
+    num_agents = 512
+    deterministic = True
+    num_iterations = 10
+
+    results = {}
+    for mode_name, control_mode in [
+        ("self_play", "control_vehicles"),
+        ("human_replay", "control_sdc_only"),
+    ]:
+        print(f"Running final eval ({mode_name}) on {map_dir} [{num_iterations} iterations]...")
+
+        config = copy.deepcopy(args)
+        config["env"]["map_dir"] = map_dir
+        config["env"]["num_maps"] = num_maps
+        config["env"]["num_agents"] = num_agents
+        config["env"]["episode_length"] = episode_length
+        config["env"]["termination_mode"] = 1
+        config["env"]["async_resets"] = False
+        config["env"]["resample_frequency"] = 0
+        config["env"]["fix_lambdas"] = True
+        config["env"]["fix_rewards"] = True
+        config["env"]["control_mode"] = control_mode
+        config["env"]["render_mode"] = 0
+        config["vec"] = dict(backend="PufferEnv", num_envs=1)
+
+        env = load_env(env_name, config)
+        evaluator = CheckpointEvaluator(config)
+
+        per_iter_rates = []
+        per_iter_scores = []
+        total_scenes = 0
+        try:
+            for it in range(num_iterations):
+                info_list = evaluator.rollout(pufferl.uncompiled_policy, env, deterministic=deterministic)
+                populated = [log for log in info_list if log and log.get("n", 0) > 0]
+                rates = [float(log["collision_rate"]) for log in populated if "collision_rate" in log]
+                scores = [float(log["score"]) for log in populated if "score" in log]
+                if rates:
+                    iter_rate = float(np.mean(rates))
+                    iter_score = float(np.mean(scores)) if scores else float("nan")
+                    per_iter_rates.append(iter_rate)
+                    per_iter_scores.append(iter_score)
+                    total_scenes += len(rates)
+                    print(
+                        f"  iter {it + 1}/{num_iterations}: "
+                        f"{len(rates)} scenes, "
+                        f"collision_rate={iter_rate:.4f}, score={iter_score:.4f}"
+                    )
+                else:
+                    print(f"  iter {it + 1}/{num_iterations}: no populated scenes")
+        finally:
+            env.close()
+
+        if per_iter_rates:
+            mean_rate = float(np.mean(per_iter_rates))
+            std_rate = float(np.std(per_iter_rates))
+            mean_score = float(np.nanmean(per_iter_scores)) if per_iter_scores else float("nan")
+            std_score = float(np.nanstd(per_iter_scores)) if per_iter_scores else float("nan")
+            results[mode_name] = {
+                "rate": mean_rate,
+                "score": mean_score,
+                "num_scenes": total_scenes,
+            }
+            print(
+                f"  {mode_name}: collision_rate={mean_rate:.4f} (std={std_rate:.4f}), "
+                f"score={mean_score:.4f} (std={std_score:.4f}), "
+                f"across {len(per_iter_rates)} iterations, "
+                f"{total_scenes} total scenes"
+            )
+        else:
+            results[mode_name] = {"rate": float("nan"), "score": float("nan"), "num_scenes": 0}
+
+    return results
 
 
 def main():
