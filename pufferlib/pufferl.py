@@ -1956,7 +1956,7 @@ def run_final_eval(pufferl, args, env_name):
         total_scenes = 0
         try:
             for it in range(num_iterations):
-                info_list = evaluator.rollout(pufferl.uncompiled_policy, env, deterministic=deterministic)
+                info_list = evaluator.rollout(env=env, policy=pufferl.uncompiled_policy, deterministic=deterministic)
                 populated = [log for log in info_list if log and log.get("n", 0) > 0]
                 rates = [float(log["collision_rate"]) for log in populated if "collision_rate" in log]
                 scores = [float(log["score"]) for log in populated if "score" in log]
