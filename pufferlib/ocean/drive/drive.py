@@ -1156,8 +1156,4 @@ if __name__ == "__main__":
     # analyze_action_space(data_folder="data/processed/training_50k", max_maps=10000)
     # test_performance()
     # Process the train dataset
-    process_all_maps(data_folder="data/processed/interactive_data_validation_50")
-    # Process the validation/test dataset
-    # process_all_maps(data_folder="data/processed/validation")
-    # # Process the validation_interactive dataset
-    # process_all_maps(data_folder="data/processed/validation_interactive")
+    process_all_maps(data_folder="data/processed/training")

@@ -47,12 +47,15 @@ CHECKPOINTS = [
 SCALING_CHECKPOINTS_PATH = (
     "models/scaling_cpts"  # Directory containing scaling checkpoints following the naming convention described above
 )
-DETERMINISTIC = True
+DETERMINISTIC = False
 
-TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
+TRAIN_MAP_DIR = "resources/drive/binaries/training"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 1024 * 5
+INTERACTIVE_MAP_DIR = (
+    "resources/drive/binaries/interactive_data_validation_50"  # 200 maps selected for SDC interactivity
+)
+INTERACTIVE_MAP_DIR_MAPS = 50
+NUM_TOTAL_EVAL_AGENTS = 1024 * 1
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -110,18 +113,18 @@ def _parse_num(s):
     return n
 
 
-def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, episode_length=110):
+def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=150):
     """Build an eval-ready config from the checkpoint config.
 
     Takes everything from the checkpoint and only overwrites eval-specific fields:
-    map_dir, control_mode, num_maps, lambda_value, and optionally episode_length.
+    map_dir, control_mode, num_maps, and optionally episode_length.
     """
     config = copy.deepcopy(cpt_config)
     config["env"]["map_dir"] = map_dir
     config["env"]["control_mode"] = control_mode
     config["env"]["num_maps"] = num_maps
     config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
-    config["env"]["lambda_value"] = lambda_value
+
     # Fixed: Important for getting valid stats
     config["env"]["async_resets"] = False
 
@@ -136,6 +139,8 @@ def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, 
     if episode_length is not None:
         config["env"]["episode_length"] = episode_length
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
+
+    print(config["env"]["lambda_value"])
     return config
 
 
@@ -167,9 +172,9 @@ def num_resample_rounds():
     return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
 
 
-def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps, lambda_value=0.0):
+def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps):
     """Create env, rollout (with resampling if needed), collect per-scene rows, close env."""
-    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value)
+    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps)
     env = load_env(ENV_NAME, config)
     rows = []
     n_rounds = num_resample_rounds()
@@ -207,9 +212,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     cpt_config["load_model_path"] = checkpoint_path
 
     # Create first env before loading policy (load_policy needs vecenv.driver_env)
-    sp_train_config = make_eval_config(
-        cpt_config, TRAIN_MAP_DIR, control_mode="control_vehicles", num_maps=50_000, lambda_value=0.0
-    )
+    sp_train_config = make_eval_config(cpt_config, TRAIN_MAP_DIR, control_mode="control_vehicles", num_maps=50_000)
     env = load_env(ENV_NAME, sp_train_config)
 
     policy = load_policy(cpt_config, env, ENV_NAME)
@@ -276,7 +279,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             "control_sdc_only",
             checkpoint_path,
             "hr_interactive",
-            num_maps=200,
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
         )
     )
 
@@ -376,7 +379,6 @@ def evaluate_scaling_checkpoints(base_config):
             TRAIN_MAP_DIR,
             control_mode="control_vehicles",
             num_maps=50_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
         sp_train_env = load_env(ENV_NAME, sp_train_config)
         policy = load_policy(cpt_config, sp_train_env, ENV_NAME)
@@ -395,7 +397,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_train",
             num_maps=50_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Self-play on validation ──────────────────────────────────────
@@ -408,7 +409,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_val",
             num_maps=10_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Human-replay on randomly sampled validation scenes ───────────
@@ -421,7 +421,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_val",
             num_maps=10_000,
-            lambda_value=0.1 if is_reg else 0.0,  # TODO: Fix this
         )
 
         # ── Human-replay on interactive scenes ───────────────────────────
@@ -433,8 +432,7 @@ def evaluate_scaling_checkpoints(base_config):
             "control_sdc_only",
             cpt_path,
             "scaling_hr_interactive",
-            num_maps=200,
-            lambda_value=0.1 if is_reg else 0.0,
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
         )
 
         # Attach scaling metadata to every row
@@ -454,7 +452,7 @@ def evaluate_scaling_checkpoints(base_config):
 
 def make_render_config(cpt_config, map_dir, num_maps=1000):
     """Build a config for human-replay rendering with headless ffmpeg output."""
-    return make_eval_config(cpt_config, map_dir, control_mode="control_sdc_only", num_maps=num_maps, lambda_value=0.0)
+    return make_eval_config(cpt_config, map_dir, control_mode="control_sdc_only", num_maps=num_maps)
 
 
 def select_render_envs(evaluator, policy, env, num_to_render):
