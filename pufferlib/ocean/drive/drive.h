@@ -105,6 +105,12 @@
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
+// Blind agents: up to BLIND_AGENT_MAX_FRACTION of agents are
+// blind for the entire episode — they do not see other vehicles in their
+// partner observations. Models inattentive drivers and blind spots, and
+// teaches other agents to handle them.
+#define BLIND_AGENT_MAX_FRACTION 0.05f
+
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
 #define PARTNER_FEATURES 7
@@ -310,6 +316,7 @@ struct Entity {
     float prev_action_dy;
     float prev_action_dyaw;
     float jerk_yaw;
+    int is_blind; // If set, this agent does not see other agents
 };
 
 void free_entity(Entity *entity) {
@@ -510,6 +517,7 @@ struct Drive {
     float obs_partner_noise_speed;
     float obs_noise_road;
     bool async_resets;
+    float blind_perc; // Max fraction of active agents that are blind
 };
 
 void add_log(Drive *env) {
@@ -1598,6 +1606,8 @@ void init(Drive *env) {
     env->dynamics_noise_pos = 0.0f; // 0.0125f; Gigaflow
     env->dynamics_noise_heading = 0.0f;
     env->obs_noise_road = 0.0f;
+    if (env->blind_perc <= 0.0f)
+        env->blind_perc = BLIND_AGENT_MAX_FRACTION;
     if (env->async_resets != 0 && env->async_resets != 1) {
         env->async_resets = 1; // Default to async resets
     }
@@ -2167,58 +2177,60 @@ void compute_observations(Drive *env) {
         // Relative Pos of other cars
         int obs_idx = ego_dim;
         int cars_seen = 0;
-        for (int j = 0; j < MAX_AGENTS; j++) {
-            int index = -1;
-            if (j < env->active_agent_count) {
-                index = env->active_agent_indices[j];
-            } else if (j < env->num_actors && env->static_agent_count > 0) {
-                index = env->static_agent_indices[j - env->active_agent_count];
+        if (!ego_entity->is_blind) {
+            for (int j = 0; j < MAX_AGENTS; j++) {
+                int index = -1;
+                if (j < env->active_agent_count) {
+                    index = env->active_agent_indices[j];
+                } else if (j < env->num_actors && env->static_agent_count > 0) {
+                    index = env->static_agent_indices[j - env->active_agent_count];
+                }
+                if (index == -1)
+                    continue;
+                if (env->entities[index].type > 3)
+                    break;
+                if (index == env->active_agent_indices[i])
+                    continue; // Skip self, but don't increment obs_idx
+                Entity *other_entity = &env->entities[index];
+                if (ego_entity->removed)
+                    continue;
+                if (other_entity->removed)
+                    continue;
+                // Store original relative positions
+                float dx = other_entity->x - ego_entity->x;
+                float dy = other_entity->y - ego_entity->y;
+                float dist = (dx * dx + dy * dy);
+                if (dist > 2500.0f)
+                    continue;
+                // Rotate to ego vehicle's frame
+                float rel_x = dx * cos_heading + dy * sin_heading;
+                float rel_y = -dx * sin_heading + dy * cos_heading;
+                // Store observations with correct indexing
+                obs[obs_idx] = rel_x * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
+                obs[obs_idx + 1] = rel_y * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
+                obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_partner_noise_pos);
+                obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN + gaussian_noise(env->obs_partner_noise_pos);
+                // relative heading
+                float rel_heading_x =
+                    other_entity->heading_x * ego_entity->heading_x +
+                    other_entity->heading_y * ego_entity->heading_y; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
+                float rel_heading_y =
+                    other_entity->heading_y * ego_entity->heading_x -
+                    other_entity->heading_x * ego_entity->heading_y; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
+
+                obs[obs_idx + 4] = rel_heading_x;
+                obs[obs_idx + 5] = rel_heading_y;
+
+                // relative speed
+                float other_speed_magnitude =
+                    sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
+                float other_v_dot_heading =
+                    other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
+                float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
+                obs[obs_idx + 6] = other_signed_speed / MAX_SPEED + gaussian_noise(env->obs_partner_noise_speed);
+                cars_seen++;
+                obs_idx += 7; // Move to next observation slot
             }
-            if (index == -1)
-                continue;
-            if (env->entities[index].type > 3)
-                break;
-            if (index == env->active_agent_indices[i])
-                continue; // Skip self, but don't increment obs_idx
-            Entity *other_entity = &env->entities[index];
-            if (ego_entity->removed)
-                continue;
-            if (other_entity->removed)
-                continue;
-            // Store original relative positions
-            float dx = other_entity->x - ego_entity->x;
-            float dy = other_entity->y - ego_entity->y;
-            float dist = (dx * dx + dy * dy);
-            if (dist > 2500.0f)
-                continue;
-            // Rotate to ego vehicle's frame
-            float rel_x = dx * cos_heading + dy * sin_heading;
-            float rel_y = -dx * sin_heading + dy * cos_heading;
-            // Store observations with correct indexing
-            obs[obs_idx] = rel_x * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
-            obs[obs_idx + 1] = rel_y * 0.02f + gaussian_noise(env->obs_partner_noise_pos);
-            obs[obs_idx + 2] = other_entity->width / MAX_VEH_WIDTH + gaussian_noise(env->obs_partner_noise_pos);
-            obs[obs_idx + 3] = other_entity->length / MAX_VEH_LEN + gaussian_noise(env->obs_partner_noise_pos);
-            // relative heading
-            float rel_heading_x =
-                other_entity->heading_x * ego_entity->heading_x +
-                other_entity->heading_y * ego_entity->heading_y; // cos(a-b) = cos(a)cos(b) + sin(a)sin(b)
-            float rel_heading_y =
-                other_entity->heading_y * ego_entity->heading_x -
-                other_entity->heading_x * ego_entity->heading_y; // sin(a-b) = sin(a)cos(b) - cos(a)sin(b)
-
-            obs[obs_idx + 4] = rel_heading_x;
-            obs[obs_idx + 5] = rel_heading_y;
-
-            // relative speed
-            float other_speed_magnitude =
-                sqrtf(other_entity->vx * other_entity->vx + other_entity->vy * other_entity->vy);
-            float other_v_dot_heading =
-                other_entity->vx * other_entity->heading_x + other_entity->vy * other_entity->heading_y;
-            float other_signed_speed = copysignf(other_speed_magnitude, other_v_dot_heading);
-            obs[obs_idx + 6] = other_signed_speed / MAX_SPEED + gaussian_noise(env->obs_partner_noise_speed);
-            cars_seen++;
-            obs_idx += 7; // Move to next observation slot
         }
         int remaining_partner_obs = (MAX_AGENTS - 1 - cars_seen) * 7;
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
@@ -2395,6 +2407,43 @@ void c_reset(Drive *env) {
         compute_agent_metrics(env, agent_idx);
     }
     compute_observations(env);
+
+    // Sample which agents are blind for this entire episode.
+    // Skipped at eval (async_resets == false).
+    for (int x = 0; x < env->active_agent_count; x++) {
+        env->entities[env->active_agent_indices[x]].is_blind = 0;
+    }
+    int max_blind = 0;
+    if (env->async_resets && (env->control_mode == CONTROL_AGENTS || env->control_mode == CONTROL_VEHICLES)) {
+        max_blind = (int)ceilf(env->blind_perc * (float)env->active_agent_count);
+        if (max_blind > env->active_agent_count)
+            max_blind = env->active_agent_count;
+    }
+    if (max_blind > 0) {
+        int idx_buf[MAX_AGENTS];
+        int n = env->active_agent_count;
+        for (int i = 0; i < n; i++)
+            idx_buf[i] = env->active_agent_indices[i];
+        // Fisher–Yates partial shuffle
+        for (int i = n - 1; i > 0; i--) {
+            int j = rand() % (i + 1);
+            int tmp = idx_buf[i];
+            idx_buf[i] = idx_buf[j];
+            idx_buf[j] = tmp;
+        }
+        for (int i = 0; i < max_blind; i++) {
+            env->entities[idx_buf[i]].is_blind = 1;
+        }
+    }
+
+    // Debug: report blind agent assignment
+    int blind_count = 0;
+    for (int x = 0; x < env->active_agent_count; x++) {
+        if (env->entities[env->active_agent_indices[x]].is_blind)
+            blind_count++;
+    }
+    // printf("[blind] active=%d blind=%d (async_resets=%d, blind_perc=%.3f)\n",
+    //        env->active_agent_count, blind_count, env->async_resets, env->blind_perc);
 }
 
 static void override_action_with_expert(Drive *env, int action_idx, int agent_idx, int t) {
@@ -3610,19 +3659,6 @@ void draw_inferred_trajectory(Drive *env, int agent_array_idx) {
         DrawSphere((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs}, 0.2f, LIGHT_PURPLE);
         DrawLine3D((Vector3){e->inferred_traj_x[t], e->inferred_traj_y[t], zs},
                    (Vector3){e->inferred_traj_x[t + 1], e->inferred_traj_y[t + 1], zs}, Fade(LIGHT_PURPLE, 0.6f));
-
-        // Error shading (red)
-        if (e->traj_valid[t + 1]) {
-            Vector3 a = {e->traj_x[t], e->traj_y[t], zg};
-            Vector3 b = {e->inferred_traj_x[t], e->inferred_traj_y[t], zg};
-            Vector3 c = {e->traj_x[t + 1], e->traj_y[t + 1], zg};
-            Vector3 d = {e->inferred_traj_x[t + 1], e->inferred_traj_y[t + 1], zg};
-            Color err = Fade(PUFF_RED, 0.15f);
-            DrawTriangle3D(a, b, c, err);
-            DrawTriangle3D(c, b, d, err);
-            DrawTriangle3D(c, b, a, err);
-            DrawTriangle3D(d, b, c, err);
-        }
     }
 }
 
