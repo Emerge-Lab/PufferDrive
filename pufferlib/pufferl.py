@@ -133,6 +133,7 @@ class PuffeRL:
         # Tracks which agents have hit a terminal and should be ignored until world reset
         self.agent_dead = torch.zeros(total_agents, device=device, dtype=torch.bool)
         self.masks = torch.ones(segments, rollout_horizon, device=device)
+        self._lambda_kl_pairs = []  # list of (lambda, kl) tensors per minibatch
 
         # LSTM
         if config["use_rnn"]:
@@ -577,6 +578,10 @@ class PuffeRL:
                             cur_lp, anchor_lp, reduction="none", log_target=True
                         ).sum(dim=-1)
 
+                with torch.no_grad():
+                    lam = anchor_obs[:, self.lambda_obs_idx].detach()
+                    self._lambda_kl_pairs.append((lam.cpu(), per_sample_kl.detach().cpu()))
+
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
                 self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
 
@@ -670,6 +675,20 @@ class PuffeRL:
         var_y = y_true.var()
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
         losses["explained_variance"] = explained_var.item()
+
+        if self.reg_mode == "kl_anchor" and len(self._lambda_kl_pairs) > 0:
+            all_lam = torch.cat([p[0] for p in self._lambda_kl_pairs])
+            all_kl = torch.cat([p[1] for p in self._lambda_kl_pairs])
+
+            lam_c = all_lam - all_lam.mean()
+            kl_c = all_kl - all_kl.mean()
+            denom = all_lam.std() * all_kl.std() + 1e-8
+            lambda_kl_corr = (lam_c * kl_c).mean() / denom
+
+            self.data["anchor/lambda_kl_corr"] = float(lambda_kl_corr)
+            self.data["anchor/lambda_kl_corr_n"] = int(all_lam.numel())
+
+            self._lambda_kl_pairs.clear()
 
         profile.end()
         logs = None
@@ -772,6 +791,7 @@ class PuffeRL:
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
             **{k: self.data.get(k, 0) for k in self.data if k.startswith("anchor/entropy")},
+            **{k: self.data[k] for k in self.data if k.startswith("anchor/")},
         }
 
         if self.eval_stats:

@@ -2396,7 +2396,7 @@ void c_reset(Drive *env) {
         if (env->fix_lambdas) {
             env->entities[agent_idx].lambda = env->lambda_value;
         } else {
-            env->entities[agent_idx].lambda = (float)rand() / (float)RAND_MAX * 0.6f - 0.1f;
+            env->entities[agent_idx].lambda = (float)rand() / (float)RAND_MAX * 0.4f - 0.1f;
         }
 
         if (env->fix_rewards) {
