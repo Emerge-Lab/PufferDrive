@@ -162,7 +162,7 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_YAW_BINS 256
 #define DELTA_MAX_DX 3.0f
 #define DELTA_MAX_DY 0.1f
-#define DELTA_MAX_DYAW M_PI / 6.0
+#define DELTA_MAX_DYAW (M_PI / 6.0)
 
 // Kinematic constraint parameters for delta-local model
 #define A_LONG_MAX 8.0f    // m/s^2  — max longitudinal accel/brake
