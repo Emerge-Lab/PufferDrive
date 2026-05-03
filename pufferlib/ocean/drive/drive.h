@@ -157,10 +157,10 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_STEER_BINS 31
 #define STEER_MIN -1.0f // radians
 #define STEER_MAX 1.0f
-#define NUM_DX_BINS 256
-#define NUM_DY_BINS 256
-#define NUM_YAW_BINS 256
-#define DELTA_MAX_DX 3.0f
+#define NUM_DX_BINS 512
+#define NUM_DY_BINS 512
+#define NUM_YAW_BINS 512
+#define DELTA_MAX_DX 3.5f
 #define DELTA_MAX_DY 0.1f
 #define DELTA_MAX_DYAW (M_PI / 6.0)
 
