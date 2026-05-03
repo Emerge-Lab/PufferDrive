@@ -2359,6 +2359,10 @@ def _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet):
 
 
 def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
+    sdc_controller = str(args["env"].get("sdc_controller", "policy")).lower()
+    if sdc_controller != "policy":
+        return None
+
     if target_policy is not None:
         target_policy.eval()
         return target_policy
@@ -2921,7 +2925,7 @@ def _render_adversarial_serial(
     policy = policy or load_policy(args, vecenv, env_name)
     target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
     policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
-    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env) if target_policy is not None else None
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -2932,10 +2936,11 @@ def _render_adversarial_serial(
             lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
             lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
         )
-        target_state = dict(
-            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-        )
+        if target_actor is not None:
+            target_state = dict(
+                lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+            )
 
     eval_folder = _get_eval_folder(args, adversarial=True)
     os.makedirs(eval_folder, exist_ok=True)
@@ -2970,9 +2975,13 @@ def _render_adversarial_serial(
                     lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
                     lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
                 )
-                target_state = dict(
-                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                target_state = (
+                    dict(
+                        lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                        lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                    )
+                    if target_actor is not None
+                    else None
                 )
 
             if args["render"]:
@@ -3179,6 +3188,8 @@ def _render_adversarial_buffered(
 
     if not quiet:
         print("Buffered adversarial render configuration:")
+        print(f"  SDC controller: {args['env'].get('sdc_controller', 'policy')}")
+        print(f"  Non-SDC controller: {args['env'].get('non_sdc_controller', 'policy')}")
         print(f"  Workers: {num_workers}")
         print(f"  Scenarios: {num_scenarios}")
         print(f"  Agents per scene: {agents_per_scene}")
@@ -3202,7 +3213,7 @@ def _render_adversarial_buffered(
     policy = policy or load_policy(args, vecenv, env_name)
     target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
     policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
-    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env) if target_policy is not None else None
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
@@ -3213,10 +3224,11 @@ def _render_adversarial_buffered(
             lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
             lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
         )
-        target_state = dict(
-            lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-        )
+        if target_actor is not None:
+            target_state = dict(
+                lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+            )
 
     eval_folder = _get_eval_folder(args, adversarial=True)
     os.makedirs(eval_folder, exist_ok=True)
@@ -3239,10 +3251,12 @@ def _render_adversarial_buffered(
                     lstm_h=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
                     lstm_c=torch.zeros(num_agents, policy_actor.hidden_size, device=device),
                 )
-                target_state = dict(
-                    lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
-                )
+                target_state = None
+                if target_actor is not None:
+                    target_state = dict(
+                        lstm_h=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                        lstm_c=torch.zeros(num_agents, target_actor.hidden_size, device=device),
+                    )
 
             for _ in range(args["env"]["scenario_length"]):
                 with torch.no_grad():
@@ -3446,6 +3460,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
 
     if not quiet:
         print("Failure mining configuration:")
+        print(f"  SDC controller: {args['env'].get('sdc_controller', 'policy')}")
+        print(f"  Non-SDC controller: {args['env'].get('non_sdc_controller', 'policy')}")
         print(f"  Target episodes: {target_num_episodes}")
         print(f"  Worker count: {num_workers}")
         print(f"  Worker agent budget: {worker_agent_budget}")
@@ -3475,7 +3491,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     policy = policy or load_policy(args, vecenv, env_name)
     target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
     policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
-    target_actor = TargetTorchActor(target_policy, vecenv.driver_env)
+    target_actor = TargetTorchActor(target_policy, vecenv.driver_env) if target_policy is not None else None
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
 
