@@ -3,15 +3,17 @@
 ## Install
 
 ```bash
-# macOS only: libomp is required for the env build.
+# macOS only: libomp is required.
 brew install libomp
 
 # Python env
 uv venv && source .venv/bin/activate
 uv pip install -e .
 
-# Build the drive C extension (re-run after any sim/ or src/ change)
+# Build the C extension (re-run after any sim/ or src/ change)
 python setup.py build_ext --inplace --force
 ```
 
-`setup.py` only builds the env-side `pufferlib._C` (CPU pybind11 bindings) so you can iterate on the C sim without CUDA. For full GPU/CUDA training, use `build.sh`.
+`setup.py` auto-detects CUDA on Linux (via `torch.utils.cpp_extension.CUDA_HOME`) and builds the GPU backend (`src/bindings.cu`); on macOS or without CUDA it builds the CPU backend (`src/bindings_cpu.cpp`). Set `PUFFER_CPU=1` to force the CPU build.
+
+`build.sh` is still available for CUDA-native PuffeRL builds and the standalone executable.
