@@ -2409,7 +2409,7 @@ void c_reset(Drive *env) {
             env->entities[agent_idx].reward_collision_cond = env->reward_vehicle_collision + u * range;
 
             u = (float)rand() / (float)RAND_MAX;
-            range = 0.001f - env->reward_offroad_collision;
+            range = 0.00f - env->reward_offroad_collision;
             env->entities[agent_idx].reward_offroad_cond = env->reward_offroad_collision + u * range;
             env->entities[agent_idx].reward_goal_cond = env->reward_goal;
         }
