@@ -852,6 +852,7 @@ class Evaluator:
         eval_config["vec"] = dict(backend=backend, num_envs=1)
         eval_config["env"]["fix_lambdas"] = True
         eval_config["env"]["fix_rewards"] = True  # Fix to the ini file ones for all agents
+        eval_config["env"]["async_resets"] = False  # Important
         eval_config["env"]["lambda_value"] = configs["env"]["lambda_value"]
         eval_config["env"]["obs_partner_noise_speed"] = 0.0
         eval_config["env"]["obs_partner_noise_pos"] = 0.0
