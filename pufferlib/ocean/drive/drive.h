@@ -2585,7 +2585,7 @@ void c_step(Drive *env) {
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
             // env->rewards[i] += r_jerk;
-            env->logs[i].episode_return += r_jerk;
+            // env->logs[i].episode_return += r_jerk;
             env->logs[i].jerk_penalty += r_jerk;
         }
 
