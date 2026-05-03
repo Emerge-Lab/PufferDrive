@@ -1380,7 +1380,9 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
 
     Entity *entity = &env->entities[agent_idx];
 
-    if (env->control_mode == CONTROL_SDC_ONLY) {
+    // SDC-only modes: only the SDC entity is policy/inferred-action controlled.
+    // INFERRED_EXPERT_ACTIONS now drives only the SDC; everyone else replays logs.
+    if (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
         return agent_idx == env->sdc_track_index;
     }
 
@@ -1390,7 +1392,6 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
 
     switch (env->control_mode) {
     case CONTROL_WOSAC:
-    case CONTROL_INFERRED_EXPERT_ACTIONS:
     case CONTROL_REPLAY_LOGS:
         // Valid types only, ignore expert flag and goal distance
         return (is_vehicle || is_ped_or_bike);
@@ -1446,6 +1447,11 @@ void set_active_agents(Drive *env) {
         control_limit = env->num_agents;
     }
 
+    // SDC-only modes: only the SDC is active; all other valid agents replay
+    // their logs as expert-static background. Forces force_replay below.
+    bool sdc_only_mode =
+        (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS);
+
     // If we have a SDC index (WOMD), initialize it first:
     int sdc_index = env->sdc_track_index;
 
@@ -1499,7 +1505,10 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++; // Includes expert replay and static agents
             env->entities[i].active_agent = 0;
-            if (env->entities[i].mark_as_expert == 1 || env->active_agent_count >= control_limit) {
+            // In SDC-only modes, force every other valid agent into the expert
+            // replay list so move_expert teleports them along their logged
+            // trajectories during c_step.
+            if (env->entities[i].mark_as_expert == 1 || env->active_agent_count >= control_limit || sdc_only_mode) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -2564,6 +2573,13 @@ void c_step(Drive *env) {
         } else {
             if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
                 override_action_with_expert(env, i, agent_idx, env->timestep - 1);
+                // if (agent_idx == env->sdc_track_index && env->dynamics_model == DELTA_LOCAL &&
+                //     env->action_type == 0) {
+                //     int *ai = (int *)env->actions;
+                //     printf("[inferred_sdc] t=%d agent=%d dx=%d dy=%d yaw=%d\n",
+                //            env->timestep - 1, agent_idx,
+                //            ai[i * 3 + 0], ai[i * 3 + 1], ai[i * 3 + 2]);
+                // }
             }
             // Apply actions
             move_dynamics(env, i, agent_idx);
@@ -4267,9 +4283,10 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
     if (env->render_mode == RENDER_HEADLESS) { // Headless rendering via ffmpeg
         Camera3D camera = {0};
 
-        bool sdc_zoom = false;
+        bool sdc_zoom = (env->sdc_track_index >= 0 && (env->control_mode == CONTROL_SDC_ONLY ||
+                                                       env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS));
         if (view_mode == VIEW_MODE_SIM_STATE) {
-            if (env->sdc_track_index >= 0 && env->control_mode == CONTROL_SDC_ONLY) {
+            if (sdc_zoom) {
                 // Follow the SDC agent (zoomed-in tracking shot)
                 Entity *sdc = &env->entities[env->sdc_track_index];
                 camera.position = (Vector3){sdc->x, sdc->y, 400.0f};
@@ -4357,7 +4374,11 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
                 DrawRectangle(bar_x, bar_y, bar_w, bar_h, Fade(PUFF_WHITE, 0.15f));
                 DrawRectangleLines(bar_x, bar_y, bar_w, bar_h, PUFF_WHITE);
                 // Fill from bottom up, in the same blue used for the SDC agent
-                DrawRectangle(bar_x, bar_y + bar_h - fill_h, bar_w, fill_h, BLUE);
+                if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+                    DrawRectangle(bar_x, bar_y + bar_h - fill_h, bar_w, fill_h, LIGHT_PURPLE);
+                } else {
+                    DrawRectangle(bar_x, bar_y + bar_h - fill_h, bar_w, fill_h, BLUE);
+                }
 
                 // Speed label below bar (m/s)
                 char buf[32];
