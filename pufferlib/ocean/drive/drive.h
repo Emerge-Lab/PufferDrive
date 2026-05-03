@@ -160,8 +160,8 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
 // Kinematic constraint parameters for delta-local model
 #define A_LONG_MAX 8.0f    // m/s^2  — max longitudinal accel/brake
-#define MAX_STEER 0.55f    // rad    — max effective steering angle
-#define YAW_ACCEL_MAX 4.0f // rad/s^2 — max change in yaw rate per second
+#define MAX_STEER 0.7f     // rad    — max effective steering angle
+#define YAW_ACCEL_MAX 8.0f // rad/s^2 — max change in yaw rate per second
 
 static int COLLECT_EXPERT_TELEPORT = 1;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
@@ -2584,7 +2584,7 @@ void c_step(Drive *env) {
             const float jerk_penalty_coef = 0.008f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
-            env->rewards[i] += r_jerk;
+            // env->rewards[i] += r_jerk;
             env->logs[i].episode_return += r_jerk;
             env->logs[i].jerk_penalty += r_jerk;
         }
