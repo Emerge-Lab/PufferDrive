@@ -846,7 +846,7 @@ class Evaluator:
         eval_config["env"]["termination_mode"] = 1  # Important to ensure correct statistics
         backend = eval_config["eval"].get("backend", "PufferEnv")
         eval_config["env"]["map_dir"] = eval_config["eval"]["map_dir"]
-        eval_config["env"]["num_maps"] = 200  # Interactive validation set
+        eval_config["env"]["num_maps"] = 10_000
         eval_config["env"]["num_agents"] = eval_config["eval"]["num_eval_agents"]
         eval_config["env"]["episode_length"] = 150
         eval_config["vec"] = dict(backend=backend, num_envs=1)
