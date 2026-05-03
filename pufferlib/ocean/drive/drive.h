@@ -109,7 +109,7 @@
 // blind for the entire episode — they do not see other vehicles in their
 // partner observations. Models inattentive drivers and blind spots, and
 // teaches other agents to handle them.
-#define BLIND_AGENT_MAX_FRACTION 0.05f
+#define BLIND_AGENT_MAX_FRACTION 0.0f
 
 #define ROAD_FEATURES 7
 #define ROAD_FEATURES_ONEHOT 13
