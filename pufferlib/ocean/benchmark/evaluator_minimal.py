@@ -71,7 +71,8 @@ class CheckpointEvaluator:
                             action = torch.stack([l.argmax(dim=-1) for l in logits], dim=-1).int()
                     else:
                         action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-                        action_np = action.cpu().numpy().reshape(env.action_space.shape)
+
+                    action_np = action.cpu().numpy().reshape(env.action_space.shape)
                 else:  # Take random actions
                     action_np = np.random.randint(
                         low=0, high=env.action_space.shape[0], size=env.action_space.shape, dtype=env.action_space.dtype
