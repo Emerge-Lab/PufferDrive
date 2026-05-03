@@ -3,6 +3,7 @@
 #define MY_SHARED
 #define MY_PUT
 #include "../env_binding.h"
+#include <time.h>
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
@@ -81,8 +82,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int max_controlled_agents = unpack(kwargs, "max_controlled_agents");
 
     // Deterministic map sampling
-    int seed = unpack(kwargs, "seed");
-    srand(seed);
+    // int seed = unpack(kwargs, "seed");
+    // srand(seed);
+    srand((unsigned int)time(NULL));
 
     int total_agent_count = 0;
     int env_count = 0;
