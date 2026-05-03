@@ -77,8 +77,8 @@ class CheckpointEvaluator:
                         low=0, high=env.action_space.shape[0], size=env.action_space.shape, dtype=env.action_space.dtype
                     )
 
-                print(action_np[0])
-                print(action_np.shape)
+                # print(action_np[0])
+                # print(action_np.shape)
 
             obs, rewards, terminals, truncated, info_list = env.step(action_np, per_env_logs=True)
 
