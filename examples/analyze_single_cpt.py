@@ -17,27 +17,23 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-# CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
-CPT_PATH = (
-    # "models/reg_delta_50k_maps_anchor_200_maps_99.pt"
-    "models/reg_delta_50k_maps_anchor_200_maps_995.pt"
-    # "models/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
-)
+CPT_PATH = "models/scaling_cpts/unreg_delta_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_AGENTS_PER_VECENV = 256 * 10
-DETERMINISTIC = True
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # <--- @WAEL only using this atm; replace this with any path you like.
+INTERACTIVE_MAP_NUM_FILES = 200  # <-- @WAEL num maps in dir here
+NUM_AGENTS_PER_VECENV = 512
+DETERMINISTIC = False
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
-# Rendering
+# Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 25
+NUM_ENVS_TO_RENDER = 0
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
-EPISODE_LENGTHS = [150]
+EPISODE_LENGTHS = [200]
 
 METRICS = [
     "n",
@@ -54,6 +50,7 @@ METRICS = [
     "episode_length",
     "episode_return",
     "perc_controlled",
+    "longitudinal_error_avg",
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,14 +83,12 @@ def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behav
     config["env"]["goal_behavior"] = goal_behavior
     config["env"]["render_mode"] = 1
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
-
-    print(config["env"]["lambda_value"])
     return config
 
 
 def select_render_envs(evaluator, policy, env, num_to_render):
     """Run a non-rendering stats rollout and pick envs to render."""
-    info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+    info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
     populated = [(i, log) for i, log in enumerate(info_list) if log and log.get("n", 0) > 0]
 
     if not populated:
@@ -112,13 +107,13 @@ def select_render_envs(evaluator, policy, env, num_to_render):
     return [idx for idx, _ in selected]
 
 
-def render_envs(evaluator, policy, env, env_indices, video_dir):
+def render_envs(evaluator, policy, env, env_indices, video_dir, seed=42):
     """Render each selected env and move mp4s into video_dir."""
     os.makedirs(video_dir, exist_ok=True)
 
     for i, env_idx in enumerate(env_indices):
         print(f"    Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
-        evaluator.rollout(policy, env, render_env_idx=env_idx, deterministic=DETERMINISTIC)
+        evaluator.rollout(env=env, policy=policy, render_env_idx=env_idx, deterministic=DETERMINISTIC)
         env.driver_env.stop_recorder(env_idx)
 
     for mp4_path in glob.glob("*.mp4"):
@@ -150,7 +145,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
         # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
         # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
-        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", 200),
+        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES),
     ]:
         print(f"\n{'─' * 60}")
         print(f"Mode: {mode_name} | Episode length: {episode_len}")
@@ -172,9 +167,9 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         if RENDER_MODE in ("worst_collision", "random"):
             print(f"  Selecting envs to render ({RENDER_MODE})...")
             env_indices = select_render_envs(evaluator, policy, env, NUM_ENVS_TO_RENDER)
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
         else:
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             env_indices = list(range(min(NUM_ENVS_TO_RENDER, env.driver_env.num_envs)))
 
         rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)  # <-- pass it
@@ -213,19 +208,19 @@ def main():
         all_rows.extend(rows)
 
     df = pd.DataFrame(all_rows)
-    # df.to_csv(OUTPUT_CSV, index=False)
-    # print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
+    df.to_csv(OUTPUT_CSV, index=False)
+    print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
 
     if not df.empty:
         summary = df.groupby(["episode_len", "mode"]).agg(
-            # scenes=("score", "count"),
-            # score=("score", "mean"),
+            scenes=("score", "count"),
             collision_rate=("collision_rate", "mean"),
             at_fault_collision_rate=("at_fault_collision_rate", "mean"),
             rear_collision_rate=("rear_collision_rate", "mean"),
-            # offroad_rate=("offroad_rate", "mean"),
+            offroad_rate=("offroad_rate", "mean"),
             route_progress=("route_progress", "mean"),
-            lateral_error_avg=("lateral_error_avg", "mean"),
+            # lateral_error_avg=("lateral_error_avg", "mean"),
+            # longitudinal_error_avg=("longitudinal_error_avg", "mean"),
         )
         print(f"\n{summary}")
 
