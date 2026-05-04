@@ -31,6 +31,7 @@
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
 #define CONTROLLER_CORRIDOR_IDM 4
+#define CONTROLLER_PDM 5
 
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
@@ -5314,6 +5315,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 }
 
 #include "idm.h"
+#include "pdm.h"
 
 static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
@@ -5330,6 +5332,11 @@ static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx
 
     if (controller == CONTROLLER_IDM) {
         move_idm(env, agent_idx);
+        return;
+    }
+
+    if (controller == CONTROLLER_PDM) {
+        move_pdm(env, agent_idx);
         return;
     }
 

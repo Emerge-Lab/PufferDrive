@@ -1311,6 +1311,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
     PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
     PyModule_AddIntConstant(m, "CONTROLLER_CORRIDOR_IDM", CONTROLLER_CORRIDOR_IDM);
+    PyModule_AddIntConstant(m, "CONTROLLER_PDM", CONTROLLER_PDM);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 
