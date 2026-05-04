@@ -76,13 +76,40 @@ fi
 EOF
 }
 
+# Find or bootstrap a uv binary. Prefer one already on PATH or in
+# $HOME/.local/bin (auto-bound by apptainer). Fall back to the official
+# installer, which drops a static binary into ~/.local/bin in seconds.
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        UV_BIN="$(command -v uv)"
+        return 0
+    fi
+    for cand in "$HOME/.local/bin/uv" "/scratch/$USER/.local/bin/uv"; do
+        if [ -x "$cand" ]; then
+            UV_BIN="$cand"
+            export PATH="$(dirname "$cand"):$PATH"
+            return 0
+        fi
+    done
+    echo "=== Bootstrapping uv via installer ==="
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    UV_BIN="$HOME/.local/bin/uv"
+}
+
 # Activate (and create if missing) the project venv. Must be called from
-# inside the container so $CONTAINER_PYTHON exists.
+# inside the container so $CONTAINER_PYTHON exists. We use `uv venv` rather
+# than `python -m venv` because miniforge3's `python -m venv` produces a
+# venv without bin/pip (its ensurepip path is broken on conda envs), which
+# causes subsequent pip calls to fall through to Ubuntu 24.04's system pip
+# (PEP 668 externally-managed → install rejected). uv venv ships pip out
+# of the box and works against any cpython.
 ensure_venv() {
+    ensure_uv
     if [ ! -f "$VENV_PATH/bin/activate" ]; then
         echo "=== Creating venv at $VENV_PATH ==="
         mkdir -p "$(dirname "$VENV_PATH")"
-        "$CONTAINER_PYTHON" -m venv "$VENV_PATH"
+        "$UV_BIN" venv "$VENV_PATH" --python "$CONTAINER_PYTHON" --seed
     fi
     patch_activate_nccl_fix
     # shellcheck disable=SC1091
@@ -102,13 +129,7 @@ install_deps() {
     # Block ~/.local/lib leakage — venv only.
     export PYTHONNOUSERSITE=1
 
-    # Bootstrap uv into the venv if missing. uv parallelizes wheel extract
-    # and is dramatically faster than pip — even more so now that writes
-    # go to ext4 instead of fuse2fs.
-    if ! command -v uv >/dev/null 2>&1; then
-        echo "=== Bootstrapping uv ==="
-        pip install --no-cache-dir uv
-    fi
+    # uv was bootstrapped by ensure_venv; reuse the same binary.
 
     echo "=== Installing build tools (ninja for parallel CUDA compile) ==="
     uv pip install ninja
