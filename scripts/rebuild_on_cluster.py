@@ -57,8 +57,18 @@ def build_rebuild_script(project_root: str, overlay: str, image: str) -> str:
     # Without this, the torch CUDA extension is built only for the build node's GPU
     # arch and jobs that land on other GPU types crash with
     # "no kernel image is available for execution on the device".
+    # NCCL fix: prepend torch's bundled NCCL dir to LD_LIBRARY_PATH so torch >= 2.10
+    # finds the right libnccl (with ncclCommShrink) instead of the sif's older
+    # /usr/lib/libnccl.so.2.25.1. See submit_cluster.py for the full story. The
+    # brace group + ; true makes a missing libnccl non-fatal so we still attempt
+    # the build (and fail with a clearer error if torch genuinely can't import).
+    nccl_fix = (
+        "{ NCCL_DIR=$(compgen -G '/ext3/miniforge3/lib/python3.*/site-packages/nvidia/nccl/lib' | head -1); "
+        '[ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ] && export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"; '
+        "true; }"
+    )
     inner = (
-        "source /ext3/env.sh && "
+        f"source /ext3/env.sh && {nccl_fix} && "
         'export TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0" && '
         f"cd {project_root} && "
         "which python3 && "

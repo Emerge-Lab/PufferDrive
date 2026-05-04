@@ -43,6 +43,31 @@ create_overlay() {
     echo "    --wrap \"$0 install\""
 }
 
+patch_env_sh_nccl_fix() {
+    # Make /ext3/env.sh prepend torch's bundled libnccl dir to LD_LIBRARY_PATH
+    # so torch >= 2.10's NCCL (with ncclCommShrink) wins the symbol search vs
+    # the sif's older /usr/lib/x86_64-linux-gnu/libnccl.so.2.25.1. Idempotent.
+    local marker="# nccl-fix: prefer torch's bundled libnccl"
+    if grep -qF "$marker" /ext3/env.sh 2>/dev/null; then
+        echo "[setup] /ext3/env.sh already has nccl-fix"
+        return 0
+    fi
+    cat >> /ext3/env.sh <<'EOF'
+
+# nccl-fix: prefer torch's bundled libnccl over the sif's older /usr/lib version.
+# torch >= 2.10 calls ncclCommShrink (added in NCCL 2.27.5), which is missing
+# from the cuda12.8.1 sif's bundled NCCL. Without this LD_LIBRARY_PATH prepend,
+# child processes spawned by torchrun resolve the wrong libnccl and fail with
+# "undefined symbol: ncclCommShrink".
+NCCL_DIR=$(compgen -G '/ext3/miniforge3/lib/python3.*/site-packages/nvidia/nccl/lib' | head -1)
+if [ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ]; then
+    export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"
+fi
+unset NCCL_DIR
+EOF
+    echo "[setup] patched /ext3/env.sh with nccl-fix"
+}
+
 install_deps() {
     echo "=== Installing dependencies in container ==="
 
@@ -59,6 +84,9 @@ install_deps() {
     echo "=== Installing PyTorch ==="
     pip3 install --upgrade "torch>=2.9" torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu128
+
+    # Patch /ext3/env.sh now that torch's bundled NCCL is on disk.
+    patch_env_sh_nccl_fix
 
     # Install PufferDrive Python package (editable).
     # puffer-4's pyproject.toml does NOT build the C extension via pip;
@@ -85,6 +113,9 @@ rebuild_extension() {
     # See install_deps comment — must target every GPU type we might land
     # on after the rebuild or jobs crash with missing kernel images.
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+    # Idempotently apply the env.sh nccl fix in case this overlay was set up
+    # before the patch was added to install_deps.
+    patch_env_sh_nccl_fix
     cd "$PROJECT_ROOT"
     ./build.sh clean
     ./build.sh
