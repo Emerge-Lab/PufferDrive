@@ -32,6 +32,7 @@ typedef struct {
     int control_mode;
     int sdc_controller;
     int non_sdc_controller;
+    int non_vehicle_controller;
     int max_controlled_agents;
     char map_dir[256];
     char anchor_policy_path[256];
@@ -151,6 +152,21 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else {
             printf("Warning: Unknown non_sdc_controller value '%s', defaulting to POLICY\n", value);
             env_config->non_sdc_controller = 1;
+        }
+    } else if (MATCH("env", "non_vehicle_controller")) {
+        if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
+            env_config->non_vehicle_controller = 0;
+        } else if (strcmp(value, "\"policy\"") == 0 || strcmp(value, "policy") == 0) {
+            env_config->non_vehicle_controller = 1;
+        } else if (strcmp(value, "\"replay\"") == 0 || strcmp(value, "replay") == 0) {
+            env_config->non_vehicle_controller = 2;
+        } else if (strcmp(value, "\"idm\"") == 0 || strcmp(value, "idm") == 0) {
+            env_config->non_vehicle_controller = 3;
+        } else if (strcmp(value, "\"corridor_idm\"") == 0 || strcmp(value, "corridor_idm") == 0) {
+            env_config->non_vehicle_controller = 4;
+        } else {
+            printf("Warning: Unknown non_vehicle_controller value '%s', defaulting to REPLAY\n", value);
+            env_config->non_vehicle_controller = 2;
         }
     } else if (MATCH("env", "reg_mode")) {
         if (strcmp(value, "\"None\"") == 0 || strcmp(value, "None") == 0 || strcmp(value, "\"none\"") == 0 ||

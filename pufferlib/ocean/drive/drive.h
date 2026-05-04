@@ -220,6 +220,9 @@ const Color LIGHT_PURPLE = (Color){204, 204, 255, 255};
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
+typedef struct IDMRoadElement IDMRoadElement;
+typedef struct IDMMap IDMMap;
+typedef struct IDMAgentState IDMAgentState;
 
 struct Log {
     float episode_return;
@@ -518,6 +521,7 @@ struct Drive {
     int control_mode;
     int sdc_controller;
     int non_sdc_controller;
+    int non_vehicle_controller;
     int max_controlled_agents;
     int render_mode;
     // Noise configuration
@@ -528,7 +532,16 @@ struct Drive {
     float obs_noise_road;
     bool async_resets;
     float blind_perc; // Max fraction of active agents that are blind
+    IDMMap *idm_map;
+    IDMAgentState *idm_agent_states;
 };
+
+static void idm_load_extension(FILE *file, Drive *env);
+static void idm_shift_map(Drive *env, float mean_x, float mean_y);
+static void idm_free(Drive *env);
+static void idm_reset_agent_states(Drive *env);
+static void move_idm(Drive *env, int agent_idx);
+static void move_corridor_idm(Drive *env, int agent_idx);
 
 void add_log(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -707,6 +720,7 @@ Entity *load_map_binary(const char *filename, Drive *env) {
         fread(&entities[i].mark_as_expert, sizeof(int), 1, file);
     }
 
+    idm_load_extension(file, env);
     fclose(file);
     return entities;
 }
@@ -1059,6 +1073,7 @@ void set_means(Drive *env) {
             env->entities[i].goal_position_y -= mean_y;
         }
     }
+    idm_shift_map(env, mean_x, mean_y);
 }
 
 void move_expert(Drive *env, float *actions, int agent_idx) {
@@ -1438,13 +1453,21 @@ static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, in
     if (env->control_mode == CONTROL_REPLAY_LOGS) {
         return CONTROLLER_REPLAY;
     }
+    if (replay_by_default) {
+        return CONTROLLER_REPLAY;
+    }
 
-    int requested_controller = (env->sdc_track_index >= 0 && agent_idx == env->sdc_track_index)
-                                   ? env->sdc_controller
-                                   : env->non_sdc_controller;
+    int requested_controller;
+    if (env->sdc_track_index >= 0 && agent_idx == env->sdc_track_index) {
+        requested_controller = env->sdc_controller;
+    } else if (env->entities[agent_idx].type == VEHICLE) {
+        requested_controller = env->non_sdc_controller;
+    } else {
+        requested_controller = env->non_vehicle_controller;
+    }
 
     if (requested_controller == CONTROLLER_POLICY && !is_active) {
-        return replay_by_default ? CONTROLLER_REPLAY : CONTROLLER_STATIC;
+        return CONTROLLER_STATIC;
     }
 
     return requested_controller;
@@ -1534,7 +1557,7 @@ void set_active_agents(Drive *env) {
             env->static_agent_count++; // Includes expert replay and static agents
             env->entities[i].active_agent = 0;
             int replay_by_default =
-                env->entities[i].mark_as_expert == 1 || env->active_agent_count >= control_limit || sdc_only_mode;
+                env->entities[i].mark_as_expert != 0 || env->active_agent_count >= control_limit || sdc_only_mode;
             env->entities[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
             // In SDC-only modes, force every other valid agent into the expert
             // replay list so move_expert teleports them along their logged
@@ -1623,6 +1646,8 @@ void remove_bad_trajectories(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env->idm_map = NULL;
+    env->idm_agent_states = NULL;
     init_action_space();
     env->entities = load_map_binary(env->map_name, env);
     set_means(env);
@@ -1685,6 +1710,7 @@ void c_close(Drive *env) {
     free(env->expert_static_agent_indices);
     free(env->ini_file);
     free(env->tracks_to_predict_indices);
+    idm_free(env);
     env->tracks_to_predict_indices = NULL;
 }
 
@@ -2395,6 +2421,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
 void c_reset(Drive *env) {
     env->timestep = env->init_steps;
     set_start_position(env);
+    idm_reset_agent_states(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
@@ -2557,21 +2584,7 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
     }
 }
 
-static void move_idm(Drive *env, int agent_idx) {
-    Entity *agent = &env->entities[agent_idx];
-    if (agent->removed || agent->x == INVALID_POSITION) {
-        return;
-    }
-
-    // Placeholder IDM: keep the agent pose fixed until route/lane following is designed.
-    agent->vx = 0.0f;
-    agent->vy = 0.0f;
-    agent->vz = 0.0f;
-    agent->a_long = 0.0f;
-    agent->a_lat = 0.0f;
-    agent->jerk_long = 0.0f;
-    agent->jerk_lat = 0.0f;
-}
+#include "idm.h"
 
 static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
@@ -2585,7 +2598,12 @@ static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx
         return;
     }
 
-    if (agent->controller == CONTROLLER_IDM || agent->controller == CONTROLLER_CORRIDOR_IDM) {
+    if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
+        move_corridor_idm(env, agent_idx);
+        return;
+    }
+
+    if (agent->controller == CONTROLLER_IDM) {
         move_idm(env, agent_idx);
         return;
     }

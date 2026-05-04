@@ -72,6 +72,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         sdc_controller="policy",
         non_sdc_controller="policy",
+        non_vehicle_controller="replay",
         max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
         ini_file_path="pufferlib/config/ocean/drive.ini",
@@ -147,6 +148,7 @@ class Drive(pufferlib.PufferEnv):
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
         self.non_sdc_controller_str = non_sdc_controller
+        self.non_vehicle_controller_str = non_vehicle_controller
         self.map_dir = map_dir
         str_to_reg_mode = {
             "None": RegMode.NONE,
@@ -189,8 +191,13 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
             )
+        if self.non_vehicle_controller_str not in CONTROLLER_MAP:
+            raise ValueError(
+                f"non_vehicle_controller must be one of {controller_options}. Got: {self.non_vehicle_controller_str}"
+            )
         self.sdc_controller = CONTROLLER_MAP[self.sdc_controller_str]
         self.non_sdc_controller = CONTROLLER_MAP[self.non_sdc_controller_str]
+        self.non_vehicle_controller = CONTROLLER_MAP[self.non_vehicle_controller_str]
 
         if action_type == "discrete":
             if dynamics_model == "classic":
@@ -283,6 +290,7 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 sdc_controller=self.sdc_controller,
                 non_sdc_controller=self.non_sdc_controller,
+                non_vehicle_controller=self.non_vehicle_controller,
                 map_dir=map_dir,
                 max_controlled_agents=self.max_controlled_agents,
                 render_mode=render_mode,
@@ -332,6 +340,7 @@ class Drive(pufferlib.PufferEnv):
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
             non_sdc_controller=self.non_sdc_controller,
+            non_vehicle_controller=self.non_vehicle_controller,
             init_steps=self.init_steps,
             goal_behavior=self.goal_behavior,
             goal_target_distance=self.goal_target_distance,
@@ -374,6 +383,7 @@ class Drive(pufferlib.PufferEnv):
                 control_mode=self.control_mode,
                 sdc_controller=self.sdc_controller,
                 non_sdc_controller=self.non_sdc_controller,
+                non_vehicle_controller=self.non_vehicle_controller,
                 map_dir=self.map_dir,
                 termination_mode=(int(self.termination_mode) if self.termination_mode is not None else 0),
                 max_controlled_agents=self.max_controlled_agents,
