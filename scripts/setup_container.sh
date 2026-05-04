@@ -54,23 +54,36 @@ install_deps() {
     # on the device" crashes when a training job lands on a different GPU
     # type than the one we built on.
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+    # Parallel C++/CUDA build (ninja honors MAX_JOBS).
+    export MAX_JOBS=8
 
-    # Install PyTorch with CUDA
+    # Bootstrap uv if missing. uv extracts wheels in parallel and avoids
+    # pip's stage→install double-write, which roughly halves the data going
+    # through fuse2fs (the single-threaded ext3 layer used under --fakeroot).
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "=== Bootstrapping uv ==="
+        pip3 install --no-cache-dir uv
+    fi
+
+    UV_PIP="uv pip install --system"
+
+    echo "=== Installing build tools (ninja for parallel CUDA compile) ==="
+    $UV_PIP ninja
+
+    # --reinstall handles partial-state overlays cleanly (e.g. after a killed install).
     echo "=== Installing PyTorch ==="
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    $UV_PIP --reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    # Install PufferDrive
-    echo "=== Installing PufferDrive ==="
+    echo "=== Installing PufferDrive (also builds C extension via setup.py) ==="
     cd "$PROJECT_ROOT"
-    pip3 install -e ".[cluster]"
+    $UV_PIP -e ".[cluster]"
 
-    # Install additional dependencies
     echo "=== Installing additional packages ==="
-    pip3 install wandb rich submitit pyyaml
+    $UV_PIP wandb rich submitit pyyaml
 
-    # Build the C extension
-    echo "=== Building C extension ==="
-    python3 setup.py build_ext --inplace --force
+    # Note: removed the redundant `python3 setup.py build_ext --inplace --force`
+    # that used to run here; `uv pip install -e .[cluster]` already invokes
+    # setup.py BuildExt as part of the editable install.
 
     echo "=== Setup complete ==="
     python3 -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
@@ -82,6 +95,7 @@ rebuild_extension() {
     # See install_deps comment — must target every GPU type we might land
     # on after the rebuild or jobs crash with missing kernel images.
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+    export MAX_JOBS=8
     cd "$PROJECT_ROOT"
     python3 setup.py build_ext --inplace --force
     echo "=== Rebuild complete ==="
