@@ -236,6 +236,8 @@ struct Drive {
     float obs_range_partner_m;
     float obs_range_traffic_control_m;
     int obs_size;
+    // Robustness features
+    float partner_blindness_prob;
 };
 
 #include "dataloader.h"
@@ -2520,6 +2522,11 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
+    if (ego->is_blind_partner) {
+        // Partner slots stay zero (compute_observations memset's the buffer).
+        *partner_count = 0;
+        return obs_idx + env->obs_slots_partners * PARTNER_FEATURES;
+    }
     typedef struct {
         int index;
         float dist_sq;
@@ -2884,6 +2891,11 @@ void c_reset(Drive *env) {
         env->logs[i] = (Log) {0};
         Agent *agent = &env->agents[i];
 
+        // Sample episode-level erratic flags before any continue, so every
+        // agent (including those that fail to spawn) gets a fresh value.
+        agent->is_blind_partner =
+            (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
+
         if (env->simulation_mode == SIMULATION_GIGAFLOW && agent->removed) {
             continue;
         }
@@ -2904,9 +2916,11 @@ void c_step(Drive *env) {
     memset(env->masks, 0, env->num_agents * sizeof(unsigned char));
     env->timestep++;
 
+    // Erratic-driver flags (e.g. blind partners) act in the world but their
+    // transitions are excluded from the PPO rollout buffer per GIGAFLOW Appendix B.4.
     for (int i = 0; i < env->num_agents; i++) {
         Agent *a = &env->agents[i];
-        env->masks[i] = !(a->stopped || a->removed);
+        env->masks[i] = !(a->stopped || a->removed || a->is_blind_partner);
     }
 
     for (int i = 0; i < env->num_moving_log_agents; i++) {

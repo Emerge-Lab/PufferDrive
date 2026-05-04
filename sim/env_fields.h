@@ -63,6 +63,8 @@
     F(float, obs_range_road_behind_m)                                                                                  \
     F(float, obs_range_road_side_m)                                                                                    \
     F(float, obs_range_partner_m)                                                                                      \
-    F(float, obs_range_traffic_control_m)
+    F(float, obs_range_traffic_control_m)                                                                              \
+    /* Robustness features */                                                                                          \
+    F(float, partner_blindness_prob)
 
 #endif
