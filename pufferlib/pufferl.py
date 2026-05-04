@@ -515,6 +515,7 @@ class PuffeRL:
                 map_dir=map_dir,
                 num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
                 clean=clean_eval,
+                scenario_length=self.config["eval"].get("scenario_length"),
             )
 
             # Build eval args by applying overrides to training config
@@ -576,6 +577,7 @@ class PuffeRL:
                 map_dir=render_map_dir,
                 num_carla_maps=self.config["eval"].get("num_carla_maps", 8),
                 clean=clean_render,
+                scenario_length=self.config["eval"].get("scenario_length"),
             )
 
             render_args = load_eval_multi_scenarios_config(
@@ -1882,7 +1884,9 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8, clean=False):
+def build_eval_overrides(
+    simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8, clean=False, scenario_length=None
+):
     """Build evaluation overrides for a given simulation mode.
 
     Args:
@@ -1899,6 +1903,11 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             phantom_braking) are always forced to zero at eval — they're
             pure randomness, they don't change the obs shape, and eval
             should be deterministic regardless of clean mode.
+        scenario_length: replay-mode scenarios per-step count (also used as
+            resample_frequency). Defaults to 91 — WOMD's 9.1s @ 10Hz. nuPlan
+            scenes from the categorized py123d pipeline want 201 (20.1s).
+            Ignored in gigaflow mode (procedural episodes always run for the
+            hardcoded 3000-step budget).
     """
     # Common reward coefficients (same for both modes)
     common_env = {
@@ -1952,12 +1961,13 @@ def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=Non
             }
         }
     elif simulation_mode == "replay":
+        replay_len = scenario_length if scenario_length is not None else 91
         eval_overrides = {
             "env": {
                 **common_env,
                 "simulation_mode": "replay",
-                "resample_frequency": 91,
-                "scenario_length": 91,
+                "resample_frequency": replay_len,
+                "scenario_length": replay_len,
                 "max_agents_per_env": 64,
                 "map_dir": map_dir or "pufferlib/resources/drive/binaries/womd",
                 "num_maps": num_scenarios,
@@ -2190,6 +2200,7 @@ def eval_multi_scenarios(
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
             clean=clean_from_config,
+            scenario_length=tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
         clean = clean or clean_from_config
@@ -2363,6 +2374,7 @@ def eval_multi_scenarios_render(
             map_dir=map_dir,
             num_carla_maps=tmp_args.get("num_carla_maps", 8),
             clean=clean_from_config,
+            scenario_length=tmp_args["eval"].get("scenario_length"),
         )
         args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
         clean = clean or clean_from_config
