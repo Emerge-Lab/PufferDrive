@@ -448,7 +448,28 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            env_setup = "source /ext3/env.sh"
+            # NCCL fix: torch >= 2.10 (in the overlay) is built against NCCL 2.27.5
+            # and calls ncclCommShrink, which is missing from the sif's older
+            # /usr/lib/x86_64-linux-gnu/libnccl.so.2.25.1. Without putting torch's
+            # bundled NCCL dir on LD_LIBRARY_PATH first, child processes spawned by
+            # torchrun resolve the wrong libnccl and crash with "undefined symbol:
+            # ncclCommShrink" at `from torch._C import *`.
+            #
+            # The same fix is baked into setup_container.sh so that overlays built
+            # via that path patch /ext3/env.sh directly. We keep this prepend in the
+            # launcher as belt-and-suspenders for users still on overlays from
+            # before the env.sh patch landed. The brace group + ; true makes a
+            # missing libnccl non-fatal so the outer && chain still reaches torchrun.
+            preload_nccl = (
+                "{ NCCL_DIR=$(compgen -G '/ext3/miniforge3/lib/python3.*/site-packages/nvidia/nccl/lib' | head -1); "
+                'if [ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ]; then '
+                '  export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"; '
+                '  echo "[nccl-fix] prepended $NCCL_DIR to LD_LIBRARY_PATH"; '
+                'else '
+                '  echo "[nccl-fix] WARNING: torch-bundled NCCL not found at expected path"; '
+                'fi; true; }'
+            )
+            env_setup = f"source /ext3/env.sh && {preload_nccl}"
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
             cache_exports = (
                 f"export XDG_CACHE_HOME={scratch_dir}/cache && "

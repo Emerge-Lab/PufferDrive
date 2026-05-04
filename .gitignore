@@ -167,3 +167,6 @@ drive
 resources/drive/binaries/*
 !resources/drive/
 !resources/drive/demo_replay_map.bin
+
+# Personal Claude Code notes — see CLAUDE.local.md convention
+CLAUDE.local.md

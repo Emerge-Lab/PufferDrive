@@ -10,11 +10,13 @@
 
 set -e
 
-# Configuration — adjust these paths for your setup
-CONTAINER_DIR="${CONTAINER_DIR:-/scratch/$USER/containers/pufferdrive}"
-OVERLAY_PATH="$CONTAINER_DIR/overlay.ext3"
+# Configuration — all env-var overridable. Defaults match submit_cluster.py
+# --container_overlay / --container_image so both scripts agree on which
+# overlay they're reading/writing.
+OVERLAY_PATH="${OVERLAY_PATH:-/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3}"
 IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"
 OVERLAY_TEMPLATE="${OVERLAY_TEMPLATE:-/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz}"
+CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 create_overlay() {
@@ -41,16 +43,50 @@ create_overlay() {
     echo "    --wrap \"$0 install\""
 }
 
+patch_env_sh_nccl_fix() {
+    # Make /ext3/env.sh prepend torch's bundled libnccl dir to LD_LIBRARY_PATH
+    # so torch >= 2.10's NCCL (with ncclCommShrink) wins the symbol search vs
+    # the sif's older /usr/lib/x86_64-linux-gnu/libnccl.so.2.25.1. Idempotent.
+    local marker="# nccl-fix: prefer torch's bundled libnccl"
+    if grep -qF "$marker" /ext3/env.sh 2>/dev/null; then
+        echo "[setup] /ext3/env.sh already has nccl-fix"
+        return 0
+    fi
+    cat >> /ext3/env.sh <<'EOF'
+
+# nccl-fix: prefer torch's bundled libnccl over the sif's older /usr/lib version.
+# torch >= 2.10 calls ncclCommShrink (added in NCCL 2.27.5), which is missing
+# from the cuda12.8.1 sif's bundled NCCL. Without this LD_LIBRARY_PATH prepend,
+# child processes spawned by torchrun resolve the wrong libnccl and fail with
+# "undefined symbol: ncclCommShrink".
+NCCL_DIR=$(compgen -G '/ext3/miniforge3/lib/python3.*/site-packages/nvidia/nccl/lib' | head -1)
+if [ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ]; then
+    export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"
+fi
+unset NCCL_DIR
+EOF
+    echo "[setup] patched /ext3/env.sh with nccl-fix"
+}
+
 install_deps() {
     echo "=== Installing dependencies in container ==="
 
     # Use --break-system-packages since we're in a container with overlay
     export PIP_BREAK_SYSTEM_PACKAGES=1
 
+    # Multi-arch CUDA build so the _C.so runs on A100 (8.0), L40S (8.9),
+    # H100/H200 (9.0) without "no kernel image is available for execution
+    # on the device" crashes when a training job lands on a different GPU
+    # type than the one we built on.
+    export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+
     # Install PyTorch with CUDA. puffer-4 requires torch >= 2.9.
     echo "=== Installing PyTorch ==="
     pip3 install --upgrade "torch>=2.9" torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu128
+
+    # Patch /ext3/env.sh now that torch's bundled NCCL is on disk.
+    patch_env_sh_nccl_fix
 
     # Install PufferDrive Python package (editable).
     # puffer-4's pyproject.toml does NOT build the C extension via pip;
@@ -74,6 +110,12 @@ install_deps() {
 
 rebuild_extension() {
     echo "=== Rebuilding _C extension ==="
+    # See install_deps comment — must target every GPU type we might land
+    # on after the rebuild or jobs crash with missing kernel images.
+    export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
+    # Idempotently apply the env.sh nccl fix in case this overlay was set up
+    # before the patch was added to install_deps.
+    patch_env_sh_nccl_fix
     cd "$PROJECT_ROOT"
     ./build.sh clean
     ./build.sh
