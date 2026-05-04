@@ -147,6 +147,7 @@ ssh torch 'cd /scratch/$USER/code/PufferDrive && git pull --ff-only origin <bran
 
 ## Common pitfalls
 
+- **`undefined symbol: ncclCommShrink` on `from torch._C import *`** — the cuda12.8.1 sif at `/share/apps/...` ships libnccl 2.25.1 in `/usr/lib/x86_64-linux-gnu/`. torch ≥ 2.10 (cu128 wheels) calls `ncclCommShrink`, added in NCCL 2.27.5. torch ships its own bundled NCCL 2.27.5 in `site-packages/nvidia/nccl/lib/`, but in `torchrun`-spawned child processes the loader sometimes resolves libtorch_cuda's `libnccl.so.2` from the sif's old `/usr/lib` instead, missing the symbol. Fix: prepend torch's NCCL dir to `LD_LIBRARY_PATH` so it wins. `setup_container.sh install`/`rebuild` patches `/ext3/env.sh` to do this automatically; `submit_cluster.py` and `rebuild_on_cluster.py` also prepend at launch as belt-and-suspenders. Existing overlays built before the env.sh patch can be retrofitted by mounting writable and appending the same `NCCL_DIR=$(compgen -G ...); export LD_LIBRARY_PATH=...` block to `/ext3/env.sh`.
 - **`CONDA_PREFIX` is empty** even after `source /ext3/env.sh` from `/ext3/miniforge3/bin/python3`. Use `sys.prefix` to find the active conda env's lib dir.
 - **`-lomp5` on Linux fails** with conda-forge openmp; default is for older Intel OpenMP packagings. setup.py overrides via `OMP_LIB`.
 - **clang's default library search path doesn't include `$prefix/lib`** even when running from a conda env. Pass `-L$sys.prefix/lib` explicitly.
