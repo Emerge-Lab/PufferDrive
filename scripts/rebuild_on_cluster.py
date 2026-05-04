@@ -1,8 +1,10 @@
 """Submit a SLURM job to rebuild the PufferDrive C extension inside the Singularity container.
 
-Avoids the nested quoting hell of sbatch --wrap by writing a standalone bash script
-to a temp location and sbatch-ing that file. The script runs `setup.py build_ext`
-inside the container overlay where torch is installed.
+Run this on the cluster login node (where sbatch is available). It writes a standalone
+bash script to /scratch/$USER/rebuild_logs/ and submits it. The script runs
+`setup.py build_ext` inside the container overlay where torch is installed.
+
+Avoids the nested quoting hell of `sbatch --wrap` by writing the script to a file first.
 
 Example:
     python scripts/rebuild_on_cluster.py
@@ -75,14 +77,15 @@ def build_rebuild_script(project_root: str, overlay: str, image: str) -> str:
     )
 
 
-def run_ssh(cmd: str, check: bool = True) -> str:
-    """Run a command on the cluster via ssh and return stdout."""
-    result = subprocess.run(["ssh", "torch", cmd], capture_output=True, text=True)
+def run(cmd: str, check: bool = True, capture: bool = True) -> str:
+    """Run a shell command on this host. Returns stdout."""
+    result = subprocess.run(cmd, shell=True, capture_output=capture, text=True)
     if check and result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr, file=sys.stderr)
-        raise SystemExit(f"ssh command failed: {cmd}")
-    return result.stdout
+        if capture:
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+        raise SystemExit(f"command failed: {cmd}")
+    return result.stdout if capture else ""
 
 
 def main():
@@ -91,11 +94,10 @@ def main():
     overlay = args.overlay or f"/scratch/{args.user}/images/PufferDrive/overlay-15GB-500K.ext3"
 
     script = build_rebuild_script(project_root, overlay, args.image)
-    # Use a scratch location for script and log so they survive the compute node.
     log_dir = f"/scratch/{args.user}/rebuild_logs"
     script_path = f"{log_dir}/rebuild_pufferdrive.sh"
     log_path = f"{log_dir}/rebuild_pufferdrive_%j.log"
-    run_ssh(f"mkdir -p {log_dir}")
+    os.makedirs(log_dir, exist_ok=True)
 
     if args.dry:
         print("=== rebuild script ===")
@@ -104,21 +106,16 @@ def main():
         print(f"=== log path: {log_path} ===")
         return 0
 
-    # Write script to cluster via ssh
-    subprocess.run(
-        ["ssh", "torch", f"cat > {script_path} && chmod +x {script_path}"],
-        input=script,
-        text=True,
-        check=True,
-    )
+    with open(script_path, "w") as f:
+        f.write(script)
+    os.chmod(script_path, 0o755)
 
-    # Submit
     sbatch_cmd = (
         f"sbatch --account={args.account} --gres=gpu:1 "
         f"--cpus-per-task={args.cpus} --mem={args.mem} --time={args.time} "
         f"-o {log_path} {script_path}"
     )
-    stdout = run_ssh(sbatch_cmd)
+    stdout = run(sbatch_cmd)
     print(stdout.strip())
 
     # Parse job id from "Submitted batch job 12345"
@@ -134,11 +131,11 @@ def main():
     if not args.wait:
         return 0
 
-    # Poll for completion
     print("Waiting for job to finish...")
+    state = ""
     while True:
         time.sleep(20)
-        state = run_ssh(
+        state = run(
             f"sacct -j {job_id} --format=State -n -P 2>/dev/null | head -1",
             check=False,
         ).strip()
@@ -151,7 +148,7 @@ def main():
 
     print()
     print("=== log ===")
-    log_content = run_ssh(f"cat {resolved_log} 2>/dev/null || echo '(no log)'", check=False)
+    log_content = run(f"cat {resolved_log} 2>/dev/null || echo '(no log)'", check=False)
     print(log_content)
     return 0 if state == "COMPLETED" else 1
 
