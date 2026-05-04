@@ -325,8 +325,8 @@ def build_env(args):
         resample_frequency=0,
         simulation_mode="gigaflow",
         control_mode="control_vehicles",
-        sdc_controller="idm",
-        non_sdc_controller="idm",
+        sdc_controller=args.sdc_controller,
+        non_sdc_controller=args.non_sdc_controller,
         action_type="discrete",
         dynamics_model="jerk",
         max_lane_segment_observations=8,
@@ -351,6 +351,8 @@ def main():
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument("--frame-interval", type=int, default=10)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--sdc-controller", default="idm")
+    parser.add_argument("--non-sdc-controller", default="idm")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

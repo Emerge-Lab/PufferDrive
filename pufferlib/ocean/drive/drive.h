@@ -30,6 +30,7 @@
 #define CONTROLLER_POLICY 1
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
+#define CONTROLLER_CORRIDOR_IDM 4
 
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
@@ -5319,6 +5320,11 @@ static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx
     int controller = agent->controller;
 
     if (controller == CONTROLLER_STATIC) {
+        return;
+    }
+
+    if (controller == CONTROLLER_CORRIDOR_IDM) {
+        move_corridor_idm(env, agent_idx);
         return;
     }
 

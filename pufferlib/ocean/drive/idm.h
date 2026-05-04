@@ -427,7 +427,7 @@ static int idm_advance_along_route_lanes(Drive *env, int agent_idx, float distan
     return 0;
 }
 
-static void move_idm(Drive *env, int agent_idx) {
+static void move_corridor_idm(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->removed) {
@@ -479,5 +479,7 @@ static void move_idm(Drive *env, int agent_idx) {
     agent->steering_angle = 0.0f;
     update_agent_speed(agent);
 }
+
+static void move_idm(Drive *env, int agent_idx) { move_corridor_idm(env, agent_idx); }
 
 #endif
