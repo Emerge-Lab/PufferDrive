@@ -140,7 +140,11 @@ install_deps() {
 
     echo "=== Installing PufferDrive (editable; also builds C extension via setup.py) ==="
     cd "$PROJECT_ROOT"
-    uv pip install -e ".[cluster]"
+    # --no-build-isolation: pyproject.toml's [build-system].requires includes
+    # torch, which would otherwise make uv spin up a fresh build env and
+    # download/extract ~6 GB of torch+CUDA wheels just to run setup.py once.
+    # We just installed torch into the venv, so use it directly.
+    uv pip install --no-build-isolation -e ".[cluster]"
 
     echo "=== Installing additional packages ==="
     uv pip install wandb rich submitit pyyaml
