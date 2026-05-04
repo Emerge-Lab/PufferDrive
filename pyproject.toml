@@ -39,8 +39,11 @@ where = ["."]
 include = ["pufferlib*"]
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "wheel", "numpy", "pybind11"]
 build-backend = "setuptools.build_meta"
+
+[tool.uv]
+no-build-isolation-package = ["torch"]
 
 [tool.ruff]
 line-length = 120
