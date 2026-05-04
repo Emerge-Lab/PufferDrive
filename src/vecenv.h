@@ -238,7 +238,7 @@ extern const char* cudaGetErrorString(cudaError_t);
 
 // Forward declare env-provided functions (defined in binding.c after this include)
 void my_init(Env* env, Dict* kwargs);
-void my_log(Log* log, Dict* out);
+void my_log(Log* log, Dict* out, float n);
 void my_env_constants(void* env, Dict* out);
 
 struct StaticThreading {
@@ -643,7 +643,7 @@ void static_vec_log(StaticVec* vec, Dict* out) {
     for (int i = 0; i < vec->size; i++) {
         memset(&envs[i].log, 0, sizeof(Log));
     }
-    my_log(&aggregate, out);
+    my_log(&aggregate, out, n);
     dict_set(out, "n", n);
 }
 
@@ -653,7 +653,7 @@ void static_vec_eval_log(StaticVec* vec, Dict* out) {
     if (n == 0) {
         return;
     }
-    my_log(&aggregate, out);
+    my_log(&aggregate, out, n);
     dict_set(out, "n", n);
 }
 

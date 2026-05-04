@@ -182,7 +182,14 @@ void my_init(Env *env, Dict *kwargs) {
     }
 }
 
-void my_log(Log *log, Dict *out) {
+void my_log(Log *log, Dict *out, float n) {
+    // Log fields are normalized per-agent by static_vec_aggregate_logs.
+    // For ratios across totals (not per-agent rates), un-normalize with n.
+    float total_distance_travelled = log->total_distance_travelled * n;
+    float total_infractions = log->total_infractions * n;
+    float avg_distance_per_infraction =
+        total_distance_travelled / fmaxf(1.0f, total_infractions);
+
     dict_set(out, "score", log->score);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
@@ -191,6 +198,7 @@ void my_log(Log *log, Dict *out) {
     dict_set(out, "num_goals_reached", log->num_goals_reached);
     dict_set(out, "avg_speed_per_agent", log->avg_speed_per_agent);
     dict_set(out, "dnf_rate", log->dnf_rate);
+    dict_set(out, "avg_distance_per_infraction", avg_distance_per_infraction);
     dict_set(out, "n", log->n);
 }
 
