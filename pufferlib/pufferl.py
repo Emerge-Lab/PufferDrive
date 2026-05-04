@@ -961,6 +961,8 @@ class PuffeRL:
 
     def _render_driving_behaviours(self, behaviours_config):
         """Render one scenario per driving behaviour class using eval_multi_scenarios_render."""
+        import random as _random
+
         EVAL_SECTIONS_PREFIX = "eval_"
         backend_name = self.config["eval"].get("multi_scenario_render_backend", "egl")
         bev_views = [(0, "", "sim_state"), (1, "_bev", "bev")] if backend_name == "egl" else [(0, "", "sim_state")]
@@ -991,6 +993,11 @@ class PuffeRL:
             render_overrides["env"]["control_mode"] = "control_sdc_only"
             render_overrides["env"]["num_maps"] = num_maps
             render_overrides["env"]["scenario_length"] = class_cfg.get("scenario_length", 91)
+            # Pick a random starting map index so each render epoch shows a
+            # different scenario from the directory. Without this, the env
+            # picks scenario 0 every time and we'd always render the same
+            # first .bin alphabetically.
+            render_overrides["env"]["starting_map"] = _random.randint(0, num_maps - 1)
 
             render_args = load_eval_multi_scenarios_config(
                 env_name=self.config["env"],
