@@ -204,7 +204,7 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                     f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: no .bin files in {map_dir}, skipping"
                 )
                 continue
-            scenario_length = class_cfg.get("scenario_length", 91)
+            scenario_length = class_cfg.get("scenario_length", 201)
             short = class_name[len(EVAL_SECTIONS_PREFIX) :]
 
             cmd = [
@@ -229,7 +229,7 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                 "replay",
                 "--env.init-mode",
                 "create_all_valid",
-                "--env.scenario-length",
+                "--eval.scenario-length",
                 str(scenario_length),
                 # Clean-eval overrides. Mirrors build_eval_overrides(clean=True):
                 # deterministic TL cycle (eval_mode=1), red lights enforced,
