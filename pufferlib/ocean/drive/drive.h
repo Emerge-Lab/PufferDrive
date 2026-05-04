@@ -79,6 +79,13 @@
 #define CONTROL_INFERRED_EXPERT_ACTIONS 5
 #define CONTROL_REPLAY_LOGS 6
 
+// Controller modes
+#define CONTROLLER_STATIC 0
+#define CONTROLLER_POLICY 1
+#define CONTROLLER_REPLAY 2
+#define CONTROLLER_IDM 3
+#define CONTROLLER_CORRIDOR_IDM 4
+
 // Minimum distance to goal position
 #define MIN_DISTANCE_TO_GOAL 2.0f
 
@@ -298,6 +305,7 @@ struct Entity {
     float goals_sampled_this_episode;
     int current_goal_reached;
     int active_agent;
+    int controller;
     int stopped;
     int removed;
     float a_long;
@@ -508,6 +516,8 @@ struct Drive {
     int *tracks_to_predict_indices;
     int init_mode;
     int control_mode;
+    int sdc_controller;
+    int non_sdc_controller;
     int max_controlled_agents;
     int render_mode;
     // Noise configuration
@@ -1424,6 +1434,22 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
     return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
+static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default) {
+    if (env->control_mode == CONTROL_REPLAY_LOGS) {
+        return CONTROLLER_REPLAY;
+    }
+
+    int requested_controller = (env->sdc_track_index >= 0 && agent_idx == env->sdc_track_index)
+                                   ? env->sdc_controller
+                                   : env->non_sdc_controller;
+
+    if (requested_controller == CONTROLLER_POLICY && !is_active) {
+        return replay_by_default ? CONTROLLER_REPLAY : CONTROLLER_STATIC;
+    }
+
+    return requested_controller;
+}
+
 void set_active_agents(Drive *env) {
 
     // Initialize
@@ -1460,6 +1486,7 @@ void set_active_agents(Drive *env) {
         env->num_actors++;
         env->active_agent_count++;
         env->entities[sdc_index].active_agent = 1;
+        env->entities[sdc_index].controller = resolve_agent_controller(env, sdc_index, 1, 0);
     }
 
     // Iterate through entities to find agents to create and/or control
@@ -1501,14 +1528,18 @@ void set_active_agents(Drive *env) {
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->entities[i].active_agent = 1;
+            env->entities[i].controller = resolve_agent_controller(env, i, 1, 0);
         } else if (env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++; // Includes expert replay and static agents
             env->entities[i].active_agent = 0;
+            int replay_by_default =
+                env->entities[i].mark_as_expert == 1 || env->active_agent_count >= control_limit || sdc_only_mode;
+            env->entities[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
             // In SDC-only modes, force every other valid agent into the expert
             // replay list so move_expert teleports them along their logged
             // trajectories during c_step.
-            if (env->entities[i].mark_as_expert == 1 || env->active_agent_count >= control_limit || sdc_only_mode) {
+            if (env->entities[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->entities[i].mark_as_expert = 1;
@@ -2526,6 +2557,44 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
     }
 }
 
+static void move_idm(Drive *env, int agent_idx) {
+    Entity *agent = &env->entities[agent_idx];
+    if (agent->removed || agent->x == INVALID_POSITION) {
+        return;
+    }
+
+    // Placeholder IDM: keep the agent pose fixed until route/lane following is designed.
+    agent->vx = 0.0f;
+    agent->vy = 0.0f;
+    agent->vz = 0.0f;
+    agent->a_long = 0.0f;
+    agent->a_lat = 0.0f;
+    agent->jerk_long = 0.0f;
+    agent->jerk_lat = 0.0f;
+}
+
+static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
+    Entity *agent = &env->entities[agent_idx];
+
+    if (agent->controller == CONTROLLER_STATIC) {
+        return;
+    }
+
+    if (agent->controller == CONTROLLER_REPLAY) {
+        move_expert(env, env->actions, agent_idx);
+        return;
+    }
+
+    if (agent->controller == CONTROLLER_IDM || agent->controller == CONTROLLER_CORRIDOR_IDM) {
+        move_idm(env, agent_idx);
+        return;
+    }
+
+    if (action_idx >= 0) {
+        move_dynamics(env, action_idx, agent_idx);
+    }
+}
+
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
@@ -2550,12 +2619,12 @@ void c_step(Drive *env) {
 
     env->timestep++;
 
-    // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int expert_idx = env->expert_static_agent_indices[i];
-        if (env->entities[expert_idx].x == INVALID_POSITION)
+    // Move background agents according to their per-agent controller.
+    for (int i = 0; i < env->static_agent_count; i++) {
+        int background_idx = env->static_agent_indices[i];
+        if (env->entities[background_idx].x == INVALID_POSITION)
             continue;
-        move_expert(env, env->actions, expert_idx);
+        move_agent_with_controller(env, -1, background_idx);
     }
 
     // Process actions for all active agents
@@ -2567,24 +2636,21 @@ void c_step(Drive *env) {
         if (env->entities[agent_idx].removed)
             continue;
 
-        if (env->control_mode == CONTROL_REPLAY_LOGS) {
-            // Teleport agents along their logged trajectories; ignore policy actions
-            move_expert(env, env->actions, agent_idx);
-        } else {
-            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
-                override_action_with_expert(env, i, agent_idx, env->timestep - 1);
-                // if (agent_idx == env->sdc_track_index && env->dynamics_model == DELTA_LOCAL &&
-                //     env->action_type == 0) {
-                //     int *ai = (int *)env->actions;
-                //     printf("[inferred_sdc] t=%d agent=%d dx=%d dy=%d yaw=%d\n",
-                //            env->timestep - 1, agent_idx,
-                //            ai[i * 3 + 0], ai[i * 3 + 1], ai[i * 3 + 2]);
-                // }
-            }
-            // Apply actions
-            move_dynamics(env, i, agent_idx);
+        if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+            override_action_with_expert(env, i, agent_idx, env->timestep - 1);
+            // if (agent_idx == env->sdc_track_index && env->dynamics_model == DELTA_LOCAL &&
+            //     env->action_type == 0) {
+            //     int *ai = (int *)env->actions;
+            //     printf("[inferred_sdc] t=%d agent=%d dx=%d dy=%d yaw=%d\n",
+            //            env->timestep - 1, agent_idx,
+            //            ai[i * 3 + 0], ai[i * 3 + 1], ai[i * 3 + 2]);
+            // }
+        }
 
-            // Apply sensor noise
+        move_agent_with_controller(env, i, agent_idx);
+
+        if (env->entities[agent_idx].controller == CONTROLLER_POLICY) {
+            // Apply sensor noise to policy-driven dynamics only.
             apply_dynamics_noise(env, agent_idx);
         }
     }

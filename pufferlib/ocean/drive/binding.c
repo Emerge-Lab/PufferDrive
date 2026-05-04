@@ -109,6 +109,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
+        env->sdc_controller = CONTROLLER_POLICY;
+        env->non_sdc_controller = CONTROLLER_POLICY;
         env->init_steps = init_steps;
         env->goal_behavior = goal_behavior;
         env->goal_target_distance = goal_target_distance;
@@ -266,6 +268,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dt = conf.dt;
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
+    env->sdc_controller = (int)unpack(kwargs, "sdc_controller");
+    env->non_sdc_controller = (int)unpack(kwargs, "non_sdc_controller");
     env->goal_behavior = (int)unpack(kwargs, "goal_behavior");
     env->goal_target_distance = (float)unpack(kwargs, "goal_target_distance");
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
