@@ -39,23 +39,14 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
-CHECKPOINTS = [
-    # "models/cpts_best/reg_delta_50k_maps_anchor_100_maps.pt"
-    # "models/rl/reg_self_play_50k.pt",
-]
+SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"
+DETERMINISTIC = True
 
-SCALING_CHECKPOINTS_PATH = (
-    "models/scaling_cpts"  # Directory containing scaling checkpoints following the naming convention described above
-)
-DETERMINISTIC = False
-
-TRAIN_MAP_DIR = "resources/drive/binaries/training"
+TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = (
-    "resources/drive/binaries/interactive_data_validation_50"  # 200 maps selected for SDC interactivity
-)
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
 INTERACTIVE_MAP_DIR_MAPS = 50
-NUM_TOTAL_EVAL_AGENTS = 1024 * 1
+NUM_TOTAL_EVAL_AGENTS = 1024 * 5
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -65,12 +56,11 @@ RUN_RENDER = False
 
 # ─── VIDEO RENDERING CONFIG ─────────────────────────────────────────────────
 CHECKPOINTS_TO_RENDER = ["models/scaling_cpts/unreg_classic_50k_maps.pt"]
-NUM_ENVS_TO_RENDER = 3
+NUM_ENVS_TO_RENDER = 0
 RENDER_MAP_DIR = INTERACTIVE_MAP_DIR  # Which maps to render on
 RENDER_NUM_MAPS = 200
 RENDER_OUTPUT_DIR = "eval_videos"
 RENDER_MODE = "worst_collision"  # "random" or "worst_collision"
-
 # ────────────────────────────────────────────────────────────────────────────────
 
 METRICS = [
@@ -139,8 +129,6 @@ def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length
     if episode_length is not None:
         config["env"]["episode_length"] = episode_length
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
-
-    print(config["env"]["lambda_value"])
     return config
 
 
@@ -184,7 +172,7 @@ def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, m
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            rollout_stats = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            rollout_stats = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
             rows.extend(process_rollout_data(rollout_stats, checkpoint, mode_name, scene_offset))
 
@@ -228,7 +216,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
             all_rows.extend(process_rollout_data(info_list, checkpoint_path, "sp_train", scene_offset))
 
@@ -462,7 +450,7 @@ def select_render_envs(evaluator, policy, env, num_to_render):
         List of (env_idx, collision_rate) tuples, sorted by collision rate descending,
         truncated to num_to_render.
     """
-    info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+    info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
     populated = [log for log in info_list if log and log.get("n", 0) > 0]
     did_collide = np.array([log["collision_rate"] for log in populated])
 
@@ -531,7 +519,7 @@ def render_checkpoint_videos(base_config):
 
         # Run a stats rollout for "random" mode to get collision rates
         if RENDER_MODE == "random" and not collision_rates:
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             for idx in env_indices:
                 if idx < len(info_list) and info_list[idx]:
                     collision_rates[idx] = info_list[idx].get("collision_rate", 0.0)
@@ -545,7 +533,7 @@ def render_checkpoint_videos(base_config):
         # Render selected envs
         for i, env_idx in enumerate(env_indices):
             print(f"  Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
-            evaluator.rollout(policy, env, render_env_idx=env_idx, deterministic=True)
+            evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             env.driver_env.stop_recorder(env_idx)
 
         # Move mp4s into the checkpoint subdirectory, tagging with collision rate
@@ -566,12 +554,6 @@ def main():
     base_config = load_config(ENV_NAME)
 
     all_rows = []
-    for cpt_path in CHECKPOINTS:
-        print(f"\n{'=' * 60}")
-        print(f"Evaluating: {cpt_path}")
-        print(f"{'=' * 60}")
-        all_rows.extend(evaluate_checkpoint(cpt_path, base_config))
-
     # ── Scaling analysis ─────────────────────────────────────────────────
     all_rows.extend(evaluate_scaling_checkpoints(base_config))
 
