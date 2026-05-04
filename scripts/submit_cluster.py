@@ -375,9 +375,16 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
         # Wrap with singularity if container mode is enabled
         if container_config is not None:
-            env_setup = "source /ext3/env.sh"
-            # Redirect caches to scratch to avoid home quota issues
+            # Activate the venv on /scratch instead of /ext3/env.sh. The venv
+            # was created with the overlay's miniforge3 python, so its
+            # bin/python symlinks back into /ext3 (still mounted :ro). All
+            # packages are on /scratch ext4 — no fuse2fs in the read path.
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
+            venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
+            env_setup = (
+                f"source {venv_path}/bin/activate && export PYTHONNOUSERSITE=1"
+            )
+            # Redirect caches to scratch to avoid home quota issues
             cache_exports = (
                 f"export XDG_CACHE_HOME={scratch_dir}/cache && "
                 f"export WANDB_CACHE_DIR={scratch_dir}/wandb_cache && "

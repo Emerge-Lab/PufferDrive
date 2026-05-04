@@ -3,8 +3,16 @@
 # This creates an overlay with all dependencies for running on HPC clusters
 # with older glibc versions.
 #
+# Architecture:
+#   - The overlay is used ONLY for the miniforge3 base Python interpreter.
+#   - All Python packages (torch, pufferlib, etc.) live in a venv on /scratch
+#     (regular ext4) instead of the overlay (fuse2fs single-threaded ~10 MB/s).
+#     This makes installs/rebuilds ~50x faster than the all-in-overlay approach.
+#   - At runtime the venv's bin/python symlinks back to /ext3/miniforge3, which
+#     is why we still mount the overlay (read-only) when activating the venv.
+#
 # Usage:
-#   1. Create an overlay: ./setup_container.sh create-overlay
+#   1. Create an overlay (one time): ./setup_container.sh create-overlay
 #   2. Install dependencies: sbatch --gres=gpu:1 --wrap "./setup_container.sh install"
 #   3. Rebuild C extension: sbatch --gres=gpu:1 --wrap "./setup_container.sh rebuild"
 
@@ -18,6 +26,10 @@ IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2
 OVERLAY_TEMPLATE="${OVERLAY_TEMPLATE:-/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz}"
 CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Venv lives on /scratch (regular ext4) — bypasses fuse2fs entirely for installs.
+VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
+# Python from the overlay's miniforge3 (mounted read-only at runtime).
+CONTAINER_PYTHON="${CONTAINER_PYTHON:-/ext3/miniforge3/bin/python3}"
 
 create_overlay() {
     echo "=== Creating overlay filesystem ==="
@@ -43,86 +55,113 @@ create_overlay() {
     echo "    --wrap \"$0 install\""
 }
 
-install_deps() {
-    echo "=== Installing dependencies in container ==="
+# Append the NCCL LD_LIBRARY_PATH fix to a venv's activate script so every
+# job that activates the venv inherits it. The cuda12.8 sif ships an old
+# libnccl (2.25.1) in /usr/lib that lacks ncclCommShrink; torch 2.x bundles
+# its own NCCL — we just have to make sure ld.so finds the bundled one first.
+patch_activate_nccl_fix() {
+    local activate="$VENV_PATH/bin/activate"
+    if grep -q "PUFFERDRIVE_NCCL_FIX" "$activate" 2>/dev/null; then
+        return 0
+    fi
+    cat >> "$activate" <<'EOF'
 
-    # Use --break-system-packages since we're in a container with overlay
-    export PIP_BREAK_SYSTEM_PACKAGES=1
+# PUFFERDRIVE_NCCL_FIX: prepend torch's bundled NCCL so libtorch_cuda finds
+# ncclCommShrink (added in NCCL 2.27). Without this, torchrun child procs
+# resolve libnccl.so.2 from the sif's old /usr/lib and crash on import torch.
+NCCL_DIR=$(compgen -G "$VIRTUAL_ENV/lib/python3.*/site-packages/nvidia/nccl/lib" | head -1)
+if [ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ]; then
+    export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"
+fi
+EOF
+}
+
+# Activate (and create if missing) the project venv. Must be called from
+# inside the container so $CONTAINER_PYTHON exists.
+ensure_venv() {
+    if [ ! -f "$VENV_PATH/bin/activate" ]; then
+        echo "=== Creating venv at $VENV_PATH ==="
+        mkdir -p "$(dirname "$VENV_PATH")"
+        "$CONTAINER_PYTHON" -m venv "$VENV_PATH"
+    fi
+    patch_activate_nccl_fix
+    # shellcheck disable=SC1091
+    source "$VENV_PATH/bin/activate"
+}
+
+install_deps() {
+    echo "=== Installing dependencies into venv at $VENV_PATH ==="
+    ensure_venv
 
     # Multi-arch CUDA build so the _C.so runs on A100 (8.0), L40S (8.9),
     # H100/H200 (9.0) without "no kernel image is available for execution
-    # on the device" crashes when a training job lands on a different GPU
-    # type than the one we built on.
+    # on the device" crashes when a training job lands on a different GPU.
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
     # Parallel C++/CUDA build (ninja honors MAX_JOBS).
     export MAX_JOBS=8
+    # Block ~/.local/lib leakage — venv only.
+    export PYTHONNOUSERSITE=1
 
-    # Bootstrap uv if missing. uv extracts wheels in parallel and avoids
-    # pip's stage→install double-write, which roughly halves the data going
-    # through fuse2fs (the single-threaded ext3 layer used under --fakeroot).
+    # Bootstrap uv into the venv if missing. uv parallelizes wheel extract
+    # and is dramatically faster than pip — even more so now that writes
+    # go to ext4 instead of fuse2fs.
     if ! command -v uv >/dev/null 2>&1; then
         echo "=== Bootstrapping uv ==="
-        pip3 install --no-cache-dir uv
+        pip install --no-cache-dir uv
     fi
 
-    UV_PIP="uv pip install --system"
-
     echo "=== Installing build tools (ninja for parallel CUDA compile) ==="
-    $UV_PIP ninja
+    uv pip install ninja
 
-    # --reinstall handles partial-state overlays cleanly (e.g. after a killed install).
+    # --reinstall heals partial-state venvs cleanly (e.g. after a killed install).
     echo "=== Installing PyTorch ==="
-    $UV_PIP --reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    uv pip install --reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    echo "=== Installing PufferDrive (also builds C extension via setup.py) ==="
+    echo "=== Installing PufferDrive (editable; also builds C extension via setup.py) ==="
     cd "$PROJECT_ROOT"
-    $UV_PIP -e ".[cluster]"
+    uv pip install -e ".[cluster]"
 
     echo "=== Installing additional packages ==="
-    $UV_PIP wandb rich submitit pyyaml
-
-    # Note: removed the redundant `python3 setup.py build_ext --inplace --force`
-    # that used to run here; `uv pip install -e .[cluster]` already invokes
-    # setup.py BuildExt as part of the editable install.
+    uv pip install wandb rich submitit pyyaml
 
     echo "=== Setup complete ==="
-    python3 -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
-    python3 -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
+    python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+    python -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
 }
 
 rebuild_extension() {
     echo "=== Rebuilding C extension ==="
-    # See install_deps comment — must target every GPU type we might land
-    # on after the rebuild or jobs crash with missing kernel images.
+    ensure_venv
     export TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"
     export MAX_JOBS=8
+    export PYTHONNOUSERSITE=1
     cd "$PROJECT_ROOT"
-    python3 setup.py build_ext --inplace --force
+    python setup.py build_ext --inplace --force
     echo "=== Rebuild complete ==="
-    python3 -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
+    python -c "from pufferlib.ocean.drive import binding; print('C binding loaded successfully')"
 }
 
 run_in_container() {
     local cmd="$1"
-    # Source /ext3/env.sh so the overlay's miniforge python, torch, and
-    # pufferlib site-packages land on sys.path. Without this the rebuild
-    # command fails with ModuleNotFoundError: torch.
-    # --fakeroot dropped — the rebuild only needs read access to the
-    # overlay. Keeping it only when we're installing (which needs to write
-    # to /ext3). See the `install` dispatch below.
+    # Overlay mounted read-only — venv's bin/python symlinks back into
+    # /ext3/miniforge3 for the interpreter, but every package read/write
+    # happens on /scratch ext4 (the venv on $VENV_PATH).
     singularity exec --nv \
         --overlay "$OVERLAY_PATH:ro" \
         "$IMAGE_PATH" \
-        bash -c "source /ext3/env.sh && cd $PROJECT_ROOT && $cmd"
+        bash -c "cd $PROJECT_ROOT && $cmd"
 }
 
 run_in_container_writable() {
     local cmd="$1"
-    # Writable overlay path for `install` — needs to pip-install into /ext3.
+    # --fakeroot still required because uv bootstrap writes to /ext3/miniforge3
+    # (the system pip puts uv there before we activate the venv). Once uv
+    # is bootstrapped, all subsequent installs go to the venv on /scratch
+    # (regular ext4, no fuse2fs in the write path).
     singularity exec --nv --fakeroot \
         --overlay "$OVERLAY_PATH" \
         "$IMAGE_PATH" \
-        bash -c "source /ext3/env.sh && cd $PROJECT_ROOT && $cmd"
+        bash -c "cd $PROJECT_ROOT && $cmd"
 }
 
 case "${1:-}" in
@@ -130,7 +169,6 @@ case "${1:-}" in
         create_overlay
         ;;
     install)
-        # Check if we're already in a container
         if [ -f /.singularity.d/Singularity ]; then
             install_deps
         else
@@ -151,8 +189,12 @@ case "${1:-}" in
         echo ""
         echo "Commands:"
         echo "  create-overlay  Create a new overlay filesystem (run on login node)"
-        echo "  install         Install all dependencies (submit as GPU job)"
+        echo "  install         Install all dependencies into venv on /scratch (submit as GPU job)"
         echo "  rebuild         Rebuild C extension only (submit as GPU job)"
+        echo ""
+        echo "Environment variables:"
+        echo "  VENV_PATH       Where the venv lives (default: /scratch/\$USER/venvs/pufferdrive)"
+        echo "  OVERLAY_PATH    Singularity overlay (only needs miniforge3 base python)"
         echo ""
         echo "Example workflow:"
         echo "  1. $0 create-overlay"
