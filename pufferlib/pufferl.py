@@ -2665,10 +2665,9 @@ def eval_multi_scenarios_render(
                 html_paths = sorted(os.path.join(gif_folder, f) for f in os.listdir(gif_folder) if f.endswith(".html"))
                 if html_paths:
                     step = args.get("global_step")
-                    html_log = {
-                        f"{_upload_prefix}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Html(p)
-                        for p in html_paths
-                    }
+                    # Stable key per (category, view); each render epoch overwrites
+                    # the same wandb panel rather than fanning out by scenario UUID.
+                    html_log = {_upload_prefix: wandb.Html(html_paths[-1])}
                     if hasattr(logger, "log"):
                         logger.log(html_log, step) if step is not None else logger.log(html_log)
                     if not quiet:
@@ -2695,10 +2694,14 @@ def eval_multi_scenarios_render(
 
             mp4_paths = sorted(os.path.join(mp4_folder, f) for f in os.listdir(mp4_folder) if f.endswith(".mp4"))
             if mp4_paths:
-                video_log = {
-                    f"{_upload_prefix}/{os.path.splitext(os.path.basename(p))[0]}": wandb.Video(p, fps=30, format="mp4")
+                # Log under a single stable key per (category, view) so successive
+                # renders show up in the same wandb panel as a time series.
+                # The scenario UUID lives in the caption, not the key.
+                videos = [
+                    wandb.Video(p, fps=30, format="mp4", caption=os.path.splitext(os.path.basename(p))[0])
                     for p in mp4_paths
-                }
+                ]
+                video_log = {_upload_prefix: videos if len(videos) > 1 else videos[0]}
                 step = args.get("global_step")
                 if hasattr(logger, "log"):
                     logger.log(video_log, step) if step is not None else logger.log(video_log)
