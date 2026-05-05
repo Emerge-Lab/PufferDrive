@@ -643,7 +643,7 @@ def plot_anchor_eval(
         )
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation accuracy (%)")
-    ax.set_title("Open-loop: validation accuracy")
+    ax.set_title("Validation accuracy")
     ax.grid(axis="y", alpha=0.3, linestyle="--")
     ax.legend(fontsize=9, loc="best")
     sns.despine(ax=ax)
@@ -660,7 +660,7 @@ def plot_anchor_eval(
     )
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation loss")
-    ax.set_title("Open-loop: validation loss")
+    ax.set_title("Validation loss")
     ax.grid(axis="y", alpha=0.3, linestyle="--")
     sns.despine(ax=ax)
 
@@ -716,8 +716,6 @@ def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
         "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
     }
-
-    breakpoint()
 
     df = df[df["mode"] == "scaling_sp_val"].copy()
     df = df[df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
