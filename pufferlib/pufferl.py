@@ -1639,6 +1639,26 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     )
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
+    # Restore optimizer state + step counters when resuming from a checkpoint.
+    # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
+    # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
+    if args.get("load_model_path"):
+        trainer_state_path = os.path.join(
+            os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt"
+        )
+        if os.path.exists(trainer_state_path):
+            print(f"Resuming optimizer/step state from {trainer_state_path}")
+            tstate = torch.load(trainer_state_path, map_location=train_config["device"])
+            pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
+            pufferl.global_step = tstate.get("global_step", pufferl.global_step)
+            pufferl.epoch = tstate.get("update", pufferl.epoch)
+            # Fast-forward the LR scheduler to the resumed epoch so the cosine
+            # schedule continues where it left off.
+            for _ in range(pufferl.epoch):
+                pufferl.scheduler.step()
+        else:
+            print(f"No trainer_state.pt next to {args['load_model_path']}; starting optimizer fresh.")
+
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
 
