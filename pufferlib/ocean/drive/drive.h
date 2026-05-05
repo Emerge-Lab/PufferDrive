@@ -1749,6 +1749,10 @@ static void build_path(Drive *env, int agent_idx) {
 
     Agent *agent = &env->agents[agent_idx];
 
+    fprintf(stderr, "[build_path] enter agent=%d route_length=%d spacing=%.2f num_road_elements=%d\n",
+            agent_idx, agent->route_length, waypoints_spacing, env->num_road_elements);
+    fflush(stderr);
+
     if (agent->path != NULL)
         free(agent->path);
     agent->path = (struct Path *)malloc(sizeof(struct Path));
@@ -1816,6 +1820,8 @@ static void build_path(Drive *env, int agent_idx) {
     }
 
     agent->path->num_waypoints = wp_count;
+    fprintf(stderr, "[build_path] exit  agent=%d wp_count=%d\n", agent_idx, wp_count);
+    fflush(stderr);
     if (wp_count < 2)
         return;
 
