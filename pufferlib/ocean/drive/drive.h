@@ -4762,6 +4762,10 @@ void c_reset(Drive *env) {
             agent->goal_position_y = gy;
             agent->goal_position_z = gz;
         } else {
+            // REPLAY-with-route: agent->route is loaded from the bin but
+            // agent->path is still NULL — interpolate waypoints along the route
+            // lanes before compute_goals dereferences agent->path.
+            build_path(env, agent_idx);
             compute_goals(env, agent_idx);
         }
         initialize_agent_progression(env, agent_idx);
