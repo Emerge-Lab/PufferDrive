@@ -625,7 +625,6 @@ class HumanReplayEvaluator:
 
     def __init__(self, config: Dict):
         self.config = config
-        self.sim_steps = 91 - self.config["env"]["init_steps"]
 
     def rollout(self, args, puffer_env, policy):
         """Roll out policy in env with human replays. Store statistics.
@@ -634,15 +633,17 @@ class HumanReplayEvaluator:
         while all other agents replay their human trajectories. This tests how compatible
         the policy is with (static) human partners.
 
+        Steps for `scenario_length * num_maps` env steps (enough for the env's
+        auto-reset to cycle through every bin in map_dir at least once), collecting
+        every info dict emitted at episode boundaries and averaging numeric fields.
+
         Args:
             args: Config dict with train settings (device, use_rnn, etc.)
             puffer_env: PufferLib environment wrapper
             policy: Trained policy to evaluate
 
         Returns:
-            dict: Aggregated metrics including:
-                - avg_collisions_per_agent: Average collisions per agent
-                - avg_offroad_per_agent: Average offroad events per agent
+            dict: Per-key mean across all completed scenarios.
         """
         import numpy as np
         import torch
@@ -650,6 +651,12 @@ class HumanReplayEvaluator:
 
         num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
+        scenario_length = args["env"]["scenario_length"]
+        init_steps = self.config["env"]["init_steps"]
+        num_maps = args["env"]["num_maps"]
+        # +1 step margin because the env's done flag fires on the step after the
+        # scenario_length'th sim step.
+        total_steps = (scenario_length - init_steps + 1) * num_maps
 
         obs, info = puffer_env.reset()
         state = {}
@@ -659,8 +666,8 @@ class HumanReplayEvaluator:
                 lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
             )
 
-        for time_idx in range(self.sim_steps):
-            # Step policy
+        all_infos = []
+        for time_idx in range(total_steps):
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
@@ -671,7 +678,22 @@ class HumanReplayEvaluator:
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
             obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            if info_list:
+                all_infos.extend(info_list)
+            # Stop once we've collected at least one info per bin to avoid
+            # double-counting on the second cycle through the dir.
+            if len(all_infos) >= num_maps:
+                break
 
-            if len(info_list) > 0:  # Happens at the end of episode
-                results = info_list[0]
-                return results
+        if not all_infos:
+            return {"num_scenarios_completed": 0}
+
+        aggregated = {"num_scenarios_completed": len(all_infos)}
+        # Numeric mean across collected info dicts. Keys present in some but
+        # not all (e.g. agent_step) are averaged over the dicts that have them.
+        keys = set().union(*(d.keys() for d in all_infos))
+        for k in keys:
+            vals = [d[k] for d in all_infos if isinstance(d.get(k), (int, float))]
+            if vals:
+                aggregated[k] = float(np.mean(vals))
+        return aggregated
