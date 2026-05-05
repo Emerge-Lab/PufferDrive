@@ -8,6 +8,7 @@ import copy
 import glob
 import os
 import shutil
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -32,8 +33,14 @@ OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 10
-RENDER_MODE = "random"  # "first", "random", or "worst_collision"
+NUM_ENVS_TO_RENDER = 20
+RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
+
+# GIF conversion settings
+CONVERT_TO_GIF = True
+GIF_FPS = 20
+GIF_SCALE_WIDTH = 960  # output width in pixels; height auto-scaled to keep aspect
+KEEP_MP4 = True  # set False to delete mp4s after successful gif conversion
 
 EPISODE_LENGTHS = [200]
 
@@ -136,6 +143,72 @@ def process_rollout_data(info_list, checkpoint, mode, episode_len):
     return rows
 
 
+def convert_mp4_to_gif(mp4_path, gif_path, fps=GIF_FPS, scale_width=GIF_SCALE_WIDTH):
+    """Convert a single mp4 to gif using ffmpeg with a generated palette for decent quality.
+
+    Returns True on success, False on failure.
+    """
+    palette_path = gif_path + ".palette.png"
+    vf_palette = f"fps={fps},scale={scale_width}:-1:flags=lanczos,palettegen=stats_mode=full"
+    vf_use = f"fps={fps},scale={scale_width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", mp4_path, "-vf", vf_palette, palette_path],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                mp4_path,
+                "-i",
+                palette_path,
+                "-lavfi",
+                vf_use,
+                gif_path,
+            ],
+            check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"    ffmpeg failed for {mp4_path}: {e}")
+        return False
+    finally:
+        if os.path.exists(palette_path):
+            os.remove(palette_path)
+
+
+def convert_videos_to_gifs(root_dir, fps=GIF_FPS, scale_width=GIF_SCALE_WIDTH, keep_mp4=KEEP_MP4):
+    """Walk root_dir and convert every .mp4 to a sibling .gif."""
+    if not os.path.isdir(root_dir):
+        print(f"  No video dir at {root_dir}, skipping gif conversion.")
+        return
+
+    mp4_files = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fn in filenames:
+            if fn.lower().endswith(".mp4"):
+                mp4_files.append(os.path.join(dirpath, fn))
+
+    if not mp4_files:
+        print(f"  No mp4 files found under {root_dir}.")
+        return
+
+    print(f"\nConverting {len(mp4_files)} mp4 file(s) to gif (fps={fps}, width={scale_width})...")
+    n_ok = 0
+    for mp4_path in mp4_files:
+        gif_path = os.path.splitext(mp4_path)[0] + ".gif"
+        print(f"  {mp4_path} -> {gif_path}")
+        if convert_mp4_to_gif(mp4_path, gif_path, fps=fps, scale_width=scale_width):
+            n_ok += 1
+            if not keep_mp4:
+                os.remove(mp4_path)
+    print(f"  Converted {n_ok}/{len(mp4_files)} videos to gif.")
+
+
 def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- add param
     cpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
     cpt_config, _ = load_checkpoint_config(checkpoint_path, base_config)
@@ -185,7 +258,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
                 f"offroad_rate={np.mean([r['offroad_rate'] for r in rows]):.3f}"
             )
 
-        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, f"ep{episode_len}", mode_name)
+        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, RENDER_MODE, mode_name)
         print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
         render_envs(evaluator, policy, env, env_indices, video_dir)
 
@@ -225,6 +298,11 @@ def main():
             # longitudinal_error_avg=("longitudinal_error_avg", "mean"),
         )
         print(f"\n{summary}")
+
+    if CONVERT_TO_GIF:
+        cpt_name = os.path.splitext(os.path.basename(CPT_PATH))[0]
+        cpt_video_root = os.path.join(RENDER_OUTPUT_DIR, cpt_name)
+        convert_videos_to_gifs(cpt_video_root)
 
     return df
 
