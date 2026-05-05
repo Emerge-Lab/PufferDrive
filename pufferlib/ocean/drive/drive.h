@@ -1867,30 +1867,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
                 action_dyaw = new_yaw_rate * env->dt;
             }
-
-            //     // ----- Debug logging -----
-            //     static long total_calls = 0;
-            //     static long clipped_calls = 0;
-            //     const long report_every = 10000;  // tune this
-
-            //     int dx_clipped   = fabsf(raw_dx   - action_dx)   > 1e-3f;
-            //     int dy_clipped   = fabsf(raw_dy   - action_dy)   > 1e-3f;
-            //     int dyaw_clipped = fabsf(raw_dyaw - action_dyaw) > 1e-3f;
-            //     int any_clipped  = dx_clipped || dy_clipped || dyaw_clipped;
-
-            //     total_calls++;
-            //     if (any_clipped) {
-            //         clipped_calls++;
-            //         printf("Clipped agent %d: pre=(%.3f, %.4f, %.4f) post=(%.3f, %.4f, %.4f)\n",
-            //             agent_idx, raw_dx, raw_dy, raw_dyaw,
-            //             action_dx, action_dy, action_dyaw);
-            //     }
-
-            //     if (total_calls % report_every == 0) {
-            //         printf("[constraint stats] %ld / %ld calls clipped (%.2f%%)\n",
-            //             clipped_calls, total_calls,
-            //             100.0 * (double)clipped_calls / (double)total_calls);
-            //     }
         }
 
         float jerk_dx = action_dx - agent->prev_action_dx;
@@ -2654,11 +2630,11 @@ void c_step(Drive *env) {
             float jw = e->jerk_yaw / (float)DELTA_MAX_DYAW;
             float jerk_sq = jx * jx + jy * jy + jw * jw;
 
-            const float jerk_penalty_coef = 0.008f;
+            const float jerk_penalty_coef = 0.007f;
             float r_jerk = -jerk_penalty_coef * jerk_sq;
 
-            // env->rewards[i] += r_jerk;
-            // env->logs[i].episode_return += r_jerk;
+            env->rewards[i] += r_jerk;
+            env->logs[i].episode_return += r_jerk;
             env->logs[i].jerk_penalty += r_jerk;
         }
 
@@ -2802,6 +2778,29 @@ void c_collect_expert_data(Drive *env, float *expert_actions_discrete_out, float
         // Step simulation
         if (t < TRAJECTORY_LENGTH - 1) {
             c_step(env);
+
+            if (COLLECT_EXPERT_TELEPORT) {
+                // Overwrite active agent positions with ground truth after c_step
+                // so that obs are computed from true positions, while static agents
+                // were advanced by c_step as a side effect.
+                for (int i = 0; i < env->active_agent_count; i++) {
+                    int agent_idx = env->active_agent_indices[i];
+                    Entity *agent = &env->entities[agent_idx];
+                    int next = t + 1;
+                    if (next < agent->array_size && agent->traj_valid && agent->traj_valid[next]) {
+                        agent->x = agent->traj_x[next];
+                        agent->y = agent->traj_y[next];
+                        agent->z = agent->traj_z[next];
+                        agent->heading = agent->traj_heading[next];
+                        agent->heading_x = cosf(agent->heading);
+                        agent->heading_y = sinf(agent->heading);
+                        agent->vx = agent->traj_vx[next];
+                        agent->vy = agent->traj_vy[next];
+                        agent->vz = agent->traj_vz[next];
+                    }
+                }
+                compute_observations(env);
+            }
         }
 
         // Record actions
