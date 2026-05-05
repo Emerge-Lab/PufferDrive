@@ -239,6 +239,7 @@ struct Log {
     float rear_collision_rate; // Fraction of steps with a rear collision event
     float longitudinal_error_avg;
     float displacement_error_avg; // ADE
+    float displacement_samples;
     float jerk_penalty;
     float n;
 };
@@ -418,10 +419,13 @@ float compute_route_progress_and_errors(Entity *e, float px, float py, int init_
     // Signed: positive => agent is ahead of the expert along the route
     *longitudinal_out = d_xt - d_now;
 
-    // Displacement: straight-line distance to the expert's pose right now
-    float ex = e->traj_x[t_lookup];
-    float ey = e->traj_y[t_lookup];
-    *displacement_out = sqrtf((px - ex) * (px - ex) + (py - ey) * (py - ey));
+    if (e->traj_valid[t_lookup] && e->traj_x[t_lookup] != INVALID_POSITION) {
+        float ex = e->traj_x[t_lookup];
+        float ey = e->traj_y[t_lookup];
+        *displacement_out = sqrtf((px - ex) * (px - ex) + (py - ey) * (py - ey));
+    } else {
+        *displacement_out = -1.0f; // sentinel: invalid
+    }
 
     float denom = d_q - d_p;
     if (denom < 1e-3f)
@@ -548,9 +552,10 @@ void add_log(Drive *env) {
         if (env->logs[i].l2_samples > 0.0f) {
             env->log.lateral_error_avg += env->logs[i].lateral_error_avg / env->logs[i].l2_samples;
             env->log.longitudinal_error_avg += env->logs[i].longitudinal_error_avg / env->logs[i].l2_samples;
-            env->log.displacement_error_avg += env->logs[i].displacement_error_avg / env->logs[i].l2_samples;
         }
-
+        if (env->logs[i].displacement_samples > 0.0f) {
+            env->log.displacement_error_avg += env->logs[i].displacement_error_avg / env->logs[i].displacement_samples;
+        }
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
         float threshold = 1.0f;
         if (e->goals_sampled_this_episode > 1) {
@@ -2681,9 +2686,12 @@ void c_step(Drive *env) {
                                               &long_err, &disp_err);
             env->logs[i].lateral_error_avg += lateral_err;
             env->logs[i].longitudinal_error_avg += fabsf(long_err);
-            env->logs[i].displacement_error_avg += disp_err;
             env->logs[i].l2_samples += 1.0f;
 
+            if (disp_err >= 0.0f) {
+                env->logs[i].displacement_error_avg += disp_err;
+                env->logs[i].displacement_samples += 1.0f;
+            }
             // Rear collisions
             if (env->entities[agent_idx].rear_collision_state) {
                 env->logs[i].rear_collision_rate = 1.0f;
