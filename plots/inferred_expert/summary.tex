@@ -1,0 +1,15 @@
+% Requires: \usepackage{booktabs}
+\begin{table}[ht]
+\centering
+\caption{Inferred-expert-action quality on the delta-local dynamics model. Comparison of discrete (bin-quantized) vs continuous (direct float) expert actions. Aggregated over 20 iterations (10240 pooled samples). Values are mean $\pm$ SE.}
+\label{tab:inferred_expert_actions}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+Action type & Route prog. (\%) $\uparrow$ & Coll. (\%) $\downarrow$ & Off-road (\%) $\downarrow$ & ADE (m) $\downarrow$ & Lateral L2 (m) $\downarrow$ & Longitudinal L2 (m) $\downarrow$ \\
+\midrule
+discrete & 100.0 & $0.4 \pm 0.1$ & $1.2 \pm 0.2$ & $0.097 \pm 0.002$ & $0.096 \pm 0.002$ & $0.004 \pm 0.000$ \\
+continuous & 100.0 & 0.0 & $0.8 \pm 0.1$ & $0.001 \pm 0.000$ & $0.001 \pm 0.000$ & $0.001 \pm 0.000$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
