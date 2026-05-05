@@ -72,7 +72,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         sdc_controller="policy",
         non_sdc_controller="policy",
-        non_vehicle_controller="replay",
+        non_vehicle_controller="auto",
         max_controlled_agents=32,
         map_dir="resources/drive/binaries/training",
         ini_file_path="pufferlib/config/ocean/drive.ini",
@@ -191,12 +191,17 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(
                 f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
             )
-        if self.non_vehicle_controller_str not in CONTROLLER_MAP:
+        if self.non_vehicle_controller_str != "auto" and self.non_vehicle_controller_str not in CONTROLLER_MAP:
             raise ValueError(
-                f"non_vehicle_controller must be one of {controller_options}. Got: {self.non_vehicle_controller_str}"
+                f"non_vehicle_controller must be 'auto' or one of {controller_options}. Got: {self.non_vehicle_controller_str}"
             )
         self.sdc_controller = CONTROLLER_MAP[self.sdc_controller_str]
         self.non_sdc_controller = CONTROLLER_MAP[self.non_sdc_controller_str]
+        if self.non_vehicle_controller_str == "auto":
+            if self.non_sdc_controller_str in ("idm", "corridor_idm"):
+                self.non_vehicle_controller_str = "replay"
+            else:
+                self.non_vehicle_controller_str = self.non_sdc_controller_str
         self.non_vehicle_controller = CONTROLLER_MAP[self.non_vehicle_controller_str]
 
         if action_type == "discrete":

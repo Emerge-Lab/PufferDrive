@@ -154,7 +154,14 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->non_sdc_controller = 1;
         }
     } else if (MATCH("env", "non_vehicle_controller")) {
-        if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
+        if (strcmp(value, "\"auto\"") == 0 || strcmp(value, "auto") == 0) {
+            if (env_config->non_sdc_controller == 3 || env_config->non_sdc_controller == 4) {
+                env_config->non_vehicle_controller = 2;
+            } else {
+                env_config->non_vehicle_controller =
+                    env_config->non_sdc_controller != 0 ? env_config->non_sdc_controller : 1;
+            }
+        } else if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
             env_config->non_vehicle_controller = 0;
         } else if (strcmp(value, "\"policy\"") == 0 || strcmp(value, "policy") == 0) {
             env_config->non_vehicle_controller = 1;
