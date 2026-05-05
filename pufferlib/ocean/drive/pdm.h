@@ -8,6 +8,11 @@
 #define PDM_PLANNING_DT 0.5f
 #define PDM_MAX_ROLLOUT_STEPS 9
 #define PDM_DANGER_TTC 2.0f
+#define PDM_SAFE_SPEED_TTC 5.0f
+#define PDM_COLLISION_PENALTY 48.0f
+#define PDM_SPEED_WEIGHT 3.0f
+#define PDM_TTC_WEIGHT 10.0f
+#define PDM_CENTER_BONUS 1.0f
 
 static const float PDM_OFFSETS[PDM_NUM_OFFSETS] = {0.0f, -1.0f, 1.0f};
 static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
@@ -38,6 +43,9 @@ typedef struct {
     float target_speed;
     float new_speed;
     float accel;
+    float collision_ttc;
+    float traffic_light_ttc;
+    float min_ttc;
     float score;
     int valid;
     PDMRollout rollout;
@@ -195,6 +203,83 @@ static IDMLeader pdm_find_leader_by_offset_route_boxes(Drive *env, int agent_idx
     return no_leader;
 }
 
+static Agent pdm_make_rollout_sample_agent(const Agent *agent, PDMRolloutStep step) {
+    return idm_make_sample_agent(agent, step.x, step.y, step.z, step.heading);
+}
+
+static Agent pdm_predict_other_agent(const Agent *other, float t) {
+    Agent predicted = *other;
+    predicted.sim_x = other->sim_x + other->sim_vx * t;
+    predicted.sim_y = other->sim_y + other->sim_vy * t;
+    return predicted;
+}
+
+static float pdm_compute_collision_ttc(Drive *env, int agent_idx, PDMCandidateScore *candidate) {
+    if (!candidate->valid || !candidate->rollout.valid) {
+        return 0.0f;
+    }
+
+    Agent *agent = &env->agents[agent_idx];
+    float max_distance = candidate->new_speed * PDM_HORIZON + 0.5f * agent->sim_length + 10.0f;
+    int candidates[IDM_MAX_CANDIDATES];
+    int num_candidates = idm_collect_route_candidates(env, agent_idx, max_distance, candidates, IDM_MAX_CANDIDATES);
+
+    for (int step_idx = 1; step_idx < candidate->rollout.num_steps; step_idx++) {
+        PDMRolloutStep step = candidate->rollout.steps[step_idx];
+        Agent sample = pdm_make_rollout_sample_agent(agent, step);
+
+        for (int i = 0; i < num_candidates; i++) {
+            Agent other = pdm_predict_other_agent(&env->agents[candidates[i]], step.t);
+            if (idm_sample_hits_agent(&sample, &other)) {
+                return step.t;
+            }
+        }
+    }
+
+    return PDM_HORIZON;
+}
+
+static float pdm_compute_traffic_light_ttc(Drive *env, const Agent *agent, PDMCandidateScore *candidate) {
+    if (!candidate->valid || !candidate->rollout.valid) {
+        return 0.0f;
+    }
+
+    for (int step_idx = 1; step_idx < candidate->rollout.num_steps; step_idx++) {
+        PDMRolloutStep step = candidate->rollout.steps[step_idx];
+        Agent sample = pdm_make_rollout_sample_agent(agent, step);
+        if (idm_sample_hits_red_light(env, &sample, step.lane_idx)) {
+            return step.t;
+        }
+    }
+
+    return PDM_HORIZON;
+}
+
+static void pdm_score_candidate(Drive *env, int agent_idx, PDMCandidateScore *candidate, float speed_limit) {
+    if (!candidate->valid) {
+        candidate->score = -INFINITY;
+        candidate->collision_ttc = 0.0f;
+        candidate->traffic_light_ttc = 0.0f;
+        candidate->min_ttc = 0.0f;
+        return;
+    }
+
+    Agent *agent = &env->agents[agent_idx];
+    candidate->collision_ttc = pdm_compute_collision_ttc(env, agent_idx, candidate);
+    candidate->traffic_light_ttc = pdm_compute_traffic_light_ttc(env, agent, candidate);
+    candidate->min_ttc = fminf(candidate->collision_ttc, candidate->traffic_light_ttc);
+
+    float ttc_score = clip(candidate->min_ttc / PDM_HORIZON, 0.0f, 1.0f);
+    float speed_score = clip(candidate->new_speed / fmaxf(speed_limit, 1.0f), 0.0f, 1.0f);
+    if (candidate->min_ttc < PDM_HORIZON && candidate->min_ttc <= PDM_SAFE_SPEED_TTC) {
+        speed_score = 0.0f;
+    }
+
+    float collision_penalty = (candidate->min_ttc < PDM_DANGER_TTC) ? PDM_COLLISION_PENALTY : 0.0f;
+    float center_bonus = (fabsf(candidate->offset) < 1e-4f) ? PDM_CENTER_BONUS : 0.0f;
+    candidate->score = -collision_penalty + PDM_SPEED_WEIGHT * speed_score + PDM_TTC_WEIGHT * ttc_score + center_bonus;
+}
+
 static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandidateScore *candidates,
                                             int max_candidates) {
     Agent *agent = &env->agents[agent_idx];
@@ -238,10 +323,14 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
                 .target_speed = target_speed,
                 .new_speed = new_speed,
                 .accel = accel,
-                .score = 0.0f,
+                .collision_ttc = PDM_HORIZON,
+                .traffic_light_ttc = PDM_HORIZON,
+                .min_ttc = PDM_HORIZON,
+                .score = -INFINITY,
                 .valid = rollout.valid,
                 .rollout = rollout,
             };
+            pdm_score_candidate(env, agent_idx, &candidates[count - 1], speed_limit);
         }
     }
 
@@ -263,6 +352,20 @@ static PDMCandidateScore pdm_select_best_candidate(PDMCandidateScore *candidates
     }
 
     return best;
+}
+
+static int pdm_all_candidates_dangerous(PDMCandidateScore *candidates, int num_candidates) {
+    int has_valid_candidate = 0;
+    for (int i = 0; i < num_candidates; i++) {
+        if (!candidates[i].valid) {
+            continue;
+        }
+        has_valid_candidate = 1;
+        if (candidates[i].min_ttc >= PDM_DANGER_TTC) {
+            return 0;
+        }
+    }
+    return has_valid_candidate;
 }
 
 static void pdm_stop_agent(Agent *agent) {
@@ -296,6 +399,8 @@ static void pdm_apply_teleport_step(Drive *env, int agent_idx, PDMCandidateScore
         return;
     }
 
+    agent->sim_x -= agent->sin_heading * candidate.offset;
+    agent->sim_y += agent->cos_heading * candidate.offset;
     agent->sim_vx = new_speed * agent->cos_heading;
     agent->sim_vy = new_speed * agent->sin_heading;
     agent->yaw_rate = compute_heading_diff(agent->sim_heading, old_heading) / env->dt;
@@ -327,6 +432,13 @@ static void move_pdm(Drive *env, int agent_idx) {
     if (!best.valid) {
         pdm_stop_agent(agent);
         return;
+    }
+
+    if (pdm_all_candidates_dangerous(candidates, num_candidates)) {
+        float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
+        best.offset = 0.0f;
+        best.new_speed = fmaxf(0.0f, current_speed - IDM_MAX_DECEL * env->dt);
+        best.accel = (best.new_speed - current_speed) / env->dt;
     }
 
     pdm_apply_teleport_step(env, agent_idx, best);
