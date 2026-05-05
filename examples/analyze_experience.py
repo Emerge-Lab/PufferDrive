@@ -52,11 +52,9 @@ FONT_METHOD_LABEL = 12
 # ─── Colors ──────────────────────────────────────────────────────────────────
 # Same scheme as plotting.py:
 #   regularized self-play RL = blue, self-play RL = black, SMART = tab:red.
-COLOR_OURS = "#6BAED6"  # reg self-play RL (ours): medium blue
-COLOR_OURS_EDGE = "#08519C"  # dark blue
+COLOR_OURS = "#08519C"  # dark blue
 COLOR_SELFPLAY = "#000000"  # self-play RL baseline: black
 COLOR_SMART = "#d62728"  # SMART baseline: tab:red
-COLOR_SMART_EDGE = "#8B1A1B"  # darker red
 
 # ─── Data ────────────────────────────────────────────────────────────────────
 # The `hr_score` column is a proxy for human-compatibility on the
@@ -139,14 +137,6 @@ def _color_for(method: str) -> str:
     return COLOR_SMART
 
 
-def _edge_for(method: str) -> str:
-    if method.startswith("Reg"):
-        return COLOR_OURS_EDGE
-    if method.startswith("Self-play"):
-        return "#000000"
-    return COLOR_SMART_EDGE
-
-
 # ─── Plot ────────────────────────────────────────────────────────────────────
 
 
@@ -156,7 +146,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     warnings.filterwarnings("ignore")
     plt.set_loglevel("WARNING")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.0))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4.5))
     plt.subplots_adjust(wspace=0.32)
 
     # ── Panel 1: HR score vs. human-demonstration data ──────────────────────
@@ -183,7 +173,6 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         x_h = row["human_transitions"]
         y = row["hr_score"]
         c = _color_for(method)
-        ec = _edge_for(method)
 
         ax.scatter(
             x_h,
@@ -191,7 +180,6 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
             marker=marker_for[method],
             s=size_for[method],
             color=c,
-            edgecolor=ec,
             linewidth=1.5,
             zorder=4,
         )
@@ -228,7 +216,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         ha="center",
         va="bottom",
         fontsize=FONT_METHOD_LABEL,
-        color=COLOR_OURS_EDGE,
+        color=COLOR_OURS,
     )
     # "Self-play RL" sits at x=0 (left edge of symlog). Anchor its label to
     # the right of the marker so it doesn't get clipped.
@@ -250,7 +238,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         ha="center",
         va="bottom",
         fontsize=FONT_METHOD_LABEL,
-        color=COLOR_SMART_EDGE,
+        color=COLOR_SMART,
     )
 
     # Human-data quantity callouts under the two markers that have it.
@@ -265,7 +253,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         ha="center",
         va="top",
         fontsize=FONT_ANNOT,
-        color=COLOR_OURS_EDGE,
+        color=COLOR_OURS,
         style="italic",
     )
     ax.annotate(
@@ -276,7 +264,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         ha="center",
         va="top",
         fontsize=FONT_ANNOT,
-        color=COLOR_SMART_EDGE,
+        color=COLOR_SMART,
         style="italic",
     )
 
@@ -291,7 +279,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     ax.set_xticklabels([_abbreviate_count(t) for t in xticks])
     ax.minorticks_off()
 
-    ax.set_xlabel("Human demonstration data (transitions)", fontsize=FONT_AXIS_LABEL)
+    ax.set_xlabel("Human demonstration data (transitions)", fontsize=14)
     ax.set_ylabel("Score with proxy for human players  ↑", fontsize=FONT_AXIS_LABEL)
     ax.grid(axis="both", alpha=0.3, linestyle="--")
     sns.despine(ax=ax)
@@ -326,7 +314,6 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     methods = panel2["Method"].tolist()
     vals = panel2["total"].values
     bar_colors = [_color_for(m) for m in methods]
-    bar_edges = [_edge_for(m) for m in methods]
     x_pos = np.arange(len(methods))
 
     # Linear y-axis on purpose. The story is that 10B utterly dwarfs 45M;
@@ -336,7 +323,6 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
         vals,
         width=0.55,
         color=bar_colors,
-        edgecolor=bar_edges,
         linewidth=1.2,
         alpha=0.9,
     )
@@ -408,7 +394,7 @@ def make_figure(df: pd.DataFrame, save_path: str = SAVE_PATH) -> plt.Figure:
     }
     ax.set_xticks(x_pos)
     ax.set_xticklabels([method_short[m] for m in methods], fontsize=FONT_TICK)
-    ax.set_ylabel("Total training transitions", fontsize=FONT_AXIS_LABEL)
+    ax.set_ylabel("Total training transitions", fontsize=14)
 
     # Pad enough headroom that the multi-line annotation above the tallest
     # bar isn't clipped at the top of the axes. Ours has a 3-line hybrid
