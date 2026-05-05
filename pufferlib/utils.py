@@ -1,8 +1,10 @@
 import os
 import sys
 import glob
+import random
 import shutil
 import subprocess
+import tempfile
 import json
 
 
@@ -175,6 +177,7 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
     Parses HUMAN_REPLAY_METRICS_START/END JSON from stdout and logs to wandb under
     driving_behaviours/<class_name>/<metric>.
     """
+    sampled_dirs = []  # temp symlink dirs created for num_scenarios sampling
     try:
         run_id = logger.run_id
         model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
@@ -198,12 +201,25 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                     f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: map_dir not found, skipping ({map_dir})"
                 )
                 continue
-            num_agents = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
-            if num_agents == 0:
+            all_bins = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+            if not all_bins:
                 print(
                     f"DrivingBehavioursEval [{class_name[len(EVAL_SECTIONS_PREFIX) :]}]: no .bin files in {map_dir}, skipping"
                 )
                 continue
+            # Optional cap: random-sample N bins each eval pass via a fresh
+            # symlink dir. Different scenes per pass; better population estimate
+            # without paying for the full directory.
+            num_scenarios = class_cfg.get("num_scenarios")
+            if num_scenarios and int(num_scenarios) < len(all_bins):
+                k = int(num_scenarios)
+                sampled = random.sample(all_bins, k)
+                tmp_dir = tempfile.mkdtemp(prefix=f"db_eval_{class_name}_")
+                for fname in sampled:
+                    os.symlink(os.path.join(map_dir, fname), os.path.join(tmp_dir, fname))
+                map_dir = tmp_dir
+                sampled_dirs.append(tmp_dir)
+            num_agents = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
             scenario_length = class_cfg.get("scenario_length", 201)
             short = class_name[len(EVAL_SECTIONS_PREFIX) :]
 
@@ -232,12 +248,10 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
                 "--eval.scenario-length",
                 str(scenario_length),
                 # Clean-eval overrides. Mirrors build_eval_overrides(clean=True):
-                # deterministic TL cycle (eval_mode=1), red lights enforced,
-                # no road-segment dropout, no partner blindness or phantom
-                # braking, wider partner budget. Subprocess re-parses the ini
-                # so training-time CLI overrides don't leak in here.
-                "--env.eval-mode",
-                "1",
+                # red lights enforced, no road-segment dropout, no partner
+                # blindness or phantom braking, wider partner budget. Subprocess
+                # re-parses the ini so training-time CLI overrides don't leak in
+                # here. (eval_mode is on ev/clean-eval branch, not this one.)
                 "--env.traffic-light-behavior",
                 "1",
                 "--env.lane-segment-dropout",
@@ -292,6 +306,9 @@ def run_driving_behaviours_eval_in_subprocess(config, logger, global_step, behav
 
     except Exception as e:
         print(f"DrivingBehavioursEval: unexpected error: {e}")
+    finally:
+        for d in sampled_dirs:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
