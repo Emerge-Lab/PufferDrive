@@ -161,7 +161,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         (
             "idm_interactive",
             INTERACTIVE_MAP_DIR,
-            "control_vehicles",
+            "control_sdc_only",
             INTERACTIVE_MAP_NUM_FILES,
             {
                 "sdc_controller": "policy",

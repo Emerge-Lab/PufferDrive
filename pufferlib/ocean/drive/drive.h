@@ -1561,12 +1561,13 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++; // Includes expert replay and static agents
             env->entities[i].active_agent = 0;
-            int replay_by_default =
-                env->entities[i].mark_as_expert != 0 || env->active_agent_count >= control_limit || sdc_only_mode;
+            int requested_controller =
+                env->entities[i].type == VEHICLE ? env->non_sdc_controller : env->non_vehicle_controller;
+            int replay_by_default = env->entities[i].mark_as_expert != 0 || env->active_agent_count >= control_limit ||
+                                    (sdc_only_mode && requested_controller == CONTROLLER_POLICY);
             env->entities[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
-            // In SDC-only modes, force every other valid agent into the expert
-            // replay list so move_expert teleports them along their logged
-            // trajectories during c_step.
+            // Replay-controlled backgrounds move through the expert list so
+            // move_expert teleports them along their logged trajectories.
             if (env->entities[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
