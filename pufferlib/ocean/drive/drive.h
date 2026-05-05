@@ -2181,9 +2181,12 @@ void compute_observations(Drive *env) {
         } else if (env->dynamics_model == DELTA_LOCAL) {
             obs[10] = ego_entity->type / 3.0f;
             // Previous action conditioning, normalized to roughly [-1, 1]
-            obs[11] = ego_entity->prev_action_dx / DELTA_MAX_DX;
-            obs[12] = ego_entity->prev_action_dy / DELTA_MAX_DY;
-            obs[13] = ego_entity->prev_action_dyaw / (float)DELTA_MAX_DYAW;
+            // obs[11] = ego_entity->prev_action_dx / DELTA_MAX_DX;
+            // obs[12] = ego_entity->prev_action_dy / DELTA_MAX_DY;
+            // obs[13] = ego_entity->prev_action_dyaw / (float)DELTA_MAX_DYAW;
+            obs[11] = 0.0f;
+            obs[12] = 0.0f;
+            obs[13] = 0.0f;
         } else {
             obs[10] = 0.0f; // Can be deleted later
             obs[11] = ego_entity->type / 3.0f;
