@@ -20,27 +20,29 @@ DPI = 600
 # should read from here so the figures and tables stay in sync.
 PALETTE = {
     # Methods (used across line plots and as LaTeX cell colours).
-    "smart": "#FFA8CC",  # pastel pink
-    "smart_edge": "#C14B8A",
-    "ours": "#CCCCFF",  # periwinkle (regularized self-play)
-    "ours_edge": "#6B3FA0",
+    "smart": "#d62728",  # tab:red
+    "smart_edge": "#8B1A1B",  # darker red for marker edges
+    "ours": "#6BAED6",  # medium blue (regularized self-play)
+    "ours_edge": "#08519C",  # dark blue for marker edges
     # "selfplay" is the unregularized baseline colour everywhere — lines,
     # markers, dashed reference lines, and unreg reg/unreg map entries.
-    "selfplay": "#4A7FD4",
+    "selfplay": "#000000",  # black
     # Regularized anchor runs: light → dark = less → more human data.
+    # Sequence of blues so multiple reg lines stay distinguishable.
     "reg_sequence": [
-        "#BCBDDC",
-        "#9E9AC8",
-        "#807DBA",
-        "#6A51A3",
-        "#4A1486",
+        "#C6DBEF",
+        "#9ECAE1",
+        "#6BAED6",
+        "#3182BD",
+        "#08519C",
     ],
     # LaTeX tier highlighting
     "tier_best": "#6FCF6A",  # soft pastel green
     "tier_second": "#DFF04B",  # soft chartreuse
     "tier_third": "#FBF4D0",  # pale cream-yellow
     # Best-per-column among unregularized rows. Overlays tier color when both apply.
-    "tier_unreg_best": "#A8C2E8",  # soft blue, tinted variant of PALETTE['selfplay']
+    # Soft gray tint, matching the new black `selfplay` colour.
+    "tier_unreg_best": "#D9D9D9",
 }
 
 # Back-compat aliases so existing references keep working without edits.
@@ -171,8 +173,8 @@ def _maps_to_human_hours(maps: int) -> float:
 def _reg_unreg_colors(anchor_vals):
     """Map each anchor value to a colour.
 
-    anchor == 0  -> blue   (PALETTE['selfplay']; unregularized baseline)
-    anchor  > 0  -> purples from PALETTE['reg_sequence'], assigned in
+    anchor == 0  -> black  (PALETTE['selfplay']; unregularized baseline)
+    anchor  > 0  -> blues from PALETTE['reg_sequence'], assigned in
                     ascending order of anchor size so darker = more human data.
     """
     reg_seq = PALETTE["reg_sequence"]
@@ -268,10 +270,11 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
       - 3rd    -> pale cream-yellow   (#FBF4D0)
     Best value in each column is additionally bolded. Ties share a tier.
 
-    The best unregularized value per column is highlighted in blue
-    (#CFE0F7). Blue wins over tier color when a cell qualifies for both,
-    so the unreg signal stays visible even when unreg is competitive with
-    the overall top-3. Bold (for overall-best) is preserved regardless.
+    The best unregularized value per column is highlighted via the
+    `tier_unreg_best` palette entry (a soft gray, matching the new black
+    `selfplay` colour). This wins over the tier color when a cell qualifies
+    for both, so the unreg signal stays visible even when unreg is competitive
+    with the overall top-3. Bold (for overall-best) is preserved regardless.
 
     Row layout: unregularized rows first, then regularized, each sorted by sp_maps.
 
@@ -392,7 +395,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         else:
             body = f"{m_val:{fmt}}"
             text = f"\\textbf{{{body}}}" if is_best else body
-        # Unreg-best blue wins over tier color — otherwise the new signal
+        # Unreg-best gray wins over tier color — otherwise the new signal
         # would be invisible exactly when the unreg row is also top-3.
         if is_unreg_best:
             return f"\\cellcolor{{tierunregbest}} {text}"
@@ -420,7 +423,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         r"scenarios. Top-3 values per column are highlighted "
         r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
         r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
-        r"\colorbox{tierunregbest}{Blue} marks the best unregularized "
+        r"\colorbox{tierunregbest}{Gray} marks the best unregularized "
         r"value per column.}"
     )
     lines.append(r"\label{tab:scaling_results}")
@@ -696,6 +699,97 @@ def plot_anchor_eval(
     return fig
 
 
+def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay_behavior_analysis.pdf"):
+    """Bar chart comparing two 50k checkpoints across four self-play behavior metrics.
+
+    4 subplots, one per metric. Two bars per subplot: unregularized vs regularized,
+    using the shared reg/unreg color convention (black = unreg, blue = reg).
+    Mode: scaling_sp_val (self-play). Mean ± SEM, raw values, no normalization.
+
+    Metrics:
+        - collisions_per_agent
+        - lateral_error_avg
+        - longitudinal_error_avg
+        - displacement_error_avg
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
+    }
+
+    breakpoint()
+
+    df = df[df["mode"] == "scaling_sp_val"].copy()
+    df = df[df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+    if df.empty:
+        print("  No self-play data for checkpoints of interest — skipping plot_selfplay_behavior_analysis.")
+        return None
+
+    required_cols = [
+        "collision_rate",
+        "lateral_error_avg",
+        "longitudinal_error_avg",
+        "displacement_error_avg",
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        print(f"  Missing columns {missing} — skipping plot_selfplay_behavior_analysis.")
+        return None
+
+    agg = df.groupby("checkpoint")[required_cols].agg(["mean", "sem"]).reset_index()
+    agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
+    agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
+
+    # unreg first (black), reg second (blue) — matches the rest of the file.
+    agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
+    agg = agg.sort_values("is_reg").reset_index(drop=True)
+    colors = [PALETTE["selfplay"] if not r else PALETTE["ours"] for r in agg["is_reg"]]
+
+    # (column, ylabel). None of these are percentages — they're counts/distances.
+    subplot_specs = [
+        ("collision_rate", "SP collision rate"),
+        ("lateral_error_avg", "SP lateral L2 distance"),
+        ("longitudinal_error_avg", "SP longitudinal L2 distance"),
+        ("displacement_error_avg", "SP avg. displacement error"),
+    ]
+
+    _set_style(2)
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+
+    for ax, (col, ylabel) in zip(axes, subplot_specs):
+        means = agg[f"{col}_mean"].values
+        sems = agg[f"{col}_sem"].values
+        labels = agg["label"].values
+        x = np.arange(len(labels))
+
+        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
+            ax.bar(
+                x[i],
+                mean,
+                yerr=sem,
+                color=color,
+                alpha=0.8,
+                width=0.5,
+                capsize=4,
+                error_kw=dict(lw=1.2),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.tick_params(axis="y", which="minor", length=3, color="gray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Updated: BC anchor LaTeX table (now includes within-5-bin accuracy column)
 # ---------------------------------------------------------------------------
@@ -917,8 +1011,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     on a log scale; y-axes in percent.
 
     Colour convention (from module-level PALETTE via _reg_unreg_colors):
-      - unregularized runs: blue
-      - regularized runs:   shades of purple (darker = more anchor data)
+      - unregularized runs: black
+      - regularized runs:   shades of blue (darker = more anchor data)
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     df = df[df["mode"].isin(scaling_modes)].copy()
@@ -966,7 +1060,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)  # blue for 0, purples for >0
+    color_map = _reg_unreg_colors(anchor_vals)  # black for 0, blues for >0
 
     markers = ["s", "^", "o", "D", "P", "X", "v", "*"]
     marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
@@ -998,8 +1092,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
                 markersize=8,
                 linewidth=1.5,
                 linestyle="-",
-                # Thin black edge on purples so the lightest shades stay
-                # visible against white; no edge needed for the blue unreg.
+                # Thin black edge on light blues so the lightest shades stay
+                # visible against white; no edge needed for the black unreg.
                 markeredgecolor="black" if anchor > 0 else color_map[anchor],
                 markeredgewidth=0.4 if anchor > 0 else 0,
                 zorder=3,
@@ -1724,10 +1818,10 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
     agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
     agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
-    # unreg first (blue), reg second (purple, matching the shared palette)
+    # unreg first (black), reg second (blue, matching the shared palette)
     agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
     agg = agg.sort_values("is_reg").reset_index(drop=True)
-    colors = [PALETTE["selfplay"] if not r else PALETTE["ours_edge"] for r in agg["is_reg"]]
+    colors = [PALETTE["selfplay"] if not r else PALETTE["ours"] for r in agg["is_reg"]]
 
     subplot_specs = [
         ("collision_rate", "HR collision rate [%]", True),
@@ -2289,9 +2383,9 @@ def plot_human_data_requirements_wosac(
         3) WOSAC map-based metrics    (main: map_based_metrics,    SMART: wosac_map_based_metrics)
 
     Series per panel:
-        - regularized self-play (ours):       line across anchor points (pale purple)
-        - best unregularized self-play:       horizontal dashed line (blue)
-        - SMART-tiny-CLSFT:                   line across SMART checkpoints (pink)
+        - regularized self-play (ours):       line across anchor points (medium blue)
+        - best unregularized self-play:       horizontal dashed line (black)
+        - SMART-tiny-CLSFT:                   line across SMART checkpoints (red)
         - Ground-truth (UB):                  dashed reference line (upper bound)
         - Random:                             dashed reference line (lower bound)
 
@@ -2430,6 +2524,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         plot_compatibility_tradeoff_bar(df)
         generate_human_data_latex_table(df)
         print("  Saved eval_compatibility_tradeoff_bar.pdf")
+        plot_selfplay_behavior_analysis(df)
+        print("  Saved eval_self_play behavior.pdf")
     plot_wosac_lineplot(wosac_df)
     print("  Saved eval_wosac_lineplot.pdf")
     plot_wosac_submetrics(wosac_df)

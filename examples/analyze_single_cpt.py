@@ -17,20 +17,22 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/scaling_cpts/unreg_delta_50k_maps.pt"
+CPT_PATH = (
+    "models/scaling_cpts/unreg_delta_50k_maps.pt"  # "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt" #
+)
 
 ENV_NAME = "puffer_drive"
-TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
+TRAIN_MAP_DIR = "resources/drive/binaries/training_50"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # <--- @WAEL only using this atm; replace this with any path you like.
 INTERACTIVE_MAP_NUM_FILES = 200  # <-- @WAEL num maps in dir here
 NUM_AGENTS_PER_VECENV = 512
-DETERMINISTIC = False
+DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 0
+NUM_ENVS_TO_RENDER = 10
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
 EPISODE_LENGTHS = [200]
@@ -172,7 +174,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
             info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             env_indices = list(range(min(NUM_ENVS_TO_RENDER, env.driver_env.num_envs)))
 
-        rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)  # <-- pass it
+        rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)
         all_rows.extend(rows)
 
         if rows:
@@ -183,7 +185,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
                 f"offroad_rate={np.mean([r['offroad_rate'] for r in rows]):.3f}"
             )
 
-        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, f"ep{episode_len}", mode_name)  # <-- ep len in path
+        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, f"ep{episode_len}", mode_name)
         print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
         render_envs(evaluator, policy, env, env_indices, video_dir)
 

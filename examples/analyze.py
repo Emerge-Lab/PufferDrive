@@ -39,14 +39,14 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
-SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"
+SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"  # "models/scaling_cpts"
 DETERMINISTIC = True
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-INTERACTIVE_MAP_DIR_MAPS = 50
-NUM_TOTAL_EVAL_AGENTS = 1024 * 5
+INTERACTIVE_MAP_DIR_MAPS = 200
+NUM_TOTAL_EVAL_AGENTS = 1024 * 2
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -74,11 +74,12 @@ METRICS = [
     "offroad_per_agent",
     "completion_rate",
     "route_progress",
-    "lateral_error_avg",
     "episode_length",
     "episode_return",
     "perc_controlled",
+    "lateral_error_avg",
     "longitudinal_error_avg",
+    "displacement_error_avg",
 ]
 
 
@@ -103,7 +104,7 @@ def _parse_num(s):
     return n
 
 
-def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=150):
+def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=200):
     """Build an eval-ready config from the checkpoint config.
 
     Takes everything from the checkpoint and only overwrites eval-specific fields:

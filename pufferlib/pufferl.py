@@ -578,10 +578,6 @@ class PuffeRL:
                             cur_lp, anchor_lp, reduction="none", log_target=True
                         ).sum(dim=-1)
 
-                # with torch.no_grad():
-                #     lam = anchor_obs[:, self.lambda_obs_idx].detach()
-                #     self._lambda_kl_pairs.append((lam.cpu(), per_sample_kl.detach().cpu()))
-
                 self.sampled_lambdas = anchor_obs[:, self.lambda_obs_idx].unsqueeze(-1)  # [B, 1]
                 self.sampled_collision_rewards = anchor_obs[:, self.reward_veh_obs_idx].unsqueeze(-1)  # [B, 1]
 
@@ -676,20 +672,6 @@ class PuffeRL:
         explained_var = torch.nan if var_y == 0 else 1 - (y_true - y_pred).var() / var_y
         losses["explained_variance"] = explained_var.item()
 
-        # if self.reg_mode == "kl_anchor" and len(self._lambda_kl_pairs) > 0:
-        #     all_lam = torch.cat([p[0] for p in self._lambda_kl_pairs])
-        #     all_kl = torch.cat([p[1] for p in self._lambda_kl_pairs])
-
-        #     lam_c = all_lam - all_lam.mean()
-        #     kl_c = all_kl - all_kl.mean()
-        #     denom = all_lam.std() * all_kl.std() + 1e-8
-        #     lambda_kl_corr = (lam_c * kl_c).mean() / denom
-
-        #     self.data["anchor/lambda_kl_corr"] = float(lambda_kl_corr)
-        #     self.data["anchor/lambda_kl_corr_n"] = int(all_lam.numel())
-
-        #     self._lambda_kl_pairs.clear()
-
         profile.end()
         logs = None
         self.epoch += 1
@@ -721,21 +703,6 @@ class PuffeRL:
                 self.evaluator.sp_env.driver_env.stop_recorder(0)
                 self.evaluator.sp_env.close()
                 self.evaluator.log_videos(eval_mode="self_play", epoch=self.epoch)
-
-            # Show agent view with sensor noise
-            # sensor_noise_eval = (self.epoch + 1) % 200 == 0
-            # if sensor_noise_eval:
-            #     self.evaluator.hr_env = load_env("puffer_drive", self.evaluator.hr_eval_config)
-            #     try:
-            #         self.evaluator.rollout(
-            #             self.uncompiled_policy,
-            #             mode="human_replay",
-            #             view_mode=3,
-            #         )
-            #     except Exception as e:
-            #         print(f"Sensor noise render failed (non-fatal): {e}")
-            #     self.evaluator.hr_env.close()
-            #     self.evaluator.log_videos(eval_mode="sensor_noise", epoch=self.epoch)
 
             # Get statistics
             if human_replay_eval or self_play_eval:
@@ -801,13 +768,13 @@ class PuffeRL:
         #     logs["data/lambda_mean"] = float(self.sampled_lambdas.mean())
         #     logs["data/lambda_std"] = float(self.sampled_lambdas.std())
 
-        if isinstance(self.logger, WandbLogger):
-            import wandb
+        # if isinstance(self.logger, WandbLogger):
+        #     import wandb
 
-            if hasattr(self, "sampled_lambdas"):
-                logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
-            if hasattr(self, "sampled_collision_rewards"):
-                logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
+        #     if hasattr(self, "sampled_lambdas"):
+        #         logs["data/lambda_distrib"] = wandb.Histogram(self.sampled_lambdas.cpu().numpy())
+        #     if hasattr(self, "sampled_collision_rewards"):
+        #         logs["data/collision_reward_distrib"] = wandb.Histogram(self.sampled_collision_rewards.cpu().numpy())
 
         if self.reg_mode == "log_prob_direct":
             logs["data/total_human_samples"] = self.data.get("data/total_human_samples", 0)

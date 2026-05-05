@@ -22,11 +22,11 @@ from train_bc_policy import (
 # ---------------------------------------------------------------------------
 # Configuration — edit these
 # ---------------------------------------------------------------------------
-CHECKPOINT_PATH = "models/anchors/bc_delta_local_1200maps_6ojrc0y6.pt"
+CHECKPOINT_PATH = "models/anchors/bc_delta_local_12000maps_djotwyvn.pt"
 DYNAMICS_MODEL = "delta_local"  # "delta_local" or "classic"
-NUM_VIDEOS = 20
-OUTPUT_DIR = "anchor_videos"
-MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # Must contain at least NUM_VIDEOS maps
+NUM_VIDEOS = 10
+OUTPUT_DIR = "anchor_videos_12k_maps_wo_constraints"
+MAP_DIR = "resources/drive/binaries/training"
 
 # Must match the values used during training
 INPUT_SIZE = 128
@@ -49,6 +49,7 @@ def record_videos():
     args["env"]["obs_partner_noise_pos"] = 0.0
     args["env"]["async_resets"] = False
     args["env"]["resample_frequency"] = 0
+    args["env"]["lambda_value"] = 0.0
     args["env"]["fix_lambdas"] = True
     args["env"]["fix_rewards"] = True
     args["env"]["num_agents"] = 128

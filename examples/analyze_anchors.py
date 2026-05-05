@@ -36,8 +36,8 @@ from pufferlib.ocean.drive import binding
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
 ANCHOR_DIR = "models/anchors"
-VAL_MAP_DIR = "resources/drive/binaries/validation"
-VAL_NUM_MAPS = 10_000
+VAL_MAP_DIR = "resources/drive/binaries/interactive_data_validation"
+VAL_NUM_MAPS = 50
 OUTPUT_CSV = "results/anchor_eval.csv"
 DETERMINISTIC = True
 
