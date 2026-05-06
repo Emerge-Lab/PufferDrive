@@ -46,8 +46,8 @@ TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
 INTERACTIVE_MAP_DIR_MAPS = 200
-NUM_TOTAL_EVAL_AGENTS = 1024 * 2
-NUM_AGENTS_PER_VECENV = 1024
+NUM_TOTAL_EVAL_AGENTS = 512
+NUM_AGENTS_PER_VECENV = 512
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"
@@ -69,6 +69,12 @@ METRICS = [
     "collision_rate",
     "at_fault_collision_rate",
     "rear_collision_rate",
+    # Delta-V
+    "delta_v_sum",
+    "delta_v_max",
+    "delta_v_count",
+    "delta_v_under_1mph",
+    # Other
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
@@ -551,6 +557,33 @@ def render_checkpoint_videos(base_config):
     print(f"\nAll videos saved to {RENDER_OUTPUT_DIR}/")
 
 
+def delta_v_summary(group):
+    """Severity stats conditional on collision."""
+    coll = group[group["delta_v_count"] > 0]
+    n_coll = len(coll)
+    if n_coll == 0:
+        return pd.Series(
+            {
+                "n_collisions": 0,
+                "mean_dv_per_event": np.nan,
+                "max_dv": np.nan,
+                "frac_under_1mph": np.nan,
+            }
+        )
+    # Mean Delta-V per event: sum across all events / count of all events
+    total_sum = coll["delta_v_sum"].sum()
+    total_count = coll["delta_v_count"].sum()
+    return pd.Series(
+        {
+            "n_collisions": int(total_count),
+            "mean_dv_per_event": total_sum / total_count,
+            "max_dv": coll["delta_v_max"].max(),
+            # delta_v_under_1mph is per-agent-with-collision, so this is the right ratio
+            "frac_under_1mph": coll["delta_v_under_1mph"].mean(),
+        }
+    )
+
+
 def main():
     base_config = load_config(ENV_NAME)
 
@@ -568,10 +601,13 @@ def main():
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
             at_fault_collision_rate=("at_fault_collision_rate", "mean"),
-            rear_collision_rate=("rear_collision_rate", "mean"),
+            # rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
         )
         print(f"\n{summary}")
+
+        dv_summary = df.groupby(["checkpoint", "mode"]).apply(delta_v_summary)
+        print(dv_summary)
 
     # ── Figures ──────────────────────────────────────────────────────────────
     if MAKE_FIGURES:
