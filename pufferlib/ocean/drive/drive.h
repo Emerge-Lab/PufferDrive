@@ -237,6 +237,11 @@ struct Log {
     float lateral_error_avg;   // Average lateral displacement from initial heading axis
     float l2_samples;          // Sample count for L2 decomposition
     float rear_collision_rate; // Fraction of steps with a rear collision event
+    // Delta-V (collision severity)
+    float delta_v_sum;        // sum of per-collision Delta-V (m/s) this episode
+    float delta_v_max;        // worst single Delta-V this episode
+    float delta_v_count;      // number of distinct collision events this episode
+    float delta_v_under_1mph; // 1.0 if delta_v_max < 0.447 m/s (1 mph), else 0
     float longitudinal_error_avg;
     float displacement_error_avg; // ADE
     float displacement_samples;
@@ -278,7 +283,12 @@ struct Entity {
     int collision_state;
     int at_fault_collision_state;
     int rear_collision_state;
-    float init_x; // Position at episode start (for L2 decomposition)
+    // Delta-V tracking (per-episode)
+    float collision_delta_v;     // Delta-V of the most recent collision event (m/s)
+    float collision_delta_v_max; // worst Delta-V seen this episode (m/s)
+    float collision_delta_v_sum; // sum of all collision Delta-Vs this episode
+    int collision_delta_v_count; // number of distinct collision events this episode
+    float init_x;                // Position at episode start (for L2 decomposition)
     float init_y;
     float init_heading_x; // Heading at episode start
     float init_heading_y;
@@ -340,6 +350,62 @@ void free_entity(Entity *entity) {
 }
 
 // Utility functions
+// Delta-V (collision severity) -----------------------------------------------
+//
+// Standard impulse-momentum model with restitution e ≈ 0.1 (vehicle crashes
+// are mostly inelastic). Delta-V of body 1 due to collision with body 2:
+//
+//   dv_1 = m_2 / (m_1 + m_2) * (1 + e) * closing_speed_along_normal
+//
+// The collision normal is approximated as the unit vector from ego center to
+// other center at the moment of impact. This is the standard simplification
+// used when contact-surface geometry isn't tracked.
+//
+// Mass is proxied from footprint for vehicles (sedan reference: 1500 kg at
+// 4.5 m × 1.8 m). Pedestrians and cyclists use fixed values, which makes
+// VRU collisions yield near-zero ego Delta-V — correct, since the ego barely
+// slows. The pedestrian/cyclist Delta-V is large in those cases and is what
+// you'd want to report for VRU injury risk.
+
+static float entity_mass(const Entity *e) {
+    if (e->type == PEDESTRIAN)
+        return 75.0f;
+    if (e->type == CYCLIST)
+        return 90.0f;
+    const float ref_area = 4.5f * 1.8f;
+    const float ref_mass = 1500.0f;
+    float area = e->length * e->width;
+    if (area <= 0.0f)
+        return ref_mass;
+    return ref_mass * (area / ref_area);
+}
+
+static float compute_delta_v(const Entity *ego, const Entity *other) {
+    const float e_rest = 0.1f; // coefficient of restitution
+    float m1 = entity_mass(ego);
+    float m2 = entity_mass(other);
+
+    // Collision normal: unit vector from ego to other
+    float nx = other->x - ego->x;
+    float ny = other->y - ego->y;
+    float n_len = sqrtf(nx * nx + ny * ny);
+    if (n_len < 1e-6f)
+        return 0.0f;
+    nx /= n_len;
+    ny /= n_len;
+
+    // Closing speed along the normal (positive = approaching).
+    // (v_other - v_ego) · n is the rate at which other recedes from ego;
+    // negate to get the rate at which they approach.
+    float dvx = other->vx - ego->vx;
+    float dvy = other->vy - ego->vy;
+    float closing = -(dvx * nx + dvy * ny);
+    if (closing < 0.0f)
+        closing = 0.0f; // already separating
+
+    return (m2 / (m1 + m2)) * (1.0f + e_rest) * closing;
+}
+
 static float gaussian_noise(float sigma) {
     if (sigma <= 0.0f)
         return 0.0f;
@@ -536,6 +602,19 @@ void add_log(Drive *env) {
         env->log.collisions_per_agent += env->logs[i].collisions_per_agent;
         env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
         env->log.rear_collision_rate += env->logs[i].rear_collision_rate; // NEW
+
+        // Delta-V rollup: sum across agents, then divide by env->log.n at
+        // analysis time to get the mean. We also flag the 1-mph (0.447 m/s)
+        // bucket per-agent so the aggregate is the fraction of agents whose
+        // worst collision was below the threshold (Waymo's reporting style).
+        env->log.delta_v_sum += env->logs[i].delta_v_sum;
+        env->log.delta_v_count += env->logs[i].delta_v_count;
+        if (env->logs[i].delta_v_max > env->log.delta_v_max) {
+            env->log.delta_v_max = env->logs[i].delta_v_max;
+        }
+        if (env->logs[i].delta_v_count > 0.0f && env->logs[i].delta_v_max < 0.447f) {
+            env->log.delta_v_under_1mph += 1.0f;
+        }
 
         // Route progress ratio
         if (env->logs[i].route_progress > 0.0f) {
@@ -749,7 +828,10 @@ void set_start_position(Drive *env) {
         e->offroad_state = 0;
         e->stopped = 0;
         e->removed = 0;
-        // NEW: capture episode-start state for metrics
+        e->collision_delta_v = 0.0f;
+        e->collision_delta_v_max = 0.0f;
+        e->collision_delta_v_sum = 0.0f;
+        e->collision_delta_v_count = 0;
         e->init_x = e->x;
         e->init_y = e->y;
         e->init_heading_x = e->heading_x;
@@ -1271,6 +1353,11 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     if (agent->x == INVALID_POSITION)
         return; // invalid agent position
 
+    // Snapshot collision state on entry so we can detect the leading edge of
+    // a collision event for Delta-V accounting (avoids double-counting
+    // multi-frame collisions).
+    int was_colliding_on_entry = agent->collision_state;
+
     int collided_with_agent = 0;
     int collided_with_road = 0;
 
@@ -1330,6 +1417,20 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
     if (collided_with_agent) {
         // Determine fault: was this agent moving toward the other?
         Entity *other = &env->entities[car_collided_with_index];
+
+        // Delta-V: only on the leading edge of a collision event (transition
+        // 0 -> 1) so a multi-frame collision counts once. Note c_step zeroes
+        // collision_state at the top of each step, so this transition fires
+        // on the first frame of contact each time.
+        if (!was_colliding_on_entry) {
+            float dv = compute_delta_v(agent, other);
+            agent->collision_delta_v = dv;
+            agent->collision_delta_v_sum += dv;
+            agent->collision_delta_v_count += 1;
+            if (dv > agent->collision_delta_v_max) {
+                agent->collision_delta_v_max = dv;
+            }
+        }
 
         // Vector from this agent to the other
         float dx = other->x - agent->x;
@@ -2599,6 +2700,13 @@ void c_step(Drive *env) {
             if (env->entities[agent_idx].at_fault_collision_state) {
                 env->logs[i].at_fault_collision_rate = 1.0f;
             }
+            // Delta-V: record only the most recent event's value into the log.
+            // compute_agent_metrics already updated the running max/sum/count
+            // on the entity. We mirror those onto the per-agent log slot.
+            Entity *e = &env->entities[agent_idx];
+            env->logs[i].delta_v_sum = e->collision_delta_v_sum;
+            env->logs[i].delta_v_max = e->collision_delta_v_max;
+            env->logs[i].delta_v_count = (float)e->collision_delta_v_count;
         }
 
         if (offroad_state == 1 && !agent_is_done) {
