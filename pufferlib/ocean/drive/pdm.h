@@ -35,6 +35,14 @@ typedef struct {
     float sin_heading;
     float speed;
     int lane_idx;
+    int route_idx;
+    int segment_idx;
+    float segment_t;
+    int center_lane_idx;
+    float center_x;
+    float center_y;
+    float center_z;
+    float center_heading;
 } PDMRolloutStep;
 
 typedef struct {
@@ -87,6 +95,101 @@ static float pdm_compute_idm_acceleration(Agent *agent, float desired_speed, IDM
     }
 
     return IDM_MAX_ACCEL * (1.0f - free_road_term - leader_term);
+}
+
+static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent) {
+    IDMLaneProjection best = {0};
+    best.route_idx = 0;
+    best.lane_idx = -1;
+    best.segment_idx = 0;
+    best.t = 0.0f;
+    best.dist_sq = INFINITY;
+
+    if (agent->route == NULL || agent->route_length <= 0) {
+        return best;
+    }
+
+    int center_route_idx = agent->current_route_index;
+    if (center_route_idx < 0) {
+        center_route_idx = 0;
+    } else if (center_route_idx >= agent->route_length) {
+        center_route_idx = agent->route_length - 1;
+    }
+
+    int center_seg_idx = agent->current_lane_geometry_idx;
+    if (center_seg_idx < 0) {
+        center_seg_idx = 0;
+    }
+
+    for (int route_idx = center_route_idx - 1; route_idx <= center_route_idx + 1; route_idx++) {
+        if (route_idx < 0 || route_idx >= agent->route_length) {
+            continue;
+        }
+
+        int lane_idx = agent->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            continue;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2) {
+            continue;
+        }
+
+        int start_seg = 0;
+        int end_seg = lane->segment_length - 1;
+        if (route_idx == center_route_idx) {
+            start_seg = center_seg_idx - 8;
+            end_seg = center_seg_idx + 9;
+            if (start_seg < 0) {
+                start_seg = 0;
+            }
+            if (end_seg > lane->segment_length - 1) {
+                end_seg = lane->segment_length - 1;
+            }
+        } else if (route_idx < center_route_idx) {
+            start_seg = lane->segment_length > 9 ? lane->segment_length - 9 : 0;
+        } else {
+            end_seg = lane->segment_length - 1 < 8 ? lane->segment_length - 1 : 8;
+        }
+
+        for (int seg_idx = start_seg; seg_idx < end_seg; seg_idx++) {
+            float dx = lane->x[seg_idx + 1] - lane->x[seg_idx];
+            float dy = lane->y[seg_idx + 1] - lane->y[seg_idx];
+            float dz = lane->z[seg_idx + 1] - lane->z[seg_idx];
+            float seg_len_sq = dx * dx + dy * dy + dz * dz;
+            if (seg_len_sq < 1e-6f) {
+                continue;
+            }
+
+            float ax = agent->sim_x - lane->x[seg_idx];
+            float ay = agent->sim_y - lane->y[seg_idx];
+            float az = agent->sim_z - lane->z[seg_idx];
+            float t = (ax * dx + ay * dy + az * dz) / seg_len_sq;
+            t = clip(t, 0.0f, 1.0f);
+
+            float px = lane->x[seg_idx] + t * dx;
+            float py = lane->y[seg_idx] + t * dy;
+            float pz = lane->z[seg_idx] + t * dz;
+            float err_x = agent->sim_x - px;
+            float err_y = agent->sim_y - py;
+            float err_z = agent->sim_z - pz;
+            float dist_sq = err_x * err_x + err_y * err_y + err_z * err_z;
+
+            if (dist_sq < best.dist_sq) {
+                best.valid = 1;
+                best.route_idx = route_idx;
+                best.lane_idx = lane_idx;
+                best.segment_idx = seg_idx;
+                best.t = t;
+                best.dist_sq = dist_sq;
+            }
+        }
+    }
+
+    if (!best.valid) {
+        return idm_project_to_route_lanes(env, agent);
+    }
+    return best;
 }
 
 static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProjection projection, float distance,
@@ -143,6 +246,14 @@ static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProject
             out->cos_heading = cos_heading;
             out->sin_heading = sin_heading;
             out->lane_idx = lane_idx;
+            out->route_idx = route_idx;
+            out->segment_idx = seg_idx;
+            out->segment_t = sample_t;
+            out->center_lane_idx = lane_idx;
+            out->center_x = center_x;
+            out->center_y = center_y;
+            out->center_z = out->z;
+            out->center_heading = heading;
             return 1;
         }
 
@@ -316,6 +427,12 @@ static int pdm_sample_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pr
             float t = seg_len > 1e-6f ? (distance - path->arc_lengths[i - 1]) / seg_len : 0.0f;
             t = clip(t, 0.0f, 1.0f);
             float heading = path->heading[i - 1];
+            float center_distance =
+                path->bezier_length > 1e-6f ? distance * path->merge_route_s / path->bezier_length : 0.0f;
+            PDMRolloutStep center_step = {0};
+            if (!pdm_sample_offset_route_pose(env, agent, projection, center_distance, 0.0f, &center_step)) {
+                return 0;
+            }
             out->valid = 1;
             out->s = distance;
             out->x = path->x[i - 1] + t * (path->x[i] - path->x[i - 1]);
@@ -324,7 +441,15 @@ static int pdm_sample_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pr
             out->heading = normalize_heading(heading);
             out->cos_heading = cosf(out->heading);
             out->sin_heading = sinf(out->heading);
-            out->lane_idx = agent->current_lane_idx;
+            out->lane_idx = center_step.lane_idx;
+            out->route_idx = center_step.route_idx;
+            out->segment_idx = center_step.segment_idx;
+            out->segment_t = center_step.segment_t;
+            out->center_lane_idx = center_step.center_lane_idx;
+            out->center_x = center_step.center_x;
+            out->center_y = center_step.center_y;
+            out->center_z = center_step.center_z;
+            out->center_heading = center_step.center_heading;
             return 1;
         }
     }
@@ -568,7 +693,7 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
     int count = 0;
     float speed_limit = idm_desired_speed(env, agent);
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
-    IDMLaneProjection projection = idm_project_to_route_lanes(env, agent);
+    IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
     IDMLeader offset_leaders[PDM_NUM_OFFSETS];
 
     if (!projection.valid) {
@@ -711,8 +836,16 @@ static void pdm_apply_teleport_step(Drive *env, int agent_idx, PDMCandidateScore
         agent->sim_heading = normalize_heading(step.heading);
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
-        if (step.lane_idx >= 0) {
+        if (step.route_idx >= 0 && step.route_idx < agent->route_length) {
+            agent->current_route_index = step.route_idx;
+        }
+        if (step.center_lane_idx >= 0) {
+            agent->current_lane_idx = step.center_lane_idx;
+        } else if (step.lane_idx >= 0) {
             agent->current_lane_idx = step.lane_idx;
+        }
+        if (step.segment_idx >= 0) {
+            agent->current_lane_geometry_idx = step.segment_idx;
         }
     } else {
         float distance = new_speed * env->dt;
