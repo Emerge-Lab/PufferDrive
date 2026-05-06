@@ -25,8 +25,10 @@ CPT_PATH = (
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training_50"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # <--- @WAEL only using this atm; replace this with any path you like.
-INTERACTIVE_MAP_NUM_FILES = 200  # <-- @WAEL num maps in dir here
+INTERACTIVE_MAP_DIR = (
+    "resources/drive/binaries/womd_val_idm_10k"  # <--- @WAEL only using this atm; replace this with any path you like.
+)
+INTERACTIVE_MAP_NUM_FILES = 10  # <-- @WAEL num maps in dir here
 NUM_AGENTS_PER_VECENV = 512
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
@@ -74,7 +76,15 @@ def load_checkpoint_config(checkpoint_path, fallback_config):
     return copy.deepcopy(fallback_config), False
 
 
-def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behavior=0, num_maps=50000):
+def make_eval_config(
+    base_config,
+    map_dir,
+    episode_len,
+    control_mode,
+    goal_behavior=0,
+    num_maps=50000,
+    controller_overrides=None,
+):
     """Build an eval-ready config, overriding only eval-specific settings."""
     config = copy.deepcopy(base_config)
     config["env"]["map_dir"] = map_dir
@@ -91,6 +101,8 @@ def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behav
     config["env"]["control_mode"] = control_mode
     config["env"]["goal_behavior"] = goal_behavior
     config["env"]["render_mode"] = 1
+    if controller_overrides is not None:
+        config["env"].update(controller_overrides)
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
     return config
 
@@ -216,12 +228,25 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
 
     all_rows = []
 
-    for mode_name, map_dir, control_mode, num_maps in [
+    eval_modes = [
         # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
         # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
         # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
-        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES),
-    ]:
+        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES, None),
+        (
+            "idm_interactive",
+            INTERACTIVE_MAP_DIR,
+            "control_sdc_only",
+            INTERACTIVE_MAP_NUM_FILES,
+            {
+                "sdc_controller": "policy",
+                "non_sdc_controller": "idm",
+                "non_vehicle_controller": "replay",
+            },
+        ),
+    ]
+
+    for mode_name, map_dir, control_mode, num_maps, controller_overrides in eval_modes:
         print(f"\n{'─' * 60}")
         print(f"Mode: {mode_name} | Episode length: {episode_len}")
         print(f"{'─' * 60}")
@@ -232,6 +257,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
             episode_len=episode_len,
             control_mode=control_mode,
             num_maps=num_maps,
+            controller_overrides=controller_overrides,
         )
         env = load_env(ENV_NAME, config)
         policy = load_policy(cpt_config, env, ENV_NAME)

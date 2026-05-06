@@ -74,8 +74,21 @@ static int egl_headless_init(int width, int height) {
     }
 
     EGLint configAttribs[] = {
-        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_NONE,
+        EGL_SURFACE_TYPE,
+        EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE,
+        EGL_OPENGL_BIT,
+        EGL_RED_SIZE,
+        8,
+        EGL_GREEN_SIZE,
+        8,
+        EGL_BLUE_SIZE,
+        8,
+        EGL_ALPHA_SIZE,
+        8,
+        EGL_DEPTH_SIZE,
+        24,
+        EGL_NONE,
     };
     EGLConfig config;
     EGLint numConfigs = 0;

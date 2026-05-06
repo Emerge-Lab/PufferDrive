@@ -104,9 +104,7 @@ def main():
 
     # Run evaluation, then optionally rerender a sample of rollouts.
     df = run_evaluations(base_args, policy, eval_cases, output_dir, args)
-    df, random_rendered, collision_rendered = maybe_render_videos(
-        base_args, policy, df, output_dir, args
-    )
+    df, random_rendered, collision_rendered = maybe_render_videos(base_args, policy, df, output_dir, args)
 
     summary = build_summary(df, maps, skipped_maps, output_dir, args)
     summary["random_videos_rendered"] = random_rendered
@@ -393,8 +391,7 @@ def validate_controlled_agents(env: Drive, expected_agent_ids: list[int]) -> lis
     controlled_ids = [int(agent_id) for agent_id in env.get_global_agent_state()["id"].tolist()]
     if sorted(controlled_ids) != sorted(int(agent_id) for agent_id in expected_agent_ids):
         raise RuntimeError(
-            f"Expected controlled agents {expected_agent_ids}, got {controlled_ids} "
-            f"for scenario {env.scenario_ids[0]}"
+            f"Expected controlled agents {expected_agent_ids}, got {controlled_ids} for scenario {env.scenario_ids[0]}"
         )
     return controlled_ids
 
@@ -468,9 +465,7 @@ def discover_controllable_agents(base_args: dict, map_record: MapRecord):
             for rank in range(first_env_count):
                 agent_id = int(state["id"][rank])
                 if agent_id not in object_id_to_index:
-                    raise ValueError(
-                        f"Agent id {agent_id} from {map_record.map_name} was not found in the binary map"
-                    )
+                    raise ValueError(f"Agent id {agent_id} from {map_record.map_name} was not found in the binary map")
 
                 cases.append(
                     {
@@ -530,8 +525,7 @@ def build_eval_cases(discovery_cases: list[dict], cli_args) -> list[dict]:
 
     if "self_play" in cli_args.eval_modes:
         cases.extend(
-            {**case, "deterministic": cli_args.deterministic}
-            for case in build_self_play_cases(discovery_cases)
+            {**case, "deterministic": cli_args.deterministic} for case in build_self_play_cases(discovery_cases)
         )
 
     order = {mode: i for i, mode in enumerate(DEFAULT_EVAL_MODES)}
@@ -563,9 +557,7 @@ def evaluate_case(base_args: dict, policy, case: dict, run_seed: int):
     row["expected_agent_ids_json"] = json.dumps(list(case["expected_agent_ids"]))
     row["controlled_agent_ids"] = json.dumps(controlled_ids)
     row["num_policy_agents"] = len(controlled_ids)
-    row["had_collision"] = bool(
-        row.get("collision_rate", 0.0) > 0.0 or row.get("collisions_per_agent", 0.0) > 0.0
-    )
+    row["had_collision"] = bool(row.get("collision_rate", 0.0) > 0.0 or row.get("collisions_per_agent", 0.0) > 0.0)
     row["had_valid_collision"] = bool(row.get("collision_rate_valid", 0.0) > 0.0)
     row["seed"] = run_seed
     return row
