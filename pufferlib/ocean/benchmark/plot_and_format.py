@@ -1325,8 +1325,8 @@ def plot_human_data_requirements(
         ),
     ]
 
-    tick_positions = [10, 30, 180, 1800, 75000]
-    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
+    tick_positions = [10, 30, 180, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "52 days"]
 
     # Labels excluded from the gains figure's x-axis (line plots still show them).
     GAINS_EXCLUDED_LABELS = {"52 days"}
@@ -1569,6 +1569,8 @@ def generate_human_data_latex_table(
 
     # (1) SMART rows
     for _, r in SMART_DATA.sort_values("minutes").reset_index(drop=True).iterrows():
+        if abs(r["minutes"] - 1800) / 1800 < 0.02:  # skip 30h
+            continue
         rows.append(
             {
                 "method": "SMART",
@@ -2520,10 +2522,20 @@ def plot_collision_severity(
 
     Returns the matplotlib Figure, or None if there's not enough data.
     """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "regularized",
+    }
+
     # ── Filter ──────────────────────────────────────────────────────────────
     sub = df[df["mode"].isin(modes)].copy()
     if sub.empty:
         print(f"  No rows in modes={modes} — skipping plot_collision_severity.")
+        return None
+
+    sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+    if sub.empty:
+        print("  No rows for checkpoints of interest — skipping plot_collision_severity.")
         return None
 
     if sp_maps_filter is not None and "sp_maps" in sub.columns:
@@ -2532,21 +2544,10 @@ def plot_collision_severity(
             print(f"  No rows with sp_maps={sp_maps_filter} — skipping plot_collision_severity.")
             return None
 
-    required = {"delta_v_count", "delta_v_sum", "delta_v_max", "delta_v_under_1mph"}
-    missing = required - set(sub.columns)
-    if missing:
-        print(f"  Missing Delta-V columns {missing} — skipping plot_collision_severity.")
-        return None
+    sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
-    # ── Tag each row as regularized vs unregularized ────────────────────────
-    if "anchor_maps" in sub.columns:
-        sub["is_reg"] = sub["anchor_maps"].fillna(0).astype(int) > 0
-    else:
-        sub["is_reg"] = ~sub["checkpoint"].str.contains("unreg", case=False)
+    coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
 
-    sub["group"] = np.where(sub["is_reg"], "regularized", "unregularized")
-
-    coll = sub[sub["delta_v_count"] > 0].copy()
     if coll.empty:
         print("  No collision events in filtered data — skipping plot_collision_severity.")
         return None
@@ -2723,30 +2724,31 @@ def generate_collision_severity_latex_table(
       \\usepackage{booktabs}, \\usepackage{graphicx},
       \\usepackage{makecell}, \\usepackage{bm}
     """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "regularized",
+    }
+
+    # ── Filter ──────────────────────────────────────────────────────────────
     sub = df[df["mode"].isin(modes)].copy()
     if sub.empty:
-        print(f"  No rows in modes={modes} — skipping severity table.")
+        print(f"  No rows in modes={modes} — skipping plot_collision_severity.")
+        return None
+
+    sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+    if sub.empty:
+        print("  No rows for checkpoints of interest — skipping plot_collision_severity.")
         return None
 
     if sp_maps_filter is not None and "sp_maps" in sub.columns:
         sub = sub[sub["sp_maps"] == sp_maps_filter]
         if sub.empty:
-            print(f"  No rows with sp_maps={sp_maps_filter} — skipping severity table.")
+            print(f"  No rows with sp_maps={sp_maps_filter} — skipping plot_collision_severity.")
             return None
 
-    required = {"delta_v_count", "delta_v_sum", "delta_v_max"}
-    missing = required - set(sub.columns)
-    if missing:
-        print(f"  Missing Delta-V columns {missing} — skipping severity table.")
-        return None
+    sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
-    if "anchor_maps" in sub.columns:
-        sub["is_reg"] = sub["anchor_maps"].fillna(0).astype(int) > 0
-    else:
-        sub["is_reg"] = ~sub["checkpoint"].str.contains("unreg", case=False)
-    sub["group"] = np.where(sub["is_reg"], "regularized", "unregularized")
-
-    coll = sub[sub["delta_v_count"] > 0].copy()
+    coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
     if coll.empty:
         print("  No collision events — skipping severity table.")
         return None
