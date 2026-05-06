@@ -2268,6 +2268,231 @@ def plot_human_data_requirements_wosac(
     return fig
 
 
+def plot_collision_severity(
+    df,
+    save_path="results/figures/eval_collision_severity.pdf",
+    modes=("hr_interactive", "scaling_hr_interactive"),
+    sp_maps_filter=50000,
+):
+    """Compare collision severity (Delta-V) between regularized and unregularized models.
+
+    Four panels:
+      0) ECDF of per-event Delta-V — distributional comparison.
+         Single-collision agents contribute their exact dv (= delta_v_max).
+         Multi-collision agents contribute mean = delta_v_sum / delta_v_count
+         and max = delta_v_max as separate proxy points (count is typically
+         small in practice; a header note prints the multi-collision share).
+         A dashed vertical line marks the Waymo 1 mph (0.447 m/s) threshold.
+      1) Bar of mean Delta-V per collision event (conditional on collision).
+      2) Bar of fraction of collision events with Delta-V < 1 mph.
+      3) Histogram (density-normalized) of per-event Delta-V, overlaid by
+         group. X-axis clipped at the 99th percentile across both groups
+         so the long tail doesn't compress the body of the distribution.
+
+    Pulls only rows from `modes` and (optionally) restricts to a single
+    metadata-map count via `sp_maps_filter` to match the human-data figure.
+    Pass sp_maps_filter=None to use all rows (e.g. main eval CSV without
+    scaling metadata).
+
+    Returns the matplotlib Figure, or None if there's not enough data.
+    """
+    # ── Filter ──────────────────────────────────────────────────────────────
+    sub = df[df["mode"].isin(modes)].copy()
+    if sub.empty:
+        print(f"  No rows in modes={modes} — skipping plot_collision_severity.")
+        return None
+
+    if sp_maps_filter is not None and "sp_maps" in sub.columns:
+        sub = sub[sub["sp_maps"] == sp_maps_filter]
+        if sub.empty:
+            print(f"  No rows with sp_maps={sp_maps_filter} — skipping plot_collision_severity.")
+            return None
+
+    required = {"delta_v_count", "delta_v_sum", "delta_v_max", "delta_v_under_1mph"}
+    missing = required - set(sub.columns)
+    if missing:
+        print(f"  Missing Delta-V columns {missing} — skipping plot_collision_severity.")
+        return None
+
+    # ── Tag each row as regularized vs unregularized ────────────────────────
+    if "anchor_maps" in sub.columns:
+        sub["is_reg"] = sub["anchor_maps"].fillna(0).astype(int) > 0
+    else:
+        sub["is_reg"] = ~sub["checkpoint"].str.contains("unreg", case=False)
+
+    sub["group"] = np.where(sub["is_reg"], "regularized", "unregularized")
+
+    coll = sub[sub["delta_v_count"] > 0].copy()
+    if coll.empty:
+        print("  No collision events in filtered data — skipping plot_collision_severity.")
+        return None
+
+    multi_frac = (coll["delta_v_count"] > 1).mean()
+    print(f"  Collision events: {len(coll)} agent-episodes with at least one collision.")
+    print(f"  Multi-collision agent-episodes: {multi_frac:.1%}")
+    if multi_frac > 0.10:
+        print("  Note: multi-collision share > 10%; CDF/histogram are approximate.")
+
+    # ── Build per-event proxy frame ─────────────────────────────────────────
+    # Single-collision rows: dv == delta_v_max exactly.
+    single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy()
+    single = single.rename(columns={"delta_v_max": "dv"})
+
+    # Multi-collision rows: emit max and mean as separate proxy events.
+    multi = coll[coll["delta_v_count"] > 1].copy()
+    multi_max = multi[["group", "delta_v_max"]].rename(columns={"delta_v_max": "dv"})
+    multi_mean = multi[["group"]].copy()
+    multi_mean["dv"] = multi["delta_v_sum"] / multi["delta_v_count"]
+
+    events = pd.concat([single, multi_max, multi_mean], ignore_index=True)
+    events = events[events["dv"] > 0]  # drop any zeros from edge cases
+
+    # ── Headline aggregates (used in panels 1 and 2) ────────────────────────
+    def _agg(group_df):
+        total_sum = group_df["delta_v_sum"].sum()
+        total_count = group_df["delta_v_count"].sum()
+        if total_count == 0:
+            return pd.Series({"mean_dv": np.nan, "frac_under_1mph": np.nan, "n_events": 0})
+        # frac_under_1mph: per-agent indicator (1 if agent's worst collision
+        # was under 1 mph). This is the cleanest agent-level summary, even
+        # though a strictly per-event version would require a C-side log.
+        return pd.Series(
+            {
+                "mean_dv": total_sum / total_count,
+                "frac_under_1mph": group_df["delta_v_under_1mph"].mean(),
+                "n_events": int(total_count),
+            }
+        )
+
+    headline = coll.groupby("group").apply(_agg).reset_index()
+
+    # Stable ordering: unreg first, reg second (matches rest of file)
+    group_order = ["unregularized", "regularized"]
+    headline = headline.set_index("group").reindex(group_order).reset_index()
+    colors = [PALETTE["selfplay"], PALETTE["ours"]]
+
+    # ── Plot ────────────────────────────────────────────────────────────────
+    _set_style(2)
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4.5))
+
+    one_mph_mps = 0.447  # 1 mph = 0.447 m/s, Waymo's threshold
+
+    # Panel 0: ECDF
+    ax = axes[0]
+    for group, color in zip(group_order, colors):
+        dv = np.sort(events.loc[events["group"] == group, "dv"].values)
+        if dv.size == 0:
+            continue
+        ecdf = np.arange(1, dv.size + 1) / dv.size
+        ax.plot(
+            dv,
+            ecdf,
+            color=color,
+            linewidth=2.0,
+            label=f"{group} (n={dv.size})",
+            zorder=3,
+        )
+    ax.axvline(
+        one_mph_mps,
+        color="gray",
+        linestyle="--",
+        linewidth=1.2,
+        alpha=0.8,
+        zorder=2,
+        label="1 mph (0.45 m/s)",
+    )
+    ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
+    ax.set_ylabel("Cumulative fraction of events")
+    ax.set_title("Distribution of collision severity")
+    ax.set_ylim(0, 1.02)
+    ax.set_xlim(left=0)
+    ax.grid(alpha=0.3, linestyle="--")
+    ax.legend(fontsize=9, loc="lower right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+    sns.despine(ax=ax)
+
+    # Panel 1: mean Delta-V per event
+    ax = axes[1]
+    x = np.arange(len(group_order))
+    means = headline["mean_dv"].values
+    ax.bar(x, means, color=colors, alpha=0.85, width=0.55)
+    for xi, m in zip(x, means):
+        if pd.notna(m):
+            ax.text(xi, m, f"{m:.2f}", ha="center", va="bottom", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(group_order, rotation=15, ha="right")
+    ax.set_ylabel(r"Mean $\Delta v$ per collision (m/s)")
+    ax.set_title(r"Mean severity $\downarrow$")
+    ax.set_ylim(bottom=0)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    # Panel 2: fraction of low-severity collisions
+    ax = axes[2]
+    fracs = headline["frac_under_1mph"].values * 100
+    ax.bar(x, fracs, color=colors, alpha=0.85, width=0.55)
+    for xi, f in zip(x, fracs):
+        if pd.notna(f):
+            ax.text(xi, f, f"{f:.0f}%", ha="center", va="bottom", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(group_order, rotation=15, ha="right")
+    ax.set_ylabel(r"% of collisions with $\Delta v < 1$ mph")
+    ax.set_title(r"Low-severity share $\uparrow$")
+    ax.set_ylim(0, 100)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    sns.despine(ax=ax)
+
+    # Panel 3: KDE of per-event Delta-V, overlaid by group.
+    # KDE leaks a small amount of mass past the dv >= 0 boundary (kernel
+    # smoothing artifact); we clip the x-axis at 0 to hide it. Bandwidth
+    # uses seaborn's default (Scott's rule), which is fine for n in 100s+.
+    ax = axes[3]
+    all_dvs = events["dv"].values
+    if all_dvs.size > 0:
+        x_hi = np.percentile(all_dvs, 99)
+    else:
+        x_hi = 1.0
+    x_hi = float(np.ceil(x_hi * 2) / 2)  # nearest 0.5
+
+    for group, color in zip(group_order, colors):
+        dv = events.loc[events["group"] == group, "dv"].values
+        if dv.size < 2:  # KDE needs at least 2 points
+            continue
+        sns.kdeplot(
+            x=dv,
+            ax=ax,
+            color=color,
+            fill=True,
+            alpha=0.35,
+            linewidth=2.0,
+            label=f"{group} (n={dv.size})",
+            clip=(0, None),  # don't extrapolate to negative Delta-V
+            zorder=3,
+        )
+    ax.axvline(
+        one_mph_mps,
+        color="gray",
+        linestyle="--",
+        linewidth=1.2,
+        alpha=0.8,
+        zorder=2,
+        label="1 mph",
+    )
+    ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
+    ax.set_ylabel("Density")
+    ax.set_title(rf"Severity density (KDE, view clipped at {x_hi:.1f} m/s)")
+    ax.set_xlim(0, x_hi)
+    ax.set_ylim(bottom=0)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.legend(fontsize=9, loc="upper right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+    sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -2292,6 +2517,11 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
     print("  Saved eval_wosac_lineplot.pdf")
     plot_wosac_submetrics(wosac_df)
     print("  Saved eval_wosac_submetrics.pdf")
+    plot_collision_severity(
+        df,
+        modes=("hr_interactive", "scaling_hr_interactive"),
+        sp_maps_filter=50000,
+    )
     if anchor_df is not None and not anchor_df.empty:
         plot_anchor_eval(anchor_df)
         print("  Saved eval_anchor.pdf")

@@ -310,11 +310,15 @@ static int my_log(PyObject *dict, Log *log) {
     assign_to_dict(dict, "rear_collision_rate", log->rear_collision_rate);
     assign_to_dict(dict, "longitudinal_error_avg", log->longitudinal_error_avg);
     assign_to_dict(dict, "displacement_error_avg", log->displacement_error_avg);
-    //  assign_to_dict(dict, "dnf_rate", log->dnf_rate);
-    // assign_to_dict(dict, "perc_other", log->perc_other);
-    // assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
-    // assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
-    // assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
-    //  assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "delta_v_sum", log->delta_v_sum);
+    assign_to_dict(dict, "delta_v_max", log->delta_v_max);
+    assign_to_dict(dict, "delta_v_count", log->delta_v_count);
+    assign_to_dict(dict, "delta_v_under_1mph", log->delta_v_under_1mph);
+    //   assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    //  assign_to_dict(dict, "perc_other", log->perc_other);
+    //  assign_to_dict(dict, "goals_sampled_this_episode", log->goals_sampled_this_episode);
+    //  assign_to_dict(dict, "goals_reached_this_episode", log->goals_reached_this_episode);
+    //  assign_to_dict(dict, "speed_at_goal", log->speed_at_goal);
+    //   assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     return 0;
 }
