@@ -21,14 +21,13 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 CPT_PATH = "models/scaling_cpts/delta_50k_maps_anchor_12k_maps.pt"  # "models/model_puffer_drive_005000 (1).pt" #"models/scaling_cpts/unreg_delta_50k_maps.pt" #"models/model_puffer_drive_010000.pt" #"models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  #"models/scaling_cpts/unreg_delta_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
-TRAIN_MAP_DIR = "resources/drive/binaries/training"
-VAL_MAP_DIR = "resources/drive/binaries/training"  # 10k maps
+TRAIN_MAP_DIR = "resources/drive/binaries/training_50"
+VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = (
-    "resources/drive/binaries/interactive_data_validation"
-    # "resources/drive/binaries/womd_val_idm_10k"
+    "resources/drive/binaries/womd_val_idm_10k"  # <--- @WAEL only using this atm; replace this with any path you like.
 )
-INTERACTIVE_MAP_NUM_FILES = 200
-NUM_AGENTS_PER_VECENV = 1024
+INTERACTIVE_MAP_NUM_FILES = 10  # <-- @WAEL num maps in dir here
+NUM_AGENTS_PER_VECENV = 512
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
@@ -229,21 +228,21 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
     all_rows = []
 
     eval_modes = [
-        ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000, None),
-        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000, None),
-        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000, None),
+        # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
+        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
+        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
         ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES, None),
-        # (
-        #     "idm_interactive",
-        #     INTERACTIVE_MAP_DIR,
-        #     "control_sdc_only",
-        #     INTERACTIVE_MAP_NUM_FILES,
-        #     {
-        #         "sdc_controller": "policy",
-        #         "non_sdc_controller": "idm",
-        #         "non_vehicle_controller": "replay",
-        #     },
-        # ),
+        (
+            "idm_interactive",
+            INTERACTIVE_MAP_DIR,
+            "control_sdc_only",
+            INTERACTIVE_MAP_NUM_FILES,
+            {
+                "sdc_controller": "policy",
+                "non_sdc_controller": "idm",
+                "non_vehicle_controller": "replay",
+            },
+        ),
     ]
 
     for mode_name, map_dir, control_mode, num_maps, controller_overrides in eval_modes:
