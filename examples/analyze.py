@@ -45,9 +45,10 @@ DETERMINISTIC = True
 TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
+IDM_MAP_DIR = "resources/drive/binaries/interactive_200_idm"  # Same 200 maps selected for SDC interactivity but processed in a different way
 INTERACTIVE_MAP_DIR_MAPS = 200
-NUM_TOTAL_EVAL_AGENTS = 512
-NUM_AGENTS_PER_VECENV = 512
+NUM_TOTAL_EVAL_AGENTS = 128
+NUM_AGENTS_PER_VECENV = 128
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"
@@ -110,21 +111,13 @@ def _parse_num(s):
     return n
 
 
-def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=200):
-    """Build an eval-ready config from the checkpoint config.
-
-    Takes everything from the checkpoint and only overwrites eval-specific fields:
-    map_dir, control_mode, num_maps, and optionally episode_length.
-    """
+def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=200, controller_overrides=None):
     config = copy.deepcopy(cpt_config)
     config["env"]["map_dir"] = map_dir
     config["env"]["control_mode"] = control_mode
     config["env"]["num_maps"] = num_maps
     config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
-
-    # Fixed: Important for getting valid stats
     config["env"]["async_resets"] = False
-
     config["env"]["goal_behavior"] = 0
     config["env"]["render_mode"] = 1
     config["env"]["termination_mode"] = 1
@@ -132,9 +125,10 @@ def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length
     config["env"]["fix_rewards"] = True
     config["env"]["obs_partner_noise_speed"] = 0.0
     config["env"]["obs_partner_noise_pos"] = 0.0
-    config["env"]["termination_mode"] = 1
     if episode_length is not None:
         config["env"]["episode_length"] = episode_length
+    if controller_overrides is not None:  # <-- NEW
+        config["env"].update(controller_overrides)
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
     return config
 
@@ -167,9 +161,10 @@ def num_resample_rounds():
     return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
 
 
-def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps):
-    """Create env, rollout (with resampling if needed), collect per-scene rows, close env."""
-    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps)
+def run_mode(
+    evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps, controller_overrides=None
+):
+    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps, controller_overrides=controller_overrides)
     env = load_env(ENV_NAME, config)
     rows = []
     n_rounds = num_resample_rounds()
@@ -430,6 +425,23 @@ def evaluate_scaling_checkpoints(base_config):
             num_maps=INTERACTIVE_MAP_DIR_MAPS,
         )
 
+        # ── IDM eval on interactive scenes ───────────────────────────────
+        idm_interactive_rows = run_mode(
+            evaluator,
+            policy,
+            cpt_config,
+            IDM_MAP_DIR,
+            "control_sdc_only",
+            cpt_path,
+            "scaling_idm_interactive",
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
+            controller_overrides={
+                "sdc_controller": "policy",
+                "non_sdc_controller": "idm",
+                "non_vehicle_controller": "replay",
+            },
+        )
+
         # Attach scaling metadata to every row
         for row in sp_train_rows + sp_val_rows + hr_val_rows + hr_interactive_rows:
             row["sp_maps"] = sp_maps
@@ -441,6 +453,7 @@ def evaluate_scaling_checkpoints(base_config):
         all_rows.extend(sp_val_rows)
         all_rows.extend(hr_val_rows)
         all_rows.extend(hr_interactive_rows)
+        all_rows.extend(idm_interactive_rows)
 
     return all_rows
 
