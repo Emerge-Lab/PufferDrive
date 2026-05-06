@@ -349,6 +349,8 @@ struct Drive {
     float world_mean_x;
     float world_mean_y;
     float dt;
+    float pdm_horizon;
+    float pdm_planning_dt;
     float spawn_initial_speed;
     int targeted_spawn_mode;
     float targeted_spawn_radius;

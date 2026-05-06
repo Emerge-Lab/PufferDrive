@@ -4,9 +4,13 @@
 #define PDM_NUM_OFFSETS 3
 #define PDM_NUM_SPEED_FRACTIONS 5
 #define PDM_NUM_CANDIDATES (PDM_NUM_OFFSETS * PDM_NUM_SPEED_FRACTIONS)
-#define PDM_HORIZON 4.0f
-#define PDM_PLANNING_DT 0.5f
-#define PDM_MAX_ROLLOUT_STEPS 9
+#define PDM_DEFAULT_HORIZON 4.0f
+#define PDM_DEFAULT_PLANNING_DT 0.5f
+#define PDM_MIN_HORIZON 0.5f
+#define PDM_MAX_HORIZON 8.0f
+#define PDM_MIN_PLANNING_DT 0.1f
+#define PDM_MAX_PLANNING_DT 1.0f
+#define PDM_MAX_ROLLOUT_STEPS 81
 #define PDM_DANGER_TTC 2.0f
 #define PDM_SAFE_SPEED_TTC 5.0f
 #define PDM_COLLISION_PENALTY 48.0f
@@ -22,6 +26,18 @@
 
 static const float PDM_OFFSETS[PDM_NUM_OFFSETS] = {0.0f, -1.0f, 1.0f};
 static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
+
+static inline float pdm_horizon(Drive *env) {
+    float horizon = env->pdm_horizon > 0.0f ? env->pdm_horizon : PDM_DEFAULT_HORIZON;
+    return clip(horizon, PDM_MIN_HORIZON, PDM_MAX_HORIZON);
+}
+
+static inline float pdm_planning_dt(Drive *env) {
+    float planning_dt = env->pdm_planning_dt > 0.0f ? env->pdm_planning_dt : PDM_DEFAULT_PLANNING_DT;
+    planning_dt = clip(planning_dt, PDM_MIN_PLANNING_DT, PDM_MAX_PLANNING_DT);
+    float min_dt_for_capacity = pdm_horizon(env) / (float)(PDM_MAX_ROLLOUT_STEPS - 1);
+    return fmaxf(planning_dt, min_dt_for_capacity);
+}
 
 typedef struct {
     int valid;
@@ -354,12 +370,13 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pro
 
     float alignment = clip(start_tx * target_tx + start_ty * target_ty, -1.0f, 1.0f);
     float alignment_scaling = 1.0f - PDM_ALIGNMENT_FACTOR * alignment;
-    float curvature_lookahead = clip(speed_for_merge * PDM_HORIZON, 5.0f, IDM_MAX_LOOKAHEAD);
+    float horizon = pdm_horizon(env);
+    float curvature_lookahead = clip(speed_for_merge * horizon, 5.0f, IDM_MAX_LOOKAHEAD);
     float max_curvature = pdm_route_max_curvature(env, agent, projection, curvature_lookahead);
     float d_merge =
         (PDM_MERGE_D_BASE + PDM_MERGE_K_V * speed - PDM_CURVATURE_FACTOR * max_curvature) * alignment_scaling;
     float h_merge = d_merge / speed_for_merge;
-    h_merge = clip(h_merge, PDM_MERGE_H_MIN, PDM_HORIZON);
+    h_merge = clip(h_merge, PDM_MERGE_H_MIN, horizon);
     d_merge = fmaxf(h_merge * speed_for_merge, 0.0f);
 
     PDMRolloutStep merge_step = {0};
@@ -473,10 +490,12 @@ static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, 
     }
     rollout.action_step.t = env->dt;
     rollout.action_step.speed = speed;
+    float horizon = pdm_horizon(env);
+    float planning_dt = pdm_planning_dt(env);
 
     for (int step = 0; step < PDM_MAX_ROLLOUT_STEPS; step++) {
-        float t = step * PDM_PLANNING_DT;
-        if (t > PDM_HORIZON + 1e-4f) {
+        float t = step * planning_dt;
+        if (t > horizon + 1e-4f) {
             break;
         }
 
@@ -555,7 +574,8 @@ static float pdm_compute_collision_ttc(Drive *env, int agent_idx, PDMCandidateSc
     }
 
     Agent *agent = &env->agents[agent_idx];
-    float max_distance = candidate->new_speed * PDM_HORIZON + 0.5f * agent->sim_length + 10.0f;
+    float horizon = pdm_horizon(env);
+    float max_distance = candidate->new_speed * horizon + 0.5f * agent->sim_length + 10.0f;
     int candidates[IDM_MAX_CANDIDATES];
     int num_candidates = idm_collect_route_candidates(env, agent_idx, max_distance, candidates, IDM_MAX_CANDIDATES);
 
@@ -571,7 +591,7 @@ static float pdm_compute_collision_ttc(Drive *env, int agent_idx, PDMCandidateSc
         }
     }
 
-    return PDM_HORIZON;
+    return horizon;
 }
 
 static float pdm_compute_traffic_light_ttc(Drive *env, const Agent *agent, PDMCandidateScore *candidate) {
@@ -587,7 +607,7 @@ static float pdm_compute_traffic_light_ttc(Drive *env, const Agent *agent, PDMCa
         }
     }
 
-    return PDM_HORIZON;
+    return pdm_horizon(env);
 }
 
 static int pdm_sample_is_offroad(Drive *env, const Agent *agent, PDMRolloutStep step) {
@@ -657,7 +677,7 @@ static float pdm_compute_offroad_ttc(Drive *env, int agent_idx, PDMCandidateScor
         }
     }
 
-    return PDM_HORIZON;
+    return pdm_horizon(env);
 }
 
 static void pdm_score_candidate(Drive *env, int agent_idx, PDMCandidateScore *candidate, float speed_limit) {
@@ -671,14 +691,15 @@ static void pdm_score_candidate(Drive *env, int agent_idx, PDMCandidateScore *ca
     }
 
     Agent *agent = &env->agents[agent_idx];
+    float horizon = pdm_horizon(env);
     candidate->collision_ttc = pdm_compute_collision_ttc(env, agent_idx, candidate);
     candidate->traffic_light_ttc = pdm_compute_traffic_light_ttc(env, agent, candidate);
     candidate->offroad_ttc = INFINITY;
     candidate->min_ttc = fminf(candidate->collision_ttc, candidate->traffic_light_ttc);
 
-    float ttc_score = clip(candidate->min_ttc / PDM_HORIZON, 0.0f, 1.0f);
+    float ttc_score = clip(candidate->min_ttc / horizon, 0.0f, 1.0f);
     float speed_score = clip(candidate->new_speed / fmaxf(speed_limit, 1.0f), 0.0f, 1.0f);
-    if (candidate->min_ttc < PDM_HORIZON && candidate->min_ttc <= PDM_SAFE_SPEED_TTC) {
+    if (candidate->min_ttc < horizon && candidate->min_ttc <= PDM_SAFE_SPEED_TTC) {
         speed_score = 0.0f;
     }
 
@@ -693,6 +714,7 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
     int count = 0;
     float speed_limit = idm_desired_speed(env, agent);
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
+    float horizon = pdm_horizon(env);
     IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
     IDMLeader offset_leaders[PDM_NUM_OFFSETS];
 
@@ -730,10 +752,10 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
                 .target_speed = target_speed,
                 .new_speed = new_speed,
                 .accel = accel,
-                .collision_ttc = PDM_HORIZON,
-                .traffic_light_ttc = PDM_HORIZON,
+                .collision_ttc = horizon,
+                .traffic_light_ttc = horizon,
                 .offroad_ttc = INFINITY,
-                .min_ttc = PDM_HORIZON,
+                .min_ttc = horizon,
                 .score = -INFINITY,
                 .valid = rollout.valid,
                 .rollout = rollout,
@@ -765,6 +787,7 @@ static PDMCandidateScore pdm_select_best_candidate(PDMCandidateScore *candidates
 static PDMCandidateScore pdm_select_best_feasible_candidate(Drive *env, int agent_idx, PDMCandidateScore *candidates,
                                                             int num_candidates) {
     int checked[PDM_NUM_CANDIDATES] = {0};
+    float horizon = pdm_horizon(env);
     PDMCandidateScore best_offroad = {0};
     best_offroad.valid = 0;
     best_offroad.score = -INFINITY;
@@ -790,7 +813,7 @@ static PDMCandidateScore pdm_select_best_feasible_candidate(Drive *env, int agen
 
         candidates[best_idx].offroad_ttc = pdm_compute_offroad_ttc(env, agent_idx, &candidates[best_idx]);
         candidates[best_idx].min_ttc = fminf(candidates[best_idx].min_ttc, candidates[best_idx].offroad_ttc);
-        if (candidates[best_idx].offroad_ttc >= PDM_HORIZON) {
+        if (candidates[best_idx].offroad_ttc >= horizon) {
             return candidates[best_idx];
         }
 

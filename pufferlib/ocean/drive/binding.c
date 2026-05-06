@@ -1882,6 +1882,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->max_traffic_control_observations = (int)unpack(kwargs, "max_traffic_control_observations");
     env->traffic_control_scope = (int)unpack(kwargs, "traffic_control_scope");
     env->dt = (float)unpack(kwargs, "dt");
+    env->pdm_horizon = (float)unpack(kwargs, "pdm_horizon");
+    env->pdm_planning_dt = (float)unpack(kwargs, "pdm_planning_dt");
     env->spawn_initial_speed = (float)unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float)unpack(kwargs, "goal_speed");
     env->scenario_length = (int)unpack(kwargs, "scenario_length");

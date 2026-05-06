@@ -156,6 +156,8 @@ class Drive(pufferlib.PufferEnv):
         traffic_light_behavior=0,
         deterministic_traffic_lights=False,
         dt=0.1,
+        pdm_horizon=4.0,
+        pdm_planning_dt=0.5,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
         scenario_length=None,
@@ -224,6 +226,8 @@ class Drive(pufferlib.PufferEnv):
         emit_completed_episodes=False,
     ):
         self.dt = dt
+        self.pdm_horizon = float(pdm_horizon)
+        self.pdm_planning_dt = float(pdm_planning_dt)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
@@ -858,6 +862,8 @@ class Drive(pufferlib.PufferEnv):
             "max_traffic_control_observations": self.max_traffic_control_observations,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
+            "pdm_horizon": self.pdm_horizon,
+            "pdm_planning_dt": self.pdm_planning_dt,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
