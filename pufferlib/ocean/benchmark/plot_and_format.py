@@ -2878,6 +2878,279 @@ def generate_collision_severity_latex_table(
     return latex_str
 
 
+def plot_three_metric_comparison(df, save_path="results/figures/eval_three_metric_comparison.pdf"):
+    """Bar chart comparing unregularized vs regularized across three key collision metrics.
+
+    3 subplots (1 row):
+      0) Self-play collision rate         (mode: scaling_sp_val)
+      1) IDM collision rate               (mode: scaling_idm_interactive)
+      2) Human-replay at-fault collision  (mode: scaling_hr_interactive)
+
+    Two bars per subplot: unregularized (black) vs regularized (blue),
+    following the shared PALETTE reg/unreg colour convention.
+    Error bars show SEM. Values plotted as percentages.
+
+    Note: scaling_idm_interactive rows do not have sp_maps/anchor_maps
+    attached in the evaluator (bug in evaluate_checkpoints.py — the metadata
+    loop omits idm_interactive_rows). Filtering is therefore done on
+    checkpoint path only, not on sp_maps.
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
+    }
+
+    subplot_specs = [
+        {
+            "mode": "scaling_sp_val",
+            "col": "collision_rate",
+            "ylabel": "Collision rate [%]",
+            "title": "Self-play collision rate",
+            "filter_sp_maps": True,  # sp_maps is reliably set for this mode
+        },
+        {
+            "mode": "scaling_idm_interactive",
+            "col": "collision_rate",
+            "ylabel": "Collision rate [%]",
+            "title": "IDM collision rate",
+            "filter_sp_maps": False,  # sp_maps NOT attached to IDM rows (evaluator bug)
+        },
+        {
+            "mode": "scaling_hr_interactive",
+            "col": "at_fault_collision_rate",
+            "ylabel": "At-fault collision rate [%]",
+            "title": "HR at-fault collision rate",
+            "filter_sp_maps": True,
+        },
+    ]
+
+    required_cols = {"collision_rate", "at_fault_collision_rate"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        print(f"  Missing columns {missing} — skipping plot_three_metric_comparison.")
+        return None
+
+    _set_style(2)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    bar_labels = ["unregularized", "regularized"]
+    colors = [PALETTE["selfplay"], PALETTE["ours"]]
+    x = np.arange(len(bar_labels))
+
+    for ax, spec in zip(axes, subplot_specs):
+        sub = df[df["mode"] == spec["mode"]].copy()
+        sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+
+        # For modes where sp_maps is reliably set, restrict to the 50k checkpoint
+        # to avoid accidentally pulling in rows from other sp_maps values that
+        # happen to share the same checkpoint path (shouldn't occur given the
+        # naming convention, but is an explicit safeguard).
+        if spec["filter_sp_maps"] and "sp_maps" in sub.columns:
+            sub = sub[sub["sp_maps"] == 50_000]
+
+        if sub.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "no data",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=11,
+                color="gray",
+            )
+            ax.set_title(spec["title"])
+            ax.set_ylabel(spec["ylabel"])
+            sns.despine(ax=ax)
+            continue
+
+        agg = sub.groupby("checkpoint")[spec["col"]].agg(mean="mean", sem="sem").reset_index()
+        agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
+        agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
+        agg = agg.sort_values("is_reg").reset_index(drop=True)
+
+        means = agg["mean"].values * 100
+        sems = agg["sem"].values * 100
+
+        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
+            ax.bar(
+                x[i],
+                mean,
+                yerr=sem,
+                color=color,
+                alpha=0.8,
+                width=0.5,
+                capsize=4,
+                error_kw=dict(lw=1.2),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(bar_labels, rotation=15, ha="right", fontsize=9)
+        ax.set_ylabel(spec["ylabel"])
+        ax.set_title(spec["title"])
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.tick_params(axis="y", which="minor", length=3, color="gray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+def generate_main_comparison_latex_table(
+    df,
+    save_path="results/figures/eval_main_comparison_table.tex",
+):
+    """LaTeX table comparing two checkpoints across self-play, HR, and IDM metrics.
+
+    Rows:    unregularized (first), regularized (second).
+    Columns: SP score | HR score | IDM score | HR at-fault coll. |
+             HR longitudinal L2 | HR lateral L2 | HR displacement error
+
+    Best value per column is bolded. No colour coding.
+
+    Note: scaling_idm_interactive rows do not have sp_maps attached (evaluator
+    bug — see evaluate_checkpoints.py). IDM filtering is by checkpoint only.
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}, \\usepackage{graphicx}, \\usepackage{bm}
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "Unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "Regularized (ours)",
+    }
+    ROW_ORDER = [
+        "models/scaling_cpts/unreg_delta_50k_maps.pt",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt",
+    ]
+
+    # ── Per-mode aggregation ────────────────────────────────────────────────
+    # (mode, col, output_key, filter_sp_maps)
+    metric_sources = [
+        ("scaling_sp_val", "score", "sp_score", True),
+        ("scaling_hr_interactive", "score", "hr_score", True),
+        ("scaling_idm_interactive", "score", "idm_score", False),
+        ("scaling_hr_interactive", "at_fault_collision_rate", "hr_atfault", True),
+        ("scaling_hr_interactive", "longitudinal_error_avg", "hr_long_err", True),
+        ("scaling_hr_interactive", "lateral_error_avg", "hr_lat_err", True),
+        ("scaling_hr_interactive", "displacement_error_avg", "hr_disp_err", True),
+    ]
+
+    # Collect mean ± sem per checkpoint for each metric
+    records = {cpt: {} for cpt in CHECKPOINTS_OF_INTEREST}
+
+    for mode, col, key, filter_sp_maps in metric_sources:
+        if col not in df.columns:
+            print(f"  Warning: column '{col}' not found — '{key}' will show as ---.")
+            for cpt in CHECKPOINTS_OF_INTEREST:
+                records[cpt][f"{key}_mean"] = float("nan")
+                records[cpt][f"{key}_sem"] = float("nan")
+            continue
+
+        sub = df[(df["mode"] == mode) & (df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST))].copy()
+        if filter_sp_maps and "sp_maps" in sub.columns:
+            sub = sub[sub["sp_maps"] == 50_000]
+
+        for cpt in CHECKPOINTS_OF_INTEREST:
+            grp = sub.loc[sub["checkpoint"] == cpt, col].dropna()
+            records[cpt][f"{key}_mean"] = grp.mean() if not grp.empty else float("nan")
+            records[cpt][f"{key}_sem"] = grp.sem() if len(grp) > 1 else float("nan")
+
+    # ── Column specs ────────────────────────────────────────────────────────
+    # (key, header, higher_is_better, as_pct, decimals)
+    col_specs = [
+        ("sp_score", r"Score $\uparrow$", True, False, 3),
+        ("hr_score", r"Score $\uparrow$", True, False, 3),
+        ("idm_score", r"Score $\uparrow$", True, False, 3),
+        ("hr_atfault", r"At-fault (\%) $\downarrow$", False, True, 1),
+        ("hr_long_err", r"Long. L2 $\downarrow$", False, False, 3),
+        ("hr_lat_err", r"Lat. L2 $\downarrow$", False, False, 3),
+        ("hr_disp_err", r"Disp. err. $\downarrow$", False, False, 3),
+    ]
+
+    # ── Best-per-column for bolding ─────────────────────────────────────────
+    best = {}
+    for key, _, higher_is_better, _, _ in col_specs:
+        vals = [records[cpt][f"{key}_mean"] for cpt in ROW_ORDER]
+        finite = [v for v in vals if not np.isnan(v)]
+        if not finite:
+            best[key] = None
+        elif higher_is_better:
+            best[key] = max(finite)
+        else:
+            best[key] = min(finite)
+
+    # ── Cell formatter ──────────────────────────────────────────────────────
+    def _fmt_cell(key, cpt, as_pct, decimals):
+        mean = records[cpt][f"{key}_mean"]
+        sem = records[cpt][f"{key}_sem"]
+        if np.isnan(mean):
+            return "---"
+        is_best = best[key] is not None and np.isclose(mean, best[key])
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if (as_pct and not np.isnan(sem)) else sem
+        fmt = f".{decimals}f"
+        if not np.isnan(s_val):
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
+        else:
+            body = f"{m_val:{fmt}}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+        return text
+
+    # ── Build LaTeX ─────────────────────────────────────────────────────────
+    n_metric_cols = len(col_specs)
+    col_spec = "l" + "|" + "r" * 3 + "|" + "r" * 4  # method | SP HR IDM | 4×HR
+
+    lines = []
+    lines.append(r"% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{bm}")
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Main results comparing unregularized and regularized self-play "
+        r"at 50k training maps. "
+        r"Self-play score on 10k validation scenes; human-replay and IDM-replay "
+        r"metrics on 200 interactive validation scenes. "
+        r"Best value per column in \textbf{bold}.}"
+    )
+    lines.append(r"\label{tab:main_comparison}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    # Header row 1: block labels
+    lines.append(r" & \multicolumn{3}{c|}{Score} & \multicolumn{4}{c}{Human-replay (interactive)} \\")
+
+    # Header row 2: per-column labels
+    col_headers = " & ".join(s[1] for s in col_specs)
+    lines.append(
+        r"\makecell{Method} & "
+        r"\makecell{Self-play} & \makecell{HR} & \makecell{IDM} & " + " & ".join(s[1] for s in col_specs[3:]) + r" \\"
+    )
+    lines.append(r"\midrule")
+
+    # Data rows
+    for cpt in ROW_ORDER:
+        label = CHECKPOINTS_OF_INTEREST[cpt]
+        cells = [label] + [_fmt_cell(key, cpt, as_pct, decimals) for key, _, _, as_pct, decimals in col_specs]
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}}")
+    lines.append(r"\end{table}")
+
+    latex_str = "\n".join(lines)
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -2910,6 +3183,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         sp_maps_filter=50000,
     )
     generate_collision_severity_latex_table(df)
+    plot_three_metric_comparison(df)
+    generate_main_comparison_latex_table(df)
     if anchor_df is not None and not anchor_df.empty:
         plot_anchor_eval(anchor_df)
         print("  Saved eval_anchor.pdf")

@@ -40,15 +40,15 @@ from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
 SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"  # "models/scaling_cpts"
-DETERMINISTIC = True
+DETERMINISTIC = False
 
 TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
 IDM_MAP_DIR = "resources/drive/binaries/interactive_200_idm"  # Same 200 maps selected for SDC interactivity but processed in a different way
 INTERACTIVE_MAP_DIR_MAPS = 200
-NUM_TOTAL_EVAL_AGENTS = 128
-NUM_AGENTS_PER_VECENV = 128
+NUM_TOTAL_EVAL_AGENTS = 1024 * 3
+NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"

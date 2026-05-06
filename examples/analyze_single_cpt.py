@@ -18,24 +18,24 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_delta_50k_maps.pt"  # "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt" #
+CPT_PATH = "models/scaling_cpts/unreg_delta_50k_maps.pt"  # "models/model_puffer_drive_005000 (1).pt" #"models/scaling_cpts/unreg_delta_50k_maps.pt" #"models/model_puffer_drive_010000.pt" #"models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  #"models/scaling_cpts/unreg_delta_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
-TRAIN_MAP_DIR = "resources/drive/binaries/training_50"
+TRAIN_MAP_DIR = "resources/drive/binaries/training"
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = (
     "resources/drive/binaries/interactive_200_idm"
-    # "resources/drive/binaries/womd_val_idm_10k"  # <--- @WAEL only using this atm; replace this with any path you like.
+    # "resources/drive/binaries/womd_val_idm_10k"
 )
-INTERACTIVE_MAP_NUM_FILES = 200  # <-- @WAEL num maps in dir here
-NUM_AGENTS_PER_VECENV = 512
-DETERMINISTIC = True
+INTERACTIVE_MAP_NUM_FILES = 200
+NUM_AGENTS_PER_VECENV = 1024
+DETERMINISTIC = False
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
 NUM_ENVS_TO_RENDER = 0
-RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
+RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
 # GIF conversion settings
 CONVERT_TO_GIF = True
@@ -61,6 +61,7 @@ METRICS = [
     "episode_return",
     "perc_controlled",
     "longitudinal_error_avg",
+    "average_displacement_avg",
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -264,12 +265,12 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         evaluator = CheckpointEvaluator(cpt_config)
 
         print(f"  Running stats rollout...")
-        if RENDER_MODE in ("worst_collision", "random"):
+        if NUM_ENVS_TO_RENDER > 0:
             print(f"  Selecting envs to render ({RENDER_MODE})...")
             env_indices = select_render_envs(evaluator, policy, env, NUM_ENVS_TO_RENDER)
             info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
         else:
-            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC, render_env_idx=None)
             env_indices = list(range(min(NUM_ENVS_TO_RENDER, env.driver_env.num_envs)))
 
         rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)
@@ -283,9 +284,10 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
                 f"offroad_rate={np.mean([r['offroad_rate'] for r in rows]):.3f}"
             )
 
-        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, RENDER_MODE, mode_name)
-        print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
-        render_envs(evaluator, policy, env, env_indices, video_dir)
+        if NUM_ENVS_TO_RENDER > 0:
+            video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, RENDER_MODE, mode_name)
+            print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
+            render_envs(evaluator, policy, env, env_indices, video_dir)
 
         env.close()
 
@@ -324,7 +326,7 @@ def main():
         )
         print(f"\n{summary}")
 
-    if CONVERT_TO_GIF:
+    if NUM_ENVS_TO_RENDER > 0 and CONVERT_TO_GIF:
         cpt_name = os.path.splitext(os.path.basename(CPT_PATH))[0]
         cpt_video_root = os.path.join(RENDER_OUTPUT_DIR, cpt_name)
         convert_videos_to_gifs(cpt_video_root)
