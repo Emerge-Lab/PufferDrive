@@ -260,6 +260,13 @@ if not NO_OCEAN:
                 ]
             )
 
+        if system == "Linux":
+            # Must be defined on the compiler command line before any
+            # system header is included so glibc exposes GNU extensions.
+            c_ext.extra_compile_args.append("-D_GNU_SOURCE")
+            if os.path.exists("/usr/include/EGL/egl.h"):
+                c_ext.extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
+
         if "impulse_wars" in c_ext.name:
             print(f"Adding {c_ext.name} to extra objects")
             c_ext.extra_objects.append(f"{BOX2D_NAME}/libbox2d.a")

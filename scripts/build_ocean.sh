@@ -103,6 +103,9 @@ FLAGS=(
     -lpthread
     $ERROR_LIMIT_FLAG
     -DPLATFORM_DESKTOP
+    # _GNU_SOURCE must be set before system headers are included so glibc
+    # exposes GNU extensions like F_SETPIPE_SZ.
+    -D_GNU_SOURCE
 )
 
 
