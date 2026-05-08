@@ -24,6 +24,7 @@
 #define PDM_MERGE_H_MIN 0.3f
 #define PDM_MERGE_D_BASE 5.0f
 #define PDM_MERGE_K_V 0.5f
+#define PDM_ROUTE_EXTENSION_MARGIN 10.0f
 
 static const float PDM_OFFSETS[PDM_NUM_OFFSETS] = {0.0f, -1.0f, 1.0f};
 static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
@@ -74,7 +75,6 @@ typedef struct {
 
 typedef struct {
     int valid;
-    int complete;
     int num_steps;
     PDMRolloutStep action_step;
     PDMRolloutStep steps[PDM_MAX_ROLLOUT_STEPS];
@@ -89,7 +89,6 @@ typedef struct {
     float collision_ttc;
     float traffic_light_ttc;
     float offroad_ttc;
-    float route_ttc;
     float min_ttc;
     float score;
     int valid;
@@ -108,6 +107,14 @@ typedef struct {
     float bezier_length;
 } PDMBezierPath;
 
+typedef struct {
+    int length;
+    int lanes[MAX_ROUTE_LENGTH];
+    int source_route_indices[MAX_ROUTE_LENGTH];
+} PDMPlanningRoute;
+
+static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent);
+
 static float pdm_compute_idm_acceleration(Agent *agent, float desired_speed, IDMLeader leader) {
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
     desired_speed = clip(desired_speed, 1.0f, MAX_SPEED);
@@ -124,6 +131,172 @@ static float pdm_compute_idm_acceleration(Agent *agent, float desired_speed, IDM
     }
 
     return IDM_MAX_ACCEL * (1.0f - free_road_term - leader_term);
+}
+
+static float pdm_required_route_distance(Drive *env, const Agent *agent) {
+    float current_speed = agent != NULL ? fmaxf(0.0f, agent->sim_speed_signed) : 0.0f;
+    float max_next_speed = fminf(MAX_SPEED, current_speed + IDM_MAX_ACCEL * env->dt);
+    return pdm_agent_horizon(env, agent) * max_next_speed + PDM_ROUTE_EXTENSION_MARGIN;
+}
+
+static float pdm_remaining_route_distance(Drive *env, const PDMPlanningRoute *route, IDMLaneProjection projection) {
+    if (!projection.valid || route == NULL || route->length <= 0) {
+        return 0.0f;
+    }
+
+    float distance = 0.0f;
+    for (int route_idx = projection.route_idx; route_idx < route->length; route_idx++) {
+        int lane_idx = route->lanes[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            break;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2) {
+            break;
+        }
+
+        int start_seg = route_idx == projection.route_idx ? projection.segment_idx : 0;
+        float start_t = route_idx == projection.route_idx ? projection.t : 0.0f;
+        for (int seg_idx = start_seg; seg_idx < lane->segment_length - 1; seg_idx++) {
+            float seg_len = idm_lane_segment_length(lane, seg_idx);
+            if (seg_len < 1e-6f) {
+                continue;
+            }
+            float seg_fraction = seg_idx == start_seg ? 1.0f - clip(start_t, 0.0f, 1.0f) : 1.0f;
+            distance += seg_fraction * seg_len;
+        }
+    }
+
+    return distance;
+}
+
+static int pdm_route_contains_lane(const int *route, int route_length, int lane_idx) {
+    for (int i = 0; i < route_length; i++) {
+        if (route[i] == lane_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int pdm_choose_route_extension_exit(Drive *env, RoadMapElement *current_lane, const int *route, int route_length,
+                                           float origin_x, float origin_y, float *max_end_distance_sq) {
+    int valid_exits[8];
+    float valid_exit_dist_sq[8];
+    int num_valid_exits = 0;
+    int progressing_exits[8];
+    float progressing_dist_sq[8];
+    int num_progressing_exits = 0;
+
+    for (int allow_revisit = 0; allow_revisit <= 1 && num_valid_exits == 0; allow_revisit++) {
+        for (int e = 0; e < current_lane->num_exits && num_valid_exits < 8; e++) {
+            int exit_lane_idx = current_lane->exit_lanes[e];
+            if (exit_lane_idx < 0 || exit_lane_idx >= env->num_road_elements) {
+                continue;
+            }
+            if (!allow_revisit && pdm_route_contains_lane(route, route_length, exit_lane_idx)) {
+                continue;
+            }
+
+            float exit_end_distance_sq =
+                compute_lane_end_distance_sq(&env->road_elements[exit_lane_idx], origin_x, origin_y);
+            valid_exits[num_valid_exits] = exit_lane_idx;
+            valid_exit_dist_sq[num_valid_exits] = exit_end_distance_sq;
+            num_valid_exits++;
+
+            if (exit_end_distance_sq > *max_end_distance_sq) {
+                progressing_exits[num_progressing_exits] = exit_lane_idx;
+                progressing_dist_sq[num_progressing_exits] = exit_end_distance_sq;
+                num_progressing_exits++;
+            }
+        }
+    }
+
+    if (num_valid_exits == 0) {
+        return -1;
+    }
+
+    int chosen_exit_idx;
+    float chosen_exit_dist_sq;
+    if (num_progressing_exits > 0) {
+        int chosen_idx = rand() % num_progressing_exits;
+        chosen_exit_idx = progressing_exits[chosen_idx];
+        chosen_exit_dist_sq = progressing_dist_sq[chosen_idx];
+    } else {
+        int best_idx = 0;
+        float best_dist_sq = valid_exit_dist_sq[0];
+        for (int i = 1; i < num_valid_exits; i++) {
+            if (valid_exit_dist_sq[i] > best_dist_sq) {
+                best_dist_sq = valid_exit_dist_sq[i];
+                best_idx = i;
+            }
+        }
+        chosen_exit_idx = valid_exits[best_idx];
+        chosen_exit_dist_sq = valid_exit_dist_sq[best_idx];
+    }
+
+    if (chosen_exit_dist_sq > *max_end_distance_sq) {
+        *max_end_distance_sq = chosen_exit_dist_sq;
+    }
+    return chosen_exit_idx;
+}
+
+static int pdm_build_planning_route(Drive *env, Agent *agent, IDMLaneProjection *projection, PDMPlanningRoute *route) {
+    *route = (PDMPlanningRoute){0};
+    if (agent->route == NULL || agent->route_length <= 0) {
+        return 0;
+    }
+
+    if (!projection->valid) {
+        return 0;
+    }
+
+    int dropped_prefix = projection->route_idx;
+    if (dropped_prefix < 0 || dropped_prefix >= agent->route_length) {
+        return 0;
+    }
+
+    for (int i = dropped_prefix; i < agent->route_length && route->length < MAX_ROUTE_LENGTH; i++) {
+        route->lanes[route->length] = agent->route[i];
+        route->source_route_indices[route->length] = i;
+        route->length++;
+    }
+
+    if (route->length <= 0) {
+        return 0;
+    }
+
+    projection->route_idx = 0;
+    float required_distance = pdm_required_route_distance(env, agent);
+    float remaining_distance = pdm_remaining_route_distance(env, route, *projection);
+    if (remaining_distance >= required_distance) {
+        return 1;
+    }
+
+    int current_lane_idx = route->lanes[route->length - 1];
+    if (current_lane_idx < 0 || current_lane_idx >= env->num_road_elements) {
+        return 0;
+    }
+
+    float max_end_distance_sq =
+        compute_lane_end_distance_sq(&env->road_elements[current_lane_idx], agent->sim_x, agent->sim_y);
+
+    while (remaining_distance < required_distance && route->length < MAX_ROUTE_LENGTH) {
+        RoadMapElement *current_lane = &env->road_elements[current_lane_idx];
+        int next_lane_idx = pdm_choose_route_extension_exit(env, current_lane, route->lanes, route->length,
+                                                            agent->sim_x, agent->sim_y, &max_end_distance_sq);
+        if (next_lane_idx == -1) {
+            break;
+        }
+
+        route->lanes[route->length] = next_lane_idx;
+        route->source_route_indices[route->length] = -1;
+        route->length++;
+        remaining_distance += compute_lane_length(&env->road_elements[next_lane_idx]);
+        current_lane_idx = next_lane_idx;
+    }
+
+    return remaining_distance >= required_distance;
 }
 
 static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent) {
@@ -221,9 +394,9 @@ static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent) 
     return best;
 }
 
-static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProjection projection, float distance,
-                                        float offset, PDMRolloutStep *out) {
-    if (!projection.valid || agent->route == NULL || agent->route_length <= 0) {
+static int pdm_sample_offset_route_pose(Drive *env, const PDMPlanningRoute *route, IDMLaneProjection projection,
+                                        float distance, float offset, PDMRolloutStep *out) {
+    if (!projection.valid || route == NULL || route->length <= 0) {
         return 0;
     }
 
@@ -232,8 +405,8 @@ static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProject
     int seg_idx = projection.segment_idx;
     float t = projection.t;
 
-    while (route_idx < agent->route_length) {
-        int lane_idx = agent->route[route_idx];
+    while (route_idx < route->length) {
+        int lane_idx = route->lanes[route_idx];
         if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
             return 0;
         }
@@ -275,7 +448,7 @@ static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProject
             out->cos_heading = cos_heading;
             out->sin_heading = sin_heading;
             out->lane_idx = lane_idx;
-            out->route_idx = route_idx;
+            out->route_idx = route->source_route_indices[route_idx];
             out->segment_idx = seg_idx;
             out->segment_t = sample_t;
             out->center_lane_idx = lane_idx;
@@ -294,8 +467,9 @@ static int pdm_sample_offset_route_pose(Drive *env, Agent *agent, IDMLaneProject
     return 0;
 }
 
-static float pdm_route_max_curvature(Drive *env, Agent *agent, IDMLaneProjection projection, float distance) {
-    if (!projection.valid || agent->route == NULL || agent->route_length <= 0 || distance <= 0.0f) {
+static float pdm_route_max_curvature(Drive *env, const PDMPlanningRoute *route, IDMLaneProjection projection,
+                                     float distance) {
+    if (!projection.valid || route == NULL || route->length <= 0 || distance <= 0.0f) {
         return 0.0f;
     }
 
@@ -306,8 +480,8 @@ static float pdm_route_max_curvature(Drive *env, Agent *agent, IDMLaneProjection
     float prev_heading = 0.0f;
     int has_prev_heading = 0;
 
-    while (route_idx < agent->route_length && traveled_s < distance) {
-        int lane_idx = agent->route[route_idx];
+    while (route_idx < route->length && traveled_s < distance) {
+        int lane_idx = route->lanes[route_idx];
         if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
             break;
         }
@@ -348,8 +522,8 @@ static void pdm_bezier_point(float alpha, float p0x, float p0y, float p0z, float
     *z = b0 * p0z + b1 * p1z + b2 * p2z + b3 * p3z;
 }
 
-static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection projection, float offset, float speed,
-                                 PDMBezierPath *path) {
+static int pdm_build_smooth_path(Drive *env, Agent *agent, const PDMPlanningRoute *route, IDMLaneProjection projection,
+                                 float offset, float speed, PDMBezierPath *path) {
     *path = (PDMBezierPath){0};
     if (!projection.valid) {
         return 0;
@@ -358,8 +532,8 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pro
     float speed_for_merge = fmaxf(speed, 0.1f);
     PDMRolloutStep target_start = {0};
     PDMRolloutStep target_ahead = {0};
-    if (!pdm_sample_offset_route_pose(env, agent, projection, 0.0f, offset, &target_start) ||
-        !pdm_sample_offset_route_pose(env, agent, projection, 1.0f, offset, &target_ahead)) {
+    if (!pdm_sample_offset_route_pose(env, route, projection, 0.0f, offset, &target_start) ||
+        !pdm_sample_offset_route_pose(env, route, projection, 1.0f, offset, &target_ahead)) {
         return 0;
     }
 
@@ -385,7 +559,7 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pro
     float alignment_scaling = 1.0f - PDM_ALIGNMENT_FACTOR * alignment;
     float horizon = pdm_horizon(env);
     float curvature_lookahead = clip(speed_for_merge * horizon, 5.0f, IDM_MAX_LOOKAHEAD);
-    float max_curvature = pdm_route_max_curvature(env, agent, projection, curvature_lookahead);
+    float max_curvature = pdm_route_max_curvature(env, route, projection, curvature_lookahead);
     float d_merge =
         (PDM_MERGE_D_BASE + PDM_MERGE_K_V * speed - PDM_CURVATURE_FACTOR * max_curvature) * alignment_scaling;
     float h_merge = d_merge / speed_for_merge;
@@ -393,7 +567,7 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pro
     d_merge = fmaxf(h_merge * speed_for_merge, 0.0f);
 
     PDMRolloutStep merge_step = {0};
-    if (!pdm_sample_offset_route_pose(env, agent, projection, d_merge, offset, &merge_step)) {
+    if (!pdm_sample_offset_route_pose(env, route, projection, d_merge, offset, &merge_step)) {
         return 0;
     }
 
@@ -441,7 +615,7 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pro
     return 1;
 }
 
-static int pdm_sample_smooth_path(Drive *env, Agent *agent, IDMLaneProjection projection, float offset,
+static int pdm_sample_smooth_path(Drive *env, const PDMPlanningRoute *route, IDMLaneProjection projection, float offset,
                                   PDMBezierPath *path, float distance, PDMRolloutStep *out) {
     if (!path->valid) {
         return 0;
@@ -460,7 +634,7 @@ static int pdm_sample_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pr
             float center_distance =
                 path->bezier_length > 1e-6f ? distance * path->merge_route_s / path->bezier_length : 0.0f;
             PDMRolloutStep center_step = {0};
-            if (!pdm_sample_offset_route_pose(env, agent, projection, center_distance, 0.0f, &center_step)) {
+            if (!pdm_sample_offset_route_pose(env, route, projection, center_distance, 0.0f, &center_step)) {
                 return 0;
             }
             out->valid = 1;
@@ -485,25 +659,24 @@ static int pdm_sample_smooth_path(Drive *env, Agent *agent, IDMLaneProjection pr
     }
 
     float route_distance = path->merge_route_s + fmaxf(0.0f, distance - path->bezier_length);
-    return pdm_sample_offset_route_pose(env, agent, projection, route_distance, offset, out);
+    return pdm_sample_offset_route_pose(env, route, projection, route_distance, offset, out);
 }
 
-static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, IDMLaneProjection projection,
-                                                      float offset, float speed) {
+static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, const PDMPlanningRoute *route,
+                                                      IDMLaneProjection projection, float offset, float speed) {
     PDMRollout rollout = {0};
     PDMBezierPath path = {0};
-    if (!pdm_build_smooth_path(env, agent, projection, offset, speed, &path)) {
+    if (!pdm_build_smooth_path(env, agent, route, projection, offset, speed, &path)) {
         return rollout;
     }
     rollout.valid = 1;
 
-    if (!pdm_sample_smooth_path(env, agent, projection, offset, &path, speed * env->dt, &rollout.action_step)) {
+    if (!pdm_sample_smooth_path(env, route, projection, offset, &path, speed * env->dt, &rollout.action_step)) {
         rollout.valid = 0;
         return rollout;
     }
     rollout.action_step.t = env->dt;
     rollout.action_step.speed = speed;
-    rollout.complete = 1;
     float horizon = pdm_agent_horizon(env, agent);
     float planning_dt = pdm_planning_dt(env);
 
@@ -515,8 +688,8 @@ static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, 
 
         PDMRolloutStep rollout_step = {0};
         float s = speed * t;
-        if (!pdm_sample_smooth_path(env, agent, projection, offset, &path, s, &rollout_step)) {
-            rollout.complete = 0;
+        if (!pdm_sample_smooth_path(env, route, projection, offset, &path, s, &rollout_step)) {
+            rollout.valid = 0;
             break;
         }
 
@@ -528,8 +701,8 @@ static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, 
     return rollout;
 }
 
-static IDMLeader pdm_find_leader_by_offset_route_boxes(Drive *env, int agent_idx, IDMLaneProjection projection,
-                                                       float offset) {
+static IDMLeader pdm_find_leader_by_offset_route_boxes(Drive *env, int agent_idx, const PDMPlanningRoute *route,
+                                                       IDMLaneProjection projection, float offset) {
     Agent *agent = &env->agents[agent_idx];
     IDMLeader no_leader = idm_no_leader();
     if (!projection.valid) {
@@ -543,7 +716,7 @@ static IDMLeader pdm_find_leader_by_offset_route_boxes(Drive *env, int agent_idx
 
     for (float sample_s = IDM_ROUTE_SAMPLE_DS; sample_s <= lookahead + 1e-4f; sample_s += IDM_ROUTE_SAMPLE_DS) {
         PDMRolloutStep sample_step = {0};
-        if (!pdm_sample_offset_route_pose(env, agent, projection, sample_s, offset, &sample_step)) {
+        if (!pdm_sample_offset_route_pose(env, route, projection, sample_s, offset, &sample_step)) {
             break;
         }
 
@@ -716,27 +889,12 @@ static float pdm_compute_offroad_ttc(Drive *env, int agent_idx, PDMCandidateScor
     return pdm_agent_horizon(env, agent);
 }
 
-static float pdm_compute_route_ttc(Drive *env, const Agent *agent, PDMCandidateScore *candidate) {
-    float horizon = pdm_agent_horizon(env, agent);
-    if (!candidate->valid || !candidate->rollout.valid) {
-        return 0.0f;
-    }
-    if (candidate->rollout.complete) {
-        return horizon;
-    }
-    if (candidate->rollout.num_steps <= 0) {
-        return 0.0f;
-    }
-    return clip(candidate->rollout.steps[candidate->rollout.num_steps - 1].t, 0.0f, horizon);
-}
-
 static void pdm_score_candidate(Drive *env, int agent_idx, PDMCandidateScore *candidate, float speed_limit) {
     if (!candidate->valid) {
         candidate->score = -INFINITY;
         candidate->collision_ttc = 0.0f;
         candidate->traffic_light_ttc = 0.0f;
         candidate->offroad_ttc = 0.0f;
-        candidate->route_ttc = 0.0f;
         candidate->min_ttc = 0.0f;
         return;
     }
@@ -745,9 +903,8 @@ static void pdm_score_candidate(Drive *env, int agent_idx, PDMCandidateScore *ca
     float horizon = pdm_agent_horizon(env, agent);
     candidate->collision_ttc = pdm_compute_collision_ttc(env, agent_idx, candidate);
     candidate->traffic_light_ttc = pdm_compute_traffic_light_ttc(env, agent, candidate);
-    candidate->route_ttc = pdm_compute_route_ttc(env, agent, candidate);
     candidate->offroad_ttc = INFINITY;
-    candidate->min_ttc = fminf(fminf(candidate->collision_ttc, candidate->traffic_light_ttc), candidate->route_ttc);
+    candidate->min_ttc = fminf(candidate->collision_ttc, candidate->traffic_light_ttc);
 
     float ttc_score = clip(candidate->min_ttc / horizon, 0.0f, 1.0f);
     float speed_score = clip(candidate->new_speed / fmaxf(speed_limit, 1.0f), 0.0f, 1.0f);
@@ -769,15 +926,16 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
     float horizon = pdm_agent_horizon(env, agent);
     IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
+    PDMPlanningRoute planning_route = {0};
     IDMLeader offset_leaders[PDM_NUM_OFFSETS];
 
-    if (!projection.valid) {
+    if (!projection.valid || !pdm_build_planning_route(env, agent, &projection, &planning_route)) {
         return 0;
     }
 
     for (int offset_idx = 0; offset_idx < PDM_NUM_OFFSETS; offset_idx++) {
         offset_leaders[offset_idx] =
-            pdm_find_leader_by_offset_route_boxes(env, agent_idx, projection, PDM_OFFSETS[offset_idx]);
+            pdm_find_leader_by_offset_route_boxes(env, agent_idx, &planning_route, projection, PDM_OFFSETS[offset_idx]);
     }
 
     for (int offset_idx = 0; offset_idx < PDM_NUM_OFFSETS; offset_idx++) {
@@ -797,8 +955,8 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
             }
             accel = (new_speed - current_speed) / env->dt;
 
-            PDMRollout rollout =
-                pdm_generate_constant_speed_rollout(env, agent, projection, PDM_OFFSETS[offset_idx], new_speed);
+            PDMRollout rollout = pdm_generate_constant_speed_rollout(env, agent, &planning_route, projection,
+                                                                     PDM_OFFSETS[offset_idx], new_speed);
             candidates[count++] = (PDMCandidateScore){
                 .offset = PDM_OFFSETS[offset_idx],
                 .speed_fraction = speed_fraction,
@@ -808,7 +966,6 @@ static int pdm_build_placeholder_candidates(Drive *env, int agent_idx, PDMCandid
                 .collision_ttc = horizon,
                 .traffic_light_ttc = horizon,
                 .offroad_ttc = INFINITY,
-                .route_ttc = horizon,
                 .min_ttc = horizon,
                 .score = -INFINITY,
                 .valid = rollout.valid,
