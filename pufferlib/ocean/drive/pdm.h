@@ -13,6 +13,7 @@
 #define PDM_MAX_ROLLOUT_STEPS 81
 #define PDM_DANGER_TTC 2.0f
 #define PDM_DANGER_TTC_BUFFER 0.5f
+#define PDM_URGENT_DECEL 8.0f
 #define PDM_SAFE_SPEED_TTC 5.0f
 #define PDM_COLLISION_PENALTY 48.0f
 #define PDM_SPEED_WEIGHT 3.0f
@@ -35,7 +36,7 @@ static inline float pdm_horizon(Drive *env) {
 }
 
 static inline float pdm_speed_aware_ttc(float speed) {
-    float stopping_ttc = speed / fmaxf(IDM_MAX_DECEL, 1e-3f) + PDM_DANGER_TTC_BUFFER;
+    float stopping_ttc = speed / fmaxf(PDM_URGENT_DECEL, 1e-3f) + PDM_DANGER_TTC_BUFFER;
     return fmaxf(PDM_DANGER_TTC, stopping_ttc);
 }
 
@@ -1081,7 +1082,7 @@ static void pdm_apply_speed_along_route_or_heading(Drive *env, int agent_idx, fl
 static void pdm_apply_urgent_brake_fallback(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
-    float new_speed = fmaxf(0.0f, current_speed - IDM_MAX_DECEL * env->dt);
+    float new_speed = fmaxf(0.0f, current_speed - PDM_URGENT_DECEL * env->dt);
     pdm_apply_speed_along_route_or_heading(env, agent_idx, new_speed);
 }
 
@@ -1157,9 +1158,22 @@ static void move_pdm(Drive *env, int agent_idx) {
     if (best.min_ttc < danger_ttc) {
         float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
         best.offset = 0.0f;
-        best.new_speed = fmaxf(0.0f, current_speed - IDM_MAX_DECEL * env->dt);
+        best.new_speed = fmaxf(0.0f, current_speed - PDM_URGENT_DECEL * env->dt);
         best.accel = (best.new_speed - current_speed) / env->dt;
-        best.rollout.action_step = (PDMRolloutStep){0};
+
+        IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
+        PDMPlanningRoute planning_route = {0};
+        if (projection.valid && pdm_build_planning_route(env, agent, &projection, &planning_route)) {
+            PDMRollout rollout = pdm_generate_constant_speed_rollout(env, agent, &planning_route, projection,
+                                                                     best.offset, best.new_speed);
+            if (rollout.valid && rollout.action_step.valid) {
+                best.rollout = rollout;
+            } else {
+                best.rollout.action_step = (PDMRolloutStep){0};
+            }
+        } else {
+            best.rollout.action_step = (PDMRolloutStep){0};
+        }
     }
 
     pdm_apply_teleport_step(env, agent_idx, best);
