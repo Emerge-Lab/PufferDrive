@@ -26,6 +26,7 @@
 #define PDM_MERGE_D_BASE 5.0f
 #define PDM_MERGE_K_V 0.5f
 #define PDM_ROUTE_EXTENSION_MARGIN 10.0f
+#define PDM_STEERING_RATE_LIMIT 0.6f
 
 static const float PDM_OFFSETS[PDM_NUM_OFFSETS] = {0.0f, -1.0f, 1.0f};
 static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
@@ -63,6 +64,7 @@ typedef struct {
     float cos_heading;
     float sin_heading;
     float speed;
+    float steering_angle;
     int lane_idx;
     int route_idx;
     int segment_idx;
@@ -113,6 +115,15 @@ typedef struct {
     int lanes[MAX_ROUTE_LENGTH];
     int source_route_indices[MAX_ROUTE_LENGTH];
 } PDMPlanningRoute;
+
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float heading;
+    float speed;
+    float steering_angle;
+} PDMTrackingState;
 
 static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent);
 
@@ -563,9 +574,21 @@ static int pdm_build_smooth_path(Drive *env, Agent *agent, const PDMPlanningRout
     float max_curvature = pdm_route_max_curvature(env, route, projection, curvature_lookahead);
     float d_merge =
         (PDM_MERGE_D_BASE + PDM_MERGE_K_V * speed - PDM_CURVATURE_FACTOR * max_curvature) * alignment_scaling;
+    float feasible_merge = 0.0f;
+
+    float lateral_error = sqrtf((target_start.x - agent->sim_x) * (target_start.x - agent->sim_x) +
+                                (target_start.y - agent->sim_y) * (target_start.y - agent->sim_y));
+    if (lateral_error > 0.05f && PDM_STEERING_RATE_LIMIT > 1e-6f && agent->wheelbase > 1e-6f) {
+        float speed_for_feasibility = fmaxf(speed_for_merge, 1.0f);
+        feasible_merge =
+            cbrtf(6.0f * lateral_error * speed_for_feasibility * agent->wheelbase / PDM_STEERING_RATE_LIMIT);
+        d_merge = fmaxf(d_merge, feasible_merge);
+    }
+
     float h_merge = d_merge / speed_for_merge;
     h_merge = clip(h_merge, PDM_MERGE_H_MIN, horizon);
     d_merge = fmaxf(h_merge * speed_for_merge, 0.0f);
+    d_merge = fmaxf(d_merge, feasible_merge);
 
     PDMRolloutStep merge_step = {0};
     if (!pdm_sample_offset_route_pose(env, route, projection, d_merge, offset, &merge_step)) {
@@ -663,6 +686,79 @@ static int pdm_sample_smooth_path(Drive *env, const PDMPlanningRoute *route, IDM
     return pdm_sample_offset_route_pose(env, route, projection, route_distance, offset, out);
 }
 
+static PDMTrackingState pdm_initial_tracking_state(const Agent *agent) {
+    return (PDMTrackingState){
+        .x = agent->sim_x,
+        .y = agent->sim_y,
+        .z = agent->sim_z,
+        .heading = agent->sim_heading,
+        .speed = fmaxf(0.0f, agent->sim_speed_signed),
+        .steering_angle = agent->steering_angle,
+    };
+}
+
+static PDMRolloutStep pdm_tracking_state_to_step(PDMTrackingState state, PDMRolloutStep target, float t, float s) {
+    PDMRolloutStep step = target;
+    step.valid = 1;
+    step.t = t;
+    step.s = s;
+    step.x = state.x;
+    step.y = state.y;
+    step.z = state.z;
+    step.heading = normalize_heading(state.heading);
+    step.cos_heading = cosf(step.heading);
+    step.sin_heading = sinf(step.heading);
+    step.speed = state.speed;
+    step.steering_angle = state.steering_angle;
+    return step;
+}
+
+static PDMTrackingState pdm_track_target_step(Drive *env, const Agent *agent, PDMTrackingState state,
+                                              PDMRolloutStep target, float target_speed, float dt) {
+    if (dt <= 0.0f) {
+        return state;
+    }
+
+    float speed = fmaxf(0.0f, state.speed);
+    float accel = (target_speed - speed) / dt;
+    accel = clip(accel, -PDM_URGENT_DECEL, IDM_MAX_ACCEL);
+    float new_speed = clip(speed + accel * dt, 0.0f, MAX_SPEED);
+
+    float dx_to_target = target.x - state.x;
+    float dy_to_target = target.y - state.y;
+    float target_distance = sqrtf(dx_to_target * dx_to_target + dy_to_target * dy_to_target);
+    float target_heading = state.heading;
+    if (target_distance > 1e-4f) {
+        target_heading = atan2f(dy_to_target, dx_to_target);
+    }
+
+    float heading_error = compute_heading_diff(target_heading, state.heading);
+    float desired_yaw_rate = heading_error / dt;
+    float steering = 0.0f;
+    if (new_speed > 1e-3f) {
+        steering = atanf(desired_yaw_rate * agent->wheelbase / new_speed);
+    }
+
+    float max_steering = STEERING_VALUES[8];
+    float delta_steer =
+        clip(steering - state.steering_angle, -PDM_STEERING_RATE_LIMIT * dt, PDM_STEERING_RATE_LIMIT * dt);
+    steering = clip(state.steering_angle + delta_steer, -max_steering, max_steering);
+
+    float beta = atanf(0.5f * tanf(steering));
+    float yaw_rate = 0.0f;
+    if (new_speed > 1e-3f) {
+        yaw_rate = (new_speed * cosf(beta) * tanf(steering)) / agent->wheelbase;
+    }
+
+    state.x += new_speed * cosf(state.heading + beta) * dt;
+    state.y += new_speed * sinf(state.heading + beta) * dt;
+    state.z = target.z;
+    state.heading = normalize_heading(state.heading + yaw_rate * dt);
+    state.speed = new_speed;
+    state.steering_angle = steering;
+    return state;
+}
+
 static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, const PDMPlanningRoute *route,
                                                       IDMLaneProjection projection, float offset, float speed) {
     PDMRollout rollout = {0};
@@ -672,14 +768,19 @@ static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, 
     }
     rollout.valid = 1;
 
-    if (!pdm_sample_smooth_path(env, route, projection, offset, &path, speed * env->dt, &rollout.action_step)) {
+    PDMTrackingState action_state = pdm_initial_tracking_state(agent);
+    PDMRolloutStep action_target = {0};
+    if (!pdm_sample_smooth_path(env, route, projection, offset, &path, speed * env->dt, &action_target)) {
         rollout.valid = 0;
         return rollout;
     }
-    rollout.action_step.t = env->dt;
-    rollout.action_step.speed = speed;
+    action_state = pdm_track_target_step(env, agent, action_state, action_target, speed, env->dt);
+    rollout.action_step = pdm_tracking_state_to_step(action_state, action_target, env->dt, speed * env->dt);
+
     float horizon = pdm_agent_horizon(env, agent);
     float planning_dt = pdm_planning_dt(env);
+    PDMTrackingState state = pdm_initial_tracking_state(agent);
+    float prev_t = 0.0f;
 
     for (int step = 0; step < PDM_MAX_ROLLOUT_STEPS; step++) {
         float t = step * planning_dt;
@@ -687,16 +788,19 @@ static PDMRollout pdm_generate_constant_speed_rollout(Drive *env, Agent *agent, 
             break;
         }
 
-        PDMRolloutStep rollout_step = {0};
         float s = speed * t;
-        if (!pdm_sample_smooth_path(env, route, projection, offset, &path, s, &rollout_step)) {
+        PDMRolloutStep target_step = {0};
+        if (!pdm_sample_smooth_path(env, route, projection, offset, &path, s, &target_step)) {
             rollout.valid = 0;
             break;
         }
 
-        rollout_step.t = t;
-        rollout_step.speed = speed;
+        if (step > 0) {
+            state = pdm_track_target_step(env, agent, state, target_step, speed, t - prev_t);
+        }
+        PDMRolloutStep rollout_step = pdm_tracking_state_to_step(state, target_step, t, s);
         rollout.steps[rollout.num_steps++] = rollout_step;
+        prev_t = t;
     }
 
     return rollout;
@@ -1086,7 +1190,7 @@ static void pdm_apply_urgent_brake_fallback(Drive *env, int agent_idx) {
     pdm_apply_speed_along_route_or_heading(env, agent_idx, new_speed);
 }
 
-static void pdm_apply_teleport_step(Drive *env, int agent_idx, PDMCandidateScore candidate) {
+static void pdm_apply_tracked_step(Drive *env, int agent_idx, PDMCandidateScore candidate) {
     Agent *agent = &env->agents[agent_idx];
     float old_a_long = agent->a_long;
     float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
@@ -1105,6 +1209,9 @@ static void pdm_apply_teleport_step(Drive *env, int agent_idx, PDMCandidateScore
         agent->sim_heading = normalize_heading(step.heading);
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
+        new_speed = fmaxf(0.0f, step.speed);
+        accel = (new_speed - current_speed) / env->dt;
+        agent->steering_angle = step.steering_angle;
         if (step.route_idx >= 0 && step.route_idx < agent->route_length) {
             agent->current_route_index = step.route_idx;
         }
@@ -1129,7 +1236,6 @@ static void pdm_apply_teleport_step(Drive *env, int agent_idx, PDMCandidateScore
     agent->jerk_lat = (new_a_lat - agent->a_lat) / env->dt;
     agent->a_long = accel;
     agent->a_lat = new_a_lat;
-    agent->steering_angle = 0.0f;
     update_agent_speed(agent);
 }
 
@@ -1176,7 +1282,7 @@ static void move_pdm(Drive *env, int agent_idx) {
         }
     }
 
-    pdm_apply_teleport_step(env, agent_idx, best);
+    pdm_apply_tracked_step(env, agent_idx, best);
 }
 
 #endif
