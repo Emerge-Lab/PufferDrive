@@ -1,8 +1,7 @@
 """BehaviorClassEvaluator — one nuPlan behavior category at a time.
 
-Runs a HumanReplayEvaluator-style rollout against a single map_dir, with
-optional fresh random sampling each pass when `num_scenarios` < total bins.
-"""
+Inherits HumanReplayEvaluator's loop. Adds optional fresh random sampling
+each pass when `num_scenarios` < total bins (via a tmp symlink dir)."""
 
 import os
 import random
@@ -10,7 +9,6 @@ import shutil
 import tempfile
 from typing import ClassVar
 
-from pufferlib.ocean.benchmark.evaluators.base import EvalResult
 from pufferlib.ocean.benchmark.evaluators.human_replay import HumanReplayEvaluator
 
 
@@ -22,9 +20,6 @@ class BehaviorClassEvaluator(HumanReplayEvaluator):
         self._sampled_dir = None  # tmp symlink dir created per pass
 
     def env_overrides(self) -> dict:
-        # Reuse HumanReplay's defaults, then handle the random-sampling
-        # cap. If num_scenarios is smaller than total bins, build a tmp
-        # symlink dir with a fresh sample each pass and point map_dir there.
         env = super().env_overrides()
         map_dir = env.get("map_dir", "")
         if not map_dir or not os.path.isdir(map_dir):
@@ -44,12 +39,6 @@ class BehaviorClassEvaluator(HumanReplayEvaluator):
             env["num_agents"] = len(all_bins)
             env["num_maps"] = len(all_bins)
         return env
-
-    def rollout(self, vecenv, policy, args) -> EvalResult:
-        result = super().rollout(vecenv, policy, args)
-        # Manager owns the cleanup window — defer rmtree until after vecenv.close
-        # so any open file descriptors on the symlinks are released first.
-        return result
 
     def cleanup(self):
         if self._sampled_dir and os.path.isdir(self._sampled_dir):

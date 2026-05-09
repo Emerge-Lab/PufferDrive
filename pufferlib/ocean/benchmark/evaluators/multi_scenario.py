@@ -1,21 +1,21 @@
 """MultiScenarioEvaluator — distribute scenarios across workers, one rollout
-per scenario, mean per-scenario metrics."""
+per scenario, mean per-scenario metrics. Drives both the gigaflow validation
+path and replay-style multi-scenario evals.
 
-import contextlib
+Inherits the default loop from `Evaluator`; overrides `_should_stop` (cap by
+scenario count), `_initial_reset` (async reset for multi-worker throughput),
+`_maybe_reset_lstm` (per-scenario LSTM reset), and `_render_pass` (the C-side
+EGL → ffmpeg mp4 dump)."""
+
 import os
-import time
 from pathlib import Path
+from typing import ClassVar
 
-import numpy as np
-import torch
-import tqdm
-
-import pufferlib
-from pufferlib.ocean.benchmark.evaluators.base import EvalResult, Evaluator
+from pufferlib.ocean.benchmark.evaluators.base import Evaluator
 
 
 class MultiScenarioEvaluator(Evaluator):
-    type_name = "multi_scenario"
+    type_name: ClassVar[str] = "multi_scenario"
 
     def vec_overrides(self) -> dict:
         # Multi-worker by default for throughput. Override via [eval.<name>.vec].
@@ -24,8 +24,6 @@ class MultiScenarioEvaluator(Evaluator):
         return {"backend": backend, "num_envs": num_envs}
 
     def env_overrides(self) -> dict:
-        # Sensible defaults for the gigaflow path; replay configs are expected
-        # to set the relevant knobs in [eval.<name>.env.*].
         env = {
             "eval_mode": 1,
             "termination_mode": 0,
@@ -34,94 +32,50 @@ class MultiScenarioEvaluator(Evaluator):
         env.update(self.config.get("env", {}))
         return env
 
-    def rollout(self, vecenv, policy, args) -> EvalResult:
-        t0 = time.time()
-        num_scenarios = int(self.config.get("eval", {}).get("num_scenarios", 1))
-        scenario_length = int(args["env"].get("scenario_length", 91))
-        device = args["train"]["device"]
-        num_agents = vecenv.observation_space.shape[0]
+    # -- Loop hooks --
 
-        global_infos = {}
-
-        # LSTM hidden state shared across the rollout; reset each scenario batch.
-        state = {}
-        if args["train"]["use_rnn"]:
-            state = dict(
-                lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-            )
-
+    def _initial_reset(self, vecenv, args):
+        # Multi-worker async reset gives us the parallel-throughput path.
         vecenv.async_reset(args.get("seed", 42))
-        ob, _, _, _, infos, _, _ = vecenv.recv()
-        scenarios_processed = 0
-        with tqdm.tqdm(total=num_scenarios, desc=f"[{self.name}] scenarios", disable=args.get("quiet", False)) as pbar:
-            while scenarios_processed < num_scenarios:
-                if args["train"]["use_rnn"]:
-                    state["lstm_h"].zero_()
-                    state["lstm_c"].zero_()
+        ob, _, _, _, _, _, _ = vecenv.recv()
+        return ob
 
-                for _ in range(scenario_length):
-                    with torch.no_grad():
-                        ob_t = torch.as_tensor(ob).to(device)
-                        logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                        action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-                    if isinstance(logits, torch.distributions.Normal):
-                        action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+    def _maybe_reset_lstm(self, state, steps, args):
+        # Reset between scenarios — gigaflow's auto-resample fires at the
+        # end of scenario_length, so steps % scenario_length == 0 is the
+        # natural boundary. No-op when LSTM is unused.
+        if not state or steps == 0:
+            return
+        scenario_length = int(args["env"].get("scenario_length", 0))
+        if scenario_length > 0 and steps % scenario_length == 0:
+            state["lstm_h"].zero_()
+            state["lstm_c"].zero_()
 
-                    ob, _, _, _, infos = vecenv.step(action)
+    def _should_stop(self, args, infos_collected, steps) -> bool:
+        target = int(self.config.get("eval", {}).get("num_scenarios", 1))
+        return len(infos_collected) >= target
 
-                    if infos and infos[0]:
-                        for sub_env in infos:
-                            for env_idx, summary in enumerate(sub_env):
-                                map_name = summary["map_name"].split("/")[-1].split(".")[0]
-                                summary["episode_id"] = env_idx
-                                summary["map_name"] = map_name
-                                scenarios_processed += 1
-                                pbar.update(1)
-                                for k, v in summary.items():
-                                    global_infos.setdefault(k, []).append(v)
-
-        metrics = self._average(global_infos)
-        if not args.get("quiet", False):
-            print(f"[{self.name}] {scenarios_processed} scenarios in {time.time() - t0:.1f}s")
-
-        frames = []
-        if self.render:
-            frames = self._render_pass(vecenv, policy, args)
-
-        return EvalResult(metrics=metrics, frames=frames)
-
-    def _average(self, global_infos: dict) -> dict:
-        out = {}
-        import numbers
-
-        for k, vs in global_infos.items():
-            if k == "num_scenarios":
-                out[k] = float(np.sum(vs))
-            elif vs and isinstance(vs[0], numbers.Number):
-                out[k] = float(np.mean(vs))
-        return out
+    # -- Render --
 
     def _render_pass(self, vecenv, policy, args) -> list:
         """One rollout per view, all writing mp4s to a single dir.
 
-        Re-uses the same vecenv if it's a single-worker setup; otherwise
-        delegates to a serial render env built fresh per view.
+        Builds a fresh single-worker env so frame capture is sequential
+        and starting_map_counter starts at 0 — the C-side ffmpeg-per-env
+        wiring assumes one bin at a time per process.
         """
         import importlib
 
-        env_name = args["env_name"]
+        import pufferlib
+
         backend = args.get("render_backend", "egl")
         if backend != "egl":
             return []
 
+        env_name = args["env_name"]
         out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "mp4"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Render with a fresh single-worker env so frame capture is sequential
-        # and starting_map_counter starts at 0. Multi-worker render doesn't
-        # match the C-side ffmpeg-per-env wiring cleanly.
         package = args.get("package", "ocean")
         module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
         env_module = importlib.import_module(module_name)
@@ -155,6 +109,11 @@ class MultiScenarioEvaluator(Evaluator):
         return all_paths
 
     def _render_view(self, vecenv, target_env, policy, args, view_idx: int, out_dir: Path) -> list:
+        import numpy as np
+        import torch
+
+        import pufferlib
+
         device = args["train"]["device"]
         num_agents = vecenv.observation_space.shape[0]
         num_scenarios = int(self.config.get("eval", {}).get("num_scenarios", 1))
@@ -163,12 +122,7 @@ class MultiScenarioEvaluator(Evaluator):
         saved_cwd = os.getcwd()
         os.chdir(out_dir)
         try:
-            state = {}
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
+            state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
             while scenarios_processed < num_scenarios:
                 ob, _ = vecenv.reset()
@@ -176,7 +130,7 @@ class MultiScenarioEvaluator(Evaluator):
                 num_in_batch = len(scenarios)
                 remaining = num_scenarios - scenarios_processed - num_in_batch
                 target_env.batch_size_eval = max(1, remaining)
-                if args["train"]["use_rnn"]:
+                if state:
                     state["lstm_h"].zero_()
                     state["lstm_c"].zero_()
                 for _ in range(max_steps):
