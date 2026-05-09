@@ -2,7 +2,7 @@
 
 MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo replay) + Python/PyTorch PPO training loop with V-trace and priority sampling.
 
-## Install
+## Install (local)
 
 ```bash
 # Python env
@@ -12,6 +12,64 @@ uv pip install -e .
 # Build C extensions (required after any .h/.c change)
 python setup.py build_ext --inplace --force
 ```
+
+## Install (HPC cluster)
+
+For clusters where the host glibc is too old or you need a CUDA toolchain that's not pinned by the OS, PufferDrive uses a **mixed Singularity + venv** layout:
+
+- **Singularity image** (read-only, system-wide): supplies CUDA + cuDNN.
+- **ext3 overlay** (writable via `--fakeroot`, host the miniforge3 base interpreter at `/ext3/miniforge3` only).
+- **Venv on `/scratch`** (regular ext4, fast): everything else — `torch`, `pufferlib`, the compiled `_C.so`.
+
+The venv lives outside the overlay because fuse2fs is single-threaded (~10 MB/s); putting torch/pufferlib in `/scratch` makes installs and rebuilds ~50× faster.
+
+`scripts/setup_container.sh` is the entrypoint. It auto-detects whether it's running inside the container and re-`singularity exec`s itself accordingly, so you can call it from the login node directly.
+
+**Defaults** (all env-var overridable):
+
+| Variable | Default |
+|---|---|
+| `OVERLAY_PATH` | `/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3` |
+| `IMAGE_PATH` | `/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif` |
+| `OVERLAY_TEMPLATE` | `/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz` |
+| `VENV_PATH` | `/scratch/$USER/venvs/pufferdrive` |
+| `CONTAINER_PYTHON` | `/ext3/miniforge3/bin/python3` |
+
+The defaults match NYU Greene's filesystem layout. Override the env vars before invoking `setup_container.sh` if your cluster differs.
+
+**One-time setup:**
+
+```bash
+# 1. Create the overlay (login node, ~2 min, no GPU needed)
+./scripts/setup_container.sh create-overlay
+
+# 2. Install dependencies into the venv (writable mount; submit as a GPU job)
+sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
+    --wrap "./scripts/setup_container.sh install"
+```
+
+The `install` step bootstraps `uv` if it's missing, creates the venv against the overlay's miniforge3, installs `torch` (cu121 wheels), then `pip install -e .` (which also builds the C extension). It also patches `bin/activate` so torch's bundled NCCL wins over the sif's older `libnccl.so.2` — without that, `torchrun`-spawned children crash on `undefined symbol: ncclCommShrink`. `TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"` is set during build so the resulting `_C.so` runs on A100 / L40S / H100 / H200 without "no kernel image" errors.
+
+**Per-code-change rebuild:**
+
+```bash
+sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=4 --mem=8gb --time=15 \
+    --wrap "./scripts/setup_container.sh rebuild"
+```
+
+`rebuild` mounts the overlay read-only — safe to run while other jobs hold the same overlay.
+
+**Submitting training jobs:**
+
+```bash
+python scripts/submit_cluster.py \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
+    --save_dir experiments \
+    --container
+```
+
+`scripts/cluster_configs/nyu_greene.yaml` defines `account`, `gpus`, `cpus`, `mem`, `time` — edit `account` to your allocation before first submit. `--container` makes `submit_cluster.py` wrap the job command in `singularity exec --nv --overlay $OVERLAY_PATH:ro $IMAGE_PATH ...`.
 
 ## Data
 
