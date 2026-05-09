@@ -241,9 +241,7 @@ class Drive(pufferlib.PufferEnv):
         elif goal_advance_mode == "saturate":
             self.goal_advance_mode = 1
         else:
-            raise ValueError(
-                f"goal_advance_mode must be one of 'regenerate' or 'saturate'. Got: {goal_advance_mode}"
-            )
+            raise ValueError(f"goal_advance_mode must be one of 'regenerate' or 'saturate'. Got: {goal_advance_mode}")
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
