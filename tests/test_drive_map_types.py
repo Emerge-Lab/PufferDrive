@@ -1,9 +1,15 @@
-"""Smoke test for Drive map ingestion.
+"""Map-source smoke + sanity tests for Drive.
 
-For each supported map source (Carla / nuPlan / WOMD), confirm that
-constructing the env, resetting, and stepping 100 times all complete
-within a watchdog budget. Catches regressions where a new map format
-parses but then hangs or crashes the engine."""
+For each (map_source, simulation_mode) pair we confirm that:
+  - Construction, reset, and stepping a full episode complete inside a
+    watchdog budget (no hangs).
+  - Observations and rewards stay finite throughout.
+  - The engine emits an episode log by `scenario_length`.
+
+Carla bins ship only a road graph (no logged trajectories), so they're
+exercised in gigaflow mode only. nuPlan and WOMD bins ship logged
+trajectories and run in both gigaflow and replay so we cover the
+full ingestion path on each format."""
 
 import os
 import signal
@@ -17,10 +23,12 @@ from pufferlib.ocean.drive.drive import Drive
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN_ROOT = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries")
 
-MAP_DIRS = [
-    pytest.param(os.path.join(BIN_ROOT, "carla_py123d"), id="carla"),
-    pytest.param(os.path.join(BIN_ROOT, "nuplan"), id="nuplan"),
-    pytest.param(os.path.join(BIN_ROOT, "obstacles"), id="womd"),
+CASES = [
+    pytest.param("carla_py123d", "gigaflow", id="carla-gigaflow"),
+    pytest.param("nuplan", "gigaflow", id="nuplan-gigaflow"),
+    pytest.param("nuplan", "replay", id="nuplan-replay"),
+    pytest.param("obstacles", "gigaflow", id="womd-gigaflow"),
+    pytest.param("obstacles", "replay", id="womd-replay"),
 ]
 
 
@@ -39,26 +47,51 @@ def _watchdog(seconds, what):
         signal.signal(signal.SIGALRM, prev)
 
 
-@pytest.mark.parametrize("map_dir", MAP_DIRS)
-def test_load_and_step_100(map_dir):
+@pytest.mark.parametrize("map_subdir, sim_mode", CASES)
+def test_load_step_log(map_subdir, sim_mode):
+    map_dir = os.path.join(BIN_ROOT, map_subdir)
     assert os.path.isdir(map_dir), f"Test fixture missing: {map_dir}"
 
-    with _watchdog(30, f"Drive() construction with map_dir={map_dir}"):
+    # control_sdc_only is the natural pairing for replay (one policy-controlled
+    # agent + log-replayed others). gigaflow tests the random-spawn path.
+    if sim_mode == "replay":
+        mode_kwargs = dict(
+            num_agents=1,
+            min_agents_per_env=1,
+            max_agents_per_env=1,
+            control_mode="control_sdc_only",
+        )
+    else:
+        mode_kwargs = dict(num_agents=32)
+
+    scenario_length = 91
+    tag = f"{map_subdir}/{sim_mode}"
+
+    with _watchdog(30, f"Drive() init [{tag}]"):
         env = Drive(
-            num_agents=32,
             num_maps=1,
-            scenario_length=200,
+            scenario_length=scenario_length,
             resample_frequency=0,
             report_interval=1,
+            simulation_mode=sim_mode,
             map_dir=map_dir,
+            **mode_kwargs,
         )
 
-    with _watchdog(30, f"env.reset() with map_dir={map_dir}"):
-        env.reset(seed=0)
+    with _watchdog(30, f"env.reset() [{tag}]"):
+        obs, _ = env.reset(seed=0)
+    assert np.isfinite(obs).all(), f"Non-finite obs after reset [{tag}]"
 
-    with _watchdog(60, f"100 env.step() with map_dir={map_dir}"):
-        for _ in range(100):
+    logs = []
+    with _watchdog(60, f"step loop [{tag}]"):
+        for _ in range(scenario_length + 5):
             actions = np.zeros_like(env.actions)
-            env.step(actions)
+            obs, reward, _, _, info = env.step(actions)
+            assert np.isfinite(obs).all(), f"Non-finite obs during step [{tag}]"
+            assert np.isfinite(reward).all(), f"Non-finite reward [{tag}]"
+            if info:
+                logs.extend(info)
+
+    assert logs, f"No episode log emitted within {scenario_length + 5} steps [{tag}]"
 
     env.close()
