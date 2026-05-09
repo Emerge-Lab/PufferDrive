@@ -148,6 +148,8 @@ dmypy.json
 checkpoints/
 experiments/
 benchmark*/
+!pufferlib/ocean/benchmark/
+!pufferlib/ocean/benchmark/**
 wandb/
 .neptune/
 raylib*/
