@@ -12,6 +12,7 @@
 #define IDM_MIN_LOOKAHEAD 20.0f
 #define IDM_MAX_LOOKAHEAD 120.0f
 #define IDM_BBOX_MARGIN 0.05f
+#define IDM_COLLISION_BBOX_MARGIN 0.05f
 #define IDM_DEFAULT_DESIRED_SPEED 15.0f
 #define IDM_ROUTE_SAMPLE_DS 1.0f
 #define IDM_MAX_CANDIDATES 256
@@ -276,9 +277,12 @@ static int idm_sample_hits_agent(const Agent *sample, Agent *other) {
     }
 
     Agent other_expanded = *other;
-    other_expanded.sim_length = other->sim_length + 2.0f * IDM_BBOX_MARGIN;
-    other_expanded.sim_width = other->sim_width + 2.0f * IDM_BBOX_MARGIN;
-    return check_obb_collision((Agent *)sample, &other_expanded);
+    Agent sample_expanded = *sample;
+    sample_expanded.sim_length = sample->sim_length + 2.0f * IDM_COLLISION_BBOX_MARGIN;
+    sample_expanded.sim_width = sample->sim_width + 2.0f * IDM_COLLISION_BBOX_MARGIN;
+    other_expanded.sim_length = other->sim_length + 2.0f * (IDM_BBOX_MARGIN + IDM_COLLISION_BBOX_MARGIN);
+    other_expanded.sim_width = other->sim_width + 2.0f * (IDM_BBOX_MARGIN + IDM_COLLISION_BBOX_MARGIN);
+    return check_obb_collision(&sample_expanded, &other_expanded);
 }
 
 static int idm_sample_hits_red_light(Drive *env, Agent *sample, int lane_idx) {

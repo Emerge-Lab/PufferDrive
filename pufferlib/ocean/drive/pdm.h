@@ -29,7 +29,7 @@
 #define PDM_STEERING_RATE_LIMIT 0.6f
 
 static const float PDM_OFFSETS[PDM_NUM_OFFSETS] = {0.0f, -1.0f, 1.0f};
-static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
+static const float PDM_SPEED_FRACTIONS[PDM_NUM_SPEED_FRACTIONS] = {1.0f, 0.75f, 0.5f, 0.25f, 0.01f};
 
 static inline float pdm_horizon(Drive *env) {
     float horizon = env->pdm_horizon > 0.0f ? env->pdm_horizon : PDM_DEFAULT_HORIZON;
