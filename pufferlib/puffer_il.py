@@ -258,7 +258,9 @@ class ImitationTrainer:
 
             target_samples = int(self.config["il"].get("bc_teacher_target_samples", 0))
             if target_samples <= 0:
-                raise pufferlib.APIUsageError("--il.bc-teacher-target-samples must be > 0 when using teacher-generated BC data")
+                raise pufferlib.APIUsageError(
+                    "--il.bc-teacher-target-samples must be > 0 when using teacher-generated BC data"
+                )
 
             chunk_steps = int(self.config["il"].get("bc_rollout_steps", 0))
             if chunk_steps <= 0:
@@ -310,7 +312,7 @@ class ImitationTrainer:
         logs = {}
         total_iters = int(self.config["il"]["dagger_iters"])
         total_steps_per_iter = int(self.config["il"]["dagger_rollout_steps"])
-        
+
         chunk_size = int(self.config["il"].get("bc_rollout_steps", total_steps_per_iter))
 
         for iteration in range(total_iters):
@@ -364,8 +366,12 @@ class ImitationTrainer:
             rollout = self._rollout_policy(self.config["il"]["gail_rollout_steps"])
             self.policy_bank.extend(rollout.observations, rollout.actions)
 
-            expert_obs, expert_actions = self.expert_bank.sample(min(self.config["il"]["bc_batch_size"], len(self.expert_bank)))
-            policy_obs, policy_actions = self.policy_bank.sample(min(self.config["il"]["bc_batch_size"], len(self.policy_bank)))
+            expert_obs, expert_actions = self.expert_bank.sample(
+                min(self.config["il"]["bc_batch_size"], len(self.expert_bank))
+            )
+            policy_obs, policy_actions = self.policy_bank.sample(
+                min(self.config["il"]["bc_batch_size"], len(self.policy_bank))
+            )
             expert_obs = expert_obs.to(self.device)
             expert_actions = expert_actions.to(self.device)
             policy_obs = policy_obs.to(self.device)
@@ -542,7 +548,9 @@ def _load_teacher_state_dict_into_policy(policy, checkpoint, source_name):
             "Continuing with partial teacher initialization."
         )
     if incompat.unexpected_keys:
-        print(f"[puffer_il] Warning: ignored {len(incompat.unexpected_keys)} unexpected teacher keys from {source_name}.")
+        print(
+            f"[puffer_il] Warning: ignored {len(incompat.unexpected_keys)} unexpected teacher keys from {source_name}."
+        )
 
 
 def _resolve_teacher_checkpoint_paths(args, env_name):
@@ -584,7 +592,7 @@ def eval(env_name, args=None, vecenv=None, policy=None):
 def sweep(args=None, env_name=None):
     """Run parameter sweep using wandb or neptune for hyperparameter optimization."""
     import pufferlib.sweep
-    
+
     args = args or load_config(env_name)
     if not args["wandb"] and not args["neptune"]:
         raise pufferlib.APIUsageError("Sweeps require either wandb or neptune")
@@ -600,14 +608,14 @@ def sweep(args=None, env_name=None):
     # For IL, use method-specific loss metric as target (e.g., "il/bc/loss" for BC)
     method_name = args["il"]["method"].lower()
     target_key = f"il/{method_name}/loss"
-    
+
     for i in range(args["max_runs"]):
         seed = time.time_ns() & 0xFFFFFFFF
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         sweep_obj.suggest(args)
-        
+
         # Run IL training
         all_logs = []
         vecenv = pufferl.load_env(env_name, args)
@@ -669,7 +677,9 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--sanity-maps", nargs="*", default=None)
 
-    parser.add_argument("--il.method", type=str, default=IL_DEFAULTS["method"], choices=["bc", "dagger", "gail", "airl"])
+    parser.add_argument(
+        "--il.method", type=str, default=IL_DEFAULTS["method"], choices=["bc", "dagger", "gail", "airl"]
+    )
     parser.add_argument("--il.updates", type=int, default=IL_DEFAULTS["updates"])
     parser.add_argument("--il.expert-data", nargs="*", default=None)
     parser.add_argument("--il.save-expert-data", type=str, default=IL_DEFAULTS["save_expert_data"])
@@ -678,9 +688,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--il.bc-batch-size", type=int, default=IL_DEFAULTS["bc_batch_size"])
     parser.add_argument("--il.bc-epochs", type=int, default=IL_DEFAULTS["bc_epochs"])
     parser.add_argument("--il.bc-rollout-steps", type=int, default=IL_DEFAULTS["bc_rollout_steps"])
-    parser.add_argument(
-        "--il.bc-teacher-target-samples", type=int, default=IL_DEFAULTS["bc_teacher_target_samples"]
-    )
+    parser.add_argument("--il.bc-teacher-target-samples", type=int, default=IL_DEFAULTS["bc_teacher_target_samples"])
     parser.add_argument("--il.dagger-iters", type=int, default=IL_DEFAULTS["dagger_iters"])
     parser.add_argument("--il.dagger-rollout-steps", type=int, default=IL_DEFAULTS["dagger_rollout_steps"])
     parser.add_argument("--il.dagger-beta-start", type=float, default=IL_DEFAULTS["dagger_beta_start"])
@@ -723,7 +731,9 @@ def load_config(env_name, config_dir=None):
             fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
             parser.add_argument(fmt.replace("_", "-"), default=puffer_type(config[section][key]), type=puffer_type)
 
-    parser.add_argument("-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit")
+    parser.add_argument(
+        "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"
+    )
 
     parsed = vars(parser.parse_args())
     args = _nest_dict(parsed)
@@ -802,9 +812,7 @@ def save_transition_bank(bank, path):
     elif path.suffix in {".pt", ".pth"}:
         torch.save({"observations": observations, "actions": actions}, path)
     else:
-        raise pufferlib.APIUsageError(
-            f"Unsupported expert data save file: {path}. Use .npz, .npy, .pt, or .pth"
-        )
+        raise pufferlib.APIUsageError(f"Unsupported expert data save file: {path}. Use .npz, .npy, .pt, or .pth")
 
 
 def load_transition_file(path):
