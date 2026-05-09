@@ -308,22 +308,36 @@ class ImitationTrainer:
             raise pufferlib.APIUsageError("DAgger requires a teacher policy or checkpoint")
 
         logs = {}
-        for iteration in range(self.config["il"]["dagger_iters"]):
+        total_iters = int(self.config["il"]["dagger_iters"])
+        total_steps_per_iter = int(self.config["il"]["dagger_rollout_steps"])
+        
+        chunk_size = int(self.config["il"].get("bc_rollout_steps", total_steps_per_iter))
+
+        for iteration in range(total_iters):
             beta = dagger_beta(
                 iteration,
-                self.config["il"]["dagger_iters"],
+                total_iters,
                 self.config["il"]["dagger_beta_start"],
                 self.config["il"]["dagger_beta_end"],
             )
-            rollout = self._rollout_policy(
-                self.config["il"]["dagger_rollout_steps"],
-                beta=beta,
-                teacher=self.teacher,
-                collect_expert_labels=True,
-            )
-            self.expert_bank.extend(rollout.observations, rollout.actions)
+
+            generated = 0
+            chunks = 0
+            while generated < total_steps_per_iter:
+                steps = min(chunk_size, total_steps_per_iter - generated)
+                rollout = self._rollout_policy(
+                    steps,
+                    beta=beta,
+                    teacher=self.teacher,
+                    collect_expert_labels=True,
+                )
+                self.expert_bank.extend(rollout.observations, rollout.actions)
+                generated += int(len(rollout.actions))
+                chunks += 1
+
             logs["dagger/beta"] = beta
-            logs["dagger/collected"] = len(rollout.actions)
+            logs["dagger/collected"] = generated
+            logs["dagger/chunks"] = chunks
             logs.update(self.train_bc())
 
         return logs
@@ -567,6 +581,69 @@ def eval(env_name, args=None, vecenv=None, policy=None):
     return pufferl.eval(env_name=env_name, args=args, vecenv=vecenv, policy=policy)
 
 
+def sweep(args=None, env_name=None):
+    """Run parameter sweep using wandb or neptune for hyperparameter optimization."""
+    import pufferlib.sweep
+    
+    args = args or load_config(env_name)
+    if not args["wandb"] and not args["neptune"]:
+        raise pufferlib.APIUsageError("Sweeps require either wandb or neptune")
+
+    method = args["sweep"].pop("method")
+    try:
+        sweep_cls = getattr(pufferlib.sweep, method)
+    except:
+        raise pufferlib.APIUsageError(f"Invalid sweep method {method}. See pufferlib.sweep")
+
+    sweep_obj = sweep_cls(args["sweep"])
+    points_per_run = args["sweep"]["downsample"]
+    # For IL, use method-specific loss metric as target (e.g., "il/bc/loss" for BC)
+    method_name = args["il"]["method"].lower()
+    target_key = f"il/{method_name}/loss"
+    
+    for i in range(args["max_runs"]):
+        seed = time.time_ns() & 0xFFFFFFFF
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        sweep_obj.suggest(args)
+        
+        # Run IL training
+        all_logs = []
+        vecenv = pufferl.load_env(env_name, args)
+        policy = pufferl.load_policy(args, vecenv, env_name)
+
+        teacher = None
+        if args["il"]["teacher_load_model_path"] is not None or args["il"]["teacher_load_id"] is not None:
+            teacher_args = deepcopy(args)
+            teacher_args["load_model_path"] = None
+            teacher_args["load_id"] = None
+            teacher = pufferl.load_policy(teacher_args, vecenv, env_name)
+            _load_teacher_checkpoint(teacher, args, env_name)
+
+        if args["neptune"]:
+            logger = pufferl.NeptuneLogger(args)
+        elif args["wandb"]:
+            logger = pufferl.WandbLogger(args)
+        else:
+            logger = None
+
+        trainer = ImitationTrainer(args, vecenv, policy, teacher=teacher, logger=logger)
+        logs = trainer.train(updates=args["il"]["updates"])
+        all_logs.append(logs)
+        model_path = trainer.close()
+        if trainer.logger is not None:
+            trainer.logger.close(model_path)
+
+        # Extract loss metric for sweep optimization
+        if all_logs and target_key in all_logs[0]:
+            loss_value = all_logs[0][target_key]
+            # Observe: for IL, we typically want to minimize loss, so use negative as score
+            sweep_obj.observe(args, -loss_value, all_logs[0].get("global_step", 1))
+        else:
+            print(f"Warning: Could not find {target_key} in logs for sweep observation")
+
+
 def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib IL [bright_cyan]{pufferlib.__version__}[/] demo options",
@@ -654,6 +731,15 @@ def load_config(env_name, config_dir=None):
     args.setdefault("il", {})
     for key, value in IL_DEFAULTS.items():
         args["il"].setdefault(key, value)
+
+    # Set up sweep defaults if not provided
+    args.setdefault("sweep", {})
+    if "method" not in args["sweep"]:
+        args["sweep"]["method"] = "Protein"
+    if "metric" not in args["sweep"]:
+        args["sweep"]["metric"] = "loss"
+    if "downsample" not in args["sweep"]:
+        args["sweep"]["downsample"] = 10
 
     data_dir = args["train"].get("data_dir", args.get("data_dir", "experiments"))
     args["train"]["data_dir"] = data_dir
@@ -815,7 +901,7 @@ def encode_actions(actions, action_space):
 
 
 def main():
-    err = "Usage: puffer_il [train, eval] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer_il [train, eval, sweep] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -825,6 +911,8 @@ def main():
         train(env_name=env_name)
     elif mode == "eval":
         eval(env_name=env_name)
+    elif mode == "sweep":
+        sweep(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 
