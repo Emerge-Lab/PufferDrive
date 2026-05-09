@@ -56,7 +56,9 @@ def main():
         choices=["gigaflow", "replay"],
         help="Simulation mode: gigaflow (random spawn) or replay (log trajectories, policy controls SDC)",
     )
-    parser.add_argument("--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)")
+    parser.add_argument(
+        "--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
+    )
     parser.add_argument(
         "--control-mode",
         default=None,

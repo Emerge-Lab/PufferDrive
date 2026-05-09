@@ -1643,9 +1643,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
     # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
     if args.get("load_model_path"):
-        trainer_state_path = os.path.join(
-            os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt"
-        )
+        trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
             tstate = torch.load(trainer_state_path, map_location=train_config["device"])

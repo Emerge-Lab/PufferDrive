@@ -381,9 +381,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             # packages are on /scratch ext4 — no fuse2fs in the read path.
             scratch_dir = os.environ.get("SCRATCH_DIR", "/scratch/" + os.environ.get("USER", ""))
             venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
-            env_setup = (
-                f"source {venv_path}/bin/activate && export PYTHONNOUSERSITE=1"
-            )
+            env_setup = f"source {venv_path}/bin/activate && export PYTHONNOUSERSITE=1"
             # Redirect caches to scratch to avoid home quota issues
             cache_exports = (
                 f"export XDG_CACHE_HOME={scratch_dir}/cache && "
