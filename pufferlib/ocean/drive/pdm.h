@@ -1144,6 +1144,33 @@ static PDMCandidateScore pdm_select_best_feasible_candidate(Drive *env, int agen
     return best_offroad.valid ? best_offroad : pdm_select_best_candidate(candidates, num_candidates);
 }
 
+static int pdm_build_urgent_action_step(Drive *env, int agent_idx, float offset, float urgent_speed,
+                                        PDMRolloutStep *out) {
+    Agent *agent = &env->agents[agent_idx];
+    *out = (PDMRolloutStep){0};
+
+    IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
+    PDMPlanningRoute planning_route = {0};
+    if (!projection.valid || !pdm_build_planning_route(env, agent, &projection, &planning_route)) {
+        return 0;
+    }
+
+    PDMBezierPath path = {0};
+    if (!pdm_build_smooth_path(env, agent, &planning_route, projection, offset, urgent_speed, &path)) {
+        return 0;
+    }
+
+    PDMRolloutStep target = {0};
+    if (!pdm_sample_smooth_path(env, &planning_route, projection, offset, &path, urgent_speed * env->dt, &target)) {
+        return 0;
+    }
+
+    PDMTrackingState state = pdm_initial_tracking_state(agent);
+    state = pdm_track_target_step(env, agent, state, target, urgent_speed, env->dt);
+    *out = pdm_tracking_state_to_step(state, target, env->dt, urgent_speed * env->dt);
+    return out->valid;
+}
+
 static void pdm_stop_agent(Agent *agent) {
     agent->sim_vx = 0.0f;
     agent->sim_vy = 0.0f;
@@ -1263,22 +1290,15 @@ static void move_pdm(Drive *env, int agent_idx) {
     float danger_ttc = fminf(pdm_speed_aware_ttc(fmaxf(0.0f, agent->sim_speed_signed)), pdm_agent_horizon(env, agent));
     if (best.min_ttc < danger_ttc) {
         float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
-        best.offset = 0.0f;
-        best.new_speed = fmaxf(0.0f, current_speed - PDM_URGENT_DECEL * env->dt);
-        best.accel = (best.new_speed - current_speed) / env->dt;
-
-        IDMLaneProjection projection = pdm_project_from_route_state(env, agent);
-        PDMPlanningRoute planning_route = {0};
-        if (projection.valid && pdm_build_planning_route(env, agent, &projection, &planning_route)) {
-            PDMRollout rollout = pdm_generate_constant_speed_rollout(env, agent, &planning_route, projection,
-                                                                     best.offset, best.new_speed);
-            if (rollout.valid && rollout.action_step.valid) {
-                best.rollout = rollout;
-            } else {
-                best.rollout.action_step = (PDMRolloutStep){0};
-            }
+        float urgent_speed = fmaxf(0.0f, current_speed - PDM_URGENT_DECEL * env->dt);
+        PDMRolloutStep urgent_step = {0};
+        if (pdm_build_urgent_action_step(env, agent_idx, best.offset, urgent_speed, &urgent_step)) {
+            best.new_speed = urgent_speed;
+            best.accel = (urgent_speed - current_speed) / env->dt;
+            best.rollout.action_step = urgent_step;
         } else {
-            best.rollout.action_step = (PDMRolloutStep){0};
+            pdm_apply_urgent_brake_fallback(env, agent_idx);
+            return;
         }
     }
 

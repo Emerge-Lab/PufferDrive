@@ -234,10 +234,6 @@ static int idm_collect_route_candidates(Drive *env, int ego_idx, float lookahead
         if (other->removed || other->sim_x == INVALID_POSITION || other->sim_valid == 0) {
             continue;
         }
-        if (!check_z_collision_possibility(ego, other)) {
-            continue;
-        }
-
         float dx = other->sim_x - ego->sim_x;
         float dy = other->sim_y - ego->sim_y;
         float max_dist = lookahead + 0.5f * ego->sim_length + 0.5f * other->sim_length + 5.0f + 2.0f * IDM_BBOX_MARGIN;
@@ -267,6 +263,10 @@ static inline Agent idm_make_sample_agent(const Agent *ego, float x, float y, fl
 }
 
 static int idm_sample_hits_agent(const Agent *sample, Agent *other) {
+    if (!check_z_collision_possibility(sample, other)) {
+        return 0;
+    }
+
     float dx = other->sim_x - sample->sim_x;
     float dy = other->sim_y - sample->sim_y;
     float local_radius = 0.5f * sample->sim_length + 0.5f * other->sim_length + sample->sim_width + other->sim_width +
