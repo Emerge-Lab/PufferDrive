@@ -150,6 +150,8 @@ experiments/
 benchmark*/
 !pufferlib/ocean/benchmark/
 !pufferlib/ocean/benchmark/**
+# But re-ignore caches inside it
+pufferlib/ocean/benchmark/**/__pycache__/
 wandb/
 .neptune/
 raylib*/
