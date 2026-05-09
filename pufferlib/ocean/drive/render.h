@@ -895,12 +895,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
             float z_world = pz + z_middle + 1;
-            DrawLine3D((Vector3){x_start_world, y_start_world, z_world},
-                       (Vector3){x_end_world, y_end_world, z_world}, RED);
+            DrawLine3D((Vector3){x_start_world, y_start_world, z_world}, (Vector3){x_end_world, y_end_world, z_world},
+                       RED);
         }
         if (mode == 0) {
-            DrawLine3D((Vector3){x_start, y_start, z_middle + 1},
-                       (Vector3){x_end, y_end, z_middle + 1}, RED);
+            DrawLine3D((Vector3){x_start, y_start, z_middle + 1}, (Vector3){x_end, y_end, z_middle + 1}, RED);
         }
     }
 }
