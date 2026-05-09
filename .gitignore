@@ -179,6 +179,9 @@ pufferlib/resources/drive/binaries/carla/.DS_Store
 !pufferlib/resources/drive/binaries/obstacles/**
 !pufferlib/resources/drive/binaries/vru/
 !pufferlib/resources/drive/binaries/vru/**
+# Single-bin fixtures used by tests/test_drive_map_types.py
+!pufferlib/resources/drive/binaries/nuplan/
+!pufferlib/resources/drive/binaries/nuplan/**
 
 # Compiled drive binary in root
 /drive

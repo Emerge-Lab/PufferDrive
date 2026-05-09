@@ -53,3 +53,8 @@ jobs:
 
       - name: Run python ini parsing tests
         run: python tests/test_drive_config.py
+
+      - name: Run map-type smoke test (carla / nuplan / womd)
+        run: |
+          pip install pytest
+          python -m pytest tests/test_drive_map_types.py -v
