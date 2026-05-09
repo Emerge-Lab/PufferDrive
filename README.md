@@ -15,7 +15,7 @@ python setup.py build_ext --inplace --force
 
 ## Install (HPC cluster)
 
-For clusters where the host glibc is too old or you need a CUDA toolchain that's not pinned by the OS, PufferDrive uses a **mixed Singularity + venv** layout:
+For the NYU cluster, PufferDrive recommends a **mixed Singularity + venv** layout:
 
 - **Singularity image** (read-only, system-wide): supplies CUDA + cuDNN.
 - **ext3 overlay** (writable via `--fakeroot`, host the miniforge3 base interpreter at `/ext3/miniforge3` only).
