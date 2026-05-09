@@ -47,6 +47,26 @@ def test_inheritance_chain():
     assert cfg["env"]["map_dir"] == "/tmp/hard_stop"
 
 
+def test_inheritance_three_levels():
+    # C inherits B inherits A. Each level overrides the one above.
+    sections = {
+        "A": {"interval": 100, "env.scenario_length": 91, "env.map_dir": "/A"},
+        "B": {"inherits": "A", "interval": 200, "env.scenario_length": 201},
+        "C": {"inherits": "B", "env.map_dir": "/C", "render": True},
+    }
+    cfg = _build_section_config("C", sections["C"], sections)
+    assert cfg["interval"] == 200, "B should win over A on interval"
+    assert cfg["env"]["scenario_length"] == 201, "B should win over A on scenario_length"
+    assert cfg["env"]["map_dir"] == "/C", "C should win over A and B on map_dir"
+    assert cfg["render"] is True, "C's own field"
+
+
+def test_inheritance_self_cycle_detected():
+    sections = {"a": {"inherits": "a"}}
+    with pytest.raises(ValueError, match="Cyclic"):
+        _build_section_config("a", sections["a"], sections)
+
+
 def test_inheritance_child_wins():
     sections = {
         "parent": {"interval": 250, "env.scenario_length": 201},
