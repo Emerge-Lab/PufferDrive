@@ -394,6 +394,89 @@ def test_behavior_class_sets_num_eval_scenarios(tmp_path):
     assert env_f["num_eval_scenarios"] == 50
 
 
+def test_behavior_class_sampling_is_reproducible_across_calls(tmp_path):
+    """random.sample inside env_overrides used to be unseeded — every epoch
+    picked different bins, so cross-epoch metric jitter from bin selection
+    was indistinguishable from policy improvement. Now seeded by section
+    name: same evaluator, same bins, every call."""
+    map_dir = tmp_path / "bins"
+    map_dir.mkdir()
+    for i in range(40):
+        (map_dir / f"bin_{i:02d}.bin").write_text("x")
+
+    cfg = {
+        "type": "behavior_class",
+        "env": {"map_dir": str(map_dir)},
+        "eval": {"num_scenarios": 5},
+    }
+
+    # Two evaluators with the SAME name should sample the same bins.
+    ev1 = BehaviorClassEvaluator("my_class", cfg, train_config={})
+    env1 = ev1.env_overrides()
+    sampled1 = sorted(os.listdir(env1["map_dir"]))
+    ev1.cleanup()
+
+    ev2 = BehaviorClassEvaluator("my_class", cfg, train_config={})
+    env2 = ev2.env_overrides()
+    sampled2 = sorted(os.listdir(env2["map_dir"]))
+    ev2.cleanup()
+
+    assert sampled1 == sampled2, "same section name should sample the same bins"
+
+    # Different section names should sample different bins (with high
+    # probability for 5-of-40; the seeds differ).
+    ev_other = BehaviorClassEvaluator("other_class", cfg, train_config={})
+    env_other = ev_other.env_overrides()
+    sampled_other = sorted(os.listdir(env_other["map_dir"]))
+    ev_other.cleanup()
+
+    assert sampled1 != sampled_other, "different section names should sample differently"
+
+
+def test_aggregate_infos_weighted_mean_by_emission_size():
+    """When vec_log emissions have different agent counts (n), the per-key
+    aggregate should be a weighted mean — not mean-of-means. Two emissions
+    [{collision_rate: 0.1, n: 100}, {collision_rate: 0.5, n: 1}] should
+    aggregate to ~0.104 (true per-agent global rate), NOT 0.30 (uniform
+    mean-of-means)."""
+
+    class _Stub(Evaluator):
+        type_name = "_stub_agg"
+
+        def _should_stop(self, *args, **kwargs):
+            return True
+
+    s = _Stub("test", {}, {})
+    infos = [
+        {"collision_rate": 0.1, "episode_return": 10.0, "n": 100.0},
+        {"collision_rate": 0.5, "episode_return": 50.0, "n": 1.0},
+    ]
+    out = s._aggregate_infos(infos)
+
+    # 0.1*100 + 0.5*1 = 10.5; /101 = ~0.1039
+    assert abs(out["collision_rate"] - 10.5 / 101) < 1e-6
+    assert abs(out["episode_return"] - (10.0 * 100 + 50.0 * 1) / 101) < 1e-6
+    # Counts: 2 emissions, 101 agents behind the metric.
+    assert out["num_log_cycles"] == 2
+    assert out["num_agents_evaluated"] == 101
+    # The "n" key is reported separately, not aggregated as a metric.
+    assert "n" not in {k for k in out if k not in ("num_log_cycles", "num_agents_evaluated")}
+
+
+def test_aggregate_infos_empty_returns_zero_counts():
+    """No emissions (env produced no completed scenarios) should report
+    both counts as zero rather than erroring."""
+
+    class _Stub(Evaluator):
+        type_name = "_stub_empty"
+
+        def _should_stop(self, *args, **kwargs):
+            return True
+
+    out = _Stub("test", {}, {})._aggregate_infos([])
+    assert out == {"num_log_cycles": 0, "num_agents_evaluated": 0.0}
+
+
 def test_behavior_class_cleanup_removes_symlink_dir(tmp_path):
     """BehaviorClassEvaluator builds a tmp symlink dir when sampling.
     cleanup() must remove it; otherwise we accumulate leftovers."""

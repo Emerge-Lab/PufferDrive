@@ -26,9 +26,13 @@ class BehaviorClassEvaluator(HumanReplayEvaluator):
             return env
 
         num_scenarios = int(self.config.get("eval", {}).get("num_scenarios", 0))
-        all_bins = [f for f in os.listdir(map_dir) if f.endswith(".bin")]
+        all_bins = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
         if num_scenarios > 0 and num_scenarios < len(all_bins):
-            sampled = random.sample(all_bins, num_scenarios)
+            # Seed the sampler with the section name so every epoch picks
+            # the same bins. Without this, cross-epoch metric jitter from
+            # bin selection is indistinguishable from policy improvement.
+            rng = random.Random(self.name)
+            sampled = rng.sample(all_bins, num_scenarios)
             self._sampled_dir = tempfile.mkdtemp(prefix=f"{self.name}_")
             for fname in sampled:
                 os.symlink(os.path.join(map_dir, fname), os.path.join(self._sampled_dir, fname))

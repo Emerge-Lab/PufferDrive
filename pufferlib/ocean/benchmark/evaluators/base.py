@@ -150,17 +150,53 @@ class Evaluator:
         return out
 
     def _aggregate_infos(self, infos: list) -> dict:
-        """Default: numeric mean per key, plus a num_scenarios_completed count."""
-        if not infos:
-            return {"num_scenarios_completed": 0}
-        import numpy as np
+        """Weighted per-agent mean across vec_log emissions.
 
-        out = {"num_scenarios_completed": float(len(infos))}
+        Each emission from vec_log is already a per-agent mean over the
+        envs that finished in that batch, plus an `n` field carrying the
+        total agent count behind that mean. So `sum(d[k] * d["n"]) / sum(d["n"])`
+        recovers the true per-agent global mean — regardless of whether
+        emissions had identical batch sizes (uniform truncation) or
+        varying sizes (mixed scenario_lengths / early_reset / mid-run
+        agent removals).
+
+        Reported counts:
+          - `num_log_cycles`     — vec_log emissions seen (1 cycle each).
+          - `num_agents_evaluated` — total agent-trajectories behind the
+            metric (sum of n across emissions). This is what readers
+            usually want when they ask "how many scenes did we eval?";
+            for behaviors it's the bin count, for gigaflow it's
+            cycles × envs × agents-per-env.
+
+        Caveat: vec_log already divides every numeric field by n. For
+        ratio fields where the numerator and denominator are themselves
+        per-agent sums (e.g. avg_distance_per_infraction in my_log),
+        weighted mean across emissions only approximates the true ratio
+        — that would require the parent to see numerator/denominator
+        separately. Same approximation as the prior mean-of-means; just
+        making the math correct for the majority of per-agent fields.
+        """
+        if not infos:
+            return {"num_log_cycles": 0, "num_agents_evaluated": 0.0}
+
+        total_n = sum(float(d.get("n", 1)) for d in infos)
+        out = {
+            "num_log_cycles": float(len(infos)),
+            "num_agents_evaluated": float(total_n),
+        }
         keys = set().union(*(d.keys() for d in infos))
+        keys.discard("n")  # reported separately; not a metric
         for k in keys:
-            vals = [d[k] for d in infos if isinstance(d.get(k), (int, float))]
-            if vals:
-                out[k] = float(np.mean(vals))
+            num = 0.0
+            den = 0.0
+            for d in infos:
+                v = d.get(k)
+                if isinstance(v, (int, float)):
+                    w = float(d.get("n", 1))
+                    num += float(v) * w
+                    den += w
+            if den > 0:
+                out[k] = num / den
         return out
 
     # -- Render (default EGL → ffmpeg mp4 pipeline) ----------------------
