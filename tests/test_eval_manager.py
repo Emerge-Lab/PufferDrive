@@ -640,9 +640,7 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
     # Whatever the real env_creator returns, we replace make() so the
     # render loop gets our fake; the kwargs/backend/num_envs are still
     # called but we don't care about them here.
-    monkeypatch.setattr(
-        pufferlib.vector, "make", lambda *a, **kw: fake_vec
-    )
+    monkeypatch.setattr(pufferlib.vector, "make", lambda *a, **kw: fake_vec)
 
     # The render loop reads target via vec.envs[0] OR vec itself; force the
     # "no .envs" path by sticking _FakeTarget on the vec.
