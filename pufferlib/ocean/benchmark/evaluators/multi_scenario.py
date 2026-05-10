@@ -96,10 +96,17 @@ class MultiScenarioEvaluator(Evaluator):
             if num_maps > 1:
                 render_env_kwargs["starting_map"] = random.randint(0, num_maps - 1)
 
+        # Stamp the training step into the filename so successive epochs
+        # produce distinct mp4s (Town01.xodr_step25100000_bev.mp4) instead
+        # of overwriting in place. wandb then shows one entry per epoch
+        # in the render carousel — useful for watching policy evolve over
+        # training. global_step falls back to 0 for ad-hoc CLI runs.
+        step_suffix = f"_step{int(args.get('global_step') or 0)}"
+
         all_paths = []
         for view in self.render_views:
             view_idx = _VIEW_NAME_TO_IDX.get(view, 0)
-            view_suffix = "" if view == "sim_state" else f"_{view}"
+            view_suffix = step_suffix + ("" if view == "sim_state" else f"_{view}")
 
             # PufferEnv backend treats the creator as a single callable and
             # passes env_args/env_kwargs to it directly (not as per-env lists).
@@ -144,11 +151,13 @@ class MultiScenarioEvaluator(Evaluator):
 
         saved_cwd = os.getcwd()
         os.chdir(out_dir)
-        # Snapshot existing mp4s so we only return files written in this
-        # pass — out_dir is shared across epochs (and across views), so
-        # globbing the dir at the end would re-pick up every mp4 from prior
-        # render passes and make _log think we rendered far more than we did.
-        existing = set(out_dir.glob("*.mp4"))
+        # Filename pattern for this pass: each scenario writes
+        # `{scenario_id}_step{N}{view_suffix}.mp4`. Globbing by step suffix
+        # picks up only this-pass mp4s and ignores accumulated files from
+        # prior epochs that share the dir. Source of truth for the suffix
+        # is _render_pass (it set_video_suffix'd each env before calling
+        # us), so we read it back from any active env to keep them aligned.
+        step_glob = f"*_step{int(args.get('global_step') or 0)}*.mp4"
         try:
             state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
@@ -178,7 +187,7 @@ class MultiScenarioEvaluator(Evaluator):
         finally:
             os.chdir(saved_cwd)
 
-        return sorted(p for p in out_dir.glob("*.mp4") if p not in existing)
+        return sorted(out_dir.glob(step_glob))
 
 
 _VIEW_NAME_TO_IDX = {
