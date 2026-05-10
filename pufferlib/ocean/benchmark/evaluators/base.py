@@ -89,8 +89,6 @@ class Evaluator:
         infos_collected: list = []
         steps = 0
         while not self._should_stop(args, infos_collected, steps):
-            self._maybe_reset_lstm(state, steps, args)
-
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
@@ -99,8 +97,18 @@ class Evaluator:
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-            obs, _, _, _, infos = vecenv.step(action)
+            obs, _, terminals, truncations, infos = vecenv.step(action)
             infos_collected.extend(self._flatten_infos(infos))
+            # Mask LSTM state per-agent for envs that just terminated or
+            # truncated — those agents' next obs is from a fresh scenario
+            # and the recurrent memory of the previous one would bias
+            # the policy. Either signal alone means "episode over, env
+            # reset," so OR them.
+            if state:
+                done = np.asarray(terminals).astype(bool) | np.asarray(truncations).astype(bool)
+                mask = torch.as_tensor(~done, device=device, dtype=state["lstm_h"].dtype).reshape(-1, 1)
+                state["lstm_h"] *= mask
+                state["lstm_c"] *= mask
             steps += 1
 
         return self._aggregate_infos(infos_collected)
@@ -121,10 +129,6 @@ class Evaluator:
             lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
             lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
         )
-
-    def _maybe_reset_lstm(self, state, steps, args):
-        """Hook for resetting LSTM state mid-rollout. Default: no-op."""
-        pass
 
     def _should_stop(self, args, infos_collected, steps) -> bool:
         """Loop termination. Subclasses must override."""

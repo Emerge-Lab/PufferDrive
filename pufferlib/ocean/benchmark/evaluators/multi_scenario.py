@@ -19,17 +19,6 @@ class MultiScenarioEvaluator(Evaluator):
         env.update(self.config.get("env", {}))
         return env
 
-    def _maybe_reset_lstm(self, state, steps, args):
-        # Reset between scenarios — gigaflow's auto-resample fires at the
-        # end of scenario_length, so steps % scenario_length == 0 is the
-        # natural boundary. No-op when LSTM is unused.
-        if not state or steps == 0:
-            return
-        scenario_length = int(args["env"].get("scenario_length", 0))
-        if scenario_length > 0 and steps % scenario_length == 0:
-            state["lstm_h"].zero_()
-            state["lstm_c"].zero_()
-
     def _should_stop(self, args, infos_collected, steps) -> bool:
         target = int(self.config.get("eval", {}).get("num_scenarios", 1))
         return len(infos_collected) >= target

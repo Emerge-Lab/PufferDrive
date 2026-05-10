@@ -321,6 +321,62 @@ def test_behavior_class_cleanup_removes_symlink_dir(tmp_path):
     assert ev._sampled_dir is None
 
 
+def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
+    """Per-agent LSTM reset on terminations or truncations. Either signal
+    means 'episode over, env reset' — the agent's next obs is from a fresh
+    scenario and stale recurrent memory would bias the policy."""
+    import numpy as np
+    import torch
+
+    import pufferlib.pytorch
+    from pufferlib.ocean.benchmark.evaluators.base import Evaluator
+
+    state = {"lstm_h": torch.ones(4, 8), "lstm_c": torch.ones(4, 8)}
+
+    class _Ev(Evaluator):
+        type_name = "_lstm_done"
+
+        def _initial_reset(self, vecenv, args):
+            return vecenv.reset_obs
+
+        def _init_lstm_state(self, num_agents, policy, device, args):
+            return state
+
+        def _should_stop(self, args, infos_collected, steps):
+            return steps >= 1
+
+    class _Vec:
+        observation_space = type("S", (), {"shape": (4, 6)})()
+        action_space = type("A", (), {"shape": (4,), "low": -1.0, "high": 1.0})()
+        reset_obs = np.zeros((4, 6), dtype=np.float32)
+
+        def step(self, action):
+            # Agents 0,2 truncated; 1 terminated; 3 alive.
+            return self.reset_obs, np.zeros(4), np.array([0, 1, 0, 0]), np.array([1, 0, 1, 0]), []
+
+    class _Policy:
+        def forward_eval(self, ob, state):
+            return torch.zeros(ob.shape[0], 1), None
+
+    # Bypass sample_logits's distribution-shape gymnastics — return a
+    # placeholder action; we only care about the post-step state masking.
+    monkeypatch.setattr(
+        pufferlib.pytorch,
+        "sample_logits",
+        lambda logits, deterministic=True: (torch.zeros(4, dtype=torch.long), None, None),
+    )
+
+    args = {"train": {"device": "cpu", "use_rnn": True}}
+    _Ev("done_test", {}, args)._run_rollout_loop(_Vec(), _Policy(), args)
+
+    # Done agents (0, 1, 2) zeroed; alive agent (3) untouched.
+    assert state["lstm_h"][0].sum().item() == 0
+    assert state["lstm_h"][1].sum().item() == 0
+    assert state["lstm_h"][2].sum().item() == 0
+    assert state["lstm_h"][3].sum().item() == 8
+    assert state["lstm_c"][3].sum().item() == 8
+
+
 def test_rollout_records_eval_seconds():
     """Every rollout's metrics dict should include `eval_seconds` so wandb
     panels show wall-clock cost per evaluator."""
