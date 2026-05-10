@@ -188,10 +188,14 @@ class Evaluator:
         make_env = env_module.env_creator(args["env_name"])
 
         render_env_kwargs = self._render_env_overrides(args)
-        # Stamp the training step into the filename so successive epochs
-        # produce distinct mp4s and wandb's render carousel shows policy
-        # evolution. global_step falls back to 0 for ad-hoc CLI runs.
-        step_suffix = f"_step{int(args.get('global_step') or 0)}"
+        # Stamp epoch + training step into the filename so successive
+        # epochs produce distinct mp4s and wandb's render carousel shows
+        # policy evolution. Epoch is the human-readable index ("which
+        # checkpoint did this come from"); global_step is the precise
+        # env-step count. Both fall back to 0 for ad-hoc CLI runs.
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        step_suffix = f"_epoch{epoch}_step{global_step}"
 
         all_paths = []
         for view in self.render_views:

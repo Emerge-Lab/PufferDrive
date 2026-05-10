@@ -249,7 +249,7 @@ def test_maybe_run_dispatches_by_interval_and_enabled(monkeypatch):
 
     calls = []
 
-    def fake_run(ev, *, policy, env_name, logger, global_step):
+    def fake_run(ev, *, policy, env_name, logger, global_step, epoch):
         calls.append(ev.name)
         return EvalResult(metrics={})
 

@@ -107,31 +107,37 @@ class EvalManager:
                 continue
             if epoch % ev.interval != 0:
                 continue
-            res = self._run_one(ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step)
+            res = self._run_one(
+                ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step, epoch=epoch
+            )
             results[ev.name] = res
         return results
 
-    def run_one_by_name(self, name: str, policy, env_name: str, logger=None, global_step=None) -> EvalResult:
+    def run_one_by_name(
+        self, name: str, policy, env_name: str, logger=None, global_step=None, epoch=None
+    ) -> EvalResult:
         """Run a single named evaluator regardless of interval. Used for
         the subprocess CLI entry and for standalone `puffer eval --evaluator <name>`."""
         for ev in self.evaluators:
             if ev.name == name:
-                return self._run_one(ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step)
+                return self._run_one(
+                    ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step, epoch=epoch
+                )
         raise KeyError(f"No evaluator named '{name}'. Known: {[e.name for e in self.evaluators]}")
 
-    def _run_one(self, ev: Evaluator, policy, env_name: str, logger, global_step) -> EvalResult:
+    def _run_one(self, ev: Evaluator, policy, env_name: str, logger, global_step, epoch=None) -> EvalResult:
         if ev.mode == "subprocess":
-            res = self._run_subprocess(ev, env_name=env_name, global_step=global_step)
+            res = self._run_subprocess(ev, env_name=env_name, global_step=global_step, epoch=epoch)
         else:
-            res = self._run_inline(ev, policy=policy, env_name=env_name, global_step=global_step)
+            res = self._run_inline(ev, policy=policy, env_name=env_name, global_step=global_step, epoch=epoch)
         if logger is not None:
             self._log(ev, res, logger=logger, global_step=global_step)
         if hasattr(ev, "cleanup"):
             ev.cleanup()
         return res
 
-    def _run_inline(self, ev: Evaluator, policy, env_name: str, global_step) -> EvalResult:
-        args = self._build_eval_args(ev, env_name=env_name, global_step=global_step)
+    def _run_inline(self, ev: Evaluator, policy, env_name: str, global_step, epoch=None) -> EvalResult:
+        args = self._build_eval_args(ev, env_name=env_name, global_step=global_step, epoch=epoch)
 
         package = args.get("package", "ocean")
         module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -169,12 +175,12 @@ class EvalManager:
             vecenv.close()
         return res
 
-    def _run_subprocess(self, ev: Evaluator, env_name: str, global_step) -> EvalResult:
+    def _run_subprocess(self, ev: Evaluator, env_name: str, global_step, epoch=None) -> EvalResult:
         out_path = Path(self.train_config.get("data_dir", ".")) / "eval_subprocess_out" / f"{ev.name}.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path = out_path.with_suffix(".cfg.json")
         with open(cfg_path, "w") as f:
-            json.dump({"name": ev.name, "global_step": global_step}, f)
+            json.dump({"name": ev.name, "global_step": global_step, "epoch": epoch}, f)
 
         cmd = [
             sys.executable,
@@ -198,13 +204,14 @@ class EvalManager:
             payload = json.load(f)
         return EvalResult(metrics=payload.get("metrics", {}), frames=payload.get("frames", []))
 
-    def _build_eval_args(self, ev: Evaluator, env_name: str, global_step) -> dict:
+    def _build_eval_args(self, ev: Evaluator, env_name: str, global_step, epoch=None) -> dict:
         args = copy.deepcopy(self.train_config)
         args["env"].update(ev.env_overrides())
         args.setdefault("vec", {})
         args["vec"].update(ev.vec_overrides())
         args["env_name"] = env_name
         args["global_step"] = global_step
+        args["epoch"] = epoch
         args["seed"] = int(self.train_config.get("train", {}).get("seed", 42)) or 42
         # Pass through evaluator-private fields that subclasses look up on args.
         ev_eval = ev.config.get("eval", {})
