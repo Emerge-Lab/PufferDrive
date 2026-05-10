@@ -141,7 +141,11 @@ class MultiScenarioEvaluator(Evaluator):
         eval_cfg = self.config.get("eval", {})
         metric_count = int(eval_cfg.get("num_scenarios", 1))
         num_scenarios = int(eval_cfg.get("render_num_scenarios", min(metric_count, 3)))
-        max_steps = args.get("render_max_steps") or int(args["env"].get("scenario_length", 91))
+        # Render-clip length: independent of scenario_length (which is the
+        # metric-pass length). At 30 fps, 91 steps = ~3s mp4. Per-step EGL
+        # render is the bottleneck (~3 fps wall-clock at 1080p), so keeping
+        # this small directly bounds the render-pass runtime.
+        max_steps = int(args.get("eval", {}).get("render_max_steps", 91))
 
         saved_cwd = os.getcwd()
         os.chdir(out_dir)
