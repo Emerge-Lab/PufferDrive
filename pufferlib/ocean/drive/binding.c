@@ -1788,7 +1788,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->init_mode = (int)unpack(kwargs, "init_mode");
     env->control_mode = (int)unpack(kwargs, "control_mode");
     env->simulation_mode = (int)unpack(kwargs, "simulation_mode");
-    env->goal_advance_mode = (int)unpack(kwargs, "goal_advance_mode");
     env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");

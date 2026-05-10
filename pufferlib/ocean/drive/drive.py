@@ -57,7 +57,6 @@ class Drive(pufferlib.PufferEnv):
         action_type="discrete",
         dynamics_model="classic",
         simulation_mode="gigaflow",
-        goal_advance_mode=None,
         termination_mode=0,
         inactive_agent_threshold=0.4,
         buf=None,
@@ -230,19 +229,6 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
 
-        # goal_advance_mode controls what happens when the SDC reaches the
-        # last goal in its sequence. None → auto-pick based on simulation_mode
-        # (gigaflow=regenerate, replay=saturate). Explicit values: "regenerate"
-        # or "saturate".
-        if goal_advance_mode is None:
-            self.goal_advance_mode = 1 if self.simulation_mode == 1 else 0
-        elif goal_advance_mode == "regenerate":
-            self.goal_advance_mode = 0
-        elif goal_advance_mode == "saturate":
-            self.goal_advance_mode = 1
-        else:
-            raise ValueError(f"goal_advance_mode must be one of 'regenerate' or 'saturate'. Got: {goal_advance_mode}")
-
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
         elif self.control_mode_str == "control_agents":
@@ -401,7 +387,6 @@ class Drive(pufferlib.PufferEnv):
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "simulation_mode": self.simulation_mode,
-            "goal_advance_mode": self.goal_advance_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
             "compute_eval_metrics": self.compute_eval_metrics,

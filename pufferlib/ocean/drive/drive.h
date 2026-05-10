@@ -64,16 +64,6 @@
 #define SIMULATION_GIGAFLOW 0
 #define SIMULATION_REPLAY 1
 
-// Goal advance modes — chosen when the SDC reaches the last goal in its
-// sequence. REGENERATE recomputes a fresh set along the route (the
-// gigaflow training pattern). SATURATE leaves the goal queue at its
-// final state so the reached-goal condition won't fire again (the
-// replay-mode pattern, where regenerating would dereference NULL paths
-// for nuPlan bins without route info). Defaults to REGENERATE for
-// gigaflow and SATURATE for replay; the Python config layer chooses.
-#define GOAL_ADVANCE_REGENERATE 0
-#define GOAL_ADVANCE_SATURATE 1
-
 // Lane selection scoring
 #define LANE_SELECTION_DISTANCE_WEIGHT 0.7f
 #define LANE_SELECTION_HEADING_WEIGHT 0.3f
@@ -346,7 +336,6 @@ struct Drive {
     int init_mode;
     int control_mode;
     int simulation_mode;
-    int goal_advance_mode;
     int termination_mode;
     float inactive_agent_threshold;
     int reward_conditioning;
@@ -4877,11 +4866,10 @@ void c_step(Drive *env) {
             if (agent->current_goal_idx == env->num_target_waypoints) {
                 // Last goal reached
                 env->logs[i].num_goals_reached += 1;
-                if (env->goal_advance_mode == GOAL_ADVANCE_SATURATE) {
-                    // Leave current_goal_idx saturated so the reached-goal
-                    // condition won't fire again. Used by replay evals where
-                    // regenerating route-based goals on WOMD/nuPlan bins
-                    // would fail (path NULL or removed=1).
+                if (env->simulation_mode == SIMULATION_REPLAY) {
+                    // Replay mode: leave current_goal_idx saturated so the
+                    // reached-goal condition won't fire again. Re-generating
+                    // route-based goals on WOMD maps fails (removed=1).
                 } else {
                     compute_goals(env, agent_idx);
                 }
