@@ -175,7 +175,11 @@ class Evaluator:
 
         import pufferlib
 
-        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "mp4"
+        # Per-evaluator subdir so each evaluator's mp4s don't get re-globbed
+        # by the next evaluator's _render_view (every evaluator runs at the
+        # same global_step, so a shared dir + step glob would collect every
+        # earlier evaluator's mp4s into this one's result.frames).
+        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "mp4" / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         package = args.get("package", "ocean")
