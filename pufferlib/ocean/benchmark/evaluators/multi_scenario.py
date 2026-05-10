@@ -60,11 +60,19 @@ class MultiScenarioEvaluator(Evaluator):
     def _render_pass(self, vecenv, policy, args) -> list:
         """One rollout per view, all writing mp4s to a single dir.
 
-        Builds a fresh single-worker env so frame capture is sequential
-        and starting_map_counter starts at 0 — the C-side ffmpeg-per-env
-        wiring assumes one bin at a time per process.
+        Builds a fresh single-worker env per view (C-side ffmpeg-per-env
+        wiring assumes one bin at a time per process). Render budget and
+        starting position are independent of the metric pass:
+
+          eval.render_num_scenarios — how many scenarios to render. Defaults
+              to min(eval.num_scenarios, 3). Always respected over
+              num_scenarios so renders stay cheap.
+          starting_map — randomized per render epoch so successive epochs
+              show different scenarios from the dir, not the same first-N
+              alphabetically. Set explicitly in env.* to pin.
         """
         import importlib
+        import random
 
         import pufferlib
 
@@ -83,6 +91,15 @@ class MultiScenarioEvaluator(Evaluator):
 
         render_env_kwargs = dict(args["env"])
         render_env_kwargs["render_mode"] = "headless"
+
+        # Random starting map per render epoch — every epoch shows a
+        # different bin from the directory rather than the first N
+        # alphabetically. The user can pin by setting env.starting_map
+        # explicitly in the [eval.<name>] section.
+        if "starting_map" not in self.config.get("env", {}):
+            num_maps = int(render_env_kwargs.get("num_maps", 1))
+            if num_maps > 1:
+                render_env_kwargs["starting_map"] = random.randint(0, num_maps - 1)
 
         all_paths = []
         for view in self.render_views:
@@ -116,7 +133,12 @@ class MultiScenarioEvaluator(Evaluator):
 
         device = args["train"]["device"]
         num_agents = vecenv.observation_space.shape[0]
-        num_scenarios = int(self.config.get("eval", {}).get("num_scenarios", 1))
+        # Render budget defaults to min(num_scenarios, 3) if not set explicitly.
+        # Renders are expensive (mp4 encode + wandb upload) so we don't want
+        # them at metric-pass scale.
+        eval_cfg = self.config.get("eval", {})
+        metric_count = int(eval_cfg.get("num_scenarios", 1))
+        num_scenarios = int(eval_cfg.get("render_num_scenarios", min(metric_count, 3)))
         max_steps = args.get("render_max_steps") or int(args["env"].get("scenario_length", 91))
 
         saved_cwd = os.getcwd()

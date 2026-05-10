@@ -136,6 +136,26 @@ def test_manager_from_config_skips_template_sections():
     assert "behaviors_defaults" not in names  # template, no `type` field
 
 
+def test_render_num_scenarios_inheritable():
+    # Behavior-style template specifies a small render budget; the per-class
+    # section inherits it without re-declaring.
+    sections = {
+        "defaults": {
+            "type": "behavior_class",
+            "interval": 250,
+            "eval.num_scenarios": 50,
+            "eval.render_num_scenarios": 2,
+        },
+        "hard_stop": {
+            "inherits": "defaults",
+            "env.map_dir": "/tmp/hard_stop",
+        },
+    }
+    cfg = _build_section_config("hard_stop", sections["hard_stop"], sections)
+    assert cfg["eval"]["num_scenarios"] == 50
+    assert cfg["eval"]["render_num_scenarios"] == 2
+
+
 def test_manager_unknown_type_raises():
     train_config = {"eval": {"foo": {"type": "totally_made_up"}}}
     with pytest.raises(ValueError, match="not registered"):
