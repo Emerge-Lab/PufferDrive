@@ -20,6 +20,7 @@ Sections without a `type` field are templates (only usable via `inherits`).
 """
 
 import copy
+import glob
 import importlib
 import json
 import os
@@ -45,12 +46,15 @@ CLEAN_EVAL_OVERRIDES = {
 
 
 class EvalManager:
-    def __init__(self, evaluators: list, train_config: dict):
+    def __init__(self, evaluators: list, train_config: dict, run_id: str = None):
         self.evaluators = evaluators
         self.train_config = train_config
+        # `run_id` is needed to resolve the latest checkpoint for subprocess
+        # evals. None is fine if no evaluator is mode=subprocess.
+        self.run_id = run_id
 
     @classmethod
-    def from_config(cls, train_config: dict) -> "EvalManager":
+    def from_config(cls, train_config: dict, run_id: str = None) -> "EvalManager":
         sections = _discover_eval_sections(train_config)
         evaluators = []
         for name, raw in sections.items():
@@ -66,7 +70,31 @@ class EvalManager:
                     f"Known types: {sorted(EVALUATOR_REGISTRY.keys())}"
                 )
             evaluators.append(cls_for_type(name=name, config=cfg, train_config=train_config))
-        return cls(evaluators=evaluators, train_config=train_config)
+        return cls(evaluators=evaluators, train_config=train_config, run_id=run_id)
+
+    def has_subprocess_evals_at(self, epoch: int) -> bool:
+        """True if any enabled subprocess evaluator would fire at this epoch.
+        Training loop uses this to decide whether to save_checkpoint() before
+        calling maybe_run() — subprocesses load the checkpoint from disk."""
+        for ev in self.evaluators:
+            if not ev.enabled or ev.mode != "subprocess" or ev.interval <= 0:
+                continue
+            if epoch % ev.interval == 0:
+                return True
+        return False
+
+    def latest_checkpoint(self, env_name: str) -> str:
+        """Return the path to the most recent model_*.pt under the experiment
+        dir. Falls back to train_config['load_model_path'] if no checkpoints
+        have been written yet (e.g. resume-from path before first save).
+        Returns None if neither resolves."""
+        if self.run_id and self.train_config.get("data_dir"):
+            model_dir = os.path.join(self.train_config["data_dir"], f"{env_name}_{self.run_id}", "models")
+            if os.path.isdir(model_dir):
+                files = glob.glob(os.path.join(model_dir, "model_*.pt"))
+                if files:
+                    return max(files, key=os.path.getctime)
+        return self.train_config.get("load_model_path")
 
     def maybe_run(self, epoch: int, policy, env_name: str, logger=None, global_step=None) -> dict:
         """Called from the training loop. Runs every enabled evaluator
@@ -147,9 +175,12 @@ class EvalManager:
             "--out",
             str(out_path),
         ]
-        # Subprocess inherits the same checkpoint via train_config.load_model_path.
-        if self.train_config.get("load_model_path"):
-            cmd += ["--load-model-path", self.train_config["load_model_path"]]
+        # Subprocess loads the freshest checkpoint on disk. Caller (training
+        # loop) is responsible for save_checkpoint() before this fires —
+        # see has_subprocess_evals_at.
+        ckpt = self.latest_checkpoint(env_name)
+        if ckpt:
+            cmd += ["--load-model-path", ckpt]
         subprocess.run(cmd, check=True)
         with open(out_path) as f:
             payload = json.load(f)

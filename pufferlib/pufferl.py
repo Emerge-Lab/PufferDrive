@@ -462,6 +462,11 @@ class PuffeRL:
         # the manager fires any whose interval divides this epoch. See
         # docs/eval_unification.md for the design.
         if self._eval_manager is not None:
+            # Subprocess evals load the policy from disk. Save the latest
+            # checkpoint first so they see this epoch's weights, not the
+            # last save_checkpoint() from `checkpoint_interval`.
+            if self._eval_manager.has_subprocess_evals_at(self.epoch):
+                self.save_checkpoint()
             self._eval_manager.maybe_run(
                 epoch=self.epoch,
                 policy=self.uncompiled_policy,
@@ -1376,7 +1381,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     from pufferlib.ocean.benchmark.manager import EvalManager
 
-    pufferl._eval_manager = EvalManager.from_config(args)
+    pufferl._eval_manager = EvalManager.from_config(args, run_id=logger.run_id if logger else None)
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt

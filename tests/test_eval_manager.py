@@ -160,3 +160,49 @@ def test_manager_unknown_type_raises():
     train_config = {"eval": {"foo": {"type": "totally_made_up"}}}
     with pytest.raises(ValueError, match="not registered"):
         EvalManager.from_config(train_config)
+
+
+def test_has_subprocess_evals_at():
+    train_config = {
+        "eval": {
+            "inline_one": {"type": "human_replay", "interval": 25, "mode": "inline"},
+            "subprocess_one": {"type": "human_replay", "interval": 100, "mode": "subprocess"},
+            "subprocess_disabled": {
+                "type": "human_replay",
+                "interval": 100,
+                "mode": "subprocess",
+                "enabled": False,
+            },
+        }
+    }
+    mgr = EvalManager.from_config(train_config)
+    assert mgr.has_subprocess_evals_at(epoch=100) is True  # subprocess_one fires
+    assert mgr.has_subprocess_evals_at(epoch=25) is False  # only inline at 25
+    assert mgr.has_subprocess_evals_at(epoch=50) is False  # nothing at 50
+
+
+def test_latest_checkpoint_finds_newest_pt(tmp_path):
+    import time
+
+    model_dir = tmp_path / "puffer_drive_run123" / "models"
+    model_dir.mkdir(parents=True)
+    p_old = model_dir / "model_puffer_drive_001.pt"
+    p_old.write_text("a")
+    time.sleep(0.05)
+    p_new = model_dir / "model_puffer_drive_002.pt"
+    p_new.write_text("b")
+
+    train_config = {"data_dir": str(tmp_path), "eval": {}}
+    mgr = EvalManager.from_config(train_config, run_id="run123")
+    assert mgr.latest_checkpoint("puffer_drive") == str(p_new)
+
+
+def test_latest_checkpoint_falls_back_to_load_model_path(tmp_path):
+    train_config = {
+        "data_dir": str(tmp_path),
+        "load_model_path": "/some/resume/path.pt",
+        "eval": {},
+    }
+    mgr = EvalManager.from_config(train_config, run_id="run123")
+    # No models dir exists → falls back to load_model_path
+    assert mgr.latest_checkpoint("puffer_drive") == "/some/resume/path.pt"
