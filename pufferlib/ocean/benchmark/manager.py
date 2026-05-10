@@ -281,7 +281,13 @@ def _build_section_config(name: str, raw: dict, all_sections: dict) -> dict:
 
     merged = {}
     for level in reversed(chain):
-        _deep_merge(merged, _expand_dotted(level))
+        # Deepcopy each level before merging — _deep_merge recurses into
+        # nested dicts in `merged` and mutates them in place. Without the
+        # copy, `merged["env"]` would alias the parent section's env dict;
+        # the child merge would mutate the parent in place, and every
+        # subsequent evaluator that inherits from the same parent would
+        # see the last-processed child's overrides instead of its own.
+        _deep_merge(merged, _expand_dotted(copy.deepcopy(level)))
 
     if merged.get("clean", True):
         env_section = merged.setdefault("env", {})

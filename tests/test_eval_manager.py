@@ -80,6 +80,27 @@ def test_inheritance_child_wins():
     assert cfg["env"]["scenario_length"] == 91
 
 
+def test_inheritance_does_not_alias_parent_env():
+    """Regression: _build_section_config used to merge by reference and mutate
+    the shared parent's env dict, so processing N siblings that all override
+    env.map_dir would leave every sibling reporting the LAST-processed sibling's
+    map_dir (the parent's env was mutated in place)."""
+    sections = {
+        "defaults": {"env.scenario_length": 201, "interval": 5},
+        "child_a": {"inherits": "defaults", "env.map_dir": "/path/a"},
+        "child_b": {"inherits": "defaults", "env.map_dir": "/path/b"},
+        "child_c": {"inherits": "defaults", "env.map_dir": "/path/c"},
+    }
+    cfg_a = _build_section_config("child_a", sections["child_a"], sections)
+    cfg_b = _build_section_config("child_b", sections["child_b"], sections)
+    cfg_c = _build_section_config("child_c", sections["child_c"], sections)
+    assert cfg_a["env"]["map_dir"] == "/path/a"
+    assert cfg_b["env"]["map_dir"] == "/path/b"
+    assert cfg_c["env"]["map_dir"] == "/path/c"
+    # The parent must remain untouched, even after building all children.
+    assert "map_dir" not in sections["defaults"].get("env", {})
+
+
 def test_inheritance_cycle_detected():
     sections = {
         "a": {"inherits": "b"},
