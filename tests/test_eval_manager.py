@@ -305,6 +305,35 @@ def test_maybe_run_dispatches_by_interval_and_enabled(monkeypatch):
     assert calls == [], "nothing fires when no interval divides the epoch"
 
 
+def test_maybe_run_isolates_evaluator_failures(monkeypatch, capsys):
+    """One failing evaluator must not skip the rest. The failure is printed
+    visibly (traceback to stdout) and the loop continues with subsequent
+    evaluators; the returned dict has entries only for those that succeeded."""
+    train_config = {
+        "eval": {
+            "good_a": {"type": "human_replay", "interval": 5},
+            "bad_middle": {"type": "human_replay", "interval": 5},
+            "good_b": {"type": "human_replay", "interval": 5},
+        }
+    }
+    mgr = EvalManager.from_config(train_config)
+
+    def fake_run(ev, *, policy, env_name, logger, global_step, epoch):
+        if ev.name == "bad_middle":
+            raise RuntimeError("synthetic eval failure")
+        return EvalResult(metrics={"ok": 1.0})
+
+    monkeypatch.setattr(mgr, "_run_one", fake_run)
+    results = mgr.maybe_run(epoch=5, policy=None, env_name="puffer_drive")
+
+    # Successful evaluators land in results; the failed one is absent.
+    assert set(results.keys()) == {"good_a", "good_b"}
+    # The failure was loud — header in stdout, traceback in stderr.
+    captured = capsys.readouterr()
+    assert "bad_middle" in captured.out
+    assert "synthetic eval failure" in captured.err
+
+
 def test_flatten_infos_handles_shape_variations():
     """_flatten_infos must accept both list-of-list (multi-worker) and
     flat-list (PufferEnv) info shapes, plus None / empty entries."""

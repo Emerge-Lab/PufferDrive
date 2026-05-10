@@ -98,7 +98,15 @@ class EvalManager:
 
     def maybe_run(self, epoch: int, policy, env_name: str, logger=None, global_step=None) -> dict:
         """Called from the training loop. Runs every enabled evaluator
-        whose `interval` divides `epoch`. Returns a dict of {eval_name → metrics}."""
+        whose `interval` divides `epoch`. Returns a dict of {eval_name → metrics}.
+
+        One evaluator's failure (e.g., a missing bin dir for a single
+        behavior class) doesn't skip the rest — the error is printed in
+        full and the loop moves on. Errors stay loud (traceback + clear
+        prefix) but the eval batch isn't all-or-nothing.
+        """
+        import traceback
+
         results = {}
         for ev in self.evaluators:
             if not ev.enabled:
@@ -107,10 +115,14 @@ class EvalManager:
                 continue
             if epoch % ev.interval != 0:
                 continue
-            res = self._run_one(
-                ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step, epoch=epoch
-            )
-            results[ev.name] = res
+            try:
+                res = self._run_one(
+                    ev, policy=policy, env_name=env_name, logger=logger, global_step=global_step, epoch=epoch
+                )
+                results[ev.name] = res
+            except Exception:
+                print(f"\n[EvalManager] Evaluator '{ev.name}' raised at epoch {epoch}; continuing with the rest:")
+                traceback.print_exc()
         return results
 
     def run_one_by_name(
@@ -178,9 +190,6 @@ class EvalManager:
     def _run_subprocess(self, ev: Evaluator, env_name: str, global_step, epoch=None) -> EvalResult:
         out_path = Path(self.train_config.get("data_dir", ".")) / "eval_subprocess_out" / f"{ev.name}.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path = out_path.with_suffix(".cfg.json")
-        with open(cfg_path, "w") as f:
-            json.dump({"name": ev.name, "global_step": global_step, "epoch": epoch}, f)
 
         cmd = [
             sys.executable,
@@ -193,6 +202,13 @@ class EvalManager:
             "--out",
             str(out_path),
         ]
+        # global_step and epoch flow through the CLI so the subprocess's
+        # render path can stamp them into mp4 filenames (otherwise every
+        # epoch's renders collide as `_epoch0_step0.mp4`).
+        if global_step is not None:
+            cmd += ["--global-step", str(int(global_step))]
+        if epoch is not None:
+            cmd += ["--epoch", str(int(epoch))]
         # Subprocess loads the freshest checkpoint on disk. Caller (training
         # loop) is responsible for save_checkpoint() before this fires —
         # see has_subprocess_evals_at.

@@ -1467,7 +1467,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
-def eval(env_name, args=None, vecenv=None, policy=None, evaluator_name=None, out_path=None):
+def eval(
+    env_name,
+    args=None,
+    vecenv=None,
+    policy=None,
+    evaluator_name=None,
+    out_path=None,
+    global_step=None,
+    epoch=None,
+):
     """Run a single named evaluator from drive.ini.
 
     Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
@@ -1476,7 +1485,10 @@ def eval(env_name, args=None, vecenv=None, policy=None, evaluator_name=None, out
 
     Subprocess form: `--out <json>` writes the result dict to a JSON file
     so the parent EvalManager can read structured metrics back without
-    parsing stdout.
+    parsing stdout. `--global-step` and `--epoch` flow through so render
+    mp4 filenames carry the right `_epoch{E}_step{N}` tag (otherwise
+    every subprocess invocation would write `_epoch0_step0.mp4` and
+    successive epochs would silently overwrite each other on disk).
     """
     from pufferlib.ocean.benchmark.manager import EvalManager
 
@@ -1510,7 +1522,8 @@ def eval(env_name, args=None, vecenv=None, policy=None, evaluator_name=None, out
         policy=policy,
         env_name=env_name,
         logger=None,
-        global_step=args.get("global_step"),
+        global_step=global_step,
+        epoch=epoch,
     )
 
     print("EVAL_RESULT_JSON_START")
@@ -1853,9 +1866,13 @@ def main():
     if mode == "train":
         train(env_name=env_name)
     elif mode == "eval":
-        # Pull --evaluator and --out from argv before load_config consumes them.
+        # Pull eval-specific argv before load_config consumes them. These
+        # aren't registered as configparser-style dotted keys because
+        # they're per-invocation, not per-config-section.
         evaluator_name = None
         out_path = None
+        global_step = None
+        epoch = None
         i = 0
         while i < len(sys.argv):
             arg = sys.argv[i]
@@ -1867,8 +1884,22 @@ def main():
                 out_path = sys.argv[i + 1]
                 del sys.argv[i : i + 2]
                 continue
+            if arg == "--global-step" and i + 1 < len(sys.argv):
+                global_step = int(sys.argv[i + 1])
+                del sys.argv[i : i + 2]
+                continue
+            if arg == "--epoch" and i + 1 < len(sys.argv):
+                epoch = int(sys.argv[i + 1])
+                del sys.argv[i : i + 2]
+                continue
             i += 1
-        eval(env_name=env_name, evaluator_name=evaluator_name, out_path=out_path)
+        eval(
+            env_name=env_name,
+            evaluator_name=evaluator_name,
+            out_path=out_path,
+            global_step=global_step,
+            epoch=epoch,
+        )
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
