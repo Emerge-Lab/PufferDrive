@@ -1,8 +1,9 @@
-"""Smoke tests for EvalManager config parsing.
+"""Smoke tests for EvalManager config parsing + dispatch.
 
 Doesn't load the full pufferl.py module (which pulls heavy training deps).
-Just verifies the inheritance + clean macro + dotted-key expansion logic
-behaves as the design doc says.
+Verifies parser correctness, dispatch gating, info-flattening shape
+handling, behavior-class symlink cleanup, and the train/section/macro
+override resolution stack.
 """
 
 import os
@@ -12,6 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pufferlib.ocean.benchmark.evaluators import EvalResult, Evaluator
+from pufferlib.ocean.benchmark.evaluators.behavior_class import BehaviorClassEvaluator
 from pufferlib.ocean.benchmark.manager import (
     CLEAN_EVAL_OVERRIDES,
     EvalManager,
@@ -206,3 +209,122 @@ def test_latest_checkpoint_falls_back_to_load_model_path(tmp_path):
     mgr = EvalManager.from_config(train_config, run_id="run123")
     # No models dir exists → falls back to load_model_path
     assert mgr.latest_checkpoint("puffer_drive") == "/some/resume/path.pt"
+
+
+# -- Tier A: dispatch + invariants -----------------------------------------
+
+
+def test_maybe_run_dispatches_by_interval_and_enabled(monkeypatch):
+    """maybe_run should fire only enabled evaluators whose interval divides epoch."""
+    train_config = {
+        "eval": {
+            "fires_at_25": {"type": "human_replay", "interval": 25},
+            "fires_at_250": {"type": "human_replay", "interval": 250},
+            "disabled": {"type": "human_replay", "interval": 25, "enabled": False},
+            "zero_interval": {"type": "human_replay", "interval": 0},
+        }
+    }
+    mgr = EvalManager.from_config(train_config)
+
+    calls = []
+
+    def fake_run(ev, *, policy, env_name, logger, global_step):
+        calls.append(ev.name)
+        return EvalResult(metrics={})
+
+    monkeypatch.setattr(mgr, "_run_one", fake_run)
+
+    mgr.maybe_run(epoch=25, policy=None, env_name="puffer_drive")
+    assert calls == ["fires_at_25"], "only the 25-interval evaluator fires at epoch 25"
+    calls.clear()
+
+    mgr.maybe_run(epoch=250, policy=None, env_name="puffer_drive")
+    assert sorted(calls) == ["fires_at_25", "fires_at_250"], "both fire at epoch 250"
+    calls.clear()
+
+    mgr.maybe_run(epoch=50, policy=None, env_name="puffer_drive")
+    assert calls == ["fires_at_25"], "only fires_at_25 at epoch 50; nothing else"
+    calls.clear()
+
+    mgr.maybe_run(epoch=33, policy=None, env_name="puffer_drive")
+    assert calls == [], "nothing fires when no interval divides the epoch"
+
+
+def test_flatten_infos_handles_shape_variations():
+    """_flatten_infos must accept both list-of-list (multi-worker) and
+    flat-list (PufferEnv) info shapes, plus None / empty entries."""
+
+    class _Stub(Evaluator):
+        type_name = "_stub_flatten"
+
+        def _should_stop(self, *args, **kwargs):
+            return True
+
+    s = _Stub("test", {}, {})
+    assert s._flatten_infos(None) == []
+    assert s._flatten_infos([]) == []
+    assert s._flatten_infos([None, None]) == []
+    assert s._flatten_infos([[], []]) == []
+
+    d1, d2, d3 = {"a": 1}, {"b": 2}, {"c": 3}
+    # Multi-worker backend: list of per-worker info lists
+    assert s._flatten_infos([[d1], [d2]]) == [d1, d2]
+    assert s._flatten_infos([[d1, d2], [d3]]) == [d1, d2, d3]
+    # PufferEnv backend: flat list of info dicts
+    assert s._flatten_infos([d1, d2]) == [d1, d2]
+
+
+def test_behavior_class_cleanup_removes_symlink_dir(tmp_path):
+    """BehaviorClassEvaluator builds a tmp symlink dir when sampling.
+    cleanup() must remove it; otherwise we accumulate leftovers."""
+    map_dir = tmp_path / "bins"
+    map_dir.mkdir()
+    for i in range(5):
+        (map_dir / f"map_{i}.bin").write_text("a")
+
+    config = {
+        "type": "behavior_class",
+        "env": {"map_dir": str(map_dir)},
+        "eval": {"num_scenarios": 2},
+    }
+    ev = BehaviorClassEvaluator("test_class", config, train_config={})
+
+    overrides = ev.env_overrides()
+    sampled = overrides["map_dir"]
+    assert sampled != str(map_dir), "sampling should redirect to a tmp dir"
+    assert os.path.isdir(sampled)
+    assert len([f for f in os.listdir(sampled) if f.endswith(".bin")]) == 2
+
+    ev.cleanup()
+    assert not os.path.exists(sampled), "tmp dir should be gone after cleanup"
+    assert ev._sampled_dir is None
+
+
+def test_eval_args_compose_train_section_and_clean_macro():
+    """_build_eval_args must fold train_config['env'] (baseline) +
+    section overrides + clean macro correctly. Section beats baseline,
+    explicit beats clean macro, baseline survives when not overridden."""
+    train_config = {
+        "env": {
+            "lane_segment_dropout": 0.5,  # training perturbation
+            "scenario_length": 91,
+            "num_agents": 1024,  # only present in train baseline
+        },
+        "train": {"seed": 42, "device": "cpu"},
+        "eval": {
+            "validation": {
+                "type": "multi_scenario",
+                "interval": 25,
+                "env.scenario_length": 201,  # section overrides baseline
+                # clean=true (default) → lane_segment_dropout zeroed by macro
+                # num_agents not specified → falls through to train baseline
+            },
+        },
+    }
+    mgr = EvalManager.from_config(train_config)
+    ev = mgr.evaluators[0]
+    args = mgr._build_eval_args(ev, env_name="puffer_drive", global_step=0)
+
+    assert args["env"]["scenario_length"] == 201, "section override wins"
+    assert args["env"]["lane_segment_dropout"] == 0.0, "clean macro applied"
+    assert args["env"]["num_agents"] == 1024, "train baseline preserved"
