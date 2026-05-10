@@ -106,14 +106,16 @@ class MultiScenarioEvaluator(Evaluator):
             view_idx = _VIEW_NAME_TO_IDX.get(view, 0)
             view_suffix = "" if view == "sim_state" else f"_{view}"
 
+            # PufferEnv backend treats the creator as a single callable and
+            # passes env_args/env_kwargs to it directly (not as per-env lists).
+            # The Multiprocessing/Serial backends expect lists; we don't use
+            # those here because EGL render assumes one ffmpeg pipe per env.
             vec = pufferlib.vector.make(
-                [make_env],
-                env_args=[[]],
-                env_kwargs=[render_env_kwargs],
+                make_env,
+                env_args=[],
+                env_kwargs=render_env_kwargs,
                 backend="PufferEnv",
                 num_envs=1,
-                num_workers=1,
-                batch_size=1,
             )
             target = vec if not hasattr(vec, "envs") else vec.envs[0]
             internal = getattr(target, "num_envs", 1)
