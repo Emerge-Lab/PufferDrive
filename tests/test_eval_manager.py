@@ -523,3 +523,191 @@ def test_eval_args_compose_train_section_and_clean_macro():
     assert args["env"]["scenario_length"] == 201, "section override wins"
     assert args["env"]["lane_segment_dropout"] == 0.0, "clean macro applied"
     assert args["env"]["num_agents"] == 1024, "train baseline preserved"
+
+
+def test_run_subprocess_passes_step_epoch_and_reads_back_result(tmp_path, monkeypatch):
+    """End-to-end contract of _run_subprocess:
+      - cmd line includes --global-step, --epoch, --evaluator, --out,
+        and --load-model-path when latest_checkpoint resolves.
+      - After the fake subprocess writes the result JSON to --out,
+        the parent reads it back into an EvalResult with the right
+        metrics + frames.
+
+    Mocks subprocess.run so the test doesn't actually launch python.
+    """
+    import json
+    import subprocess
+
+    train_config = {
+        "data_dir": str(tmp_path),
+        "load_model_path": "/fake/checkpoint.pt",
+        "eval": {"my_sub": {"type": "human_replay", "interval": 5, "mode": "subprocess"}},
+    }
+    mgr = EvalManager.from_config(train_config, run_id="run123")
+    ev = mgr.evaluators[0]
+
+    seen = {}
+
+    def fake_run(cmd, check):
+        seen["cmd"] = list(cmd)
+        # Locate --out and write the canonical subprocess payload there
+        # so the parent can read it back.
+        i = cmd.index("--out")
+        out_path = cmd[i + 1]
+        with open(out_path, "w") as f:
+            json.dump(
+                {
+                    "name": "my_sub",
+                    "metrics": {"collision_rate": 0.123},
+                    "frames": ["/fake/Town01_epoch7_step1234.mp4"],
+                },
+                f,
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = mgr._run_subprocess(ev, env_name="puffer_drive", global_step=1234, epoch=7)
+
+    # cmd carries the per-invocation knobs that used to be silently dropped.
+    cmd = seen["cmd"]
+    assert "--evaluator" in cmd and cmd[cmd.index("--evaluator") + 1] == "my_sub"
+    assert "--global-step" in cmd and cmd[cmd.index("--global-step") + 1] == "1234"
+    assert "--epoch" in cmd and cmd[cmd.index("--epoch") + 1] == "7"
+    assert "--out" in cmd
+    assert "--load-model-path" in cmd and cmd[cmd.index("--load-model-path") + 1] == "/fake/checkpoint.pt"
+    # The result JSON written by the subprocess round-trips into EvalResult.
+    assert res.metrics == {"collision_rate": 0.123}
+    assert res.frames == ["/fake/Town01_epoch7_step1234.mp4"]
+
+
+def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
+    """Render output isolation:
+      - Each evaluator writes to its own `mp4/<ev_name>/` subdir.
+      - Filenames carry `_epoch{E}_step{N}` from args.
+      - Returned paths are filtered by the step suffix, so mp4s left over
+        from a prior epoch (same dir, different step) don't bleed into
+        this pass's result.frames.
+
+    Mocks the env construction + render so we can control the filenames
+    the fake env produces.
+    """
+    import pufferlib.vector
+    from pufferlib.ocean.benchmark.evaluators.base import Evaluator
+
+    suffixes_set = []
+
+    class _FakeTarget:
+        num_envs = 2
+
+        def set_video_suffix(self, suffix, env_idx):
+            suffixes_set.append((env_idx, suffix))
+
+        def render(self, env_idx, view_mode):
+            # Write a stub mp4 named like the real C-side would. The "bin
+            # scenario_id" is faked as scene_{env_idx} for testability.
+            from pathlib import Path
+
+            view_part = "" if view_mode == 0 else "_bev"
+            stem = f"scene_{env_idx}_epoch7_step1234{view_part}"
+            (Path.cwd() / f"{stem}.mp4").write_bytes(b"\x00")
+
+        def close_client(self, env_idx):
+            pass
+
+    class _FakeVec:
+        observation_space = type("S", (), {"shape": (2, 4)})()
+        action_space = type("A", (), {"shape": (2,), "low": -1.0, "high": 1.0})()
+
+        def reset(self):
+            import numpy as np
+
+            return np.zeros((2, 4), dtype=np.float32), {}
+
+        def get_state(self):
+            return [0, 1]  # 2 envs
+
+        def step(self, action):
+            import numpy as np
+
+            return np.zeros((2, 4)), np.zeros(2), np.zeros(2), np.ones(2), []
+
+        def close(self):
+            pass
+
+    fake_vec = _FakeVec()
+
+    # Whatever the real env_creator returns, we replace make() so the
+    # render loop gets our fake; the kwargs/backend/num_envs are still
+    # called but we don't care about them here.
+    monkeypatch.setattr(
+        pufferlib.vector, "make", lambda *a, **kw: fake_vec
+    )
+
+    # The render loop reads target via vec.envs[0] OR vec itself; force the
+    # "no .envs" path by sticking _FakeTarget on the vec.
+    fake_vec.__class__ = type("_F", (_FakeVec,), {})
+    fake_vec_target = _FakeTarget()
+    # Inject `_FakeTarget` as the target by patching getattr lookup.
+    fake_vec.set_video_suffix = fake_vec_target.set_video_suffix
+    fake_vec.render = fake_vec_target.render
+    fake_vec.close_client = fake_vec_target.close_client
+    fake_vec.num_envs = fake_vec_target.num_envs
+
+    # Stub the policy + sample_logits so the rollout loop has no real model.
+    import torch
+
+    import pufferlib.pytorch
+
+    class _Policy:
+        def forward_eval(self, ob, state):
+            return torch.zeros(ob.shape[0], 1), None
+
+    monkeypatch.setattr(
+        pufferlib.pytorch,
+        "sample_logits",
+        lambda logits, deterministic=True: (torch.zeros(logits.shape[0], dtype=torch.long), None, None),
+    )
+
+    class _Ev(Evaluator):
+        type_name = "_render_test"
+
+        def _should_stop(self, args, infos_collected, steps):
+            return True  # not used; render_pass doesn't run rollout loop
+
+    cfg = {
+        "render": True,
+        "render_views": ["sim_state", "bev"],
+        "eval": {"render_num_scenarios": 2, "render_max_steps": 1},
+        "env": {},
+    }
+    ev = _Ev("my_eval", cfg, train_config={})
+    args = {
+        "env": {},
+        "env_name": "puffer_drive",
+        "train": {"device": "cpu"},
+        "render_results_dir": str(tmp_path),
+        "epoch": 7,
+        "global_step": 1234,
+        "eval": cfg["eval"],
+    }
+
+    # Drop a stale mp4 from a "previous epoch" in the SAME per-evaluator
+    # subdir; the step-glob filter must NOT pick it up.
+    out_dir = tmp_path / "mp4" / "my_eval"
+    out_dir.mkdir(parents=True)
+    (out_dir / "stale_epoch1_step100.mp4").write_bytes(b"\x00")
+
+    paths = ev._render_pass(vecenv=None, policy=_Policy(), args=args)
+
+    # 2 envs × 2 views = 4 mp4s, all named with this pass's epoch+step.
+    names = sorted(p.name for p in paths)
+    assert len(names) == 4, names
+    for n in names:
+        assert "_epoch7_step1234" in n
+    # The stale mp4 from a prior epoch must NOT be returned.
+    assert "stale_epoch1_step100.mp4" not in names
+    # All mp4s land in this evaluator's per-eval subdir, isolated from
+    # other evaluators' renders.
+    for p in paths:
+        assert p.parent == out_dir

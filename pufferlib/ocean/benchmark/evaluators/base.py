@@ -218,7 +218,7 @@ class Evaluator:
             for e in range(internal):
                 target.set_video_suffix(view_suffix, env_idx=e)
 
-            paths = self._render_view(vec, target, policy, args, view_idx, out_dir, step_suffix)
+            paths = self._render_view(vec, target, policy, args, view_idx, out_dir, view_suffix)
             vec.close()
             all_paths.extend(paths)
         return all_paths
@@ -232,7 +232,7 @@ class Evaluator:
         out["render_mode"] = "headless"
         return out
 
-    def _render_view(self, vecenv, target_env, policy, args, view_idx, out_dir, step_suffix) -> list:
+    def _render_view(self, vecenv, target_env, policy, args, view_idx, out_dir, view_suffix) -> list:
         """One rollout per render-env, writes one mp4 per active env per view.
         Caps how many internal envs actually feed ffmpeg pipes via
         `eval.render_num_scenarios` so render cost stays bounded."""
@@ -258,10 +258,12 @@ class Evaluator:
 
         saved_cwd = os.getcwd()
         os.chdir(out_dir)
-        # Glob for files written this pass: every mp4 has the step suffix,
-        # so a step_suffix-prefixed glob filters out accumulated mp4s from
-        # prior epochs (the dir is shared across runs).
-        step_glob = f"*{step_suffix}*.mp4"
+        # Glob by full view_suffix (= step_suffix + view marker) so we get
+        # only this-view's mp4s — not files written by a prior view in the
+        # same render pass, which would otherwise duplicate in all_paths.
+        # The trailing `.mp4` is exact, so e.g. `*_epoch7_step12_bev.mp4`
+        # matches bev files but not the bare sim_state ones.
+        view_glob = f"*{view_suffix}.mp4"
         try:
             state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
@@ -293,7 +295,7 @@ class Evaluator:
         finally:
             os.chdir(saved_cwd)
 
-        return sorted(out_dir.glob(step_glob))
+        return sorted(out_dir.glob(view_glob))
 
 
 _VIEW_NAME_TO_IDX = {
