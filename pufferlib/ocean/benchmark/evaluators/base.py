@@ -62,16 +62,23 @@ class Evaluator:
     def rollout(self, vecenv, policy, args) -> EvalResult:
         """Default rollout: reset → step → collect infos → aggregate.
 
-        Times the inner work and adds `eval_seconds` to metrics so wandb
-        panels show wall-clock cost per evaluator. Subclasses tune
-        behavior by overriding `_run_rollout_loop` (and optionally
-        `_render_pass`); only override this method if the loop shape
-        itself needs to differ.
+        Times the metric pass and the render pass separately and reports
+        both alongside the total. Render is EGL+ffmpeg-bound and varies
+        wildly with `render_max_steps`/`render_num_scenarios`; lumping
+        it with the policy-driven metric pass hides where time is going.
+
+          metric_seconds  — _run_rollout_loop wall time (policy + env step)
+          render_seconds  — _render_pass wall time (0.0 if render=false)
+          eval_seconds    — total = metric + render
         """
         t0 = time.time()
         metrics = self._run_rollout_loop(vecenv, policy, args)
+        t_metric = time.time()
         frames = self._render_pass(vecenv, policy, args) if self.render else []
-        metrics["eval_seconds"] = float(time.time() - t0)
+        t_render = time.time()
+        metrics["metric_seconds"] = float(t_metric - t0)
+        metrics["render_seconds"] = float(t_render - t_metric)
+        metrics["eval_seconds"] = float(t_render - t0)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:

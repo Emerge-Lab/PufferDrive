@@ -559,23 +559,39 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
     assert state["lstm_c"][3].sum().item() == 8
 
 
-def test_rollout_records_eval_seconds():
-    """Every rollout's metrics dict should include `eval_seconds` so wandb
-    panels show wall-clock cost per evaluator."""
+def test_rollout_records_metric_render_and_total_seconds():
+    """Rollout reports metric pass time, render pass time, and total
+    separately. With render=False, render_seconds is ~0 and
+    eval_seconds ≈ metric_seconds. With render=True, the two are
+    summed into eval_seconds."""
     import time as _time
 
     class _Stub(Evaluator):
         type_name = "_stub_timing"
 
         def _run_rollout_loop(self, vecenv, policy, args):
-            _time.sleep(0.02)  # forced floor so the recorded time is > 0
+            _time.sleep(0.02)
             return {"some_metric": 1.5}
 
+        def _render_pass(self, vecenv, policy, args):
+            _time.sleep(0.03)
+            return []
+
+    # render=false → no render time charged.
     s = _Stub("test", {}, {})
     result = s.rollout(vecenv=None, policy=None, args={})
-    assert "eval_seconds" in result.metrics
+    assert result.metrics["metric_seconds"] >= 0.02
+    assert result.metrics["render_seconds"] < 0.01, "render skipped when render=false"
     assert result.metrics["eval_seconds"] >= 0.02
-    assert result.metrics["some_metric"] == 1.5
+    assert abs(result.metrics["eval_seconds"] - result.metrics["metric_seconds"]) < 0.01
+
+    # render=true → both timed, eval_seconds = metric + render.
+    s2 = _Stub("test", {"render": True}, {})
+    result2 = s2.rollout(vecenv=None, policy=None, args={})
+    assert result2.metrics["metric_seconds"] >= 0.02
+    assert result2.metrics["render_seconds"] >= 0.03
+    expected_total = result2.metrics["metric_seconds"] + result2.metrics["render_seconds"]
+    assert abs(result2.metrics["eval_seconds"] - expected_total) < 1e-6
 
 
 def test_eval_args_compose_train_section_and_clean_macro():
