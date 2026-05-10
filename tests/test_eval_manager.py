@@ -24,12 +24,16 @@ from pufferlib.ocean.benchmark.manager import (
 
 
 def test_dotted_expand():
+    """`_expand_dotted` should turn `{"env.X": v}` flat keys into a nested
+    `{"env": {"X": v}}` dict so configparser-style ini keys round-trip."""
     raw = {"env.simulation_mode": "replay", "interval": 25}
     out = _expand_dotted(raw)
     assert out == {"env": {"simulation_mode": "replay"}, "interval": 25}
 
 
 def test_inheritance_chain():
+    """Single-level inheritance: child should pull all parent fields it
+    doesn't explicitly override, including nested env.*."""
     sections = {
         "behaviors_defaults": {
             "type": "behavior_class",
@@ -51,7 +55,8 @@ def test_inheritance_chain():
 
 
 def test_inheritance_three_levels():
-    # C inherits B inherits A. Each level overrides the one above.
+    """Three-level chain (C → B → A): nearest ancestor wins per field;
+    grandparent fields survive when no descendant overrides them."""
     sections = {
         "A": {"interval": 100, "env.scenario_length": 91, "env.map_dir": "/A"},
         "B": {"inherits": "A", "interval": 200, "env.scenario_length": 201},
@@ -65,12 +70,16 @@ def test_inheritance_three_levels():
 
 
 def test_inheritance_self_cycle_detected():
+    """A section that inherits from itself must raise rather than spin
+    forever in the chain walk."""
     sections = {"a": {"inherits": "a"}}
     with pytest.raises(ValueError, match="Cyclic"):
         _build_section_config("a", sections["a"], sections)
 
 
 def test_inheritance_child_wins():
+    """When child and parent both set the same key (top-level scalar and
+    nested env.*), the child's value should appear in the merged config."""
     sections = {
         "parent": {"interval": 250, "env.scenario_length": 201},
         "child": {"inherits": "parent", "interval": 100, "env.scenario_length": 91},
@@ -102,6 +111,7 @@ def test_inheritance_does_not_alias_parent_env():
 
 
 def test_inheritance_cycle_detected():
+    """A two-section cycle (a→b→a) must raise rather than spin forever."""
     sections = {
         "a": {"inherits": "b"},
         "b": {"inherits": "a"},
@@ -111,6 +121,8 @@ def test_inheritance_cycle_detected():
 
 
 def test_inheritance_unknown_parent():
+    """`inherits = "nonexistent"` should fail loudly rather than silently
+    skip the missing parent."""
     sections = {
         "child": {"inherits": "nonexistent"},
     }
@@ -119,6 +131,8 @@ def test_inheritance_unknown_parent():
 
 
 def test_clean_macro_applied_by_default():
+    """`clean = true` (the default) injects every key from CLEAN_EVAL_OVERRIDES
+    into the merged env config, zeroing perturbations + enforcing red lights."""
     sections = {"foo": {"type": "multi_scenario"}}
     cfg = _build_section_config("foo", sections["foo"], sections)
     for k, v in CLEAN_EVAL_OVERRIDES.items():
@@ -126,6 +140,8 @@ def test_clean_macro_applied_by_default():
 
 
 def test_clean_macro_disabled_when_clean_false():
+    """`clean = false` opts out of the macro — none of the perturbation
+    knobs get injected; they fall back to whatever the train config has."""
     sections = {"foo": {"type": "multi_scenario", "clean": False}}
     cfg = _build_section_config("foo", sections["foo"], sections)
     for k in CLEAN_EVAL_OVERRIDES:
@@ -133,6 +149,9 @@ def test_clean_macro_disabled_when_clean_false():
 
 
 def test_clean_macro_loses_to_explicit_override():
+    """An explicit env.* value in the section beats the macro default for
+    that same key — useful when a particular eval wants to keep some
+    perturbation on for a targeted test."""
     sections = {
         "foo": {
             "type": "multi_scenario",
@@ -144,6 +163,8 @@ def test_clean_macro_loses_to_explicit_override():
 
 
 def test_manager_from_config_skips_template_sections():
+    """Sections without a `type` field are templates (parents only) — they
+    should NOT be instantiated as Evaluators, only inherited from."""
     train_config = {
         "eval": {
             "behaviors_defaults": {"interval": 250, "env.scenario_length": 201},
@@ -161,8 +182,9 @@ def test_manager_from_config_skips_template_sections():
 
 
 def test_render_num_scenarios_inheritable():
-    # Behavior-style template specifies a small render budget; the per-class
-    # section inherits it without re-declaring.
+    """eval.* keys inherit from parent template just like env.* keys do —
+    so a behaviors_defaults template's render budget is shared by every
+    child class without each having to re-declare it."""
     sections = {
         "defaults": {
             "type": "behavior_class",
@@ -181,12 +203,18 @@ def test_render_num_scenarios_inheritable():
 
 
 def test_manager_unknown_type_raises():
+    """A section with `type = "<not in registry>"` must fail loudly at
+    EvalManager construction rather than silently skipping the section."""
     train_config = {"eval": {"foo": {"type": "totally_made_up"}}}
     with pytest.raises(ValueError, match="not registered"):
         EvalManager.from_config(train_config)
 
 
 def test_has_subprocess_evals_at():
+    """has_subprocess_evals_at(epoch) should return True iff at least one
+    enabled subprocess-mode evaluator's interval divides the epoch — the
+    training loop uses this to decide whether to save_checkpoint() before
+    firing evals (subprocesses load the policy from disk)."""
     train_config = {
         "eval": {
             "inline_one": {"type": "human_replay", "interval": 25, "mode": "inline"},
@@ -206,6 +234,9 @@ def test_has_subprocess_evals_at():
 
 
 def test_latest_checkpoint_finds_newest_pt(tmp_path):
+    """latest_checkpoint should resolve to the most-recently-written .pt
+    under data_dir/<env>_<run_id>/models/ — subprocess evals depend on
+    this to load the freshest weights."""
     import time
 
     model_dir = tmp_path / "puffer_drive_run123" / "models"
@@ -222,6 +253,9 @@ def test_latest_checkpoint_finds_newest_pt(tmp_path):
 
 
 def test_latest_checkpoint_falls_back_to_load_model_path(tmp_path):
+    """When no checkpoint dir exists yet (resume-from-elsewhere before
+    first save), latest_checkpoint should return train_config['load_model_path']
+    so the very first eval still has weights to evaluate."""
     train_config = {
         "data_dir": str(tmp_path),
         "load_model_path": "/some/resume/path.pt",
