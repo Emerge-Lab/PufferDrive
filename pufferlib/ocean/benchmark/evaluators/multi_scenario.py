@@ -1,14 +1,7 @@
-"""MultiScenarioEvaluator — distribute scenarios across workers, one rollout
-per scenario, mean per-scenario metrics. Drives both the gigaflow validation
-path and replay-style multi-scenario evals.
+"""MultiScenarioEvaluator — gigaflow validation eval. C-side eval_mode
+cycles maps sequentially in one batched rollout, so the base loop +
+PufferEnv defaults handle parallelism without multi-process workers."""
 
-Inherits the default loop from `Evaluator`; overrides `_should_stop` (cap by
-scenario count), `_initial_reset` (async reset for multi-worker throughput),
-`_maybe_reset_lstm` (per-scenario LSTM reset), and `_render_pass` (the C-side
-EGL → ffmpeg mp4 dump)."""
-
-import os
-from pathlib import Path
 from typing import ClassVar
 
 from pufferlib.ocean.benchmark.evaluators.base import Evaluator
@@ -26,15 +19,6 @@ class MultiScenarioEvaluator(Evaluator):
         env.update(self.config.get("env", {}))
         return env
 
-    # vec_overrides + _initial_reset use the base-class defaults: PufferEnv
-    # backend with num_envs=1 and a sync reset. Drive's C side already
-    # allocates `min(ceil(num_agents/max_per_env), num_eval_scenarios)`
-    # internal envs and steps them in one batched kernel call, so we get
-    # full per-map parallelism without paying multi-process fork/IPC cost.
-    # Override [eval.<name>.vec] in the ini if you genuinely need workers.
-
-    # -- Loop hooks --
-
     def _maybe_reset_lstm(self, state, steps, args):
         # Reset between scenarios — gigaflow's auto-resample fires at the
         # end of scenario_length, so steps % scenario_length == 0 is the
@@ -50,149 +34,16 @@ class MultiScenarioEvaluator(Evaluator):
         target = int(self.config.get("eval", {}).get("num_scenarios", 1))
         return len(infos_collected) >= target
 
-    # -- Render --
-
-    def _render_pass(self, vecenv, policy, args) -> list:
-        """One rollout per view, all writing mp4s to a single dir.
-
-        Builds a fresh single-worker env per view (C-side ffmpeg-per-env
-        wiring assumes one bin at a time per process). Render budget and
-        starting position are independent of the metric pass:
-
-          eval.render_num_scenarios — how many scenarios to render. Defaults
-              to min(eval.num_scenarios, 3). Always respected over
-              num_scenarios so renders stay cheap.
-          starting_map — randomized per render epoch so successive epochs
-              show different scenarios from the dir, not the same first-N
-              alphabetically. Set explicitly in env.* to pin.
-        """
-        import importlib
+    def _render_env_overrides(self, args) -> dict:
+        # Random starting_map per render epoch — every epoch shows a
+        # different bin from the dir rather than the same alphabetical
+        # first-N. Pin by setting env.starting_map explicitly in the
+        # [eval.<name>] section.
         import random
 
-        import pufferlib
-
-        backend = args.get("render_backend", "egl")
-        if backend != "egl":
-            return []
-
-        env_name = args["env_name"]
-        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "mp4"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        package = args.get("package", "ocean")
-        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-        env_module = importlib.import_module(module_name)
-        make_env = env_module.env_creator(env_name)
-
-        render_env_kwargs = dict(args["env"])
-        render_env_kwargs["render_mode"] = "headless"
-
-        # Random starting map per render epoch — every epoch shows a
-        # different bin from the directory rather than the first N
-        # alphabetically. The user can pin by setting env.starting_map
-        # explicitly in the [eval.<name>] section.
+        out = super()._render_env_overrides(args)
         if "starting_map" not in self.config.get("env", {}):
-            num_maps = int(render_env_kwargs.get("num_maps", 1))
+            num_maps = int(out.get("num_maps", 1))
             if num_maps > 1:
-                render_env_kwargs["starting_map"] = random.randint(0, num_maps - 1)
-
-        # Stamp the training step into the filename so successive epochs
-        # produce distinct mp4s (Town01.xodr_step25100000_bev.mp4) instead
-        # of overwriting in place. wandb then shows one entry per epoch
-        # in the render carousel — useful for watching policy evolve over
-        # training. global_step falls back to 0 for ad-hoc CLI runs.
-        step_suffix = f"_step{int(args.get('global_step') or 0)}"
-
-        all_paths = []
-        for view in self.render_views:
-            view_idx = _VIEW_NAME_TO_IDX.get(view, 0)
-            view_suffix = step_suffix + ("" if view == "sim_state" else f"_{view}")
-
-            # PufferEnv backend treats the creator as a single callable and
-            # passes env_args/env_kwargs to it directly (not as per-env lists).
-            # The Multiprocessing/Serial backends expect lists; we don't use
-            # those here because EGL render assumes one ffmpeg pipe per env.
-            vec = pufferlib.vector.make(
-                make_env,
-                env_args=[],
-                env_kwargs=render_env_kwargs,
-                backend="PufferEnv",
-                num_envs=1,
-            )
-            target = vec if not hasattr(vec, "envs") else vec.envs[0]
-            internal = getattr(target, "num_envs", 1)
-            for e in range(internal):
-                target.set_video_suffix(view_suffix, env_idx=e)
-
-            paths = self._render_view(vec, target, policy, args, view_idx, out_dir)
-            vec.close()
-            all_paths.extend(paths)
-        return all_paths
-
-    def _render_view(self, vecenv, target_env, policy, args, view_idx: int, out_dir: Path) -> list:
-        import numpy as np
-        import torch
-
-        import pufferlib
-
-        device = args["train"]["device"]
-        num_agents = vecenv.observation_space.shape[0]
-        # Render budget defaults to min(num_scenarios, 3) if not set explicitly.
-        # Renders are expensive (mp4 encode + wandb upload) so we don't want
-        # them at metric-pass scale.
-        eval_cfg = self.config.get("eval", {})
-        metric_count = int(eval_cfg.get("num_scenarios", 1))
-        num_scenarios = int(eval_cfg.get("render_num_scenarios", min(metric_count, 3)))
-        # Render-clip length: independent of scenario_length (which is the
-        # metric-pass length). At 30 fps, 300 steps = ~10s mp4. Per-step EGL
-        # render is the bottleneck (~3 fps wall-clock at 1080p), so keeping
-        # this small directly bounds the render-pass runtime.
-        max_steps = int(args.get("eval", {}).get("render_max_steps", 300))
-
-        saved_cwd = os.getcwd()
-        os.chdir(out_dir)
-        # Filename pattern for this pass: each scenario writes
-        # `{scenario_id}_step{N}{view_suffix}.mp4`. Globbing by step suffix
-        # picks up only this-pass mp4s and ignores accumulated files from
-        # prior epochs that share the dir. Source of truth for the suffix
-        # is _render_pass (it set_video_suffix'd each env before calling
-        # us), so we read it back from any active env to keep them aligned.
-        step_glob = f"*_step{int(args.get('global_step') or 0)}*.mp4"
-        try:
-            state = self._init_lstm_state(num_agents, policy, device, args)
-            scenarios_processed = 0
-            while scenarios_processed < num_scenarios:
-                ob, _ = vecenv.reset()
-                scenarios = vecenv.get_state()
-                num_in_batch = len(scenarios)
-                remaining = num_scenarios - scenarios_processed - num_in_batch
-                target_env.batch_size_eval = max(1, remaining)
-                if state:
-                    state["lstm_h"].zero_()
-                    state["lstm_c"].zero_()
-                for _ in range(max_steps):
-                    with torch.no_grad():
-                        ob_t = torch.as_tensor(ob).to(device)
-                        logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                        action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-                    if isinstance(logits, torch.distributions.Normal):
-                        action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-                    ob, _, _, _, _ = vecenv.step(action)
-                    for e in range(num_in_batch):
-                        target_env.render(env_idx=e, view_mode=view_idx)
-                for e in range(num_in_batch):
-                    target_env.close_client(env_idx=e)
-                scenarios_processed += num_in_batch
-        finally:
-            os.chdir(saved_cwd)
-
-        return sorted(out_dir.glob(step_glob))
-
-
-_VIEW_NAME_TO_IDX = {
-    "sim_state": 0,
-    "bev": 1,
-    "topdown_sim": 2,
-    "bev_all": 3,
-}
+                out["starting_map"] = random.randint(0, num_maps - 1)
+        return out
