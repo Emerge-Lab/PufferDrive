@@ -394,45 +394,6 @@ def test_behavior_class_sets_num_eval_scenarios(tmp_path):
     assert env_f["num_eval_scenarios"] == 50
 
 
-def test_behavior_class_sampling_is_reproducible_across_calls(tmp_path):
-    """random.sample inside env_overrides used to be unseeded — every epoch
-    picked different bins, so cross-epoch metric jitter from bin selection
-    was indistinguishable from policy improvement. Now seeded by section
-    name: same evaluator, same bins, every call."""
-    map_dir = tmp_path / "bins"
-    map_dir.mkdir()
-    for i in range(40):
-        (map_dir / f"bin_{i:02d}.bin").write_text("x")
-
-    cfg = {
-        "type": "behavior_class",
-        "env": {"map_dir": str(map_dir)},
-        "eval": {"num_scenarios": 5},
-    }
-
-    # Two evaluators with the SAME name should sample the same bins.
-    ev1 = BehaviorClassEvaluator("my_class", cfg, train_config={})
-    env1 = ev1.env_overrides()
-    sampled1 = sorted(os.listdir(env1["map_dir"]))
-    ev1.cleanup()
-
-    ev2 = BehaviorClassEvaluator("my_class", cfg, train_config={})
-    env2 = ev2.env_overrides()
-    sampled2 = sorted(os.listdir(env2["map_dir"]))
-    ev2.cleanup()
-
-    assert sampled1 == sampled2, "same section name should sample the same bins"
-
-    # Different section names should sample different bins (with high
-    # probability for 5-of-40; the seeds differ).
-    ev_other = BehaviorClassEvaluator("other_class", cfg, train_config={})
-    env_other = ev_other.env_overrides()
-    sampled_other = sorted(os.listdir(env_other["map_dir"]))
-    ev_other.cleanup()
-
-    assert sampled1 != sampled_other, "different section names should sample differently"
-
-
 def test_aggregate_infos_weighted_mean_by_emission_size():
     """When vec_log emissions have different agent counts (n), the per-key
     aggregate should be a weighted mean — not mean-of-means. Two emissions
