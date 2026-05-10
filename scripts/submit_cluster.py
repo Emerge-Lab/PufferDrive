@@ -69,7 +69,16 @@ def parse_args():
     parser.add_argument("--nodes", type=int, default=None, help="Number of nodes")
     parser.add_argument("--gpu_type", type=str, default=None, help="GPU type (a100/v100/etc)")
     parser.add_argument("--nodelist", type=str, default=None, help="Specific nodes to use")
-    parser.add_argument("--mem", type=str, default=None, help="Memory per node (e.g., 32gb)")
+    parser.add_argument(
+        "--mem",
+        type=str,
+        default=None,
+        help=(
+            "Memory per node (e.g., 96gb). Falls back to compute_config['mem'], then to 96gb. "
+            "Gigaflow eval renders 8 ffmpeg children concurrently at 1080p which plus the "
+            "live training env can hit 60-70GB peak; smaller can OOM."
+        ),
+    )
     parser.add_argument("--exclude", type=str, default="", help="Nodes to exclude")
     parser.add_argument("--time", type=int, default=None, help="Time limit in minutes")
     parser.add_argument("--task_per_node", type=int, default=1, help="Tasks per node")
@@ -264,7 +273,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         nodes=from_config.get("nodes", 1),
         slurm_gres=gres,
         slurm_exclude=from_config.get("exclude") or None,
-        slurm_mem=from_config.get("mem"),
+        slurm_mem=from_config.get("mem", "96gb") or "96gb",
         slurm_time=from_config.get("time", 60),
         slurm_job_name=job_name,
         slurm_additional_parameters=additional_parameters,
