@@ -1,5 +1,6 @@
 """Evaluator base class + default rollout loop + EvalResult dataclass."""
 
+import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -61,12 +62,16 @@ class Evaluator:
     def rollout(self, vecenv, policy, args) -> EvalResult:
         """Default rollout: reset → step → collect infos → aggregate.
 
-        Subclasses tune behavior via the hooks below. Override this
-        method directly only if the loop shape itself needs to differ
-        (e.g. per-scene multi-rollout patterns).
+        Times the inner work and adds `eval_seconds` to metrics so wandb
+        panels show wall-clock cost per evaluator. Subclasses tune
+        behavior by overriding `_run_rollout_loop` (and optionally
+        `_render_pass`); only override this method if the loop shape
+        itself needs to differ.
         """
+        t0 = time.time()
         metrics = self._run_rollout_loop(vecenv, policy, args)
         frames = self._render_pass(vecenv, policy, args) if self.render else []
+        metrics["eval_seconds"] = float(time.time() - t0)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:

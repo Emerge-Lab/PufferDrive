@@ -300,6 +300,25 @@ def test_behavior_class_cleanup_removes_symlink_dir(tmp_path):
     assert ev._sampled_dir is None
 
 
+def test_rollout_records_eval_seconds():
+    """Every rollout's metrics dict should include `eval_seconds` so wandb
+    panels show wall-clock cost per evaluator."""
+    import time as _time
+
+    class _Stub(Evaluator):
+        type_name = "_stub_timing"
+
+        def _run_rollout_loop(self, vecenv, policy, args):
+            _time.sleep(0.02)  # forced floor so the recorded time is > 0
+            return {"some_metric": 1.5}
+
+    s = _Stub("test", {}, {})
+    result = s.rollout(vecenv=None, policy=None, args={})
+    assert "eval_seconds" in result.metrics
+    assert result.metrics["eval_seconds"] >= 0.02
+    assert result.metrics["some_metric"] == 1.5
+
+
 def test_eval_args_compose_train_section_and_clean_macro():
     """_build_eval_args must fold train_config['env'] (baseline) +
     section overrides + clean macro correctly. Section beats baseline,

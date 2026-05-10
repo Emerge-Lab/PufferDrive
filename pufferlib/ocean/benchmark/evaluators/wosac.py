@@ -8,7 +8,7 @@ fits it into the unified Evaluator interface.
 
 from typing import ClassVar
 
-from pufferlib.ocean.benchmark.evaluators.base import EvalResult, Evaluator
+from pufferlib.ocean.benchmark.evaluators.base import Evaluator
 
 
 class WOSACEvaluator(Evaluator):
@@ -25,7 +25,7 @@ class WOSACEvaluator(Evaluator):
         env.update(self.config.get("env", {}))
         return env
 
-    def rollout(self, vecenv, policy, args) -> EvalResult:
+    def _run_rollout_loop(self, vecenv, policy, args) -> dict:
         # Inner class pulls pandas/matplotlib — keep the import inside the
         # rollout so the wrapper class can be imported in environments
         # that don't have those (e.g. unit-test smoke envs).
@@ -38,5 +38,4 @@ class WOSACEvaluator(Evaluator):
         results["total_num_agents"] = float(df["num_agents_per_scene"].sum())
         results["total_unique_scenarios"] = float(df.index.unique().shape[0])
         results["realism_meta_score_std"] = float(df["realism_meta_score"].std())
-        results = {k: (float(v) if hasattr(v, "item") else v) for k, v in results.items()}
-        return EvalResult(metrics=results, frames=[])
+        return {k: (float(v) if hasattr(v, "item") else v) for k, v in results.items()}
