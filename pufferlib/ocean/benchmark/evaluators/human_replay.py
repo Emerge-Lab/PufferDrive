@@ -23,19 +23,26 @@ class HumanReplayEvaluator(Evaluator):
             "reward_randomization": False,
         }
         env.update(self.config.get("env", {}))
-        # num_agents = number of bins so each gets one episode slot
-        if "num_agents" not in env:
-            map_dir = env.get("map_dir", "")
-            if map_dir and os.path.isdir(map_dir):
-                env["num_agents"] = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
-                env["num_maps"] = env["num_agents"]
+        # 1 SDC per bin → num_agents == num_maps == num_eval_scenarios.
+        # Override the train-config defaults (num_agents=1024 etc.) since
+        # they don't apply in replay+control_sdc_only mode.
+        # Without setting num_eval_scenarios, the C-side replay branch caps
+        # env_count at drive.py's default of 16 — only 16 of N bins would
+        # ever instantiate as envs.
+        map_dir = env.get("map_dir", "")
+        if map_dir and os.path.isdir(map_dir):
+            n_bins = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+            env["num_agents"] = n_bins
+            env["num_maps"] = n_bins
+            env["num_eval_scenarios"] = n_bins
         return env
 
     def _should_stop(self, args, infos_collected, steps) -> bool:
-        # Stop once every bin has yielded one info, OR after a step budget
-        # generous enough to give every bin a chance (env auto-resamples).
+        # All bins run as parallel envs in one batched rollout (because
+        # num_eval_scenarios = num_maps). Every env truncates on the same
+        # tick at scenario_length, vec_log emits one aggregate dict at
+        # that boundary, and we have the full per-bin average. Stop right
+        # after that — waiting longer just deterministically re-runs the
+        # same bins (resample_frequency is effectively never in replay).
         scenario_length = int(args["env"]["scenario_length"])
-        init_steps = int(args["env"].get("init_steps", 0))
-        num_maps = int(args["env"]["num_maps"])
-        max_steps = (scenario_length - init_steps + 1) * num_maps
-        return len(infos_collected) >= num_maps or steps >= max_steps
+        return steps >= scenario_length + 1

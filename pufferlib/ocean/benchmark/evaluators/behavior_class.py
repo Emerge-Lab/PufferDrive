@@ -33,11 +33,12 @@ class BehaviorClassEvaluator(HumanReplayEvaluator):
             for fname in sampled:
                 os.symlink(os.path.join(map_dir, fname), os.path.join(self._sampled_dir, fname))
             env["map_dir"] = self._sampled_dir
-            env["num_agents"] = num_scenarios
-            env["num_maps"] = num_scenarios
+            n = num_scenarios
         else:
-            env["num_agents"] = len(all_bins)
-            env["num_maps"] = len(all_bins)
+            n = len(all_bins)
+        env["num_agents"] = n
+        env["num_maps"] = n
+        env["num_eval_scenarios"] = n
         return env
 
     def cleanup(self):

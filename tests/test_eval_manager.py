@@ -329,6 +329,42 @@ def test_flatten_infos_handles_shape_variations():
     assert s._flatten_infos([d1, d2]) == [d1, d2]
 
 
+def test_behavior_class_sets_num_eval_scenarios(tmp_path):
+    """BehaviorClassEvaluator must set num_eval_scenarios alongside
+    num_agents/num_maps. Without it, the C-side replay branch caps at
+    drive.py's default of 16, so any category with >16 bins (or any
+    eval.num_scenarios > 16 sampling target) silently truncates."""
+    map_dir = tmp_path / "bins"
+    map_dir.mkdir()
+    for i in range(50):
+        (map_dir / f"map_{i}.bin").write_text("x")
+
+    # Sampling branch: num_scenarios < total bins.
+    cfg_sampled = {
+        "type": "behavior_class",
+        "env": {"map_dir": str(map_dir)},
+        "eval": {"num_scenarios": 50},
+    }
+    ev_s = BehaviorClassEvaluator("sampled", cfg_sampled, train_config={})
+    env_s = ev_s.env_overrides()
+    assert env_s["num_agents"] == 50
+    assert env_s["num_maps"] == 50
+    assert env_s["num_eval_scenarios"] == 50
+    ev_s.cleanup()
+
+    # All-bins branch: num_scenarios > total bins, no sampling.
+    cfg_full = {
+        "type": "behavior_class",
+        "env": {"map_dir": str(map_dir)},
+        "eval": {"num_scenarios": 999},
+    }
+    ev_f = BehaviorClassEvaluator("full", cfg_full, train_config={})
+    env_f = ev_f.env_overrides()
+    assert env_f["num_agents"] == 50
+    assert env_f["num_maps"] == 50
+    assert env_f["num_eval_scenarios"] == 50
+
+
 def test_behavior_class_cleanup_removes_symlink_dir(tmp_path):
     """BehaviorClassEvaluator builds a tmp symlink dir when sampling.
     cleanup() must remove it; otherwise we accumulate leftovers."""
