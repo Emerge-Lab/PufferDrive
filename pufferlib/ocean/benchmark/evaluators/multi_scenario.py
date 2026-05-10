@@ -144,6 +144,11 @@ class MultiScenarioEvaluator(Evaluator):
 
         saved_cwd = os.getcwd()
         os.chdir(out_dir)
+        # Snapshot existing mp4s so we only return files written in this
+        # pass — out_dir is shared across epochs (and across views), so
+        # globbing the dir at the end would re-pick up every mp4 from prior
+        # render passes and make _log think we rendered far more than we did.
+        existing = set(out_dir.glob("*.mp4"))
         try:
             state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
@@ -173,7 +178,7 @@ class MultiScenarioEvaluator(Evaluator):
         finally:
             os.chdir(saved_cwd)
 
-        return sorted(p for p in out_dir.glob("*.mp4"))
+        return sorted(p for p in out_dir.glob("*.mp4") if p not in existing)
 
 
 _VIEW_NAME_TO_IDX = {
