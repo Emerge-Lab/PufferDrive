@@ -17,12 +17,6 @@ from pufferlib.ocean.benchmark.evaluators.base import Evaluator
 class MultiScenarioEvaluator(Evaluator):
     type_name: ClassVar[str] = "multi_scenario"
 
-    def vec_overrides(self) -> dict:
-        # Multi-worker by default for throughput. Override via [eval.<name>.vec].
-        backend = self.train_config.get("vec", {}).get("backend", "PufferEnv")
-        num_envs = int(self.config.get("vec", {}).get("num_envs", 1))
-        return {"backend": backend, "num_envs": num_envs}
-
     def env_overrides(self) -> dict:
         env = {
             "eval_mode": 1,
@@ -32,13 +26,14 @@ class MultiScenarioEvaluator(Evaluator):
         env.update(self.config.get("env", {}))
         return env
 
-    # -- Loop hooks --
+    # vec_overrides + _initial_reset use the base-class defaults: PufferEnv
+    # backend with num_envs=1 and a sync reset. Drive's C side already
+    # allocates `min(ceil(num_agents/max_per_env), num_eval_scenarios)`
+    # internal envs and steps them in one batched kernel call, so we get
+    # full per-map parallelism without paying multi-process fork/IPC cost.
+    # Override [eval.<name>.vec] in the ini if you genuinely need workers.
 
-    def _initial_reset(self, vecenv, args):
-        # Multi-worker async reset gives us the parallel-throughput path.
-        vecenv.async_reset(args.get("seed", 42))
-        ob, _, _, _, _, _, _ = vecenv.recv()
-        return ob
+    # -- Loop hooks --
 
     def _maybe_reset_lstm(self, state, steps, args):
         # Reset between scenarios — gigaflow's auto-resample fires at the

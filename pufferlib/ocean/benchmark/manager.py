@@ -139,18 +139,30 @@ class EvalManager:
         make_env = env_module.env_creator(env_name)
 
         vec_kwargs = ev.vec_overrides()
+        backend = vec_kwargs.get("backend", "PufferEnv")
         num_envs = int(vec_kwargs.get("num_envs", 1))
-        env_kwargs_list = [args["env"] for _ in range(num_envs)]
-        env_creators = [make_env] * num_envs
-        env_args_list = [[]] * num_envs
 
-        vec_call_kwargs = dict(vec_kwargs)
-        vec_call_kwargs.setdefault("num_workers", num_envs)
-        vec_call_kwargs.setdefault("batch_size", num_envs)
-
-        vecenv = pufferlib.vector.make(
-            env_creators, env_args=env_args_list, env_kwargs=env_kwargs_list, **vec_call_kwargs
-        )
+        # PufferEnv is the default: Drive's C kernel batches all internal
+        # envs in one call so we get per-map parallelism without paying
+        # fork/IPC cost, and render shares the single ffmpeg pipeline.
+        # Multiprocessing is opt-in via [eval.<name>.vec] backend = ...
+        # for evals that genuinely need it (memory-split for big replay
+        # sweeps, hetero scenarios, async overlap on long rollouts).
+        # The two backends have incompatible call shapes; branch here.
+        if backend == "PufferEnv":
+            vecenv = pufferlib.vector.make(
+                make_env, env_args=[], env_kwargs=args["env"], backend=backend, num_envs=num_envs
+            )
+        else:
+            vec_call_kwargs = dict(vec_kwargs)
+            vec_call_kwargs.setdefault("num_workers", num_envs)
+            vec_call_kwargs.setdefault("batch_size", num_envs)
+            vecenv = pufferlib.vector.make(
+                [make_env] * num_envs,
+                env_args=[[]] * num_envs,
+                env_kwargs=[args["env"] for _ in range(num_envs)],
+                **vec_call_kwargs,
+            )
         try:
             res = ev.rollout(vecenv, policy, args)
         finally:
