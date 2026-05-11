@@ -1,0 +1,29 @@
+# Nuplan self-play with goal_behavior=1 (agents removed on final-goal-reach).
+# Workers/envs sized so 8 × ~13 GB Drive workers fit comfortably in 128 GB
+# (the matching --mem to pass to submit_cluster.py; nyu_greene.yaml's 96 GB
+# default OOMs at this scale — that's what tripped us on the first attempt).
+
+# Training
+train.total_timesteps: 1_000_000_000
+train.checkpoint_interval: 1000
+
+# Vec env: 8 workers on 16-core node leaves half the cores idle but is
+# the safe memory point for unmodified num_agents=1024. Bump --cpus + workers
+# together (both 16) if you also bump --mem to ~256 GB.
+vec.num_envs: 8
+vec.num_workers: 8
+
+# Env: replay nuplan_mini_train_bins; goal_behavior=1 = remove on goal-reach.
+# inactive_agent_threshold=1.0 was meant to keep episodes alive until every
+# agent is done — note this only takes effect in gigaflow mode (drive.h:4844),
+# so under replay the episode ends at scenario_length=201 regardless.
+env.simulation_mode: replay
+env.map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+env.goal_behavior: 1
+env.scenario_length: 201
+env.inactive_agent_threshold: 1.0
+
+# W&B logging
+wandb: True
+wandb_project: pufferdrive
+wandb_group: nuplan_selfplay_goal_remove
