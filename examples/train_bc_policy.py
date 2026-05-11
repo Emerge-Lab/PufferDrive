@@ -645,7 +645,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     output_sizes = get_output_sizes(dynamics_model)
 
     run = wandb.init(
-        project="delta_bc_debug",
+        project="delta_bc_corl_26",
         tags=["bc_policy", dynamics_model],
         config={**TRAIN_DEFAULTS, "dynamics_model": dynamics_model, "output_sizes": output_sizes},
     )

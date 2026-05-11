@@ -202,9 +202,6 @@ class Drive(pufferlib.PufferEnv):
                 f"num_maps ({num_maps}) exceeds available maps in directory ({available_maps}). Please reduce num_maps or add more maps to resources/drive/binaries."
             )
 
-        print(self.ego_features)  # should match the C constant
-        print(self.num_obs)        # ego_features + (MAX_AGENTS-1)*7 + 128*7
-
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             seed=seed,
