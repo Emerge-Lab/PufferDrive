@@ -458,6 +458,7 @@ class Drive(pufferlib.PufferEnv):
                     min_agents_per_env=self.min_agents_per_env,
                     max_agents_per_env=self.max_agents_per_env,
                     num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+                    goal_radius=self.goal_radius,
                 )
 
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
