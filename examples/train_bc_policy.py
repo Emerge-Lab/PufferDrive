@@ -5,7 +5,6 @@ Usage:
     python examples/train_bc_policy.py train                        # single run, default config
     python examples/train_bc_policy.py train --dynamics classic     # single run, classic dynamics
     python examples/train_bc_policy.py train --map-dir path/to/maps --num-maps 25000
-    python examples/train_bc_policy.py sweep                        # launch sweep + agent
     python examples/train_bc_policy.py --dynamics classic
 """
 
@@ -20,6 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.distributions.categorical import Categorical
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from pufferlib.pufferl import load_config, load_env
 from pufferlib.ocean.drive import binding
@@ -28,33 +28,38 @@ import pufferlib.models
 
 CHECKPOINT_PATH = "models/anchors"
 os.makedirs(CHECKPOINT_PATH, exist_ok=True)
+NUM_MAPS = 12000
+MAP_DIR = "resources/drive/binaries/training"
+
+# Defined in drive.h
+NUM_DX = binding.NUM_DX_BINS
+NUM_DY = binding.NUM_DY_BINS
+NUM_YAW = binding.NUM_YAW_BINS
+MAX_DX = 3.5
+MAX_DY = 0.1
+MAX_DYAW = np.pi / 6.0
+
+DX_STEP = 2 * MAX_DX / (NUM_DX - 1)
+DY_STEP = 2 * MAX_DY / (NUM_DY - 1)
+YAW_STEP = 2 * MAX_DYAW / (NUM_YAW - 1)
+
+HEAD_STEP_SIZES = {"dx": DX_STEP, "dy": DY_STEP, "dyaw": YAW_STEP}
 
 # ---------------------------------------------------------------------------
-# Sweep config
+# Multi-run config
 # ---------------------------------------------------------------------------
-SWEEP_CONFIG = {
-    "method": "grid",
-    "metric": {"name": "best_avg_loss", "goal": "minimize"},
-    "parameters": {
-        "learning_rate": {"values": [1e-4]},
-        "input_size": {"values": [128]},
-        "hidden_size": {"values": [512]},
-        "batch_size": {"values": [2048]},
-        "resample_every_n_epochs": {"values": [1]},
-        "num_maps": {"values": [67, 200, 1200, 12_000]},  # 10 min, 30 min, 3 hr, 30 hr
-    },
-}
+NUM_MAPS_SWEEP = [67, 200, 1200, 12_000]  # 10 min, 30 min, 3 hr, 30 hr
 
 TRAIN_DEFAULTS = {
     "learning_rate": 1e-4,
     "input_size": 128,
     "hidden_size": 512,
     "batch_size": 2048,
-    "resample_every_n_epochs": 1,  # Resample after k full passes through the dataset
-    "epochs": 4000,
-    "num_maps": 50_000,
-    "eval_frequency": 10,  # Validation dataset
-    "val_patience": 40,  # Stop if val loss doesn't improve for this many eval checks
+    "resample_every_n_epochs": 2,  # Resample after k full passes through the dataset
+    "epochs": 5000,
+    "num_maps": NUM_MAPS,
+    "eval_frequency": 100,  # Validation dataset
+    "val_patience": 3,  # Stop if val loss doesn't improve for this many eval checks
 }
 
 
@@ -271,7 +276,7 @@ def build_env_args(dynamics_model, num_maps):
     args = load_config("puffer_drive")
     args["vec"]["backend"] = "Serial"
     args["env"]["num_maps"] = num_maps
-    args["env"]["map_dir"] = "resources/drive/binaries/training_50k"
+    args["env"]["map_dir"] = MAP_DIR
     args["env"]["reg_mode"] = "log_prob_direct"
     args["env"]["dynamics_model"] = dynamics_model
     args["base"]["rnn_name"] = "none"
@@ -279,6 +284,7 @@ def build_env_args(dynamics_model, num_maps):
     args["env"]["fix_rewards"] = True
     args["env"]["lambda_value"] = 0.0
     args["env"]["control_mode"] = "control_sdc_only"
+    args["env"]["episode_length"] = 91
     args["env"]["num_agents"] = 128
     return args
 
@@ -311,6 +317,28 @@ def load_data(driver_env):
     return TensorDataset(obs, actions)
 
 
+def compute_head_metrics(policy, batch_obs, batch_actions, bin_tolerance=5):
+    """Per-head accuracy within k bins and mean absolute error in physical units."""
+    head_names = ["dx", "dy", "dyaw"]
+    with torch.no_grad():
+        dists = policy.dist(batch_obs)
+        result = {}
+        for i, d in enumerate(dists):
+            name = head_names[i] if i < len(head_names) else f"head_{i}"
+            step = HEAD_STEP_SIZES.get(name, 1.0)
+
+            pred = d.logits.argmax(dim=-1)
+            target = batch_actions[:, i] if batch_actions.dim() > 1 else batch_actions.squeeze(-1)
+            abs_bin_err = (pred - target.long()).abs().float()
+
+            # Tolerance is in bin space; label shows equivalent physical value
+            phys_tol = bin_tolerance * step
+            result[f"acc_within_{bin_tolerance}bins_{name}"] = (abs_bin_err <= bin_tolerance).float().mean().item()
+            result[f"mean_abs_err_{name}"] = (abs_bin_err * step).mean().item()
+
+    return result
+
+
 def compute_accuracy(policy, batch_obs, batch_actions):
     with torch.no_grad():
         pred = policy(batch_obs, deterministic=True)
@@ -323,6 +351,33 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
     for batch_obs, batch_actions in DataLoader(dataset, batch_size=len(dataset)):
         all_obs = batch_obs
         all_actions = batch_actions.numpy()
+
+    EXPERT_COLOR = "tab:green"
+    LEARNED_COLOR = "tab:blue"
+    GRID_KW = dict(alpha=0.25, linestyle="--", linewidth=0.6)
+
+    sns.set_theme(style="white", context="notebook")
+
+    def style_axis(ax, title, xlabel, color):
+        ax.set_title(title, fontsize=11, color=color, pad=8)
+        ax.set_xlabel(xlabel, fontsize=11)
+        ax.set_ylabel("Count", fontsize=11)
+        ax.axvline(x=0, color="#888", linestyle=":", linewidth=1, alpha=0.7, zorder=1)
+        ax.grid(True, **GRID_KW)
+        ax.set_axisbelow(True)
+        ax.tick_params(labelsize=11)
+
+    def plot_dist(ax, vals, color, bins, rng):
+        ax.hist(
+            vals,
+            bins=bins,
+            range=rng,
+            color=color,
+            alpha=1.0,
+            edgecolor="white",
+            linewidth=0.2,
+            zorder=2,
+        )
 
     if dynamics_model == "classic":
         NUM_STEER = binding.NUM_STEER_BINS
@@ -343,37 +398,49 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         pred_accel_vals = -4.0 + pred_accel_idx * accel_step
         pred_steer_vals = -1.0 + pred_steer_idx * steer_step
 
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        n_expert_steer = (steer_idx != NUM_STEER // 2).sum()
+        n_pred_steer = (pred_steer_idx != NUM_STEER // 2).sum()
+
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8.5), constrained_layout=True)
         fig.suptitle(
-            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
-            fontsize=14,
+            f"Expert vs Learned Action Distributions  ·  {len(all_actions):,} samples  ·  "
+            f"{dynamics_model}  ·  {num_maps} maps",
+            fontsize=13,
+            weight="semibold",
         )
-        for ax, vals, title, color in [
-            (axes[0, 0], steer_vals, f"Expert Steering (non-zero: {(steer_idx != NUM_STEER // 2).sum()})", "steelblue"),
+
+        rows = [
             (
-                axes[0, 1],
+                "Steering",
+                "Steering (rad)",
+                NUM_STEER,
+                (-1.0, 1.0),
+                steer_vals,
                 pred_steer_vals,
-                f"Learned Steering (non-zero: {(pred_steer_idx != NUM_STEER // 2).sum()})",
-                "orange",
+                f"non-zero: {n_expert_steer:,}",
+                f"non-zero: {n_pred_steer:,}",
             ),
-            (axes[1, 0], accel_vals, "Expert Acceleration", "steelblue"),
-            (axes[1, 1], pred_accel_vals, "Learned Acceleration", "orange"),
-        ]:
-            bins, rng = (NUM_STEER, (-1.0, 1.0)) if "Steer" in title else (NUM_ACCEL, (-4.0, 4.0))
-            xlabel = "Steering (rad)" if "Steer" in title else "Acceleration (m/s²)"
-            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Count")
-            ax.set_title(title)
-            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+            ("Acceleration", "Acceleration (m/s²)", NUM_ACCEL, (-4.0, 4.0), accel_vals, pred_accel_vals, "", ""),
+        ]
+        for r, (name, xlabel, bins, rng, ev, lv, e_extra, l_extra) in enumerate(rows):
+            e_title = f"Expert · {name}" + (f"  ({e_extra})" if e_extra else "")
+            l_title = f"Learned · {name}" + (f"  ({l_extra})" if l_extra else "")
+            plot_dist(axes[r, 0], ev, EXPERT_COLOR, bins, rng)
+            plot_dist(axes[r, 1], lv, LEARNED_COLOR, bins, rng)
+            style_axis(axes[r, 0], e_title, xlabel, EXPERT_COLOR)
+            style_axis(axes[r, 1], l_title, xlabel, LEARNED_COLOR)
+            # match y-limits across the row for a fair visual comparison
+            ymax = max(axes[r, 0].get_ylim()[1], axes[r, 1].get_ylim()[1])
+            axes[r, 0].set_ylim(0, ymax)
+            axes[r, 1].set_ylim(0, ymax)
 
     elif dynamics_model == "delta_local":
         NUM_DX = binding.NUM_DX_BINS
         NUM_DY = binding.NUM_DY_BINS
         NUM_YAW = binding.NUM_YAW_BINS
-        MAX_DX = 2.0
-        MAX_DY = 2.0
-        MAX_DYAW = np.pi / 4.0
+        MAX_DX = 3.0
+        MAX_DY = 0.1
+        MAX_DYAW = np.pi / 6.0
 
         dx_step = 2 * MAX_DX / (NUM_DX - 1)
         dy_step = 2 * MAX_DY / (NUM_DY - 1)
@@ -390,37 +457,40 @@ def save_action_distribution_plot(policy, dataset, dynamics_model, num_maps, run
         pred_dy_vals = -MAX_DY + pred[:, 1].astype(int) * dy_step
         pred_yaw_vals = -MAX_DYAW + pred[:, 2].astype(int) * yaw_step
 
-        fig, axes = plt.subplots(3, 2, figsize=(14, 14))
+        fig, axes = plt.subplots(3, 2, figsize=(13, 11), constrained_layout=True)
         fig.suptitle(
-            f"BC Training Data vs Learned Policy — {len(all_actions)} samples, {dynamics_model}, {num_maps} maps",
-            fontsize=14,
+            f"Expert vs Learned Action Distributions  ·  {len(all_actions):,} samples  ·  "
+            f"{dynamics_model}  ·  {num_maps} maps",
+            fontsize=13,
         )
-        plot_configs = [
-            (axes[0, 0], expert_dx_vals, "Expert ΔX", "steelblue", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
-            (axes[0, 1], pred_dx_vals, "Learned ΔX", "orange", NUM_DX, (-MAX_DX, MAX_DX), "ΔX (m)"),
-            (axes[1, 0], expert_dy_vals, "Expert ΔY", "steelblue", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
-            (axes[1, 1], pred_dy_vals, "Learned ΔY", "orange", NUM_DY, (-MAX_DY, MAX_DY), "ΔY (m)"),
-            (axes[2, 0], expert_yaw_vals, "Expert ΔYaw", "steelblue", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
-            (axes[2, 1], pred_yaw_vals, "Learned ΔYaw", "orange", NUM_YAW, (-MAX_DYAW, MAX_DYAW), "ΔYaw (rad)"),
+
+        rows = [
+            ("ΔX", "ΔX (m)", NUM_DX, (-MAX_DX, MAX_DX), expert_dx_vals, pred_dx_vals),
+            ("ΔY", "ΔY (m)", NUM_DY, (-MAX_DY, MAX_DY), expert_dy_vals, pred_dy_vals),
+            ("ΔYaw", "ΔYaw (rad)", NUM_YAW, (-MAX_DYAW, MAX_DYAW), expert_yaw_vals, pred_yaw_vals),
         ]
-        for ax, vals, title, color, bins, rng, xlabel in plot_configs:
-            ax.hist(vals, bins=bins, range=rng, edgecolor="black", alpha=0.7, color=color)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Count")
-            ax.set_title(title)
-            ax.axvline(x=0, color="r", linestyle="--", alpha=0.5)
+        for r, (name, xlabel, bins, rng, ev, lv) in enumerate(rows):
+            plot_dist(axes[r, 0], ev, EXPERT_COLOR, bins, rng)
+            plot_dist(axes[r, 1], lv, LEARNED_COLOR, bins, rng)
+            style_axis(axes[r, 0], f"Expert · {name}", xlabel, EXPERT_COLOR)
+            style_axis(axes[r, 1], f"Learned · {name}", xlabel, LEARNED_COLOR)
+            ymax = max(axes[r, 0].get_ylim()[1], axes[r, 1].get_ylim()[1])
+            axes[r, 0].set_ylim(0, ymax)
+            axes[r, 1].set_ylim(0, ymax)
 
     else:
         return
 
+    sns.despine(fig=fig)
     wandb.log({"action_distribution": wandb.Image(fig)})
     plt.close(fig)
 
 
-def evaluate(policy, dataloader, device):
+def evaluate(policy, dataloader, device, bin_tolerance=5):
     policy.eval()
     losses, accuracies = [], []
     entropy_accum = {}
+    head_metrics_accum = {}
 
     with torch.no_grad():
         for batch_obs, batch_actions in dataloader:
@@ -430,6 +500,7 @@ def evaluate(policy, dataloader, device):
             loss = -policy._log_prob(batch_obs, batch_actions.float())
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
             entropy = policy._entropy(batch_obs)
+            head_metrics = compute_head_metrics(policy, batch_obs, batch_actions, bin_tolerance)
 
             losses.append(loss.item())
             accuracies.append(accuracy)
@@ -438,14 +509,133 @@ def evaluate(policy, dataloader, device):
                     entropy_accum.setdefault(k, []).append(v)
             else:
                 entropy_accum.setdefault("entropy", []).append(entropy)
+            for k, v in head_metrics.items():
+                head_metrics_accum.setdefault(k, []).append(v)
 
     policy.train()
-    metrics = {
+    return {
         "loss": np.mean(losses),
         "accuracy": np.mean(accuracies),
         **{k: np.mean(v) for k, v in entropy_accum.items()},
+        **{k: np.mean(v) for k, v in head_metrics_accum.items()},
     }
-    return metrics
+
+
+def record_rollout_video(policy, dynamics_model, device, video_dir="bc_eval_videos"):
+    """Run one closed-loop rollout with headless rendering and log an mp4 per map to wandb."""
+    import glob
+    import shutil
+
+    args = build_env_args(dynamics_model, num_maps=1)
+    args["env"]["map_dir"] = MAP_DIR
+    args["env"]["control_mode"] = "control_sdc_only"
+    args["env"]["termination_mode"] = 1
+    args["env"]["obs_partner_noise_speed"] = 0.0
+    args["env"]["obs_partner_noise_pos"] = 0.0
+    args["env"]["async_resets"] = False
+    args["env"]["resample_frequency"] = 0
+    args["env"]["fix_lambdas"] = True
+    args["env"]["fix_rewards"] = True
+    args["env"]["num_agents"] = 64
+    args["env"]["episode_length"] = 91
+    args["env"]["num_maps"] = NUM_MAPS
+    args["vec"] = dict(backend="PufferEnv", num_envs=1)
+
+    env = load_env("puffer_drive", args)
+
+    episode_length = env.driver_env.episode_length or 91
+    num_maps = min(NUM_MAPS, 15)
+
+    os.makedirs(video_dir, exist_ok=True)
+    logged = 0
+
+    # Collect (timestep, entropy) across all maps for the scatterplot
+    all_timesteps = []
+    all_entropies = []
+
+    for map_idx in range(num_maps):
+        obs, info = env.reset()
+        print(f"Rendering map {map_idx}")
+        before = set(glob.glob("*.mp4"))
+
+        for t in range(episode_length):
+            with torch.no_grad():
+                obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=device)
+                actions = policy(obs_tensor, deterministic=True)
+                # Entropy of the actor distribution at this timestep (mean over agents/heads)
+                entropy = policy._entropy(obs_tensor)
+                if isinstance(entropy, dict):
+                    step_entropy = float(np.mean(list(entropy.values())))
+                else:
+                    step_entropy = float(entropy)
+            all_timesteps.append(t)
+            all_entropies.append(step_entropy)
+
+            action_np = actions.cpu().numpy()
+            if action_np.ndim == 1:
+                action_np = action_np[:, None]
+
+            obs, _, terminated, truncated, _ = env.step(action_np)
+
+            if not terminated[map_idx]:
+                env.driver_env.render(env_idx=map_idx)
+
+            if truncated.all() or terminated.all():
+                break
+
+        env.driver_env.stop_recorder(map_idx)  # flushes ffmpeg before we look for the file
+
+        new_files = sorted(set(glob.glob("*.mp4")) - before)
+        if not new_files:
+            print(f"  Warning: no video produced for map_idx={map_idx}")
+            continue
+
+        for mp4_path in new_files:
+            dest = os.path.join(video_dir, os.path.basename(mp4_path))
+            shutil.move(mp4_path, dest)
+            scenario_id = os.path.splitext(os.path.basename(mp4_path))[0]
+            caption = f"map_{map_idx}_scenario_{scenario_id}"
+
+            # wandb.Video copies/encodes the file at log time, so it's safe
+            # to delete `dest` once wandb.log returns.
+            wandb.log({"rollout_video": wandb.Video(dest, format="mp4", caption=caption)})
+            print(f"  Logged map_idx={map_idx}: {dest}")
+            logged += 1
+
+            try:
+                os.remove(dest)
+            except OSError as e:
+                print(f"  Warning: could not delete {dest}: {e}")
+
+    # ------------------------------------------------------------------
+    # Log timestep vs entropy scatterplot across all rollout maps
+    # ------------------------------------------------------------------
+    if all_timesteps:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.scatter(all_timesteps, all_entropies, alpha=0.2, s=10, color="steelblue")
+        ax.set_xlabel("t")
+        ax.set_ylabel("Entropy")
+        ax.set_title(f"Policy entropy vs time ({num_maps} maps; {len(all_timesteps)} steps)")
+        wandb.log({"entropy_vs_timestep": wandb.Image(fig)})
+        plt.close(fig)
+
+    env.close()
+
+    # Sweep up anything left behind: the moved-and-deleted dir, plus any
+    # stray mp4s ffmpeg may have left in the cwd.
+    if os.path.isdir(video_dir):
+        try:
+            shutil.rmtree(video_dir)
+        except OSError as e:
+            print(f"Warning: could not remove {video_dir}: {e}")
+
+    for stray in glob.glob("*.mp4"):
+        try:
+            os.remove(stray)
+        except OSError as e:
+            print(f"Warning: could not delete {stray}: {e}")
+
+    print(f"Logged {logged} videos across {num_maps} maps")
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +645,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     output_sizes = get_output_sizes(dynamics_model)
 
     run = wandb.init(
-        project="bc_anchor_policy",
+        project="delta_bc_debug",
         tags=["bc_policy", dynamics_model],
         config={**TRAIN_DEFAULTS, "dynamics_model": dynamics_model, "output_sizes": output_sizes},
     )
@@ -489,13 +679,15 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
     effective_map_dir = args["env"]["map_dir"]
     run.name = f"{dynamics_model}_{os.path.basename(effective_map_dir)}_{num_maps}maps"
+    checkpoint_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
+    checkpoint_save_frequency = 250
 
     env = load_env("puffer_drive", args)
     driver_env = env.driver_env
 
     # Validation env: same config but uses a held-out set of maps
     val_args = build_env_args(dynamics_model, num_maps=10000)
-    val_args["env"]["map_dir"] = "resources/drive/binaries/validation"
+    val_args["env"]["map_dir"] = "resources/drive/binaries/training"
     val_env = load_env("puffer_drive", val_args)
     val_driver_env = val_env.driver_env
 
@@ -570,10 +762,12 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
             optimizer.step()
 
             accuracy = compute_accuracy(policy, batch_obs, batch_actions)
+
             epoch_losses.append(loss.item())
             epoch_accuracies.append(accuracy)
 
             # Log statistics
+            head_metrics = compute_head_metrics(policy, batch_obs, batch_actions)
             wandb.log(
                 {
                     f"train/{k}": v
@@ -583,6 +777,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
                         "epoch": epoch,
                         "global_step": global_step,
                         **(entropy if isinstance(entropy, dict) else {"entropy": entropy}),
+                        **head_metrics,
                     }.items()
                 }
             )
@@ -601,7 +796,7 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         # ------------------------------------------------------------------
         # Validation + patience-based early stopping
         # ------------------------------------------------------------------
-        if epoch % eval_frequency == 0:
+        if epoch % eval_frequency == 0 or stop_training:
             val_metrics = evaluate(policy, val_dataloader, device)
             last_val_loss = val_metrics["loss"]
             last_val_accuracy = val_metrics["accuracy"]
@@ -633,6 +828,19 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
 
         print(f"Epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}  best={best_avg_loss:.4f}")
 
+        # Periodic checkpoint save (overwrites previous)
+        if (epoch + 1) % checkpoint_save_frequency == 0:
+            periodic_metrics = {
+                "num_maps": num_maps,
+                "val_accuracy": last_val_accuracy,
+                "train_accuracy": last_train_accuracy,
+                "train_loss": last_train_loss,
+                "val_loss": last_val_loss,
+                "epoch": epoch + 1,
+            }
+            save_checkpoint(checkpoint_path, policy, periodic_metrics)
+            print(f"  [checkpoint] saved at epoch {epoch + 1} -> {checkpoint_path}")
+
         if stop_training:
             break
 
@@ -645,7 +853,6 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
     final_val_metrics = evaluate(policy, val_dataloader, device)
     last_val_loss = final_val_metrics["loss"]
     last_val_accuracy = final_val_metrics["accuracy"]
-    wandb.log({"val/final_" + k: v for k, v in final_val_metrics.items()})
 
     # ------------------------------------------------------------------
     # Save checkpoint: weights + performance metrics
@@ -658,11 +865,10 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         "val_loss": last_val_loss,
     }
 
-    save_path = f"{CHECKPOINT_PATH}/bc_{dynamics_model}_{num_maps}maps_{run.id}.pt"
-    save_checkpoint(save_path, policy, checkpoint_metrics)
-    wandb.save(save_path, base_path=".")
+    save_checkpoint(checkpoint_path, policy, checkpoint_metrics)
+    wandb.save(checkpoint_path, base_path=".")
     print(
-        f"Saved checkpoint: {save_path}\n"
+        f"Saved final checkpoint: {checkpoint_path}\n"
         f"  num_maps={num_maps}  val_acc={last_val_accuracy:.4f}  val_loss={last_val_loss:.4f}  "
         f"  train_acc={last_train_accuracy:.4f}  train_loss={last_train_loss:.4f}"
     )
@@ -679,6 +885,13 @@ def train(dynamics_model: str, map_dir: str = None, num_maps_override: int = Non
         device=device,
     )
 
+    # Visual sanity check rollout
+    # On train maps
+    try:
+        record_rollout_video(policy, dynamics_model, device)
+    except Exception as e:
+        print(f"Video recording failed (non-fatal): {e}")
+
     env.close()
     val_env.close()
     wandb.finish()
@@ -693,7 +906,7 @@ def parse_args():
 
     for name, help_text in [
         ("train", "Single training run"),
-        ("sweep", "Create a new sweep and attach an agent"),
+        ("multi", "Sequentially train one run per value in NUM_MAPS_SWEEP"),
     ]:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--dynamics", choices=["classic", "delta_local"], default="delta_local")
@@ -701,8 +914,8 @@ def parse_args():
             p.add_argument("--map-dir", type=str, default=None, help="Override map_dir")
             p.add_argument("--num-maps", type=int, default=None, help="Override num_maps")
             p.add_argument("--val-patience", type=int, default=None, help="Override val_patience")
-        if name == "sweep":
-            p.add_argument("--count", type=int, default=50, help="Number of sweep runs")
+        if name == "multi":
+            p.add_argument("--map-dir", type=str, default=None, help="Override map_dir for all runs")
 
     return parser.parse_args()
 
@@ -720,6 +933,11 @@ if __name__ == "__main__":
             num_maps_override=args.num_maps,
         )
 
-    elif args.mode == "sweep":
-        sweep_id = wandb.sweep(SWEEP_CONFIG, project="bc_anchor_policy")
-        wandb.agent(sweep_id, function=lambda: train(args.dynamics), count=args.count)
+    elif args.mode == "multi":
+        for i, n in enumerate(NUM_MAPS_SWEEP, start=1):
+            print(f"\n{'=' * 60}\nRun {i}/{len(NUM_MAPS_SWEEP)}: num_maps={n}\n{'=' * 60}")
+            train(
+                dynamics_model=args.dynamics,
+                map_dir=args.map_dir,
+                num_maps_override=n,
+            )

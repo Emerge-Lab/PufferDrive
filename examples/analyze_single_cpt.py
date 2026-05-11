@@ -25,16 +25,16 @@ CPT_PATH = (
 )
 
 ENV_NAME = "puffer_drive"
-TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
-VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
+TRAIN_MAP_DIR = "resources/drive/binaries/training"
+VAL_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_AGENTS_PER_VECENV = 256 * 10
+NUM_AGENTS_PER_VECENV = 100
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 25
+NUM_ENVS_TO_RENDER = 0#20
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
 EPISODE_LENGTHS = [150]

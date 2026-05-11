@@ -35,11 +35,11 @@ from pufferlib.pufferl import load_config, load_env
 from pufferlib.ocean.drive import binding
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-ANCHOR_DIR = "models/anchors_v2"
-VAL_MAP_DIR = "resources/drive/binaries/validation"
+ANCHOR_DIR = "models/anchors"
+VAL_MAP_DIR = "resources/drive/binaries/training"
 VAL_NUM_MAPS = 10_000
 OUTPUT_CSV = "results/anchor_eval.csv"
-DETERMINISTIC = True
+DETERMINISTIC = False
 
 METRICS = [
     "n",
@@ -90,7 +90,7 @@ def make_bc_eval_env(dynamics_model: str, control_mode: str, num_maps: int):
     """
     args = load_config("puffer_drive")
     args["vec"] = dict(backend="PufferEnv", num_envs=1)
-    args["env"]["num_agents"] = 2048
+    args["env"]["num_agents"] = 1024
     args["env"]["map_dir"] = VAL_MAP_DIR
     args["env"]["num_maps"] = num_maps
     args["env"]["dynamics_model"] = dynamics_model

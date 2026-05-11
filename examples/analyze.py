@@ -49,11 +49,11 @@ SCALING_CHECKPOINTS_PATH = (
 )
 DETERMINISTIC = True
 
-TRAIN_MAP_DIR = "resources/drive/binaries/training_50k"
-VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 1024 * 5
-NUM_AGENTS_PER_VECENV = 1024
+TRAIN_MAP_DIR = "resources/drive/binaries/training"
+VAL_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/validation"  # 10k maps
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
+NUM_TOTAL_EVAL_AGENTS = 128 #1024 * 5
+NUM_AGENTS_PER_VECENV = 128 #1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"

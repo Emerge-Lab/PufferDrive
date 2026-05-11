@@ -1075,7 +1075,6 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
     }
 
     int trajectory_length = PyArray_DIM(expert_actions_discrete, 0);
-    int max_obs = EGO_FEATURES + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
     // Process data for each vectorized environment
     int agent_offset = 0;
@@ -1083,6 +1082,13 @@ static PyObject *vec_collect_expert_data(PyObject *self, PyObject *args) {
         Env *env = vec->envs[i];
         int num_agents = env->active_agent_count;
         int discrete_action_dim = (env->dynamics_model == DELTA_LOCAL) ? 3 : 1;
+
+        int ego_dim;
+        if (env->dynamics_model == JERK)
+            ego_dim = EGO_FEATURES_JERK;
+        else 
+            ego_dim = EGO_FEATURES;
+        int max_obs = ego_dim + PARTNER_FEATURES * (MAX_AGENTS - 1) + ROAD_FEATURES * MAX_ROAD_SEGMENT_OBSERVATIONS;
 
         float *env_actions_discrete =
             (float *)malloc(trajectory_length * num_agents * discrete_action_dim * sizeof(float));

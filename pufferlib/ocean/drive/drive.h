@@ -153,9 +153,14 @@ static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 #define NUM_DX_BINS 51
 #define NUM_DY_BINS 51
 #define NUM_YAW_BINS 127
-#define DELTA_MAX_DX 2.5f
-#define DELTA_MAX_DY 2.0f
-#define DELTA_MAX_DYAW 3.14159265 / 4.0
+#define DELTA_MAX_DX 3.5f
+#define DELTA_MAX_DY 0.1f
+#define DELTA_MAX_DYAW (M_PI / 6.0)
+
+// Kinematic constraint parameters for delta-local model
+#define A_LONG_MAX 8.0f    // m/s^2  — max longitudinal accel/brake
+#define MAX_STEER 0.7f     // rad    — max effective steering angle
+#define YAW_ACCEL_MAX 8.0f // rad/s^2 — max change in yaw rate per second
 
 static int COLLECT_EXPERT_TELEPORT = 1;
 static float ACCELERATION_VALUES[NUM_ACCEL_BINS];
@@ -224,6 +229,9 @@ struct Log {
     float route_progress;      // Longitudinal continuous route completion
     float lateral_error_avg;   // Average lateral displacement from initial heading axis
     float l2_samples;          // Sample count for L2 decomposition
+    float longitudinal_error_avg;
+    float displacement_error_avg; // ADE
+    float displacement_samples;
     float rear_collision_rate; // Fraction of steps with a rear collision event
     float n;
 };
@@ -297,6 +305,10 @@ struct Entity {
     float reward_collision_cond;
     float reward_offroad_cond;
     float reward_goal_cond;
+    float prev_action_dx;
+    float prev_action_dy;
+    float prev_action_dyaw;
+    float jerk_yaw;
 };
 
 void free_entity(Entity *entity) {
@@ -342,19 +354,29 @@ float clip(float value, float min, float max) {
     return value;
 }
 
-float compute_route_progress_and_lateral(Entity *e, float px, float py, int init_steps, float *lateral_out) {
+float compute_route_progress_and_errors(Entity *e, float px, float py, int init_steps, int timestep, float *lateral_out,
+                                        float *longitudinal_out, float *displacement_out) {
     if (e->traj_x == NULL || e->traj_valid == NULL) {
         *lateral_out = 0.0f;
+        *longitudinal_out = 0.0f;
+        *displacement_out = 0.0f;
         return 0.0f;
     }
 
     float cumulative = 0.0f;
-    float d_p = 0.0f;
-    float d_q = 0.0f;
-    float d_xt = 0.0f;
+    float d_p = 0.0f;   // arc length at init_steps
+    float d_q = 0.0f;   // arc length at end (total)
+    float d_xt = 0.0f;  // arc length at closest point to (px, py)
+    float d_now = 0.0f; // arc length at current timestep
     float best_dist_sq = 1e30f;
-    float best_x = px, best_y = py; // closest point on trajectory
     float prev_x = e->traj_x[0], prev_y = e->traj_y[0];
+
+    // Clamp timestep into the trajectory range for displacement lookup
+    int t_lookup = timestep;
+    if (t_lookup < 0)
+        t_lookup = 0;
+    if (t_lookup >= e->array_size)
+        t_lookup = e->array_size - 1;
 
     for (int t = 0; t < e->array_size; t++) {
         if (!e->traj_valid[t]) {
@@ -369,6 +391,8 @@ float compute_route_progress_and_lateral(Entity *e, float px, float py, int init
         }
         if (t == init_steps)
             d_p = cumulative;
+        if (t == t_lookup)
+            d_now = cumulative;
         d_q = cumulative;
 
         float dx = px - e->traj_x[t];
@@ -377,15 +401,22 @@ float compute_route_progress_and_lateral(Entity *e, float px, float py, int init
         if (dist_sq < best_dist_sq) {
             best_dist_sq = dist_sq;
             d_xt = cumulative;
-            best_x = e->traj_x[t];
-            best_y = e->traj_y[t];
         }
         prev_x = e->traj_x[t];
         prev_y = e->traj_y[t];
     }
 
-    // Lateral error = Euclidean distance to closest point on expert trajectory
     *lateral_out = sqrtf(best_dist_sq);
+    // Signed: positive => agent is ahead of the expert along the route
+    *longitudinal_out = d_xt - d_now;
+
+    if (e->traj_valid[t_lookup] && e->traj_x[t_lookup] != INVALID_POSITION) {
+        float ex = e->traj_x[t_lookup];
+        float ey = e->traj_y[t_lookup];
+        *displacement_out = sqrtf((px - ex) * (px - ex) + (py - ey) * (py - ey));
+    } else {
+        *displacement_out = -1.0f; // sentinel: invalid
+    }
 
     float denom = d_q - d_p;
     if (denom < 1e-3f)
@@ -502,13 +533,17 @@ void add_log(Drive *env) {
             env->log.route_progress += env->logs[i].route_progress;
         } else {
             // Agent timed out without reaching goal: compute from final position
-            float unused_lateral = 0.0f;
-            env->log.route_progress +=
-                compute_route_progress_and_lateral(e, e->x, e->y, env->init_steps, &unused_lateral);
+            float unused_lateral = 0.0f, unused_long = 0.0f, unused_disp = 0.0f;
+            env->log.route_progress += compute_route_progress_and_errors(e, e->x, e->y, env->init_steps, env->timestep,
+                                                                         &unused_lateral, &unused_long, &unused_disp);
         }
 
         if (env->logs[i].l2_samples > 0.0f) {
             env->log.lateral_error_avg += env->logs[i].lateral_error_avg / env->logs[i].l2_samples;
+            env->log.longitudinal_error_avg += env->logs[i].longitudinal_error_avg / env->logs[i].l2_samples;
+        }
+        if (env->logs[i].displacement_samples > 0.0f) {
+            env->log.displacement_error_avg += env->logs[i].displacement_error_avg / env->logs[i].displacement_samples;
         }
 
         float frac_goal_reached = e->goals_reached_this_episode / e->goals_sampled_this_episode;
@@ -717,6 +752,12 @@ void set_start_position(Drive *env) {
         e->jerk_lat = 0.0f;
         e->steering_angle = 0.0f;
         e->wheelbase = e->length;
+        // Initialize prev_action_* from the agent's actual starting motion so the
+        // kinematic constraints don't artificially throttle step 1.
+        float speed_init = e->vx * e->heading_x + e->vy * e->heading_y;
+        e->prev_action_dx = speed_init * env->dt;
+        e->prev_action_dy = 0.0f;
+        e->prev_action_dyaw = 0.0f;
     }
 }
 
@@ -1334,7 +1375,9 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
 
     Entity *entity = &env->entities[agent_idx];
 
-    if (env->control_mode == CONTROL_SDC_ONLY) {
+    // SDC-only modes: only the SDC entity is policy/inferred-action controlled.
+    // INFERRED_EXPERT_ACTIONS now drives only the SDC; everyone else replays logs.
+    if (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
         return agent_idx == env->sdc_track_index;
     }
 
@@ -1344,7 +1387,6 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
 
     switch (env->control_mode) {
     case CONTROL_WOSAC:
-    case CONTROL_INFERRED_EXPERT_ACTIONS:
     case CONTROL_REPLAY_LOGS:
         // Valid types only, ignore expert flag and goal distance
         return (is_vehicle || is_ped_or_bike);
@@ -1377,6 +1419,7 @@ bool should_control_agent(Drive *env, int agent_idx, int control_limit) {
     return distance_to_goal >= MIN_DISTANCE_TO_GOAL;
 }
 
+
 void set_active_agents(Drive *env) {
 
     // Initialize
@@ -1399,6 +1442,11 @@ void set_active_agents(Drive *env) {
     } else {
         control_limit = env->num_agents;
     }
+
+    // SDC-only modes: only the SDC is active; all other valid agents replay
+    // their logs as expert-static background. Forces force_replay below.
+    bool sdc_only_mode =
+        (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS);
 
     // If we have a SDC index (WOMD), initialize it first:
     int sdc_index = env->sdc_track_index;
@@ -1750,6 +1798,71 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         action_dx = clip(action_dx, -DELTA_MAX_DX, DELTA_MAX_DX);
         action_dy = clip(action_dy, -DELTA_MAX_DY, DELTA_MAX_DY);
         action_dyaw = normalize_heading(action_dyaw);
+
+        float raw_dx = action_dx, raw_dy = action_dy, raw_dyaw = action_dyaw;
+
+        // ----- Kinematic constraints (delta-local) -----
+        // Each constraint operates on the action AFTER prior constraints have clipped it.
+        // prev_action_* stores the previously-executed (post-constraint) values.
+
+        // A. Longitudinal acceleration bound.
+        //    Implied previous speed = prev_action_dx / dt. Limit change to ±A_LONG_MAX*dt.
+        {
+            float prev_speed = agent->prev_action_dx / env->dt;
+            float speed_lo = prev_speed - A_LONG_MAX * env->dt;
+            float speed_hi = prev_speed + A_LONG_MAX * env->dt;
+            float new_speed_proposed = action_dx / env->dt;
+            float new_speed = clip(new_speed_proposed, speed_lo, speed_hi);
+            action_dx = new_speed * env->dt;
+        }
+
+        // B. Lateral motion bicycle envelope: |dy| ≤ |dx| * tan(MAX_STEER).
+        //    Eliminates lateral sliding and side-shimmy at low / zero forward speed.
+        {
+            float max_dy = fabsf(action_dx) * tanf(MAX_STEER);
+            float prev_action_dy = action_dy;
+            action_dy = clip(action_dy, -max_dy, max_dy);
+       
+        }
+
+        // // C. Yaw rate kinematic envelope: |dyaw| ≤ |dx / wheelbase| * tan(MAX_STEER).
+        // //    Yaw scales with forward motion — no standing-still pivots.
+        // {
+        //     float max_dyaw = fabsf(action_dx / agent->wheelbase) * tanf(MAX_STEER);
+        //     float previous_action_dyaw = action_dyaw;
+        //     action_dyaw = clip(action_dyaw, -max_dyaw, max_dyaw);
+        // }
+
+        // // D. Yaw acceleration bound.
+        // //    Implied previous yaw rate = prev_action_dyaw / dt. Limit change to ±YAW_ACCEL_MAX*dt.
+        // //    Prevents rapid left-right flip-flop within the kinematic envelope.
+        // {
+        //     float prev_yaw_rate = agent->prev_action_dyaw / env->dt;
+        //     float yr_lo = prev_yaw_rate - YAW_ACCEL_MAX * env->dt;
+        //     float yr_hi = prev_yaw_rate + YAW_ACCEL_MAX * env->dt;
+        //     float new_yaw_rate_proposed = action_dyaw / env->dt;
+        //     float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
+        //     action_dyaw = new_yaw_rate * env->dt;
+        // }
+
+        float jerk_dx = action_dx - agent->prev_action_dx;
+        float jerk_dy = action_dy - agent->prev_action_dy;
+        float jerk_dyaw = normalize_heading(action_dyaw - agent->prev_action_dyaw);
+
+        agent->jerk_long = jerk_dx;
+        agent->jerk_lat = jerk_dy;
+        agent->jerk_yaw = jerk_dyaw;
+
+        agent->prev_action_dx = action_dx;
+        agent->prev_action_dy = action_dy;
+        agent->prev_action_dyaw = action_dyaw;
+
+        // if (raw_dx != action_dx)
+        //     printf("clipped dx: %.3f -> %.3f\n", raw_dx, action_dx);
+        // if (raw_dy != action_dy)
+        //     printf("clipped dy: %.3f -> %.3f\n", raw_dy, action_dy);
+        // if (raw_dyaw != action_dyaw)
+        //     printf("clipped dyaw: %.3f -> %.3f\n", raw_dyaw, action_dyaw);
 
         float cos_h = agent->heading_x;
         float sin_h = agent->heading_y;
@@ -2324,7 +2437,6 @@ static void override_action_with_expert(Drive *env, int action_idx, int agent_id
         }
     }
 }
-
 void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
@@ -2449,17 +2561,22 @@ void c_step(Drive *env) {
             }
         }
 
-        // NEW: per-step metrics accumulation (only while agent is alive)
+        // Per-step metrics accumulation (only while agent is alive)
         if (!agent_is_done && !env->entities[agent_idx].removed) {
 
-            // --- Per-step lateral deviation from expert trajectory ---
-            float lateral_err = 0.0f;
-            compute_route_progress_and_lateral(&env->entities[agent_idx], env->entities[agent_idx].x,
-                                               env->entities[agent_idx].y, env->init_steps, &lateral_err);
+            float lateral_err = 0.0f, long_err = 0.0f, disp_err = 0.0f;
+            compute_route_progress_and_errors(&env->entities[agent_idx], env->entities[agent_idx].x,
+                                              env->entities[agent_idx].y, env->init_steps, env->timestep, &lateral_err,
+                                              &long_err, &disp_err);
             env->logs[i].lateral_error_avg += lateral_err;
+            env->logs[i].longitudinal_error_avg += fabsf(long_err);
             env->logs[i].l2_samples += 1.0f;
 
-            // --- Rear collision ---
+            if (disp_err >= 0.0f) {
+                env->logs[i].displacement_error_avg += disp_err;
+                env->logs[i].displacement_samples += 1.0f;
+            }
+            // Rear collisions
             if (env->entities[agent_idx].rear_collision_state) {
                 env->logs[i].rear_collision_rate = 1.0f;
             }
