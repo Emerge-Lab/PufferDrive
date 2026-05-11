@@ -461,7 +461,12 @@ class PuffeRL:
         # [eval.<name>] section in drive.ini is one evaluator instance;
         # the manager fires any whose interval divides this epoch. See
         # docs/eval_unification.md for the design.
-        if self._eval_manager is not None:
+        # Under DDP, only rank 0 runs eval — every rank has identical
+        # weights so duplicating the rollout wastes memory + compute,
+        # and parallel mp4 writes from N ranks race on filenames. Other
+        # ranks block on the next allreduce until rank 0 rejoins.
+        is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
+        if self._eval_manager is not None and is_rank0:
             # Subprocess evals load the policy from disk. Save the latest
             # checkpoint first so they see this epoch's weights, not the
             # last save_checkpoint() from `checkpoint_interval`.
@@ -1461,8 +1466,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # of whether `epoch % interval == 0` lines up. Restores the
     # `epoch % interval == 0 or done_training` semantics from the legacy
     # eval pipeline — without this the final epoch's metrics get dropped
-    # whenever total_timesteps lands off-cycle.
-    if pufferl._eval_manager is not None:
+    # whenever total_timesteps lands off-cycle. Rank-0 only under DDP
+    # for the same reasons as the in-loop call above.
+    is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
+    if pufferl._eval_manager is not None and is_rank0:
         pufferl._eval_manager.maybe_run(
             epoch=pufferl.epoch,
             policy=pufferl.uncompiled_policy,
