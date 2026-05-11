@@ -1830,6 +1830,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
+    assign_to_dict(dict, "goal_completion_rate", log->goal_completion_rate);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "score", log->score);

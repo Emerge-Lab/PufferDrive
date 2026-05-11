@@ -203,6 +203,7 @@ struct Log {
     float red_light_violation_rate;
     float num_waypoints_reached;
     float num_goals_reached;
+    float goal_completion_rate;
     float comfort_violation_count;
     float velocity_progress_sum;
     float lane_center_rate;
@@ -2611,6 +2612,7 @@ static void add_log(Drive *env) {
         env->log.num_waypoints_reached += num_waypoints_reached;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
+        env->log.goal_completion_rate += env->logs[i].goal_completion_rate;
         // Score: 1 per agent that reached all 3 target waypoints without
         // being removed/stopped. Was hardcoded to >=4, unreachable given
         // num_target_waypoints=3 in the ini, so score was always 0.
@@ -4877,6 +4879,12 @@ void c_step(Drive *env) {
                 // landed in the rollout buffer this step; the goal_behavior
                 // branch decides what the AGENT does NEXT step.
                 env->logs[i].num_goals_reached += 1;
+                // Idempotent per-episode flag: 1 iff this agent ever reached
+                // its final goal. Assignment (not +=) so vec_log's sum/n
+                // gives the fraction of agents that completed their route,
+                // independent of how many post-final-goal steps the agent
+                // sits at the saturated goal position.
+                env->logs[i].goal_completion_rate = 1.0f;
                 if (env->goal_behavior == GOAL_REMOVE) {
                     // Self-play / nuplan-style episodes: mark the agent
                     // removed so it sits invalid until either every agent
