@@ -1,11 +1,6 @@
 import os
-import sys
-import glob
-import random
 import shutil
 import subprocess
-import tempfile
-import json
 
 
 def render_videos(config, vecenv, logger, epoch, global_step, bin_path):

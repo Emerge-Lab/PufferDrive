@@ -1457,6 +1457,21 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     #     stats = pufferl.evaluate()
     #     i += 1
 
+    # Force every enabled evaluator to fire once at shutdown, regardless
+    # of whether `epoch % interval == 0` lines up. Restores the
+    # `epoch % interval == 0 or done_training` semantics from the legacy
+    # eval pipeline — without this the final epoch's metrics get dropped
+    # whenever total_timesteps lands off-cycle.
+    if pufferl._eval_manager is not None:
+        pufferl._eval_manager.maybe_run(
+            epoch=pufferl.epoch,
+            policy=pufferl.uncompiled_policy,
+            env_name=pufferl.config["env"],
+            logger=pufferl.logger,
+            global_step=pufferl.global_step,
+            force=True,
+        )
+
     logs = pufferl.mean_and_log()
     if logs is not None:
         all_logs.append(logs)

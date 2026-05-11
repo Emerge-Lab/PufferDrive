@@ -96,9 +96,13 @@ class EvalManager:
                     return max(files, key=os.path.getctime)
         return self.train_config.get("load_model_path")
 
-    def maybe_run(self, epoch: int, policy, env_name: str, logger=None, global_step=None) -> dict:
+    def maybe_run(self, epoch: int, policy, env_name: str, logger=None, global_step=None, force: bool = False) -> dict:
         """Called from the training loop. Runs every enabled evaluator
-        whose `interval` divides `epoch`. Returns a dict of {eval_name → metrics}.
+        whose `interval` divides `epoch` (or all enabled evaluators if
+        `force=True` — used at training shutdown to capture final metrics
+        regardless of where the epoch lands). Returns a dict mapping
+        `eval_name → EvalResult` (each result has `.metrics` and
+        `.frames`).
 
         One evaluator's failure (e.g., a missing bin dir for a single
         behavior class) doesn't skip the rest — the error is printed in
@@ -111,9 +115,9 @@ class EvalManager:
         for ev in self.evaluators:
             if not ev.enabled:
                 continue
-            if ev.interval <= 0:
+            if ev.interval <= 0 and not force:
                 continue
-            if epoch % ev.interval != 0:
+            if not force and epoch % ev.interval != 0:
                 continue
             try:
                 res = self._run_one(

@@ -62,6 +62,10 @@ class Evaluator:
     def rollout(self, vecenv, policy, args) -> EvalResult:
         """Default rollout: reset → step → collect infos → aggregate.
 
+        Switches the policy to `.eval()` for the duration so dropout /
+        batchnorm / etc. behave deterministically; restores the prior
+        mode afterward so subsequent training is unaffected.
+
         Times the metric pass and the render pass separately and reports
         both alongside the total. Render is EGL+ffmpeg-bound and varies
         wildly with `render_max_steps`/`render_num_scenarios`; lumping
@@ -71,11 +75,18 @@ class Evaluator:
           render_seconds  — _render_pass wall time (0.0 if render=false)
           eval_seconds    — total = metric + render
         """
+        prev_training = getattr(policy, "training", None)
+        if prev_training is not None:
+            policy.eval()
         t0 = time.time()
-        metrics = self._run_rollout_loop(vecenv, policy, args)
-        t_metric = time.time()
-        frames = self._render_pass(vecenv, policy, args) if self.render else []
-        t_render = time.time()
+        try:
+            metrics = self._run_rollout_loop(vecenv, policy, args)
+            t_metric = time.time()
+            frames = self._render_pass(vecenv, policy, args) if self.render else []
+            t_render = time.time()
+        finally:
+            if prev_training:
+                policy.train()
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)

@@ -555,6 +555,67 @@ def test_rollout_records_metric_render_and_total_seconds():
     assert abs(result2.metrics["eval_seconds"] - expected_total) < 1e-6
 
 
+def test_rollout_puts_policy_in_eval_mode_and_restores():
+    """Policies are passed in their training-loop state (typically `.train()`).
+    Eval rollout must flip the module to `.eval()` so dropout/batchnorm are
+    deterministic, then restore the prior mode so subsequent training is
+    unaffected. Verifies both: the rollout observes eval=True, and the
+    policy ends back in train mode."""
+
+    class _Stub(Evaluator):
+        type_name = "_stub_eval_mode"
+
+        def _run_rollout_loop(self, vecenv, policy, args):
+            # Snapshot policy mode AT the moment of rollout so we can
+            # assert it was flipped to eval.
+            args["_observed_training"] = policy.training
+            return {}
+
+    class _Policy:
+        training = True  # mimic nn.Module: starts in train mode
+
+        def eval(self):
+            self.training = False
+
+        def train(self, mode: bool = True):
+            self.training = mode
+
+    policy = _Policy()
+    args = {}
+    _Stub("test", {}, {}).rollout(vecenv=None, policy=policy, args=args)
+    assert args["_observed_training"] is False, "policy was not put in eval mode during rollout"
+    assert policy.training is True, "policy was not restored to train mode after rollout"
+
+
+def test_maybe_run_force_fires_every_enabled_evaluator(monkeypatch):
+    """force=True is used at training shutdown — every enabled evaluator
+    fires regardless of whether epoch % interval == 0. interval-disabled
+    evaluators (interval=0 or enabled=false) are still skipped."""
+    train_config = {
+        "eval": {
+            "every_5": {"type": "human_replay", "interval": 5},
+            "every_250": {"type": "human_replay", "interval": 250},
+            "disabled": {"type": "human_replay", "interval": 5, "enabled": False},
+            "zero_interval": {"type": "human_replay", "interval": 0},
+        }
+    }
+    mgr = EvalManager.from_config(train_config)
+    calls = []
+
+    def fake_run(ev, *, policy, env_name, logger, global_step, epoch):
+        calls.append(ev.name)
+        return EvalResult(metrics={})
+
+    monkeypatch.setattr(mgr, "_run_one", fake_run)
+
+    # epoch=37 lines up with no interval, but force=True should still fire
+    # every enabled (and interval>0 OR force) evaluator.
+    mgr.maybe_run(epoch=37, policy=None, env_name="puffer_drive", force=True)
+    assert sorted(calls) == ["every_250", "every_5", "zero_interval"], (
+        "force=True ignores interval check; disabled is still skipped"
+    )
+
+
 def test_eval_args_compose_train_section_and_clean_macro():
     """_build_eval_args must fold train_config['env'] (baseline) +
     section overrides + clean macro correctly. Section beats baseline,
