@@ -8,6 +8,7 @@ import copy
 import glob
 import os
 import shutil
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -17,27 +18,32 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-# CPT_PATH = "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt"
-CPT_PATH = (
-    # "models/reg_delta_50k_maps_anchor_200_maps_99.pt"
-    "models/reg_delta_50k_maps_anchor_200_maps_995.pt"
-    # "models/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_classic_50k_maps.pt"
-)
+CPT_PATH = "models/scaling_cpts/delta_50k_maps_anchor_12k_maps.pt"  # "models/model_puffer_drive_005000 (1).pt" #"models/scaling_cpts/unreg_delta_50k_maps.pt" #"models/model_puffer_drive_010000.pt" #"models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  #"models/scaling_cpts/unreg_delta_50k_maps.pt"
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training"
-VAL_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_AGENTS_PER_VECENV = 100
+VAL_MAP_DIR = "resources/drive/binaries/training"  # 10k maps
+INTERACTIVE_MAP_DIR = (
+    "resources/drive/binaries/interactive_data_validation"
+    # "resources/drive/binaries/womd_val_idm_10k"
+)
+INTERACTIVE_MAP_NUM_FILES = 200
+NUM_AGENTS_PER_VECENV = 1024
 DETERMINISTIC = True
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
-# Rendering
+# Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 0#20
+NUM_ENVS_TO_RENDER = 0
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
-EPISODE_LENGTHS = [150]
+# GIF conversion settings
+CONVERT_TO_GIF = True
+GIF_FPS = 20
+GIF_SCALE_WIDTH = 960  # output width in pixels; height auto-scaled to keep aspect
+KEEP_MP4 = True  # set False to delete mp4s after successful gif conversion
+
+EPISODE_LENGTHS = [200]
 
 METRICS = [
     "n",
@@ -54,6 +60,8 @@ METRICS = [
     "episode_length",
     "episode_return",
     "perc_controlled",
+    "longitudinal_error_avg",
+    "average_displacement_avg",
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -68,7 +76,15 @@ def load_checkpoint_config(checkpoint_path, fallback_config):
     return copy.deepcopy(fallback_config), False
 
 
-def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behavior=0, num_maps=50000):
+def make_eval_config(
+    base_config,
+    map_dir,
+    episode_len,
+    control_mode,
+    goal_behavior=0,
+    num_maps=50000,
+    controller_overrides=None,
+):
     """Build an eval-ready config, overriding only eval-specific settings."""
     config = copy.deepcopy(base_config)
     config["env"]["map_dir"] = map_dir
@@ -85,15 +101,15 @@ def make_eval_config(base_config, map_dir, episode_len, control_mode, goal_behav
     config["env"]["control_mode"] = control_mode
     config["env"]["goal_behavior"] = goal_behavior
     config["env"]["render_mode"] = 1
+    if controller_overrides is not None:
+        config["env"].update(controller_overrides)
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
-
-    print(config["env"]["lambda_value"])
     return config
 
 
 def select_render_envs(evaluator, policy, env, num_to_render):
     """Run a non-rendering stats rollout and pick envs to render."""
-    info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+    info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
     populated = [(i, log) for i, log in enumerate(info_list) if log and log.get("n", 0) > 0]
 
     if not populated:
@@ -112,13 +128,13 @@ def select_render_envs(evaluator, policy, env, num_to_render):
     return [idx for idx, _ in selected]
 
 
-def render_envs(evaluator, policy, env, env_indices, video_dir):
+def render_envs(evaluator, policy, env, env_indices, video_dir, seed=42):
     """Render each selected env and move mp4s into video_dir."""
     os.makedirs(video_dir, exist_ok=True)
 
     for i, env_idx in enumerate(env_indices):
         print(f"    Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
-        evaluator.rollout(policy, env, render_env_idx=env_idx, deterministic=DETERMINISTIC)
+        evaluator.rollout(env=env, policy=policy, render_env_idx=env_idx, deterministic=DETERMINISTIC)
         env.driver_env.stop_recorder(env_idx)
 
     for mp4_path in glob.glob("*.mp4"):
@@ -139,6 +155,72 @@ def process_rollout_data(info_list, checkpoint, mode, episode_len):
     return rows
 
 
+def convert_mp4_to_gif(mp4_path, gif_path, fps=GIF_FPS, scale_width=GIF_SCALE_WIDTH):
+    """Convert a single mp4 to gif using ffmpeg with a generated palette for decent quality.
+
+    Returns True on success, False on failure.
+    """
+    palette_path = gif_path + ".palette.png"
+    vf_palette = f"fps={fps},scale={scale_width}:-1:flags=lanczos,palettegen=stats_mode=full"
+    vf_use = f"fps={fps},scale={scale_width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", mp4_path, "-vf", vf_palette, palette_path],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                mp4_path,
+                "-i",
+                palette_path,
+                "-lavfi",
+                vf_use,
+                gif_path,
+            ],
+            check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"    ffmpeg failed for {mp4_path}: {e}")
+        return False
+    finally:
+        if os.path.exists(palette_path):
+            os.remove(palette_path)
+
+
+def convert_videos_to_gifs(root_dir, fps=GIF_FPS, scale_width=GIF_SCALE_WIDTH, keep_mp4=KEEP_MP4):
+    """Walk root_dir and convert every .mp4 to a sibling .gif."""
+    if not os.path.isdir(root_dir):
+        print(f"  No video dir at {root_dir}, skipping gif conversion.")
+        return
+
+    mp4_files = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fn in filenames:
+            if fn.lower().endswith(".mp4"):
+                mp4_files.append(os.path.join(dirpath, fn))
+
+    if not mp4_files:
+        print(f"  No mp4 files found under {root_dir}.")
+        return
+
+    print(f"\nConverting {len(mp4_files)} mp4 file(s) to gif (fps={fps}, width={scale_width})...")
+    n_ok = 0
+    for mp4_path in mp4_files:
+        gif_path = os.path.splitext(mp4_path)[0] + ".gif"
+        print(f"  {mp4_path} -> {gif_path}")
+        if convert_mp4_to_gif(mp4_path, gif_path, fps=fps, scale_width=scale_width):
+            n_ok += 1
+            if not keep_mp4:
+                os.remove(mp4_path)
+    print(f"  Converted {n_ok}/{len(mp4_files)} videos to gif.")
+
+
 def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- add param
     cpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
     cpt_config, _ = load_checkpoint_config(checkpoint_path, base_config)
@@ -146,12 +228,25 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
 
     all_rows = []
 
-    for mode_name, map_dir, control_mode, num_maps in [
-        # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
-        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
-        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
-        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", 200),
-    ]:
+    eval_modes = [
+        ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000, None),
+        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000, None),
+        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000, None),
+        ("hr_interactive", INTERACTIVE_MAP_DIR, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES, None),
+        # (
+        #     "idm_interactive",
+        #     INTERACTIVE_MAP_DIR,
+        #     "control_sdc_only",
+        #     INTERACTIVE_MAP_NUM_FILES,
+        #     {
+        #         "sdc_controller": "policy",
+        #         "non_sdc_controller": "idm",
+        #         "non_vehicle_controller": "replay",
+        #     },
+        # ),
+    ]
+
+    for mode_name, map_dir, control_mode, num_maps, controller_overrides in eval_modes:
         print(f"\n{'─' * 60}")
         print(f"Mode: {mode_name} | Episode length: {episode_len}")
         print(f"{'─' * 60}")
@@ -162,6 +257,7 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
             episode_len=episode_len,
             control_mode=control_mode,
             num_maps=num_maps,
+            controller_overrides=controller_overrides,
         )
         env = load_env(ENV_NAME, config)
         policy = load_policy(cpt_config, env, ENV_NAME)
@@ -169,15 +265,15 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
         evaluator = CheckpointEvaluator(cpt_config)
 
         print(f"  Running stats rollout...")
-        if RENDER_MODE in ("worst_collision", "random"):
+        if NUM_ENVS_TO_RENDER > 0:
             print(f"  Selecting envs to render ({RENDER_MODE})...")
             env_indices = select_render_envs(evaluator, policy, env, NUM_ENVS_TO_RENDER)
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
         else:
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC, render_env_idx=None)
             env_indices = list(range(min(NUM_ENVS_TO_RENDER, env.driver_env.num_envs)))
 
-        rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)  # <-- pass it
+        rows = process_rollout_data(info_list, checkpoint_path, mode_name, episode_len)
         all_rows.extend(rows)
 
         if rows:
@@ -188,9 +284,10 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
                 f"offroad_rate={np.mean([r['offroad_rate'] for r in rows]):.3f}"
             )
 
-        video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, f"ep{episode_len}", mode_name)  # <-- ep len in path
-        print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
-        render_envs(evaluator, policy, env, env_indices, video_dir)
+        if NUM_ENVS_TO_RENDER > 0:
+            video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name, RENDER_MODE, mode_name)
+            print(f"  Rendering {len(env_indices)} scenarios -> {video_dir}")
+            render_envs(evaluator, policy, env, env_indices, video_dir)
 
         env.close()
 
@@ -213,21 +310,26 @@ def main():
         all_rows.extend(rows)
 
     df = pd.DataFrame(all_rows)
-    # df.to_csv(OUTPUT_CSV, index=False)
-    # print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
+    df.to_csv(OUTPUT_CSV, index=False)
+    print(f"\nResults saved to {OUTPUT_CSV} ({len(df)} rows)")
 
     if not df.empty:
         summary = df.groupby(["episode_len", "mode"]).agg(
-            # scenes=("score", "count"),
-            # score=("score", "mean"),
+            scenes=("score", "count"),
             collision_rate=("collision_rate", "mean"),
             at_fault_collision_rate=("at_fault_collision_rate", "mean"),
             rear_collision_rate=("rear_collision_rate", "mean"),
-            # offroad_rate=("offroad_rate", "mean"),
+            offroad_rate=("offroad_rate", "mean"),
             route_progress=("route_progress", "mean"),
-            lateral_error_avg=("lateral_error_avg", "mean"),
+            # lateral_error_avg=("lateral_error_avg", "mean"),
+            # longitudinal_error_avg=("longitudinal_error_avg", "mean"),
         )
         print(f"\n{summary}")
+
+    if NUM_ENVS_TO_RENDER > 0 and CONVERT_TO_GIF:
+        cpt_name = os.path.splitext(os.path.basename(CPT_PATH))[0]
+        cpt_video_root = os.path.join(RENDER_OUTPUT_DIR, cpt_name)
+        convert_videos_to_gifs(cpt_video_root)
 
     return df
 
