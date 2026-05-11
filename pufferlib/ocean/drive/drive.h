@@ -102,6 +102,14 @@
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
+// Goal behaviors (what to do when an agent reaches its FINAL goal).
+// 0 = new_goal (regen a fresh route; gigaflow default), 1 = remove
+// (mark agent removed; self-play / nuplan episode-end semantics).
+// 0-indexed to match the rest of the env enums; no stop analog because
+// "stop on goal-reach" doesn't make semantic sense.
+#define GOAL_NEW 0
+#define GOAL_REMOVE 1
+
 #define MAX_SPEED 40.0f
 
 // Grid cell size
@@ -319,6 +327,7 @@ struct Drive {
     int collision_behavior;     // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int goal_behavior;          // 0 = new_goal (regen on final goal), 1 = remove
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
@@ -4864,17 +4873,33 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
             if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached
+                // Last goal reached. The per-step goal reward has already
+                // landed in the rollout buffer this step; the goal_behavior
+                // branch decides what the AGENT does NEXT step.
                 env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Replay mode: leave current_goal_idx saturated so the
-                    // reached-goal condition won't fire again. Re-generating
-                    // route-based goals on WOMD maps fails (removed=1).
+                if (env->goal_behavior == GOAL_REMOVE) {
+                    // Self-play / nuplan-style episodes: mark the agent
+                    // removed so it sits invalid until either every agent
+                    // in the env is done (termination_mode=1 +
+                    // inactive_agent_threshold=1.0) or scenario_length is
+                    // hit. Next step's c_step sets mask=0 → filtered from
+                    // PPO training.
+                    agent->removed = 1;
+                } else if (env->simulation_mode == SIMULATION_REPLAY) {
+                    // GOAL_NEW in replay mode: leave current_goal_idx
+                    // saturated so the reached-goal condition won't fire
+                    // again. Re-generating route-based goals on WOMD-style
+                    // logged scenes typically fails (compute_goals would
+                    // set removed=1) so we deliberately don't call it
+                    // here — the agent just coasts to scenario_length.
                 } else {
+                    // GOAL_NEW in gigaflow: regen a fresh route. Agent
+                    // keeps driving with a new objective, accumulating
+                    // more goal rewards over the scenario.
                     compute_goals(env, agent_idx);
                 }
             } else {
-                // Advance alias to next goal
+                // Advance alias to next intermediate waypoint
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
                 agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];

@@ -45,6 +45,13 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         traffic_light_behavior=0,
+        # 0 = new_goal: regen a fresh route on final-goal-reach (gigaflow
+        # default — agent keeps driving). 1 = remove: mark agent removed
+        # on final-goal-reach (self-play / replay episode-end semantics).
+        # In replay mode, "new_goal" actually saturates goal_idx because
+        # compute_goals on logged scenes fails — see drive.h goal-update
+        # block. Indexing matches the other env behavior knobs (0-based).
+        goal_behavior=0,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -136,6 +143,9 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
+        if goal_behavior not in (0, 1):
+            raise ValueError(f"goal_behavior must be 0 (new_goal) or 1 (remove). Got: {goal_behavior}")
+        self.goal_behavior = goal_behavior
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -364,6 +374,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "goal_behavior": self.goal_behavior,
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,
