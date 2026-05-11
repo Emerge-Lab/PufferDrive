@@ -1825,26 +1825,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
        
         }
 
-        // // C. Yaw rate kinematic envelope: |dyaw| ≤ |dx / wheelbase| * tan(MAX_STEER).
-        // //    Yaw scales with forward motion — no standing-still pivots.
-        // {
-        //     float max_dyaw = fabsf(action_dx / agent->wheelbase) * tanf(MAX_STEER);
-        //     float previous_action_dyaw = action_dyaw;
-        //     action_dyaw = clip(action_dyaw, -max_dyaw, max_dyaw);
-        // }
-
-        // // D. Yaw acceleration bound.
-        // //    Implied previous yaw rate = prev_action_dyaw / dt. Limit change to ±YAW_ACCEL_MAX*dt.
-        // //    Prevents rapid left-right flip-flop within the kinematic envelope.
-        // {
-        //     float prev_yaw_rate = agent->prev_action_dyaw / env->dt;
-        //     float yr_lo = prev_yaw_rate - YAW_ACCEL_MAX * env->dt;
-        //     float yr_hi = prev_yaw_rate + YAW_ACCEL_MAX * env->dt;
-        //     float new_yaw_rate_proposed = action_dyaw / env->dt;
-        //     float new_yaw_rate = clip(new_yaw_rate_proposed, yr_lo, yr_hi);
-        //     action_dyaw = new_yaw_rate * env->dt;
-        // }
-
         float jerk_dx = action_dx - agent->prev_action_dx;
         float jerk_dy = action_dy - agent->prev_action_dy;
         float jerk_dyaw = normalize_heading(action_dyaw - agent->prev_action_dyaw);
