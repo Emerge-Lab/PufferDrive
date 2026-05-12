@@ -1665,8 +1665,10 @@ def mine_failures(env_name, args=None):
     episodes_df = pd.DataFrame(rows)
     csv_path = os.path.join(output_dir, "episodes.csv")
     episodes_df.to_csv(csv_path, index=False)
-    print(f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, "
-          f"{int(episodes_df['did_target_fail'].sum())} failures captured)")
+    print(
+        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, "
+        f"{int(episodes_df['did_target_fail'].sum())} failures captured)"
+    )
 
     if do_render and render_dir is not None:
         render_lookup = {}
@@ -1676,9 +1678,7 @@ def mine_failures(env_name, args=None):
                 continue
             ep_id = int(row["episode_id"])
             out_html = os.path.join(render_dir, f"episode_{ep_id:06d}.html")
-            mining_viz.render_compact_replay_html(
-                row["replay_path"], out_html, render_context={"summary": row}
-            )
+            mining_viz.render_compact_replay_html(row["replay_path"], out_html, render_context={"summary": row})
             render_lookup[ep_id] = os.path.relpath(out_html, render_dir)
             rendered += 1
         index_path = os.path.join(render_dir, "index.html")

@@ -663,16 +663,29 @@ class Drive(pufferlib.PufferEnv):
             "metadata": self._build_compact_replay_metadata(env_idx, scenario),
             "agent_capacity": len(agents),
             "traffic_capacity": len(traffic_elements),
-            "agent_frames": {k: [] for k in ("valid", "id", "type", "is_target", "active", "stopped",
-                                              "x", "y", "z", "heading", "length", "width")},
+            "agent_frames": {
+                k: []
+                for k in (
+                    "valid",
+                    "id",
+                    "type",
+                    "is_target",
+                    "active",
+                    "stopped",
+                    "x",
+                    "y",
+                    "z",
+                    "heading",
+                    "length",
+                    "width",
+                )
+            },
             "traffic_frames": {k: [] for k in ("valid", "type", "state", "stop_line")},
         }
 
     def _initialize_compact_replay_buffers(self):
         scenarios = self._normalize_scenarios(self.get_state())
-        self._compact_replay_buffers = [
-            self._create_compact_replay_buffer(i, s) for i, s in enumerate(scenarios)
-        ]
+        self._compact_replay_buffers = [self._create_compact_replay_buffer(i, s) for i, s in enumerate(scenarios)]
 
     def _extract_compact_agents_frame(self, scenario, capacity):
         valid = np.zeros(capacity, dtype=np.bool_)
@@ -706,9 +719,20 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
-        return {"valid": valid, "id": agent_id, "type": agent_type, "is_target": is_target,
-                "active": active, "stopped": stopped, "x": x, "y": y, "z": z,
-                "heading": heading, "length": length, "width": width}
+        return {
+            "valid": valid,
+            "id": agent_id,
+            "type": agent_type,
+            "is_target": is_target,
+            "active": active,
+            "stopped": stopped,
+            "x": x,
+            "y": y,
+            "z": z,
+            "heading": heading,
+            "length": length,
+            "width": width,
+        }
 
     def _extract_compact_traffic_frame(self, scenario, timestep, capacity):
         valid = np.zeros(capacity, dtype=np.bool_)
@@ -739,8 +763,7 @@ class Drive(pufferlib.PufferEnv):
             buffer = self._compact_replay_buffers[env_idx]
             episode_timestep = int(scenario.get("episode_timestep", self.tick) or 0)
             agent_frame = self._extract_compact_agents_frame(scenario, buffer["agent_capacity"])
-            traffic_frame = self._extract_compact_traffic_frame(
-                scenario, episode_timestep, buffer["traffic_capacity"])
+            traffic_frame = self._extract_compact_traffic_frame(scenario, episode_timestep, buffer["traffic_capacity"])
             for k, v in agent_frame.items():
                 buffer["agent_frames"][k].append(v)
             for k, v in traffic_frame.items():
@@ -760,15 +783,17 @@ class Drive(pufferlib.PufferEnv):
         if not buffer["agent_frames"]["valid"]:
             return None
         metadata = dict(buffer["metadata"])
-        metadata.update({
-            "episode_index": int(summary.get("episode_index", 0) or 0),
-            "episode_length": int(summary.get("episode_length", len(buffer["agent_frames"]["valid"]))),
-            "episode_return": float(summary.get("episode_return", 0.0) or 0.0),
-            "collision_rate": float(summary.get("collision_rate", 0.0) or 0.0),
-            "offroad_rate": float(summary.get("offroad_rate", 0.0) or 0.0),
-            "red_light_violation_rate": float(summary.get("red_light_violation_rate", 0.0) or 0.0),
-            "num_goals_reached": float(summary.get("num_goals_reached", 0.0) or 0.0),
-        })
+        metadata.update(
+            {
+                "episode_index": int(summary.get("episode_index", 0) or 0),
+                "episode_length": int(summary.get("episode_length", len(buffer["agent_frames"]["valid"]))),
+                "episode_return": float(summary.get("episode_return", 0.0) or 0.0),
+                "collision_rate": float(summary.get("collision_rate", 0.0) or 0.0),
+                "offroad_rate": float(summary.get("offroad_rate", 0.0) or 0.0),
+                "red_light_violation_rate": float(summary.get("red_light_violation_rate", 0.0) or 0.0),
+                "num_goals_reached": float(summary.get("num_goals_reached", 0.0) or 0.0),
+            }
+        )
         bundle = {
             "schema_version": 2,
             "metadata": metadata,
