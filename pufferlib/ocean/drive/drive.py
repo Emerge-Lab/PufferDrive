@@ -327,7 +327,6 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
-        print(f"[DEBUG init] id={id(self)} pid={os.getpid()} num_envs={num_envs} num_agents={num_agents} map_ids={list(map_ids)} starting_map_counter={self.starting_map_counter}", flush=True)
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
@@ -470,7 +469,6 @@ class Drive(pufferlib.PufferEnv):
                 info.append(log)
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
-            print(f"[DEBUG resample] id={id(self)} pid={os.getpid()} tick={self.tick} starting_map_counter={self.starting_map_counter} self.map_ids={list(self.map_ids)}", flush=True)
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -507,7 +505,6 @@ class Drive(pufferlib.PufferEnv):
                 # to find the active map for each env; without this update it would
                 # forever report the map_id assigned at __init__.
                 self.map_ids = map_ids
-                print(f"[DEBUG resample] AFTER: id={id(self)} pid={os.getpid()} num_envs={num_envs} new map_ids={list(map_ids)} counter={self.starting_map_counter}", flush=True)
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]

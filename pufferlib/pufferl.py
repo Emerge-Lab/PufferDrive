@@ -1594,11 +1594,17 @@ def mine_failures(env_name, args=None):
     # one binding.shared() picked at init. Without this, num_envs=1 + a never-firing
     # resample leaves every episode on the alphabetically-first map.
     env_kwargs["resample_frequency"] = int(env_kwargs.get("scenario_length", 1280))
-    # Mining is sequential: one vec env, walk episodes one batch at a time.
+    # Mining is sequential: a single in-process Drive instance walks one episode at
+    # a time. The Multiprocessing backend would fork N workers that each initialize
+    # with starting_map_counter=0, locking every worker to the alphabetically-first
+    # map and breaking the cross-episode map cycling. PufferEnv backend runs Drive
+    # in the main process so resample_frequency advances starting_map_counter
+    # across episodes as expected.
     vec_kwargs = dict(args["vec"])
-    vec_kwargs.setdefault("num_envs", 1)
-    vec_kwargs.setdefault("num_workers", 1)
-    vec_kwargs.setdefault("batch_size", vec_kwargs["num_envs"])
+    vec_kwargs["backend"] = "PufferEnv"
+    vec_kwargs["num_envs"] = 1
+    vec_kwargs.pop("num_workers", None)
+    vec_kwargs.pop("batch_size", None)
 
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
