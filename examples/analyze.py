@@ -39,17 +39,7 @@ NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"
-MAKE_FIGURES = True
-RUN_RENDER = False
-
-# ─── VIDEO RENDERING CONFIG ─────────────────────────────────────────────────
-CHECKPOINTS_TO_RENDER = ["models/scaling_cpts/unreg_classic_50k_maps.pt"]
-NUM_ENVS_TO_RENDER = 0
-RENDER_MAP_DIR = INTERACTIVE_MAP_DIR  # Which maps to render on
-RENDER_NUM_MAPS = 200
-RENDER_OUTPUT_DIR = "eval_videos"
-RENDER_MODE = "worst_collision"  # "random" or "worst_collision"
-# ────────────────────────────────────────────────────────────────────────────────
+MAKE_FIGURES = False
 
 METRICS = [
     "n",
@@ -403,90 +393,6 @@ def select_render_envs(evaluator, policy, env, num_to_render):
     return scored[:num_to_render]
 
 
-def render_checkpoint_videos(base_config):
-    """Render human-replay videos for each checkpoint in CHECKPOINTS_TO_RENDER.
-
-    Supports two modes (RENDER_MODE):
-      - "random": render the first NUM_ENVS_TO_RENDER env indices
-      - "worst_collision": run a stats-only rollout first, then render
-        the NUM_ENVS_TO_RENDER envs with the highest collision rates
-    """
-    import glob
-    import shutil
-
-    env = None
-
-    for cpt_path in CHECKPOINTS_TO_RENDER:
-        cpt_name = os.path.splitext(os.path.basename(cpt_path))[0]
-        cpt_video_dir = os.path.join(RENDER_OUTPUT_DIR, cpt_name)
-        os.makedirs(cpt_video_dir, exist_ok=True)
-
-        print(f"\n{'=' * 60}")
-        print(f"Rendering videos: {cpt_name}")
-        print(f"{'=' * 60}")
-
-        cpt_config, _ = load_checkpoint_config(cpt_path, base_config)
-        cpt_config["load_model_path"] = cpt_path
-
-        # Create env once (or reuse across checkpoints — same map config)
-        if env is None:
-            config = make_render_config(cpt_config, RENDER_MAP_DIR, num_maps=RENDER_NUM_MAPS)
-            env = load_env(ENV_NAME, config)
-
-        policy = load_policy(cpt_config, env, ENV_NAME)
-        policy.eval()
-
-        evaluator = CheckpointEvaluator(cpt_config)
-
-        # Select which envs to render
-        collision_rates = {}  # scenario_id -> collision_rate for filename tagging
-        if RENDER_MODE == "worst_collision":
-            print(f"  Running stats rollout to find worst collisions...")
-            selected = select_render_envs(evaluator, policy, env, NUM_ENVS_TO_RENDER)
-            env_indices = [idx for idx, _ in selected]
-            collision_rates = {idx: rate for idx, rate in selected}
-            for idx, coll_rate in selected:
-                print(f"    env {idx}: collision_rate={coll_rate:.3f}")
-        else:
-            env_indices = list(range(NUM_ENVS_TO_RENDER))
-
-        # Build env_idx -> scenario_id mapping for filename tagging
-        scenario_ids = env.driver_env.scenario_ids
-        idx_to_scenario = {idx: scenario_ids[idx].rstrip("\x00") for idx in env_indices}
-
-        # Run a stats rollout for "random" mode to get collision rates
-        if RENDER_MODE == "random" and not collision_rates:
-            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
-            for idx in env_indices:
-                if idx < len(info_list) and info_list[idx]:
-                    collision_rates[idx] = info_list[idx].get("collision_rate", 0.0)
-
-        # Map scenario_id -> collision_rate
-        scenario_collision = {}
-        for idx in env_indices:
-            sid = idx_to_scenario.get(idx, "")
-            scenario_collision[sid] = collision_rates.get(idx, 0.0)
-
-        # Render selected envs
-        for i, env_idx in enumerate(env_indices):
-            print(f"  Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
-            evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
-            env.driver_env.stop_recorder(env_idx)
-
-        # Move mp4s into the checkpoint subdirectory, tagging with collision rate
-        for mp4_path in glob.glob("*.mp4"):
-            scenario_id = os.path.splitext(os.path.basename(mp4_path))[0]
-            coll_rate = scenario_collision.get(scenario_id, 0.0)
-            dest = os.path.join(cpt_video_dir, f"coll{coll_rate:.2f}_{scenario_id}.mp4")
-            shutil.move(mp4_path, dest)
-            print(f"  Saved: {dest}")
-
-    if env is not None:
-        env.close()
-
-    print(f"\nAll videos saved to {RENDER_OUTPUT_DIR}/")
-
-
 def delta_v_summary(group):
     """Severity stats conditional on collision."""
     coll = group[group["delta_v_count"] > 0]
@@ -544,10 +450,6 @@ def main():
         from pufferlib.ocean.benchmark.plot_and_format import make_all_figures
 
         make_all_figures(df if not df.empty else None)
-
-    # ── Video rendering (last: env.close() may segfault in raylib cleanup) ──
-    if RUN_RENDER and CHECKPOINTS_TO_RENDER:
-        render_checkpoint_videos(base_config)
 
     return df
 

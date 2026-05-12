@@ -1155,11 +1155,12 @@ def _smart_ckpt_to_num_maps(ckpt: str) -> float:
     return np.nan
 
 
-def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv") -> pd.DataFrame:
+def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
     """Load the SMART baseline CSV and pivot into per-num_maps rows.
 
     Returns a DataFrame with columns:
         num_maps, minutes,
+        hr_score,                                   # raw [0,1] — NOT multiplied by 100
         hr_atfault_pct, hr_coll_pct, hr_offroad_pct, hr_progress_pct,
         sp_coll_pct, sp_offroad_pct, sp_progress_pct
 
@@ -1170,6 +1171,7 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv
     cols = [
         "num_maps",
         "minutes",
+        "hr_score",
         "hr_atfault_pct",
         "hr_coll_pct",
         "hr_offroad_pct",
@@ -1183,12 +1185,7 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv
         return pd.DataFrame(columns=cols)
 
     raw = pd.read_csv(csv_path)
-
-    # Drop explicitly-excluded checkpoints (e.g. the pre-BC snapshot).
     raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
-
-    # Map each remaining checkpoint to a num_maps value; drop anything we
-    # don't recognise rather than silently plotting it at NaN.
     raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
     unknown = raw[raw["num_maps"].isna()]["checkpoint"].unique()
     if len(unknown) > 0:
@@ -1196,60 +1193,96 @@ def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv
     raw = raw.dropna(subset=["num_maps"]).copy()
     raw["num_maps"] = raw["num_maps"].astype(int)
 
-    # Build HR and SP pivots from the columns that are actually present in the
-    # CSV. `offroad_rate` is optional and will only show up if recorded.
+    # ── HR percentage metrics (multiplied by 100 below) ─────────────────────
     hr_wanted = {
         "at_fault_collision_rate": "hr_atfault_pct",
         "collision_rate": "hr_coll_pct",
         "offroad_rate": "hr_offroad_pct",
         "route_progress": "hr_progress_pct",
     }
+    hr_raw = raw[raw["mode"] == "scaling_hr_val"]
+    hr_present = [c for c in hr_wanted if c in hr_raw.columns]
+    hr = hr_raw.set_index("num_maps")[hr_present].rename(columns={c: hr_wanted[c] for c in hr_present})
+
+    # ── HR score — kept as raw [0,1], joined separately to avoid *100 ────────
+    hr_score = pd.Series(dtype=float, name="hr_score")
+    if "score" in hr_raw.columns:
+        hr_score = hr_raw.set_index("num_maps")["score"].rename("hr_score")
+
+    # ── SP percentage metrics ────────────────────────────────────────────────
     sp_wanted = {
         "collision_rate": "sp_coll_pct",
         "offroad_rate": "sp_offroad_pct",
         "route_progress": "sp_progress_pct",
     }
-
-    hr_raw = raw[raw["mode"] == "scaling_hr_val"]
-    hr_present = [c for c in hr_wanted if c in hr_raw.columns]
-    hr = hr_raw.set_index("num_maps")[hr_present].rename(columns={c: hr_wanted[c] for c in hr_present})
-
     sp_raw = raw[raw["mode"] == "scaling_sp_val"]
     sp_present = [c for c in sp_wanted if c in sp_raw.columns]
     sp = sp_raw.set_index("num_maps")[sp_present].rename(columns={c: sp_wanted[c] for c in sp_present})
 
-    # Fractions → percentages.
+    # Fractions → percentages for all pct columns; hr_score joined without scaling
     out = hr.join(sp, how="outer") * 100
+    out = out.join(hr_score)
     out = out.reset_index().sort_values("num_maps").reset_index(drop=True)
     out["minutes"] = out["num_maps"] * 9 / 60
 
-    # Re-index to the full expected column list so any metric the CSV is
-    # missing surfaces as NaN rather than raising a KeyError.
     for c in cols:
         if c not in out.columns:
             out[c] = np.nan
     return out[cols]
 
 
+def _smart_row(r, has_sp_offroad=False, has_hr_offroad=False):
+    """Build a single SMART baseline row dict from a _load_smart_baseline record."""
+    return {
+        "method": "SMART",
+        "minutes": r["minutes"],
+        "sp_coll_mean": r["sp_coll_pct"],
+        "sp_coll_sem": np.nan,
+        "sp_progress_mean": r["sp_progress_pct"],
+        "sp_progress_sem": np.nan,
+        "sp_offroad_mean": r["sp_offroad_pct"] if has_sp_offroad else np.nan,
+        "sp_offroad_sem": np.nan,
+        "hr_score_mean": r.get("hr_score", np.nan),  # ← was np.nan
+        "hr_score_sem": np.nan,
+        "hr_coll_mean": r["hr_coll_pct"],
+        "hr_coll_sem": np.nan,
+        "hr_atfault_mean": r["hr_atfault_pct"],
+        "hr_atfault_sem": np.nan,
+        "hr_progress_mean": r["hr_progress_pct"],
+        "hr_progress_sem": np.nan,
+        "hr_offroad_mean": r["hr_offroad_pct"] if has_hr_offroad else np.nan,
+        "hr_offroad_sem": np.nan,
+    }
+
+
 def plot_human_data_requirements(
     df,
     save_path="results/figures/eval_human_data_requirements.pdf",
     save_path_gains="results/figures/eval_human_data_gains.pdf",
+    save_path_semilogy=None,
     smart_csv="results/smart_baseline_res.csv",
 ):
     """Human-data sweep at fixed 50k metadata maps.
 
-    Saves two PDFs:
-      - save_path:        1×4 line plots (HR at-fault / HR coll / SP coll / HR progress).
-                          HR at-fault is linear; others log; route progress clipped to [50, 110].
-      - save_path_gains:  1×4 categorical bar plots of reg-self-play's relative improvement
-                          vs SMART at each matched human-data amount, expressed as a ratio.
-                          Collision metrics: SMART / reg (lower is better). Route progress:
-                          reg / SMART. Reference line at y=1 marks parity; bars above 1 mean
-                          reg self-play wins. "52 days" is omitted from the x-axis.
+    Saves three PDFs:
+      - save_path:          1×3 line plots with linear y-axes (original).
+      - save_path_semilogy: same layout but subplots 0 and 1 (collision
+                            metrics) use a log y-scale. Derived automatically
+                            from save_path if not supplied
+                            (e.g. "…requirements.pdf" → "…requirements_semilogy.pdf").
+      - save_path_gains:    1×3 categorical bar plots of reg-self-play's
+                            relative improvement vs SMART at each matched
+                            human-data amount, expressed as a ratio.
 
-    Returns (fig_lines, fig_gains).
+    Returns (fig_lines, fig_semilogy, fig_gains).
     """
+    import os as _os
+
+    # ── Derive semilogy path from save_path when not given ──────────────────
+    if save_path_semilogy is None:
+        base, ext = _os.path.splitext(save_path)
+        save_path_semilogy = f"{base}_semilogy{ext}"
+
     # ── SMART baseline data ─────────────────────────────────────────────────
     SMART_DATA = _load_smart_baseline(smart_csv)
 
@@ -1317,9 +1350,9 @@ def plot_human_data_requirements(
         (
             "hr_progress_mean_pct",
             "hr_progress_sem_pct",
-            "Route progress [%]",
+            "Task completion [%]",  # renamed from "Route progress [%]"
             "hr_progress_pct",
-            "HR route progress",
+            "HR task completion",  # renamed from "HR route progress"
             False,
             "linear",
         ),
@@ -1328,7 +1361,6 @@ def plot_human_data_requirements(
     tick_positions = [10, 30, 180, 1800, 75000]
     tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
 
-    # Labels excluded from the gains figure's x-axis (line plots still show them).
     GAINS_EXCLUDED_LABELS = {"52 days"}
 
     def _minutes_to_label(m):
@@ -1341,7 +1373,6 @@ def plot_human_data_requirements(
             return f"{m / 60:.0f} hours"
         return f"{m / 1440:.0f} days"
 
-    # Shared category order for the gains figure, driven by SMART's anchors.
     if not SMART_DATA.empty:
         category_order = [
             _minutes_to_label(m)
@@ -1351,77 +1382,98 @@ def plot_human_data_requirements(
     else:
         category_order = []
 
-    green_palette = sns.color_palette("Greens_d", n_colors=max(len(category_order), 1))
+    # ── Inner helper: draw the 1×3 line figure ──────────────────────────────
+    def _draw_lines_fig(semilogy=False):
+        """Draw the three line-plot panels.
 
-    # ── FIGURE 1: line plots ────────────────────────────────────────────────
-    _set_style(3)
-    fig_lines, line_axes = plt.subplots(1, 3, figsize=(15, 4.5))
+        semilogy=True  → log y-scale on panels 0 and 1 (collision metrics).
+        semilogy=False → linear y-scale on all panels (original behaviour).
+        """
+        _set_style(3)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
 
-    for ax, (y_mean, y_sem, ylabel, smart_col, _, _, top_yscale) in zip(line_axes, subplot_specs):
-        if not reg.empty:
-            ax.errorbar(
-                reg["anchor_minutes"],
-                reg[y_mean],
-                yerr=reg[y_sem],
-                color=COLOR_OURS,
-                marker="o",
-                markersize=9,
-                linewidth=2.0,
-                capsize=3,
-                markeredgecolor=COLOR_OURS_EDGE,
-                markerfacecolor=COLOR_OURS,
-                label="regularized self-play (ours)",
-                zorder=4,
+        for idx, (ax, (y_mean, y_sem, ylabel, smart_col, _, _, _)) in enumerate(zip(axes, subplot_specs)):
+            use_log = semilogy and idx in (0, 1)
+
+            if not reg.empty:
+                ax.errorbar(
+                    reg["anchor_minutes"],
+                    reg[y_mean],
+                    yerr=reg[y_sem],
+                    color=COLOR_OURS,
+                    marker="o",
+                    markersize=9,
+                    linewidth=2.0,
+                    capsize=3,
+                    markeredgecolor=COLOR_OURS_EDGE,
+                    markerfacecolor=COLOR_OURS,
+                    label="regularized self-play (ours)",
+                    zorder=4,
+                )
+            if not unreg.empty:
+                ax.axhline(
+                    unreg[y_mean].iloc[0],
+                    color=COLOR_SELFPLAY,
+                    linestyle="--",
+                    linewidth=2.0,
+                    alpha=0.9,
+                    label="best unregularized self-play",
+                    zorder=2,
+                )
+            smart_valid = (
+                SMART_DATA.dropna(subset=[smart_col]) if smart_col in SMART_DATA.columns else SMART_DATA.iloc[0:0]
             )
-        if not unreg.empty:
-            ax.axhline(
-                unreg[y_mean].iloc[0],
-                color=COLOR_SELFPLAY,
-                linestyle="--",
-                linewidth=2.0,
-                alpha=0.9,
-                label="best unregularized self-play",
-                zorder=2,
-            )
-        smart_valid = SMART_DATA.dropna(subset=[smart_col]) if smart_col in SMART_DATA.columns else SMART_DATA.iloc[0:0]
-        if not smart_valid.empty:
-            ax.plot(
-                smart_valid["minutes"],
-                smart_valid[smart_col],
-                color=COLOR_SMART,
-                marker="o",
-                markersize=9,
-                linewidth=2.0,
-                linestyle="-",
-                markeredgecolor=COLOR_SMART_EDGE,
-                markerfacecolor=COLOR_SMART,
-                label="SMART-tiny-CLSFT",
-                zorder=3,
-            )
+            if not smart_valid.empty:
+                ax.plot(
+                    smart_valid["minutes"],
+                    smart_valid[smart_col],
+                    color=COLOR_SMART,
+                    marker="o",
+                    markersize=9,
+                    linewidth=2.0,
+                    linestyle="-",
+                    markeredgecolor=COLOR_SMART_EDGE,
+                    markerfacecolor=COLOR_SMART,
+                    label="SMART-tiny-CLSFT",
+                    zorder=3,
+                )
 
-        ax.set_xscale("symlog", linthresh=60, linscale=1.2)
-        ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
-        ax.minorticks_off()
-        ax.set_yscale(top_yscale)
-        if top_yscale == "linear":
-            ax.set_ylim(bottom=0)
-        if y_mean == "hr_progress_mean_pct":
-            ax.set_ylim(50, 102)
-        ax.set_xlabel("Human demonstration data")
-        ax.set_ylabel(ylabel)
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
-        sns.despine(ax=ax)
+            ax.set_xscale("symlog", linthresh=60, linscale=1.2)
+            ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
+            ax.minorticks_off()
 
-    fig_lines.tight_layout()
+            if use_log:
+                ax.set_yscale("log")
+            else:
+                if y_mean == "hr_progress_mean_pct":
+                    ax.set_ylim(50, 102)
+                else:
+                    ax.set_ylim(bottom=0)
+
+            ax.set_xlabel("Human demonstration data")
+            ax.set_ylabel(ylabel)
+            ax.grid(axis="y", alpha=0.3, linestyle="--")
+            ax.legend(fontsize=8, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+            sns.despine(ax=ax)
+
+        fig.tight_layout()
+        return fig
+
+    # ── FIGURE 1a: linear y-axes (original) ────────────────────────────────
+    fig_lines = _draw_lines_fig(semilogy=False)
     _ensure_dir(save_path)
     fig_lines.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
 
+    # ── FIGURE 1b: log y-axes on collision panels ───────────────────────────
+    fig_semilogy = _draw_lines_fig(semilogy=True)
+    _ensure_dir(save_path_semilogy)
+    fig_semilogy.savefig(save_path_semilogy, dpi=DPI, bbox_inches="tight", facecolor="white")
+
     # ── FIGURE 2: relative-improvement bars ─────────────────────────────────
+    _set_style(3)
     fig_gains, gain_axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
 
     for bax, (y_mean, _, _, smart_col, _, lower_better, _) in zip(gain_axes, subplot_specs):
-        # Parity line: ratio = 1 means reg and SMART are equal.
         bax.axhline(1.0, color="black", linewidth=1.0, linestyle="--", zorder=1)
 
         records = []
@@ -1437,7 +1489,6 @@ def plot_human_data_requirements(
                 r_val = matches.iloc[0][y_mean]
                 if pd.isna(s_val) or pd.isna(r_val) or s_val == 0 or r_val == 0:
                     continue
-                # Orient so "higher = reg self-play is better" in every metric.
                 ratio = s_val / r_val if lower_better else r_val / s_val
                 records.append({"human_data": label, "ratio": ratio})
 
@@ -1479,7 +1530,7 @@ def plot_human_data_requirements(
     fig_gains.savefig(save_path_gains, dpi=DPI, bbox_inches="tight", facecolor="white")
 
     plt.show()
-    return fig_lines, fig_gains
+    return fig_lines, fig_semilogy, fig_gains
 
 
 def generate_human_data_latex_table(
@@ -1496,7 +1547,7 @@ def generate_human_data_latex_table(
       3) Regularized self-play rows, sorted by increasing anchor data.
 
     Columns: self-play block (Coll., Off-road, Route prog.) and human-replay
-    block (Coll., At-fault, Off-road, Route prog.). Off-road columns are
+    block (Score, Coll., At-fault, Off-road, Route prog.). Off-road columns are
     emitted only if at least one row has non-NaN data for them.
 
     Top-3 values per metric column are highlighted via the shared tier palette;
@@ -1513,13 +1564,14 @@ def generate_human_data_latex_table(
 
     df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
 
-    # Aggregate both modes, keeping anchor=0 this time so the unreg row survives.
+    # ── Aggregate HR metrics (now includes score) ────────────────────────────
     hr = df[df["mode"] == "scaling_hr_val"]
-    hr_metrics = ["at_fault_collision_rate", "collision_rate", "route_progress"]
+    hr_metrics = ["score", "at_fault_collision_rate", "collision_rate", "route_progress"]
     if "offroad_rate" in hr.columns:
         hr_metrics.append("offroad_rate")
     hr_agg = hr.groupby("anchor_maps")[hr_metrics].agg(["mean", "sem"]).reset_index()
     hr_short = {
+        "score": "hr_score",
         "at_fault_collision_rate": "hr_atfault",
         "collision_rate": "hr_coll",
         "route_progress": "hr_progress",
@@ -1531,6 +1583,7 @@ def generate_human_data_latex_table(
         hr_col_names.extend([f"{short}_mean", f"{short}_sem"])
     hr_agg.columns = hr_col_names
 
+    # ── Aggregate SP metrics ─────────────────────────────────────────────────
     sp = df[df["mode"] == "scaling_sp_val"]
     sp_metrics = ["collision_rate", "route_progress"]
     if "offroad_rate" in sp.columns:
@@ -1551,6 +1604,7 @@ def generate_human_data_latex_table(
     has_sp_offroad = "sp_offroad_mean" in full_agg.columns
     has_hr_offroad = "hr_offroad_mean" in full_agg.columns
 
+    # score is NOT a percentage — excluded from pct_cols intentionally
     pct_cols = ["hr_atfault", "hr_coll", "hr_progress", "sp_coll", "sp_progress"]
     if has_sp_offroad:
         pct_cols.append("sp_offroad")
@@ -1567,7 +1621,7 @@ def generate_human_data_latex_table(
     # ── Build row structure ─────────────────────────────────────────────────
     rows = []
 
-    # (1) SMART rows
+    # (1) SMART rows — hr_score not available in SMART baseline CSV
     for _, r in SMART_DATA.sort_values("minutes").reset_index(drop=True).iterrows():
         if abs(r["minutes"] - 1800) / 1800 < 0.02:  # skip 30h
             continue
@@ -1581,6 +1635,8 @@ def generate_human_data_latex_table(
                 "sp_progress_sem": np.nan,
                 "sp_offroad_mean": r["sp_offroad_pct"] if "sp_offroad_pct" in r else np.nan,
                 "sp_offroad_sem": np.nan,
+                "hr_score_mean": r.get("hr_score", np.nan),
+                "hr_score_sem": np.nan,
                 "hr_coll_mean": r["hr_coll_pct"],
                 "hr_coll_sem": np.nan,
                 "hr_atfault_mean": r["hr_atfault_pct"],
@@ -1592,19 +1648,21 @@ def generate_human_data_latex_table(
             }
         )
 
-    # (2) Single unregularized self-play row (the 50k unreg checkpoint).
+    # (2) Single unregularized self-play row
     if not unreg_agg.empty:
         u = unreg_agg.iloc[0]
         rows.append(
             {
                 "method": "unreg. self-play",
-                "minutes": np.nan,  # no human data used
+                "minutes": np.nan,
                 "sp_coll_mean": u["sp_coll_mean_pct"],
                 "sp_coll_sem": u["sp_coll_sem_pct"],
                 "sp_progress_mean": u["sp_progress_mean_pct"],
                 "sp_progress_sem": u["sp_progress_sem_pct"],
                 "sp_offroad_mean": u["sp_offroad_mean_pct"] if has_sp_offroad else np.nan,
                 "sp_offroad_sem": u["sp_offroad_sem_pct"] if has_sp_offroad else np.nan,
+                "hr_score_mean": u["hr_score_mean"],
+                "hr_score_sem": u["hr_score_sem"],
                 "hr_coll_mean": u["hr_coll_mean_pct"],
                 "hr_coll_sem": u["hr_coll_sem_pct"],
                 "hr_atfault_mean": u["hr_atfault_mean_pct"],
@@ -1628,6 +1686,8 @@ def generate_human_data_latex_table(
                 "sp_progress_sem": r["sp_progress_sem_pct"],
                 "sp_offroad_mean": r["sp_offroad_mean_pct"] if has_sp_offroad else np.nan,
                 "sp_offroad_sem": r["sp_offroad_sem_pct"] if has_sp_offroad else np.nan,
+                "hr_score_mean": r["hr_score_mean"],  # raw score, not pct
+                "hr_score_sem": r["hr_score_sem"],
                 "hr_coll_mean": r["hr_coll_mean_pct"],
                 "hr_coll_sem": r["hr_coll_sem_pct"],
                 "hr_atfault_mean": r["hr_atfault_mean_pct"],
@@ -1643,12 +1703,10 @@ def generate_human_data_latex_table(
 
     def _fmt_minutes(minutes):
         if pd.isna(minutes):
-            return "---"  # unreg row: no human demonstrations
+            return "---"
         if minutes < 60:
             return f"{int(round(minutes))} min"
         hours = minutes / 60
-        # Keep "hours" format up through ~2 days so 30h reads as "30 hours",
-        # not "1.2 days". Only genuinely multi-day amounts use the days format.
         if hours < 48:
             if hours == int(hours):
                 return f"{int(hours)} hours"
@@ -1661,17 +1719,17 @@ def generate_human_data_latex_table(
     table["human_data_label"] = table["minutes"].apply(_fmt_minutes)
 
     # ── Metric metadata ──────────────────────────────────────────────────────
-    # Off-road columns are included only if at least one row has non-NaN data.
     any_sp_offroad = "sp_offroad_mean" in table.columns and table["sp_offroad_mean"].notna().any()
     any_hr_offroad = "hr_offroad_mean" in table.columns and table["hr_offroad_mean"].notna().any()
 
-    # (mean, sem, header, higher_is_better, as_pct, decimals)
+    # (mean_col, sem_col, header, higher_is_better, as_pct, decimals)
     sp_specs = [("sp_coll_mean", "sp_coll_sem", r"Coll. (\%) $\downarrow$", False, False, 1)]
     if any_sp_offroad:
         sp_specs.append(("sp_offroad_mean", "sp_offroad_sem", r"Off-road (\%) $\downarrow$", False, False, 1))
     sp_specs.append(("sp_progress_mean", "sp_progress_sem", r"Route prog. (\%) $\uparrow$", True, False, 1))
 
     hr_specs = [
+        ("hr_score_mean", "hr_score_sem", r"Score $\uparrow$", True, False, 3),  # added
         ("hr_coll_mean", "hr_coll_sem", r"Coll. (\%) $\downarrow$", False, False, 1),
         ("hr_atfault_mean", "hr_atfault_sem", r"At-fault (\%) $\downarrow$", False, False, 1),
     ]
@@ -1719,7 +1777,8 @@ def generate_human_data_latex_table(
         r"self-play training maps. Top-3 values per column are highlighted "
         r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
         r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
-        r"The unregularized self-play row uses no human demonstrations.}"
+        r"The unregularized self-play row uses no human demonstrations. "
+        r"HR score for SMART is not available (---).}"
     )
     lines.append(r"\label{tab:human_data_results}")
     lines.append(r"\resizebox{\textwidth}{!}{%")
@@ -1773,103 +1832,6 @@ def generate_human_data_latex_table(
         f.write(latex_str)
     print(f"  LaTeX table written to {save_path}")
     return latex_str
-
-
-def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatibility_tradeoff_bar.pdf"):
-    """Bar chart comparing two checkpoints across four HR metrics.
-
-    4 subplots, one per metric. Two bars per subplot: unreg vs reg.
-    Raw values, no normalization.
-    """
-    CHECKPOINTS_OF_INTEREST = {
-        "models/scaling_cpts/unreg_classic_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_10k_maps_anchor_10k_maps.pt": "regularized",
-    }
-
-    df = df[df["mode"] == "scaling_hr_interactive"].copy()
-    df = df[df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
-    if df.empty:
-        print("  No data for checkpoints of interest — skipping plot_compatibility_tradeoff_bar.")
-        return None
-
-    required_cols = [
-        "collision_rate",
-        "at_fault_collision_rate",
-        "rear_collision_rate",
-        "route_progress",
-        "lateral_error_avg",
-    ]
-
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        print(f"  Missing columns {missing} — skipping plot_compatibility_tradeoff_bar.")
-        return None
-
-    agg = df.groupby("checkpoint")[required_cols].agg(["mean", "sem"]).reset_index()
-    agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
-    agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
-
-    # unreg first (black), reg second (blue, matching the shared palette)
-    agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
-    agg = agg.sort_values("is_reg").reset_index(drop=True)
-    colors = [PALETTE["selfplay"] if not r else PALETTE["ours"] for r in agg["is_reg"]]
-
-    subplot_specs = [
-        ("collision_rate", "HR collision rate [%]", True),
-        ("at_fault_collision_rate", "HR at-fault collision rate [%]", True),
-        ("rear_collision_rate", "HR rear collision rate [%]", True),
-        ("route_progress", "HR route progress [%]", True),
-        ("lateral_error_avg", "HR lateral L2 distance", False),
-    ]
-
-    _set_style(2)
-    fig = plt.figure(figsize=(20, 4))
-    gs = fig.add_gridspec(1, 5)
-
-    ax0 = fig.add_subplot(gs[0])
-    ax1 = fig.add_subplot(gs[1], sharey=ax0)
-    ax2 = fig.add_subplot(gs[2], sharey=ax0)
-    ax3 = fig.add_subplot(gs[3])
-    ax4 = fig.add_subplot(gs[4])
-    axes = [ax0, ax1, ax2, ax3, ax4]
-
-    axes[1].tick_params(labelleft=False)
-    axes[2].tick_params(labelleft=False)
-
-    for ax, (col, ylabel, as_pct) in zip(axes, subplot_specs):
-        means = agg[f"{col}_mean"].values * (100 if as_pct else 1)
-        sems = agg[f"{col}_sem"].values * (100 if as_pct else 1)
-        labels = agg["label"].values
-        x = np.arange(len(labels))
-
-        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
-            ax.bar(
-                x[i],
-                mean,
-                yerr=sem,
-                color=color,
-                alpha=0.8,
-                width=0.5,
-                capsize=4,
-                error_kw=dict(lw=1.2),
-            )
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
-        ax.set_ylabel(ylabel)
-        ax.set_ylim(bottom=0)
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        sns.despine(ax=ax)
-
-    if ax in (axes[0], axes[1], axes[2]):
-        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
-        ax.tick_params(axis="y", which="minor", length=3, color="gray")
-
-    plt.tight_layout()
-    _ensure_dir(save_path)
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    plt.show()
-    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -3168,7 +3130,6 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         print("  Saved eval_human_data_requirements.pdf")
         generate_scaling_latex_table(df)
         generate_hr_comparison_latex_table(df)
-        plot_compatibility_tradeoff_bar(df)
         generate_human_data_latex_table(df)
         print("  Saved eval_compatibility_tradeoff_bar.pdf")
         plot_selfplay_behavior_analysis(df)
