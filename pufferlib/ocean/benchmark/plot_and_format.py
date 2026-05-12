@@ -20,27 +20,29 @@ DPI = 600
 # should read from here so the figures and tables stay in sync.
 PALETTE = {
     # Methods (used across line plots and as LaTeX cell colours).
-    "smart": "#FFA8CC",  # pastel pink
-    "smart_edge": "#C14B8A",
-    "ours": "#CCCCFF",  # periwinkle (regularized self-play)
-    "ours_edge": "#6B3FA0",
+    "smart": "#d62728",  # tab:red
+    "smart_edge": "#8B1A1B",  # darker red for marker edges
+    "ours": "#6BAED6",  # medium blue (regularized self-play)
+    "ours_edge": "#08519C",  # dark blue for marker edges
     # "selfplay" is the unregularized baseline colour everywhere — lines,
     # markers, dashed reference lines, and unreg reg/unreg map entries.
-    "selfplay": "#4A7FD4",
+    "selfplay": "#000000",  # black
     # Regularized anchor runs: light → dark = less → more human data.
+    # Sequence of blues so multiple reg lines stay distinguishable.
     "reg_sequence": [
-        "#BCBDDC",
-        "#9E9AC8",
-        "#807DBA",
-        "#6A51A3",
-        "#4A1486",
+        "#C6DBEF",
+        "#9ECAE1",
+        "#6BAED6",
+        "#3182BD",
+        "#08519C",
     ],
     # LaTeX tier highlighting
     "tier_best": "#6FCF6A",  # soft pastel green
     "tier_second": "#DFF04B",  # soft chartreuse
     "tier_third": "#FBF4D0",  # pale cream-yellow
     # Best-per-column among unregularized rows. Overlays tier color when both apply.
-    "tier_unreg_best": "#A8C2E8",  # soft blue, tinted variant of PALETTE['selfplay']
+    # Soft gray tint, matching the new black `selfplay` colour.
+    "tier_unreg_best": "#D9D9D9",
 }
 
 # Back-compat aliases so existing references keep working without edits.
@@ -171,8 +173,8 @@ def _maps_to_human_hours(maps: int) -> float:
 def _reg_unreg_colors(anchor_vals):
     """Map each anchor value to a colour.
 
-    anchor == 0  -> blue   (PALETTE['selfplay']; unregularized baseline)
-    anchor  > 0  -> purples from PALETTE['reg_sequence'], assigned in
+    anchor == 0  -> black  (PALETTE['selfplay']; unregularized baseline)
+    anchor  > 0  -> blues from PALETTE['reg_sequence'], assigned in
                     ascending order of anchor size so darker = more human data.
     """
     reg_seq = PALETTE["reg_sequence"]
@@ -268,10 +270,11 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
       - 3rd    -> pale cream-yellow   (#FBF4D0)
     Best value in each column is additionally bolded. Ties share a tier.
 
-    The best unregularized value per column is highlighted in blue
-    (#CFE0F7). Blue wins over tier color when a cell qualifies for both,
-    so the unreg signal stays visible even when unreg is competitive with
-    the overall top-3. Bold (for overall-best) is preserved regardless.
+    The best unregularized value per column is highlighted via the
+    `tier_unreg_best` palette entry (a soft gray, matching the new black
+    `selfplay` colour). This wins over the tier color when a cell qualifies
+    for both, so the unreg signal stays visible even when unreg is competitive
+    with the overall top-3. Bold (for overall-best) is preserved regardless.
 
     Row layout: unregularized rows first, then regularized, each sorted by sp_maps.
 
@@ -392,7 +395,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         else:
             body = f"{m_val:{fmt}}"
             text = f"\\textbf{{{body}}}" if is_best else body
-        # Unreg-best blue wins over tier color — otherwise the new signal
+        # Unreg-best gray wins over tier color — otherwise the new signal
         # would be invisible exactly when the unreg row is also top-3.
         if is_unreg_best:
             return f"\\cellcolor{{tierunregbest}} {text}"
@@ -420,7 +423,7 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
         r"scenarios. Top-3 values per column are highlighted "
         r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
         r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
-        r"\colorbox{tierunregbest}{Blue} marks the best unregularized "
+        r"\colorbox{tierunregbest}{Gray} marks the best unregularized "
         r"value per column.}"
     )
     lines.append(r"\label{tab:scaling_results}")
@@ -488,15 +491,88 @@ def generate_scaling_latex_table(df, save_path="results/figures/eval_scaling_tab
 # ---------------------------------------------------------------------------
 
 
-def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
-    """Three-subplot summary figure for BC anchor evaluation.
+# ---------------------------------------------------------------------------
+# Helper: final-step within-5-bin accuracy from wandb training-curve CSVs
+# ---------------------------------------------------------------------------
+
+
+def _load_final_within5_accuracy(
+    dx_csv="results/anchor_train_dx.csv",
+    dy_csv="results/anchor_train_dy.csv",
+    dyaw_csv="results/anchor_train_dyaw.csv",
+):
+    """Return a DataFrame [num_maps_trained, within5_avg_pct] from the wandb CSVs.
+
+    For each run (one column per axis CSV), takes the last non-NaN value of the
+    mean column, then averages across the three axes per num_maps. Drops runs
+    that don't have all three axes available so the "average" means the same
+    thing on every row. Returns an empty (correctly-typed) frame if none of
+    the CSVs are present.
+    """
+    axis_files = [("dx", dx_csv), ("dy", dy_csv), ("dyaw", dyaw_csv)]
+    rows = []  # (num_maps, axis, final_acc)
+
+    for axis, path in axis_files:
+        if not os.path.exists(path):
+            print(f"  {path} not found — skipping {axis} for within-5-bin overlay.")
+            continue
+        df = pd.read_csv(path)
+        metric = f"val/acc_within_5bins_{axis}"
+        for col in df.columns:
+            # Match the mean column only; skip wandb's __MIN/__MAX siblings.
+            if not col.endswith(f" - {metric}") or col.endswith("__MIN") or col.endswith("__MAX"):
+                continue
+            run = col.split(" - ")[0]
+            m = re.search(r"_(\d+)maps", run)
+            if not m:
+                continue
+            num_maps = int(m.group(1))
+            series = df[col].dropna()
+            if series.empty:
+                continue
+            rows.append({"num_maps_trained": num_maps, "axis": axis, "final_acc": series.iloc[-1]})
+
+    if not rows:
+        return pd.DataFrame(columns=["num_maps_trained", "within5_avg_pct"])
+
+    long_df = pd.DataFrame(rows)
+    counts = long_df.groupby("num_maps_trained")["axis"].nunique()
+    complete = counts[counts == 3].index
+    incomplete = sorted(set(long_df["num_maps_trained"]) - set(complete))
+    if incomplete:
+        print(f"  Skipping within-5-bin overlay for runs missing axes: {incomplete}")
+    long_df = long_df[long_df["num_maps_trained"].isin(complete)]
+
+    out = (
+        long_df.groupby("num_maps_trained")["final_acc"]
+        .mean()
+        .reset_index()
+        .rename(columns={"final_acc": "within5_avg_pct"})
+    )
+    out["within5_avg_pct"] = out["within5_avg_pct"] * 100  # to %
+    return out.sort_values("num_maps_trained").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Updated: BC anchor figure (subplot 0 now overlays within-5-bin accuracy)
+# ---------------------------------------------------------------------------
+
+
+def plot_anchor_eval(
+    anchor_df,
+    save_path="results/figures/eval_anchor.pdf",
+    within5_csvs=("results/anchor_train_dx.csv", "results/anchor_train_dy.csv", "results/anchor_train_dyaw.csv"),
+):
+    """Four-subplot summary figure for BC anchor evaluation.
 
     All subplots share the same x-axis: hours of human driving data used to
     train the anchor (num_maps_trained via _maps_to_human_hours).
 
-    Subplot 0 — Open-loop: validation accuracy (one point per checkpoint).
-    Subplot 1 — Closed-loop: route progress, self-play vs human-replay.
-    Subplot 2 — Closed-loop: score, self-play vs human-replay.
+    Subplot 0 — Open-loop: argmax accuracy + final within-5-bin accuracy
+                (averaged across dx/dy/dyaw, taken at last training step).
+    Subplot 1 — Open-loop: validation loss.
+    Subplot 2 — Closed-loop: route progress, self-play vs human-replay.
+    Subplot 3 — Closed-loop: score, self-play vs human-replay.
     """
     if anchor_df is None or anchor_df.empty:
         print("  No anchor eval data — skipping plot_anchor_eval.")
@@ -515,6 +591,12 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     )
     ol_df["human_hours"] = ol_df["num_maps_trained"].apply(_maps_to_human_hours)
     ol_df = ol_df.sort_values("human_hours")
+
+    # Within-5-bin: average final-step accuracy across dx/dy/dyaw, joined by num_maps.
+    w5_df = _load_final_within5_accuracy(*within5_csvs) if within5_csvs else pd.DataFrame()
+    if not w5_df.empty:
+        w5_df["human_hours"] = w5_df["num_maps_trained"].apply(_maps_to_human_hours)
+        w5_df = w5_df.sort_values("human_hours")
 
     # Closed-loop: mean ± SEM per (checkpoint, mode)
     cl_df = (
@@ -538,7 +620,7 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     _set_style(len(MODE_STYLES))
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
-    # ── Subplot 0: open-loop validation accuracy (%) ─────────────────────────
+    # ── Subplot 0: open-loop accuracy + within-5-bin avg ─────────────────────
     ax = axes[0]
     ax.plot(
         ol_df["human_hours"],
@@ -547,11 +629,23 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
         marker="D",
         linewidth=1.5,
         markersize=8,
+        label="Argmax accuracy",
     )
+    if not w5_df.empty:
+        ax.plot(
+            w5_df["human_hours"],
+            w5_df["within5_avg_pct"],
+            color="#9467bd",
+            marker="s",
+            linewidth=1.5,
+            markersize=8,
+            label=r"Within-5-bin accuracy (avg over $\Delta x, \Delta y, \Delta\mathrm{yaw}$)",
+        )
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation accuracy (%)")
-    ax.set_title("Open-loop: validation accuracy")
+    ax.set_title("Validation accuracy")
     ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.legend(fontsize=9, loc="best")
     sns.despine(ax=ax)
 
     # ── Subplot 1: open-loop validation loss ──────────────────────────────────
@@ -566,7 +660,7 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     )
     ax.set_xlabel("Human driving demonstrations (hours)")
     ax.set_ylabel("Validation loss")
-    ax.set_title("Open-loop: validation loss")
+    ax.set_title("Validation loss")
     ax.grid(axis="y", alpha=0.3, linestyle="--")
     sns.despine(ax=ax)
 
@@ -605,17 +699,116 @@ def plot_anchor_eval(anchor_df, save_path="results/figures/eval_anchor.pdf"):
     return fig
 
 
-def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eval_table.tex"):
+def plot_selfplay_behavior_analysis(df, save_path="results/figures/eval_selfplay_behavior_analysis.pdf"):
+    """Bar chart comparing two 50k checkpoints across four self-play behavior metrics.
+
+    4 subplots, one per metric. Two bars per subplot: unregularized vs regularized,
+    using the shared reg/unreg color convention (black = unreg, blue = reg).
+    Mode: scaling_sp_val (self-play). Mean ± SEM, raw values, no normalization.
+
+    Metrics:
+        - collisions_per_agent
+        - lateral_error_avg
+        - longitudinal_error_avg
+        - displacement_error_avg
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
+    }
+
+    df = df[df["mode"] == "scaling_sp_val"].copy()
+    df = df[df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+    if df.empty:
+        print("  No self-play data for checkpoints of interest — skipping plot_selfplay_behavior_analysis.")
+        return None
+
+    required_cols = [
+        "collision_rate",
+        "lateral_error_avg",
+        "longitudinal_error_avg",
+        "displacement_error_avg",
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        print(f"  Missing columns {missing} — skipping plot_selfplay_behavior_analysis.")
+        return None
+
+    agg = df.groupby("checkpoint")[required_cols].agg(["mean", "sem"]).reset_index()
+    agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
+    agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
+
+    # unreg first (black), reg second (blue) — matches the rest of the file.
+    agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
+    agg = agg.sort_values("is_reg").reset_index(drop=True)
+    colors = [PALETTE["selfplay"] if not r else PALETTE["ours"] for r in agg["is_reg"]]
+
+    # (column, ylabel). None of these are percentages — they're counts/distances.
+    subplot_specs = [
+        ("collision_rate", "SP collision rate"),
+        ("lateral_error_avg", "SP lateral L2 distance"),
+        ("longitudinal_error_avg", "SP longitudinal L2 distance"),
+        ("displacement_error_avg", "SP avg. displacement error"),
+    ]
+
+    _set_style(2)
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+
+    for ax, (col, ylabel) in zip(axes, subplot_specs):
+        means = agg[f"{col}_mean"].values
+        sems = agg[f"{col}_sem"].values
+        labels = agg["label"].values
+        x = np.arange(len(labels))
+
+        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
+            ax.bar(
+                x[i],
+                mean,
+                yerr=sem,
+                color=color,
+                alpha=0.8,
+                width=0.5,
+                capsize=4,
+                error_kw=dict(lw=1.2),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.tick_params(axis="y", which="minor", length=3, color="gray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Updated: BC anchor LaTeX table (now includes within-5-bin accuracy column)
+# ---------------------------------------------------------------------------
+
+
+def generate_anchor_latex_table(
+    anchor_df,
+    save_path="results/figures/anchor_eval_table.tex",
+    within5_csvs=("results/anchor_train_dx.csv", "results/anchor_train_dy.csv", "results/anchor_train_dyaw.csv"),
+):
     """LaTeX table for BC anchor evaluation results.
 
     Rows:    one per checkpoint (num_maps_trained), sorted ascending.
-    Columns: Human data (hours) | OL val accuracy (%) | OL val loss
+    Columns: Human data (hours)
+             | OL argmax accuracy (%) | OL within-5-bin accuracy (%) | OL val loss
              | CL self-play route progress | CL self-play score
              | CL human-replay route progress | CL human-replay score
 
-    Uses the same green/red cellcolor heatmap convention as the legacy scaling
-    table (kept intentionally — this table has a single series per metric so
-    tier highlighting is less useful).
+    Within-5-bin accuracy is the final-step value averaged across dx/dy/dyaw
+    from the wandb training-curve CSVs. Pass `within5_csvs=None` to skip the
+    column entirely (e.g. if the CSVs aren't available on a given run).
 
     Required LaTeX packages:
       \\usepackage{booktabs}
@@ -634,6 +827,21 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
         .copy()
     )
     ol["human_hours"] = ol["num_maps_trained"].apply(_maps_to_human_hours)
+
+    # Within-5-bin column. Stored as a fraction (0-1) here so it shares the
+    # same `scale=100` formatting path as ol_val_accuracy below.
+    if within5_csvs:
+        w5 = _load_final_within5_accuracy(*within5_csvs)
+        if not w5.empty:
+            w5 = w5.rename(columns={"within5_avg_pct": "ol_within5_acc"}).copy()
+            w5["ol_within5_acc"] = w5["ol_within5_acc"] / 100.0
+            ol = ol.merge(w5[["num_maps_trained", "ol_within5_acc"]], on="num_maps_trained", how="left")
+        else:
+            ol["ol_within5_acc"] = np.nan
+    else:
+        ol["ol_within5_acc"] = np.nan
+
+    has_within5 = ol["ol_within5_acc"].notna().any()
 
     # Closed-loop: mean +/- SEM per (checkpoint, mode)
     cl = (
@@ -703,22 +911,38 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
         "hr_route_progress_mean": merged["hr_route_progress_mean"].max(),
         "hr_score_mean": merged["hr_score_mean"].max(),
     }
+    if has_within5:
+        best["ol_within5_acc"] = merged["ol_within5_acc"].max()
 
     def _is_best(col, val):
+        if col not in best:
+            return False
         return not np.isnan(val) and np.isclose(val, best[col])
 
-    col_spec = "r|rr|rr|rr"
+    n_ol = 3 if has_within5 else 2
+    col_spec = "r|" + "r" * n_ol + "|rr|rr"
+
+    ol_header_cells = [r"Acc. (\%)"]
+    if has_within5:
+        ol_header_cells.append(r"Acc. $\pm 5$ bins (\%)")
+    ol_header_cells.append("Loss")
+
     lines = [
         r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, \usepackage{graphicx}, \usepackage{bm}",
         r"\begin{table}[ht]",
         r"\centering",
-        r"\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; closed-loop metrics averaged over validation scenes.}",
+        r"\caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; "
+        r"closed-loop metrics averaged over validation scenes. "
+        r"Within-5-bin accuracy is the average of $\Delta x$, $\Delta y$, "
+        r"$\Delta\mathrm{yaw}$ accuracies at the final training step.}",
         r"\label{tab:anchor_results}",
         r"\resizebox{\textwidth}{!}{%",
         r"\begin{tabular}{" + col_spec + "}",
         r"\toprule",
-        r" & \multicolumn{2}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\",
-        r"Human data (h) & Acc. (\%) & Loss & Route prog. & Score & Route prog. & Score \\",
+        r" & \multicolumn{" + str(n_ol) + r"}{c|}{Open-loop} & "
+        r"\multicolumn{2}{c|}{Closed-loop self-play} & "
+        r"\multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\",
+        r"Human data (h) & " + " & ".join(ol_header_cells) + r" & Route prog. & Score & Route prog. & Score \\",
         r"\midrule",
     ]
 
@@ -733,6 +957,16 @@ def generate_anchor_latex_table(anchor_df, save_path="results/figures/anchor_eva
                 is_best=_is_best("ol_val_accuracy", row["ol_val_accuracy"]),
             )
         )
+        if has_within5:
+            cells.append(
+                _fmt_green(
+                    row["ol_within5_acc"],
+                    "ol_within5_acc",
+                    scale=100,
+                    decimals=1,
+                    is_best=_is_best("ol_within5_acc", row["ol_within5_acc"]),
+                )
+            )
         cells.append(
             _fmt_red(
                 row["ol_val_loss"],
@@ -775,8 +1009,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     on a log scale; y-axes in percent.
 
     Colour convention (from module-level PALETTE via _reg_unreg_colors):
-      - unregularized runs: blue
-      - regularized runs:   shades of purple (darker = more anchor data)
+      - unregularized runs: black
+      - regularized runs:   shades of blue (darker = more anchor data)
     """
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     df = df[df["mode"].isin(scaling_modes)].copy()
@@ -824,7 +1058,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)  # blue for 0, purples for >0
+    color_map = _reg_unreg_colors(anchor_vals)  # black for 0, blues for >0
 
     markers = ["s", "^", "o", "D", "P", "X", "v", "*"]
     marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
@@ -856,8 +1090,8 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
                 markersize=8,
                 linewidth=1.5,
                 linestyle="-",
-                # Thin black edge on purples so the lightest shades stay
-                # visible against white; no edge needed for the blue unreg.
+                # Thin black edge on light blues so the lightest shades stay
+                # visible against white; no edge needed for the black unreg.
                 markeredgecolor="black" if anchor > 0 else color_map[anchor],
                 markeredgewidth=0.4 if anchor > 0 else 0,
                 zorder=3,
@@ -921,7 +1155,7 @@ def _smart_ckpt_to_num_maps(ckpt: str) -> float:
     return np.nan
 
 
-def _load_smart_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
+def _load_smart_baseline(csv_path: str = "results/smart_baseline_32_rollouts.csv") -> pd.DataFrame:
     """Load the SMART baseline CSV and pivot into per-num_maps rows.
 
     Returns a DataFrame with columns:
@@ -1575,10 +1809,10 @@ def plot_compatibility_tradeoff_bar(df, save_path="results/figures/eval_compatib
     agg.columns = ["checkpoint"] + [f"{m}_{s}" for m in required_cols for s in ["mean", "sem"]]
     agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
-    # unreg first (blue), reg second (purple, matching the shared palette)
+    # unreg first (black), reg second (blue, matching the shared palette)
     agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
     agg = agg.sort_values("is_reg").reset_index(drop=True)
-    colors = [PALETTE["selfplay"] if not r else PALETTE["ours_edge"] for r in agg["is_reg"]]
+    colors = [PALETTE["selfplay"] if not r else PALETTE["ours"] for r in agg["is_reg"]]
 
     subplot_specs = [
         ("collision_rate", "HR collision rate [%]", True),
@@ -2140,9 +2374,9 @@ def plot_human_data_requirements_wosac(
         3) WOSAC map-based metrics    (main: map_based_metrics,    SMART: wosac_map_based_metrics)
 
     Series per panel:
-        - regularized self-play (ours):       line across anchor points (pale purple)
-        - best unregularized self-play:       horizontal dashed line (blue)
-        - SMART-tiny-CLSFT:                   line across SMART checkpoints (pink)
+        - regularized self-play (ours):       line across anchor points (medium blue)
+        - best unregularized self-play:       horizontal dashed line (black)
+        - SMART-tiny-CLSFT:                   line across SMART checkpoints (red)
         - Ground-truth (UB):                  dashed reference line (upper bound)
         - Random:                             dashed reference line (lower bound)
 
@@ -2644,6 +2878,279 @@ def generate_collision_severity_latex_table(
     return latex_str
 
 
+def plot_three_metric_comparison(df, save_path="results/figures/eval_three_metric_comparison.pdf"):
+    """Bar chart comparing unregularized vs regularized across three key collision metrics.
+
+    3 subplots (1 row):
+      0) Self-play collision rate         (mode: scaling_sp_val)
+      1) IDM collision rate               (mode: scaling_idm_interactive)
+      2) Human-replay at-fault collision  (mode: scaling_hr_interactive)
+
+    Two bars per subplot: unregularized (black) vs regularized (blue),
+    following the shared PALETTE reg/unreg colour convention.
+    Error bars show SEM. Values plotted as percentages.
+
+    Note: scaling_idm_interactive rows do not have sp_maps/anchor_maps
+    attached in the evaluator (bug in evaluate_checkpoints.py — the metadata
+    loop omits idm_interactive_rows). Filtering is therefore done on
+    checkpoint path only, not on sp_maps.
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
+    }
+
+    subplot_specs = [
+        {
+            "mode": "scaling_sp_val",
+            "col": "collision_rate",
+            "ylabel": "Collision rate [%]",
+            "title": "Self-play collision rate",
+            "filter_sp_maps": True,  # sp_maps is reliably set for this mode
+        },
+        {
+            "mode": "scaling_idm_interactive",
+            "col": "collision_rate",
+            "ylabel": "Collision rate [%]",
+            "title": "IDM collision rate",
+            "filter_sp_maps": False,  # sp_maps NOT attached to IDM rows (evaluator bug)
+        },
+        {
+            "mode": "scaling_hr_interactive",
+            "col": "at_fault_collision_rate",
+            "ylabel": "At-fault collision rate [%]",
+            "title": "HR at-fault collision rate",
+            "filter_sp_maps": True,
+        },
+    ]
+
+    required_cols = {"collision_rate", "at_fault_collision_rate"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        print(f"  Missing columns {missing} — skipping plot_three_metric_comparison.")
+        return None
+
+    _set_style(2)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    bar_labels = ["unregularized", "regularized"]
+    colors = [PALETTE["selfplay"], PALETTE["ours"]]
+    x = np.arange(len(bar_labels))
+
+    for ax, spec in zip(axes, subplot_specs):
+        sub = df[df["mode"] == spec["mode"]].copy()
+        sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
+
+        # For modes where sp_maps is reliably set, restrict to the 50k checkpoint
+        # to avoid accidentally pulling in rows from other sp_maps values that
+        # happen to share the same checkpoint path (shouldn't occur given the
+        # naming convention, but is an explicit safeguard).
+        if spec["filter_sp_maps"] and "sp_maps" in sub.columns:
+            sub = sub[sub["sp_maps"] == 50_000]
+
+        if sub.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "no data",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=11,
+                color="gray",
+            )
+            ax.set_title(spec["title"])
+            ax.set_ylabel(spec["ylabel"])
+            sns.despine(ax=ax)
+            continue
+
+        agg = sub.groupby("checkpoint")[spec["col"]].agg(mean="mean", sem="sem").reset_index()
+        agg["label"] = agg["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
+        agg["is_reg"] = ~agg["checkpoint"].str.contains("unreg")
+        agg = agg.sort_values("is_reg").reset_index(drop=True)
+
+        means = agg["mean"].values * 100
+        sems = agg["sem"].values * 100
+
+        for i, (mean, sem, color) in enumerate(zip(means, sems, colors)):
+            ax.bar(
+                x[i],
+                mean,
+                yerr=sem,
+                color=color,
+                alpha=0.8,
+                width=0.5,
+                capsize=4,
+                error_kw=dict(lw=1.2),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(bar_labels, rotation=15, ha="right", fontsize=9)
+        ax.set_ylabel(spec["ylabel"])
+        ax.set_title(spec["title"])
+        ax.set_ylim(bottom=0)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.tick_params(axis="y", which="minor", length=3, color="gray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
+def generate_main_comparison_latex_table(
+    df,
+    save_path="results/figures/eval_main_comparison_table.tex",
+):
+    """LaTeX table comparing two checkpoints across self-play, HR, and IDM metrics.
+
+    Rows:    unregularized (first), regularized (second).
+    Columns: SP score | HR score | IDM score | HR at-fault coll. |
+             HR longitudinal L2 | HR lateral L2 | HR displacement error
+
+    Best value per column is bolded. No colour coding.
+
+    Note: scaling_idm_interactive rows do not have sp_maps attached (evaluator
+    bug — see evaluate_checkpoints.py). IDM filtering is by checkpoint only.
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}, \\usepackage{graphicx}, \\usepackage{bm}
+    """
+    CHECKPOINTS_OF_INTEREST = {
+        "models/scaling_cpts/unreg_delta_50k_maps.pt": "Unregularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "Regularized (ours)",
+    }
+    ROW_ORDER = [
+        "models/scaling_cpts/unreg_delta_50k_maps.pt",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt",
+    ]
+
+    # ── Per-mode aggregation ────────────────────────────────────────────────
+    # (mode, col, output_key, filter_sp_maps)
+    metric_sources = [
+        ("scaling_sp_val", "score", "sp_score", True),
+        ("scaling_hr_interactive", "score", "hr_score", True),
+        ("scaling_idm_interactive", "score", "idm_score", False),
+        ("scaling_hr_interactive", "at_fault_collision_rate", "hr_atfault", True),
+        ("scaling_hr_interactive", "longitudinal_error_avg", "hr_long_err", True),
+        ("scaling_hr_interactive", "lateral_error_avg", "hr_lat_err", True),
+        ("scaling_hr_interactive", "displacement_error_avg", "hr_disp_err", True),
+    ]
+
+    # Collect mean ± sem per checkpoint for each metric
+    records = {cpt: {} for cpt in CHECKPOINTS_OF_INTEREST}
+
+    for mode, col, key, filter_sp_maps in metric_sources:
+        if col not in df.columns:
+            print(f"  Warning: column '{col}' not found — '{key}' will show as ---.")
+            for cpt in CHECKPOINTS_OF_INTEREST:
+                records[cpt][f"{key}_mean"] = float("nan")
+                records[cpt][f"{key}_sem"] = float("nan")
+            continue
+
+        sub = df[(df["mode"] == mode) & (df["checkpoint"].isin(CHECKPOINTS_OF_INTEREST))].copy()
+        if filter_sp_maps and "sp_maps" in sub.columns:
+            sub = sub[sub["sp_maps"] == 50_000]
+
+        for cpt in CHECKPOINTS_OF_INTEREST:
+            grp = sub.loc[sub["checkpoint"] == cpt, col].dropna()
+            records[cpt][f"{key}_mean"] = grp.mean() if not grp.empty else float("nan")
+            records[cpt][f"{key}_sem"] = grp.sem() if len(grp) > 1 else float("nan")
+
+    # ── Column specs ────────────────────────────────────────────────────────
+    # (key, header, higher_is_better, as_pct, decimals)
+    col_specs = [
+        ("sp_score", r"Score $\uparrow$", True, False, 3),
+        ("hr_score", r"Score $\uparrow$", True, False, 3),
+        ("idm_score", r"Score $\uparrow$", True, False, 3),
+        ("hr_atfault", r"At-fault (\%) $\downarrow$", False, True, 1),
+        ("hr_long_err", r"Long. L2 $\downarrow$", False, False, 3),
+        ("hr_lat_err", r"Lat. L2 $\downarrow$", False, False, 3),
+        ("hr_disp_err", r"Disp. err. $\downarrow$", False, False, 3),
+    ]
+
+    # ── Best-per-column for bolding ─────────────────────────────────────────
+    best = {}
+    for key, _, higher_is_better, _, _ in col_specs:
+        vals = [records[cpt][f"{key}_mean"] for cpt in ROW_ORDER]
+        finite = [v for v in vals if not np.isnan(v)]
+        if not finite:
+            best[key] = None
+        elif higher_is_better:
+            best[key] = max(finite)
+        else:
+            best[key] = min(finite)
+
+    # ── Cell formatter ──────────────────────────────────────────────────────
+    def _fmt_cell(key, cpt, as_pct, decimals):
+        mean = records[cpt][f"{key}_mean"]
+        sem = records[cpt][f"{key}_sem"]
+        if np.isnan(mean):
+            return "---"
+        is_best = best[key] is not None and np.isclose(mean, best[key])
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if (as_pct and not np.isnan(sem)) else sem
+        fmt = f".{decimals}f"
+        if not np.isnan(s_val):
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
+        else:
+            body = f"{m_val:{fmt}}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+        return text
+
+    # ── Build LaTeX ─────────────────────────────────────────────────────────
+    n_metric_cols = len(col_specs)
+    col_spec = "l" + "|" + "r" * 3 + "|" + "r" * 4  # method | SP HR IDM | 4×HR
+
+    lines = []
+    lines.append(r"% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{bm}")
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Main results comparing unregularized and regularized self-play "
+        r"at 50k training maps. "
+        r"Self-play score on 10k validation scenes; human-replay and IDM-replay "
+        r"metrics on 200 interactive validation scenes. "
+        r"Best value per column in \textbf{bold}.}"
+    )
+    lines.append(r"\label{tab:main_comparison}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    # Header row 1: block labels
+    lines.append(r" & \multicolumn{3}{c|}{Score} & \multicolumn{4}{c}{Human-replay (interactive)} \\")
+
+    # Header row 2: per-column labels
+    col_headers = " & ".join(s[1] for s in col_specs)
+    lines.append(
+        r"\makecell{Method} & "
+        r"\makecell{Self-play} & \makecell{HR} & \makecell{IDM} & " + " & ".join(s[1] for s in col_specs[3:]) + r" \\"
+    )
+    lines.append(r"\midrule")
+
+    # Data rows
+    for cpt in ROW_ORDER:
+        label = CHECKPOINTS_OF_INTEREST[cpt]
+        cells = [label] + [_fmt_cell(key, cpt, as_pct, decimals) for key, _, _, as_pct, decimals in col_specs]
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}}")
+    lines.append(r"\end{table}")
+
+    latex_str = "\n".join(lines)
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -2664,6 +3171,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         plot_compatibility_tradeoff_bar(df)
         generate_human_data_latex_table(df)
         print("  Saved eval_compatibility_tradeoff_bar.pdf")
+        plot_selfplay_behavior_analysis(df)
+        print("  Saved eval_self_play behavior.pdf")
     plot_wosac_lineplot(wosac_df)
     print("  Saved eval_wosac_lineplot.pdf")
     plot_wosac_submetrics(wosac_df)
@@ -2674,6 +3183,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         sp_maps_filter=50000,
     )
     generate_collision_severity_latex_table(df)
+    plot_three_metric_comparison(df)
+    generate_main_comparison_latex_table(df)
     if anchor_df is not None and not anchor_df.empty:
         plot_anchor_eval(anchor_df)
         print("  Saved eval_anchor.pdf")

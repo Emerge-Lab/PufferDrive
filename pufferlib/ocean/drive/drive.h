@@ -248,7 +248,6 @@ struct Log {
     float longitudinal_error_avg;
     float displacement_error_avg; // ADE
     float displacement_samples;
-    float rear_collision_rate; // Fraction of steps with a rear collision event
     float n;
 };
 

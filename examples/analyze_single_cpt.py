@@ -18,7 +18,7 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/scaling_cpts/delta_50k_maps_anchor_12k_maps.pt" 
+CPT_PATH = "models/scaling_cpts/reg_delta_50k_maps_anchor_12k_maps.pt" 
 
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training" # 50k maps used for training
