@@ -4879,11 +4879,9 @@ void c_step(Drive *env) {
                 // landed in the rollout buffer this step; the goal_behavior
                 // branch decides what the AGENT does NEXT step.
                 env->logs[i].num_goals_reached += 1;
-                // Idempotent per-episode flag: 1 iff this agent ever reached
-                // its final goal. Assignment (not +=) so vec_log's sum/n
-                // gives the fraction of agents that completed their route,
-                // independent of how many post-final-goal steps the agent
-                // sits at the saturated goal position.
+                // Idempotent per-episode: 1 iff this agent ever reached its
+                // final goal. Assignment (not +=) so vec_log's sum/n yields
+                // the fraction of agents that completed their route.
                 env->logs[i].goal_completion_rate = 1.0f;
                 if (env->goal_behavior == GOAL_REMOVE) {
                     // Self-play / nuplan-style episodes: mark the agent
