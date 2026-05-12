@@ -1597,6 +1597,11 @@ def mine_failures(env_name, args=None):
     # one binding.shared() picked at init. Without this, num_envs=1 + a never-firing
     # resample leaves every episode on the alphabetically-first map.
     env_kwargs["resample_frequency"] = int(env_kwargs.get("scenario_length", 1280))
+    # Drive's eval-mode resample path silently goes dormant after
+    # num_eval_scenarios resamples (default 16), leaving every subsequent
+    # episode locked on whichever map was loaded last. Lift the cap to at
+    # least the requested episode count so mining cycles all the way through.
+    env_kwargs["num_eval_scenarios"] = max(num_episodes, int(env_kwargs.get("num_eval_scenarios", 16) or 16))
     # Mining is sequential: a single in-process Drive instance walks one episode at
     # a time. The Multiprocessing backend would fork N workers that each initialize
     # with starting_map_counter=0, locking every worker to the alphabetically-first
