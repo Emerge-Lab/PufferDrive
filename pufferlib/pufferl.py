@@ -2458,14 +2458,24 @@ def _render_compact_replay_job(job):
     return pufferlib.mining_viz.render_compact_replay_html(replay_path, output_path, render_context=render_context)
 
 
+def _sanitize_path_component(value):
+    return str(value).replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+
+def _get_no_model_run_names(args):
+    env_args = args.get("env", {})
+    sdc_controller = _sanitize_path_component(env_args.get("sdc_controller", "policy"))
+    non_sdc_controller = _sanitize_path_component(env_args.get("non_sdc_controller", "policy"))
+    return "controller_baselines", f"sdc_{sdc_controller}_non_sdc_{non_sdc_controller}"
+
+
 def _get_eval_folder(args, adversarial=False):
     if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
         return args["eval_results_dir"]
 
     model_path = args.get("load_model_path")
     if model_path is None:
-        experiment_name = "manual"
-        model_name = "random_init"
+        experiment_name, model_name = _get_no_model_run_names(args)
     else:
         model_filename_with_ext = os.path.basename(model_path)
         model_name = os.path.splitext(model_filename_with_ext)[0]
@@ -2480,8 +2490,7 @@ def _get_eval_folder(args, adversarial=False):
 def _get_failure_mining_folder(args):
     model_path = args.get("load_model_path")
     if model_path is None:
-        experiment_name = "manual"
-        model_name = "random_init"
+        experiment_name, model_name = _get_no_model_run_names(args)
     else:
         model_filename_with_ext = os.path.basename(model_path)
         model_name = os.path.splitext(model_filename_with_ext)[0]
