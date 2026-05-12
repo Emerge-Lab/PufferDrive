@@ -334,6 +334,7 @@ struct Drive {
     float adv_reward_weight_drive;
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
+    int adv_reward_collision_offroad_only;
     int adv_target_hit_responsibility_reward;
     float adv_target_hit_reward_min_responsibility;
     float adv_target_hit_low_responsibility_threshold;
@@ -5520,6 +5521,9 @@ void c_step(Drive *env) {
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
         float target_reward = total_reward_terms(&reward_terms[0]);
+        if (env->adv_reward_collision_offroad_only) {
+            target_reward = reward_terms[0].collision + reward_terms[0].offroad;
+        }
         float target_hit_reward_multiplier = 1.0f;
         if (env->adv_target_hit_responsibility_reward && env->target_hit_this_step) {
             float responsibility = env->target_hit_responsibility_this_step;
