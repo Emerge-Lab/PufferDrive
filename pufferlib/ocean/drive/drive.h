@@ -18,6 +18,8 @@
 #include <time.h>
 #include "error.h"
 
+// CURRENT
+
 // EGL is optional: systems without EGL headers keep using the Xvfb/Mesa path.
 #if defined(__linux__) && defined(__has_include)
 #if __has_include(<EGL/egl.h>)
@@ -1983,7 +1985,6 @@ void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             float max_dy = fabsf(action_dx) * tanf(MAX_STEER);
             float prev_action_dy = action_dy;
             action_dy = clip(action_dy, -max_dy, max_dy);
-       
         }
 
         float jerk_dx = action_dx - agent->prev_action_dx;
@@ -4429,6 +4430,9 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
             }
 
             draw_scene(env, client, 1, 0, 0, 0);
+
+            // Draw timestep
+            DrawText(TextFormat("t=%d", env->timestep), 10, 10, 26, PUFF_WHITE);
 
         } else if (view_mode == VIEW_MODE_BEV_AGENT_OBS) {
             // Orthographic bird's-eye view centered on the selected agent,

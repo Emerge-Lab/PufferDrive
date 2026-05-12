@@ -1,19 +1,5 @@
 """Evaluate RL checkpoints across multiple eval modes.
 
-Modes:
-  1. Self-play on training maps
-  2. Self-play on validation maps
-  3. Human-replay on training maps
-  4. Human-replay on validation maps
-  5. Human-replay on interactive scenes (1k scenes selected for SDC interactivity)
-  6. Scaling analysis: all checkpoints in SCALING_CHECKPOINTS_PATH on validation
-     set in both self-play and human-replay modes
-
-When NUM_TOTAL_EVAL_AGENTS > NUM_AGENTS_PER_VECENV, we keep the buffer at
-NUM_AGENTS_PER_VECENV and loop resample_maps() to cover more scenes.
-
-Output: One row per scene per mode, with checkpoint name and metrics.
-
 Checkpoint naming convention (scaling):
   [reg|unreg]_[dynamics]_[N]_maps[_anchor_[M]_maps].pt
 
@@ -24,7 +10,7 @@ Checkpoint naming convention (scaling):
       -> unregularized, delta dynamics, 10 self-play maps, no anchor
 
 Usage:
-    python evaluate_checkpoints.py
+    python analyze.py
 """
 
 import copy
@@ -48,6 +34,7 @@ INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 
 IDM_MAP_DIR = "resources/drive/binaries/interactive_200_idm"  # Same 200 maps selected for SDC interactivity but processed in a different way
 INTERACTIVE_MAP_DIR_MAPS = 200
 NUM_TOTAL_EVAL_AGENTS = 1024 * 10
+NUM_TOTAL_INTERACTIVE_EVAL_AGENTS = 1024 * 1  # Interactive maps are small (200); avoid excessive resampling
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
@@ -154,20 +141,29 @@ def process_rollout_data(info_list, checkpoint, mode, scene_offset=0, dataset=DA
     return rows
 
 
-def num_resample_rounds():
-    """How many rollout rounds needed to cover NUM_TOTAL_EVAL_AGENTS."""
-    if NUM_TOTAL_EVAL_AGENTS <= NUM_AGENTS_PER_VECENV:
+def num_resample_rounds(total_eval_agents=NUM_TOTAL_EVAL_AGENTS):
+    """How many rollout rounds needed to cover total_eval_agents."""
+    if total_eval_agents <= NUM_AGENTS_PER_VECENV:
         return 1
-    return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
+    return (total_eval_agents + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
 
 
 def run_mode(
-    evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps, controller_overrides=None
+    evaluator,
+    policy,
+    cpt_config,
+    map_dir,
+    control_mode,
+    checkpoint,
+    mode_name,
+    num_maps,
+    controller_overrides=None,
+    total_eval_agents=NUM_TOTAL_EVAL_AGENTS,
 ):
     config = make_eval_config(cpt_config, map_dir, control_mode, num_maps, controller_overrides=controller_overrides)
     env = load_env(ENV_NAME, config)
     rows = []
-    n_rounds = num_resample_rounds()
+    n_rounds = num_resample_rounds(total_eval_agents)
 
     try:
         for round_idx in range(n_rounds):
@@ -193,87 +189,6 @@ def run_mode(
 
     env.close()
     return rows
-
-
-def evaluate_checkpoint(checkpoint_path, base_config):
-    """Run all eval modes for a single checkpoint. Returns list of per-scene dicts."""
-
-    cpt_config, _ = load_checkpoint_config(checkpoint_path, base_config)
-    cpt_config["load_model_path"] = checkpoint_path
-
-    # Create first env before loading policy (load_policy needs vecenv.driver_env)
-    sp_train_config = make_eval_config(cpt_config, TRAIN_MAP_DIR, control_mode="control_vehicles", num_maps=50_000)
-    env = load_env(ENV_NAME, sp_train_config)
-
-    policy = load_policy(cpt_config, env, ENV_NAME)
-    policy.eval()
-
-    evaluator = CheckpointEvaluator(cpt_config)
-    all_rows = []
-
-    # ── 1. Self-play on training maps (reuse the env we already created) ─────
-    n_rounds = num_resample_rounds()
-    try:
-        for round_idx in range(n_rounds):
-            if round_idx > 0:
-                env.driver_env.resample_maps()
-
-            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
-            scene_offset = round_idx * env.driver_env.num_envs
-            all_rows.extend(process_rollout_data(info_list, checkpoint_path, "sp_train", scene_offset))
-
-        sp_rows = [r for r in all_rows if r["mode"] == "sp_train"]
-        if sp_rows:
-            mean_score = np.mean([r["score"] for r in sp_rows])
-            mean_coll = np.mean([r["collision_rate"] for r in sp_rows])
-            print(f"  sp_train: {len(sp_rows)} scenes, score={mean_score:.3f}, collision_rate={mean_coll:.3f}")
-    except Exception as e:
-        print(f"  sp_train failed (non-fatal): {e}")
-    env.close()
-
-    # ── 2. Self-play on validation maps ──────────────────────────────────────
-    all_rows.extend(
-        run_mode(
-            evaluator, policy, cpt_config, VAL_MAP_DIR, "control_vehicles", checkpoint_path, "sp_val", num_maps=10_000
-        )
-    )
-
-    # ── 3. Human-replay on training maps ─────────────────────────────────────
-    all_rows.extend(
-        run_mode(
-            evaluator,
-            policy,
-            cpt_config,
-            TRAIN_MAP_DIR,
-            "control_sdc_only",
-            checkpoint_path,
-            "hr_train",
-            num_maps=50_000,
-        )
-    )
-
-    # ── 4. Human-replay on validation maps ───────────────────────────────────
-    all_rows.extend(
-        run_mode(
-            evaluator, policy, cpt_config, VAL_MAP_DIR, "control_sdc_only", checkpoint_path, "hr_val", num_maps=10_000
-        )
-    )
-
-    # ── 5. Human-replay on interactive scenes ────────────────────────────────
-    all_rows.extend(
-        run_mode(
-            evaluator,
-            policy,
-            cpt_config,
-            INTERACTIVE_MAP_DIR,
-            "control_sdc_only",
-            checkpoint_path,
-            "hr_interactive",
-            num_maps=INTERACTIVE_MAP_DIR_MAPS,
-        )
-    )
-
-    return all_rows
 
 
 def parse_scaling_checkpoint_name(filename):
@@ -423,6 +338,7 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_interactive",
             num_maps=INTERACTIVE_MAP_DIR_MAPS,
+            total_eval_agents=NUM_TOTAL_INTERACTIVE_EVAL_AGENTS,
         )
 
         # ── IDM eval on interactive scenes ───────────────────────────────
@@ -440,6 +356,7 @@ def evaluate_scaling_checkpoints(base_config):
                 "non_sdc_controller": "idm",
                 "non_vehicle_controller": "replay",
             },
+            total_eval_agents=NUM_TOTAL_INTERACTIVE_EVAL_AGENTS,
         )
 
         # Attach scaling metadata to every row
