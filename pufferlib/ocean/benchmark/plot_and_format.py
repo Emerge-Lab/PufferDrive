@@ -3113,6 +3113,156 @@ def generate_main_comparison_latex_table(
     return latex_str
 
 
+def plot_learning_curves(
+    score_csv="results/learning_curves_sp_scores.csv",
+    kl_csv="results/learning_curves_kl_div.csv",
+    save_path="results/figures/learning_curves.pdf",
+    smooth_window=200,
+):
+    """Learning curves: SP score and KL divergence vs training steps.
+
+    Two subplots (1 row × 2 cols):
+      0) Self-play score over training steps.
+      1) KL divergence (reg_loss) over training steps.
+
+    smooth_window controls the rolling-average window (number of logged steps).
+    Set to 1 or None to disable smoothing.
+
+    Colour convention:
+      - λ=0 (pure self-play): black  (PALETTE['selfplay'])
+      - λ>0 (regularized):    blues from PALETTE['reg_sequence'],
+                               darker = more anchor data.
+    """
+    import re
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    def _parse_prefix(prefix):
+        """Return (lambda_val, num_maps) from a wandb run-name prefix."""
+        lam = float(re.search(r"lambda_value=([\d.]+)", prefix).group(1))
+        m = re.search(r"num_maps=(\d+)", prefix)
+        if m:
+            return lam, int(m.group(1))
+        mk = re.search(r"select_(\d+)k_maps", prefix)
+        if mk:
+            return lam, int(mk.group(1)) * 1000
+        mp = re.search(r"select_(\d+)_maps", prefix)
+        if mp:
+            return lam, int(mp.group(1))
+        return lam, None
+
+    def _run_label(lam, num_maps):
+        if lam == 0.0:
+            return r"unregularized ($\lambda=0$)"
+        return f"regularized, {_maps_to_human_time(num_maps)}" if num_maps else f"regularized, λ={lam}"
+
+    def _extract_runs(df):
+        """Parse a wandb CSV into a list of dicts with keys:
+        prefix, lambda_val, num_maps, label, steps, mean, lo, hi
+        """
+        # Collect unique prefixes (mean columns only — no __MIN/__MAX suffix)
+        seen = {}
+        for col in df.columns:
+            if col == "Step" or col.endswith("__MIN") or col.endswith("__MAX"):
+                continue
+            # split on " - " to separate run name from metric name
+            prefix = col.split(" - ")[0]
+            if prefix not in seen:
+                seen[prefix] = col  # mean col
+        runs = []
+        for prefix, mean_col in seen.items():
+            min_col = mean_col + "__MIN"
+            max_col = mean_col + "__MAX"
+            lam, num_maps = _parse_prefix(prefix)
+            mask = df[mean_col].notna()
+            steps = df.loc[mask, "Step"].values / 1e9  # → billions
+            mean = df.loc[mask, mean_col].values
+            lo = df.loc[mask, min_col].values if min_col in df.columns else mean
+            hi = df.loc[mask, max_col].values if max_col in df.columns else mean
+            runs.append(
+                dict(
+                    prefix=prefix,
+                    lambda_val=lam,
+                    num_maps=num_maps,
+                    label=_run_label(lam, num_maps),
+                    steps=steps,
+                    mean=mean,
+                    lo=lo,
+                    hi=hi,
+                )
+            )
+        return runs
+
+    def _assign_colors(runs):
+        """Black for λ=0, blues (light→dark by num_maps) for λ>0."""
+        reg_runs = sorted(
+            [r for r in runs if r["lambda_val"] != 0.0],
+            key=lambda r: r["num_maps"] if r["num_maps"] is not None else 0,
+        )
+        seq = PALETTE["reg_sequence"]
+        # Spread across the sequence so even a single reg run gets a mid-blue
+        step = max(1, (len(seq) - 1) / max(len(reg_runs) - 1, 1))
+        color_map = {}
+        for i, r in enumerate(reg_runs):
+            idx = min(int(round(i * step)), len(seq) - 1)
+            color_map[r["prefix"]] = seq[idx]
+        for r in runs:
+            if r["lambda_val"] == 0.0:
+                color_map[r["prefix"]] = PALETTE["selfplay"]
+        return color_map
+
+    def _smooth(arr):
+        if not smooth_window or smooth_window <= 1:
+            return arr
+        return pd.Series(arr).rolling(smooth_window, min_periods=1, center=True).mean().values
+
+    # ── Load ─────────────────────────────────────────────────────────────────
+    score_df = pd.read_csv(score_csv)
+    kl_df = pd.read_csv(kl_csv)
+
+    score_runs = _extract_runs(score_df)
+    kl_runs = _extract_runs(kl_df)
+    color_map = _assign_colors(score_runs)  # same prefixes in both CSVs
+
+    # ── Plot ─────────────────────────────────────────────────────────────────
+    _set_style(len(score_runs))
+    fig, axes = plt.subplots(1, 2, figsize=(8.5, 3))
+
+    subplot_data = [
+        (axes[0], score_runs, "Self-play score", "Score"),
+        (axes[1], kl_runs, "KL divergence", r"KL$(\pi(\cdot|o_t)\,\|\,\tau(\cdot|o_t))$"),
+    ]
+
+    for ax, runs, title, ylabel in subplot_data:
+        # Draw λ=0 last so it sits on top
+        ordered = sorted(runs, key=lambda r: r["lambda_val"] == 0.0)
+        for r in ordered:
+            color = color_map.get(r["prefix"], PALETTE["selfplay"])
+            lw = 2.0
+            mean = _smooth(r["mean"])
+            lo = _smooth(r["lo"])
+            hi = _smooth(r["hi"])
+            ax.plot(
+                r["steps"], mean, color=color, linewidth=lw, label=r["label"], zorder=3 if r["lambda_val"] == 0.0 else 2
+            )
+            if not (r["lo"] == r["mean"]).all():
+                ax.fill_between(r["steps"], lo, hi, color=color, alpha=0.15, zorder=1)
+
+        ax.set_xlabel("Training steps (B)")
+        ax.set_ylabel(ylabel, fontsize=13)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=9, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
+        sns.despine(ax=ax)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", facecolor="white")
+    plt.show()
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Master entry point
 # ---------------------------------------------------------------------------
@@ -3151,6 +3301,8 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         print("  Saved eval_anchor.pdf")
         generate_anchor_latex_table(anchor_df)
         print("  Saved anchor_eval_table.tex")
+
+    plot_learning_curves()
 
 
 if __name__ == "__main__":
