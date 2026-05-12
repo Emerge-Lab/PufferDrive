@@ -1564,9 +1564,9 @@ def mine_failures(env_name, args=None):
     Config keys (under `mine.` or via CLI flags):
       - mine.output_dir (default: f"./failure_mining/{env_name}")
       - mine.num_episodes (default: 100)
-      - mine.score_threshold (default: -inf, i.e. capture every episode;
-        episodes with `episode_return` strictly below this threshold are
-        flagged as failures and have their replay bundle written to disk)
+      - mine.num_failures (default: min(20, num_episodes); bottom-K episodes
+        ranked ascending by `avg_distance_per_infraction` are flagged as
+        failures and have their replay bundle written to disk)
       - mine.render (default: True; render each captured replay to HTML and
         write a top-level index.html via mining_viz)
 
@@ -1583,7 +1583,7 @@ def mine_failures(env_name, args=None):
     mine_cfg = args.get("mine") or {}
     output_dir = mine_cfg.get("output_dir") or f"./failure_mining/{env_name}"
     num_episodes = int(mine_cfg.get("num_episodes", 100))
-    score_threshold = float(mine_cfg.get("score_threshold", float("-inf")))
+    num_failures = int(mine_cfg.get("num_failures", min(20, num_episodes)))
     do_render = bool(mine_cfg.get("render", True))
 
     env_kwargs = dict(args["env"])
@@ -1617,14 +1617,17 @@ def mine_failures(env_name, args=None):
         os.makedirs(render_dir, exist_ok=True)
 
     rows = []
+    bundles_by_id = {}
     next_episode_id = 0
     seed = args.get("train", {}).get("seed") or 0
     if hasattr(vecenv, "async_reset"):
         vecenv.async_reset(seed=seed)
     obs_arr, *_ = vecenv.recv()
-    pbar_total = num_episodes
     pbar_done = 0
-    print(f"[mine_failures] target episodes={num_episodes} output={output_dir} score_threshold={score_threshold}")
+    print(
+        f"[mine_failures] target episodes={num_episodes} output={output_dir} "
+        f"num_failures={num_failures} (bottom-K by avg_distance_per_infraction)"
+    )
     while pbar_done < num_episodes:
         with torch.no_grad():
             o_t = torch.as_tensor(obs_arr).to(device)
@@ -1649,21 +1652,35 @@ def mine_failures(env_name, args=None):
             row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
                 1.0, float(row.get("total_infractions", 0.0))
             )
-            row["failed"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
+            row["failed"] = 0
             row["has_replay"] = 0
             row["replay_path"] = None
-            if bundle_bytes is not None and row["failed"]:
-                replay_path = os.path.join(replay_dir, f"episode_{episode_id:06d}.replay.zlib")
-                with open(replay_path, "wb") as f:
-                    f.write(bundle_bytes)
-                row["has_replay"] = 1
-                row["replay_path"] = replay_path
+            if bundle_bytes is not None:
+                bundles_by_id[episode_id] = bundle_bytes
             rows.append(row)
             pbar_done += 1
             if pbar_done >= num_episodes:
                 break
 
     vecenv.close()
+
+    # Pick the K worst by avg_distance_per_infraction (ascending = worst first).
+    # Lower means more infractions per meter driven. Episodes with no infractions
+    # score very high and never get flagged.
+    failure_ids = {
+        r["episode_id"]
+        for r in sorted(rows, key=lambda r: r.get("avg_distance_per_infraction", float("inf")))[:num_failures]
+    }
+    for row in rows:
+        if row["episode_id"] in failure_ids:
+            row["failed"] = 1
+            bundle = bundles_by_id.get(row["episode_id"])
+            if bundle is not None:
+                replay_path = os.path.join(replay_dir, f"episode_{int(row['episode_id']):06d}.replay.zlib")
+                with open(replay_path, "wb") as f:
+                    f.write(bundle)
+                row["has_replay"] = 1
+                row["replay_path"] = replay_path
 
     episodes_df = pd.DataFrame(rows)
     csv_path = os.path.join(output_dir, "episodes.csv")

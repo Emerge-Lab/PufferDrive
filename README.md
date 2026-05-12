@@ -114,14 +114,14 @@ puffer eval_multi_scenarios_render puffer_drive \
 
 ## Failure mining
 
-Roll a trained policy out against a scenario suite, capture per-episode compact replays for episodes whose `episode_return` falls below a threshold, render each one as an interactive HTML page, and produce a sortable cross-episode index. Useful for triaging what a policy fails at after a long training run.
+Roll a trained policy out against a scenario suite, rank episodes by `avg_distance_per_infraction` (lower = worse), keep the bottom K as "failures", render each one as an interactive HTML page, and produce a sortable cross-episode index. Useful for triaging what a policy fails at after a long training run.
 
 ```bash
 puffer mine_failures puffer_drive \
     --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
     --mine.output_dir ./failure_mining/puffer_drive_xxxx \
     --mine.num_episodes 200 \
-    --mine.score_threshold -10.0
+    --mine.num_failures 20
 ```
 
 Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
@@ -130,7 +130,7 @@ Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
 |---|---|---|
 | `output_dir` | `./failure_mining/<env_name>` | Where replays, CSV, and HTML output go |
 | `num_episodes` | `100` | Total episodes to roll out |
-| `score_threshold` | `-inf` | `episode_return < threshold` → flagged as failure; replay written to disk. With `-inf`, no failures are flagged and no replays are persisted. |
+| `num_failures` | `20` | Bottom-K episodes by `avg_distance_per_infraction` (ascending) are flagged as failures and have replays persisted to disk. |
 | `render` | `True` | Render each captured replay to HTML + write `index.html` via `mining_viz` |
 
 `env.*` overrides apply (e.g. `--env.simulation_mode gigaflow` to mine on procedural scenarios). Single vec env, sequential rollout — no per-worker map pinning yet.
@@ -139,7 +139,7 @@ Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
 
 ```
 episodes.csv                 # one row per episode, all summary metrics
-replays/episode_NNNNNN.replay.zlib   # only for failures (above-threshold episodes are not persisted)
+replays/episode_NNNNNN.replay.zlib   # only for the bottom-K failures
 renders/episode_NNNNNN.html  # one viewer page per failure
 renders/index.html           # sortable index of all episodes
 ```

@@ -670,8 +670,7 @@ HTML_TEMPLATE = """<!doctype html>
       const length = Math.max(agent.length * scale, 6);
       const width = Math.max(agent.width * scale, 4);
       const heading = Number(agent.heading || 0);
-      let fill = '#2a7fff';
-      else if (!agent.active) fill = '#95a5a6';
+      let fill = agent.active ? '#2a7fff' : '#95a5a6';
       if (agent.stopped) fill = '#f39c12';
 
       ctx.save();
