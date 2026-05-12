@@ -1588,10 +1588,12 @@ def mine_failures(env_name, args=None):
     num_episodes = int(mine_cfg.get("num_episodes", 100))
     num_failures = int(mine_cfg.get("num_failures", min(20, num_episodes)))
     do_render = bool(mine_cfg.get("render", True))
+    observe_agent = int(mine_cfg.get("observe_agent", -1))
 
     env_kwargs = dict(args["env"])
     env_kwargs["capture_compact_replay"] = True
     env_kwargs["emit_completed_episodes"] = True
+    env_kwargs["observe_agent_idx"] = observe_agent
     env_kwargs["eval_mode"] = env_kwargs.get("eval_mode", 1)
     # Force a map resample every episode so we cover all maps, not just whichever
     # one binding.shared() picked at init. Without this, num_envs=1 + a never-firing

@@ -389,6 +389,21 @@ struct Drive {
     int next_episode_index;
     int completed_episodes_count;
     CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
+
+    // Mining: when >= 0, compute_observations records which partners, road
+    // elements, and traffic controls passed the FOV gate for the active-slot
+    // agent at this index. Capacities sized at env_init from num_agents /
+    // num_road_elements / num_traffic_elements; counts reset each step.
+    int observe_agent_idx;
+    int *obs_capture_partner_ids;
+    int obs_capture_partner_count;
+    int obs_capture_partner_capacity;
+    int *obs_capture_road_ids;
+    int obs_capture_road_count;
+    int obs_capture_road_capacity;
+    int *obs_capture_traffic_ids;
+    int obs_capture_traffic_count;
+    int obs_capture_traffic_capacity;
 };
 
 // ========================================
@@ -3473,6 +3488,9 @@ void c_close(Drive *env) {
     free_lane_graph(&env->lane_graph);
     free(env->map_name);
     free(env->ini_file);
+    free(env->obs_capture_partner_ids);
+    free(env->obs_capture_road_ids);
+    free(env->obs_capture_traffic_ids);
 }
 
 static int compute_observation_size(Drive *env) {
@@ -4029,6 +4047,11 @@ static void compute_observations(Drive *env) {
     int max_obs = compute_observation_size(env);
 
     memset(env->observations, 0, max_obs * env->active_agent_count * sizeof(float));
+    if (env->observe_agent_idx >= 0) {
+        env->obs_capture_partner_count = 0;
+        env->obs_capture_road_count = 0;
+        env->obs_capture_traffic_count = 0;
+    }
     float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
     for (int i = 0; i < env->active_agent_count; i++) {
         float *obs = &observations[i][0];
@@ -4165,6 +4188,11 @@ static void compute_observations(Drive *env) {
                 candidates[candidate_count].dy = dy;
                 candidates[candidate_count].dz = dz;
                 candidate_count++;
+                if (env->observe_agent_idx >= 0 && i == env->observe_agent_idx &&
+                    env->obs_capture_partner_ids != NULL &&
+                    env->obs_capture_partner_count < env->obs_capture_partner_capacity) {
+                    env->obs_capture_partner_ids[env->obs_capture_partner_count++] = index;
+                }
             }
             int cars_seen = 0;
             if (candidate_count > 0) {
@@ -4294,6 +4322,22 @@ static void compute_observations(Drive *env) {
             if (fabsf(rel_z) > Z_BUFFER)
                 continue;
 
+            if (env->observe_agent_idx >= 0 && i == env->observe_agent_idx &&
+                env->obs_capture_road_ids != NULL) {
+                // Dedupe: a single road_element produces many geometry segments.
+                // For visualization we just want the element id once.
+                int already = 0;
+                for (int q = 0; q < env->obs_capture_road_count; q++) {
+                    if (env->obs_capture_road_ids[q] == entity_idx) {
+                        already = 1;
+                        break;
+                    }
+                }
+                if (!already && env->obs_capture_road_count < env->obs_capture_road_capacity) {
+                    env->obs_capture_road_ids[env->obs_capture_road_count++] = entity_idx;
+                }
+            }
+
             // Compute segment direction and length
             float dx = end_x - mid_x;
             float dy = end_y - mid_y;
@@ -4385,6 +4429,11 @@ static void compute_observations(Drive *env) {
             traffic_controls[num_visible_controls].idx = j;
             traffic_controls[num_visible_controls].dist_sq = dist_sq;
             num_visible_controls++;
+            if (env->observe_agent_idx >= 0 && i == env->observe_agent_idx &&
+                env->obs_capture_traffic_ids != NULL &&
+                env->obs_capture_traffic_count < env->obs_capture_traffic_capacity) {
+                env->obs_capture_traffic_ids[env->obs_capture_traffic_count++] = j;
+            }
         }
 
         // Partial selection sort: find K closest (O(N*K))

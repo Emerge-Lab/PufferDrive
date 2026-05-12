@@ -79,6 +79,9 @@ def _materialize_agent_frames(replay_bundle):
         for slot_idx in np.flatnonzero(frame_valid):
             frame.append(
                 {
+                    # arr_idx is the env->agents[] array index; obs_frames'
+                    # visible_partners is in this same index space.
+                    "arr_idx": int(slot_idx),
                     "id": int(agent_arrays["id"][frame_idx, slot_idx]),
                     "type": int(agent_arrays["type"][frame_idx, slot_idx]),
                     "active": bool(agent_arrays["active"][frame_idx, slot_idx]),
@@ -92,6 +95,26 @@ def _materialize_agent_frames(replay_bundle):
                 }
             )
         frames.append(frame)
+    return frames
+
+
+def _materialize_obs_frames(replay_bundle):
+    obs_arrays = replay_bundle.get("obs_arrays")
+    if not obs_arrays:
+        return []
+    n = len(obs_arrays.get("agent_x") or [])
+    frames = []
+    for t in range(n):
+        frames.append(
+            {
+                "agent_x": float(obs_arrays["agent_x"][t]),
+                "agent_y": float(obs_arrays["agent_y"][t]),
+                "agent_heading": float(obs_arrays["agent_heading"][t]),
+                "visible_partners": [int(v) for v in (obs_arrays["visible_partners"][t] or [])],
+                "visible_roads": [int(v) for v in (obs_arrays["visible_roads"][t] or [])],
+                "visible_traffic": [int(v) for v in (obs_arrays["visible_traffic"][t] or [])],
+            }
+        )
     return frames
 
 
@@ -120,6 +143,7 @@ def _materialize_replay_bundle(replay_bundle):
     materialized = dict(replay_bundle)
     materialized["agent_frames"] = _materialize_agent_frames(replay_bundle)
     materialized["traffic_frames"] = _materialize_traffic_frames(replay_bundle)
+    materialized["obs_frames"] = _materialize_obs_frames(replay_bundle)
     return materialized
 
 
@@ -188,6 +212,7 @@ def _build_render_payload(replay_bundle):
         "bounds": _compute_bounds(map_static, materialized_bundle),
         "agent_frames": materialized_bundle.get("agent_frames", []),
         "traffic_frames": materialized_bundle.get("traffic_frames", []),
+        "obs_frames": materialized_bundle.get("obs_frames", []),
     }
 
 
@@ -461,6 +486,7 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
         <div class="viewer-tools">
           <button id="reset-view" type="button">Reset View</button>
+          <button id="toggle-obs" type="button">Hide Observations</button>
           <div id="status-pill" class="pill">Failed</div>
         </div>
       </div>
@@ -486,14 +512,29 @@ HTML_TEMPLATE = """<!doctype html>
     const nextLink = document.getElementById('next-link');
     const episodeList = document.getElementById('episode-list');
     const resetViewButton = document.getElementById('reset-view');
+    const toggleObsButton = document.getElementById('toggle-obs');
+    if (toggleObsButton) {
+      if (!observedAgent) {
+        toggleObsButton.style.display = 'none';
+      } else {
+        toggleObsButton.addEventListener('click', () => {
+          showObs = !showObs;
+          toggleObsButton.innerText = showObs ? 'Hide Observations' : 'Show Observations';
+          draw();
+        });
+      }
+    }
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
     const navigation = DATA.navigation || {};
     const frames = DATA.agent_frames || [];
     const trafficFrames = DATA.traffic_frames || [];
+    const obsFrames = DATA.obs_frames || [];
+    const observedAgent = metadata.observed_agent || null;
     const roadElements = (DATA.map && DATA.map.road_elements) || [];
     const bounds = DATA.bounds || [-100, -100, 100, 100];
+    let showObs = !!observedAgent;
 
     let frameIndex = 0;
     let playing = false;
@@ -700,10 +741,140 @@ HTML_TEMPLATE = """<!doctype html>
       });
     }
 
+    function drawObsOverlay() {
+      if (!showObs || !observedAgent) return;
+      const obs = obsFrames[frameIndex];
+      if (!obs) return;
+      const visiblePartners = new Set(obs.visible_partners || []);
+      const visibleRoads = new Set(obs.visible_roads || []);
+      const visibleTraffic = new Set(obs.visible_traffic || []);
+      const ax = obs.agent_x;
+      const ay = obs.agent_y;
+      const heading = Number(obs.agent_heading || 0);
+      const partnerRadius = Number(observedAgent.agent_obs_max_dist || 0);
+      const front = Number(observedAgent.road_obs_front_dist || 0);
+      const behind = Number(observedAgent.road_obs_behind_dist || 0);
+      const side = Number(observedAgent.road_obs_side_dist || 0);
+
+      // Highlight observed road elements (thicker, brighter stroke).
+      for (const r_idx of visibleRoads) {
+        const elem = roadElements[r_idx];
+        if (!elem) continue;
+        const xs = elem.x || [];
+        const ys = elem.y || [];
+        if (xs.length < 2) continue;
+        ctx.beginPath();
+        for (let i = 0; i < xs.length; i++) {
+          const p = worldToCanvas(xs[i], ys[i]);
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.strokeStyle = '#2a7fff';
+        ctx.globalAlpha = 0.75;
+        ctx.lineWidth = 2.0;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+      }
+
+      // Goal route polylines (dashed accent).
+      const route = observedAgent.route_polylines || [];
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = 'rgba(0,160,80,0.85)';
+      ctx.lineWidth = 1.6;
+      for (const lane of route) {
+        const xs = lane.x || [];
+        const ys = lane.y || [];
+        if (xs.length < 2) continue;
+        ctx.beginPath();
+        for (let i = 0; i < xs.length; i++) {
+          const p = worldToCanvas(xs[i], ys[i]);
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // FOV shapes: partner circle + road rectangle in agent local frame.
+      const center = worldToCanvas(ax, ay);
+      const refScale = (() => {
+        const a = worldToCanvas(0, 0);
+        const b = worldToCanvas(1, 0);
+        return Math.hypot(b.x - a.x, b.y - a.y);
+      })();
+      ctx.save();
+      ctx.translate(center.x, center.y);
+      ctx.rotate(-heading);
+      // Road rectangle (forward-biased)
+      ctx.strokeStyle = 'rgba(42,127,255,0.55)';
+      ctx.fillStyle = 'rgba(42,127,255,0.08)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.rect(-behind * refScale, -side * refScale, (front + behind) * refScale, 2 * side * refScale);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      // Partner circle (axis-aligned)
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, partnerRadius * refScale, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(214,69,69,0.6)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      // Highlight observed partners + outline the ego agent.
+      const frame = frames[frameIndex] || [];
+      for (const a of frame) {
+        if (a.arr_idx === observedAgent.agent_index || a.id === observedAgent.agent_id) {
+          const p = worldToCanvas(a.x, a.y);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(a.length, a.width) * refScale * 0.7, 0, Math.PI * 2);
+          ctx.strokeStyle = '#27ae60';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        } else if (visiblePartners.has(a.arr_idx)) {
+          const p = worldToCanvas(a.x, a.y);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(a.length, a.width) * refScale * 0.65, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(214,69,69,0.85)';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+        }
+      }
+
+      // Highlight observed TCs (ring at stop-line midpoint).
+      const tf = trafficFrames[frameIndex] || [];
+      for (let t_idx = 0; t_idx < tf.length; t_idx++) {
+        if (!visibleTraffic.has(t_idx)) continue;
+        const sl = tf[t_idx].stop_line || [];
+        if (sl.length < 6) continue;
+        const mx = (sl[0] + sl[3]) * 0.5;
+        const my = (sl[1] + sl[4]) * 0.5;
+        const p = worldToCanvas(mx, my);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.strokeStyle = '#f1c40f';
+        ctx.lineWidth = 2.0;
+        ctx.stroke();
+      }
+
+      // Goal point marker (small filled diamond).
+      if (Number.isFinite(observedAgent.goal_x) && Number.isFinite(observedAgent.goal_y)) {
+        const g = worldToCanvas(observedAgent.goal_x, observedAgent.goal_y);
+        ctx.save();
+        ctx.translate(g.x, g.y);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = 'rgba(0,160,80,0.95)';
+        ctx.fillRect(-6, -6, 12, 12);
+        ctx.restore();
+      }
+    }
+
     function draw() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
       drawRoads();
+      drawObsOverlay();
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
       for (const agent of frame) drawAgent(agent);

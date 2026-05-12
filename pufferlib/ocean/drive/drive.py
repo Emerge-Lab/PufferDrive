@@ -54,6 +54,11 @@ class Drive(pufferlib.PufferEnv):
         # `compact_replay_bundle` to each summary.
         capture_compact_replay=False,
         emit_completed_episodes=False,
+        # When capture_compact_replay is True and observe_agent_idx >= 0, the
+        # bundle also includes which partners/roads/traffic controls passed
+        # the FOV gate of active_agent_indices[observe_agent_idx] each step,
+        # plus that agent's goal point and route.
+        observe_agent_idx=-1,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -146,6 +151,7 @@ class Drive(pufferlib.PufferEnv):
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
         self.capture_compact_replay = bool(capture_compact_replay)
+        self.observe_agent_idx = int(observe_agent_idx)
         # capture_compact_replay implies emit_completed_episodes, since the
         # bundle rides on the per-episode summary.
         self.emit_completed_episodes = bool(emit_completed_episodes) or self.capture_compact_replay
@@ -379,6 +385,7 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "emit_completed_episodes": int(self.emit_completed_episodes),
+            "observe_agent_idx": int(self.observe_agent_idx),
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,
@@ -667,10 +674,85 @@ class Drive(pufferlib.PufferEnv):
             "dynamics_model": self.dynamics_model,
         }
 
+    def _resolve_observed_agent_idx(self, scenario):
+        """Return the agent-list index for active_agent_indices[observe_agent_idx]
+        in the given scenario, or None if the slot is out of range."""
+        if self.observe_agent_idx < 0:
+            return None
+        active_indices = scenario.get("active_agent_indices") or []
+        if self.observe_agent_idx >= len(active_indices):
+            return None
+        return int(active_indices[self.observe_agent_idx])
+
+    def _build_observed_agent_metadata(self, scenario):
+        """One-shot per-episode metadata for the observed agent: its id, goal
+        position, and route (list of road_element indices). Route is converted
+        to (x, y) polylines here so the viewer doesn't have to reindex roads."""
+        agent_idx = self._resolve_observed_agent_idx(scenario)
+        if agent_idx is None:
+            return None
+        agents = scenario.get("agents") or []
+        if agent_idx >= len(agents):
+            return None
+        agent = agents[agent_idx]
+        route = agent.get("route") or []
+        road_elements = scenario.get("road_elements") or []
+        route_polylines = []
+        for lane_id in route:
+            lid = int(lane_id)
+            if 0 <= lid < len(road_elements):
+                elem = road_elements[lid]
+                xs = elem.get("x") or []
+                ys = elem.get("y") or []
+                if xs and ys and len(xs) == len(ys):
+                    route_polylines.append({
+                        "lane_id": lid,
+                        "x": list(xs),
+                        "y": list(ys),
+                    })
+        return {
+            "slot": int(self.observe_agent_idx),
+            "agent_id": int(agent.get("id", agent_idx)),
+            "agent_index": int(agent_idx),
+            "goal_x": float(agent.get("goal_position_x", 0.0) or 0.0),
+            "goal_y": float(agent.get("goal_position_y", 0.0) or 0.0),
+            "goal_z": float(agent.get("goal_position_z", 0.0) or 0.0),
+            "route_polylines": route_polylines,
+            "agent_obs_max_dist": float(self.agent_obs_max_dist),
+            "road_obs_front_dist": float(self.road_obs_front_dist),
+            "road_obs_behind_dist": float(self.road_obs_behind_dist),
+            "road_obs_side_dist": float(self.road_obs_side_dist),
+        }
+
+    def _compute_observed_visibility(self, scenario):
+        """For the observed agent in this scenario, return (agent_x, agent_y,
+        agent_heading, visible_partner_ids, visible_road_ids, visible_tc_ids).
+        Indices come directly from the C-engine's FOV gates via the
+        `observed_obs_capture` field on scenario — no Python predicate
+        duplication, so the viewer can't drift from compute_observations.
+        Returns None if the observed slot doesn't resolve.
+        """
+        agent_idx = self._resolve_observed_agent_idx(scenario)
+        if agent_idx is None:
+            return None
+        agents = scenario.get("agents") or []
+        if agent_idx >= len(agents):
+            return None
+        ego = agents[agent_idx]
+        ax = float(ego.get("sim_x", 0.0) or 0.0)
+        ay = float(ego.get("sim_y", 0.0) or 0.0)
+        ah = float(ego.get("sim_heading", 0.0) or 0.0)
+
+        capture = scenario.get("observed_obs_capture") or {}
+        visible_partners = [int(v) for v in (capture.get("partner_ids") or [])]
+        visible_roads = [int(v) for v in (capture.get("road_ids") or [])]
+        visible_traffic = [int(v) for v in (capture.get("traffic_ids") or [])]
+        return ax, ay, ah, visible_partners, visible_roads, visible_traffic
+
     def _create_compact_replay_buffer(self, env_idx, scenario):
         agents = scenario.get("agents", []) or []
         traffic_elements = scenario.get("traffic_elements", []) or []
-        return {
+        buffer = {
             "metadata": self._build_compact_replay_metadata(env_idx, scenario),
             "agent_capacity": len(agents),
             "traffic_capacity": len(traffic_elements),
@@ -692,6 +774,19 @@ class Drive(pufferlib.PufferEnv):
             },
             "traffic_frames": {k: [] for k in ("valid", "type", "state", "stop_line")},
         }
+        if self.observe_agent_idx >= 0:
+            obs_meta = self._build_observed_agent_metadata(scenario)
+            if obs_meta is not None:
+                buffer["metadata"]["observed_agent"] = obs_meta
+                buffer["obs_frames"] = {
+                    "agent_x": [],
+                    "agent_y": [],
+                    "agent_heading": [],
+                    "visible_partners": [],
+                    "visible_roads": [],
+                    "visible_traffic": [],
+                }
+        return buffer
 
     def _initialize_compact_replay_buffers(self):
         scenarios = self._normalize_scenarios(self.get_state())
@@ -774,6 +869,16 @@ class Drive(pufferlib.PufferEnv):
                 buffer["agent_frames"][k].append(v)
             for k, v in traffic_frame.items():
                 buffer["traffic_frames"][k].append(v)
+            if "obs_frames" in buffer:
+                vis = self._compute_observed_visibility(scenario)
+                if vis is not None:
+                    ax, ay, ah, vp, vr, vt = vis
+                    buffer["obs_frames"]["agent_x"].append(ax)
+                    buffer["obs_frames"]["agent_y"].append(ay)
+                    buffer["obs_frames"]["agent_heading"].append(ah)
+                    buffer["obs_frames"]["visible_partners"].append(vp)
+                    buffer["obs_frames"]["visible_roads"].append(vr)
+                    buffer["obs_frames"]["visible_traffic"].append(vt)
 
     def _stack_compact_replay_frames(self, frames_dict):
         stacked = {}
@@ -806,6 +911,18 @@ class Drive(pufferlib.PufferEnv):
             "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
             "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),
         }
+        if "obs_frames" in buffer:
+            obs = buffer["obs_frames"]
+            bundle["obs_arrays"] = {
+                "agent_x": np.asarray(obs["agent_x"], dtype=np.float32),
+                "agent_y": np.asarray(obs["agent_y"], dtype=np.float32),
+                "agent_heading": np.asarray(obs["agent_heading"], dtype=np.float32),
+                # Per-step variable-length int lists. Keep as object arrays to
+                # avoid padding overhead; viewer iterates them as-is.
+                "visible_partners": obs["visible_partners"],
+                "visible_roads": obs["visible_roads"],
+                "visible_traffic": obs["visible_traffic"],
+            }
         return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
 
     def _reset_compact_replay_buffer(self, env_idx, scenario):

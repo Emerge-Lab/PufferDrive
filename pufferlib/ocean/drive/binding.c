@@ -1448,6 +1448,61 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             return NULL;
     }
 
+    /* FOV-pass capture for the chosen observed agent slot.
+     * compute_observations writes IDs into these arrays during obs gating; we
+     * expose the most recent step's contents here. */
+    if (env->observe_agent_idx >= 0) {
+        PyObject *capture = PyDict_New();
+        if (!capture)
+            return NULL;
+        PyObject *slot = PyLong_FromLong(env->observe_agent_idx);
+        if (!slot || PyDict_SetItemString(capture, "slot", slot) < 0) {
+            Py_XDECREF(slot);
+            Py_DECREF(capture);
+            return NULL;
+        }
+        Py_DECREF(slot);
+        const struct {
+            const char *key;
+            const int *ids;
+            int count;
+        } lists[3] = {
+            {"partner_ids", env->obs_capture_partner_ids, env->obs_capture_partner_count},
+            {"road_ids", env->obs_capture_road_ids, env->obs_capture_road_count},
+            {"traffic_ids", env->obs_capture_traffic_ids, env->obs_capture_traffic_count},
+        };
+        for (int li = 0; li < 3; li++) {
+            PyObject *lst = PyList_New(lists[li].count);
+            if (!lst) {
+                Py_DECREF(capture);
+                return NULL;
+            }
+            for (int k = 0; k < lists[li].count; k++) {
+                PyObject *iv = PyLong_FromLong(lists[li].ids[k]);
+                if (!iv) {
+                    Py_DECREF(lst);
+                    Py_DECREF(capture);
+                    return NULL;
+                }
+                PyList_SetItem(lst, k, iv);
+            }
+            if (PyDict_SetItemString(capture, lists[li].key, lst) < 0) {
+                Py_DECREF(lst);
+                Py_DECREF(capture);
+                return NULL;
+            }
+            Py_DECREF(lst);
+        }
+        if (PyDict_SetItemString(dict, "observed_obs_capture", capture) < 0) {
+            Py_DECREF(capture);
+            return NULL;
+        }
+        Py_DECREF(capture);
+    } else {
+        if (PyDict_SetItemString(dict, "observed_obs_capture", Py_None) < 0)
+            return NULL;
+    }
+
     /* Map corners (bounding box) from GridMap */
     if (env->grid_map) {
         PyObject *corners_list = PyList_New(4);
@@ -1812,8 +1867,35 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_prob = (float)unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float)unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
+    env->observe_agent_idx = (int)unpack(kwargs, "observe_agent_idx");
+    env->obs_capture_partner_ids = NULL;
+    env->obs_capture_partner_count = 0;
+    env->obs_capture_partner_capacity = 0;
+    env->obs_capture_road_ids = NULL;
+    env->obs_capture_road_count = 0;
+    env->obs_capture_road_capacity = 0;
+    env->obs_capture_traffic_ids = NULL;
+    env->obs_capture_traffic_count = 0;
+    env->obs_capture_traffic_capacity = 0;
 
     init(env);
+    // init() loads the map, so num_road_elements / num_traffic_elements /
+    // num_total_agents are known here. Allocate FOV-capture scratch only if
+    // requested; freed by my_close along with the rest of env's heap.
+    if (env->observe_agent_idx >= 0) {
+        if (env->num_total_agents > 0) {
+            env->obs_capture_partner_capacity = env->num_total_agents;
+            env->obs_capture_partner_ids = calloc(env->obs_capture_partner_capacity, sizeof(int));
+        }
+        if (env->num_road_elements > 0) {
+            env->obs_capture_road_capacity = env->num_road_elements;
+            env->obs_capture_road_ids = calloc(env->obs_capture_road_capacity, sizeof(int));
+        }
+        if (env->num_traffic_elements > 0) {
+            env->obs_capture_traffic_capacity = env->num_traffic_elements;
+            env->obs_capture_traffic_ids = calloc(env->obs_capture_traffic_capacity, sizeof(int));
+        }
+    }
     return 0;
 }
 
