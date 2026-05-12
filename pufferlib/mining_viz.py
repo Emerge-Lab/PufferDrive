@@ -102,7 +102,13 @@ def _materialize_obs_frames(replay_bundle):
     obs_arrays = replay_bundle.get("obs_arrays")
     if not obs_arrays:
         return []
-    n = len(obs_arrays.get("agent_x") or [])
+    agent_x = obs_arrays.get("agent_x")
+    if agent_x is None:
+        return []
+    n = int(len(agent_x))
+    partners = obs_arrays.get("visible_partners") or []
+    roads = obs_arrays.get("visible_roads") or []
+    traffic = obs_arrays.get("visible_traffic") or []
     frames = []
     for t in range(n):
         frames.append(
@@ -110,9 +116,9 @@ def _materialize_obs_frames(replay_bundle):
                 "agent_x": float(obs_arrays["agent_x"][t]),
                 "agent_y": float(obs_arrays["agent_y"][t]),
                 "agent_heading": float(obs_arrays["agent_heading"][t]),
-                "visible_partners": [int(v) for v in (obs_arrays["visible_partners"][t] or [])],
-                "visible_roads": [int(v) for v in (obs_arrays["visible_roads"][t] or [])],
-                "visible_traffic": [int(v) for v in (obs_arrays["visible_traffic"][t] or [])],
+                "visible_partners": [int(v) for v in (partners[t] if t < len(partners) else [])],
+                "visible_roads": [int(v) for v in (roads[t] if t < len(roads) else [])],
+                "visible_traffic": [int(v) for v in (traffic[t] if t < len(traffic) else [])],
             }
         )
     return frames
