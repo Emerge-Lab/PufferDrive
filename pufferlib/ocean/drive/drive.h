@@ -191,6 +191,9 @@ struct CompletedEpisodeSummary {
     float offroad_rate;
     float red_light_violation_rate;
     float num_goals_reached;
+    float score;
+    float total_distance_travelled;
+    float total_infractions;
     float n;
     int episode_index;
 };
@@ -2688,15 +2691,28 @@ static void add_log(Drive *env) {
         s->offroad_rate = 0.0f;
         s->red_light_violation_rate = 0.0f;
         s->num_goals_reached = 0.0f;
+        s->score = 0.0f;
+        s->total_distance_travelled = 0.0f;
+        s->total_infractions = 0.0f;
         s->n = (float)env->active_agent_count;
         s->episode_index = env->next_episode_index++;
         for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent_i = &env->agents[env->active_agent_indices[i]];
+            int collided = env->logs[i].collision_rate;
+            int offroad = env->logs[i].offroad_rate;
+            int red_light = env->logs[i].red_light_violation_rate;
+            int num_goals = env->logs[i].num_goals_reached;
             s->episode_length += env->logs[i].episode_length;
             s->episode_return += env->logs[i].episode_return;
-            s->collision_rate += env->logs[i].collision_rate;
-            s->offroad_rate += env->logs[i].offroad_rate;
-            s->red_light_violation_rate += env->logs[i].red_light_violation_rate;
-            s->num_goals_reached += env->logs[i].num_goals_reached;
+            s->collision_rate += collided;
+            s->offroad_rate += offroad;
+            s->red_light_violation_rate += red_light;
+            s->num_goals_reached += num_goals;
+            if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped)
+                s->score += 1.0f;
+            s->total_distance_travelled += agent_i->distance_since_spawn;
+            if (collided || offroad || red_light)
+                s->total_infractions += 1.0f;
         }
     }
 }

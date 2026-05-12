@@ -2,6 +2,7 @@ import json
 import math
 import os
 import pickle
+import tempfile
 import zlib
 from functools import lru_cache
 from pathlib import Path
@@ -60,27 +61,10 @@ def _ensure_python_scalar(value):
     return value
 
 
-def _impact_zone_label(value):
-    zone_code = int(float(value or 0))
-    return {
-        0: "none",
-        1: "front",
-        2: "rear",
-        3: "left",
-        4: "right",
-    }.get(zone_code, f"unknown[{zone_code}]")
-
-
 def _format_summary_for_render(summary):
     if not summary:
         return {}
-
-    formatted = {key: _ensure_python_scalar(value) for key, value in summary.items()}
-    if "target_collision_impact_zone" in formatted:
-        formatted["target_collision_impact_zone_label"] = _impact_zone_label(
-            formatted.get("target_collision_impact_zone", 0)
-        )
-    return formatted
+    return {key: _ensure_python_scalar(value) for key, value in summary.items()}
 
 
 def _materialize_agent_frames(replay_bundle):
@@ -97,7 +81,6 @@ def _materialize_agent_frames(replay_bundle):
                 {
                     "id": int(agent_arrays["id"][frame_idx, slot_idx]),
                     "type": int(agent_arrays["type"][frame_idx, slot_idx]),
-                    "is_target": bool(agent_arrays["is_target"][frame_idx, slot_idx]),
                     "active": bool(agent_arrays["active"][frame_idx, slot_idx]),
                     "stopped": bool(agent_arrays["stopped"][frame_idx, slot_idx]),
                     "x": float(agent_arrays["x"][frame_idx, slot_idx]),
@@ -143,28 +126,26 @@ def _materialize_replay_bundle(replay_bundle):
 @lru_cache(maxsize=16)
 def load_map_static(map_path):
     resolved_map_path = _resolve_map_path(map_path)
-    map_dir = resolved_map_path.parent
-    bin_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
-    try:
-        map_index = bin_files.index(resolved_map_path.name)
-    except ValueError:
-        raise FileNotFoundError(f"{resolved_map_path.name} not found in {map_dir}")
-    env = Drive(
-        map_dir=str(map_dir),
-        num_maps=1,
-        starting_map=map_index,
-        num_agents=1,
-        min_agents_per_env=1,
-        max_agents_per_env=1,
-        simulation_mode="gigaflow",
-        scenario_length=1,
-        resample_frequency=0,
-        report_interval=10_000,
-    )
-    try:
-        scenario = _normalize_scenario(env.get_state())
-    finally:
-        env.close()
+    # Drive picks maps by alphabetic order from map_dir; `starting_map` isn't
+    # honored when num_maps=1, so isolate the requested .bin in its own
+    # temp dir to force Drive to load that exact file.
+    with tempfile.TemporaryDirectory(prefix="mining_viz_map_") as tmp_dir:
+        os.symlink(str(resolved_map_path), os.path.join(tmp_dir, resolved_map_path.name))
+        env = Drive(
+            map_dir=tmp_dir,
+            num_maps=1,
+            num_agents=1,
+            min_agents_per_env=1,
+            max_agents_per_env=1,
+            simulation_mode="gigaflow",
+            scenario_length=1,
+            resample_frequency=0,
+            report_interval=10_000,
+        )
+        try:
+            scenario = _normalize_scenario(env.get_state())
+        finally:
+            env.close()
 
     return {
         "map_name": scenario.get("map_name"),
@@ -224,7 +205,6 @@ HTML_TEMPLATE = """<!doctype html>
       --muted: #5b6570;
       --border: rgba(31,41,51,0.12);
       --accent: #1261a0;
-      --target: #d64545;
       --stopped: #f39c12;
       --active: #2a7fff;
       --inactive: #95a5a6;
@@ -437,10 +417,6 @@ HTML_TEMPLATE = """<!doctype html>
     <aside class="panel sidebar">
       <h1 class="title" id="title"></h1>
       <p class="subtitle" id="subtitle"></p>
-      <div class="lambda-card" id="lambda-card">
-        <span class="meta-label">Adv Drive Weight</span>
-        <span class="meta-value" id="meta-adv-drive-weight">n/a</span>
-      </div>
       <div class="controls">
         <div class="controls-row">
           <button id="play-toggle" type="button">Play</button>
@@ -455,7 +431,6 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
       <div class="nav">
         <a id="back-link" href="index.html">Back To Table</a>
-        <button id="focus-target" type="button">Focus Target</button>
         <a id="prev-link" href="#">Previous</a>
         <a id="next-link" href="#">Next</a>
       </div>
@@ -464,20 +439,16 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
         <div class="meta-item"><span class="meta-label">Scenario</span><span class="meta-value" id="meta-scenario"></span></div>
         <div class="meta-item"><span class="meta-label">Episode Length</span><span class="meta-value" id="meta-length"></span></div>
-        <div class="meta-item"><span class="meta-label">Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
-        <div class="meta-item"><span class="meta-label">Impact Zone</span><span class="meta-value" id="meta-impact-zone"></span></div>
-        <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
-        <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
-        <div class="meta-item"><span class="meta-label">Made Progress</span><span class="meta-value" id="meta-made-progress"></span></div>
-        <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
+        <div class="meta-item"><span class="meta-label">Episode Return</span><span class="meta-value" id="meta-return"></span></div>
+        <div class="meta-item"><span class="meta-label">Score</span><span class="meta-value" id="meta-score"></span></div>
+        <div class="meta-item"><span class="meta-label">Avg Distance / Infraction</span><span class="meta-value" id="meta-avg-distance"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Rate</span><span class="meta-value" id="meta-collision-rate"></span></div>
+        <div class="meta-item"><span class="meta-label">Offroad Rate</span><span class="meta-value" id="meta-offroad-rate"></span></div>
+        <div class="meta-item"><span class="meta-label">Red Light Violations</span><span class="meta-value" id="meta-red-light"></span></div>
         <div class="meta-item"><span class="meta-label">Goals Reached</span><span class="meta-value" id="meta-goals"></span></div>
-        <div class="meta-item"><span class="meta-label">TTC Within Bound</span><span class="meta-value" id="meta-ttc"></span></div>
-        <div class="meta-item"><span class="meta-label">Progress Ratio</span><span class="meta-value" id="meta-progress-ratio"></span></div>
-        <div class="meta-item"><span class="meta-label">Puffer Score</span><span class="meta-value" id="meta-puffer-score"></span></div>
       </div>
       <div class="legend">
-        <div class="legend-row"><span class="swatch" style="background: var(--target)"></span>Target</div>
-        <div class="legend-row"><span class="swatch" style="background: var(--active)"></span>Active adversary</div>
+        <div class="legend-row"><span class="swatch" style="background: var(--active)"></span>Active</div>
         <div class="legend-row"><span class="swatch" style="background: var(--inactive)"></span>Inactive / static</div>
         <div class="legend-row"><span class="swatch" style="background: var(--stopped)"></span>Stopped / crashed</div>
       </div>
@@ -490,7 +461,7 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
         <div class="viewer-tools">
           <button id="reset-view" type="button">Reset View</button>
-          <div id="status-pill" class="pill">Target failed</div>
+          <div id="status-pill" class="pill">Failed</div>
         </div>
       </div>
       <canvas id="scene"></canvas>
@@ -514,7 +485,6 @@ HTML_TEMPLATE = """<!doctype html>
     const prevLink = document.getElementById('prev-link');
     const nextLink = document.getElementById('next-link');
     const episodeList = document.getElementById('episode-list');
-    const focusTargetButton = document.getElementById('focus-target');
     const resetViewButton = document.getElementById('reset-view');
 
     const metadata = DATA.metadata || {};
@@ -532,7 +502,6 @@ HTML_TEMPLATE = """<!doctype html>
     let camera = null;
     let dragState = null;
     let hitAgents = [];
-    let followTarget = false;
 
     function summaryValue(key, fallback=null) {
       if (summary[key] != null) return summary[key];
@@ -546,15 +515,6 @@ HTML_TEMPLATE = """<!doctype html>
       return num.toFixed(digits);
     }
 
-    function advDriveWeightValue() {
-      return summaryValue('adv_reward_weight_drive', summaryValue('adv_drive_weight', null));
-    }
-
-    function formatAdvDriveWeight(value) {
-      const num = Number(value);
-      return Number.isFinite(num) ? num.toFixed(3) : 'n/a';
-    }
-
     function createDefaultCamera() {
       const minX = bounds[0], minY = bounds[1], maxX = bounds[2], maxY = bounds[3];
       return {
@@ -566,25 +526,21 @@ HTML_TEMPLATE = """<!doctype html>
 
     function setMeta() {
       document.getElementById('title').innerText = metadata.map_name || 'Replay';
-      document.getElementById('subtitle').innerText = `dynamics=${metadata.dynamics_model || 'unknown'} | target=${metadata.target_type || 'unknown'}`;
+      document.getElementById('subtitle').innerText = `dynamics=${metadata.dynamics_model || 'unknown'}`;
       document.getElementById('meta-episode').innerText = metadata.episode_id ?? 'N/A';
-      document.getElementById('meta-adv-drive-weight').innerText = formatAdvDriveWeight(advDriveWeightValue());
       document.getElementById('meta-map').innerText = metadata.map_name || 'N/A';
       document.getElementById('meta-scenario').innerText = metadata.scenario_id || 'N/A';
       document.getElementById('meta-length').innerText = metadata.episode_length ?? frames.length;
-      document.getElementById('meta-run-light').innerText = Number(summaryValue('did_target_run_light', 0) || 0) > 0 ? 'yes' : 'no';
-      document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
-      document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
-      document.getElementById('meta-collision-responsibility').innerText = formatMetric(summaryValue('target_collision_responsibility', 0));
-      document.getElementById('meta-made-progress').innerText = Number(summaryValue('did_target_make_progress', 0) || 0) > 0 ? 'yes' : 'no';
-      document.getElementById('meta-at-fault').innerText = Number(summaryValue('did_target_have_at_fault_collision', 0) || 0) > 0 ? 'yes' : 'no';
-      document.getElementById('meta-goals').innerText = String(summaryValue('target_num_goals_reached', 0));
-      document.getElementById('meta-ttc').innerText = formatMetric(summaryValue('target_ttc_within_bound_rate', 0));
-      document.getElementById('meta-progress-ratio').innerText = formatMetric(summaryValue('target_progress_ratio', 0));
-      document.getElementById('meta-puffer-score').innerText = formatMetric(summaryValue('target_puffer_score', 0));
-      const failed = Number(summaryValue('did_target_fail', 0) || 0) > 0;
+      document.getElementById('meta-return').innerText = formatMetric(summaryValue('episode_return', 0));
+      document.getElementById('meta-score').innerText = formatMetric(summaryValue('score', 0));
+      document.getElementById('meta-avg-distance').innerText = formatMetric(summaryValue('avg_distance_per_infraction', 0));
+      document.getElementById('meta-collision-rate').innerText = formatMetric(summaryValue('collision_rate', 0));
+      document.getElementById('meta-offroad-rate').innerText = formatMetric(summaryValue('offroad_rate', 0));
+      document.getElementById('meta-red-light').innerText = formatMetric(summaryValue('red_light_violation_rate', 0));
+      document.getElementById('meta-goals').innerText = formatMetric(summaryValue('num_goals_reached', 0));
+      const failed = Number(summaryValue('failed', 0) || 0) > 0;
       statusPill.className = failed ? 'pill' : 'pill ok';
-      statusPill.innerText = failed ? 'Target failed' : 'Target survived';
+      statusPill.innerText = failed ? 'Failed' : 'OK';
       backLink.href = navigation.index_html || 'index.html';
       prevLink.href = navigation.prev_html || '#';
       nextLink.href = navigation.next_html || '#';
@@ -595,10 +551,8 @@ HTML_TEMPLATE = """<!doctype html>
       const items = navigation.episodes || [];
       episodeList.innerHTML = items.map(item => {
         const active = item.episode_id === metadata.episode_id ? 'episode-link active' : 'episode-link';
-        const badge = item.did_target_fail ? '<span class="badge fail">fail</span>' : '<span class="badge">ok</span>';
-        const lambda = item.adv_reward_weight_drive ?? item.adv_drive_weight;
-        const lambdaText = lambda == null ? '' : ` | λ=${formatAdvDriveWeight(lambda)}`;
-        return `<a class="${active}" href="${item.href}">${badge}<strong>Episode ${item.episode_id}${lambdaText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
+        const badge = item.failed ? '<span class="badge fail">fail</span>' : '<span class="badge">ok</span>';
+        return `<a class="${active}" href="${item.href}">${badge}<strong>Episode ${item.episode_id}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
       }).join('');
     }
 
@@ -647,29 +601,11 @@ HTML_TEMPLATE = """<!doctype html>
       };
     }
 
-    function findTarget(frame) {
-      return (frame || []).find(agent => agent.is_target);
-    }
-
     function focusOnAgent(agent, zoom = 2.5) {
       if (!agent) return;
       camera.x = agent.x;
       camera.y = agent.y;
       camera.zoom = zoom;
-      draw();
-    }
-
-    function setFollowTarget(enabled) {
-      followTarget = !!enabled;
-      focusTargetButton.innerText = followTarget ? 'Unlock Target' : 'Focus Target';
-      if (followTarget) {
-        const target = findTarget(frames[frameIndex]);
-        if (target) {
-          camera.x = target.x;
-          camera.y = target.y;
-          camera.zoom = Math.max(camera.zoom, 3.0);
-        }
-      }
       draw();
     }
 
@@ -735,7 +671,6 @@ HTML_TEMPLATE = """<!doctype html>
       const width = Math.max(agent.width * scale, 4);
       const heading = Number(agent.heading || 0);
       let fill = '#2a7fff';
-      if (agent.is_target) fill = '#d64545';
       else if (!agent.active) fill = '#95a5a6';
       if (agent.stopped) fill = '#f39c12';
 
@@ -769,13 +704,6 @@ HTML_TEMPLATE = """<!doctype html>
     function draw() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
-      if (followTarget) {
-        const target = findTarget(frames[frameIndex]);
-        if (target) {
-          camera.x = target.x;
-          camera.y = target.y;
-        }
-      }
       drawRoads();
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
@@ -811,15 +739,11 @@ HTML_TEMPLATE = """<!doctype html>
       speed = Number(e.target.value || 6) / 6;
       speedLabel.innerText = `${speed.toFixed(1)}x`;
     });
-    focusTargetButton.addEventListener('click', () => setFollowTarget(!followTarget));
     resetViewButton.addEventListener('click', () => {
-      followTarget = false;
-      focusTargetButton.innerText = 'Focus Target';
       camera = createDefaultCamera();
       draw();
     });
     canvas.addEventListener('mousedown', (e) => {
-      if (followTarget) setFollowTarget(false);
       dragState = { x: e.offsetX, y: e.offsetY, cameraX: camera.x, cameraY: camera.y };
     });
     canvas.addEventListener('mousemove', (e) => {
@@ -834,7 +758,6 @@ HTML_TEMPLATE = """<!doctype html>
     canvas.addEventListener('mouseleave', () => { dragState = null; });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      if (followTarget) setFollowTarget(false);
       const pointerBefore = canvasToWorld(e.offsetX, e.offsetY);
       const zoomFactor = e.deltaY < 0 ? 1.12 : 0.9;
       camera.zoom = Math.min(20, Math.max(0.4, camera.zoom * zoomFactor));
@@ -850,8 +773,7 @@ HTML_TEMPLATE = """<!doctype html>
         const dx = x - hit.x;
         const dy = y - hit.y;
         if (dx * dx + dy * dy <= hit.radius * hit.radius) {
-          if (followTarget && !hit.agent.is_target) setFollowTarget(false);
-          focusOnAgent(hit.agent, hit.agent.is_target ? 3.0 : 2.2);
+          focusOnAgent(hit.agent, 2.5);
           break;
         }
       }
@@ -899,49 +821,30 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     rows = []
     preferred_columns = [
         "episode_id",
-        "adv_reward_weight_drive",
-        "adv_drive_weight",
-        "adv_reward_weight_drive_bin",
         "map_name",
         "scenario_id",
-        "did_target_fail",
-        "did_target_collide",
-        "did_target_offroad",
-        "did_target_run_light",
-        "did_target_make_progress",
-        "did_target_have_at_fault_collision",
-        "target_num_goals_reached",
-        "target_ttc_within_bound_rate",
-        "target_progress_ratio",
-        "target_puffer_score",
-        "target_hit_count",
-        "target_hit_responsibility",
-        "target_hit_low_responsibility_rate",
-        "target_collision_impact_zone",
-        "target_collision_responsibility",
-        "target_collision_severity",
-        "target_episode_return",
-        "target_episode_length",
+        "failed",
+        "score",
+        "avg_distance_per_infraction",
+        "episode_return",
+        "episode_length",
+        "collision_rate",
+        "offroad_rate",
+        "red_light_violation_rate",
+        "num_goals_reached",
         "has_replay",
     ]
     existing_columns = [col for col in preferred_columns if col in episodes_df.columns]
     for row in episodes_df.to_dict(orient="records"):
         replay_html = render_lookup.get(row.get("episode_id"))
         out = {key: _safe_value(row.get(key)) for key in existing_columns}
-        if "target_collision_impact_zone" in out:
-            out["target_collision_impact_zone"] = (
-                f"{_impact_zone_label(out['target_collision_impact_zone'])}"
-                f" [{int(float(out['target_collision_impact_zone'] or 0))}]"
-            )
         out["rendered_html"] = replay_html
         rows.append(out)
 
-    rows.sort(key=lambda item: (-(item.get("did_target_fail") or 0), item.get("target_episode_return") or 0))
+    rows.sort(key=lambda item: (-(item.get("failed") or 0), item.get("episode_return") or 0))
     title = Path(output_path).parent.name
-    lambda_columns = {"adv_reward_weight_drive", "adv_drive_weight", "adv_reward_weight_drive_bin"}
     header_cells = "".join(
-        f"<th data-key='{col}' class='{'lambda-col' if col in lambda_columns else ''}'>{col}<span class='sort-indicator'></span></th>"
-        for col in existing_columns
+        f"<th data-key='{col}'>{col}<span class='sort-indicator'></span></th>" for col in existing_columns
     )
     html = f"""<!doctype html>
 <html lang="en">
@@ -1006,13 +909,12 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
   <script>
     const ROWS = {json.dumps(rows, separators=(",", ":"))};
     const COLS = {json.dumps(existing_columns)};
-    const LAMBDA_COLS = new Set({json.dumps(sorted(lambda_columns))});
     const tbody = document.querySelector('#failure-table tbody');
     const count = document.getElementById('count');
     const search = document.getElementById('search');
     const replayFilter = document.getElementById('filter-replay');
     const failuresFilter = document.getElementById('filter-failures');
-    let sortKey = 'did_target_fail';
+    let sortKey = 'failed';
     let sortDir = -1;
     let replayOnly = false;
     let failuresOnly = false;
@@ -1049,12 +951,12 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       const term = (search.value || '').toLowerCase();
       const filtered = ROWS.filter(row => {{
         if (replayOnly && !row.rendered_html) return false;
-        if (failuresOnly && !(Number(row.did_target_fail || 0) > 0)) return false;
+        if (failuresOnly && !(Number(row.failed || 0) > 0)) return false;
         return JSON.stringify(row).toLowerCase().includes(term);
       }});
       filtered.sort((a, b) => compareValues(a, b, sortKey, sortDir));
       tbody.innerHTML = filtered.map(row => {{
-        const cells = COLS.map(col => `<td class="${{LAMBDA_COLS.has(col) ? 'lambda-col' : ''}}">${{row[col] == null ? '' : row[col]}}</td>`).join('');
+        const cells = COLS.map(col => `<td>${{row[col] == null ? '' : row[col]}}</td>`).join('');
         const link = row.rendered_html ? `<a href="${{row.rendered_html}}">open</a>` : '<span class="muted">n/a</span>';
         return `<tr><td>${{link}}</td>${{cells}}</tr>`;
       }}).join('');

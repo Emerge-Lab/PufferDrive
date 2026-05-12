@@ -1646,10 +1646,13 @@ def mine_failures(env_name, args=None):
             bundle_bytes = info.pop("compact_replay_bundle", None)
             row = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in info.items()}
             row["episode_id"] = episode_id
-            row["did_target_fail"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
+            row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
+                1.0, float(row.get("total_infractions", 0.0))
+            )
+            row["failed"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
             row["has_replay"] = 0
             row["replay_path"] = None
-            if bundle_bytes is not None and row["did_target_fail"]:
+            if bundle_bytes is not None and row["failed"]:
                 replay_path = os.path.join(replay_dir, f"episode_{episode_id:06d}.replay.zlib")
                 with open(replay_path, "wb") as f:
                     f.write(bundle_bytes)
@@ -1667,7 +1670,7 @@ def mine_failures(env_name, args=None):
     episodes_df.to_csv(csv_path, index=False)
     print(
         f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, "
-        f"{int(episodes_df['did_target_fail'].sum())} failures captured)"
+        f"{int(episodes_df['failed'].sum())} failures captured)"
     )
 
     if do_render and render_dir is not None:

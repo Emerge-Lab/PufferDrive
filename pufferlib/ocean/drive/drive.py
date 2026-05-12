@@ -652,7 +652,6 @@ class Drive(pufferlib.PufferEnv):
             "map_name": map_name,
             "map_path": map_path,
             "scenario_id": scenario.get("scenario_id"),
-            "target_type": self.target_type_str,
             "dynamics_model": self.dynamics_model,
         }
 
@@ -669,7 +668,6 @@ class Drive(pufferlib.PufferEnv):
                     "valid",
                     "id",
                     "type",
-                    "is_target",
                     "active",
                     "stopped",
                     "x",
@@ -691,7 +689,6 @@ class Drive(pufferlib.PufferEnv):
         valid = np.zeros(capacity, dtype=np.bool_)
         agent_id = np.full(capacity, -1, dtype=np.int32)
         agent_type = np.zeros(capacity, dtype=np.int16)
-        is_target = np.zeros(capacity, dtype=np.bool_)
         active = np.zeros(capacity, dtype=np.bool_)
         stopped = np.zeros(capacity, dtype=np.bool_)
         x = np.zeros(capacity, dtype=np.float32)
@@ -709,8 +706,6 @@ class Drive(pufferlib.PufferEnv):
             valid[idx] = True
             agent_id[idx] = int(agent.get("id", idx))
             agent_type[idx] = int(agent.get("type", 1))
-            # First active-agent slot is the "agent of interest" for mining.
-            is_target[idx] = idx == 0
             active[idx] = idx in active_indices
             stopped[idx] = bool(agent.get("stopped", False))
             x[idx] = np.float32(agent.get("sim_x", 0.0))
@@ -723,7 +718,6 @@ class Drive(pufferlib.PufferEnv):
             "valid": valid,
             "id": agent_id,
             "type": agent_type,
-            "is_target": is_target,
             "active": active,
             "stopped": stopped,
             "x": x,
