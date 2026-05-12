@@ -86,6 +86,8 @@ def run_config(config, args):
         "sps": agent_steps / elapsed if elapsed > 0 else float("inf"),
         "collision_rate": float(log.get("collision_rate", float("nan"))),
         "offroad_rate": float(log.get("offroad_rate", float("nan"))),
+        "red_light_violation_rate": float(log.get("red_light_violation_rate", float("nan"))),
+        "comfort_violation_count": float(log.get("comfort_violation_count", float("nan"))),
     }
 
 
@@ -100,14 +102,16 @@ def main():
 
     print(
         f"{'config':<22} {'ctrl':<12} {'horizon':>7} {'dt':>5} "
-        f"{'elapsed_s':>10} {'sps':>12} {'collision':>10} {'offroad':>10}"
+        f"{'elapsed_s':>10} {'sps':>12} {'collision':>10} {'offroad':>10} "
+        f"{'red_light':>10} {'comfort':>10}"
     )
     for config in CONFIGS:
         row = run_config(config, args)
         print(
             f"{row['name']:<22} {row['controller']:<12} {row['pdm_horizon']:>7.1f} "
             f"{row['pdm_planning_dt']:>5.1f} {row['elapsed_s']:>10.3f} "
-            f"{row['sps']:>12.0f} {row['collision_rate']:>10.4f} {row['offroad_rate']:>10.4f}"
+            f"{row['sps']:>12.0f} {row['collision_rate']:>10.4f} {row['offroad_rate']:>10.4f} "
+            f"{row['red_light_violation_rate']:>10.4f} {row['comfort_violation_count']:>10.4f}"
         )
 
 
