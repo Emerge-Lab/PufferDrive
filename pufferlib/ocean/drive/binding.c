@@ -1759,6 +1759,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
+    env->emit_completed_episodes = (int)unpack(kwargs, "emit_completed_episodes");
+    env->next_episode_index = 0;
+    env->completed_episodes_count = 0;
     env->goal_radius = (float)unpack(kwargs, "goal_radius");
     env->min_waypoint_spacing = (float)unpack(kwargs, "min_waypoint_spacing");
     env->max_waypoint_spacing = (float)unpack(kwargs, "max_waypoint_spacing");
@@ -1811,6 +1814,19 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
 
     init(env);
+    return 0;
+}
+
+static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
+    (void)env;
+    assign_to_dict(dict, "episode_index", (float)summary->episode_index);
+    assign_to_dict(dict, "n", summary->n);
+    assign_to_dict(dict, "episode_length", summary->episode_length);
+    assign_to_dict(dict, "episode_return", summary->episode_return);
+    assign_to_dict(dict, "collision_rate", summary->collision_rate);
+    assign_to_dict(dict, "offroad_rate", summary->offroad_rate);
+    assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
+    assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
     return 0;
 }
 

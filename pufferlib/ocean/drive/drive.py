@@ -1,4 +1,6 @@
 import argparse
+import pickle
+import zlib
 from pathlib import Path
 import numpy as np
 import gymnasium
@@ -45,6 +47,13 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         traffic_light_behavior=0,
+        # emit_completed_episodes=True: env emits one summary dict per
+        # completed episode via info (drained from a per-env C-side queue).
+        # capture_compact_replay=True additionally records per-step agent and
+        # traffic state and attaches a pickled+zlib'd schema_version=2
+        # `compact_replay_bundle` to each summary.
+        capture_compact_replay=False,
+        emit_completed_episodes=False,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -136,6 +145,11 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
+        self.capture_compact_replay = bool(capture_compact_replay)
+        # capture_compact_replay implies emit_completed_episodes, since the
+        # bundle rides on the per-episode summary.
+        self.emit_completed_episodes = bool(emit_completed_episodes) or self.capture_compact_replay
+        self._compact_replay_buffers = []
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -364,6 +378,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "emit_completed_episodes": int(self.emit_completed_episodes),
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,
@@ -418,13 +433,36 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         self.truncations[:] = 0
+        if self.capture_compact_replay:
+            self._initialize_compact_replay_buffers()
         return self.observations, []
 
     def step(self, actions):
+        if self.capture_compact_replay:
+            self._capture_compact_replay_step()
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
+        if self.emit_completed_episodes:
+            completed = binding.vec_pop_completed_episodes(self.c_envs)
+            if completed:
+                scenarios_after = None
+                if self.capture_compact_replay:
+                    scenarios_after = self._normalize_scenarios(self.get_state())
+                for summary in completed:
+                    if not isinstance(summary, dict):
+                        continue
+                    tagged = dict(summary)
+                    tagged["summary_type"] = "completed_episode"
+                    env_slot = int(tagged.get("env_slot", 0))
+                    if self.capture_compact_replay:
+                        bundle = self._build_compact_replay_bundle(env_slot, tagged)
+                        if bundle is not None:
+                            tagged["compact_replay_bundle"] = bundle
+                        if scenarios_after is not None and env_slot < len(scenarios_after):
+                            self._reset_compact_replay_buffer(env_slot, scenarios_after[env_slot])
+                    info.append(tagged)
         if self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
@@ -592,6 +630,157 @@ class Drive(pufferlib.PufferEnv):
         # Tear down the render Client for one env without destroying the env.
         # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
         binding.vec_close_client(self.c_envs, env_idx)
+
+    # ====== Compact-replay capture (active when capture_compact_replay=True) ======
+
+    def _normalize_scenarios(self, state):
+        if isinstance(state, list):
+            return state
+        if isinstance(state, dict):
+            return [state]
+        return []
+
+    def _build_compact_replay_metadata(self, env_idx, scenario):
+        map_idx = self.map_ids[env_idx] if env_idx < len(self.map_ids) else 0
+        map_path = self.map_files[map_idx] if map_idx < len(self.map_files) else None
+        raw_map_name = scenario.get("map_name") or map_path
+        if isinstance(raw_map_name, str):
+            map_name = os.path.basename(raw_map_name).split(".")[0]
+        else:
+            map_name = raw_map_name
+        return {
+            "map_name": map_name,
+            "map_path": map_path,
+            "scenario_id": scenario.get("scenario_id"),
+            "target_type": self.target_type_str,
+            "dynamics_model": self.dynamics_model,
+        }
+
+    def _create_compact_replay_buffer(self, env_idx, scenario):
+        agents = scenario.get("agents", []) or []
+        traffic_elements = scenario.get("traffic_elements", []) or []
+        return {
+            "metadata": self._build_compact_replay_metadata(env_idx, scenario),
+            "agent_capacity": len(agents),
+            "traffic_capacity": len(traffic_elements),
+            "agent_frames": {k: [] for k in ("valid", "id", "type", "is_target", "active", "stopped",
+                                              "x", "y", "z", "heading", "length", "width")},
+            "traffic_frames": {k: [] for k in ("valid", "type", "state", "stop_line")},
+        }
+
+    def _initialize_compact_replay_buffers(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        self._compact_replay_buffers = [
+            self._create_compact_replay_buffer(i, s) for i, s in enumerate(scenarios)
+        ]
+
+    def _extract_compact_agents_frame(self, scenario, capacity):
+        valid = np.zeros(capacity, dtype=np.bool_)
+        agent_id = np.full(capacity, -1, dtype=np.int32)
+        agent_type = np.zeros(capacity, dtype=np.int16)
+        is_target = np.zeros(capacity, dtype=np.bool_)
+        active = np.zeros(capacity, dtype=np.bool_)
+        stopped = np.zeros(capacity, dtype=np.bool_)
+        x = np.zeros(capacity, dtype=np.float32)
+        y = np.zeros(capacity, dtype=np.float32)
+        z = np.zeros(capacity, dtype=np.float32)
+        heading = np.zeros(capacity, dtype=np.float32)
+        length = np.zeros(capacity, dtype=np.float32)
+        width = np.zeros(capacity, dtype=np.float32)
+        active_indices = set(scenario.get("active_agent_indices") or [])
+        for idx, agent in enumerate(scenario.get("agents") or []):
+            if idx >= capacity:
+                break
+            if not agent.get("sim_valid"):
+                continue
+            valid[idx] = True
+            agent_id[idx] = int(agent.get("id", idx))
+            agent_type[idx] = int(agent.get("type", 1))
+            # First active-agent slot is the "agent of interest" for mining.
+            is_target[idx] = idx == 0
+            active[idx] = idx in active_indices
+            stopped[idx] = bool(agent.get("stopped", False))
+            x[idx] = np.float32(agent.get("sim_x", 0.0))
+            y[idx] = np.float32(agent.get("sim_y", 0.0))
+            z[idx] = np.float32(agent.get("sim_z", 0.0))
+            heading[idx] = np.float32(agent.get("sim_heading", 0.0))
+            length[idx] = np.float32(agent.get("sim_length", 0.0))
+            width[idx] = np.float32(agent.get("sim_width", 0.0))
+        return {"valid": valid, "id": agent_id, "type": agent_type, "is_target": is_target,
+                "active": active, "stopped": stopped, "x": x, "y": y, "z": z,
+                "heading": heading, "length": length, "width": width}
+
+    def _extract_compact_traffic_frame(self, scenario, timestep, capacity):
+        valid = np.zeros(capacity, dtype=np.bool_)
+        control_type = np.zeros(capacity, dtype=np.int16)
+        state = np.zeros(capacity, dtype=np.int16)
+        stop_line = np.zeros((capacity, 6), dtype=np.float32)
+        for idx, elem in enumerate(scenario.get("traffic_elements") or []):
+            if idx >= capacity:
+                break
+            if not isinstance(elem, dict):
+                continue
+            raw_stop_line = elem.get("stop_line")
+            if raw_stop_line is None or len(raw_stop_line) < 6:
+                continue
+            valid[idx] = True
+            control_type[idx] = int(elem.get("type", 0))
+            stop_line[idx, :] = np.asarray(raw_stop_line[:6], dtype=np.float32)
+            states = elem.get("states") or []
+            if states and len(states) > timestep:
+                state[idx] = int(states[timestep])
+        return {"valid": valid, "type": control_type, "state": state, "stop_line": stop_line}
+
+    def _capture_compact_replay_step(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        if len(self._compact_replay_buffers) != len(scenarios):
+            self._initialize_compact_replay_buffers()
+        for env_idx, scenario in enumerate(scenarios):
+            buffer = self._compact_replay_buffers[env_idx]
+            episode_timestep = int(scenario.get("episode_timestep", self.tick) or 0)
+            agent_frame = self._extract_compact_agents_frame(scenario, buffer["agent_capacity"])
+            traffic_frame = self._extract_compact_traffic_frame(
+                scenario, episode_timestep, buffer["traffic_capacity"])
+            for k, v in agent_frame.items():
+                buffer["agent_frames"][k].append(v)
+            for k, v in traffic_frame.items():
+                buffer["traffic_frames"][k].append(v)
+
+    def _stack_compact_replay_frames(self, frames_dict):
+        stacked = {}
+        for k, frames in frames_dict.items():
+            if frames:
+                stacked[k] = np.stack(frames, axis=0)
+        return stacked
+
+    def _build_compact_replay_bundle(self, env_slot, summary):
+        if env_slot < 0 or env_slot >= len(self._compact_replay_buffers):
+            return None
+        buffer = self._compact_replay_buffers[env_slot]
+        if not buffer["agent_frames"]["valid"]:
+            return None
+        metadata = dict(buffer["metadata"])
+        metadata.update({
+            "episode_index": int(summary.get("episode_index", 0) or 0),
+            "episode_length": int(summary.get("episode_length", len(buffer["agent_frames"]["valid"]))),
+            "episode_return": float(summary.get("episode_return", 0.0) or 0.0),
+            "collision_rate": float(summary.get("collision_rate", 0.0) or 0.0),
+            "offroad_rate": float(summary.get("offroad_rate", 0.0) or 0.0),
+            "red_light_violation_rate": float(summary.get("red_light_violation_rate", 0.0) or 0.0),
+            "num_goals_reached": float(summary.get("num_goals_reached", 0.0) or 0.0),
+        })
+        bundle = {
+            "schema_version": 2,
+            "metadata": metadata,
+            "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
+            "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),
+        }
+        return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
+
+    def _reset_compact_replay_buffer(self, env_idx, scenario):
+        if env_idx < 0 or env_idx >= len(self._compact_replay_buffers):
+            return
+        self._compact_replay_buffers[env_idx] = self._create_compact_replay_buffer(env_idx, scenario)
 
     def close(self):
         binding.vec_close(self.c_envs)
