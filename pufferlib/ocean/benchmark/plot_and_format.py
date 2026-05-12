@@ -1325,8 +1325,8 @@ def plot_human_data_requirements(
         ),
     ]
 
-    tick_positions = [10, 30, 180, 75000]
-    tick_labels = ["10 min", "30 min", "3 hours", "52 days"]
+    tick_positions = [10, 30, 180, 1800, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
 
     # Labels excluded from the gains figure's x-axis (line plots still show them).
     GAINS_EXCLUDED_LABELS = {"52 days"}
@@ -2524,7 +2524,7 @@ def plot_collision_severity(
     """
     CHECKPOINTS_OF_INTEREST = {
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "regularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_12k_maps.pt": "regularized",
     }
 
     # ── Filter ──────────────────────────────────────────────────────────────
@@ -3195,7 +3195,7 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
 if __name__ == "__main__":
     import os
 
-    EVAL_CSV = "results/checkpoint_eval_results.csv"
+    EVAL_CSV = "results/checkpoint_eval_results_detFalse.csv"
     WOSAC_CSV = "results/checkpoint_wosac_results.csv"
     ANCHOR_CSV = "results/anchor_eval.csv"
 

@@ -18,26 +18,26 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = "models/scaling_cpts/reg_delta_50k_maps_anchor_12k_maps.pt" 
+CPT_PATH = "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt"
 
 ENV_NAME = "puffer_drive"
-TRAIN_MAP_DIR = "resources/drive/binaries/training" # 50k maps used for training
+TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps used for training
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR_REPLAY = "resources/drive/binaries/interactive_data_validation"  # 200 maps with human replay data
 INTERACTIVE_MAP_DIR_IDM = "resources/drive/binaries/interactive_200_idm"
 INTERACTIVE_MAP_NUM_FILES = 200
 NUM_AGENTS_PER_VECENV = 1024
-DETERMINISTIC = True
+DETERMINISTIC = False
 OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 0
+NUM_ENVS_TO_RENDER = 20
 RENDER_MODE = "random"  # "first", "random", or "worst_collision"
 
 # GIF conversion settings
 CONVERT_TO_GIF = True
-GIF_FPS = 20
+GIF_FPS = 25
 GIF_SCALE_WIDTH = 960  # output width in pixels; height auto-scaled to keep aspect
 KEEP_MP4 = True  # set False to delete mp4s after successful gif conversion
 
