@@ -525,6 +525,14 @@ class Drive(pufferlib.PufferEnv):
                 binding.vec_reset(self.c_envs, self.random_seed)
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
+                # Refresh compact-replay buffer metadata so subsequent frames are
+                # tagged with the new map. Without this, buffers were last reset
+                # using scenarios_after captured before the map swap, so each
+                # bundle's metadata trails one episode behind its actual frames.
+                if self.capture_compact_replay:
+                    scenarios_new = self._normalize_scenarios(self.get_state())
+                    for env_slot, scenario in enumerate(scenarios_new):
+                        self._reset_compact_replay_buffer(env_slot, scenario)
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

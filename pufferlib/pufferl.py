@@ -1575,6 +1575,9 @@ def mine_failures(env_name, args=None):
     a single vec env).
     """
     import csv
+    import pickle
+    import zlib
+
     import pandas as pd
 
     from pufferlib import mining_viz
@@ -1664,8 +1667,16 @@ def mine_failures(env_name, args=None):
             row["failed"] = 0
             row["has_replay"] = 0
             row["replay_path"] = None
+            row["map_name"] = None
+            row["scenario_id"] = None
             if bundle_bytes is not None:
                 bundles_by_id[episode_id] = bundle_bytes
+                try:
+                    bundle_meta = pickle.loads(zlib.decompress(bundle_bytes))["metadata"]
+                    row["map_name"] = bundle_meta.get("map_name")
+                    row["scenario_id"] = bundle_meta.get("scenario_id")
+                except Exception:
+                    pass
             rows.append(row)
             pbar_done += 1
             if pbar_done >= num_episodes:
@@ -1700,15 +1711,37 @@ def mine_failures(env_name, args=None):
     )
 
     if do_render and render_dir is not None:
-        render_lookup = {}
+        renderable = [row for row in rows if row.get("has_replay")]
+        renderable.sort(key=lambda r: int(r["episode_id"]))
+        episode_order = [int(r["episode_id"]) for r in renderable]
+        render_lookup = {
+            ep_id: f"episode_{ep_id:06d}.html" for ep_id in episode_order
+        }
+        episode_summaries = [
+            {
+                "episode_id": int(r["episode_id"]),
+                "href": render_lookup[int(r["episode_id"])],
+                "failed": int(r.get("failed", 0) or 0),
+                "map_name": r.get("map_name"),
+                "scenario_id": r.get("scenario_id"),
+            }
+            for r in renderable
+        ]
         rendered = 0
-        for row in rows:
-            if not row.get("has_replay"):
-                continue
+        for idx, row in enumerate(renderable):
             ep_id = int(row["episode_id"])
-            out_html = os.path.join(render_dir, f"episode_{ep_id:06d}.html")
-            mining_viz.render_compact_replay_html(row["replay_path"], out_html, render_context={"summary": row})
-            render_lookup[ep_id] = os.path.relpath(out_html, render_dir)
+            out_html = os.path.join(render_dir, render_lookup[ep_id])
+            navigation = {
+                "index_html": "index.html",
+                "prev_html": render_lookup[episode_order[idx - 1]] if idx > 0 else None,
+                "next_html": render_lookup[episode_order[idx + 1]] if idx + 1 < len(episode_order) else None,
+                "episodes": episode_summaries,
+            }
+            mining_viz.render_compact_replay_html(
+                row["replay_path"],
+                out_html,
+                render_context={"summary": row, "navigation": navigation},
+            )
             rendered += 1
         index_path = os.path.join(render_dir, "index.html")
         mining_viz.generate_failure_index(episodes_df, render_lookup, index_path)
