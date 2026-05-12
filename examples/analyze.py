@@ -39,21 +39,16 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
-CHECKPOINTS = [
-    # "models/cpts_best/reg_delta_50k_maps_anchor_100_maps.pt"
-    # "models/rl/reg_self_play_50k.pt",
-]
+SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"  # "models/scaling_cpts"
+DETERMINISTIC = False
 
-SCALING_CHECKPOINTS_PATH = (
-    "models/scaling_cpts"  # Directory containing scaling checkpoints following the naming convention described above
-)
-DETERMINISTIC = True
-
-TRAIN_MAP_DIR = "resources/drive/binaries/training"
-VAL_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/validation"  # 10k maps
-INTERACTIVE_MAP_DIR = "resources/drive/binaries/training" #"resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
-NUM_TOTAL_EVAL_AGENTS = 128 #1024 * 5
-NUM_AGENTS_PER_VECENV = 128 #1024
+TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps
+VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
+INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
+IDM_MAP_DIR = "resources/drive/binaries/interactive_200_idm"  # Same 200 maps selected for SDC interactivity but processed in a different way
+INTERACTIVE_MAP_DIR_MAPS = 200
+NUM_TOTAL_EVAL_AGENTS = 1024 * 3
+NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
 OUTPUT_CSV = "results/checkpoint_eval_results.csv"
@@ -62,12 +57,11 @@ RUN_RENDER = False
 
 # ─── VIDEO RENDERING CONFIG ─────────────────────────────────────────────────
 CHECKPOINTS_TO_RENDER = ["models/scaling_cpts/unreg_classic_50k_maps.pt"]
-NUM_ENVS_TO_RENDER = 3
+NUM_ENVS_TO_RENDER = 0
 RENDER_MAP_DIR = INTERACTIVE_MAP_DIR  # Which maps to render on
 RENDER_NUM_MAPS = 200
 RENDER_OUTPUT_DIR = "eval_videos"
 RENDER_MODE = "worst_collision"  # "random" or "worst_collision"
-
 # ────────────────────────────────────────────────────────────────────────────────
 
 METRICS = [
@@ -76,15 +70,23 @@ METRICS = [
     "collision_rate",
     "at_fault_collision_rate",
     "rear_collision_rate",
+    # Delta-V
+    "delta_v_sum",
+    "delta_v_max",
+    "delta_v_count",
+    "delta_v_under_1mph",
+    # Other
     "collisions_per_agent",
     "offroad_rate",
     "offroad_per_agent",
     "completion_rate",
     "route_progress",
-    "lateral_error_avg",
     "episode_length",
     "episode_return",
     "perc_controlled",
+    "lateral_error_avg",
+    "longitudinal_error_avg",
+    "displacement_error_avg",
 ]
 
 
@@ -109,21 +111,13 @@ def _parse_num(s):
     return n
 
 
-def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, episode_length=110):
-    """Build an eval-ready config from the checkpoint config.
-
-    Takes everything from the checkpoint and only overwrites eval-specific fields:
-    map_dir, control_mode, num_maps, lambda_value, and optionally episode_length.
-    """
+def make_eval_config(cpt_config, map_dir, control_mode, num_maps, episode_length=200, controller_overrides=None):
     config = copy.deepcopy(cpt_config)
     config["env"]["map_dir"] = map_dir
     config["env"]["control_mode"] = control_mode
     config["env"]["num_maps"] = num_maps
     config["env"]["num_agents"] = NUM_AGENTS_PER_VECENV
-    config["env"]["lambda_value"] = lambda_value
-    # Fixed: Important for getting valid stats
     config["env"]["async_resets"] = False
-
     config["env"]["goal_behavior"] = 0
     config["env"]["render_mode"] = 1
     config["env"]["termination_mode"] = 1
@@ -131,9 +125,10 @@ def make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value, 
     config["env"]["fix_rewards"] = True
     config["env"]["obs_partner_noise_speed"] = 0.0
     config["env"]["obs_partner_noise_pos"] = 0.0
-    config["env"]["termination_mode"] = 1
     if episode_length is not None:
         config["env"]["episode_length"] = episode_length
+    if controller_overrides is not None:  # <-- NEW
+        config["env"].update(controller_overrides)
     config["vec"] = dict(backend="PufferEnv", num_envs=1)
     return config
 
@@ -166,9 +161,10 @@ def num_resample_rounds():
     return (NUM_TOTAL_EVAL_AGENTS + NUM_AGENTS_PER_VECENV - 1) // NUM_AGENTS_PER_VECENV
 
 
-def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps, lambda_value=0.0):
-    """Create env, rollout (with resampling if needed), collect per-scene rows, close env."""
-    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps, lambda_value)
+def run_mode(
+    evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, mode_name, num_maps, controller_overrides=None
+):
+    config = make_eval_config(cpt_config, map_dir, control_mode, num_maps, controller_overrides=controller_overrides)
     env = load_env(ENV_NAME, config)
     rows = []
     n_rounds = num_resample_rounds()
@@ -178,7 +174,7 @@ def run_mode(evaluator, policy, cpt_config, map_dir, control_mode, checkpoint, m
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            rollout_stats = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            rollout_stats = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
             rows.extend(process_rollout_data(rollout_stats, checkpoint, mode_name, scene_offset))
 
@@ -206,9 +202,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
     cpt_config["load_model_path"] = checkpoint_path
 
     # Create first env before loading policy (load_policy needs vecenv.driver_env)
-    sp_train_config = make_eval_config(
-        cpt_config, TRAIN_MAP_DIR, control_mode="control_vehicles", num_maps=50_000, lambda_value=0.0
-    )
+    sp_train_config = make_eval_config(cpt_config, TRAIN_MAP_DIR, control_mode="control_vehicles", num_maps=50_000)
     env = load_env(ENV_NAME, sp_train_config)
 
     policy = load_policy(cpt_config, env, ENV_NAME)
@@ -224,7 +218,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             if round_idx > 0:
                 env.driver_env.resample_maps()
 
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             scene_offset = round_idx * env.driver_env.num_envs
             all_rows.extend(process_rollout_data(info_list, checkpoint_path, "sp_train", scene_offset))
 
@@ -275,7 +269,7 @@ def evaluate_checkpoint(checkpoint_path, base_config):
             "control_sdc_only",
             checkpoint_path,
             "hr_interactive",
-            num_maps=200,
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
         )
     )
 
@@ -375,7 +369,6 @@ def evaluate_scaling_checkpoints(base_config):
             TRAIN_MAP_DIR,
             control_mode="control_vehicles",
             num_maps=50_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
         sp_train_env = load_env(ENV_NAME, sp_train_config)
         policy = load_policy(cpt_config, sp_train_env, ENV_NAME)
@@ -394,7 +387,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_train",
             num_maps=50_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Self-play on validation ──────────────────────────────────────
@@ -407,7 +399,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_sp_val",
             num_maps=10_000,
-            lambda_value=0.1 if is_reg else 0.0,
         )
 
         # ── Human-replay on randomly sampled validation scenes ───────────
@@ -420,7 +411,6 @@ def evaluate_scaling_checkpoints(base_config):
             cpt_path,
             "scaling_hr_val",
             num_maps=10_000,
-            lambda_value=0.1 if is_reg else 0.0,  # TODO: Fix this
         )
 
         # ── Human-replay on interactive scenes ───────────────────────────
@@ -432,8 +422,24 @@ def evaluate_scaling_checkpoints(base_config):
             "control_sdc_only",
             cpt_path,
             "scaling_hr_interactive",
-            num_maps=200,
-            lambda_value=0.1 if is_reg else 0.0,
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
+        )
+
+        # ── IDM eval on interactive scenes ───────────────────────────────
+        idm_interactive_rows = run_mode(
+            evaluator,
+            policy,
+            cpt_config,
+            IDM_MAP_DIR,
+            "control_sdc_only",
+            cpt_path,
+            "scaling_idm_interactive",
+            num_maps=INTERACTIVE_MAP_DIR_MAPS,
+            controller_overrides={
+                "sdc_controller": "policy",
+                "non_sdc_controller": "idm",
+                "non_vehicle_controller": "replay",
+            },
         )
 
         # Attach scaling metadata to every row
@@ -447,13 +453,14 @@ def evaluate_scaling_checkpoints(base_config):
         all_rows.extend(sp_val_rows)
         all_rows.extend(hr_val_rows)
         all_rows.extend(hr_interactive_rows)
+        all_rows.extend(idm_interactive_rows)
 
     return all_rows
 
 
 def make_render_config(cpt_config, map_dir, num_maps=1000):
     """Build a config for human-replay rendering with headless ffmpeg output."""
-    return make_eval_config(cpt_config, map_dir, control_mode="control_sdc_only", num_maps=num_maps, lambda_value=0.0)
+    return make_eval_config(cpt_config, map_dir, control_mode="control_sdc_only", num_maps=num_maps)
 
 
 def select_render_envs(evaluator, policy, env, num_to_render):
@@ -463,7 +470,7 @@ def select_render_envs(evaluator, policy, env, num_to_render):
         List of (env_idx, collision_rate) tuples, sorted by collision rate descending,
         truncated to num_to_render.
     """
-    info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+    info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
     populated = [log for log in info_list if log and log.get("n", 0) > 0]
     did_collide = np.array([log["collision_rate"] for log in populated])
 
@@ -532,7 +539,7 @@ def render_checkpoint_videos(base_config):
 
         # Run a stats rollout for "random" mode to get collision rates
         if RENDER_MODE == "random" and not collision_rates:
-            info_list = evaluator.rollout(policy, env, deterministic=DETERMINISTIC)
+            info_list = evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             for idx in env_indices:
                 if idx < len(info_list) and info_list[idx]:
                     collision_rates[idx] = info_list[idx].get("collision_rate", 0.0)
@@ -546,7 +553,7 @@ def render_checkpoint_videos(base_config):
         # Render selected envs
         for i, env_idx in enumerate(env_indices):
             print(f"  Rendering env {env_idx} ({i + 1}/{len(env_indices)})...")
-            evaluator.rollout(policy, env, render_env_idx=env_idx, deterministic=True)
+            evaluator.rollout(env=env, policy=policy, deterministic=DETERMINISTIC)
             env.driver_env.stop_recorder(env_idx)
 
         # Move mp4s into the checkpoint subdirectory, tagging with collision rate
@@ -563,16 +570,37 @@ def render_checkpoint_videos(base_config):
     print(f"\nAll videos saved to {RENDER_OUTPUT_DIR}/")
 
 
+def delta_v_summary(group):
+    """Severity stats conditional on collision."""
+    coll = group[group["delta_v_count"] > 0]
+    n_coll = len(coll)
+    if n_coll == 0:
+        return pd.Series(
+            {
+                "n_collisions": 0,
+                "mean_dv_per_event": np.nan,
+                "max_dv": np.nan,
+                "frac_under_1mph": np.nan,
+            }
+        )
+    # Mean Delta-V per event: sum across all events / count of all events
+    total_sum = coll["delta_v_sum"].sum()
+    total_count = coll["delta_v_count"].sum()
+    return pd.Series(
+        {
+            "n_collisions": int(total_count),
+            "mean_dv_per_event": total_sum / total_count,
+            "max_dv": coll["delta_v_max"].max(),
+            # delta_v_under_1mph is per-agent-with-collision, so this is the right ratio
+            "frac_under_1mph": coll["delta_v_under_1mph"].mean(),
+        }
+    )
+
+
 def main():
     base_config = load_config(ENV_NAME)
 
     all_rows = []
-    for cpt_path in CHECKPOINTS:
-        print(f"\n{'=' * 60}")
-        print(f"Evaluating: {cpt_path}")
-        print(f"{'=' * 60}")
-        all_rows.extend(evaluate_checkpoint(cpt_path, base_config))
-
     # ── Scaling analysis ─────────────────────────────────────────────────
     all_rows.extend(evaluate_scaling_checkpoints(base_config))
 
@@ -586,10 +614,13 @@ def main():
             score=("score", "mean"),
             collision_rate=("collision_rate", "mean"),
             at_fault_collision_rate=("at_fault_collision_rate", "mean"),
-            rear_collision_rate=("rear_collision_rate", "mean"),
+            # rear_collision_rate=("rear_collision_rate", "mean"),
             offroad_rate=("offroad_rate", "mean"),
         )
         print(f"\n{summary}")
+
+        dv_summary = df.groupby(["checkpoint", "mode"]).apply(delta_v_summary)
+        print(dv_summary)
 
     # ── Figures ──────────────────────────────────────────────────────────────
     if MAKE_FIGURES:

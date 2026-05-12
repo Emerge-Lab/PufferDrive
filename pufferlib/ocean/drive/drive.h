@@ -2551,15 +2551,9 @@ void c_step(Drive *env) {
         if (env->entities[agent_idx].removed)
             continue;
 
-        if (env->control_mode == CONTROL_REPLAY_LOGS) {
-            // Teleport agents along their logged trajectories; ignore policy actions
-            move_expert(env, env->actions, agent_idx);
-        } else {
-            if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
-                override_action_with_expert(env, i, agent_idx, env->timestep - 1);
-            }
-            // Apply actions
-            move_dynamics(env, i, agent_idx);
+        if (env->control_mode == CONTROL_INFERRED_EXPERT_ACTIONS) {
+            override_action_with_expert(env, i, agent_idx, env->timestep - 1);
+        }
 
         move_agent_with_controller(env, i, agent_idx);
 
