@@ -501,6 +501,10 @@ class Drive(pufferlib.PufferEnv):
 
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
                 self.starting_map_counter = self.starting_map_counter + num_envs
+                # Capture metadata (_build_compact_replay_metadata) reads self.map_ids
+                # to find the active map for each env; without this update it would
+                # forever report the map_id assigned at __init__.
+                self.map_ids = map_ids
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]

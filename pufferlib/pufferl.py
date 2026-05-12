@@ -1590,7 +1590,10 @@ def mine_failures(env_name, args=None):
     env_kwargs["capture_compact_replay"] = True
     env_kwargs["emit_completed_episodes"] = True
     env_kwargs["eval_mode"] = env_kwargs.get("eval_mode", 1)
-    env_kwargs["resample_frequency"] = 0
+    # Force a map resample every episode so we cover all maps, not just whichever
+    # one binding.shared() picked at init. Without this, num_envs=1 + a never-firing
+    # resample leaves every episode on the alphabetically-first map.
+    env_kwargs["resample_frequency"] = int(env_kwargs.get("scenario_length", 1280))
     # Mining is sequential: one vec env, walk episodes one batch at a time.
     vec_kwargs = dict(args["vec"])
     vec_kwargs.setdefault("num_envs", 1)
