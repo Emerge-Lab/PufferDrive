@@ -327,6 +327,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+        print(f"[DEBUG init] id={id(self)} pid={os.getpid()} num_envs={num_envs} num_agents={num_agents} map_ids={list(map_ids)} starting_map_counter={self.starting_map_counter}", flush=True)
         super().__init__(buf=buf)
         env_ids = []
         for i in range(num_envs):
