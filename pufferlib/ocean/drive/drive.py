@@ -672,6 +672,7 @@ class Drive(pufferlib.PufferEnv):
             "map_path": map_path,
             "scenario_id": scenario.get("scenario_id"),
             "dynamics_model": self.dynamics_model,
+            "simulation_mode": self.simulation_mode_str,
         }
 
     def _resolve_observed_agent_idx(self, scenario):
