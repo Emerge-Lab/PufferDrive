@@ -706,6 +706,53 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
+            /* Target waypoints (static target sequence used by compute_observations). */
+            {
+                int nw = env->num_target_waypoints;
+                if (nw > MAX_TARGET_WAYPOINTS) nw = MAX_TARGET_WAYPOINTS;
+                if (nw < 0) nw = 0;
+                const char *axis_keys[3] = {"goal_positions_x", "goal_positions_y", "goal_positions_z"};
+                const float *axis_src[3] = {a->goal_positions_x, a->goal_positions_y, a->goal_positions_z};
+                for (int axis = 0; axis < 3; axis++) {
+                    PyObject *lst = PyList_New(nw);
+                    if (!lst) {
+                        Py_DECREF(agent);
+                        Py_DECREF(agents_list);
+                        return NULL;
+                    }
+                    for (int w = 0; w < nw; w++) {
+                        PyObject *fv = PyFloat_FromDouble((double)axis_src[axis][w]);
+                        if (!fv) {
+                            Py_DECREF(lst);
+                            Py_DECREF(agent);
+                            Py_DECREF(agents_list);
+                            return NULL;
+                        }
+                        PyList_SetItem(lst, w, fv);
+                    }
+                    if (PyDict_SetItemString(agent, axis_keys[axis], lst) < 0) {
+                        Py_DECREF(lst);
+                        Py_DECREF(agent);
+                        Py_DECREF(agents_list);
+                        return NULL;
+                    }
+                    Py_DECREF(lst);
+                }
+                tmp = PyLong_FromLong(a->current_goal_idx);
+                if (!tmp) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "current_goal_idx", tmp) < 0) {
+                    Py_DECREF(tmp);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(tmp);
+            }
+
             /* Status flags */
             tmp = PyLong_FromLong(a->stopped);
             if (!tmp) {

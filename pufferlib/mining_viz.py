@@ -892,6 +892,26 @@ HTML_TEMPLATE = """<!doctype html>
         ctx.fillRect(-6, -6, 12, 12);
         ctx.restore();
       }
+
+      // Per-waypoint markers: the policy sees these as obs targets (TARGET_STATIC).
+      const targetWps = observedAgent.target_waypoints || [];
+      for (let w = 0; w < targetWps.length; w++) {
+        const wp = targetWps[w];
+        if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) continue;
+        const c = worldToCanvas(wp.x, wp.y);
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = 'rgba(0,160,80,0.85)';
+        ctx.strokeStyle = '#0a4d2e';
+        ctx.lineWidth = 1.2;
+        ctx.fillRect(-4, -4, 8, 8);
+        ctx.strokeRect(-4, -4, 8, 8);
+        ctx.restore();
+        ctx.fillStyle = '#0a4d2e';
+        ctx.font = '11px ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.fillText(String(w + 1), c.x + 6, c.y - 6);
+      }
     }
 
     function draw() {

@@ -710,6 +710,13 @@ class Drive(pufferlib.PufferEnv):
                         "x": list(xs),
                         "y": list(ys),
                     })
+        wp_xs = agent.get("goal_positions_x") or []
+        wp_ys = agent.get("goal_positions_y") or []
+        wp_zs = agent.get("goal_positions_z") or []
+        target_waypoints = [
+            {"x": float(wp_xs[w]), "y": float(wp_ys[w]), "z": float(wp_zs[w])}
+            for w in range(min(len(wp_xs), len(wp_ys), len(wp_zs)))
+        ]
         return {
             "slot": int(self.observe_agent_idx),
             "agent_id": int(agent.get("id", agent_idx)),
@@ -717,6 +724,7 @@ class Drive(pufferlib.PufferEnv):
             "goal_x": float(agent.get("goal_position_x", 0.0) or 0.0),
             "goal_y": float(agent.get("goal_position_y", 0.0) or 0.0),
             "goal_z": float(agent.get("goal_position_z", 0.0) or 0.0),
+            "target_waypoints": target_waypoints,
             "route_polylines": route_polylines,
             "agent_obs_max_dist": float(self.agent_obs_max_dist),
             "road_obs_front_dist": float(self.road_obs_front_dist),
