@@ -1005,13 +1005,17 @@ def generate_anchor_latex_table(
 def plot_data_requirements(df, save_path="results/figures/eval_data_requirements.pdf"):
     """How much data is needed for human-compatible policies?
 
-    4 subplots, all using scaling modes; x-axis is self-play training maps
+    3 subplots, all using scaling modes; x-axis is self-play training maps
     on a log scale; y-axes in percent.
 
     Colour convention (from module-level PALETTE via _reg_unreg_colors):
       - unregularized runs: black
       - regularized runs:   shades of blue (darker = more anchor data)
+
+    Only anchor_maps in {0, 200, 1200} are shown.
     """
+    ANCHOR_MAPS_TO_SHOW = {0, 200, 1200}
+
     scaling_modes = ["scaling_sp_val", "scaling_hr_interactive"]
     df = df[df["mode"].isin(scaling_modes)].copy()
     if df.empty:
@@ -1019,6 +1023,11 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
         return None
 
     df["anchor_maps"] = df["anchor_maps"].fillna(0).astype(int)
+    df = df[df["anchor_maps"].isin(ANCHOR_MAPS_TO_SHOW)]
+    if df.empty:
+        print("  No data for selected anchor_maps — skipping plot_data_requirements.")
+        return None
+
     if "dynamics" not in df.columns:
         df["dynamics"] = "delta"
 
@@ -1049,8 +1058,6 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     )
     agg = hr_agg.merge(sp_agg, on=["sp_maps", "anchor_maps"], how="left")
 
-    # Convert to percentages (must come BEFORE computing delta so both sides
-    # of the subtraction are in the same units).
     agg["hr_atfault"] = agg["hr_atfault"] * 100
     agg["sp_atfault"] = agg["sp_atfault"] * 100
     agg["hr_collision_rate"] = agg["hr_collision_rate"] * 100
@@ -1058,7 +1065,7 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
     agg["delta_atfault"] = agg["sp_atfault"] - agg["hr_atfault"]
 
     anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)  # black for 0, blues for >0
+    color_map = _reg_unreg_colors(anchor_vals)
 
     markers = ["s", "^", "o", "D", "P", "X", "v", "*"]
     marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
@@ -1070,12 +1077,11 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
 
     subplot_specs = [
         ("sp_collision_rate", "Self-play collision rate [%]"),
-        ("hr_collision_rate", "Human-replay collision rate [%]"),
         ("hr_atfault", "Human-replay at-fault collision rate [%]"),
         ("delta_atfault", "\u0394 at-fault (SP \u2212 HR) [%]"),
     ]
 
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
     for ax, (y_col, ylabel) in zip(axes, subplot_specs):
         for anchor in anchor_vals:
@@ -1090,8 +1096,6 @@ def plot_data_requirements(df, save_path="results/figures/eval_data_requirements
                 markersize=8,
                 linewidth=1.5,
                 linestyle="-",
-                # Thin black edge on light blues so the lightest shades stay
-                # visible against white; no edge needed for the black unreg.
                 markeredgecolor="black" if anchor > 0 else color_map[anchor],
                 markeredgewidth=0.4 if anchor > 0 else 0,
                 zorder=3,
@@ -1330,15 +1334,6 @@ def plot_human_data_requirements(
     # (y_mean, y_sem, ylabel, smart_col, metric_label, lower_is_better, top_yscale)
     subplot_specs = [
         (
-            "hr_atfault_mean_pct",
-            "hr_atfault_sem_pct",
-            "Human-replay at-fault collision rate [%]",
-            "hr_atfault_pct",
-            "HR at-fault coll.",
-            True,
-            "linear",
-        ),
-        (
             "sp_coll_mean_pct",
             "sp_coll_sem_pct",
             "Self-play collision rate [%]",
@@ -1348,11 +1343,20 @@ def plot_human_data_requirements(
             "linear",
         ),
         (
+            "hr_atfault_mean_pct",
+            "hr_atfault_sem_pct",
+            "Human-replay at-fault collision rate [%]",
+            "hr_atfault_pct",
+            "HR at-fault coll.",
+            True,
+            "linear",
+        ),
+        (
             "hr_progress_mean_pct",
             "hr_progress_sem_pct",
-            "Task completion [%]",  # renamed from "Route progress [%]"
+            "Task completion [%]",
             "hr_progress_pct",
-            "HR task completion",  # renamed from "HR route progress"
+            "HR task completion",
             False,
             "linear",
         ),
@@ -1839,92 +1843,119 @@ def generate_human_data_latex_table(
 # ---------------------------------------------------------------------------
 
 
-def plot_wosac_lineplot(wosac_df, save_path="results/figures/eval_wosac_lineplot.pdf"):
-    """Line plot of WOSAC realism metrics vs self-play training maps.
+def plot_wosac_lineplot(
+    wosac_df,
+    save_path="results/figures/eval_wosac_lineplot.pdf",
+    smart_csv="results/smart_baseline_res.csv",
+    sp_maps_filter=50000,
+):
+    """Line plot of WOSAC realism metrics vs human demonstration data.
 
     Four subplots — realism meta-score, kinematic, interactive, map-based.
-    x-axis: sp_maps (log scale); color/marker: anchor_maps (reg/unreg convention).
-    SMART and Random reference lines drawn on each subplot.
+    x-axis: human demonstration data (anchor_maps for our method, num_maps
+    for SMART), on a symlog scale. SMART baseline read from smart_csv.
     """
     if wosac_df is None or wosac_df.empty:
         print("  No WOSAC data found — skipping plot_wosac_lineplot.")
         return None
 
+    SMART_DATA = _load_smart_wosac_baseline(smart_csv)
+
     wdf = wosac_df.copy()
     wdf["anchor_maps"] = wdf["anchor_maps"].fillna(0).astype(int)
 
-    wosac_metrics = [
-        "realism_meta_score",
-        "kinematic_metrics",
-        "interactive_metrics",
-        "map_based_metrics",
+    if sp_maps_filter is not None and "sp_maps" in wdf.columns:
+        wdf = wdf[wdf["sp_maps"] == sp_maps_filter]
+    if wdf.empty:
+        print(f"  No WOSAC data for sp_maps={sp_maps_filter} — skipping plot_wosac_lineplot.")
+        return None
+
+    # (main_col, smart_cols, ylabel, title)
+    subplot_specs = [
+        ("realism_meta_score", ["wosac_realism_meta_score"], "Realism meta-score", "WOSAC realism meta-score"),
+        ("kinematic_metrics", ["wosac_kinematic_metrics"], "Kinematic metrics", "WOSAC kinematic metrics"),
+        ("interactive_metrics", ["wosac_interactive_metrics"], "Interactive metrics", "WOSAC interactive metrics"),
+        ("map_based_metrics", ["wosac_map_based_metrics"], "Map-based metrics", "WOSAC map-based metrics"),
     ]
-    available = [m for m in wosac_metrics if m in wdf.columns]
-    if not available:
+    subplot_specs = [(m, sc, yl, t) for m, sc, yl, t in subplot_specs if m in wdf.columns]
+    if not subplot_specs:
         print("  WOSAC metric columns missing — skipping plot_wosac_lineplot.")
         return None
 
-    agg = wdf.groupby(["sp_maps", "anchor_maps"])[available].agg(["mean", "sem"]).reset_index()
-    flat_cols = ["sp_maps", "anchor_maps"]
-    for m in available:
+    available_main = [m for m, _, _, _ in subplot_specs]
+    agg = wdf.groupby("anchor_maps")[available_main].agg(["mean", "sem"]).reset_index()
+    flat_cols = ["anchor_maps"]
+    for m in available_main:
         flat_cols.extend([f"{m}_mean", f"{m}_sem"])
     agg.columns = flat_cols
+    agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
 
-    anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)
-    markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
-    marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
+    unreg = agg[agg["anchor_maps"] == 0]
+    reg = agg[agg["anchor_maps"] > 0].sort_values("anchor_minutes")
 
-    def _anchor_label(a):
-        return "no anchor (unreg)" if a == 0 else f"{_maps_to_human_time(a)} anchor"
+    tick_positions = [10, 30, 180, 1800, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
 
-    # Reference baselines per metric
-    smart_scores = [0.7818, 0.5200, 0.8914, 0.8378]
-    random_scores = [0.4459, 0.0506, 0.34, 0.4704]
-
-    subplot_specs = [
-        ("realism_meta_score", "Realism meta-score", "WOSAC realism meta-score"),
-        ("kinematic_metrics", "Kinematic metrics", "WOSAC kinematic metrics"),
-        ("interactive_metrics", "Interactive metrics", "WOSAC interactive metrics"),
-        ("map_based_metrics", "Map-based metrics", "WOSAC map-based metrics"),
-    ]
-    subplot_specs = [(m, yl, t) for m, yl, t in subplot_specs if m in available]
-
-    _set_style(len(anchor_vals))
+    _set_style(3)
     fig, axes = plt.subplots(1, len(subplot_specs), figsize=(5 * len(subplot_specs), 4.5))
     if len(subplot_specs) == 1:
         axes = [axes]
 
-    for ax, (metric, ylabel, title), smart, rand in zip(axes, subplot_specs, smart_scores, random_scores):
+    for ax, (metric, smart_cols, ylabel, title) in zip(axes, subplot_specs):
         mean_col = f"{metric}_mean"
         sem_col = f"{metric}_sem"
-        if mean_col not in agg.columns:
-            continue
 
-        for anchor in anchor_vals:
-            subset = agg[agg["anchor_maps"] == anchor].sort_values("sp_maps")
-            if subset.empty:
-                continue
-            ax.plot(
-                subset["sp_maps"],
-                subset[mean_col],
-                color=color_map[anchor],
-                marker=marker_map[anchor],
-                markersize=8,
-                linewidth=1.2,
-                linestyle="-",
-                zorder=3,
-                label=_anchor_label(anchor),
+        if not reg.empty and mean_col in reg.columns:
+            ax.errorbar(
+                reg["anchor_minutes"],
+                reg[mean_col],
+                yerr=reg[sem_col],
+                color=COLOR_OURS,
+                marker="o",
+                markersize=9,
+                linewidth=2.0,
+                capsize=3,
+                markeredgecolor=COLOR_OURS_EDGE,
+                markerfacecolor=COLOR_OURS,
+                label="regularized self-play (ours)",
+                zorder=4,
+            )
+        if not unreg.empty and mean_col in unreg.columns:
+            ax.axhline(
+                unreg[mean_col].iloc[0],
+                color=COLOR_SELFPLAY,
+                linestyle="--",
+                linewidth=2.5,
+                alpha=0.9,
+                label="best unregularized self-play",
+                zorder=2,
             )
 
-        ax.axhline(smart, color=COLOR_SMART, linestyle="--", linewidth=1.5, alpha=0.8, label="SMART")
-        ax.axhline(rand, color="grey", linestyle="--", linewidth=1.5, alpha=0.7, label="Random")
+        smart_styles = [
+            dict(linestyle="-", label="SMART-tiny-CLSFT"),
+        ]
+        for sc, style in zip(smart_cols, smart_styles):
+            smart_valid = (
+                SMART_DATA.dropna(subset=[sc]) if not SMART_DATA.empty and sc in SMART_DATA.columns else pd.DataFrame()
+            )
+            if not smart_valid.empty:
+                ax.plot(
+                    smart_valid["minutes"],
+                    smart_valid[sc],
+                    color=COLOR_SMART,
+                    marker="o",
+                    markersize=9,
+                    linewidth=2.0,
+                    markeredgecolor=COLOR_SMART_EDGE,
+                    markerfacecolor=COLOR_SMART,
+                    zorder=3,
+                    **style,
+                )
 
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
-        )
-        ax.set_xlabel("Self-play training maps")
+        ax.set_xscale("symlog", linthresh=60, linscale=1.2)
+        ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
+        ax.minorticks_off()
+        ax.set_xlabel("Human demonstration data")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
@@ -1938,8 +1969,13 @@ def plot_wosac_lineplot(wosac_df, save_path="results/figures/eval_wosac_lineplot
     return fig
 
 
-def plot_wosac_submetrics(wosac_df, save_path="results/figures/eval_wosac_submetrics.pdf"):
-    """3×3 line plot of every individual WOSAC sub-metric vs self-play training maps.
+def plot_wosac_submetrics(
+    wosac_df,
+    save_path="results/figures/eval_wosac_submetrics.pdf",
+    smart_csv="results/smart_baseline_res.csv",
+    sp_maps_filter=50000,
+):
+    """3×3 line plot of every individual WOSAC sub-metric vs human demonstration data.
 
     Rows / columns:
       Kinematic (4):   likelihood_linear_speed, likelihood_linear_acceleration,
@@ -1949,106 +1985,162 @@ def plot_wosac_submetrics(wosac_df, save_path="results/figures/eval_wosac_submet
                        likelihood_time_to_collision
       Map (2):         likelihood_distance_to_road_edge, likelihood_offroad_indication
 
-    9 subplots total laid out in a 3×3 grid. Each panel has the same style as
-    plot_wosac_lineplot: log x-axis, reg/unreg color+marker convention, no
-    reference lines (sub-metric baselines are not publicly available).
+    9 subplots total laid out in a 3×3 grid. x-axis is human demonstration
+    data on a symlog scale. SMART baseline read from smart_csv.
     """
     if wosac_df is None or wosac_df.empty:
         print("  No WOSAC data found — skipping plot_wosac_submetrics.")
         return None
 
-    # All 9 individual sub-metrics grouped by category
+    SMART_DATA = _load_smart_wosac_baseline(smart_csv)
+
+    # (main_col, smart_col, ylabel, title, group)
     subplot_specs = [
-        # (column_name, ylabel, title)
-        # ── Kinematic ──────────────────────────────────────────────────────
-        ("likelihood_linear_speed", "Likelihood", "Linear speed"),
-        ("likelihood_linear_acceleration", "Likelihood", "Linear acceleration"),
-        ("likelihood_angular_speed", "Likelihood", "Angular speed"),
-        ("likelihood_angular_acceleration", "Likelihood", "Angular acceleration"),
-        # ── Interactive ────────────────────────────────────────────────────
-        ("likelihood_collision_indication", "Likelihood", "Collision indication"),
-        ("likelihood_distance_to_nearest_object", "Likelihood", "Dist. to nearest object"),
-        ("likelihood_time_to_collision", "Likelihood", "Time to collision"),
-        # ── Map ────────────────────────────────────────────────────────────
-        ("likelihood_distance_to_road_edge", "Likelihood", "Dist. to road edge"),
-        ("likelihood_offroad_indication", "Likelihood", "Offroad indication"),
+        ("likelihood_linear_speed", "wosac_likelihood_linear_speed", "Likelihood", "Linear speed", "Kinematic"),
+        (
+            "likelihood_linear_acceleration",
+            "wosac_likelihood_linear_acceleration",
+            "Likelihood",
+            "Linear acceleration",
+            "Kinematic",
+        ),
+        ("likelihood_angular_speed", "wosac_likelihood_angular_speed", "Likelihood", "Angular speed", "Kinematic"),
+        (
+            "likelihood_angular_acceleration",
+            "wosac_likelihood_angular_acceleration",
+            "Likelihood",
+            "Angular acceleration",
+            "Kinematic",
+        ),
+        (
+            "likelihood_collision_indication",
+            "wosac_likelihood_collision_indication",
+            "Likelihood",
+            "Collision indication",
+            "Interactive",
+        ),
+        (
+            "likelihood_distance_to_nearest_object",
+            "wosac_likelihood_distance_to_nearest_object",
+            "Likelihood",
+            "Dist. to nearest object",
+            "Interactive",
+        ),
+        (
+            "likelihood_time_to_collision",
+            "wosac_likelihood_time_to_collision",
+            "Likelihood",
+            "Time to collision",
+            "Interactive",
+        ),
+        (
+            "likelihood_distance_to_road_edge",
+            "wosac_likelihood_distance_to_road_edge",
+            "Likelihood",
+            "Dist. to road edge",
+            "Map",
+        ),
+        (
+            "likelihood_offroad_indication",
+            "wosac_likelihood_offroad_indication",
+            "Likelihood",
+            "Offroad indication",
+            "Map",
+        ),
     ]
 
     wdf = wosac_df.copy()
     wdf["anchor_maps"] = wdf["anchor_maps"].fillna(0).astype(int)
 
-    available = [col for col, _, _ in subplot_specs if col in wdf.columns]
-    if not available:
+    if sp_maps_filter is not None and "sp_maps" in wdf.columns:
+        wdf = wdf[wdf["sp_maps"] == sp_maps_filter]
+    if wdf.empty:
+        print(f"  No WOSAC data for sp_maps={sp_maps_filter} — skipping plot_wosac_submetrics.")
+        return None
+
+    subplot_specs = [(m, sc, yl, t, g) for m, sc, yl, t, g in subplot_specs if m in wdf.columns]
+    if not subplot_specs:
         print("  No WOSAC sub-metric columns found — skipping plot_wosac_submetrics.")
         return None
 
-    subplot_specs = [(col, yl, t) for col, yl, t in subplot_specs if col in wdf.columns]
-
-    agg = wdf.groupby(["sp_maps", "anchor_maps"])[available].agg(["mean", "sem"]).reset_index()
-    flat_cols = ["sp_maps", "anchor_maps"]
-    for m in available:
+    available_main = [m for m, _, _, _, _ in subplot_specs]
+    agg = wdf.groupby("anchor_maps")[available_main].agg(["mean", "sem"]).reset_index()
+    flat_cols = ["anchor_maps"]
+    for m in available_main:
         flat_cols.extend([f"{m}_mean", f"{m}_sem"])
     agg.columns = flat_cols
+    agg["anchor_minutes"] = agg["anchor_maps"] * 9 / 60
 
-    anchor_vals = sorted(agg["anchor_maps"].unique())
-    color_map = _reg_unreg_colors(anchor_vals)
-    markers = ["^", "s", "o", "D", "P", "X", "v", "*"]
-    marker_map = {a: markers[i % len(markers)] for i, a in enumerate(anchor_vals)}
+    unreg = agg[agg["anchor_maps"] == 0]
+    reg = agg[agg["anchor_maps"] > 0].sort_values("anchor_minutes")
 
-    def _anchor_label(a):
-        return "no anchor (unreg)" if a == 0 else f"{_maps_to_human_time(a)} anchor"
+    tick_positions = [10, 30, 180, 1800, 75000]
+    tick_labels = ["10 min", "30 min", "3 hours", "30 hours", "52 days"]
 
-    _set_style(len(anchor_vals))
-    fig, axes = plt.subplots(3, 3, figsize=(18, 13))
+    _set_style(3)
+    fig, axes = plt.subplots(3, 3, figsize=(15, 13))
     axes_flat = axes.flatten()
 
-    # Group labels for row titles
-    group_labels = {
-        0: "Kinematic",
-        1: "Kinematic",
-        2: "Kinematic",
-        3: "Kinematic",
-        4: "Interactive",
-        5: "Interactive",
-        6: "Interactive",
-        7: "Map",
-        8: "Map",
-    }
-
-    for idx, (ax, (metric, ylabel, title)) in enumerate(zip(axes_flat, subplot_specs)):
+    for ax, (metric, smart_col, ylabel, title, group) in zip(axes_flat, subplot_specs):
         mean_col = f"{metric}_mean"
-        if mean_col not in agg.columns:
-            ax.set_visible(False)
-            continue
+        sem_col = f"{metric}_sem"
 
-        for anchor in anchor_vals:
-            subset = agg[agg["anchor_maps"] == anchor].sort_values("sp_maps")
-            if subset.empty:
-                continue
-            ax.plot(
-                subset["sp_maps"],
-                subset[mean_col],
-                color=color_map[anchor],
-                marker=marker_map[anchor],
+        if not reg.empty and mean_col in reg.columns:
+            ax.errorbar(
+                reg["anchor_minutes"],
+                reg[mean_col],
+                yerr=reg[sem_col],
+                color=COLOR_OURS,
+                marker="o",
                 markersize=7,
-                linewidth=1.2,
-                linestyle="-",
-                zorder=3,
-                label=_anchor_label(anchor),
+                linewidth=1.5,
+                capsize=3,
+                markeredgecolor=COLOR_OURS_EDGE,
+                markerfacecolor=COLOR_OURS,
+                label="regularized self-play (ours)",
+                zorder=4,
+            )
+        if not unreg.empty and mean_col in unreg.columns:
+            ax.axhline(
+                unreg[mean_col].iloc[0],
+                color=COLOR_SELFPLAY,
+                linestyle="--",
+                linewidth=2.0,
+                alpha=0.9,
+                label="best unregularized self-play",
+                zorder=2,
             )
 
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"{int(x / 1000)}k" if x >= 1000 else str(int(x)))
+        smart_valid = (
+            SMART_DATA.dropna(subset=[smart_col])
+            if not SMART_DATA.empty and smart_col in SMART_DATA.columns
+            else pd.DataFrame()
         )
-        ax.set_xlabel("Self-play training maps")
+        if not smart_valid.empty:
+            ax.plot(
+                smart_valid["minutes"],
+                smart_valid[smart_col],
+                color=COLOR_SMART,
+                marker="o",
+                markersize=7,
+                linewidth=1.5,
+                linestyle="-",
+                markeredgecolor=COLOR_SMART_EDGE,
+                markerfacecolor=COLOR_SMART,
+                label="SMART-tiny-CLSFT",
+                zorder=3,
+            )
+
+        ax.set_xscale("symlog", linthresh=60, linscale=1.2)
+        ax.set_xticks(tick_positions, labels=tick_labels, rotation=35, ha="right")
+        ax.minorticks_off()
+        ax.set_xlabel("Human demonstration data")
         ax.set_ylabel(ylabel)
-        ax.set_title(f"[{group_labels[idx]}] {title}")
+        ax.set_title(f"[{group}] {title}")
         ax.grid(axis="y", alpha=0.3, linestyle="--")
         ax.legend(fontsize=7, loc="best", framealpha=1.0, facecolor="white", edgecolor="lightgray")
         sns.despine(ax=ax)
 
-    # Hide any unused axes (in case fewer than 9 metrics are available)
     for ax in axes_flat[len(subplot_specs) :]:
         ax.set_visible(False)
 
@@ -2280,24 +2372,22 @@ def generate_hr_comparison_latex_table(df, save_path="results/figures/eval_hr_co
 
 
 def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv") -> pd.DataFrame:
-    """Load WOSAC scores from the SMART baseline CSV.
-
-    Returns a DataFrame with columns:
-        num_maps, minutes,
-        wosac_score, wosac_kinematic_metrics,
-        wosac_interactive_metrics, wosac_map_based_metrics
-
-    WOSAC metrics in the SMART CSV are only populated in the scaling_sp_val
-    mode (the former `all_agents` rows). Missing values stay NaN; returns an
-    empty (correctly-typed) DataFrame if the CSV is absent.
-    """
     cols = [
         "num_maps",
         "minutes",
-        "wosac_score",
+        "wosac_realism_meta_score",
         "wosac_kinematic_metrics",
         "wosac_interactive_metrics",
         "wosac_map_based_metrics",
+        "wosac_likelihood_linear_speed",
+        "wosac_likelihood_linear_acceleration",
+        "wosac_likelihood_angular_speed",
+        "wosac_likelihood_angular_acceleration",
+        "wosac_likelihood_distance_to_nearest_object",
+        "wosac_likelihood_time_to_collision",
+        "wosac_likelihood_collision_indication",
+        "wosac_likelihood_distance_to_road_edge",
+        "wosac_likelihood_offroad_indication",
     ]
     if not os.path.exists(csv_path):
         print(f"  {csv_path} not found — SMART WOSAC baseline will be omitted.")
@@ -2305,7 +2395,6 @@ def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv")
 
     raw = pd.read_csv(csv_path)
     raw = raw[~raw["checkpoint"].isin(_SMART_EXCLUDED_CHECKPOINTS)]
-    # WOSAC metrics only live in the scaling_sp_val rows.
     raw = raw[raw["mode"] == "scaling_sp_val"].copy()
 
     raw["num_maps"] = raw["checkpoint"].apply(_smart_ckpt_to_num_maps)
@@ -2315,7 +2404,6 @@ def _load_smart_wosac_baseline(csv_path: str = "results/smart_baseline_res.csv")
     metric_cols = [c for c in cols if c.startswith("wosac_") and c in raw.columns]
     out = raw[["num_maps"] + metric_cols].sort_values("num_maps").reset_index(drop=True)
     out["minutes"] = out["num_maps"] * 9 / 60
-    # Re-index to the full expected column list so missing WOSAC columns become NaN.
     for c in cols:
         if c not in out.columns:
             out[c] = np.nan
@@ -2983,11 +3071,11 @@ def generate_main_comparison_latex_table(
     """
     CHECKPOINTS_OF_INTEREST = {
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "Unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "Regularized (ours)",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "Regularized (ours)",
     }
     ROW_ORDER = [
         "models/scaling_cpts/unreg_delta_50k_maps.pt",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt",
     ]
 
     # ── Per-mode aggregation ────────────────────────────────────────────────
@@ -3308,7 +3396,7 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
 if __name__ == "__main__":
     import os
 
-    EVAL_CSV = "results/checkpoint_eval_results_detFalse.csv"
+    EVAL_CSV = "results/checkpoint_eval_results.csv"
     WOSAC_CSV = "results/checkpoint_wosac_results.csv"
     ANCHOR_CSV = "results/anchor_eval.csv"
 

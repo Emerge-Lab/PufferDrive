@@ -49,7 +49,7 @@ class WOSACEvaluator:
         self.metrics_config.read(wosac_metrics_path)
         self.mode = "rl"
 
-    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=True):
+    def evaluate(self, args, vecenv, policy=None, drop_scene_duplicates=False):
         """Run full WOSAC evaluation with batched iteration over target scenarios.
 
         Args:
@@ -64,70 +64,63 @@ class WOSACEvaluator:
         num_target_maps = args["eval"]["wosac_target_scenarios"]
         max_batches = args["eval"].get("wosac_max_batches", 100)
 
-        unique_files_sampled = set()
+        files_sampled = set()
         combined_results = []
 
-        with tqdm(total=100, desc="Processing batches", unit="%", colour="cyan") as pbar:
-            batch_idx = 0
-            while batch_idx < max_batches:
-                # Resample maps for each batch (except first)
-                if batch_idx > 0:
-                    vecenv.driver_env.resample_maps()
+        batch_idx = 0
+        while batch_idx < max_batches:
+            print(batch_idx)
+            print(f"\nProcessing batch {batch_idx + 1}/{max_batches}...")
+            # Resample maps for each batch (except first)
+            if batch_idx > 0:
+                vecenv.driver_env.resample_maps()
+                print(f"Resample")
 
-                # Obtain ground truth trajectories
-                gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
+            # Obtain ground truth trajectories
+            gt_trajectories = self.collect_ground_truth_trajectories(vecenv)
 
-                # Collect simulated trajectories
-                if policy is not None and self.eval_mode == "policy":
-                    simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
-                elif self.eval_mode == "ground_truth":
-                    # Create fake simulated trajectories by repeating ground truth
-                    simulated_trajectories = gt_trajectories.copy()
-                    for key in ["x", "y", "heading", "id"]:
-                        simulated_trajectories[key] = np.repeat(
-                            gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
-                        )
-                    simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
-                    simulated_trajectories["dones"] = np.zeros_like(simulated_trajectories["x"])
-                else:
-                    raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
+            # Collect simulated trajectories
+            if policy is not None and self.eval_mode == "policy":
+                simulated_trajectories = self.collect_simulated_trajectories(args, vecenv, policy)
+            elif self.eval_mode == "ground_truth":
+                # Create fake simulated trajectories by repeating ground truth
+                simulated_trajectories = gt_trajectories.copy()
+                for key in ["x", "y", "heading", "id"]:
+                    simulated_trajectories[key] = np.repeat(
+                        gt_trajectories[key], args["eval"]["wosac_num_rollouts"], axis=1
+                    )
+                simulated_trajectories["id"] = simulated_trajectories["id"][..., np.newaxis]
+                simulated_trajectories["dones"] = np.zeros_like(simulated_trajectories["x"])
+            else:
+                raise ValueError(f"Policy is None or unknown evaluation mode: {self.eval_mode}")
 
-                # Compute metrics for this batch
-                agent_state = vecenv.driver_env.get_global_agent_state()
-                road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
-                batch_results = self.compute_metrics(
-                    gt_trajectories,
-                    simulated_trajectories,
-                    agent_state,
-                    road_edge_polylines,
-                    aggregate_results=False,
-                )
+            # Compute metrics for this batch
+            agent_state = vecenv.driver_env.get_global_agent_state()
+            road_edge_polylines = vecenv.driver_env.get_road_edge_polylines()
+            batch_results = self.compute_metrics(
+                gt_trajectories,
+                simulated_trajectories,
+                agent_state,
+                road_edge_polylines,
+                aggregate_results=False,
+            )
 
-                # Optional: sanity check on first batch
-                if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
-                    self._quick_sanity_check(gt_trajectories, simulated_trajectories)
+            # Optional: sanity check on first batch
+            if args["eval"].get("wosac_sanity_check", False) and batch_idx == 0:
+                self._quick_sanity_check(gt_trajectories, simulated_trajectories)
 
-                # Track coverage
-                unique_files_sampled.update(str(s) for s in np.unique(gt_trajectories["scenario_id"]))
-                combined_results.append(batch_results)
+            # Track coverage
+            files_sampled.update(str(s) for s in gt_trajectories["scenario_id"])
+            combined_results.append(batch_results)
 
-                # Update progress
-                coverage = len(unique_files_sampled) / num_target_maps
-                pbar.n = int(coverage * 100)
-                pbar.set_postfix({"n": len(unique_files_sampled), "batch": batch_idx + 1})
-                pbar.refresh()
+            # Update progress
+            coverage = len(files_sampled) / num_target_maps
+            print(f"Coverage {coverage * 100:.2f}%")
+            batch_idx += 1
 
-                batch_idx += 1
-
-                # Stop if we've covered all target scenarios
-                if len(unique_files_sampled) >= num_target_maps:
-                    break
-
-            # Check if we didn't reach target coverage
-            if len(unique_files_sampled) < num_target_maps:
-                print(
-                    f"\nWarning: Only covered {len(unique_files_sampled)}/{num_target_maps} scenarios after {batch_idx} batches"
-                )
+            # Stop if we've covered all target scenarios
+            if len(files_sampled) >= num_target_maps:
+                break
 
             # Combine batch results into single dataframe
             df_combined = pd.concat(combined_results)
@@ -140,9 +133,9 @@ class WOSACEvaluator:
                 if dropped > 0:
                     print(f"\nDropped {dropped} duplicate scenarios.")
 
-            print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
+        print(f"\nCollected {len(df_combined)} agent records from {batch_idx} batches")
 
-            return df_combined
+        return df_combined
 
     def _compute_metametric(self, metrics: pd.Series) -> float:
         metametric = 0.0
@@ -197,7 +190,7 @@ class WOSACEvaluator:
             "dones": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.bool_),
         }
 
-        for rollout_idx in tqdm(range(self.num_rollouts), desc="Collecting rollouts", colour="blue"):
+        for rollout_idx in range(self.num_rollouts):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
 
             obs, info = puffer_env.reset()

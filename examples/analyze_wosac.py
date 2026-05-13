@@ -29,7 +29,7 @@ import torch
 from pufferlib.pufferl import load_env, load_policy, load_config
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
-SCALING_CHECKPOINTS_PATH = "models/scaling_cpts"
+SCALING_CHECKPOINTS_PATH = "models/best_cpts"
 ENV_NAME = "puffer_drive"
 OUTPUT_CSV = "results/checkpoint_wosac_results.csv"
 
@@ -41,7 +41,7 @@ SP_MAPS_FILTER = 50000
 WOSAC_MAP_DIR = "resources/drive/binaries/validation"
 WOSAC_BATCH_SIZE = 256  # num_scenes_per_batch
 WOSAC_SCENARIO_POOL_SIZE = 10000
-WOSAC_MAX_BATCHES = 10
+WOSAC_MAX_BATCHES = 100
 WOSAC_NUM_ROLLOUTS = 32
 WOSAC_INIT_STEPS = 10
 WOSAC_CONTROL_MODE = "control_wosac"
@@ -166,6 +166,7 @@ def make_wosac_config(cpt_config):
     config["eval"]["wosac_init_mode"] = WOSAC_INIT_MODE
     config["eval"]["wosac_goal_behavior"] = WOSAC_GOAL_BEHAVIOR
     config["eval"]["wosac_goal_radius"] = WOSAC_GOAL_RADIUS
+    config["eval"]["wosac_target_scenarios"] = 1000
     config["eval"]["wosac_aggregate_results"] = False  # keep per-scenario rows
     config["eval"]["wosac_filter_out_post_done"] = False
     config["eval"]["wosac_sanity_check"] = False
