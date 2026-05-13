@@ -264,6 +264,8 @@ struct RoadMapElement {
     int num_exits;
     int *exit_lanes;
     float speed_limit;
+    float length;
+    float *cum_lengths;
 };
 
 struct TrafficControlElement {
@@ -286,7 +288,6 @@ typedef struct {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *lane_lengths;
     float *distances; // n_lanes * n_lanes row-major
 };
 
@@ -312,6 +313,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->headings);
     free(element->entry_lanes);
     free(element->exit_lanes);
+    free(element->cum_lengths);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {
@@ -321,6 +323,5 @@ void free_traffic_element(struct TrafficControlElement *element) {
 
 void free_lane_graph(struct LaneGraph *graph) {
     free(graph->lane_ids);
-    free(graph->lane_lengths);
     free(graph->distances);
 }
