@@ -764,24 +764,41 @@ HTML_TEMPLATE = """<!doctype html>
       const side = Number(observedAgent.road_obs_side_dist || 0);
 
       // Highlight observed road elements (thicker, brighter stroke).
+      // The C gate is per-segment-midpoint, not per-polyline, so we replicate
+      // that here and only stroke segments whose midpoint falls in the
+      // agent-local FOV rectangle. Otherwise long lanes that just clip the
+      // rectangle would be drawn highlighted for their full length.
+      const cosH = Math.cos(heading);
+      const sinH = Math.sin(heading);
+      function inFovBox(wx, wy) {
+        const dx = wx - ax;
+        const dy = wy - ay;
+        const xLocal = dx * cosH + dy * sinH;
+        const yLocal = -dx * sinH + dy * cosH;
+        return xLocal >= -behind && xLocal <= front && Math.abs(yLocal) <= side;
+      }
+      ctx.strokeStyle = '#2a7fff';
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 2.0;
       for (const r_idx of visibleRoads) {
         const elem = roadElements[r_idx];
         if (!elem) continue;
         const xs = elem.x || [];
         const ys = elem.y || [];
         if (xs.length < 2) continue;
-        ctx.beginPath();
-        for (let i = 0; i < xs.length; i++) {
-          const p = worldToCanvas(xs[i], ys[i]);
-          if (i === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
+        for (let i = 0; i < xs.length - 1; i++) {
+          const mx = (xs[i] + xs[i + 1]) * 0.5;
+          const my = (ys[i] + ys[i + 1]) * 0.5;
+          if (!inFovBox(mx, my)) continue;
+          const a = worldToCanvas(xs[i], ys[i]);
+          const b = worldToCanvas(xs[i + 1], ys[i + 1]);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
         }
-        ctx.strokeStyle = '#2a7fff';
-        ctx.globalAlpha = 0.75;
-        ctx.lineWidth = 2.0;
-        ctx.stroke();
-        ctx.globalAlpha = 1.0;
       }
+      ctx.globalAlpha = 1.0;
 
       // Goal route polylines (dashed accent).
       const route = observedAgent.route_polylines || [];
