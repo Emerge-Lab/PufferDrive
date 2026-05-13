@@ -519,17 +519,6 @@ HTML_TEMPLATE = """<!doctype html>
     const episodeList = document.getElementById('episode-list');
     const resetViewButton = document.getElementById('reset-view');
     const toggleObsButton = document.getElementById('toggle-obs');
-    if (toggleObsButton) {
-      if (!observedAgent) {
-        toggleObsButton.style.display = 'none';
-      } else {
-        toggleObsButton.addEventListener('click', () => {
-          showObs = !showObs;
-          toggleObsButton.innerText = showObs ? 'Hide Observations' : 'Show Observations';
-          draw();
-        });
-      }
-    }
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
@@ -541,6 +530,18 @@ HTML_TEMPLATE = """<!doctype html>
     const roadElements = (DATA.map && DATA.map.road_elements) || [];
     const bounds = DATA.bounds || [-100, -100, 100, 100];
     let showObs = !!observedAgent;
+
+    if (toggleObsButton) {
+      if (!observedAgent) {
+        toggleObsButton.style.display = 'none';
+      } else {
+        toggleObsButton.addEventListener('click', () => {
+          showObs = !showObs;
+          toggleObsButton.innerText = showObs ? 'Hide Observations' : 'Show Observations';
+          draw();
+        });
+      }
+    }
 
     let frameIndex = 0;
     let playing = false;
@@ -880,7 +881,7 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
       drawRoads();
-      drawObsOverlay();
+      try { drawObsOverlay(); } catch (e) { console.error('drawObsOverlay failed:', e); }
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
       for (const agent of frame) drawAgent(agent);
