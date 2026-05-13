@@ -1669,8 +1669,7 @@ def mine_failures(env_name, args=None):
     csv_path = os.path.join(output_dir, "episodes.csv")
     episodes_df.to_csv(csv_path, index=False)
     print(
-        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, "
-        f"{int(episodes_df['failed'].sum())} failures captured)"
+        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, {int(episodes_df['failed'].sum())} failures captured)"
     )
 
     if do_render and render_dir is not None:
