@@ -161,21 +161,32 @@ def load_map_static(map_path):
     # temp dir to force Drive to load that exact file.
     with tempfile.TemporaryDirectory(prefix="mining_viz_map_") as tmp_dir:
         os.symlink(str(resolved_map_path), os.path.join(tmp_dir, resolved_map_path.name))
-        env = Drive(
-            map_dir=tmp_dir,
-            num_maps=1,
-            num_agents=1,
-            min_agents_per_env=1,
-            max_agents_per_env=1,
-            simulation_mode="gigaflow",
-            scenario_length=1,
-            resample_frequency=0,
-            report_interval=10_000,
-        )
-        try:
-            scenario = _normalize_scenario(env.get_state())
-        finally:
-            env.close()
+        # Suppress C-side stdout: the probe runs compute_goals in gigaflow
+        # mode on a 1-agent stub even when the actual replay was in replay
+        # mode, which prints harmless "Max iterations in compute_goals"
+        # warnings on nuplan binaries that don't have precomputed routes.
+        saved_stdout_fd = os.dup(1)
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            try:
+                env = Drive(
+                    map_dir=tmp_dir,
+                    num_maps=1,
+                    num_agents=1,
+                    min_agents_per_env=1,
+                    max_agents_per_env=1,
+                    simulation_mode="gigaflow",
+                    scenario_length=1,
+                    resample_frequency=0,
+                    report_interval=10_000,
+                )
+                try:
+                    scenario = _normalize_scenario(env.get_state())
+                finally:
+                    env.close()
+            finally:
+                os.dup2(saved_stdout_fd, 1)
+                os.close(saved_stdout_fd)
 
     return {
         "map_name": scenario.get("map_name"),
