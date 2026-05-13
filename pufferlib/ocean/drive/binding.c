@@ -1915,6 +1915,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_trigger_prob = (float)unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
     env->observe_agent_idx = (int)unpack(kwargs, "observe_agent_idx");
+    env->replay_traffic_enabled = (int)unpack(kwargs, "replay_traffic_enabled");
     env->obs_capture_partner_ids = NULL;
     env->obs_capture_partner_count = 0;
     env->obs_capture_partner_capacity = 0;

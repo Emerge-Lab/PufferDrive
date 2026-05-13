@@ -404,6 +404,12 @@ struct Drive {
     int *obs_capture_traffic_ids;
     int obs_capture_traffic_count;
     int obs_capture_traffic_capacity;
+
+    // Under control_sdc_only (log-replay) mode, whether to also spawn the
+    // recorded non-controlled agents as expert/static traffic. 0 means the
+    // SDC drives alone with its recorded route; 1 (default) is normal
+    // log-replay with all valid logged agents.
+    int replay_traffic_enabled;
 };
 
 // ========================================
@@ -3223,7 +3229,10 @@ void set_active_agents(Drive *env) {
         // Determine if entity should be created
         bool should_create = false;
         if (is_log_replay) {
-            should_create = true; // Log-replay: all valid agents
+            // Default: all valid logged agents (controlled SDC + expert traffic).
+            // When replay_traffic_enabled=0, restrict to the SDC (idx 0) so it
+            // drives alone with its recorded route.
+            should_create = env->replay_traffic_enabled ? true : (i == 0);
         } else if (env->init_mode == INIT_ALL_VALID) {
             should_create = true; // All valid entities
         } else if (env->control_mode == CONTROL_VEHICLES) {

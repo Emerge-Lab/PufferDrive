@@ -59,6 +59,10 @@ class Drive(pufferlib.PufferEnv):
         # the FOV gate of active_agent_indices[observe_agent_idx] each step,
         # plus that agent's goal point and route.
         observe_agent_idx=-1,
+        # Only meaningful under control_sdc_only. When False, suppresses the
+        # recorded non-controlled traffic so the SDC drives alone with its
+        # recorded route. Defaults to True (standard log-replay).
+        replay_traffic_enabled=True,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -152,6 +156,7 @@ class Drive(pufferlib.PufferEnv):
         self.traffic_light_behavior = traffic_light_behavior
         self.capture_compact_replay = bool(capture_compact_replay)
         self.observe_agent_idx = int(observe_agent_idx)
+        self.replay_traffic_enabled = bool(replay_traffic_enabled)
         # capture_compact_replay implies emit_completed_episodes, since the
         # bundle rides on the per-episode summary.
         self.emit_completed_episodes = bool(emit_completed_episodes) or self.capture_compact_replay
@@ -386,6 +391,7 @@ class Drive(pufferlib.PufferEnv):
             "traffic_light_behavior": self.traffic_light_behavior,
             "emit_completed_episodes": int(self.emit_completed_episodes),
             "observe_agent_idx": int(self.observe_agent_idx),
+            "replay_traffic_enabled": int(self.replay_traffic_enabled),
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,
