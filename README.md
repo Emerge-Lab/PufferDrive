@@ -132,8 +132,23 @@ Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
 | `num_episodes` | `100` | Total episodes to roll out |
 | `num_failures` | `20` | Bottom-K episodes by `avg_distance_per_infraction` (ascending) are flagged as failures and have replays persisted to disk. |
 | `render` | `True` | Render each captured replay to HTML + write `index.html` via `mining_viz` |
+| `observe_agent` | `-1` | Active-slot index of an agent whose FOV-pass set is captured per step. When `>= 0`, each rendered HTML draws the policy's road FOV rectangle + partner FOV circle around that agent and highlights the road segments, partner agents, and traffic controls that passed the gate. `0` picks the first active agent (the SDC under `control_sdc_only`). `-1` disables the overlay. |
 
 `env.*` overrides apply (e.g. `--env.simulation_mode gigaflow` to mine on procedural scenarios). Single vec env, sequential rollout — no per-worker map pinning yet.
+
+### Observation overlay
+
+When `--mine.observe-agent N` is set (where `N` is an active-agent slot index), each replay HTML gains a togglable layer showing what the policy could observe at every step:
+
+- A blue, agent-heading-aligned rectangle for the road FOV (`road_obs_front_dist` ahead, `road_obs_behind_dist` behind, `road_obs_side_dist` to each side).
+- A red circle for the partner FOV (`agent_obs_max_dist`).
+- Thicker blue strokes on road segments whose midpoint fell in the road FOV.
+- Red outlines on partner agents within the partner FOV.
+- Yellow rings on traffic controls whose stop-line midpoint fell in range.
+- Dashed green polylines for the observed agent's goal route + a green diamond at the goal point.
+- A green outline on the observed agent itself.
+
+The "Hide Observations" button in the viewer toggles the layer. The visible-segment set is captured inside the C engine's `compute_observations` so the overlay can't drift from the policy's actual FOV gates (3D partner distance, `is_blind_partner` zero-out, etc.).
 
 **Output structure** (under `output_dir`):
 
@@ -145,6 +160,25 @@ renders/index.html           # sortable index of all episodes
 ```
 
 Open `renders/index.html` in a browser to triage. The index page filters by "failures only" / "replays only" and sorts by any metric column. Each row links to the per-episode viewer with the scene's full 2D animation.
+
+### Example: nuplan with the obs overlay
+
+```bash
+puffer mine_failures puffer_drive \
+    --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
+    --mine.output-dir ./failure_mining/nuplan_xxxx \
+    --mine.num-episodes 50 \
+    --mine.num-failures 15 \
+    --mine.observe-agent 0 \
+    --env.map-dir /path/to/nuplan_bins \
+    --env.num-maps 50 \
+    --env.simulation-mode replay \
+    --env.control-mode control_sdc_only \
+    --env.init-mode create_all_valid \
+    --env.scenario-length 201
+```
+
+Under `control_sdc_only` the SDC is the only controlled agent per scenario, so slot `0` is the ego car everywhere. Ranking by `avg_distance_per_infraction` then surfaces episodes where the SDC crashed early relative to how far it drove.
 
 ## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
