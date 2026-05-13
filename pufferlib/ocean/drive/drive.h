@@ -180,6 +180,23 @@ typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
 typedef struct Agent Agent;
+typedef struct CompletedEpisodeSummary CompletedEpisodeSummary;
+
+#define COMPLETED_EPISODE_QUEUE_CAPACITY 16
+
+struct CompletedEpisodeSummary {
+    float episode_length;
+    float episode_return;
+    float collision_rate;
+    float offroad_rate;
+    float red_light_violation_rate;
+    float num_goals_reached;
+    float score;
+    float total_distance_travelled;
+    float total_infractions;
+    float n;
+    int episode_index;
+};
 typedef struct RoadMapElement RoadMapElement;
 typedef struct TrafficControlElement TrafficControlElement;
 
@@ -368,6 +385,10 @@ struct Drive {
     float road_obs_front_dist;
     float road_obs_behind_dist;
     float road_obs_side_dist;
+    int emit_completed_episodes;
+    int next_episode_index;
+    int completed_episodes_count;
+    CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
 };
 
 // ========================================
@@ -2656,6 +2677,54 @@ static void add_log(Drive *env) {
     // Log composition counts per agent so vec_log averaging recovers the per-env value
     env->log.expert_static_car_count += env->expert_static_agent_count;
     env->log.static_car_count += env->static_agent_count;
+
+    if (env->emit_completed_episodes && env->completed_episodes_count < COMPLETED_EPISODE_QUEUE_CAPACITY) {
+        // Snapshot per-episode aggregates from env->logs[] before c_reset
+        // zeros them. The agent loop above mirrors the same per-agent sums,
+        // so we re-aggregate here for the per-episode summary (env->log
+        // itself is cumulative across episodes within a vec_log interval,
+        // so we can't snapshot it directly).
+        CompletedEpisodeSummary *s = &env->completed_episodes[env->completed_episodes_count++];
+        s->episode_length = 0.0f;
+        s->episode_return = 0.0f;
+        s->collision_rate = 0.0f;
+        s->offroad_rate = 0.0f;
+        s->red_light_violation_rate = 0.0f;
+        s->num_goals_reached = 0.0f;
+        s->score = 0.0f;
+        s->total_distance_travelled = 0.0f;
+        s->total_infractions = 0.0f;
+        s->n = (float)env->active_agent_count;
+        s->episode_index = env->next_episode_index++;
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent_i = &env->agents[env->active_agent_indices[i]];
+            int collided = env->logs[i].collision_rate;
+            int offroad = env->logs[i].offroad_rate;
+            int red_light = env->logs[i].red_light_violation_rate;
+            int num_goals = env->logs[i].num_goals_reached;
+            s->episode_length += env->logs[i].episode_length;
+            s->episode_return += env->logs[i].episode_return;
+            s->collision_rate += collided;
+            s->offroad_rate += offroad;
+            s->red_light_violation_rate += red_light;
+            s->num_goals_reached += num_goals;
+            if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped)
+                s->score += 1.0f;
+            s->total_distance_travelled += agent_i->distance_since_spawn;
+            if (collided || offroad || red_light)
+                s->total_infractions += 1.0f;
+        }
+    }
+}
+
+static int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *out) {
+    if (env->completed_episodes_count == 0)
+        return 0;
+    *out = env->completed_episodes[0];
+    for (int i = 1; i < env->completed_episodes_count; i++)
+        env->completed_episodes[i - 1] = env->completed_episodes[i];
+    env->completed_episodes_count--;
+    return 1;
 }
 
 // ========================================

@@ -216,3 +216,4 @@ docs/
 
 # Claude config
 .claude/
+CLAUDE.local.md

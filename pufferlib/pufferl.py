@@ -1564,6 +1564,139 @@ def eval(
     return result.metrics
 
 
+def mine_failures(env_name, args=None):
+    """Roll out a trained policy against a fixed scenario suite, capture per-
+    episode compact replays + summaries, and produce a sortable HTML index.
+
+    Config keys (under `mine.` or via CLI flags):
+      - mine.output_dir (default: f"./failure_mining/{env_name}")
+      - mine.num_episodes (default: 100)
+      - mine.score_threshold (default: -inf, i.e. capture every episode;
+        episodes with `episode_return` strictly below this threshold are
+        flagged as failures and have their replay bundle written to disk)
+      - mine.render (default: True; render each captured replay to HTML and
+        write a top-level index.html via mining_viz)
+
+    Other args reused from training/eval: load_model_path, env.*, policy_name,
+    train.device, vec.* (only num_envs is meaningful here; mining always uses
+    a single vec env).
+    """
+    import csv
+    import pandas as pd
+
+    from pufferlib import mining_viz
+
+    args = args or load_config(env_name)
+    mine_cfg = args.get("mine") or {}
+    output_dir = mine_cfg.get("output_dir") or f"./failure_mining/{env_name}"
+    num_episodes = int(mine_cfg.get("num_episodes", 100))
+    score_threshold = float(mine_cfg.get("score_threshold", float("-inf")))
+    do_render = bool(mine_cfg.get("render", True))
+
+    env_kwargs = dict(args["env"])
+    env_kwargs["capture_compact_replay"] = True
+    env_kwargs["emit_completed_episodes"] = True
+    env_kwargs["eval_mode"] = env_kwargs.get("eval_mode", 1)
+    env_kwargs["resample_frequency"] = 0
+    # Mining is sequential: one vec env, walk episodes one batch at a time.
+    vec_kwargs = dict(args["vec"])
+    vec_kwargs.setdefault("num_envs", 1)
+    vec_kwargs.setdefault("num_workers", 1)
+    vec_kwargs.setdefault("batch_size", vec_kwargs["num_envs"])
+
+    package = args["package"]
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    env_module = importlib.import_module(module_name)
+    make_env = env_module.env_creator(env_name)
+    vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **vec_kwargs)
+
+    policy = load_policy({**args, "env": env_kwargs}, vecenv, env_name)
+    policy.eval()
+
+    device = args["train"]["device"]
+    if isinstance(device, int):
+        device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
+
+    replay_dir = os.path.join(output_dir, "replays")
+    render_dir = os.path.join(output_dir, "renders") if do_render else None
+    os.makedirs(replay_dir, exist_ok=True)
+    if render_dir is not None:
+        os.makedirs(render_dir, exist_ok=True)
+
+    rows = []
+    next_episode_id = 0
+    seed = args.get("train", {}).get("seed") or 0
+    if hasattr(vecenv, "async_reset"):
+        vecenv.async_reset(seed=seed)
+    obs_arr, *_ = vecenv.recv()
+    pbar_total = num_episodes
+    pbar_done = 0
+    print(f"[mine_failures] target episodes={num_episodes} output={output_dir} score_threshold={score_threshold}")
+    while pbar_done < num_episodes:
+        with torch.no_grad():
+            o_t = torch.as_tensor(obs_arr).to(device)
+            state = {"reward": None, "done": None, "env_id": None, "mask": None}
+            logits, _ = policy.forward_eval(o_t, state)
+            action, _, _ = pufferlib.pytorch.sample_logits(logits)
+            action = action.cpu().numpy()
+            if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
+                action = action.reshape(-1, *vecenv.single_action_space.shape)
+        vecenv.send(action)
+        obs_arr, _, _, _, infos, *_ = vecenv.recv()
+        for info in infos:
+            if not isinstance(info, dict):
+                continue
+            if info.get("summary_type") != "completed_episode":
+                continue
+            episode_id = next_episode_id
+            next_episode_id += 1
+            bundle_bytes = info.pop("compact_replay_bundle", None)
+            row = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in info.items()}
+            row["episode_id"] = episode_id
+            row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
+                1.0, float(row.get("total_infractions", 0.0))
+            )
+            row["failed"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
+            row["has_replay"] = 0
+            row["replay_path"] = None
+            if bundle_bytes is not None and row["failed"]:
+                replay_path = os.path.join(replay_dir, f"episode_{episode_id:06d}.replay.zlib")
+                with open(replay_path, "wb") as f:
+                    f.write(bundle_bytes)
+                row["has_replay"] = 1
+                row["replay_path"] = replay_path
+            rows.append(row)
+            pbar_done += 1
+            if pbar_done >= num_episodes:
+                break
+
+    vecenv.close()
+
+    episodes_df = pd.DataFrame(rows)
+    csv_path = os.path.join(output_dir, "episodes.csv")
+    episodes_df.to_csv(csv_path, index=False)
+    print(
+        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, {int(episodes_df['failed'].sum())} failures captured)"
+    )
+
+    if do_render and render_dir is not None:
+        render_lookup = {}
+        rendered = 0
+        for row in rows:
+            if not row.get("has_replay"):
+                continue
+            ep_id = int(row["episode_id"])
+            out_html = os.path.join(render_dir, f"episode_{ep_id:06d}.html")
+            mining_viz.render_compact_replay_html(row["replay_path"], out_html, render_context={"summary": row})
+            render_lookup[ep_id] = os.path.relpath(out_html, render_dir)
+            rendered += 1
+        index_path = os.path.join(render_dir, "index.html")
+        mining_viz.generate_failure_index(episodes_df, render_lookup, index_path)
+        print(f"[mine_failures] rendered {rendered} replays + index at {index_path}")
+
+    return episodes_df
+
+
 def sweep(args=None, env_name=None):
     args = args or load_config(env_name)
     if not args["wandb"] and not args["neptune"] and not args["tb"]:
@@ -1879,7 +2012,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, mine_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1932,6 +2065,8 @@ def main():
         profile(env_name=env_name)
     elif mode == "export":
         export(env_name=env_name)
+    elif mode in ("mine_failures", "mine-failures"):
+        mine_failures(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 
