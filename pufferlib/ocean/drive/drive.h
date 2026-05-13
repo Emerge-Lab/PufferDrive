@@ -3761,8 +3761,9 @@ static void compute_metrics(Drive *env, int agent_idx) {
         compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
 
-    // Goal reaching
-    if (distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+    // Goal reaching — guard against incrementing past num_target_waypoints
+    if (agent->current_goal_idx < env->num_target_waypoints &&
+        distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent->current_goal_idx++;
     }
@@ -4747,20 +4748,26 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
-            int last = agent->trajectory_length - 1;
-            float gx = agent->log_trajectory_x[last];
-            float gy = agent->log_trajectory_y[last];
-            float gz = agent->log_trajectory_z[last];
-            for (int g = 0; g < env->num_target_waypoints && g < MAX_TARGET_WAYPOINTS; g++) {
-                agent->goal_positions_x[g] = gx;
-                agent->goal_positions_y[g] = gy;
-                agent->goal_positions_z[g] = gz;
+        if (env->simulation_mode == SIMULATION_REPLAY) {
+            int start = env->init_steps > 0 ? env->init_steps : 0;
+            int remaining = agent->trajectory_length - 1 - start;
+            if (remaining < 1)
+                remaining = 1;
+            int num_wp = env->num_target_waypoints;
+            if (num_wp > MAX_TARGET_WAYPOINTS)
+                num_wp = MAX_TARGET_WAYPOINTS;
+            for (int g = 0; g < num_wp; g++) {
+                int t = start + (g + 1) * remaining / num_wp;
+                if (t >= agent->trajectory_length)
+                    t = agent->trajectory_length - 1;
+                agent->goal_positions_x[g] = agent->log_trajectory_x[t];
+                agent->goal_positions_y[g] = agent->log_trajectory_y[t];
+                agent->goal_positions_z[g] = agent->log_trajectory_z[t];
             }
             agent->current_goal_idx = 0;
-            agent->goal_position_x = gx;
-            agent->goal_position_y = gy;
-            agent->goal_position_z = gz;
+            agent->goal_position_x = agent->goal_positions_x[0];
+            agent->goal_position_y = agent->goal_positions_y[0];
+            agent->goal_position_z = agent->goal_positions_z[0];
         } else {
             // REPLAY-with-route: agent->route is loaded from the bin but
             // agent->path is still NULL — interpolate waypoints along the route
