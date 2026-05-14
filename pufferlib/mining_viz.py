@@ -77,20 +77,22 @@ def _materialize_agent_frames(replay_bundle):
         frame = []
         frame_valid = valid[frame_idx]
         for slot_idx in np.flatnonzero(frame_valid):
-            frame.append(
-                {
-                    "id": int(agent_arrays["id"][frame_idx, slot_idx]),
-                    "type": int(agent_arrays["type"][frame_idx, slot_idx]),
-                    "active": bool(agent_arrays["active"][frame_idx, slot_idx]),
-                    "stopped": bool(agent_arrays["stopped"][frame_idx, slot_idx]),
-                    "x": float(agent_arrays["x"][frame_idx, slot_idx]),
-                    "y": float(agent_arrays["y"][frame_idx, slot_idx]),
-                    "z": float(agent_arrays["z"][frame_idx, slot_idx]),
-                    "heading": float(agent_arrays["heading"][frame_idx, slot_idx]),
-                    "length": float(agent_arrays["length"][frame_idx, slot_idx]),
-                    "width": float(agent_arrays["width"][frame_idx, slot_idx]),
-                }
-            )
+            entry = {
+                "id": int(agent_arrays["id"][frame_idx, slot_idx]),
+                "type": int(agent_arrays["type"][frame_idx, slot_idx]),
+                "active": bool(agent_arrays["active"][frame_idx, slot_idx]),
+                "stopped": bool(agent_arrays["stopped"][frame_idx, slot_idx]),
+                "x": float(agent_arrays["x"][frame_idx, slot_idx]),
+                "y": float(agent_arrays["y"][frame_idx, slot_idx]),
+                "z": float(agent_arrays["z"][frame_idx, slot_idx]),
+                "heading": float(agent_arrays["heading"][frame_idx, slot_idx]),
+                "length": float(agent_arrays["length"][frame_idx, slot_idx]),
+                "width": float(agent_arrays["width"][frame_idx, slot_idx]),
+            }
+            if "goal_x" in agent_arrays:
+                entry["goal_x"] = float(agent_arrays["goal_x"][frame_idx, slot_idx])
+                entry["goal_y"] = float(agent_arrays["goal_y"][frame_idx, slot_idx])
+            frame.append(entry)
         frames.append(frame)
     return frames
 
@@ -670,8 +672,7 @@ HTML_TEMPLATE = """<!doctype html>
       const length = Math.max(agent.length * scale, 6);
       const width = Math.max(agent.width * scale, 4);
       const heading = Number(agent.heading || 0);
-      let fill = '#2a7fff';
-      else if (!agent.active) fill = '#95a5a6';
+      let fill = agent.active ? '#2a7fff' : '#95a5a6';
       if (agent.stopped) fill = '#f39c12';
 
       ctx.save();
@@ -692,6 +693,17 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fill();
       ctx.restore();
+
+      if (agent.active && agent.goal_x != null) {
+        const goal = worldToCanvas(agent.goal_x, agent.goal_y);
+        ctx.beginPath();
+        ctx.arc(goal.x, goal.y, Math.max(5, 4 * center.scale), 0, Math.PI * 2);
+        ctx.strokeStyle = '#2a7fff';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.8;
+        ctx.stroke();
+        ctx.globalAlpha = 1.0;
+      }
 
       hitAgents.push({
         agent,

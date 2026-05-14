@@ -238,6 +238,10 @@ class EvalManager:
         if ev_eval:
             args.setdefault("eval", {})
             args["eval"].update(ev_eval)
+        # Forward top-level render config so _render_pass can read it.
+        for key in ("render_backend", "render_results_dir", "eval_results_dir"):
+            if key in ev.config:
+                args[key] = ev.config[key]
         return args
 
     def _log(self, ev: Evaluator, result: EvalResult, logger, global_step):

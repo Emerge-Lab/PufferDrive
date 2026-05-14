@@ -676,6 +676,8 @@ class Drive(pufferlib.PufferEnv):
                     "heading",
                     "length",
                     "width",
+                    "goal_x",
+                    "goal_y",
                 )
             },
             "traffic_frames": {k: [] for k in ("valid", "type", "state", "stop_line")},
@@ -697,6 +699,8 @@ class Drive(pufferlib.PufferEnv):
         heading = np.zeros(capacity, dtype=np.float32)
         length = np.zeros(capacity, dtype=np.float32)
         width = np.zeros(capacity, dtype=np.float32)
+        goal_x = np.zeros(capacity, dtype=np.float32)
+        goal_y = np.zeros(capacity, dtype=np.float32)
         active_indices = set(scenario.get("active_agent_indices") or [])
         for idx, agent in enumerate(scenario.get("agents") or []):
             if idx >= capacity:
@@ -714,6 +718,8 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
+            goal_x[idx] = np.float32(agent.get("goal_position_x", 0.0))
+            goal_y[idx] = np.float32(agent.get("goal_position_y", 0.0))
         return {
             "valid": valid,
             "id": agent_id,
@@ -726,6 +732,8 @@ class Drive(pufferlib.PufferEnv):
             "heading": heading,
             "length": length,
             "width": width,
+            "goal_x": goal_x,
+            "goal_y": goal_y,
         }
 
     def _extract_compact_traffic_frame(self, scenario, timestep, capacity):
