@@ -271,6 +271,25 @@ struct GridMap {
     int num_drivable_grid_cell;
 };
 
+typedef struct DriveMap DriveMap;
+struct DriveMap {
+    char *map_name;
+    RoadMapElement *road_elements;
+    GridMap *grid_map;
+    struct LaneGraph lane_graph;
+    int num_road_elements;
+    int num_objects;
+};
+
+typedef struct DriveMapCache DriveMapCache;
+struct DriveMapCache {
+    DriveMap **maps;
+    int count;
+    int capacity;
+    int cache_hits;
+    int cache_misses;
+};
+
 typedef struct {
     float collision;
     float offroad;
@@ -300,6 +319,9 @@ struct Drive {
     Agent *agents;
     RoadMapElement *road_elements;
     TrafficControlElement *traffic_elements;
+    DriveMap *shared_map;
+    int owns_map_data;
+    int owns_traffic_data;
     int num_road_elements;
     int num_traffic_elements;
     int num_objects;
