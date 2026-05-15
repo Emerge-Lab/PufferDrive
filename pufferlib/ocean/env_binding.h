@@ -1010,98 +1010,6 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_map_debug(PyObject *self, PyObject *args) {
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-
-    PyObject *list = PyList_New(vec->num_envs);
-    if (!list) {
-        return NULL;
-    }
-
-    for (int i = 0; i < vec->num_envs; i++) {
-        Env *env = vec->envs[i];
-        PyObject *dict = PyDict_New();
-        if (!dict) {
-            Py_DECREF(list);
-            return NULL;
-        }
-
-        PyObject *v = PyLong_FromVoidPtr(env->shared_map);
-        if (!v || PyDict_SetItemString(dict, "shared_map_ptr", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        v = PyLong_FromVoidPtr(env->road_elements);
-        if (!v || PyDict_SetItemString(dict, "road_elements_ptr", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        v = PyLong_FromVoidPtr(env->grid_map);
-        if (!v || PyDict_SetItemString(dict, "grid_map_ptr", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        v = PyLong_FromVoidPtr(env->traffic_elements);
-        if (!v || PyDict_SetItemString(dict, "traffic_elements_ptr", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        v = PyLong_FromLong(env->owns_map_data);
-        if (!v || PyDict_SetItemString(dict, "owns_map_data", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        v = PyLong_FromLong(env->owns_traffic_data);
-        if (!v || PyDict_SetItemString(dict, "owns_traffic_data", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        if (env->map_name) {
-            v = PyUnicode_FromString(env->map_name);
-        } else {
-            v = Py_NewRef(Py_None);
-        }
-        if (!v || PyDict_SetItemString(dict, "map_name", v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            Py_DECREF(list);
-            return NULL;
-        }
-        Py_DECREF(v);
-
-        PyList_SetItem(list, i, dict);
-    }
-
-    return list;
-}
-
 static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
@@ -1443,7 +1351,6 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
-    {"vec_map_debug", vec_map_debug, METH_VARARGS, "Get map sharing debug data from each env"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
