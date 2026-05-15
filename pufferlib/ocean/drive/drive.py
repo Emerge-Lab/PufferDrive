@@ -493,10 +493,13 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
+        self._map_cache = binding.map_cache_init()
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
+            init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
+            init_kwargs["map_cache_handle"] = self._map_cache
             env_id = binding.env_init(
                 self.observations[cur:nxt],
                 self.actions[cur:nxt],
@@ -505,7 +508,7 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[cur:nxt],
                 self.masks[cur:nxt],
                 self.random_seed,
-                **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                **init_kwargs,
             )
             env_ids.append(env_id)
 
@@ -1020,6 +1023,8 @@ class Drive(pufferlib.PufferEnv):
                 if self.current_num_eval_scenarios == 0:
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
                 binding.vec_close(self.c_envs)
+                binding.map_cache_close(self._map_cache)
+                self._map_cache = binding.map_cache_init()
                 self._replay_batch_start = self.starting_map_counter
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
@@ -1046,6 +1051,8 @@ class Drive(pufferlib.PufferEnv):
                 for i in range(num_envs):
                     cur = agent_offsets[i]
                     nxt = agent_offsets[i + 1]
+                    init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
+                    init_kwargs["map_cache_handle"] = self._map_cache
                     env_id = binding.env_init(
                         self.observations[cur:nxt],
                         self.actions[cur:nxt],
@@ -1054,7 +1061,7 @@ class Drive(pufferlib.PufferEnv):
                         self.truncations[cur:nxt],
                         self.masks[cur:nxt],
                         self.random_seed,
-                        **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                        **init_kwargs,
                     )
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
@@ -1165,7 +1172,12 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_render(self.c_envs, 0)
 
     def close(self):
-        binding.vec_close(self.c_envs)
+        if getattr(self, "c_envs", None) is not None:
+            binding.vec_close(self.c_envs)
+            self.c_envs = None
+        if getattr(self, "_map_cache", None) is not None:
+            binding.map_cache_close(self._map_cache)
+            self._map_cache = None
 
     def get_state(self):
         try:

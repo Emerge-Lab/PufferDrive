@@ -290,6 +290,20 @@ struct DriveMapCache {
     int cache_misses;
 };
 
+static DriveMapCache *drive_map_cache_create(void) {
+    DriveMapCache *cache = (DriveMapCache *)calloc(1, sizeof(DriveMapCache));
+    return cache;
+}
+
+static void drive_map_cache_close(DriveMapCache *cache) {
+    if (cache == NULL) {
+        return;
+    }
+
+    free(cache->maps);
+    free(cache);
+}
+
 typedef struct {
     float collision;
     float offroad;
@@ -320,6 +334,7 @@ struct Drive {
     RoadMapElement *road_elements;
     TrafficControlElement *traffic_elements;
     DriveMap *shared_map;
+    DriveMapCache *map_cache;
     int owns_map_data;
     int owns_traffic_data;
     int num_road_elements;

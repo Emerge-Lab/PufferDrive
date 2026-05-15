@@ -1835,6 +1835,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
+    PyObject *map_cache_handle = PyDict_GetItemString(kwargs, "map_cache_handle");
+    if (map_cache_handle && map_cache_handle != Py_None) {
+        if (!PyObject_TypeCheck(map_cache_handle, &PyLong_Type)) {
+            PyErr_SetString(PyExc_TypeError, "map_cache_handle must be an integer");
+            return 1;
+        }
+        env->map_cache = (DriveMapCache *)PyLong_AsVoidPtr(map_cache_handle);
+    }
+
     env->action_type = (int)unpack(kwargs, "action_type");
     env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
     env->reward_goal = (float)unpack(kwargs, "reward_goal");

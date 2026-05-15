@@ -267,6 +267,38 @@ static PyObject *env_put(PyObject *self, PyObject *args, PyObject *kwargs) {
     Py_RETURN_NONE;
 }
 
+static PyObject *map_cache_init(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 0) {
+        PyErr_SetString(PyExc_TypeError, "map_cache_init requires 0 arguments");
+        return NULL;
+    }
+
+    DriveMapCache *cache = drive_map_cache_create();
+    if (!cache) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate map cache");
+        return NULL;
+    }
+
+    return PyLong_FromVoidPtr(cache);
+}
+
+static PyObject *map_cache_close(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "map_cache_close requires 1 argument");
+        return NULL;
+    }
+
+    PyObject *handle_obj = PyTuple_GetItem(args, 0);
+    if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "map_cache_handle must be an integer");
+        return NULL;
+    }
+
+    DriveMapCache *cache = (DriveMapCache *)PyLong_AsVoidPtr(handle_obj);
+    drive_map_cache_close(cache);
+    Py_RETURN_NONE;
+}
+
 typedef struct {
     Env **envs;
     int num_envs;
@@ -1246,6 +1278,8 @@ static PyMethodDef methods[] = {
     {"env_close", env_close, METH_VARARGS, "Close the environment"},
     {"env_get", env_get, METH_VARARGS, "Get the environment state"},
     {"env_put", (PyCFunction)env_put, METH_VARARGS | METH_KEYWORDS, "Put stuff into env"},
+    {"map_cache_init", map_cache_init, METH_VARARGS, "Initialize a shared map cache"},
+    {"map_cache_close", map_cache_close, METH_VARARGS, "Close a shared map cache"},
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
