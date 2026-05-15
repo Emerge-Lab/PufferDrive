@@ -225,6 +225,7 @@ class Drive(pufferlib.PufferEnv):
         capture_compact_replay=False,
         capture_compact_replay_failures_only=True,
         emit_completed_episodes=False,
+        enable_map_cache=True,
     ):
         self.dt = dt
         self.pdm_horizon = float(pdm_horizon)
@@ -349,6 +350,7 @@ class Drive(pufferlib.PufferEnv):
         self.capture_compact_replay = bool(capture_compact_replay)
         self.capture_compact_replay_failures_only = bool(capture_compact_replay_failures_only)
         self.emit_completed_episodes = bool(emit_completed_episodes)
+        self.enable_map_cache = bool(enable_map_cache)
         self._replay_buffers = []
         self._compact_replay_buffers = []
         self._replay_batch_start = starting_map
@@ -493,13 +495,14 @@ class Drive(pufferlib.PufferEnv):
         self.map_ids = map_ids
         self.num_envs = num_envs
         super().__init__(buf=buf)
-        self._map_cache = binding.map_cache_init()
+        self._map_cache = binding.map_cache_init() if self.enable_map_cache else None
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
             init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
-            init_kwargs["map_cache_handle"] = self._map_cache
+            if self._map_cache is not None:
+                init_kwargs["map_cache_handle"] = self._map_cache
             env_id = binding.env_init(
                 self.observations[cur:nxt],
                 self.actions[cur:nxt],
@@ -1023,8 +1026,9 @@ class Drive(pufferlib.PufferEnv):
                 if self.current_num_eval_scenarios == 0:
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
                 binding.vec_close(self.c_envs)
-                binding.map_cache_close(self._map_cache)
-                self._map_cache = binding.map_cache_init()
+                if self._map_cache is not None:
+                    binding.map_cache_close(self._map_cache)
+                self._map_cache = binding.map_cache_init() if self.enable_map_cache else None
                 self._replay_batch_start = self.starting_map_counter
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
@@ -1052,7 +1056,8 @@ class Drive(pufferlib.PufferEnv):
                     cur = agent_offsets[i]
                     nxt = agent_offsets[i + 1]
                     init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
-                    init_kwargs["map_cache_handle"] = self._map_cache
+                    if self._map_cache is not None:
+                        init_kwargs["map_cache_handle"] = self._map_cache
                     env_id = binding.env_init(
                         self.observations[cur:nxt],
                         self.actions[cur:nxt],

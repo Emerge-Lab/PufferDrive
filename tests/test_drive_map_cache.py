@@ -56,6 +56,8 @@ def test_replay_does_not_use_shared_map_cache():
     try:
         env = Drive(
             num_agents=4,
+            min_agents_per_env=1,
+            max_agents_per_env=4,
             num_maps=1,
             map_dir=REPLAY_MAP_DIR,
             simulation_mode="replay",
