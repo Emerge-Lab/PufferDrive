@@ -275,11 +275,15 @@ typedef struct DriveMap DriveMap;
 struct DriveMap {
     char *map_name;
     RoadMapElement *road_elements;
+    TrafficControlElement *traffic_elements;
     GridMap *grid_map;
     struct LaneGraph lane_graph;
     int num_road_elements;
+    int num_traffic_elements;
     int num_objects;
 };
+
+static void free_drive_map(DriveMap *map);
 
 typedef struct DriveMapCache DriveMapCache;
 struct DriveMapCache {
@@ -300,6 +304,9 @@ static void drive_map_cache_close(DriveMapCache *cache) {
         return;
     }
 
+    for (int i = 0; i < cache->count; i++) {
+        free_drive_map(cache->maps[i]);
+    }
     free(cache->maps);
     free(cache);
 }
@@ -3959,6 +3966,172 @@ static void free_grid_map(GridMap *grid_map) {
     free(grid_map);
 }
 
+static void free_drive_map(DriveMap *map) {
+    if (map == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < map->num_road_elements; i++)
+        free_road_element(&map->road_elements[i]);
+    for (int i = 0; i < map->num_traffic_elements; i++)
+        free_traffic_element(&map->traffic_elements[i]);
+    free(map->road_elements);
+    free(map->traffic_elements);
+    free_grid_map(map->grid_map);
+    free_lane_graph(&map->lane_graph);
+    free(map->map_name);
+    free(map);
+}
+
+static TrafficControlElement *clone_traffic_elements(const TrafficControlElement *src, int count) {
+    if (src == NULL || count <= 0) {
+        return NULL;
+    }
+
+    TrafficControlElement *dst = (TrafficControlElement *)calloc(count, sizeof(TrafficControlElement));
+    if (dst == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < count; i++) {
+        dst[i] = src[i];
+        dst[i].states = NULL;
+        dst[i].controlled_lanes = NULL;
+
+        if (src[i].state_length > 0 && src[i].states != NULL) {
+            dst[i].states = (int *)malloc(src[i].state_length * sizeof(int));
+            if (dst[i].states == NULL) {
+                for (int j = 0; j < i; j++)
+                    free_traffic_element(&dst[j]);
+                free(dst);
+                return NULL;
+            }
+            memcpy(dst[i].states, src[i].states, src[i].state_length * sizeof(int));
+        }
+
+        if (src[i].num_controlled_lanes > 0 && src[i].controlled_lanes != NULL) {
+            dst[i].controlled_lanes = (int *)malloc(src[i].num_controlled_lanes * sizeof(int));
+            if (dst[i].controlled_lanes == NULL) {
+                for (int j = 0; j <= i; j++)
+                    free_traffic_element(&dst[j]);
+                free(dst);
+                return NULL;
+            }
+            memcpy(dst[i].controlled_lanes, src[i].controlled_lanes, src[i].num_controlled_lanes * sizeof(int));
+        }
+    }
+
+    return dst;
+}
+
+static DriveMap *drive_map_cache_find(DriveMapCache *cache, const char *map_name) {
+    if (cache == NULL || map_name == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < cache->count; i++) {
+        if (cache->maps[i] && cache->maps[i]->map_name && strcmp(cache->maps[i]->map_name, map_name) == 0) {
+            cache->cache_hits++;
+            return cache->maps[i];
+        }
+    }
+
+    return NULL;
+}
+
+static int drive_map_cache_append(DriveMapCache *cache, DriveMap *map) {
+    if (cache->count == cache->capacity) {
+        int new_capacity = cache->capacity == 0 ? 8 : cache->capacity * 2;
+        DriveMap **new_maps = (DriveMap **)realloc(cache->maps, new_capacity * sizeof(DriveMap *));
+        if (new_maps == NULL) {
+            return 0;
+        }
+        cache->maps = new_maps;
+        cache->capacity = new_capacity;
+    }
+
+    cache->maps[cache->count++] = map;
+    return 1;
+}
+
+static void free_loaded_agents(Drive *env) {
+    for (int i = 0; i < env->num_total_agents; i++)
+        free_agent(&env->agents[i]);
+    free(env->agents);
+}
+
+static DriveMap *drive_map_cache_load(DriveMapCache *cache, const char *map_name, Drive *env) {
+    Drive temp = {0};
+    temp.map_name = (char *)map_name;
+    temp.road_obs_front_dist = env->road_obs_front_dist;
+    temp.road_obs_behind_dist = env->road_obs_behind_dist;
+    temp.road_obs_side_dist = env->road_obs_side_dist;
+    temp.max_lane_segment_observations = env->max_lane_segment_observations;
+    temp.max_boundary_segment_observations = env->max_boundary_segment_observations;
+    temp.obs_lane_segment_count = env->obs_lane_segment_count;
+    temp.obs_boundary_segment_count = env->obs_boundary_segment_count;
+
+    if (load_map_binary(map_name, &temp) != 0) {
+        return NULL;
+    }
+
+    temp.road_dropout_enabled = (temp.obs_lane_segment_count < temp.max_lane_segment_observations) ||
+                                (temp.obs_boundary_segment_count < temp.max_boundary_segment_observations);
+    init_grid_map(&temp);
+    int vision_half_range = (int)ceilf(
+        fmaxf(fmaxf(temp.road_obs_front_dist, temp.road_obs_behind_dist), temp.road_obs_side_dist) / GRID_CELL_SIZE);
+    temp.grid_map->vision_range = 2 * vision_half_range + 1;
+    init_neighbor_offsets(&temp);
+    cache_neighbor_offsets(&temp);
+
+    DriveMap *map = (DriveMap *)calloc(1, sizeof(DriveMap));
+    if (map == NULL) {
+        free_loaded_agents(&temp);
+        for (int i = 0; i < temp.num_road_elements; i++)
+            free_road_element(&temp.road_elements[i]);
+        for (int i = 0; i < temp.num_traffic_elements; i++)
+            free_traffic_element(&temp.traffic_elements[i]);
+        free(temp.road_elements);
+        free(temp.traffic_elements);
+        free_grid_map(temp.grid_map);
+        free(temp.neighbor_offsets);
+        free_lane_graph(&temp.lane_graph);
+        free(temp.objects_of_interest);
+        free(temp.tracks_to_predict);
+        return NULL;
+    }
+
+    map->map_name = strdup(map_name);
+    map->road_elements = temp.road_elements;
+    map->traffic_elements = temp.traffic_elements;
+    map->grid_map = temp.grid_map;
+    map->lane_graph = temp.lane_graph;
+    map->num_road_elements = temp.num_road_elements;
+    map->num_traffic_elements = temp.num_traffic_elements;
+    map->num_objects = temp.num_objects;
+
+    free_loaded_agents(&temp);
+    free(temp.neighbor_offsets);
+    free(temp.objects_of_interest);
+    free(temp.tracks_to_predict);
+
+    if (map->map_name == NULL || !drive_map_cache_append(cache, map)) {
+        free_drive_map(map);
+        return NULL;
+    }
+
+    cache->cache_misses++;
+    return map;
+}
+
+static DriveMap *drive_map_cache_get_or_load(DriveMapCache *cache, const char *map_name, Drive *env) {
+    DriveMap *map = drive_map_cache_find(cache, map_name);
+    if (map != NULL) {
+        return map;
+    }
+    return drive_map_cache_load(cache, map_name, env);
+}
+
 static void free_owned_map_data(Drive *env) {
     if (!env->owns_map_data) {
         return;
@@ -3982,10 +4155,42 @@ static void free_owned_traffic_data(Drive *env) {
     free(env->traffic_elements);
 }
 
+static int init_cached_gigaflow_map_data(Drive *env) {
+    DriveMap *map = drive_map_cache_get_or_load(env->map_cache, env->map_name, env);
+    if (map == NULL) {
+        return 0;
+    }
+
+    env->shared_map = map;
+    env->road_elements = map->road_elements;
+    env->grid_map = map->grid_map;
+    env->lane_graph = map->lane_graph;
+    env->num_road_elements = map->num_road_elements;
+    env->num_traffic_elements = map->num_traffic_elements;
+    env->num_objects = map->num_objects;
+    env->traffic_elements = clone_traffic_elements(map->traffic_elements, map->num_traffic_elements);
+    if (map->num_traffic_elements > 0 && env->traffic_elements == NULL) {
+        return 0;
+    }
+
+    env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations) ||
+                                (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
+    env->owns_map_data = 0;
+    env->owns_traffic_data = 1;
+    env->neighbor_offsets = NULL;
+    return 1;
+}
+
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
-    init_owned_map_data(env);
+    if (env->simulation_mode == SIMULATION_GIGAFLOW && env->map_cache != NULL) {
+        if (!init_cached_gigaflow_map_data(env)) {
+            init_owned_map_data(env);
+        }
+    } else {
+        init_owned_map_data(env);
+    }
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
