@@ -299,6 +299,64 @@ static PyObject *map_cache_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *map_cache_stats(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "map_cache_stats requires 1 argument");
+        return NULL;
+    }
+
+    PyObject *handle_obj = PyTuple_GetItem(args, 0);
+    if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "map_cache_handle must be an integer");
+        return NULL;
+    }
+
+    DriveMapCache *cache = (DriveMapCache *)PyLong_AsVoidPtr(handle_obj);
+    if (!cache) {
+        PyErr_SetString(PyExc_ValueError, "Invalid map cache handle");
+        return NULL;
+    }
+
+    PyObject *dict = PyDict_New();
+    if (!dict) {
+        return NULL;
+    }
+
+    PyObject *v = PyLong_FromLong(cache->count);
+    if (!v || PyDict_SetItemString(dict, "count", v) < 0) {
+        Py_XDECREF(v);
+        Py_DECREF(dict);
+        return NULL;
+    }
+    Py_DECREF(v);
+
+    v = PyLong_FromLong(cache->capacity);
+    if (!v || PyDict_SetItemString(dict, "capacity", v) < 0) {
+        Py_XDECREF(v);
+        Py_DECREF(dict);
+        return NULL;
+    }
+    Py_DECREF(v);
+
+    v = PyLong_FromLong(cache->cache_hits);
+    if (!v || PyDict_SetItemString(dict, "cache_hits", v) < 0) {
+        Py_XDECREF(v);
+        Py_DECREF(dict);
+        return NULL;
+    }
+    Py_DECREF(v);
+
+    v = PyLong_FromLong(cache->cache_misses);
+    if (!v || PyDict_SetItemString(dict, "cache_misses", v) < 0) {
+        Py_XDECREF(v);
+        Py_DECREF(dict);
+        return NULL;
+    }
+    Py_DECREF(v);
+
+    return dict;
+}
+
 typedef struct {
     Env **envs;
     int num_envs;
@@ -952,6 +1010,98 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_map_debug(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *list = PyList_New(vec->num_envs);
+    if (!list) {
+        return NULL;
+    }
+
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        PyObject *dict = PyDict_New();
+        if (!dict) {
+            Py_DECREF(list);
+            return NULL;
+        }
+
+        PyObject *v = PyLong_FromVoidPtr(env->shared_map);
+        if (!v || PyDict_SetItemString(dict, "shared_map_ptr", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        v = PyLong_FromVoidPtr(env->road_elements);
+        if (!v || PyDict_SetItemString(dict, "road_elements_ptr", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        v = PyLong_FromVoidPtr(env->grid_map);
+        if (!v || PyDict_SetItemString(dict, "grid_map_ptr", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        v = PyLong_FromVoidPtr(env->traffic_elements);
+        if (!v || PyDict_SetItemString(dict, "traffic_elements_ptr", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        v = PyLong_FromLong(env->owns_map_data);
+        if (!v || PyDict_SetItemString(dict, "owns_map_data", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        v = PyLong_FromLong(env->owns_traffic_data);
+        if (!v || PyDict_SetItemString(dict, "owns_traffic_data", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        if (env->map_name) {
+            v = PyUnicode_FromString(env->map_name);
+        } else {
+            v = Py_NewRef(Py_None);
+        }
+        if (!v || PyDict_SetItemString(dict, "map_name", v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(v);
+
+        PyList_SetItem(list, i, dict);
+    }
+
+    return list;
+}
+
 static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
@@ -1280,6 +1430,7 @@ static PyMethodDef methods[] = {
     {"env_put", (PyCFunction)env_put, METH_VARARGS | METH_KEYWORDS, "Put stuff into env"},
     {"map_cache_init", map_cache_init, METH_VARARGS, "Initialize a shared map cache"},
     {"map_cache_close", map_cache_close, METH_VARARGS, "Close a shared map cache"},
+    {"map_cache_stats", map_cache_stats, METH_VARARGS, "Get shared map cache stats"},
     {"vectorize", vectorize, METH_VARARGS, "Make a vector of environment handles"},
     {"vec_init", (PyCFunction)vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
     {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
@@ -1292,6 +1443,7 @@ static PyMethodDef methods[] = {
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
     {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
+    {"vec_map_debug", vec_map_debug, METH_VARARGS, "Get map sharing debug data from each env"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
     {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
