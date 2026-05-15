@@ -3908,9 +3908,10 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
-void init(Drive *env) {
-    env->human_agent_idx = 0;
-    env->timestep = 0;
+static void init_owned_map_data(Drive *env) {
+    env->shared_map = NULL;
+    env->owns_map_data = 1;
+    env->owns_traffic_data = 1;
     load_map_binary(env->map_name, env);
     env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations) ||
                                 (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
@@ -3920,6 +3921,56 @@ void init(Drive *env) {
     env->grid_map->vision_range = 2 * vision_half_range + 1;
     init_neighbor_offsets(env);
     cache_neighbor_offsets(env);
+}
+
+static void free_grid_map(GridMap *grid_map) {
+    if (grid_map == NULL) {
+        return;
+    }
+
+    int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        free(grid_map->cells[grid_index]);
+    }
+    free(grid_map->cells);
+    free(grid_map->cell_entities_count);
+    free(grid_map->grid_index_drivable);
+
+    for (int i = 0; i < grid_cell_count; i++) {
+        free(grid_map->neighbor_cache_entities[i]);
+    }
+    free(grid_map->neighbor_cache_entities);
+    free(grid_map->neighbor_cache_count);
+    free(grid_map);
+}
+
+static void free_owned_map_data(Drive *env) {
+    if (!env->owns_map_data) {
+        return;
+    }
+
+    for (int i = 0; i < env->num_road_elements; i++)
+        free_road_element(&env->road_elements[i]);
+    free(env->road_elements);
+    free_grid_map(env->grid_map);
+    free(env->neighbor_offsets);
+    free_lane_graph(&env->lane_graph);
+}
+
+static void free_owned_traffic_data(Drive *env) {
+    if (!env->owns_traffic_data) {
+        return;
+    }
+
+    for (int i = 0; i < env->num_traffic_elements; i++)
+        free_traffic_element(&env->traffic_elements[i]);
+    free(env->traffic_elements);
+}
+
+void init(Drive *env) {
+    env->human_agent_idx = 0;
+    env->timestep = 0;
+    init_owned_map_data(env);
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
@@ -3964,36 +4015,15 @@ void init(Drive *env) {
 void c_close(Drive *env) {
     for (int i = 0; i < env->num_total_agents; i++)
         free_agent(&env->agents[i]);
-    for (int i = 0; i < env->num_road_elements; i++)
-        free_road_element(&env->road_elements[i]);
-    for (int i = 0; i < env->num_traffic_elements; i++)
-        free_traffic_element(&env->traffic_elements[i]);
     free(env->agents);
-    free(env->road_elements);
-    free(env->traffic_elements);
     free(env->active_agent_indices);
     free(env->logs);
-    // GridMap cleanup
-    int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(env->grid_map->cells[grid_index]);
-    }
-    free(env->grid_map->cells);
-    free(env->grid_map->cell_entities_count);
-    free(env->grid_map->grid_index_drivable);
-    free(env->neighbor_offsets);
-
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(env->grid_map->neighbor_cache_entities[i]);
-    }
-    free(env->grid_map->neighbor_cache_entities);
-    free(env->grid_map->neighbor_cache_count);
-    free(env->grid_map);
+    free_owned_map_data(env);
+    free_owned_traffic_data(env);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
-    free_lane_graph(&env->lane_graph);
     free(env->map_name);
     free(env->ini_file);
 }
