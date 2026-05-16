@@ -38,9 +38,9 @@ static EGLHeadlessContext g_egl_ctx = {0};
 
 // Create an EGL context on an NVIDIA GPU. Does NOT make it current yet.
 static int egl_headless_init(int width, int height) {
-    PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC)eglGetProcAddress("eglQueryDevicesEXT");
-    PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT =
-        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
+    PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT
+        = (PFNEGLGETPLATFORMDISPLAYEXTPROC) eglGetProcAddress("eglGetPlatformDisplayEXT");
 
     if (!eglQueryDevicesEXT || !eglGetPlatformDisplayEXT) {
         fprintf(stderr, "[egl_headless] EGL device extensions not available\n");
@@ -82,21 +82,22 @@ static int egl_headless_init(int width, int height) {
         fprintf(stderr, "[egl_headless] Using fallback EGL device 0 (EGL %d.%d)\n", major, minor);
     }
 
-    EGLint configAttribs[] = {EGL_SURFACE_TYPE,
-                              EGL_PBUFFER_BIT,
-                              EGL_RENDERABLE_TYPE,
-                              EGL_OPENGL_BIT,
-                              EGL_RED_SIZE,
-                              8,
-                              EGL_GREEN_SIZE,
-                              8,
-                              EGL_BLUE_SIZE,
-                              8,
-                              EGL_ALPHA_SIZE,
-                              8,
-                              EGL_DEPTH_SIZE,
-                              24,
-                              EGL_NONE};
+    EGLint configAttribs[]
+        = {EGL_SURFACE_TYPE,
+           EGL_PBUFFER_BIT,
+           EGL_RENDERABLE_TYPE,
+           EGL_OPENGL_BIT,
+           EGL_RED_SIZE,
+           8,
+           EGL_GREEN_SIZE,
+           8,
+           EGL_BLUE_SIZE,
+           8,
+           EGL_ALPHA_SIZE,
+           8,
+           EGL_DEPTH_SIZE,
+           24,
+           EGL_NONE};
     EGLConfig config;
     EGLint numConfigs;
     eglChooseConfig(display, configAttribs, &config, 1, &numConfigs);
@@ -115,13 +116,14 @@ static int egl_headless_init(int width, int height) {
     }
 
     eglBindAPI(EGL_OPENGL_API);
-    EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
-                               3,
-                               EGL_CONTEXT_MINOR_VERSION,
-                               3,
-                               EGL_CONTEXT_OPENGL_PROFILE_MASK,
-                               EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
-                               EGL_NONE};
+    EGLint contextAttribs[]
+        = {EGL_CONTEXT_MAJOR_VERSION,
+           3,
+           EGL_CONTEXT_MINOR_VERSION,
+           3,
+           EGL_CONTEXT_OPENGL_PROFILE_MASK,
+           EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
+           EGL_NONE};
     EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
     if (context == EGL_NO_CONTEXT) {
         fprintf(stderr, "[egl_headless] Failed to create GL context: 0x%x\n", eglGetError());
@@ -195,9 +197,9 @@ static int egl_switch_to_gpu(void) {
     typedef void *(*glXGetCurrentContextFunc)(void);
     void *libgl = dlopen("libGL.so.1", RTLD_LAZY);
     if (libgl) {
-        glXMakeCurrentFunc glXMC = (glXMakeCurrentFunc)dlsym(libgl, "glXMakeCurrent");
-        glXGetCurrentDisplayFunc glXGCD = (glXGetCurrentDisplayFunc)dlsym(libgl, "glXGetCurrentDisplay");
-        glXGetCurrentContextFunc glXGCC = (glXGetCurrentContextFunc)dlsym(libgl, "glXGetCurrentContext");
+        glXMakeCurrentFunc glXMC = (glXMakeCurrentFunc) dlsym(libgl, "glXMakeCurrent");
+        glXGetCurrentDisplayFunc glXGCD = (glXGetCurrentDisplayFunc) dlsym(libgl, "glXGetCurrentDisplay");
+        glXGetCurrentContextFunc glXGCC = (glXGetCurrentContextFunc) dlsym(libgl, "glXGetCurrentContext");
         if (glXMC && glXGCD && glXGCC) {
             void *current_dpy = glXGCD();
             void *current_ctx = glXGCC();
@@ -217,8 +219,8 @@ static int egl_switch_to_gpu(void) {
         return 0;
     }
     g_egl_ctx.active = 1;
-    const char *renderer = (const char *)glGetString(GL_RENDERER);
-    const char *version = (const char *)glGetString(GL_VERSION);
+    const char *renderer = (const char *) glGetString(GL_RENDERER);
+    const char *version = (const char *) glGetString(GL_VERSION);
     fprintf(stderr, "[egl_headless] GPU active: %s (%s)\n", renderer ? renderer : "unknown", version ? version : "?");
     return 1;
 }
@@ -234,8 +236,9 @@ static void egl_headless_cleanup(void) {
         eglMakeCurrent(g_egl_ctx.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         eglDestroyContext(g_egl_ctx.display, g_egl_ctx.context);
     }
-    if (g_egl_ctx.surface)
+    if (g_egl_ctx.surface) {
         eglDestroySurface(g_egl_ctx.display, g_egl_ctx.surface);
+    }
     // Intentionally do NOT call eglTerminate(g_egl_ctx.display) — it breaks CUDA.
     g_egl_ctx.context = NULL;
     g_egl_ctx.surface = NULL;

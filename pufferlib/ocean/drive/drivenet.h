@@ -1,11 +1,12 @@
-#include <time.h>
 #include "puffernet.h"
+
+#include <assert.h>
 #include <math.h>
 #include <raylib.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <assert.h>
+#include <time.h>
 
 typedef struct DriveNet DriveNet;
 struct DriveNet {
@@ -180,16 +181,27 @@ void forward(DriveNet *net, float *observations, int *actions) {
             // Get the 7 features for this object
             float *obj_features = &net->obs_partner[b * 63 * 7 + obj * 7];
             // Apply linear layer to this object
-            _linear(obj_features, net->partner_encoder->weights, net->partner_encoder->bias,
-                    &net->partner_linear_output[b * 63 * 64 + obj * 64], 1, 7, 64);
+            _linear(
+                obj_features,
+                net->partner_encoder->weights,
+                net->partner_encoder->bias,
+                &net->partner_linear_output[b * 63 * 64 + obj * 64],
+                1,
+                7,
+                64);
         }
     }
 
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < 63; obj++) {
             float *after_first = &net->partner_linear_output[b * 63 * 64 + obj * 64];
-            _layernorm(after_first, net->partner_layernorm->weights, net->partner_layernorm->bias,
-                       &net->partner_layernorm_output[b * 63 * 64 + obj * 64], 1, 64);
+            _layernorm(
+                after_first,
+                net->partner_layernorm->weights,
+                net->partner_layernorm->bias,
+                &net->partner_layernorm_output[b * 63 * 64 + obj * 64],
+                1,
+                64);
         }
     }
     for (int b = 0; b < net->num_agents; b++) {
@@ -197,8 +209,14 @@ void forward(DriveNet *net, float *observations, int *actions) {
             // Get the 7 features for this object
             float *obj_features = &net->partner_layernorm_output[b * 63 * 64 + obj * 64];
             // Apply linear layer to this object
-            _linear(obj_features, net->partner_encoder_two->weights, net->partner_encoder_two->bias,
-                    &net->partner_linear_output_two[b * 63 * 64 + obj * 64], 1, 64, 64);
+            _linear(
+                obj_features,
+                net->partner_encoder_two->weights,
+                net->partner_encoder_two->bias,
+                &net->partner_linear_output_two[b * 63 * 64 + obj * 64],
+                1,
+                64,
+                64);
         }
     }
 
@@ -208,8 +226,14 @@ void forward(DriveNet *net, float *observations, int *actions) {
             // Get the 13 features for this object
             float *obj_features = &net->obs_road[b * 200 * 13 + obj * 13];
             // Apply linear layer to this object
-            _linear(obj_features, net->road_encoder->weights, net->road_encoder->bias,
-                    &net->road_linear_output[b * 200 * 64 + obj * 64], 1, 13, 64);
+            _linear(
+                obj_features,
+                net->road_encoder->weights,
+                net->road_encoder->bias,
+                &net->road_linear_output[b * 200 * 64 + obj * 64],
+                1,
+                13,
+                64);
         }
     }
 
@@ -217,15 +241,26 @@ void forward(DriveNet *net, float *observations, int *actions) {
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < 200; obj++) {
             float *after_first = &net->road_linear_output[b * 200 * 64 + obj * 64];
-            _layernorm(after_first, net->road_layernorm->weights, net->road_layernorm->bias,
-                       &net->road_layernorm_output[b * 200 * 64 + obj * 64], 1, 64);
+            _layernorm(
+                after_first,
+                net->road_layernorm->weights,
+                net->road_layernorm->bias,
+                &net->road_layernorm_output[b * 200 * 64 + obj * 64],
+                1,
+                64);
         }
     }
     for (int b = 0; b < net->num_agents; b++) {
         for (int obj = 0; obj < 200; obj++) {
             float *after_first = &net->road_layernorm_output[b * 200 * 64 + obj * 64];
-            _linear(after_first, net->road_encoder_two->weights, net->road_encoder_two->bias,
-                    &net->road_linear_output_two[b * 200 * 64 + obj * 64], 1, 64, 64);
+            _linear(
+                after_first,
+                net->road_encoder_two->weights,
+                net->road_encoder_two->bias,
+                &net->road_linear_output_two[b * 200 * 64 + obj * 64],
+                1,
+                64,
+                64);
         }
     }
 

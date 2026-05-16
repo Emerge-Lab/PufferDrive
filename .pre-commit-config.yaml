@@ -26,5 +26,3 @@ repos:
   rev: 'v21.1.5'
   hooks:
   -   id: clang-format
-      args:
-        - --verbose

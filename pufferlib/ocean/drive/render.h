@@ -13,18 +13,19 @@
 #define VIEW_MODE_BEV_AGENT_OBS 1
 #define VIEW_MODE_TOPDOWN_SIM 2
 
-#include <raylib.h>
 #include "rlgl.h"
+
+#include <raylib.h>
 
 #define MAX_AGENTS 64
 
-const Color STONE_GRAY = (Color){80, 80, 80, 255};
-const Color PUFF_RED = (Color){187, 0, 0, 255};
-const Color PUFF_CYAN = (Color){0, 187, 187, 255};
-const Color PUFF_WHITE = (Color){241, 241, 241, 241};
-const Color PUFF_BACKGROUND = (Color){6, 24, 24, 255};
-const Color PUFF_BACKGROUND2 = (Color){18, 72, 72, 255};
-const Color LIGHTGREEN = (Color){152, 255, 152, 255};
+const Color STONE_GRAY = (Color) {80, 80, 80, 255};
+const Color PUFF_RED = (Color) {187, 0, 0, 255};
+const Color PUFF_CYAN = (Color) {0, 187, 187, 255};
+const Color PUFF_WHITE = (Color) {241, 241, 241, 241};
+const Color PUFF_BACKGROUND = (Color) {6, 24, 24, 255};
+const Color PUFF_BACKGROUND2 = (Color) {18, 72, 72, 255};
+const Color LIGHTGREEN = (Color) {152, 255, 152, 255};
 
 typedef struct Client {
     float width;
@@ -75,21 +76,23 @@ void build_road_cache(Drive *env, Client *client) {
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *road = &env->road_elements[i];
         int segs = road->segment_length - 1;
-        if (segs <= 0)
+        if (segs <= 0) {
             continue;
-        if (is_road_edge(road->type))
+        }
+        if (is_road_edge(road->type)) {
             tri_count += segs * 14; // 7 faces of a rectangular curb, 2 tris each
-        else if (is_road_lane(road->type) || is_road_line(road->type))
+        } else if (is_road_lane(road->type) || is_road_line(road->type)) {
             line_count += segs;
+        }
     }
 
     int num_tri_verts = tri_count * 3;
-    float *tri_verts = (float *)RL_CALLOC(num_tri_verts * 3, sizeof(float));
-    unsigned char *tri_colors = (unsigned char *)RL_CALLOC(num_tri_verts * 4, sizeof(unsigned char));
+    float *tri_verts = (float *) RL_CALLOC(num_tri_verts * 3, sizeof(float));
+    unsigned char *tri_colors = (unsigned char *) RL_CALLOC(num_tri_verts * 4, sizeof(unsigned char));
     free(client->road_line_verts);
     free(client->road_line_colors);
-    client->road_line_verts = (float *)malloc(line_count * 2 * 3 * sizeof(float));
-    client->road_line_colors = (unsigned char *)malloc(line_count * 2 * 4);
+    client->road_line_verts = (float *) malloc(line_count * 2 * 3 * sizeof(float));
+    client->road_line_colors = (unsigned char *) malloc(line_count * 2 * 4);
     int actual_tri_count = 0;
     client->road_line_count = 0;
 
@@ -144,8 +147,9 @@ void build_road_cache(Drive *env, Client *client) {
                 float curb_height = 0.5f, curb_width = 0.3f;
                 float dx = ex - sx, dy = ey - sy;
                 float len = sqrtf(dx * dx + dy * dy);
-                if (len < 1e-6f)
+                if (len < 1e-6f) {
                     continue;
+                }
                 float nx = -dy / len, ny = dx / len;
                 float hw = curb_width / 2;
 
@@ -191,8 +195,11 @@ void build_road_cache(Drive *env, Client *client) {
     client->road_material = LoadMaterialDefault();
 
     client->road_cache_valid = 1;
-    fprintf(stderr, "[drive] Road cache: %d triangles (VBO), %d lines (rlgl)\n", actual_tri_count,
-            client->road_line_count);
+    fprintf(
+        stderr,
+        "[drive] Road cache: %d triangles (VBO), %d lines (rlgl)\n",
+        actual_tri_count,
+        client->road_line_count);
 }
 
 // Draw cached road geometry: curbs via the GPU VBO, lane/road lines via rlgl.
@@ -205,10 +212,15 @@ static inline void draw_road_cached(Client *client) {
         rlBegin(RL_LINES);
         int nv = client->road_line_count * 2;
         for (int i = 0; i < nv; i++) {
-            rlColor4ub(client->road_line_colors[i * 4], client->road_line_colors[i * 4 + 1],
-                       client->road_line_colors[i * 4 + 2], client->road_line_colors[i * 4 + 3]);
-            rlVertex3f(client->road_line_verts[i * 3], client->road_line_verts[i * 3 + 1],
-                       client->road_line_verts[i * 3 + 2]);
+            rlColor4ub(
+                client->road_line_colors[i * 4],
+                client->road_line_colors[i * 4 + 1],
+                client->road_line_colors[i * 4 + 2],
+                client->road_line_colors[i * 4 + 3]);
+            rlVertex3f(
+                client->road_line_verts[i * 3],
+                client->road_line_verts[i * 3 + 1],
+                client->road_line_verts[i * 3 + 2]);
         }
         rlEnd();
     }
@@ -226,7 +238,7 @@ static int g_xvfb_display_num = 0;
 static int g_glfw_ready = 0;
 
 Client *make_client(Drive *env) {
-    Client *client = (Client *)calloc(1, sizeof(Client));
+    Client *client = (Client *) calloc(1, sizeof(Client));
     // Fixed 1920x1080 pbuffer for headless (roughly 3x the pixel area of
     // the old 1280x704). MUST be identical across all envs because the
     // EGL pbuffer is a single global resource shared across every env's
@@ -274,14 +286,25 @@ Client *make_client(Drive *env) {
             if (g_xvfb_pid == 0) {
                 close(STDOUT_FILENO);
                 close(STDERR_FILENO);
-                execlp("Xvfb", "Xvfb", display_str, "-screen", "0", "1280x720x24", "+extension", "GLX", "-ac",
-                       "-noreset", NULL);
+                execlp(
+                    "Xvfb",
+                    "Xvfb",
+                    display_str,
+                    "-screen",
+                    "0",
+                    "1280x720x24",
+                    "+extension",
+                    "GLX",
+                    "-ac",
+                    "-noreset",
+                    NULL);
                 _exit(1);
             }
             setenv("DISPLAY", display_str, 1);
             // Wait up to 2 seconds for the lockfile (Xvfb ready signal).
-            for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++)
+            for (int i = 0; i < 20 && access(lock_file, F_OK) != 0; i++) {
                 usleep(100000);
+            }
             usleep(200000);
         }
         InitWindow(client->width, client->height, "PufferLib Ray GPU Drive");
@@ -299,15 +322,15 @@ Client *make_client(Drive *env) {
     // rlglClose + rlglInit, otherwise subsequent draw calls crash.
     static int egl_ready = 0;
     if (env->render_mode == RENDER_HEADLESS && !egl_ready) {
-        if (egl_headless_init((int)client->width, (int)client->height)) {
+        if (egl_headless_init((int) client->width, (int) client->height)) {
             if (egl_switch_to_gpu()) {
                 // Do NOT call rlglClose here. rlglClose triggers glDelete*
                 // on IDs from the previous (GLX/Mesa) context, which forces
                 // an XSync on the GLX connection and surfaces queued X errors
                 // from the glXMakeCurrent(dpy, 0, NULL) release. 3.0 avoids
                 // this by just calling rlglInit on the fresh EGL context.
-                rlglInit((int)client->width, (int)client->height);
-                rlViewport(0, 0, (int)client->width, (int)client->height);
+                rlglInit((int) client->width, (int) client->height);
+                rlViewport(0, 0, (int) client->width, (int) client->height);
                 rlEnableDepthTest();
                 egl_ready = 1;
             }
@@ -319,11 +342,12 @@ Client *make_client(Drive *env) {
         // Subsequent headless clients reuse the persistent EGL context. The
         // pbuffer may need to grow if this env's map is larger than the one
         // the first client sized for.
-        egl_headless_resize((int)client->width, (int)client->height);
-        rlViewport(0, 0, (int)client->width, (int)client->height);
+        egl_headless_resize((int) client->width, (int) client->height);
+        rlViewport(0, 0, (int) client->width, (int) client->height);
     }
-    if (egl_ready)
+    if (egl_ready) {
         client->egl_mode = 1;
+    }
 #endif
     client->puffers = LoadTexture("resources/puffers_128.png");
     client->cars[0] = LoadModel("resources/drive/RedCar.glb");
@@ -366,11 +390,11 @@ Client *make_client(Drive *env) {
     // Top-down bird's-eye view: camera directly above target in Z.
     // World convention: X=east, Y=north, Z=altitude.
     // This puts roads and agents in the same X-Y plane as seen from above.
-    client->default_camera_position = (Vector3){scene_cx, scene_cy, scene_cz + 200.0f};
+    client->default_camera_position = (Vector3) {scene_cx, scene_cy, scene_cz + 200.0f};
     client->default_camera_target = target_pos;
     client->camera.position = client->default_camera_position;
     client->camera.target = client->default_camera_target;
-    client->camera.up = (Vector3){0.0f, 1.0f, 0.0f}; // +Y (north) is screen-up
+    client->camera.up = (Vector3) {0.0f, 1.0f, 0.0f}; // +Y (north) is screen-up
     client->camera.fovy = 45.0f;
     client->camera.projection = CAMERA_PERSPECTIVE;
     client->camera_zoom = 1.0f;
@@ -387,14 +411,15 @@ Client *make_client(Drive *env) {
         }
 
         char size_str[64];
-        snprintf(size_str, sizeof(size_str), "%dx%d", (int)client->width, (int)client->height);
+        snprintf(size_str, sizeof(size_str), "%dx%d", (int) client->width, (int) client->height);
 
         char filename[320];
         const char *stem = env->scenario_id[0] ? env->scenario_id : "pufferdrive";
-        if (env->video_suffix[0])
+        if (env->video_suffix[0]) {
             snprintf(filename, sizeof(filename), "%s%s.mp4", stem, env->video_suffix);
-        else
+        } else {
             snprintf(filename, sizeof(filename), "%s.mp4", stem);
+        }
 
         client->recorder_pid = fork();
         if (client->recorder_pid == -1) {
@@ -408,8 +433,9 @@ Client *make_client(Drive *env) {
             close(client->recorder_pipefd[1]);
             dup2(client->recorder_pipefd[0], STDIN_FILENO);
             close(client->recorder_pipefd[0]);
-            for (int fd = 3; fd < 256; fd++)
+            for (int fd = 3; fd < 256; fd++) {
                 close(fd);
+            }
             // -threads 4: cap libx264's internal thread pool. x264 autodetects
             // from the physical node (~96+ cores on H100/H200) and spawns ~24
             // encode threads + 4 lookahead threads. Under a 16-core SLURM
@@ -418,15 +444,44 @@ Client *make_client(Drive *env) {
             // already far more than needed for ultrafast encoding (~500 fps
             // encode vs <200 fps producer), and leaves cores untouched for the
             // main thread / env / render producer.
-            execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i",
-                   "-", "-c:v", "libx264", "-threads", "4", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23",
-                   filename, NULL);
+            execlp(
+                "ffmpeg",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-s",
+                size_str,
+                "-r",
+                "30",
+                "-i",
+                "-",
+                "-c:v",
+                "libx264",
+                "-threads",
+                "4",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "23",
+                filename,
+                NULL);
             fprintf(stderr, "[drive] execlp ffmpeg failed: %s\n", strerror(errno));
             _exit(1);
         }
         close(client->recorder_pipefd[0]);
-        fprintf(stderr, "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n", client->recorder_pid,
-                client->recorder_pipefd[1], size_str, filename, client->egl_mode);
+        fprintf(
+            stderr,
+            "[drive] ffmpeg forked: pid=%d pipe_write_fd=%d size=%s file=%s egl=%d\n",
+            client->recorder_pid,
+            client->recorder_pipefd[1],
+            size_str,
+            filename,
+            client->egl_mode);
 
         // Grow the pipe buffer so one frame fits without blocking the writer.
 #ifdef F_SETPIPE_SZ
@@ -434,8 +489,9 @@ Client *make_client(Drive *env) {
         // for at least one frame so the writev from client_record_frame doesn't
         // block the producer on every frame. 16 MB leaves headroom.
         int pipe_sz = fcntl(client->recorder_pipefd[1], F_SETPIPE_SZ, 16 * 1024 * 1024);
-        if (pipe_sz > 0)
+        if (pipe_sz > 0) {
             fprintf(stderr, "[drive] Pipe buffer set to %d bytes\n", pipe_sz);
+        }
 #endif
         client->recorder_active = 1;
     }
@@ -450,34 +506,37 @@ Client *make_client(Drive *env) {
 // runs. glReadPixels returns rows bottom-up but ffmpeg expects top-down —
 // we row-reverse via a writev iovec instead of memcpy.
 static inline void client_record_frame(Client *client) {
-    if (!client->recorder_active)
+    if (!client->recorder_active) {
         return;
+    }
 #ifdef DRIVE_HAS_EGL
     if (!client->egl_mode) {
         // Xvfb/Mesa fallback: synchronous rlReadScreenPixels + write.
-        int w = (int)client->width, h = (int)client->height;
+        int w = (int) client->width, h = (int) client->height;
         int frame_bytes = w * h * 4;
         unsigned char *screen_data = rlReadScreenPixels(w, h);
-        if (!screen_data)
+        if (!screen_data) {
             return;
-        size_t remaining = (size_t)frame_bytes;
+        }
+        size_t remaining = (size_t) frame_bytes;
         unsigned char *p = screen_data;
         while (remaining > 0) {
             ssize_t written = write(client->recorder_pipefd[1], p, remaining);
             if (written < 0) {
-                if (errno == EINTR)
+                if (errno == EINTR) {
                     continue;
+                }
                 break;
             }
             p += written;
-            remaining -= (size_t)written;
+            remaining -= (size_t) written;
         }
         RL_FREE(screen_data);
         client->pbo_frame_count++;
         return;
     }
 
-    int w = (int)client->width, h = (int)client->height;
+    int w = (int) client->width, h = (int) client->height;
     int frame_bytes = w * h * 4;
 
     // Lazily allocate the PBO pair on first frame.
@@ -502,7 +561,7 @@ static inline void client_record_frame(Client *client) {
     // because there's no prior data yet.
     if (client->pbo_frame_count > 0) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
-        unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        unsigned char *ptr = (unsigned char *) glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
         if (ptr) {
             int row_bytes = w * 4;
             // IOV_MAX on Linux is 1024, so frames taller than 1024 rows need
@@ -520,7 +579,7 @@ static inline void client_record_frame(Client *client) {
                 size_t chunk_bytes = 0;
                 for (int i = 0; i < chunk; i++) {
                     int src_row = h - 1 - (row_top + i);
-                    iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                    iov[i].iov_base = ptr + (size_t) src_row * row_bytes;
                     iov[i].iov_len = row_bytes;
                     chunk_bytes += row_bytes;
                 }
@@ -530,22 +589,28 @@ static inline void client_record_frame(Client *client) {
                 while (cur_remaining > 0) {
                     ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
                     if (written < 0) {
-                        if (errno == EINTR)
+                        if (errno == EINTR) {
                             continue;
-                        fprintf(stderr, "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
-                                client->pbo_frame_count, cur_cnt, errno, strerror(errno));
+                        }
+                        fprintf(
+                            stderr,
+                            "[drive-pbo] frame=%d writev chunk=%d failed errno=%d(%s)\n",
+                            client->pbo_frame_count,
+                            cur_cnt,
+                            errno,
+                            strerror(errno));
                         io_error = 1;
                         break;
                     }
-                    cur_remaining -= (size_t)written;
-                    size_t consumed = (size_t)written;
+                    cur_remaining -= (size_t) written;
+                    size_t consumed = (size_t) written;
                     while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
                         consumed -= cur[0].iov_len;
                         cur++;
                         cur_cnt--;
                     }
                     if (cur_cnt > 0 && consumed > 0) {
-                        cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                        cur[0].iov_base = (unsigned char *) cur[0].iov_base + consumed;
                         cur[0].iov_len -= consumed;
                     }
                 }
@@ -554,8 +619,11 @@ static inline void client_record_frame(Client *client) {
             }
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         } else {
-            fprintf(stderr, "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n", client->pbo_frame_count,
-                    glGetError());
+            fprintf(
+                stderr,
+                "[drive-pbo] frame=%d glMapBuffer returned NULL! GL error=0x%x\n",
+                client->pbo_frame_count,
+                glGetError());
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
@@ -563,7 +631,7 @@ static inline void client_record_frame(Client *client) {
     client->pbo_index = prev;
     client->pbo_frame_count++;
 #else
-    (void)client;
+    (void) client;
 #endif
 }
 
@@ -585,8 +653,9 @@ void handle_camera_controls(Client *client) {
 
     if (is_dragging) {
         Vector2 current_mouse_pos = GetMousePosition();
-        Vector2 delta = {(current_mouse_pos.x - prev_mouse_pos.x) * camera_move_speed,
-                         -(current_mouse_pos.y - prev_mouse_pos.y) * camera_move_speed};
+        Vector2 delta
+            = {(current_mouse_pos.x - prev_mouse_pos.x) * camera_move_speed,
+               -(current_mouse_pos.y - prev_mouse_pos.y) * camera_move_speed};
 
         // Update camera position (only X and Y)
         client->camera.position.x += delta.x;
@@ -604,9 +673,10 @@ void handle_camera_controls(Client *client) {
     if (wheel != 0) {
         float zoom_factor = 1.0f - (wheel * 0.1f);
         // Calculate the current direction vector from target to position
-        Vector3 direction = {client->camera.position.x - client->camera.target.x,
-                             client->camera.position.y - client->camera.target.y,
-                             client->camera.position.z - client->camera.target.z};
+        Vector3 direction
+            = {client->camera.position.x - client->camera.target.x,
+               client->camera.position.y - client->camera.target.y,
+               client->camera.position.z - client->camera.target.z};
 
         // Scale the direction vector by the zoom factor
         direction.x *= zoom_factor;
@@ -627,12 +697,12 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float diamond_z = 8.0f;      // Base Z position
 
     // Define diamond points
-    Vector3 top_point = (Vector3){0.0f, 0.0f, diamond_z + diamond_height / 2};    // Top point
-    Vector3 bottom_point = (Vector3){0.0f, 0.0f, diamond_z - diamond_height / 2}; // Bottom point
-    Vector3 front_point = (Vector3){0.0f, diamond_width / 2, diamond_z};          // Front point
-    Vector3 back_point = (Vector3){0.0f, -diamond_width / 2, diamond_z};          // Back point
-    Vector3 left_point = (Vector3){-diamond_width / 2, 0.0f, diamond_z};          // Left point
-    Vector3 right_point = (Vector3){diamond_width / 2, 0.0f, diamond_z};          // Right point
+    Vector3 top_point = (Vector3) {0.0f, 0.0f, diamond_z + diamond_height / 2};    // Top point
+    Vector3 bottom_point = (Vector3) {0.0f, 0.0f, diamond_z - diamond_height / 2}; // Bottom point
+    Vector3 front_point = (Vector3) {0.0f, diamond_width / 2, diamond_z};          // Front point
+    Vector3 back_point = (Vector3) {0.0f, -diamond_width / 2, diamond_z};          // Back point
+    Vector3 left_point = (Vector3) {-diamond_width / 2, 0.0f, diamond_z};          // Left point
+    Vector3 right_point = (Vector3) {diamond_width / 2, 0.0f, diamond_z};          // Right point
 
     // Draw the diamond faces
     // Top pyramid
@@ -658,7 +728,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
                                                               : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
     int max_obs = compute_observation_size(env);
-    float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
+    float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
     float *agent_obs = &observations[agent_index][0];
     // self
     int active_idx = env->active_agent_indices[agent_index];
@@ -674,17 +744,25 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float goal_x = agent_obs[goal_obs_idx] * env->max_goal_position;
         float goal_y = agent_obs[goal_obs_idx + 1] * env->max_goal_position;
         if (mode == 0) {
-            DrawSphere((Vector3){goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
-            DrawCircle3D((Vector3){goal_x, goal_y, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                         Fade(LIGHTGREEN, 0.3f));
+            DrawSphere((Vector3) {goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
+            DrawCircle3D(
+                (Vector3) {goal_x, goal_y, 0.1f},
+                env->goal_radius,
+                (Vector3) {0, 0, 1},
+                90.0f,
+                Fade(LIGHTGREEN, 0.3f));
         }
 
         if (mode == 1) {
             float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
             float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-            DrawSphere((Vector3){goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-            DrawCircle3D((Vector3){goal_x_world, goal_y_world, 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                         Fade(LIGHTGREEN, 0.3f));
+            DrawSphere((Vector3) {goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
+            DrawCircle3D(
+                (Vector3) {goal_x_world, goal_y_world, 0.1f},
+                env->goal_radius,
+                (Vector3) {0, 0, 1},
+                90.0f,
+                Fade(LIGHTGREEN, 0.3f));
         }
     }
     // First draw other agent observations
@@ -706,14 +784,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float y = agent_obs[obs_idx + 1] * env->max_position;
         float z = agent_obs[obs_idx + 2] * env->max_position;
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x, y, z + 1}, ORANGE);
+            DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x, y, z + 1}, ORANGE);
         }
 
         float partner_x = px + (x * heading_self_x - y * heading_self_y);
         float partner_y = py + (x * heading_self_y + y * heading_self_x);
         float partner_z = pz + z;
         if (lasers && mode == 1) {
-            DrawLine3D((Vector3){px, py, pz + 1}, (Vector3){partner_x, partner_y, partner_z + 1}, ORANGE);
+            DrawLine3D((Vector3) {px, py, pz + 1}, (Vector3) {partner_x, partner_y, partner_z + 1}, ORANGE);
         }
 
         float half_len = 0.5f * agent_obs[obs_idx + 3] * env->max_veh_len;
@@ -724,14 +802,18 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float cos_heading = cosf(partner_angle);
         float sin_heading = sinf(partner_angle);
         Vector3 corners[4] = {
-            (Vector3){x + (half_len * cos_heading - half_width * sin_heading),
-                      y + (half_len * sin_heading + half_width * cos_heading), z + 1},
-            (Vector3){x + (half_len * cos_heading + half_width * sin_heading),
-                      y + (half_len * sin_heading - half_width * cos_heading), z + 1},
-            (Vector3){x + (-half_len * cos_heading + half_width * sin_heading),
-                      y + (-half_len * sin_heading - half_width * cos_heading), z + 1},
-            (Vector3){x + (-half_len * cos_heading - half_width * sin_heading),
-                      y + (-half_len * sin_heading + half_width * cos_heading), z + 1},
+            (Vector3) {x + (half_len * cos_heading - half_width * sin_heading),
+                       y + (half_len * sin_heading + half_width * cos_heading),
+                       z + 1},
+            (Vector3) {x + (half_len * cos_heading + half_width * sin_heading),
+                       y + (half_len * sin_heading - half_width * cos_heading),
+                       z + 1},
+            (Vector3) {x + (-half_len * cos_heading + half_width * sin_heading),
+                       y + (-half_len * sin_heading - half_width * cos_heading),
+                       z + 1},
+            (Vector3) {x + (-half_len * cos_heading - half_width * sin_heading),
+                       y + (-half_len * sin_heading + half_width * cos_heading),
+                       z + 1},
         };
 
         if (mode == 0) {
@@ -762,13 +844,15 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float arrow_x_world;
         float arrow_y_world;
         if (mode == 0) {
-            DrawLine3D((Vector3){x, y, z + 1}, (Vector3){arrow_x, arrow_y, z + 1}, PUFF_WHITE);
+            DrawLine3D((Vector3) {x, y, z + 1}, (Vector3) {arrow_x, arrow_y, z + 1}, PUFF_WHITE);
         }
         if (mode == 1) {
             arrow_x_world = px + (arrow_x * heading_self_x - arrow_y * heading_self_y);
             arrow_y_world = py + (arrow_x * heading_self_y + arrow_y * heading_self_x);
-            DrawLine3D((Vector3){partner_x, partner_y, partner_z + 1},
-                       (Vector3){arrow_x_world, arrow_y_world, partner_z + 1}, PUFF_WHITE);
+            DrawLine3D(
+                (Vector3) {partner_x, partner_y, partner_z + 1},
+                (Vector3) {arrow_x_world, arrow_y_world, partner_z + 1},
+                PUFF_WHITE);
         }
         // Calculate perpendicular offsets for arrow head
         float arrow_size = 0.3f; // Size of the arrow head
@@ -791,10 +875,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
             // Draw the two lines forming the arrow head
             if (mode == 0) {
-                DrawLine3D((Vector3){arrow_x, arrow_y, z + 1}, (Vector3){arrow_x_end1, arrow_y_end1, z + 1},
-                           PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x, arrow_y, z + 1}, (Vector3){arrow_x_end2, arrow_y_end2, z + 1},
-                           PUFF_WHITE);
+                DrawLine3D(
+                    (Vector3) {arrow_x, arrow_y, z + 1},
+                    (Vector3) {arrow_x_end1, arrow_y_end1, z + 1},
+                    PUFF_WHITE);
+                DrawLine3D(
+                    (Vector3) {arrow_x, arrow_y, z + 1},
+                    (Vector3) {arrow_x_end2, arrow_y_end2, z + 1},
+                    PUFF_WHITE);
             }
 
             if (mode == 1) {
@@ -802,10 +890,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 float arrow_y_end1_world = py + (arrow_x_end1 * heading_self_y + arrow_y_end1 * heading_self_x);
                 float arrow_x_end2_world = px + (arrow_x_end2 * heading_self_x - arrow_y_end2 * heading_self_y);
                 float arrow_y_end2_world = py + (arrow_x_end2 * heading_self_y + arrow_y_end2 * heading_self_x);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, partner_z + 1},
-                           (Vector3){arrow_x_end1_world, arrow_y_end1_world, partner_z + 1}, PUFF_WHITE);
-                DrawLine3D((Vector3){arrow_x_world, arrow_y_world, partner_z + 1},
-                           (Vector3){arrow_x_end2_world, arrow_y_end2_world, partner_z + 1}, PUFF_WHITE);
+                DrawLine3D(
+                    (Vector3) {arrow_x_world, arrow_y_world, partner_z + 1},
+                    (Vector3) {arrow_x_end1_world, arrow_y_end1_world, partner_z + 1},
+                    PUFF_WHITE);
+                DrawLine3D(
+                    (Vector3) {arrow_x_world, arrow_y_world, partner_z + 1},
+                    (Vector3) {arrow_x_end2_world, arrow_y_end2_world, partner_z + 1},
+                    PUFF_WHITE);
             }
         }
 
@@ -842,7 +934,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float y_end = y_middle + segment_length * sinf(rel_angle);
 
         if (lasers && mode == 0) {
-            DrawLine3D((Vector3){0, 0, 0}, (Vector3){x_middle, y_middle, z_middle + 1}, lineColor);
+            DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x_middle, y_middle, z_middle + 1}, lineColor);
         }
 
         if (mode == 1) {
@@ -853,15 +945,18 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
             float z_world = pz + z_middle + 1;
-            DrawCube((Vector3){x_middle_world, y_middle_world, z_world}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start_world, y_start_world, z_world}, (Vector3){x_end_world, y_end_world, z_world},
-                       BLUE);
-            if (lasers)
-                DrawLine3D((Vector3){px, py, pz + 1}, (Vector3){x_middle_world, y_middle_world, z_world}, lineColor);
+            DrawCube((Vector3) {x_middle_world, y_middle_world, z_world}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D(
+                (Vector3) {x_start_world, y_start_world, z_world},
+                (Vector3) {x_end_world, y_end_world, z_world},
+                BLUE);
+            if (lasers) {
+                DrawLine3D((Vector3) {px, py, pz + 1}, (Vector3) {x_middle_world, y_middle_world, z_world}, lineColor);
+            }
         }
         if (mode == 0) {
-            DrawCube((Vector3){x_middle, y_middle, z_middle + 1}, 0.5f, 0.5f, 0.5f, lineColor);
-            DrawLine3D((Vector3){x_start, y_start, z_middle + 1}, (Vector3){x_end, y_end, z_middle + 1}, BLUE);
+            DrawCube((Vector3) {x_middle, y_middle, z_middle + 1}, 0.5f, 0.5f, 0.5f, lineColor);
+            DrawLine3D((Vector3) {x_start, y_start, z_middle + 1}, (Vector3) {x_end, y_end, z_middle + 1}, BLUE);
         }
     }
     // Draw boundary/edge segment observations in red (immediately after lane obs)
@@ -875,8 +970,9 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
                 break;
             }
         }
-        if (is_empty)
+        if (is_empty) {
             continue;
+        }
         float x_middle = agent_obs[entity_idx] * env->max_position;
         float y_middle = agent_obs[entity_idx + 1] * env->max_position;
         float z_middle = agent_obs[entity_idx + 2] * env->max_position;
@@ -895,19 +991,21 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             float x_end_world = px + (x_end * heading_self_x - y_end * heading_self_y);
             float y_end_world = py + (x_end * heading_self_y + y_end * heading_self_x);
             float z_world = pz + z_middle + 1;
-            DrawLine3D((Vector3){x_start_world, y_start_world, z_world}, (Vector3){x_end_world, y_end_world, z_world},
-                       RED);
+            DrawLine3D(
+                (Vector3) {x_start_world, y_start_world, z_world},
+                (Vector3) {x_end_world, y_end_world, z_world},
+                RED);
         }
         if (mode == 0) {
-            DrawLine3D((Vector3){x_start, y_start, z_middle + 1}, (Vector3){x_end, y_end, z_middle + 1}, RED);
+            DrawLine3D((Vector3) {x_start, y_start, z_middle + 1}, (Vector3) {x_end, y_end, z_middle + 1}, RED);
         }
     }
 }
 
 void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float end_y, Color lineColor) {
-    Color CURB_TOP = (Color){220, 220, 220, 255};  // Top surface - lightest
-    Color CURB_SIDE = (Color){180, 180, 180, 255}; // Side faces - medium
-    Color CURB_BOTTOM = (Color){160, 160, 160, 255};
+    Color CURB_TOP = (Color) {220, 220, 220, 255};  // Top surface - lightest
+    Color CURB_SIDE = (Color) {180, 180, 180, 255}; // Side faces - medium
+    Color CURB_BOTTOM = (Color) {160, 160, 160, 255};
     // Calculate curb dimensions
     float curb_height = 0.5f; // Height of the curb
     float curb_width = 0.3f;  // Width/thickness of the curb
@@ -958,14 +1056,22 @@ void draw_road_edge(Drive *env, float start_x, float start_y, float end_x, float
 void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, int show_grid) {
     // Draw a grid to help with orientation
     // DrawGrid(20, 1.0f);
-    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0},
-               (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
-               (Vector3){env->grid_map->top_left_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0},
-               (Vector3){env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0}, PUFF_CYAN);
-    DrawLine3D((Vector3){env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
-               (Vector3){env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0}, PUFF_CYAN);
+    DrawLine3D(
+        (Vector3) {env->grid_map->top_left_x, env->grid_map->top_left_y, 0},
+        (Vector3) {env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0},
+        PUFF_CYAN);
+    DrawLine3D(
+        (Vector3) {env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
+        (Vector3) {env->grid_map->top_left_x, env->grid_map->top_left_y, 0},
+        PUFF_CYAN);
+    DrawLine3D(
+        (Vector3) {env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0},
+        (Vector3) {env->grid_map->bottom_right_x, env->grid_map->top_left_y, 0},
+        PUFF_CYAN);
+    DrawLine3D(
+        (Vector3) {env->grid_map->top_left_x, env->grid_map->bottom_right_y, 0},
+        (Vector3) {env->grid_map->bottom_right_x, env->grid_map->bottom_right_y, 0},
+        PUFF_CYAN);
 
     // ==== Traffic lights ====================================================
     // For each TRAFFIC_LIGHT element, query states[env->timestep] and draw the
@@ -975,16 +1081,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     // dynamic state, so we leave them out for now (they're a follow-up).
     for (int tl_i = 0; tl_i < env->num_traffic_elements; tl_i++) {
         TrafficControlElement *traffic = &env->traffic_elements[tl_i];
-        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
-        if (traffic->states == NULL || traffic->state_length <= 0)
+        }
+        if (traffic->states == NULL || traffic->state_length <= 0) {
             continue;
+        }
 
         int state_idx = env->timestep;
-        if (state_idx < 0)
+        if (state_idx < 0) {
             state_idx = 0;
-        if (state_idx >= traffic->state_length)
+        }
+        if (state_idx >= traffic->state_length) {
             state_idx = traffic->state_length - 1;
+        }
         int tl_state = traffic->states[state_idx];
 
         Color tl_color;
@@ -1006,9 +1116,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         // Lift the stop-line endpoints a little above the road surface so the
         // line and marker render on top of the road tri mesh instead of
         // z-fighting with it.
-        Vector3 sl_p1 = (Vector3){traffic->stop_line[0], traffic->stop_line[1], traffic->stop_line[2] + 0.3f};
-        Vector3 sl_p2 = (Vector3){traffic->stop_line[3], traffic->stop_line[4], traffic->stop_line[5] + 0.3f};
-        Vector3 sl_mid = (Vector3){
+        Vector3 sl_p1 = (Vector3) {traffic->stop_line[0], traffic->stop_line[1], traffic->stop_line[2] + 0.3f};
+        Vector3 sl_p2 = (Vector3) {traffic->stop_line[3], traffic->stop_line[4], traffic->stop_line[5] + 0.3f};
+        Vector3 sl_mid = (Vector3) {
             (traffic->stop_line[0] + traffic->stop_line[3]) * 0.5f,
             (traffic->stop_line[1] + traffic->stop_line[4]) * 0.5f,
             (traffic->stop_line[2] + traffic->stop_line[5]) * 0.5f + 0.5f,
@@ -1051,7 +1161,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         // With a hardcoded z=1 the car's world pos diverges from the road
         // surface (which comes from road->x/y/z in build_road_cache), so
         // on maps with elevation the car appears off the road surface.
-        position = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z};
+        position = (Vector3) {agent->sim_x, agent->sim_y, agent->sim_z};
         heading = agent->sim_heading;
         // Create size vector
         Vector3 size = {agent->sim_length, agent->sim_width, agent->sim_height};
@@ -1069,15 +1179,19 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             // Calculate the four corners of the collision box
             Vector3 corners[4] = {
-                (Vector3){position.x + (half_len * cos_heading - half_width * sin_heading),
-                          position.y + (half_len * sin_heading + half_width * cos_heading), position.z},
+                (Vector3) {position.x + (half_len * cos_heading - half_width * sin_heading),
+                           position.y + (half_len * sin_heading + half_width * cos_heading),
+                           position.z},
 
-                (Vector3){position.x + (half_len * cos_heading + half_width * sin_heading),
-                          position.y + (half_len * sin_heading - half_width * cos_heading), position.z},
-                (Vector3){position.x + (-half_len * cos_heading + half_width * sin_heading),
-                          position.y + (-half_len * sin_heading - half_width * cos_heading), position.z},
-                (Vector3){position.x + (-half_len * cos_heading - half_width * sin_heading),
-                          position.y + (-half_len * sin_heading + half_width * cos_heading), position.z},
+                (Vector3) {position.x + (half_len * cos_heading + half_width * sin_heading),
+                           position.y + (half_len * sin_heading - half_width * cos_heading),
+                           position.z},
+                (Vector3) {position.x + (-half_len * cos_heading + half_width * sin_heading),
+                           position.y + (-half_len * sin_heading - half_width * cos_heading),
+                           position.z},
+                (Vector3) {position.x + (-half_len * cos_heading - half_width * sin_heading),
+                           position.y + (-half_len * sin_heading + half_width * cos_heading),
+                           position.z},
 
             };
 
@@ -1090,13 +1204,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
 
             // --- Draw the car  ---
             Color car_color = GRAY; // default for static
-            if (is_expert)
+            if (is_expert) {
                 car_color = GOLD; // expert replay
-            if (is_active_agent)
+            }
+            if (is_active_agent) {
                 car_color = GREEN; // policy-controlled SDC
-            if (is_active_agent && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
-                                    agent->metrics_array[RED_LIGHT_IDX] > 0))
+            }
+            if (is_active_agent
+                && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
+                    || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
                 car_color = RED;
+            }
             if (is_active_agent && car_color.r == GREEN.r && car_color.g == GREEN.g) {
                 // Filled quad for the SDC
                 DrawTriangle3D(corners[0], corners[1], corners[2], Fade(GREEN, 0.7f));
@@ -1108,8 +1226,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             }
             // --- Draw a heading arrow pointing forward ---
             Vector3 arrowStart = position;
-            Vector3 arrowEnd = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
-                                position.y + sin_heading * half_len * 1.5f, position.z};
+            Vector3 arrowEnd
+                = {position.x + cos_heading * half_len * 1.5f, // extend arrow beyond car
+                   position.y + sin_heading * half_len * 1.5f,
+                   position.z};
 
             DrawLine3D(arrowStart, arrowEnd, car_color);
             DrawSphere(arrowEnd, 0.2f, car_color); // arrow tip
@@ -1124,8 +1244,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (is_active_agent) {
                 car_model = client->cars[client->car_assignments[i % 64]];
             }
-            if (is_active_agent && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
-                                    agent->metrics_array[RED_LIGHT_IDX] > 0)) {
+            if (is_active_agent
+                && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
+                    || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
                 car_model = client->cars[0]; // Collided agent
             }
             // Draw obs for human selected agent
@@ -1136,15 +1257,15 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             // Calculate scale factors based on desired size and model dimensions
 
             BoundingBox bounds = GetModelBoundingBox(car_model);
-            Vector3 model_size = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y,
-                                  bounds.max.z - bounds.min.z};
+            Vector3 model_size
+                = {bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z};
             Vector3 scale = {size.x / model_size.x, size.y / model_size.y, size.z / model_size.z};
             if ((obs_only || IsKeyDown(KEY_LEFT_CONTROL)) && agent_index != env->human_agent_idx) {
                 rlPopMatrix();
                 continue;
             }
 
-            DrawModelEx(car_model, (Vector3){0, 0, 0}, (Vector3){1, 0, 0}, 90.0f, scale, WHITE);
+            DrawModelEx(car_model, (Vector3) {0, 0, 0}, (Vector3) {1, 0, 0}, 90.0f, scale, WHITE);
             {
                 // Corners in LOCAL space: the enclosing rlPushMatrix +
                 // rlTranslatef(position) + rlRotatef(heading) block already
@@ -1156,20 +1277,23 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 float half_len = agent->sim_length * 0.5f;
                 float half_width = agent->sim_width * 0.5f;
                 Vector3 corners[4] = {
-                    (Vector3){half_len, -half_width, 0},  // front-left
-                    (Vector3){half_len, half_width, 0},   // front-right
-                    (Vector3){-half_len, half_width, 0},  // rear-right
-                    (Vector3){-half_len, -half_width, 0}, // rear-left
+                    (Vector3) {half_len, -half_width, 0},  // front-left
+                    (Vector3) {half_len, half_width, 0},   // front-right
+                    (Vector3) {-half_len, half_width, 0},  // rear-right
+                    (Vector3) {-half_len, -half_width, 0}, // rear-left
                 };
                 Color wire_color = GRAY; // static
-                if (!is_active_agent && agent->mark_as_expert == 1)
+                if (!is_active_agent && agent->mark_as_expert == 1) {
                     wire_color = GOLD; // expert replay
-                if (is_active_agent)
+                }
+                if (is_active_agent) {
                     wire_color = GREEN; // policy-controlled SDC
-                if (is_active_agent &&
-                    (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0 ||
-                     agent->metrics_array[RED_LIGHT_IDX] > 0))
+                }
+                if (is_active_agent
+                    && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
+                        || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
                     wire_color = RED;
+                }
                 if (is_active_agent && wire_color.r == GREEN.r && wire_color.g == GREEN.g) {
                     // Filled quad for the SDC
                     rlBegin(RL_TRIANGLES);
@@ -1195,19 +1319,20 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (agent->metrics_array[REACHED_GOAL_IDX]) {
                 env->human_agent_idx = rand() % env->active_agent_count;
             }
-            Vector3 camera_position =
-                (Vector3){position.x - (25.0f * cosf(heading)), position.y - (25.0f * sinf(heading)), position.z + 15};
+            Vector3 camera_position = (Vector3) {position.x - (25.0f * cosf(heading)),
+                                                 position.y - (25.0f * sinf(heading)),
+                                                 position.z + 15};
 
-            Vector3 camera_target =
-                (Vector3){position.x + 40.0f * cosf(heading), position.y + 40.0f * sinf(heading), position.z - 5.0f};
+            Vector3 camera_target
+                = (Vector3) {position.x + 40.0f * cosf(heading), position.y + 40.0f * sinf(heading), position.z - 5.0f};
             client->camera.position = camera_position;
             client->camera.target = camera_target;
-            client->camera.up = (Vector3){0, 0, 1};
+            client->camera.up = (Vector3) {0, 0, 1};
         }
         if (IsKeyReleased(KEY_SPACE)) {
             client->camera.position = client->default_camera_position;
             client->camera.target = client->default_camera_target;
-            client->camera.up = (Vector3){0, 0, 1};
+            client->camera.up = (Vector3) {0, 0, 1};
         }
         // Draw goal position for active agents
 
@@ -1217,21 +1342,27 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
             // Draw all target waypoints: brightest (first) to darkest (last)
             int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS)
+            if (num_wp > MAX_TARGET_WAYPOINTS) {
                 num_wp = MAX_TARGET_WAYPOINTS;
+            }
             for (int wp = 0; wp < num_wp; wp++) {
-                if (wp < agent->current_goal_idx)
+                if (wp < agent->current_goal_idx) {
                     continue; // already reached
+                }
                 float wx = agent->goal_positions_x[wp];
                 float wy = agent->goal_positions_y[wp];
                 float wz = agent->goal_positions_z[wp];
                 // Brightness: first=1.0, last=0.3
-                float alpha = 1.0f - 0.7f * (float)wp / (float)(num_wp > 1 ? num_wp - 1 : 1);
-                float radius = 1.5f - 0.5f * (float)wp / (float)(num_wp > 1 ? num_wp - 1 : 1);
+                float alpha = 1.0f - 0.7f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
+                float radius = 1.5f - 0.5f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
                 Color wp_color = Fade(LIME, alpha);
-                DrawSphere((Vector3){wx, wy, wz + 1.0f}, radius, wp_color);
-                DrawCircle3D((Vector3){wx, wy, wz + 0.1f}, env->goal_radius, (Vector3){0, 0, 1}, 90.0f,
-                             Fade(LIME, alpha * 0.3f));
+                DrawSphere((Vector3) {wx, wy, wz + 1.0f}, radius, wp_color);
+                DrawCircle3D(
+                    (Vector3) {wx, wy, wz + 0.1f},
+                    env->goal_radius,
+                    (Vector3) {0, 0, 1},
+                    90.0f,
+                    Fade(LIME, alpha * 0.3f));
             }
         }
     }
@@ -1247,18 +1378,24 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                     float ex = element->x[j + 1], ey = element->y[j + 1], ez = element->z[j + 1];
                     if (is_road_lane(element->type)) {
                         // Lane centerline: semi-transparent yellow line (matches headless cache)
-                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
-                                   (Color){230, 200, 90, 100});
+                        DrawLine3D(
+                            (Vector3) {sx, sy, sz + 0.05f},
+                            (Vector3) {ex, ey, ez + 0.05f},
+                            (Color) {230, 200, 90, 100});
                     } else if (is_road_line(element->type)) {
                         // Road marking: solid white line
-                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f}, WHITE);
+                        DrawLine3D((Vector3) {sx, sy, sz + 0.05f}, (Vector3) {ex, ey, ez + 0.05f}, WHITE);
                     } else if (is_road_edge(element->type)) {
                         // Road edge / curb: flat white line at same level as road markings
-                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
-                                   (Color){255, 255, 255, 200});
+                        DrawLine3D(
+                            (Vector3) {sx, sy, sz + 0.05f},
+                            (Vector3) {ex, ey, ez + 0.05f},
+                            (Color) {255, 255, 255, 200});
                     } else if (is_misc_road(element->type)) {
-                        DrawLine3D((Vector3){sx, sy, sz + 0.05f}, (Vector3){ex, ey, ez + 0.05f},
-                                   (Color){255, 100, 100, 180});
+                        DrawLine3D(
+                            (Vector3) {sx, sy, sz + 0.05f},
+                            (Vector3) {ex, ey, ez + 0.05f},
+                            (Color) {255, 100, 100, 180});
                     }
                 }
             }
@@ -1272,8 +1409,12 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             for (int j = 0; j < env->grid_map->grid_rows; j++) {
                 float x = grid_start_x + i * GRID_CELL_SIZE;
                 float y = grid_start_y + j * GRID_CELL_SIZE;
-                DrawCubeWires((Vector3){x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1}, GRID_CELL_SIZE,
-                              GRID_CELL_SIZE, 0.1f, PUFF_BACKGROUND2);
+                DrawCubeWires(
+                    (Vector3) {x + GRID_CELL_SIZE / 2, y + GRID_CELL_SIZE / 2, 1},
+                    GRID_CELL_SIZE,
+                    GRID_CELL_SIZE,
+                    0.1f,
+                    PUFF_BACKGROUND2);
             }
         }
     }
@@ -1292,8 +1433,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             float raw_x = -env->agents[agent_idx].sim_x * pixels_per_world_unit;
             float raw_y = env->agents[agent_idx].sim_y * pixels_per_world_unit;
 
-            int screen_x = (int)raw_x + client->width / 2 + 20;
-            int screen_y = (int)raw_y + client->height / 2 - 25;
+            int screen_x = (int) raw_x + client->width / 2 + 20;
+            int screen_y = (int) raw_y + client->height / 2 - 25;
 
             if (screen_x >= 0 && screen_x <= client->width && screen_y >= 0 && screen_y <= client->height) {
                 char text[32];
@@ -1305,16 +1446,27 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
-void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height, int obs,
-                      int lasers, int trajectories, int frame_count, float *path, int log_trajectories, int show_grid) {
+void saveTopDownImage(
+    Drive *env,
+    Client *client,
+    const char *filename,
+    RenderTexture2D target,
+    int map_height,
+    int obs,
+    int lasers,
+    int trajectories,
+    int frame_count,
+    float *path,
+    int log_trajectories,
+    int show_grid) {
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
-    camera.target = (Vector3){0.0f, 0.0f, 0.0f};     // look at origin
-    camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+    camera.position = (Vector3) {0.0f, 0.0f, 500.0f}; // above the scene
+    camera.target = (Vector3) {0.0f, 0.0f, 0.0f};     // look at origin
+    camera.up = (Vector3) {0.0f, -1.0f, 0.0f};
     camera.fovy = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
-    Color road = (Color){35, 35, 37, 255};
+    Color road = (Color) {35, 35, 37, 255};
 
     BeginTextureMode(target);
     ClearBackground(road);
@@ -1329,9 +1481,10 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
                 float x = agent->log_trajectory_x[j];
                 float y = agent->log_trajectory_y[j];
                 float valid = agent->log_valid[j];
-                if (!valid)
+                if (!valid) {
                     continue;
-                DrawSphere((Vector3){x, y, 0.5f}, 0.3f, Fade(LIGHTGREEN, 0.6f));
+                }
+                DrawSphere((Vector3) {x, y, 0.5f}, 0.3f, Fade(LIGHTGREEN, 0.6f));
             }
         }
     }
@@ -1339,7 +1492,7 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
     // Draw current path trajectories SECOND (slightly higher than log trajectories)
     if (trajectories) {
         for (int i = 0; i < frame_count; i++) {
-            DrawSphere((Vector3){path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
+            DrawSphere((Vector3) {path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
         }
     }
 
@@ -1356,23 +1509,32 @@ void saveTopDownImage(Drive *env, Client *client, const char *filename, RenderTe
     UnloadImage(img);
 }
 
-void saveAgentViewImage(Drive *env, Client *client, const char *filename, RenderTexture2D target, int map_height,
-                        int obs_only, int lasers, int show_grid) {
+void saveAgentViewImage(
+    Drive *env,
+    Client *client,
+    const char *filename,
+    RenderTexture2D target,
+    int map_height,
+    int obs_only,
+    int lasers,
+    int show_grid) {
     // Agent perspective camera following the human agent
     int agent_idx = env->active_agent_indices[env->human_agent_idx];
     Agent *agent = &env->agents[agent_idx];
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
-    camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
-                                agent->sim_y - (25.0f * sinf(agent->sim_heading)), 15.0f};
-    camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
-                              agent->sim_y + 40.0f * sinf(agent->sim_heading), 1.0f};
-    camera.up = (Vector3){0.0f, 0.0f, 1.0f};
+    camera.position = (Vector3) {agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+                                 agent->sim_y - (25.0f * sinf(agent->sim_heading)),
+                                 15.0f};
+    camera.target = (Vector3) {agent->sim_x + 40.0f * cosf(agent->sim_heading),
+                               agent->sim_y + 40.0f * sinf(agent->sim_heading),
+                               1.0f};
+    camera.up = (Vector3) {0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
-    Color road = (Color){35, 35, 37, 255};
+    Color road = (Color) {35, 35, 37, 255};
 
     BeginTextureMode(target);
     ClearBackground(road);
@@ -1408,39 +1570,40 @@ void c_render(Drive *env, int view_mode) {
     // the agent moves through the map. Mirrors 3.0 drive.h's c_render.
     Camera3D render_camera;
     if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_TOPDOWN_SIM) {
-        render_camera = (Camera3D){0};
+        render_camera = (Camera3D) {0};
         float cx = (env->grid_map->top_left_x + env->grid_map->bottom_right_x) * 0.5f;
         float cy = (env->grid_map->top_left_y + env->grid_map->bottom_right_y) * 0.5f;
-        render_camera.position = (Vector3){cx, cy, 400.0f};
-        render_camera.target = (Vector3){cx, cy, 0.0f};
-        render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+        render_camera.position = (Vector3) {cx, cy, 400.0f};
+        render_camera.target = (Vector3) {cx, cy, 0.0f};
+        render_camera.up = (Vector3) {0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
         float map_w = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
         float map_h = fabsf(env->grid_map->bottom_right_y - env->grid_map->top_left_y);
         render_camera.fovy = fmaxf(map_w, map_h) * 1.05f;
-    } else if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS &&
-               env->active_agent_count > 0) {
+    } else if (
+        env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
         int agent_idx = env->active_agent_indices[env->human_agent_idx];
         Agent *agent = &env->agents[agent_idx];
-        render_camera = (Camera3D){0};
-        render_camera.position = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z + 400.0f};
-        render_camera.target = (Vector3){agent->sim_x, agent->sim_y, agent->sim_z};
-        render_camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+        render_camera = (Camera3D) {0};
+        render_camera.position = (Vector3) {agent->sim_x, agent->sim_y, agent->sim_z + 400.0f};
+        render_camera.target = (Vector3) {agent->sim_x, agent->sim_y, agent->sim_z};
+        render_camera.up = (Vector3) {0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
-        float _bev_obs_window =
-            fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist);
-        int _bev_vrange = (int)ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
-        render_camera.fovy = (float)_bev_vrange * GRID_CELL_SIZE * 2.0f;
+        float _bev_obs_window
+            = fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist);
+        int _bev_vrange = (int) ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
+        render_camera.fovy = (float) _bev_vrange * GRID_CELL_SIZE * 2.0f;
     } else {
         render_camera = client->camera;
     }
 
     BeginDrawing();
-    Color road = (Color){35, 35, 37, 255};
+    Color road = (Color) {35, 35, 37, 255};
     ClearBackground(road);
     BeginMode3D(render_camera);
-    if (env->render_mode != RENDER_HEADLESS)
+    if (env->render_mode != RENDER_HEADLESS) {
         handle_camera_controls(env->client);
+    }
     if (client->road_cache_valid) {
         draw_road_cached(client);
     }
@@ -1455,25 +1618,47 @@ void c_render(Drive *env, int view_mode) {
     }
     if (env->render_mode != RENDER_HEADLESS) {
         // Debug overlay — only meaningful in the interactive viewer.
-        DrawText(TextFormat("Camera Position: (%.2f, %.2f, %.2f)", client->camera.position.x, client->camera.position.y,
-                            client->camera.position.z),
-                 10, 10, 20, PUFF_WHITE);
-        DrawText(TextFormat("Camera Target: (%.2f, %.2f, %.2f)", client->camera.target.x, client->camera.target.y,
-                            client->camera.target.z),
-                 10, 30, 20, PUFF_WHITE);
+        DrawText(
+            TextFormat(
+                "Camera Position: (%.2f, %.2f, %.2f)",
+                client->camera.position.x,
+                client->camera.position.y,
+                client->camera.position.z),
+            10,
+            10,
+            20,
+            PUFF_WHITE);
+        DrawText(
+            TextFormat(
+                "Camera Target: (%.2f, %.2f, %.2f)",
+                client->camera.target.x,
+                client->camera.target.y,
+                client->camera.target.z),
+            10,
+            30,
+            20,
+            PUFF_WHITE);
         DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
         int human_idx = env->active_agent_indices[env->human_agent_idx];
         DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
         DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
-        DrawText("Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent", 10, client->height - 30, 20,
-                 PUFF_WHITE);
+        DrawText(
+            "Controls: W/S - Accelerate/Brake, A/D - Steer, 1-4 - Switch Agent",
+            10,
+            client->height - 30,
+            20,
+            PUFF_WHITE);
         if (env->action_type == 1) { // continuous (float)
-            float (*action_array_f)[2] = (float (*)[2])env->actions;
-            DrawText(TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]), 10, 110, 20,
-                     PUFF_WHITE);
+            float (*action_array_f)[2] = (float (*)[2]) env->actions;
+            DrawText(
+                TextFormat("Acceleration: %.2f", action_array_f[env->human_agent_idx][0]),
+                10,
+                110,
+                20,
+                PUFF_WHITE);
             DrawText(TextFormat("Steering: %.2f", action_array_f[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
         } else { // discrete (int)
-            int (*action_array)[2] = (int (*)[2])env->actions;
+            int (*action_array)[2] = (int (*)[2]) env->actions;
             DrawText(TextFormat("Acceleration: %d", action_array[env->human_agent_idx][0]), 10, 110, 20, PUFF_WHITE);
             DrawText(TextFormat("Steering: %d", action_array[env->human_agent_idx][1]), 10, 130, 20, PUFF_WHITE);
         }
@@ -1505,10 +1690,10 @@ void close_client(Client *client) {
 #ifdef DRIVE_HAS_EGL
         if (client->egl_mode && client->pbo_frame_count > 0) {
             int prev = 1 - client->pbo_index;
-            int w = (int)client->width, h = (int)client->height;
+            int w = (int) client->width, h = (int) client->height;
             int row_bytes = w * 4;
             glBindBuffer(GL_PIXEL_PACK_BUFFER, client->pbo[prev]);
-            unsigned char *ptr = (unsigned char *)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+            unsigned char *ptr = (unsigned char *) glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
             if (ptr) {
                 int iov_max = 1024;
                 int rows_remaining = h;
@@ -1520,7 +1705,7 @@ void close_client(Client *client) {
                     size_t chunk_bytes = 0;
                     for (int i = 0; i < chunk; i++) {
                         int src_row = h - 1 - (row_top + i);
-                        iov[i].iov_base = ptr + (size_t)src_row * row_bytes;
+                        iov[i].iov_base = ptr + (size_t) src_row * row_bytes;
                         iov[i].iov_len = row_bytes;
                         chunk_bytes += row_bytes;
                     }
@@ -1530,20 +1715,21 @@ void close_client(Client *client) {
                     while (cur_remaining > 0) {
                         ssize_t written = writev(client->recorder_pipefd[1], cur, cur_cnt);
                         if (written < 0) {
-                            if (errno == EINTR)
+                            if (errno == EINTR) {
                                 continue;
+                            }
                             io_error = 1;
                             break;
                         }
-                        cur_remaining -= (size_t)written;
-                        size_t consumed = (size_t)written;
+                        cur_remaining -= (size_t) written;
+                        size_t consumed = (size_t) written;
                         while (cur_cnt > 0 && consumed >= cur[0].iov_len) {
                             consumed -= cur[0].iov_len;
                             cur++;
                             cur_cnt--;
                         }
                         if (cur_cnt > 0 && consumed > 0) {
-                            cur[0].iov_base = (unsigned char *)cur[0].iov_base + consumed;
+                            cur[0].iov_base = (unsigned char *) cur[0].iov_base + consumed;
                             cur[0].iov_len -= consumed;
                         }
                     }

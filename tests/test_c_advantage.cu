@@ -1,14 +1,25 @@
+#include "c_advantage.cu"
+
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include "c_advantage.cu"
 
 // Kernel declaration
-__global__ void advantage_kernel(float *reward_block, float *reward_mask, float *values_mean, float *values_std,
-                                 float *buf, float *dones, float *rewards, float *advantages, int *bounds,
-                                 int num_steps, float r_std, int horizon);
+__global__ void advantage_kernel(
+    float *reward_block,
+    float *reward_mask,
+    float *values_mean,
+    float *values_std,
+    float *buf,
+    float *dones,
+    float *rewards,
+    float *advantages,
+    int *bounds,
+    int num_steps,
+    float r_std,
+    int horizon);
 
 #define NUM_STEPS 6
 #define HORIZON 4
@@ -39,15 +50,15 @@ int main() {
     const int bounds_size = NUM_STEPS * sizeof(int);
 
     // Host buffers
-    float *h_reward_block = (float *)malloc(block_size);
-    float *h_reward_mask = (float *)malloc(block_size);
-    float *h_values_mean = (float *)malloc(block_size);
-    float *h_values_std = (float *)malloc(block_size);
-    float *h_buf = (float *)malloc(block_size);
-    float *h_dones = (float *)malloc(steps_size);
-    float *h_rewards = (float *)malloc(steps_size);
-    float *h_advantages = (float *)malloc(steps_size);
-    int *h_bounds = (int *)malloc(bounds_size);
+    float *h_reward_block = (float *) malloc(block_size);
+    float *h_reward_mask = (float *) malloc(block_size);
+    float *h_values_mean = (float *) malloc(block_size);
+    float *h_values_std = (float *) malloc(block_size);
+    float *h_buf = (float *) malloc(block_size);
+    float *h_dones = (float *) malloc(steps_size);
+    float *h_rewards = (float *) malloc(steps_size);
+    float *h_advantages = (float *) malloc(steps_size);
+    int *h_bounds = (int *) malloc(bounds_size);
 
     // Device buffers
     float *d_reward_block, *d_reward_mask, *d_values_mean, *d_values_std;
@@ -55,15 +66,15 @@ int main() {
     int *d_bounds;
 
     // Allocate device memory
-    cudaMalloc((void **)&d_reward_block, block_size);
-    cudaMalloc((void **)&d_reward_mask, block_size);
-    cudaMalloc((void **)&d_values_mean, block_size);
-    cudaMalloc((void **)&d_values_std, block_size);
-    cudaMalloc((void **)&d_buf, block_size);
-    cudaMalloc((void **)&d_dones, steps_size);
-    cudaMalloc((void **)&d_rewards, steps_size);
-    cudaMalloc((void **)&d_advantages, steps_size);
-    cudaMalloc((void **)&d_bounds, bounds_size);
+    cudaMalloc((void **) &d_reward_block, block_size);
+    cudaMalloc((void **) &d_reward_mask, block_size);
+    cudaMalloc((void **) &d_values_mean, block_size);
+    cudaMalloc((void **) &d_values_std, block_size);
+    cudaMalloc((void **) &d_buf, block_size);
+    cudaMalloc((void **) &d_dones, steps_size);
+    cudaMalloc((void **) &d_rewards, steps_size);
+    cudaMalloc((void **) &d_advantages, steps_size);
+    cudaMalloc((void **) &d_bounds, bounds_size);
 
     // Initialize test data
     // Copy input data to device
@@ -77,9 +88,19 @@ int main() {
     int blocks = (NUM_STEPS + threadsPerBlock - 1) / threadsPerBlock;
 
     // Launch kernel
-    advantage_kernel<<<blocks, threadsPerBlock>>>(d_reward_block, d_reward_mask, d_values_mean, d_values_std, d_buf,
-                                                  d_dones, d_rewards, d_advantages, d_bounds, NUM_STEPS, r_std,
-                                                  HORIZON);
+    advantage_kernel<<<blocks, threadsPerBlock>>>(
+        d_reward_block,
+        d_reward_mask,
+        d_values_mean,
+        d_values_std,
+        d_buf,
+        d_dones,
+        d_rewards,
+        d_advantages,
+        d_bounds,
+        NUM_STEPS,
+        r_std,
+        HORIZON);
 
     cudaGetLastError();
     cudaDeviceSynchronize();
