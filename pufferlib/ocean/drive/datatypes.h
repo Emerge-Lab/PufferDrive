@@ -113,19 +113,33 @@ struct ttc_result {
     float closing_speed;
 };
 
-static inline int is_road_lane(int type) { return (type >= 0 && type <= 9); }
+static inline int is_road_lane(int type) {
+    return (type >= 0 && type <= 9);
+}
 
-static inline int is_drivable_road_lane(int type) { return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET); }
+static inline int is_drivable_road_lane(int type) {
+    return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
+}
 
-static inline int is_road_line(int type) { return (type >= 10 && type <= 19); }
+static inline int is_road_line(int type) {
+    return (type >= 10 && type <= 19);
+}
 
-static inline int is_road_edge(int type) { return (type >= 20 && type <= 29); }
+static inline int is_road_edge(int type) {
+    return (type >= 20 && type <= 29);
+}
 
-static inline int is_misc_road(int type) { return type >= MISC_UNKNOWN; }
+static inline int is_misc_road(int type) {
+    return type >= MISC_UNKNOWN;
+}
 
-static inline int is_road(int type) { return is_road_lane(type) || is_road_line(type) || is_road_edge(type); }
+static inline int is_road(int type) {
+    return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
+}
 
-static inline int is_controllable_agent(int type) { return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST); }
+static inline int is_controllable_agent(int type) {
+    return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
+}
 
 static inline int normalize_road_type(int type) {
     if (is_road_lane(type)) {

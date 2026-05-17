@@ -1,8 +1,10 @@
 #include "drive.h"
-#include "drivenet.h"
-#include <string.h>
-#include <dirent.h>
+
 #include "../env_config.h"
+#include "drivenet.h"
+
+#include <dirent.h>
+#include <string.h>
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -35,10 +37,11 @@ void test_drivenet() {
 }
 
 static inline int compute_effective_road_obs_count(int max_count, float dropout) {
-    if (max_count <= 0)
+    if (max_count <= 0) {
         return 0;
+    }
     float clipped_dropout = clip(dropout, 0.0f, 1.0f);
-    return (int)(max_count * (1.0f - clipped_dropout));
+    return (int) (max_count * (1.0f - clipped_dropout));
 }
 
 void demo() {
@@ -128,10 +131,10 @@ void demo() {
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
         .phantom_braking_duration = conf.phantom_braking_duration,
     };
-    env.obs_lane_segment_count =
-        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
-    env.obs_boundary_segment_count =
-        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+    env.obs_lane_segment_count
+        = compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
+    env.obs_boundary_segment_count
+        = compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
 
     allocate(&env);
     c_reset(&env);
@@ -142,7 +145,7 @@ void demo() {
     int steer_delta = 4;
     while (!WindowShouldClose()) {
         // Handle camera controls
-        int (*actions)[2] = (int (*)[2])env.actions;
+        int (*actions)[2] = (int (*)[2]) env.actions;
         forward(net, env.observations, env.actions);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             actions[env.human_agent_idx][0] = 3;
@@ -253,10 +256,10 @@ void performance_test() {
         .phantom_braking_duration = conf.phantom_braking_duration,
 
     };
-    env.obs_lane_segment_count =
-        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
-    env.obs_boundary_segment_count =
-        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+    env.obs_lane_segment_count
+        = compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
+    env.obs_boundary_segment_count
+        = compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
 
     struct timespec ts_total_start, ts_total_end;
     struct timespec ts_init_start, ts_init_end;
@@ -280,7 +283,7 @@ void performance_test() {
     clock_gettime(CLOCK_MONOTONIC, &ts_step_start);
     while (time(NULL) - start < test_time) {
         // Set random discrete actions for all agents
-        int (*actions)[2] = (int (*)[2])env.actions;
+        int (*actions)[2] = (int (*)[2]) env.actions;
         for (int j = 0; j < env.active_agent_count; j++) {
             actions[j][0] = rand() % 7;
             actions[j][1] = rand() % 13;

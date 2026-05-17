@@ -2,9 +2,9 @@
 #define ENV_CONFIG_H
 
 #include <../../inih-r62/ini.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Config struct for parsing INI files - contains all environment configuration
 typedef struct {
@@ -61,7 +61,7 @@ typedef struct {
 
 // INI file parser handler - parses all environment configuration from drive.ini
 static int handler(void *config, const char *section, const char *name, const char *value) {
-    env_init_config *env_config = (env_init_config *)config;
+    env_init_config *env_config = (env_init_config *) config;
 #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
 
     if (MATCH("env", "action_type")) {

@@ -1,10 +1,10 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
 
 // Error types enumeration
 typedef enum {
@@ -55,7 +55,9 @@ void raise_error_with_message(ErrorType type, const char *format, ...) {
 }
 
 // Simple error function (backward compatibility)
-void raise_error(ErrorType type) { raise_error_with_message(type, NULL); }
+void raise_error(ErrorType type) {
+    raise_error_with_message(type, NULL);
+}
 
 // Convenience macros for common error patterns
 #define RAISE_FILE_ERROR(path) raise_error_with_message(ERROR_FILE_NOT_FOUND, "at path: %s", path)
