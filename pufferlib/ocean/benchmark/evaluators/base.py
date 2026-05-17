@@ -221,12 +221,14 @@ class Evaluator:
 
     def _render_pass(self, vecenv, policy, args) -> list:
         """Build a fresh PufferEnv with `render_mode=headless`, render one
-        clip per (scenario, view), return mp4 paths. Returns [] for non-egl
-        backends. Subclasses customize the render env via `_render_env_overrides`.
+        clip per (scenario, view), return mp4 paths (egl) or html paths (html).
+        Subclasses customize the render env via `_render_env_overrides`.
         """
         backend = args.get("render_backend", "egl")
-        if backend != "egl":
-            return []
+        if backend == "html":
+            return self._render_pass_html(vecenv, policy, args)
+        if backend not in ["egl", "html"]:
+            raise ValueError(f"Evaluator: _render_pass only accepts egl, html backends but got {backend} instead.")
 
         import importlib
         from pathlib import Path
@@ -276,6 +278,104 @@ class Evaluator:
             vec.close()
             all_paths.extend(paths)
         return all_paths
+
+    def _render_pass_html(self, vecenv, policy, args) -> list:
+        """CPU-only HTML render path. Creates a fresh env with
+        capture_compact_replay=True, runs one episode per requested scenario,
+        and writes one .html file per episode via mining_viz."""
+        import importlib
+        import pickle
+        import tempfile
+        import zlib
+        from pathlib import Path
+
+        import numpy as np
+        import torch
+
+        import pufferlib
+        from pufferlib import mining_viz
+
+        eval_cfg = self.config.get("eval", {})
+        for required in ("render_num_scenarios", "render_max_steps"):
+            if required not in eval_cfg:
+                raise KeyError(f"[eval.{self.name}] has render=true but eval.{required} is not set.")
+        num_scenarios = int(eval_cfg["render_num_scenarios"])
+        max_steps = int(eval_cfg["render_max_steps"])
+
+        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "gif" / self.name
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        step_suffix = f"_epoch{epoch}_step{global_step}"
+
+        package = args.get("package", "ocean")
+        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+        env_module = importlib.import_module(module_name)
+        make_env = env_module.env_creator(args["env_name"])
+
+        render_env_kwargs = self._render_env_overrides(args)
+        render_env_kwargs["capture_compact_replay"] = True
+        render_env_kwargs["emit_completed_episodes"] = True
+
+        device = args["train"]["device"]
+        html_paths = []
+        scenarios_done = 0
+
+        vec = pufferlib.vector.make(
+            make_env,
+            env_args=[],
+            env_kwargs=render_env_kwargs,
+            backend="PufferEnv",
+            num_envs=1,
+        )
+        try:
+            state = self._init_lstm_state(vec.observation_space.shape[0], policy, device, args)
+            ob, _ = vec.reset()
+            if state:
+                state["lstm_h"].zero_()
+                state["lstm_c"].zero_()
+
+            for _ in range(max_steps * num_scenarios):
+                with torch.no_grad():
+                    ob_t = torch.as_tensor(ob).to(device)
+                    logits, _ = policy.forward_eval(ob_t, state)
+                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                    action = action.cpu().numpy().reshape(vec.action_space.shape)
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, vec.action_space.low, vec.action_space.high)
+
+                ob, _, terminals, truncations, infos = vec.step(action)
+
+                if state:
+                    done = np.asarray(terminals).astype(bool) | np.asarray(truncations).astype(bool)
+                    mask = torch.as_tensor(~done, device=device, dtype=state["lstm_h"].dtype).reshape(-1, 1)
+                    state["lstm_h"] *= mask
+                    state["lstm_c"] *= mask
+
+                for info in infos or []:
+                    bundle_bytes = info.get("compact_replay_bundle")
+                    if bundle_bytes is None:
+                        continue
+                    scenario_id = info.get("scenario_id") or f"{scenarios_done:04d}"
+                    map_name = info.get("map_name") or "map"
+                    stem = f"{map_name}_{scenario_id}{step_suffix}"
+                    tmp_path = out_dir / f"{stem}.pkl.zlib"
+                    html_path = out_dir / f"{stem}.html"
+                    tmp_path.write_bytes(bundle_bytes)
+                    mining_viz.render_compact_replay_html(str(tmp_path), str(html_path))
+                    tmp_path.unlink(missing_ok=True)
+                    html_paths.append(html_path)
+                    scenarios_done += 1
+                    if scenarios_done >= num_scenarios:
+                        break
+
+                if scenarios_done >= num_scenarios:
+                    break
+        finally:
+            vec.close()
+
+        return html_paths
 
     def _render_env_overrides(self, args) -> dict:
         """Build env kwargs for the render env. Default: same as the

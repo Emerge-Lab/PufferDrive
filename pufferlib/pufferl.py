@@ -1523,6 +1523,15 @@ def eval(
             "puffer eval requires --evaluator <name>; named [eval.<name>] sections live in drive.ini"
         )
 
+    # Derive a default render output dir from the model path when none is set.
+    # experiments/puffer_drive_e6guw2wv/models/model.pt → benchmark/puffer_e6guw2wv
+    if not args.get("render_results_dir") and not args.get("eval_results_dir"):
+        load_model_path = args.get("load_model_path")
+        if load_model_path:
+            exp_name = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(load_model_path))))
+            run_id = exp_name.removeprefix(f"{env_name}_")
+            args["render_results_dir"] = os.path.join("benchmark", f"puffer_{run_id}")
+
     manager = EvalManager.from_config(args)
 
     # Build a fresh vecenv inside the manager via the evaluator's overrides.
