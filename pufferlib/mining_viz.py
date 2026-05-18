@@ -17,8 +17,8 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version != 2:
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=2.")
+    if schema_version != 3:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=3.")
 
     required_top_level = ("metadata", "agent_arrays", "traffic_arrays")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
@@ -106,6 +106,8 @@ def _materialize_agent_frames(replay_bundle):
                     "heading": float(agent_arrays["heading"][frame_idx, slot_idx]),
                     "length": float(agent_arrays["length"][frame_idx, slot_idx]),
                     "width": float(agent_arrays["width"][frame_idx, slot_idx]),
+                    "vx": float(agent_arrays["vx"][frame_idx, slot_idx]),
+                    "vy": float(agent_arrays["vy"][frame_idx, slot_idx]),
                 }
             )
         frames.append(frame)
@@ -468,12 +470,16 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">TTC Within Bound</span><span class="meta-value" id="meta-ttc"></span></div>
         <div class="meta-item"><span class="meta-label">Progress Ratio</span><span class="meta-value" id="meta-progress-ratio"></span></div>
         <div class="meta-item"><span class="meta-label">Puffer Score</span><span class="meta-value" id="meta-puffer-score"></span></div>
+        <div class="meta-item"><span class="meta-label">Focused Agent</span><span class="meta-value" id="focus-agent">none</span></div>
+        <div class="meta-item"><span class="meta-label">Focused Speed</span><span class="meta-value" id="focus-speed">n/a</span></div>
+        <div class="meta-item"><span class="meta-label">Focused Velocity</span><span class="meta-value" id="focus-velocity">n/a</span></div>
       </div>
       <div class="legend">
         <div class="legend-row"><span class="swatch" style="background: var(--target)"></span>Target</div>
         <div class="legend-row"><span class="swatch" style="background: var(--active)"></span>Active adversary</div>
         <div class="legend-row"><span class="swatch" style="background: var(--inactive)"></span>Inactive / static</div>
         <div class="legend-row"><span class="swatch" style="background: var(--stopped)"></span>Stopped / crashed</div>
+        <div class="legend-row"><span class="swatch" style="background: #05a3c7"></span>Velocity vector</div>
       </div>
     </aside>
     <main class="panel viewer">
@@ -483,6 +489,7 @@ HTML_TEMPLATE = """<!doctype html>
           <p class="viewer-subtitle">Lightweight mining viewer</p>
         </div>
         <div class="viewer-tools">
+          <button id="velocity-toggle" type="button">Hide Vectors</button>
           <button id="reset-view" type="button">Reset View</button>
           <div id="status-pill" class="pill">Target failed</div>
         </div>
@@ -510,6 +517,7 @@ HTML_TEMPLATE = """<!doctype html>
     const episodeList = document.getElementById('episode-list');
     const focusTargetButton = document.getElementById('focus-target');
     const resetViewButton = document.getElementById('reset-view');
+    const velocityToggleButton = document.getElementById('velocity-toggle');
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
@@ -527,6 +535,8 @@ HTML_TEMPLATE = """<!doctype html>
     let dragState = null;
     let hitAgents = [];
     let followTarget = false;
+    let selectedAgentId = null;
+    let showVelocityVectors = true;
 
     function summaryValue(key, fallback=null) {
       if (summary[key] != null) return summary[key];
@@ -645,8 +655,37 @@ HTML_TEMPLATE = """<!doctype html>
       return (frame || []).find(agent => agent.is_target);
     }
 
+    function speedOfAgent(agent) {
+      return Math.hypot(Number(agent.vx || 0), Number(agent.vy || 0));
+    }
+
+    function findAgentById(frame, id) {
+      return (frame || []).find(agent => agent.id === id);
+    }
+
+    function isAgentBraking(agent) {
+      if (frameIndex <= 0) return speedOfAgent(agent) < 0.1;
+      const prev = findAgentById(frames[frameIndex - 1], agent.id);
+      if (!prev) return speedOfAgent(agent) < 0.1;
+      return speedOfAgent(agent) < speedOfAgent(prev) - 0.05 || speedOfAgent(agent) < 0.1;
+    }
+
+    function updateFocusedAgentTelemetry() {
+      const agent = selectedAgentId == null ? null : findAgentById(frames[frameIndex], selectedAgentId);
+      document.getElementById('focus-agent').innerText = agent ? String(agent.id) : 'none';
+      if (!agent) {
+        document.getElementById('focus-speed').innerText = 'n/a';
+        document.getElementById('focus-velocity').innerText = 'n/a';
+        return;
+      }
+      const speed = speedOfAgent(agent);
+      document.getElementById('focus-speed').innerText = `${speed.toFixed(2)} m/s | ${(speed * 3.6).toFixed(1)} km/h`;
+      document.getElementById('focus-velocity').innerText = `vx=${Number(agent.vx || 0).toFixed(2)}, vy=${Number(agent.vy || 0).toFixed(2)}`;
+    }
+
     function focusOnAgent(agent, zoom = 2.5) {
       if (!agent) return;
+      selectedAgentId = agent.id;
       camera.x = agent.x;
       camera.y = agent.y;
       camera.zoom = zoom;
@@ -659,6 +698,7 @@ HTML_TEMPLATE = """<!doctype html>
       if (followTarget) {
         const target = findTarget(frames[frameIndex]);
         if (target) {
+          selectedAgentId = target.id;
           camera.x = target.x;
           camera.y = target.y;
           camera.zoom = Math.max(camera.zoom, 3.0);
@@ -722,6 +762,50 @@ HTML_TEMPLATE = """<!doctype html>
       }
     }
 
+    function drawVelocityVector(agent, center) {
+      if (!showVelocityVectors) return;
+      const vx = Number(agent.vx || 0);
+      const vy = Number(agent.vy || 0);
+      const speed = Math.hypot(vx, vy);
+      if (speed < 0.15) return;
+
+      const rawEnd = worldToCanvas(agent.x + vx * 0.8, agent.y + vy * 0.8);
+      let dx = rawEnd.x - center.x;
+      let dy = rawEnd.y - center.y;
+      const rawLen = Math.hypot(dx, dy);
+      if (rawLen <= 0) return;
+
+      const minLen = 10;
+      const maxLen = agent.is_target ? 90 : 70;
+      const targetLen = Math.min(maxLen, Math.max(minLen, rawLen));
+      dx = dx / rawLen * targetLen;
+      dy = dy / rawLen * targetLen;
+
+      const endX = center.x + dx;
+      const endY = center.y + dy;
+      const angle = Math.atan2(dy, dx);
+      const color = agent.is_target ? '#ef4444' : '#05a3c7';
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = agent.is_target ? 0.95 : 0.78;
+      ctx.lineWidth = agent.is_target ? 2.4 : 1.8;
+      ctx.beginPath();
+      ctx.moveTo(center.x, center.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+
+      const head = agent.is_target ? 8 : 6;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - head * Math.cos(angle - Math.PI / 6), endY - head * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(endX - head * Math.cos(angle + Math.PI / 6), endY - head * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
     function drawAgent(agent) {
       const center = worldToCanvas(agent.x, agent.y);
       const scale = center.scale;
@@ -750,7 +834,28 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.closePath();
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fill();
+      if (isAgentBraking(agent)) {
+        ctx.fillStyle = 'rgba(255,0,0,0.92)';
+        ctx.shadowColor = 'rgba(255,0,0,0.85)';
+        ctx.shadowBlur = 8;
+        const lightW = Math.max(2, length * 0.05);
+        const lightH = Math.max(2, width * 0.28);
+        ctx.fillRect(-length / 2, -width / 2, lightW, lightH);
+        ctx.fillRect(-length / 2, width / 2 - lightH, lightW, lightH);
+        ctx.shadowBlur = 0;
+      }
       ctx.restore();
+
+      drawVelocityVector(agent, center);
+      if (agent.id === selectedAgentId) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, Math.max(length, width) * 0.75, 0, Math.PI * 2);
+        ctx.strokeStyle = agent.is_target ? '#ef4444' : '#05a3c7';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
 
       hitAgents.push({
         agent,
@@ -774,6 +879,7 @@ HTML_TEMPLATE = """<!doctype html>
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
       for (const agent of frame) drawAgent(agent);
+      updateFocusedAgentTelemetry();
       frameLabel.innerText = `${frameIndex + 1} / ${Math.max(frames.length, 1)}`;
       slider.value = frameIndex;
     }
@@ -809,7 +915,13 @@ HTML_TEMPLATE = """<!doctype html>
     resetViewButton.addEventListener('click', () => {
       followTarget = false;
       focusTargetButton.innerText = 'Focus Target';
+      selectedAgentId = null;
       camera = createDefaultCamera();
+      draw();
+    });
+    velocityToggleButton.addEventListener('click', () => {
+      showVelocityVectors = !showVelocityVectors;
+      velocityToggleButton.innerText = showVelocityVectors ? 'Hide Vectors' : 'Show Vectors';
       draw();
     });
     canvas.addEventListener('mousedown', (e) => {

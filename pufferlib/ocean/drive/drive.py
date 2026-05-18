@@ -609,6 +609,8 @@ class Drive(pufferlib.PufferEnv):
                 "heading": [],
                 "length": [],
                 "width": [],
+                "vx": [],
+                "vy": [],
             },
             "traffic_frames": {
                 "valid": [],
@@ -637,6 +639,8 @@ class Drive(pufferlib.PufferEnv):
         heading = np.zeros(capacity, dtype=np.float32)
         length = np.zeros(capacity, dtype=np.float32)
         width = np.zeros(capacity, dtype=np.float32)
+        vx = np.zeros(capacity, dtype=np.float32)
+        vy = np.zeros(capacity, dtype=np.float32)
         active_indices = set(scenario.get("active_agent_indices", []))
         for idx, agent in enumerate(scenario.get("agents", [])):
             if idx >= capacity:
@@ -655,6 +659,8 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
+            vx[idx] = np.float32(agent.get("sim_vx", 0.0))
+            vy[idx] = np.float32(agent.get("sim_vy", 0.0))
         return {
             "valid": valid,
             "id": agent_id,
@@ -668,6 +674,8 @@ class Drive(pufferlib.PufferEnv):
             "heading": heading,
             "length": length,
             "width": width,
+            "vx": vx,
+            "vy": vy,
         }
 
     def _extract_compact_traffic_frame(self, scenario, timestep, capacity):
@@ -753,7 +761,7 @@ class Drive(pufferlib.PufferEnv):
             }
         )
         bundle = {
-            "schema_version": 2,
+            "schema_version": 3,
             "metadata": metadata,
             "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
             "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),

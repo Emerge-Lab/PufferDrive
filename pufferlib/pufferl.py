@@ -2510,6 +2510,8 @@ def _resolve_gigaflow_mining_maps(args):
     selectors = args.get("eval_maps")
     if selectors is None:
         selectors = args.get("env", {}).get("maps")
+    if isinstance(selectors, str) and selectors.strip().lower() in ("", "none", "null"):
+        selectors = None
     if selectors is None:
         num_carla_maps = args.get("num_carla_maps", len(all_map_files))
         return [os.path.basename(path) for path in all_map_files[:num_carla_maps]]
