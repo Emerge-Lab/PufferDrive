@@ -5878,21 +5878,21 @@ void c_step(Drive *env) {
                            env->adv_target_hit_low_responsibility_behavior == 2)) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            env->truncations[i] = 0;
-            env->terminals[i] = 0;
             if (env->adv_target_hit_low_responsibility_behavior == 1) {
+                env->truncations[i] = 0;
                 env->terminals[i] = 1;
             } else if (env->adv_target_hit_low_responsibility_behavior == 2) {
                 if (agent_idx == env->target_hit_hitter_idx_this_step) {
+                    env->truncations[i] = 0;
                     env->terminals[i] = 1;
-                } else {
-                    env->truncations[i] = 1;
                 }
             }
         }
-        add_log(env);
-        c_reset(env);
-        return;
+        if (env->adv_target_hit_low_responsibility_behavior == 1) {
+            add_log(env);
+            c_reset(env);
+            return;
+        }
     }
 
     // -> 3. Check for episode truncation
