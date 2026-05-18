@@ -142,8 +142,7 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_adversarial=1.0,
         adv_bonus_only=False,
         adv_reward_collision_offroad_only=False,
-        adv_target_hit_responsibility_reward=False,
-        adv_target_hit_reward_min_responsibility=0.0,
+        adv_target_hit_at_fault_reward=False,
         adv_target_hit_low_responsibility_threshold=-1.0,
         adv_target_hit_low_responsibility_behavior=0,
         min_waypoint_spacing=20.0,
@@ -262,8 +261,7 @@ class Drive(pufferlib.PufferEnv):
         self.adv_reward_weight_adversarial = adv_reward_weight_adversarial
         self.adv_bonus_only = adv_bonus_only
         self.adv_reward_collision_offroad_only = bool(adv_reward_collision_offroad_only)
-        self.adv_target_hit_responsibility_reward = bool(adv_target_hit_responsibility_reward)
-        self.adv_target_hit_reward_min_responsibility = float(adv_target_hit_reward_min_responsibility)
+        self.adv_target_hit_at_fault_reward = bool(adv_target_hit_at_fault_reward)
         self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
         self.adv_target_hit_low_responsibility_behavior = int(adv_target_hit_low_responsibility_behavior)
         self.goal_radius = goal_radius
@@ -858,8 +856,7 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
             "adv_bonus_only": self.adv_bonus_only,
             "adv_reward_collision_offroad_only": self.adv_reward_collision_offroad_only,
-            "adv_target_hit_responsibility_reward": self.adv_target_hit_responsibility_reward,
-            "adv_target_hit_reward_min_responsibility": self.adv_target_hit_reward_min_responsibility,
+            "adv_target_hit_at_fault_reward": self.adv_target_hit_at_fault_reward,
             "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
             "adv_target_hit_low_responsibility_behavior": self.adv_target_hit_low_responsibility_behavior,
             "collision_behavior": self.collision_behavior,

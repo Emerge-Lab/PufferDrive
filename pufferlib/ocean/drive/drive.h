@@ -388,12 +388,12 @@ struct Drive {
     float adv_reward_weight_adversarial;
     int adv_bonus_only;
     int adv_reward_collision_offroad_only;
-    int adv_target_hit_responsibility_reward;
-    float adv_target_hit_reward_min_responsibility;
+    int adv_target_hit_at_fault_reward;
     float adv_target_hit_low_responsibility_threshold;
     int adv_target_hit_low_responsibility_behavior;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
+    int target_hit_at_fault_this_step;
     float target_hit_responsibility_this_step;
     float target_hit_count_episode;
     float target_hit_responsibility_episode;
@@ -4650,6 +4650,10 @@ static void compute_metrics(Drive *env, int agent_idx) {
         if (episode_started && target_involved_collision) {
             record_target_hit_responsibility(env, agent_idx, car_collided_with_index, collision_normal_x,
                                              collision_normal_y);
+            int other_idx = (agent_idx == target_agent_idx) ? car_collided_with_index : agent_idx;
+            if (target_agent_idx >= 0 && other_idx >= 0 && is_at_fault_collision(env, target_agent_idx, other_idx)) {
+                env->target_hit_at_fault_this_step = 1;
+            }
         }
         if (episode_started && env->remove_target_on_collision_or_offroad && target_involved_collision &&
             target_agent_idx >= 0) {
@@ -5671,6 +5675,7 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
 void c_reset(Drive *env) {
     env->target_hit_this_step = 0;
     env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_at_fault_this_step = 0;
     env->target_hit_responsibility_this_step = 0.0f;
     env->target_hit_count_episode = 0.0f;
     env->target_hit_responsibility_episode = 0.0f;
@@ -5763,6 +5768,7 @@ void c_step(Drive *env) {
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
     env->target_hit_this_step = 0;
     env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_at_fault_this_step = 0;
     env->target_hit_responsibility_this_step = 0.0f;
 
     // Update masks: exclude stopped/removed agents AND erratic drivers (blind/phantom-braker)
@@ -5830,10 +5836,8 @@ void c_step(Drive *env) {
             target_reward = reward_terms[0].collision + reward_terms[0].offroad;
         }
         float target_hit_reward_multiplier = 1.0f;
-        if (env->adv_target_hit_responsibility_reward && env->target_hit_this_step) {
-            float responsibility = env->target_hit_responsibility_this_step;
-            target_hit_reward_multiplier =
-                (responsibility >= env->adv_target_hit_reward_min_responsibility) ? responsibility : 0.0f;
+        if (env->adv_target_hit_at_fault_reward && env->target_hit_this_step) {
+            target_hit_reward_multiplier = env->target_hit_at_fault_this_step ? 1.0f : 0.0f;
         }
 
         for (int i = 1; i < env->active_agent_count; i++) {
