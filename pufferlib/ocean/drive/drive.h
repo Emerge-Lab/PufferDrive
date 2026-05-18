@@ -52,6 +52,7 @@
 #define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
+#define NUPLAN_BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
 // TTC default value when no vehicle ahead
 #define DEFAULT_TTC 5.0f
@@ -63,6 +64,14 @@
 #define MULTI_LANE_THRESHOLD (LANE_WIDTH / 2.0f + LANE_MARGIN) // 2.05m
 #define MULTI_LANE_FULL_SCORE_TIME 3.4f                        // seconds
 #define MULTI_LANE_HALF_SCORE_TIME 5.7f                        // seconds
+
+// nuPlan-style collision classification
+#define COLLISION_TYPE_NONE 0
+#define COLLISION_TYPE_STOPPED_EGO 1
+#define COLLISION_TYPE_STOPPED_TRACK 2
+#define COLLISION_TYPE_ACTIVE_REAR 3
+#define COLLISION_TYPE_ACTIVE_FRONT 4
+#define COLLISION_TYPE_ACTIVE_LATERAL 5
 
 // Collision state
 #define NO_COLLISION 0
@@ -2457,6 +2466,8 @@ static bool check_line_intersection(float p1[2], float p2[2], float q1[2], float
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
+static void compute_agent_corners(const Agent *agent, float corners[4][2]);
+
 static bool check_stop_line_crossing(Drive *env, Agent *agent, int current_lane_idx, float corners[4][2]) {
     float agent_x = agent->sim_x;
     float agent_y = agent->sim_y;
@@ -2560,17 +2571,8 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     if (current_lane_idx == -1)
         return false;
 
-    // Compute bounding box corners: front-right(0), front-left(1), back-left(2), back-right(3)
-    static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
-    float half_length = agent->sim_length / 2.0f;
-    float half_width = agent->sim_width / 2.0f;
     float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0] = agent->sim_x + (offsets[i][0] * half_length * agent->cos_heading -
-                                        offsets[i][1] * half_width * agent->sin_heading);
-        corners[i][1] = agent->sim_y + (offsets[i][0] * half_length * agent->sin_heading +
-                                        offsets[i][1] * half_width * agent->cos_heading);
-    }
+    compute_agent_corners(agent, corners);
 
     if (check_stop_line_crossing(env, agent, current_lane_idx, corners))
         return true;
@@ -2581,48 +2583,67 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     return false;
 }
 
+static void compute_agent_corners(const Agent *agent, float corners[4][2]) {
+    float half_length = agent->sim_length * 0.5f;
+    float half_width = agent->sim_width * 0.5f;
+    float cos_heading = agent->cos_heading;
+    float sin_heading = agent->sin_heading;
+
+    // Front-right, front-left, rear-left, rear-right.
+    corners[0][0] = agent->sim_x + half_length * cos_heading - half_width * sin_heading;
+    corners[0][1] = agent->sim_y + half_length * sin_heading + half_width * cos_heading;
+    corners[1][0] = agent->sim_x + half_length * cos_heading + half_width * sin_heading;
+    corners[1][1] = agent->sim_y + half_length * sin_heading - half_width * cos_heading;
+    corners[2][0] = agent->sim_x - half_length * cos_heading + half_width * sin_heading;
+    corners[2][1] = agent->sim_y - half_length * sin_heading - half_width * cos_heading;
+    corners[3][0] = agent->sim_x - half_length * cos_heading - half_width * sin_heading;
+    corners[3][1] = agent->sim_y - half_length * sin_heading + half_width * cos_heading;
+}
+
+static bool point_inside_agent_box(float x, float y, const Agent *agent) {
+    float dx = x - agent->sim_x;
+    float dy = y - agent->sim_y;
+    float local_long = dx * agent->cos_heading + dy * agent->sin_heading;
+    float local_lat = -dx * agent->sin_heading + dy * agent->cos_heading;
+    return fabsf(local_long) <= 0.5f * agent->sim_length && fabsf(local_lat) <= 0.5f * agent->sim_width;
+}
+
+static bool segment_intersects_agent_box(float p1[2], float p2[2], const Agent *agent) {
+    if (point_inside_agent_box(p1[0], p1[1], agent) || point_inside_agent_box(p2[0], p2[1], agent))
+        return true;
+
+    float corners[4][2];
+    compute_agent_corners(agent, corners);
+    for (int i = 0; i < 4; i++) {
+        int next = (i + 1) % 4;
+        if (check_line_intersection(p1, p2, corners[i], corners[next]))
+            return true;
+    }
+    return false;
+}
+
+static bool front_bumper_intersects_agent(const Agent *ego, const Agent *other) {
+    float corners[4][2];
+    compute_agent_corners(ego, corners);
+    return segment_intersects_agent_box(corners[0], corners[1], other);
+}
+
 // OBB collision via SAT (Separating Axis Theorem).
 // Projects both boxes onto 4 axes (2 per car) and checks for overlap on all axes.
 // When intersecting, returns the minimum-penetration axis oriented from car1 toward car2.
 static bool check_obb_collision_with_normal(Agent *car1, Agent *car2, float *normal_x, float *normal_y,
                                             float *penetration_depth) {
-    // Get car corners in world space
-    float cos1 = car1->cos_heading;
-    float sin1 = car1->sin_heading;
-
-    float cos2 = car2->cos_heading;
-    float sin2 = car2->sin_heading;
-
-    // Calculate half dimensions
-    float half_len1 = car1->sim_length * 0.5f;
-    float half_width1 = car1->sim_width * 0.5f;
-    float half_len2 = car2->sim_length * 0.5f;
-    float half_width2 = car2->sim_width * 0.5f;
-
-    // Calculate car1's corners in world space
-    float car1_corners[4][2] = {
-        {car1->sim_x + (half_len1 * cos1 - half_width1 * sin1), car1->sim_y + (half_len1 * sin1 + half_width1 * cos1)},
-        {car1->sim_x + (half_len1 * cos1 + half_width1 * sin1), car1->sim_y + (half_len1 * sin1 - half_width1 * cos1)},
-        {car1->sim_x + (-half_len1 * cos1 - half_width1 * sin1),
-         car1->sim_y + (-half_len1 * sin1 + half_width1 * cos1)},
-        {car1->sim_x + (-half_len1 * cos1 + half_width1 * sin1),
-         car1->sim_y + (-half_len1 * sin1 - half_width1 * cos1)}};
-
-    // Calculate car2's corners in world space
-    float car2_corners[4][2] = {
-        {car2->sim_x + (half_len2 * cos2 - half_width2 * sin2), car2->sim_y + (half_len2 * sin2 + half_width2 * cos2)},
-        {car2->sim_x + (half_len2 * cos2 + half_width2 * sin2), car2->sim_y + (half_len2 * sin2 - half_width2 * cos2)},
-        {car2->sim_x + (-half_len2 * cos2 - half_width2 * sin2),
-         car2->sim_y + (-half_len2 * sin2 + half_width2 * cos2)},
-        {car2->sim_x + (-half_len2 * cos2 + half_width2 * sin2),
-         car2->sim_y + (-half_len2 * sin2 - half_width2 * cos2)}};
+    float car1_corners[4][2];
+    float car2_corners[4][2];
+    compute_agent_corners(car1, car1_corners);
+    compute_agent_corners(car2, car2_corners);
 
     // Get the axes to check (normalized vectors perpendicular to each edge)
     float axes[4][2] = {
-        {cos1, sin1},  // Car1's length axis
-        {-sin1, cos1}, // Car1's width axis
-        {cos2, sin2},  // Car2's length axis
-        {-sin2, cos2}  // Car2's width axis
+        {car1->cos_heading, car1->sin_heading},  // Car1's length axis
+        {-car1->sin_heading, car1->cos_heading}, // Car1's width axis
+        {car2->cos_heading, car2->sin_heading},  // Car2's length axis
+        {-car2->sin_heading, car2->cos_heading}, // Car2's width axis
     };
 
     float best_overlap = INFINITY;
@@ -2867,28 +2888,61 @@ static bool is_adversarial_agent(Drive *env, int agent_idx) {
     return false;
 }
 
+static bool is_agent_behind_rear_axle(const Agent *ego, const Agent *other) {
+    // nuPlan uses is_agent_behind(ego.rear_axle, other.box.center), where behind
+    // means relative angle > 150 degrees. Use the equivalent normalized dot test.
+    float rear_x = ego->sim_x - 0.5f * ego->sim_length * ego->cos_heading;
+    float rear_y = ego->sim_y - 0.5f * ego->sim_length * ego->sin_heading;
+    float dx = other->sim_x - rear_x;
+    float dy = other->sim_y - rear_y;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist < 1e-6f)
+        return false;
+
+    float dot = (ego->cos_heading * dx + ego->sin_heading * dy) / dist;
+    return dot < NUPLAN_BEHIND_COS_THRESHOLD;
+}
+
+static bool is_agent_cleanly_in_lane(const Agent *agent) {
+    if (agent->current_lane_idx == -1)
+        return false;
+
+    float edge_dist = fabsf(agent->metrics_array[LANE_DIST_IDX]) + 0.5f * agent->sim_width;
+    return edge_dist <= MULTI_LANE_THRESHOLD;
+}
+
+static int classify_collision_type(const Agent *ego, const Agent *other) {
+    if (ego->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD)
+        return COLLISION_TYPE_STOPPED_EGO;
+
+    if (other->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD)
+        return COLLISION_TYPE_STOPPED_TRACK;
+
+    if (is_agent_behind_rear_axle(ego, other))
+        return COLLISION_TYPE_ACTIVE_REAR;
+
+    if (front_bumper_intersects_agent(ego, other))
+        return COLLISION_TYPE_ACTIVE_FRONT;
+
+    return COLLISION_TYPE_ACTIVE_LATERAL;
+}
+
 // Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     Agent *agent = &env->agents[agent_idx];
     Agent *other = &env->agents[other_idx];
+    int collision_type = classify_collision_type(agent, other);
 
-    // Rule 1: Collision with stopped vehicle = always at-fault.
-    if (other->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD)
+    if (collision_type == COLLISION_TYPE_STOPPED_TRACK)
         return true;
 
-    // Rule 2: If ego is stopped = never at-fault.
-    if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD)
-        return false;
+    if (collision_type == COLLISION_TYPE_ACTIVE_FRONT)
+        return true;
 
-    // Rule 3: Rear-bumper collision = not at-fault.
-    // Check if the other car hit our rear using the heading-aligned relative position.
-    float dx = other->sim_x - agent->sim_x;
-    float dy = other->sim_y - agent->sim_y;
-    float dot = dx * agent->cos_heading + dy * agent->sin_heading;
-    if (dot < 0)
-        return false;
+    if (collision_type == COLLISION_TYPE_ACTIVE_LATERAL)
+        return !is_agent_cleanly_in_lane(agent);
 
-    return true;
+    return false;
 }
 
 static inline struct ttc_result default_ttc_result(void) {
@@ -3287,21 +3341,17 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, float spa
 
 static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float spawn_heading, float spawn_length,
                                 float spawn_width, float spawn_z) {
-    // Compute bounding box corners (same as offroad detection in step)
-    static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
-    // Increase length and width slightly for spawn offroad check
-    float half_length = (spawn_length * 1.1f) / 2.0f;
-    float half_width = (spawn_width * 1.1f) / 2.0f;
-    float cos_heading = cosf(spawn_heading);
-    float sin_heading = sinf(spawn_heading);
-
+    Agent temp_agent = {0};
+    temp_agent.sim_x = spawn_x;
+    temp_agent.sim_y = spawn_y;
+    temp_agent.sim_heading = spawn_heading;
+    temp_agent.cos_heading = cosf(spawn_heading);
+    temp_agent.sin_heading = sinf(spawn_heading);
+    // Slightly inflate dimensions to reject near-boundary spawn candidates.
+    temp_agent.sim_length = spawn_length * 1.1f;
+    temp_agent.sim_width = spawn_width * 1.1f;
     float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0] =
-            spawn_x + (offsets[i][0] * half_length * cos_heading - offsets[i][1] * half_width * sin_heading);
-        corners[i][1] =
-            spawn_y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
-    }
+    compute_agent_corners(&temp_agent, corners);
 
     // Get neighboring road elements
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
@@ -3348,16 +3398,8 @@ static bool check_spawn_red_light_violation(Drive *env, float spawn_x, float spa
     temp_agent.sim_height = spawn_height;
     temp_agent.current_lane_idx = lane_idx;
 
-    static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
-    float half_length = spawn_length / 2.0f;
-    float half_width = spawn_width / 2.0f;
     float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0] = spawn_x + (offsets[i][0] * half_length * temp_agent.cos_heading -
-                                   offsets[i][1] * half_width * temp_agent.sin_heading);
-        corners[i][1] = spawn_y + (offsets[i][0] * half_length * temp_agent.sin_heading +
-                                   offsets[i][1] * half_width * temp_agent.cos_heading);
-    }
+    compute_agent_corners(&temp_agent, corners);
 
     return check_stop_line_crossing(env, &temp_agent, lane_idx, corners);
 }
@@ -4425,11 +4467,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     bool is_offroad = false;
-    float half_length = agent->sim_length / 2.0f;
     float half_width = agent->sim_width / 2.0f;
-    // Use cached trig values from move_dynamics
-    float cos_heading = agent->cos_heading;
-    float sin_heading = agent->sin_heading;
 
     // Track best candidate by combined distance/heading score
     float best_score = 1e9f;
@@ -4439,12 +4477,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
     float best_candidate_lane_heading = 0.0f;
 
     float corners[4][2];
-    for (int i = 0; i < 4; i++) {
-        corners[i][0] =
-            agent->sim_x + (offsets[i][0] * half_length * cos_heading - offsets[i][1] * half_width * sin_heading);
-        corners[i][1] =
-            agent->sim_y + (offsets[i][0] * half_length * sin_heading + offsets[i][1] * half_width * cos_heading);
-    }
+    compute_agent_corners(agent, corners);
 
     GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25]; // Array big enough for all neighboring cells
     int list_size = get_neighbors_entities(env, agent->sim_x, agent->sim_y, entity_list, MAX_ENTITIES_PER_CELL * 25,
