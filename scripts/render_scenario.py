@@ -33,55 +33,6 @@ import sys
 import tempfile
 
 
-def _patch_policy_args_from_checkpoint(args, checkpoint_path):
-    """Infer policy architecture dims from checkpoint weights and patch args["policy"].
-
-    Checkpoints carry no config metadata, so we reverse-engineer the dims:
-      - input_size        — ego_encoder.0.weight output dim (shape[0])
-      - backbone_hidden_size — backbone.1.weight output dim (shape[0])
-      - split_network     — True if critic_backbone weights exist separately
-
-    This lets render_scenario work with checkpoints trained under any config
-    without the user needing to know or pass the architecture flags.
-    """
-    import torch
-
-    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    # Strip DDP wrapper prefix if present
-    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-
-    # input_size: output dim of the first sub-encoder linear layer
-    ego_key = "actor_backbone.ego_encoder.0.weight"
-    if ego_key in state_dict:
-        inferred_input_size = state_dict[ego_key].shape[0]
-        if inferred_input_size != args["policy"]["input_size"]:
-            print(
-                f"[render_scenario] checkpoint input_size={inferred_input_size} "
-                f"(config default was {args['policy']['input_size']}); patching."
-            )
-            args["policy"]["input_size"] = inferred_input_size
-
-    # backbone_hidden_size: output dim of the first backbone hidden layer
-    bb_key = "actor_backbone.backbone.1.weight"
-    if bb_key in state_dict:
-        inferred_bb_hidden = state_dict[bb_key].shape[0]
-        if inferred_bb_hidden != args["policy"]["backbone_hidden_size"]:
-            print(
-                f"[render_scenario] checkpoint backbone_hidden_size={inferred_bb_hidden} "
-                f"(config default was {args['policy']['backbone_hidden_size']}); patching."
-            )
-            args["policy"]["backbone_hidden_size"] = inferred_bb_hidden
-
-    # split_network: critic has its own weights only when split
-    has_split = any(k.startswith("critic_backbone.ego_encoder") for k in state_dict)
-    if has_split != args["policy"].get("split_network", False):
-        print(
-            f"[render_scenario] checkpoint split_network={has_split} "
-            f"(config default was {args['policy'].get('split_network', False)}); patching."
-        )
-        args["policy"]["split_network"] = has_split
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint")
@@ -178,8 +129,6 @@ def main():
     args = load_config(env_name)
     args["load_model_path"] = cli.checkpoint
     args["eval_results_dir"] = cli.output_dir
-
-    _patch_policy_args_from_checkpoint(args, cli.checkpoint)
 
     env_overrides = {
         "map_dir": map_dir,
