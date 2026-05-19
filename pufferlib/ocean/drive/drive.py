@@ -56,6 +56,14 @@ class Drive(pufferlib.PufferEnv):
         emit_completed_episodes=False,
         dt=0.1,
         spawn_initial_speed=0.0,
+        spawn_length_min=0.8,
+        spawn_length_max=7.0,
+        spawn_width_min=0.8,
+        spawn_width_max=3.0,
+        eval_spawn_length_min=2.0,
+        eval_spawn_length_max=5.5,
+        eval_spawn_width_min=1.5,
+        eval_spawn_width_max=2.5,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -108,6 +116,14 @@ class Drive(pufferlib.PufferEnv):
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.spawn_length_min = float(spawn_length_min)
+        self.spawn_length_max = float(spawn_length_max)
+        self.spawn_width_min = float(spawn_width_min)
+        self.spawn_width_max = float(spawn_width_max)
+        self.eval_spawn_length_min = float(eval_spawn_length_min)
+        self.eval_spawn_length_max = float(eval_spawn_length_max)
+        self.eval_spawn_width_min = float(eval_spawn_width_min)
+        self.eval_spawn_width_max = float(eval_spawn_width_max)
         self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
@@ -394,6 +410,14 @@ class Drive(pufferlib.PufferEnv):
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "spawn_length_min": self.spawn_length_min,
+            "spawn_length_max": self.spawn_length_max,
+            "spawn_width_min": self.spawn_width_min,
+            "spawn_width_max": self.spawn_width_max,
+            "eval_spawn_length_min": self.eval_spawn_length_min,
+            "eval_spawn_length_max": self.eval_spawn_length_max,
+            "eval_spawn_width_min": self.eval_spawn_width_min,
+            "eval_spawn_width_max": self.eval_spawn_width_max,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

@@ -115,6 +115,30 @@ def logits_to_float(logits):
         return logits.float()
     return tuple(l.float() for l in logits)
 
+# [env] keys whose values shape the observation / action tensors and therefore
+# the network's input/output dimensions. When loading a checkpoint, these are
+# pulled from the base run's config.yaml and override whatever drive.ini / the
+# finetune overlay / CLI args specify — otherwise state_dict load would fail.
+# [policy] and [rnn] sections are whole-section locked (see train()).
+FINETUNE_LOCKED_ENV_KEYS = {
+    "action_type",
+    "dynamics_model",
+    "target_type",
+    "num_target_waypoints",
+    "reward_conditioning",
+    "reward_randomization",
+    "trajectory_prediction_length",
+    "num_trajectory_scaling_factors",
+    "trajectory_scaling_factors",
+    "max_boundary_segment_observations",
+    "max_lane_segment_observations",
+    "max_partner_observations",
+    "max_traffic_control_observations",
+    "traffic_control_scope",
+    "boundary_segment_dropout",
+    "lane_segment_dropout",
+}
+
 
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
@@ -232,17 +256,57 @@ class PuffeRL:
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
 
+        # Build the iterable of params (or param groups) for the optimizer.
+        # Under finetune.enabled, freeze_regex / mode=lora may have already
+        # masked some params (requires_grad=False) and added LoRA adapter
+        # params; build a two-group config so the LoRA adapters can ride a
+        # different LR (typically 10x base_lr per the LoRA paper).
+        finetune_cfg = (config.get("finetune") or {}) if isinstance(config, dict) else {}
+        if finetune_cfg.get("enabled", False):
+            from pufferlib.finetune import build_param_groups
+
+            base_lr_for_opt = config["learning_rate"]
+            lora_lr = base_lr_for_opt * float(finetune_cfg.get("lora_lr_mult", 1.0) or 1.0)
+            optim_param_arg = build_param_groups(self.policy, base_lr_for_opt, lora_lr)
+            if not optim_param_arg:
+                raise pufferlib.APIUsageError(
+                    "[finetune] no trainable params after applying freeze/LoRA. "
+                    "Check freeze_regex / lora_target."
+                )
+        else:
+            optim_param_arg = self.policy.parameters()
+
+        # Build the iterable of params (or param groups) for the optimizer.
+        # Under finetune.enabled, freeze_regex / mode=lora may have already
+        # masked some params (requires_grad=False) and added LoRA adapter
+        # params; build a two-group config so the LoRA adapters can ride a
+        # different LR (typically 10x base_lr per the LoRA paper).
+        finetune_cfg = (config.get("finetune") or {}) if isinstance(config, dict) else {}
+        if finetune_cfg.get("enabled", False):
+            from pufferlib.finetune import build_param_groups
+
+            base_lr_for_opt = config["learning_rate"]
+            lora_lr = base_lr_for_opt * float(finetune_cfg.get("lora_lr_mult", 1.0) or 1.0)
+            optim_param_arg = build_param_groups(self.policy, base_lr_for_opt, lora_lr)
+            if not optim_param_arg:
+                raise pufferlib.APIUsageError(
+                    "[finetune] no trainable params after applying freeze/LoRA. "
+                    "Check freeze_regex / lora_target."
+                )
+        else:
+            optim_param_arg = self.policy.parameters()
+
         # Optimizer
         if config["optimizer"] == "adam":
             optimizer = torch.optim.Adam(
-                self.policy.parameters(),
+                optim_param_arg,
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
             )
         elif config["optimizer"] == "adamw":
             optimizer = torch.optim.AdamW(
-                self.policy.parameters(),
+                optim_param_arg,
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
@@ -261,7 +325,7 @@ class PuffeRL:
             # heavyball_momentum=True introduced in heavyball 2.1.1
             # recovers heavyball-1.7.2 behaviour - previously swept hyperparameters work well
             optimizer = ForeachMuon(
-                self.policy.parameters(),
+                optim_param_arg,
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
@@ -1363,43 +1427,11 @@ def _save_experiment_config(args, path):
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
-    # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
-    if args["load_model_path"]:
-        experiment_dir = os.path.dirname(args["load_model_path"])
-        config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-        KEYS_OF_INTEREST = {
-            "action_type",
-            "dynamics_model",
-            "target_type",
-            "num_target_waypoints",
-            "reward_conditioning",
-            "reward_randomization",
-            "trajectory_prediction_length",
-            "num_trajectory_scaling_factors",
-            "trajectory_scaling_factors",
-            "max_boundary_segment_observations",
-            "max_lane_segment_observations",
-            "boundary_segment_dropout",
-            "lane_segment_dropout",
-            "max_partner_observations",
-            "max_traffic_control_observations",
-            "traffic_control_scope",
-        }
-        if os.path.exists(config_yaml_path):
-            print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
-            with open(config_yaml_path, "r") as f:
-                yaml_config = yaml.safe_load(f)
-
-            # Override Policy and RNN dimensions from model config
-            for section in ["policy", "rnn"]:
-                if section in yaml_config and isinstance(yaml_config[section], dict):
-                    for k, v in yaml_config[section].items():
-                        args[section][k] = v
-            # Override ENV parameters for observation size from model config
-            if "env" in yaml_config and isinstance(yaml_config["env"], dict):
-                for k, v in yaml_config["env"].items():
-                    if k in KEYS_OF_INTEREST:
-                        args["env"][k] = v
+    # Fine-tuning: reload network / observation config from the base run's
+    # config.yaml and override args so the rebuilt policy matches the saved
+    # checkpoint's shapes. Everything not in the locked set (rewards, maps,
+    # sim params, train HPs) stays free to differ.
+    _apply_checkpoint_arch_lock(args)
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:
@@ -1441,7 +1473,24 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             experiment_dir=experiment_dir,
         )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    # Apply finetune.base_lr override before PuffeRL builds the optimizer.
+    finetune_cfg = args.get("finetune", {})
+    finetune_enabled = bool(finetune_cfg.get("enabled", False))
+    if finetune_enabled:
+        base_lr = finetune_cfg.get("base_lr", None)
+        if base_lr is not None:
+            print(
+                f"[finetune] overriding train.learning_rate "
+                f"{args['train']['learning_rate']} -> {base_lr}"
+            )
+            args["train"]["learning_rate"] = base_lr
+
+    train_config = dict(
+        **args["train"],
+        env=env_name,
+        eval=args.get("eval", {}),
+        finetune=args.get("finetune", {}),
+    )
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     if args["train"].get("resume_state_path"):
@@ -1451,10 +1500,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     pufferl._eval_manager = EvalManager.from_config(args, run_id=logger.run_id if logger else None)
 
-    # Restore optimizer state + step counters when resuming from a checkpoint.
-    # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
-    # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
-    if args.get("load_model_path"):
+    # Restore optimizer state + step counters when RESUMING from a checkpoint.
+    # When finetune.enabled=True we deliberately start fresh — a finetune is a
+    # new training run that happens to inherit base weights, not a continuation
+    # of the base's optimizer momentum / LR schedule / step counter.
+    if args.get("load_model_path") and not finetune_enabled:
         trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
@@ -1468,9 +1518,34 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 pufferl.scheduler.step()
         else:
             print(f"No trainer_state.pt next to {args['load_model_path']}; starting optimizer fresh.")
+    elif args.get("load_model_path") and finetune_enabled:
+        print(
+            f"[finetune] mode={finetune_cfg.get('mode', 'full')}: loaded weights from "
+            f"{args['load_model_path']}; starting optimizer / step counter / LR schedule from epoch 0."
+        )
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
+
+    # Drop a finetune_meta.yaml next to config.yaml so the run is self-describing:
+    # what base checkpoint was used, what strategy, which params were trainable.
+    if finetune_enabled and args.get("load_model_path"):
+        meta = {
+            "base_checkpoint": args["load_model_path"],
+            "mode": finetune_cfg.get("mode", "full"),
+            "base_lr": args["train"]["learning_rate"],
+            "total_timesteps": train_config["total_timesteps"],
+            "freeze_regex": finetune_cfg.get("freeze_regex", None),
+            "lora_target": finetune_cfg.get("lora_target", None),
+            "lora_rank": finetune_cfg.get("lora_rank", None),
+            "lora_alpha": finetune_cfg.get("lora_alpha", None),
+            "lora_lr_mult": finetune_cfg.get("lora_lr_mult", None),
+            "finetune_config": args.get("finetune_config", None),
+        }
+        meta_path = os.path.join(path, "finetune_meta.yaml")
+        with open(meta_path, "w") as f:
+            yaml.dump(meta, f, sort_keys=False)
+        print(f"[finetune] wrote {meta_path}")
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
@@ -1665,11 +1740,15 @@ def eval(
 
     args = args or load_config(env_name)
 
-    # When evaluating a checkpoint, adopt its network architecture from the
-    # training run's sibling config.yaml so the policy is built to match the
-    # weights regardless of what drive.ini currently says.
-    if args.get("load_model_path"):
-        _merge_checkpoint_arch(args, args["load_model_path"])
+    # Subprocess evals (and standalone `puffer eval`) re-read drive.ini and
+    # have no idea what arch the parent run used. Apply the same checkpoint
+    # arch-lock train() does so the policy is built with matching shapes.
+    _apply_checkpoint_arch_lock(args)
+
+    # Subprocess evals (and standalone `puffer eval`) re-read drive.ini and
+    # have no idea what arch the parent run used. Apply the same checkpoint
+    # arch-lock train() does so the policy is built with matching shapes.
+    _apply_checkpoint_arch_lock(args)
 
     if evaluator_name is None:
         evaluator_name = args.get("evaluator")
@@ -2080,7 +2159,111 @@ def load_policy(args, vecenv, env_name=""):
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)
 
+    # ----- Phase 2: parameter-efficient finetune wiring -----
+    # Order: load_state_dict has already run (base weights are in `policy`).
+    # apply_freeze first so freeze_regex can pin any non-LoRA params; then
+    # wrap_lora replaces matched nn.Linears with LoRALinear (which copies the
+    # just-loaded weight as a frozen base + adds trainable A,B init at zero).
+    # Must happen BEFORE DDP wrap / torch.compile / optimizer construction.
+    finetune_cfg = (args.get("finetune") or {}) if isinstance(args, dict) else {}
+    if finetune_cfg.get("enabled", False):
+        from pufferlib.finetune import apply_freeze, wrap_lora, trainable_summary
+
+        mode = finetune_cfg.get("mode", "full") or "full"
+        if mode in ("freeze", "lora"):
+            n_frozen = apply_freeze(policy, finetune_cfg.get("freeze_regex"))
+            if n_frozen:
+                print(
+                    f"[finetune] froze {n_frozen} parameter tensors matching "
+                    f"freeze_regex={finetune_cfg.get('freeze_regex')!r}"
+                )
+        if mode == "lora":
+            rank = int(finetune_cfg.get("lora_rank", 16))
+            alpha = float(finetune_cfg.get("lora_alpha", 32))
+            lora_target = finetune_cfg.get("lora_target")
+            n_wrapped = wrap_lora(policy, target_regex=lora_target, rank=rank, alpha=alpha)
+            if n_wrapped:
+                print(
+                    f"[finetune] wrapped {n_wrapped} nn.Linear modules with LoRA "
+                    f"(rank={rank}, alpha={alpha}, target={lora_target!r})"
+                )
+            else:
+                print(
+                    f"[finetune] WARNING: mode=lora but 0 modules matched "
+                    f"lora_target={lora_target!r} — training will run as mode=full."
+                )
+        if mode not in ("full", "freeze", "lora"):
+            raise pufferlib.APIUsageError(
+                f"[finetune] unknown mode={mode!r}; expected one of full / freeze / lora"
+            )
+        print(trainable_summary(policy))
+
     return policy
+
+
+def _apply_checkpoint_arch_lock(args):
+    """If args has a load_model_path with a sibling config.yaml, pull the
+    locked architecture / observation-shape keys from that config.yaml and
+    override the current args in place so the rebuilt policy has shapes that
+    match the saved checkpoint. Whole [policy] and [rnn] sections are
+    overridden; within [env], only FINETUNE_LOCKED_ENV_KEYS are.
+
+    Called from both train() (so finetune runs inherit base architecture)
+    and eval() (so subprocess evals match the parent's architecture even
+    though the subprocess only receives --load-model-path on the CLI).
+    """
+    if not args.get("load_model_path"):
+        return
+    # save_checkpoint layout: <exp_dir>/models/<env>_<epoch>.pt — config.yaml
+    # lives at <exp_dir>/config.yaml (one dir above models/).
+    experiment_dir = os.path.dirname(os.path.dirname(args["load_model_path"]))
+    config_yaml_path = os.path.join(experiment_dir, "config.yaml")
+    if not os.path.exists(config_yaml_path):
+        return
+    print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
+    with open(config_yaml_path, "r") as f:
+        yaml_config = yaml.safe_load(f)
+    for section in ("policy", "rnn"):
+        if section in yaml_config and isinstance(yaml_config[section], dict):
+            args.setdefault(section, {})
+            for k, v in yaml_config[section].items():
+                args[section][k] = v
+    if "env" in yaml_config and isinstance(yaml_config["env"], dict):
+        args.setdefault("env", {})
+        for k, v in yaml_config["env"].items():
+            if k in FINETUNE_LOCKED_ENV_KEYS:
+                args["env"][k] = v
+
+
+def _warn_locked_overlay_keys(overlay_p, overlay_path):
+    """Emit a warning for any key in the finetune overlay that will be ignored
+    because it's locked to the base checkpoint's architecture.
+
+    Whole sections [policy] and [rnn] are locked. Within [env], only the keys
+    in FINETUNE_LOCKED_ENV_KEYS are locked. We warn but do not strip; the
+    locked override happens later in train() via the base run's config.yaml.
+    """
+    locked_hits = []  # list of (section, key)
+    for section in ("policy", "rnn"):
+        if section in overlay_p.sections():
+            for key in overlay_p[section]:
+                locked_hits.append((section, key))
+    if "env" in overlay_p.sections():
+        for key in overlay_p["env"]:
+            if key in FINETUNE_LOCKED_ENV_KEYS:
+                locked_hits.append(("env", key))
+    if not locked_hits:
+        return
+    print(
+        f"[finetune] WARNING: {len(locked_hits)} key(s) in overlay '{overlay_path}' "
+        f"will be IGNORED because they are locked to the base checkpoint's architecture:"
+    )
+    for section, key in locked_hits:
+        print(f"[finetune]   - [{section}] {key}")
+    print(
+        "[finetune]   (architecture / observation-shape keys are inherited from the base's "
+        "config.yaml at load time so the saved weights can be loaded.)"
+    )
 
 
 def load_config(env_name, config_dir=None):
@@ -2117,6 +2300,13 @@ def load_config(env_name, config_dir=None):
     parser.add_argument(
         "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
+    parser.add_argument(
+        "--finetune-config",
+        type=str,
+        default=None,
+        help="Optional overlay .ini layered on top of the env config. Used to specify only the "
+        "keys that differ for a finetune run (rewards, maps, [finetune] section, etc.).",
+    )
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
@@ -2128,17 +2318,35 @@ def load_config(env_name, config_dir=None):
     # Load defaults and config
     puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
+    # Layered .ini reads: defaults → env config → optional finetune overlay.
+    # ConfigParser.read() processes files left-to-right with last-write-wins, so the
+    # overlay can override any key in the env config (except FINETUNE_LOCKED_ENV_KEYS,
+    # which we warn about below and which train() later overrides from base config.yaml).
+    config_layers = [puffer_default_config]
     if env_name == "default":
         p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-        p.read(puffer_default_config)
+        p.read(config_layers)
     else:
         for path in glob.glob(puffer_config_dir, recursive=True):
             p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-            p.read([puffer_default_config, path])
+            p.read(config_layers + [path])
             if env_name in p["base"]["env_name"].split():
+                config_layers.append(path)
                 break
         else:
             raise pufferlib.APIUsageError("No config for env_name {}".format(env_name))
+
+    if args.finetune_config is not None:
+        if not os.path.exists(args.finetune_config):
+            raise pufferlib.APIUsageError(f"--finetune-config path not found: {args.finetune_config}")
+        # Read the overlay alone first so we can detect which keys came from it
+        # (vs which were inherited from drive.ini) — used by the locked-key warning.
+        overlay_p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+        overlay_p.read(args.finetune_config)
+        _warn_locked_overlay_keys(overlay_p, args.finetune_config)
+        # Merge overlay on top.
+        p.read(args.finetune_config)
+        config_layers.append(args.finetune_config)
 
     # Dynamic help menu from config
     def puffer_type(value):
