@@ -31,6 +31,7 @@ import argparse
 import os
 import sys
 import tempfile
+import time
 
 
 def main():
@@ -76,6 +77,8 @@ def main():
 
     # Suppress argparse pollution from pufferl's load_config after our own parse
     sys.argv = ["render_scenario"]
+
+    seed = int(time.time_ns() & 0xFFFFFFFF)
 
     # Defaults that depend on simulation mode
     if cli.simulation_mode == "replay":
@@ -149,6 +152,7 @@ def main():
         "map_dir": map_dir,
         "num_maps": num_bin_files,
         "num_agents": num_agents * num_scenarios,
+        "seed": seed,
         "simulation_mode": cli.simulation_mode,
         "control_mode": control_mode,
         "init_steps": init_steps,
