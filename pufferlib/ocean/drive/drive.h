@@ -396,6 +396,7 @@ struct Drive {
     int adv_reward_collision_offroad_only;
     int adv_target_hit_at_fault_reward;
     int adv_target_hit_reward_shaping;
+    float adv_target_hit_reward_min_responsibility;
     float adv_target_hit_low_responsibility_threshold;
     int adv_target_hit_low_responsibility_behavior;
     int target_hit_this_step;
@@ -5914,7 +5915,9 @@ void c_step(Drive *env) {
                 env->adv_target_hit_at_fault_reward) {
                 target_hit_reward_multiplier = env->target_hit_at_fault_this_step ? 1.0f : 0.0f;
             } else if (env->adv_target_hit_reward_shaping == TARGET_HIT_REWARD_SHAPING_RESPONSIBILITY) {
-                target_hit_reward_multiplier = fmaxf(0.0f, fminf(1.0f, env->target_hit_responsibility_this_step));
+                float responsibility = fmaxf(0.0f, fminf(1.0f, env->target_hit_responsibility_this_step));
+                target_hit_reward_multiplier =
+                    (responsibility >= env->adv_target_hit_reward_min_responsibility) ? responsibility : 0.0f;
             }
         }
 
