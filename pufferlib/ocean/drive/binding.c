@@ -1814,6 +1814,14 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->spawn_length_min = (float) unpack(kwargs, "spawn_length_min");
+    env->spawn_length_max = (float) unpack(kwargs, "spawn_length_max");
+    env->spawn_width_min = (float) unpack(kwargs, "spawn_width_min");
+    env->spawn_width_max = (float) unpack(kwargs, "spawn_width_max");
+    env->eval_spawn_length_min = (float) unpack(kwargs, "eval_spawn_length_min");
+    env->eval_spawn_length_max = (float) unpack(kwargs, "eval_spawn_length_max");
+    env->eval_spawn_width_min = (float) unpack(kwargs, "eval_spawn_width_min");
+    env->eval_spawn_width_max = (float) unpack(kwargs, "eval_spawn_width_max");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");

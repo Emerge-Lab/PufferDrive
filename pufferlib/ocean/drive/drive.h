@@ -343,6 +343,17 @@ struct Drive {
     float world_mean_y;
     float dt;
     float spawn_initial_speed;
+    // Per-agent spawn dimension ranges (training vs eval modes use separate ranges).
+    // length: longitudinal extent in meters; width: lateral extent in meters.
+    // width is clipped to <= length at spawn time.
+    float spawn_length_min;
+    float spawn_length_max;
+    float spawn_width_min;
+    float spawn_width_max;
+    float eval_spawn_length_min;
+    float eval_spawn_length_max;
+    float eval_spawn_width_min;
+    float eval_spawn_width_max;
     float goal_radius;
     float goal_speed;
     float min_waypoint_spacing;
@@ -2896,19 +2907,17 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    // Default vehicle dimensions
-    // length: [0.8, 7.0] m
-    // width: [0.8, 3.0] m
-    // width = min(width, length)
+    // Vehicle dimensions sampled from configured ranges. Training and eval
+    // modes use independent ranges so e.g. a truck-trained policy can be
+    // eval'd on truck-sized agents instead of falling back to cars.
+    // width = min(width, length) is enforced below.
     float spawn_length, spawn_width;
     if (env->eval_mode) {
-        // Fixed size for eval mode
-        spawn_length = random_uniform(2.0f, 5.5f);
-        spawn_width = random_uniform(1.5f, 2.5f);
+        spawn_length = random_uniform(env->eval_spawn_length_min, env->eval_spawn_length_max);
+        spawn_width = random_uniform(env->eval_spawn_width_min, env->eval_spawn_width_max);
     } else {
-        // Random size for training mode
-        spawn_length = random_uniform(0.8f, 7.0f);
-        spawn_width = random_uniform(0.8f, 3.0f);
+        spawn_length = random_uniform(env->spawn_length_min, env->spawn_length_max);
+        spawn_width = random_uniform(env->spawn_width_min, env->spawn_width_max);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
