@@ -1,0 +1,1 @@
+This model was trained by Valentin. It is compatible with the repo at commit a41e5a69ca0ecc9c34c20409146475213d044c12 but not after that!
