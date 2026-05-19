@@ -1,6 +1,11 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
+#ifndef ENV_ROLE_ADVERSARIAL
+#define ENV_ROLE_ADVERSARIAL 0
+#define ENV_ROLE_DRIVING 1
+#endif
+
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
@@ -1010,6 +1015,45 @@ static PyObject *vec_close(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_replace_env(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_replace_env requires vec_handle, env_index, and env_handle");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *index_obj = PyTuple_GetItem(args, 1);
+    if (!PyObject_TypeCheck(index_obj, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "env_index must be an integer");
+        return NULL;
+    }
+    int env_index = PyLong_AsLong(index_obj);
+    if (env_index < 0 || env_index >= vec->num_envs) {
+        PyErr_SetString(PyExc_IndexError, "env_index is out of range");
+        return NULL;
+    }
+
+    PyObject *handle_obj = PyTuple_GetItem(args, 2);
+    if (!PyObject_TypeCheck(handle_obj, &PyLong_Type)) {
+        PyErr_SetString(PyExc_TypeError, "env_handle must be an integer");
+        return NULL;
+    }
+    Env *new_env = (Env *)PyLong_AsVoidPtr(handle_obj);
+    if (!new_env) {
+        PyErr_SetString(PyExc_ValueError, "Invalid replacement env handle");
+        return NULL;
+    }
+
+    c_close(vec->envs[env_index]);
+    free(vec->envs[env_index]);
+    vec->envs[env_index] = new_env;
+    Py_RETURN_NONE;
+}
+
 static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_global_agent_state requires 7 arguments");
@@ -1350,6 +1394,7 @@ static PyMethodDef methods[] = {
 #endif
     {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
     {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
+    {"vec_replace_env", vec_replace_env, METH_VARARGS, "Replace one environment inside a vector"},
     {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
     {"shared", (PyCFunction)my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
     {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
@@ -1405,6 +1450,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
     PyModule_AddIntConstant(m, "CONTROLLER_CORRIDOR_IDM", CONTROLLER_CORRIDOR_IDM);
     PyModule_AddIntConstant(m, "CONTROLLER_PDM", CONTROLLER_PDM);
+    PyModule_AddIntConstant(m, "ENV_ROLE_ADVERSARIAL", ENV_ROLE_ADVERSARIAL);
+    PyModule_AddIntConstant(m, "ENV_ROLE_DRIVING", ENV_ROLE_DRIVING);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 

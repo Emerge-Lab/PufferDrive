@@ -162,6 +162,9 @@ class Drive(pufferlib.PufferEnv):
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
+        driving_env_count=0,
+        driving_env_num_agents=64,
+        driving_env_resample_frequency=0,
         num_maps=100,
         num_agents=512,
         min_agents_per_env=32,
@@ -286,6 +289,9 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
+        self.driving_env_count = int(driving_env_count)
+        self.driving_env_num_agents = int(driving_env_num_agents)
+        self.driving_env_resample_frequency = int(driving_env_resample_frequency)
         self.action_type_str = action_type
         self.dynamics_model = dynamics_model
         if dynamics_model == "classic":
@@ -459,6 +465,7 @@ class Drive(pufferlib.PufferEnv):
 
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
+        self.driving_map_counter = starting_map
 
         # Calculate dynamic batch size for Eval + Replay mode
         self.current_num_eval_scenarios = self.num_eval_scenarios
@@ -470,11 +477,12 @@ class Drive(pufferlib.PufferEnv):
 
         # Iterate through all maps to count total agents that can be initialized for each map
         self._replay_batch_start = self.starting_map_counter
-        agent_offsets, map_ids, num_envs = binding.shared(
+        agent_offsets, map_ids, env_roles, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
             num_maps=self.num_maps,
             starting_map_counter=self.starting_map_counter,
+            driving_map_counter=self.driving_map_counter,
             eval_mode=self.eval_mode,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
@@ -484,21 +492,26 @@ class Drive(pufferlib.PufferEnv):
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
             num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+            driving_env_count=self.driving_env_count,
+            driving_env_num_agents=self.driving_env_num_agents,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
         self.starting_map_counter = self.starting_map_counter + num_envs
+        self.driving_map_counter += sum(1 for role in env_roles if role == binding.ENV_ROLE_DRIVING)
 
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
+        self.env_roles = env_roles
         self.num_envs = num_envs
         super().__init__(buf=buf)
         self._map_cache = binding.map_cache_init() if self.enable_map_cache else None
+        self.env_ids = []
         env_ids = []
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
-            init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
+            init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur, env_roles[i])
             if self._map_cache is not None:
                 init_kwargs["map_cache_handle"] = self._map_cache
             env_id = binding.env_init(
@@ -513,6 +526,7 @@ class Drive(pufferlib.PufferEnv):
             )
             env_ids.append(env_id)
 
+        self.env_ids = env_ids
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, self.random_seed)
         if self.capture_replay:
@@ -830,9 +844,10 @@ class Drive(pufferlib.PufferEnv):
 
         return summaries
 
-    def _env_init_kwargs(self, map_file, max_agents):
+    def _env_init_kwargs(self, map_file, max_agents, env_role=0):
         return {
             "action_type": self._action_type_flag,
+            "env_role": int(env_role),
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
@@ -922,6 +937,53 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_duration": self.phantom_braking_duration,
         }
 
+    def _init_env_slot(self, env_slot, map_id=None, env_role=None):
+        cur = self.agent_offsets[env_slot]
+        nxt = self.agent_offsets[env_slot + 1]
+        if map_id is None:
+            map_id = self.map_ids[env_slot]
+        if env_role is None:
+            env_role = self.env_roles[env_slot]
+        init_kwargs = self._env_init_kwargs(self.map_files[map_id], nxt - cur, env_role)
+        if self._map_cache is not None:
+            init_kwargs["map_cache_handle"] = self._map_cache
+        return binding.env_init(
+            self.observations[cur:nxt],
+            self.actions[cur:nxt],
+            self.rewards[cur:nxt],
+            self.terminals[cur:nxt],
+            self.truncations[cur:nxt],
+            self.masks[cur:nxt],
+            self.random_seed,
+            **init_kwargs,
+        )
+
+    def _driving_resample_period_steps(self):
+        if self.driving_env_count <= 0 or self.driving_env_resample_frequency <= 0:
+            return 0
+        if self.scenario_length is None:
+            return 0
+        return int(self.driving_env_resample_frequency) * int(self.scenario_length)
+
+    def _resample_driving_envs(self):
+        driving_slots = [i for i, role in enumerate(self.env_roles) if role == binding.ENV_ROLE_DRIVING]
+        if not driving_slots:
+            return
+
+        for offset, env_slot in enumerate(driving_slots):
+            map_id = (self.driving_map_counter + offset) % self.num_maps
+            env_id = self._init_env_slot(env_slot, map_id=map_id, env_role=binding.ENV_ROLE_DRIVING)
+            binding.env_reset(env_id, self.random_seed)
+            binding.vec_replace_env(self.c_envs, env_slot, env_id)
+            self.env_ids[env_slot] = env_id
+            self.map_ids[env_slot] = map_id
+
+            cur = self.agent_offsets[env_slot]
+            nxt = self.agent_offsets[env_slot + 1]
+            self.truncations[cur:nxt] = 1
+
+        self.driving_map_counter += len(driving_slots)
+
     @property
     def random_seed(self):
         return int(self.rng.integers(0, 2**24))
@@ -935,7 +997,7 @@ class Drive(pufferlib.PufferEnv):
             self._initialize_replay_buffers()
         if self.capture_compact_replay:
             self._initialize_compact_replay_buffers()
-        return self.observations, [{"agent_offsets": self.agent_offsets}]
+        return self.observations, [{"agent_offsets": self.agent_offsets, "env_roles": self.env_roles}]
 
     def step(self, actions):
         if self.capture_replay:
@@ -946,6 +1008,14 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
+        full_resample_due = self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0
+        driving_resample_period = self._driving_resample_period_steps()
+        driving_resample_due = (
+            not full_resample_due
+            and driving_resample_period > 0
+            and self.tick > 0
+            and self.tick % driving_resample_period == 0
+        )
         if self.emit_completed_episodes:
             completed_episodes = binding.vec_pop_completed_episodes(self.c_envs)
             if completed_episodes:
@@ -996,15 +1066,15 @@ class Drive(pufferlib.PufferEnv):
         if self.tick % self.report_interval == 0:
             log_payload = binding.vec_log(self.c_envs, self.num_agents)
             log_summaries = self._normalize_log_summaries(log_payload)
-            if log_payload and not (
-                self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0
-            ):
+            if log_payload and not full_resample_due:
                 if self.capture_replay:
                     self._accumulate_replay_window_logs(log_summaries)
                 else:
                     info.append(log_payload)
                 # print(log_payload)
-        if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
+        if driving_resample_due:
+            self._resample_driving_envs()
+        if full_resample_due:
             self.tick = 0
             will_resample = 1
             if will_resample:
@@ -1035,10 +1105,11 @@ class Drive(pufferlib.PufferEnv):
                     binding.map_cache_close(self._map_cache)
                 self._map_cache = binding.map_cache_init() if self.enable_map_cache else None
                 self._replay_batch_start = self.starting_map_counter
-                agent_offsets, map_ids, num_envs = binding.shared(
+                agent_offsets, map_ids, env_roles, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
+                    driving_map_counter=self.driving_map_counter,
                     eval_mode=self.eval_mode,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
@@ -1049,18 +1120,22 @@ class Drive(pufferlib.PufferEnv):
                     min_agents_per_env=self.min_agents_per_env,
                     max_agents_per_env=self.max_agents_per_env,
                     num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+                    driving_env_count=self.driving_env_count,
+                    driving_env_num_agents=self.driving_env_num_agents,
                 )
 
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
                 self.starting_map_counter = self.starting_map_counter + num_envs
+                self.driving_map_counter += sum(1 for role in env_roles if role == binding.ENV_ROLE_DRIVING)
                 self.agent_offsets = agent_offsets
                 self.map_ids = map_ids
+                self.env_roles = env_roles
                 self.num_envs = num_envs
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]
                     nxt = agent_offsets[i + 1]
-                    init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur)
+                    init_kwargs = self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur, env_roles[i])
                     if self._map_cache is not None:
                         init_kwargs["map_cache_handle"] = self._map_cache
                     env_id = binding.env_init(
@@ -1074,6 +1149,7 @@ class Drive(pufferlib.PufferEnv):
                         **init_kwargs,
                     )
                     env_ids.append(env_id)
+                self.env_ids = env_ids
                 self.c_envs = binding.vectorize(*env_ids)
 
                 binding.vec_reset(self.c_envs, self.random_seed)
@@ -1083,7 +1159,7 @@ class Drive(pufferlib.PufferEnv):
                     self._initialize_compact_replay_buffers()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
-        info.append({"agent_offsets": self.agent_offsets})
+        info.append({"agent_offsets": self.agent_offsets, "env_roles": self.env_roles})
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

@@ -72,6 +72,8 @@
 #define COLLISION_TYPE_ACTIVE_REAR 3
 #define COLLISION_TYPE_ACTIVE_FRONT 4
 #define COLLISION_TYPE_ACTIVE_LATERAL 5
+#define ENV_ROLE_ADVERSARIAL 0
+#define ENV_ROLE_DRIVING 1
 
 // Collision state
 #define NO_COLLISION 0
@@ -344,6 +346,7 @@ struct Drive {
     int num_total_agents; // Total agents in a log scenario
     int num_max_agents;   // Max agents allocated in the environment
     int num_agents;       // Current number of agents in the environment
+    int env_role;
     int action_type;
     int human_agent_idx;
     Agent *agents;
@@ -3730,6 +3733,8 @@ static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, in
     return requested_controller;
 }
 
+static inline void remove_driving_env_target(Drive *env);
+
 void set_active_agents(Drive *env) {
     // Initialize
     env->active_agent_count = 0;        // Foreground agents with observations/rewards/actions
@@ -3772,6 +3777,8 @@ void set_active_agents(Drive *env) {
         env->num_agents = env->num_total_agents;
         env->static_agent_count = 0;
         env->expert_static_agent_count = 0;
+
+        remove_driving_env_target(env);
 
         return;
     }
@@ -4240,6 +4247,9 @@ void init(Drive *env) {
         remove_bad_trajectories(env);
     }
     set_start_position(env);
+    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+        remove_driving_env_target(env);
+    }
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -5672,6 +5682,15 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->phantom_braking_counter = 0;
 }
 
+static inline void remove_driving_env_target(Drive *env) {
+    if (env->env_role != ENV_ROLE_DRIVING || env->active_agent_count <= 0)
+        return;
+
+    int target_idx = env->active_agent_indices[0];
+    env->agents[target_idx].removed = 1;
+    invalidate_agent(&env->agents[target_idx]);
+}
+
 void c_reset(Drive *env) {
     env->target_hit_this_step = 0;
     env->target_hit_hitter_idx_this_step = -1;
@@ -5720,6 +5739,7 @@ void c_reset(Drive *env) {
 
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.
         // Only need to generate reward coefs and compute initial metrics.
+        remove_driving_env_target(env);
         generate_env_adv_reward_weight_drive(env);
         for (int x = 0; x < env->active_agent_count; x++) {
             env->logs[x] = (Log){0};

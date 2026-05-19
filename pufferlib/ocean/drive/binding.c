@@ -1641,6 +1641,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
+    int driving_env_count = unpack(kwargs, "driving_env_count");
+    int driving_env_num_agents = unpack(kwargs, "driving_env_num_agents");
+    int driving_map_counter = unpack(kwargs, "driving_map_counter");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1651,6 +1654,14 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     if (num_agents < min_agents_per_env) {
         PyErr_SetString(PyExc_ValueError, "num_agents must be >= min_agents_per_env");
+        return NULL;
+    }
+    if (driving_env_count < 0) {
+        PyErr_SetString(PyExc_ValueError, "driving_env_count must be >= 0");
+        return NULL;
+    }
+    if (driving_env_num_agents <= 0) {
+        PyErr_SetString(PyExc_ValueError, "driving_env_num_agents must be > 0");
         return NULL;
     }
 
@@ -1667,27 +1678,51 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
             PyObject *agent_offsets = PyList_New(env_count + 1);
             PyObject *map_ids_list = PyList_New(env_count);
+            PyObject *env_roles = PyList_New(env_count);
 
             int offset = 0;
             for (int i = 0; i < env_count; i++) {
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
                 PyList_SetItem(map_ids_list, i, PyLong_FromLong((s_map_counter + i) % num_maps));
+                PyList_SetItem(env_roles, i, PyLong_FromLong(ENV_ROLE_ADVERSARIAL));
                 int remaining = num_agents - offset;
                 offset += (remaining < agents_per_env) ? remaining : agents_per_env;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
-            PyObject *tuple = PyTuple_New(3);
+            PyObject *tuple = PyTuple_New(4);
             PyTuple_SetItem(tuple, 0, agent_offsets);
             PyTuple_SetItem(tuple, 1, map_ids_list);
-            PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+            PyTuple_SetItem(tuple, 2, env_roles);
+            PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
             return tuple;
         }
 
         // Training mode: random agent counts per env
-        int *agent_counts = malloc((num_agents / min_agents_per_env + 1) * sizeof(int));
-        int remaining = num_agents;
+        int driving_agent_budget = driving_env_count * driving_env_num_agents;
+        if (driving_agent_budget > num_agents) {
+            PyErr_SetString(PyExc_ValueError, "driving_env_count * driving_env_num_agents must be <= num_agents");
+            return NULL;
+        }
+        int adversarial_agents = num_agents - driving_agent_budget;
+        if (adversarial_agents > 0 && adversarial_agents < min_agents_per_env) {
+            PyErr_SetString(PyExc_ValueError, "remaining adversarial agents must be 0 or >= min_agents_per_env");
+            return NULL;
+        }
+
+        int max_env_count = driving_env_count + (adversarial_agents / min_agents_per_env) + 1;
+        int *agent_counts = malloc(max_env_count * sizeof(int));
+        int *env_role_values = malloc(max_env_count * sizeof(int));
+        int *map_id_values = malloc(max_env_count * sizeof(int));
+        int remaining = adversarial_agents;
         int env_count = 0;
+
+        for (int i = 0; i < driving_env_count; i++) {
+            agent_counts[env_count] = driving_env_num_agents;
+            env_role_values[env_count] = ENV_ROLE_DRIVING;
+            map_id_values[env_count] = (driving_map_counter + i) % num_maps;
+            env_count++;
+        }
 
         while (remaining > 0) {
             int count;
@@ -1715,28 +1750,36 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                     count = current_lower_bound + (rand() % range);
                 }
             }
-            agent_counts[env_count++] = count;
+            agent_counts[env_count] = count;
+            env_role_values[env_count] = ENV_ROLE_ADVERSARIAL;
+            map_id_values[env_count] = rand() % num_maps;
+            env_count++;
             remaining -= count;
         }
 
         // Build Python return lists
         PyObject *agent_offsets = PyList_New(env_count + 1);
         PyObject *map_ids_list = PyList_New(env_count);
+        PyObject *env_roles = PyList_New(env_count);
 
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id_values[i]));
+            PyList_SetItem(env_roles, i, PyLong_FromLong(env_role_values[i]));
             offset += agent_counts[i];
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));
 
         free(agent_counts);
+        free(env_role_values);
+        free(map_id_values);
 
-        PyObject *tuple = PyTuple_New(3);
+        PyObject *tuple = PyTuple_New(4);
         PyTuple_SetItem(tuple, 0, agent_offsets);
         PyTuple_SetItem(tuple, 1, map_ids_list);
-        PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+        PyTuple_SetItem(tuple, 2, env_roles);
+        PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
         return tuple;
     }
 
@@ -1755,6 +1798,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
+    PyObject *env_roles = PyList_New(max_envs);
 
     // Added condition: s_map_counter < end_map_index
     while (total_agent_count < num_agents && env_count < max_envs && (!eval_mode || s_map_counter < end_map_index)) {
@@ -1799,6 +1843,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Store map_id
         PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
+        PyList_SetItem(env_roles, env_count, PyLong_FromLong(ENV_ROLE_ADVERSARIAL));
         // Store agent offset
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
         total_agent_count += env->active_agent_count;
@@ -1827,10 +1872,12 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    PyObject *tuple = PyTuple_New(3);
+    PyObject *resized_env_roles = PyList_GetSlice(env_roles, 0, env_count);
+    PyObject *tuple = PyTuple_New(4);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
-    PyTuple_SetItem(tuple, 2, final_env_count);
+    PyTuple_SetItem(tuple, 2, resized_env_roles);
+    PyTuple_SetItem(tuple, 3, final_env_count);
     return tuple;
 }
 
@@ -1845,6 +1892,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
 
     env->action_type = (int)unpack(kwargs, "action_type");
+    env->env_role = (int)unpack(kwargs, "env_role");
     env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
     env->reward_goal = (float)unpack(kwargs, "reward_goal");
     env->reward_vehicle_collision = (float)unpack(kwargs, "reward_vehicle_collision");
