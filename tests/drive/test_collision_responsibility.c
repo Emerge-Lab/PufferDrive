@@ -65,6 +65,12 @@ static void set_prev(Agent *agent, float x, float y, float heading) {
     agent->prev_sim_heading = heading;
 }
 
+static void set_prev_from_dt(Agent *agent, float dt) {
+    agent->prev_sim_x = agent->sim_x - agent->sim_vx * dt;
+    agent->prev_sim_y = agent->sim_y - agent->sim_vy * dt;
+    agent->prev_sim_heading = agent->sim_heading;
+}
+
 static Scenario make_scenario(const char *name, const char *description, Agent target, Agent adv,
                               ExpectedResponsibility expected, float low_threshold, float high_threshold) {
     Scenario scenario;
@@ -138,9 +144,9 @@ static Scenario make_cut_in_adversary_hits_target_rear_side(void) {
     Agent target = {0};
     Agent adv = {0};
     set_pose(&target, 1.5f, 0.0f, 0.0f, 15.0f);
-    set_prev(&target, 0.0f, 0.0f, 0.0f);
-    set_pose(&adv, 0.1f, 0.95f, -0.72f, 8.0f);
-    set_prev(&adv, -0.05f, 1.58f, -0.72f);
+    set_prev_from_dt(&target, 0.1f);
+    set_pose(&adv, 0.0235547f, 2.6728963f, -0.4702856f, 9.0986018f);
+    set_prev_from_dt(&adv, 0.1f);
     return make_scenario("cut_in_adversary_rear_side_graze", "Adversary cuts into target rear-side/corner.", target,
                          adv, EXPECT_TARGET_LOW, 0.25f, 0.75f);
 }
@@ -149,9 +155,9 @@ static Scenario make_cut_in_center_bias_probe(void) {
     Agent target = {0};
     Agent adv = {0};
     set_pose(&target, 1.5f, 0.0f, 0.0f, 15.0f);
-    set_prev(&target, 0.0f, 0.0f, 0.0f);
-    set_pose(&adv, 2.15f, 0.98f, -0.95f, 8.0f);
-    set_prev(&adv, 2.61f, 1.63f, -0.95f);
+    set_prev_from_dt(&target, 0.1f);
+    set_pose(&adv, 1.8316058f, 2.5613388f, -1.3494792f, 10.4209760f);
+    set_prev_from_dt(&adv, 0.1f);
     return make_scenario("cut_in_center_ahead_side_graze_probe",
                          "Adversary center is ahead, but motion is a side/corner cut-in.", target, adv,
                          EXPECT_TARGET_LOW, 0.25f, 0.75f);
@@ -168,24 +174,32 @@ static int expectation_passed(const Scenario *scenario, float target_rho) {
 static ScenarioResult evaluate_scenario(const Scenario *scenario) {
     ScenarioResult result;
     memset(&result, 0, sizeof(result));
-    Agent target = scenario->target;
-    Agent adv = scenario->adv;
+    Agent agents[2];
+    int active_agent_indices[2] = {TARGET_IDX, ADV_IDX};
+    Drive env;
+    memset(&env, 0, sizeof(env));
+    agents[TARGET_IDX] = scenario->target;
+    agents[ADV_IDX] = scenario->adv;
+    env.agents = agents;
+    env.active_agent_indices = active_agent_indices;
+    env.active_agent_count = 2;
+    env.num_agents = 2;
 
-    result.collided =
-        check_obb_collision_with_normal(&target, &adv, &result.sat_normal_x, &result.sat_normal_y, &result.penetration);
+    result.collided = check_obb_collision_with_normal(&agents[TARGET_IDX], &agents[ADV_IDX], &result.sat_normal_x,
+                                                      &result.sat_normal_y, &result.penetration);
     if (!result.collided) {
         result.passed = 0;
         return result;
     }
 
-    compute_collision_normal(&target, &adv, result.sat_normal_x, result.sat_normal_y, &result.normal_x,
-                             &result.normal_y);
-    evaluate_collision_pair(&target, &adv, result.normal_x, result.normal_y, NULL, &result.target_responsibility);
+    collision_check(&env, TARGET_IDX, &result.normal_x, &result.normal_y, &result.penetration);
+    evaluate_collision_pair(&agents[TARGET_IDX], &agents[ADV_IDX], result.normal_x, result.normal_y, NULL,
+                            &result.target_responsibility);
     result.adv_responsibility = 1.0f - result.target_responsibility;
-    result.target_dot = target.sim_vx * result.normal_x + target.sim_vy * result.normal_y;
-    result.adv_dot = adv.sim_vx * result.normal_x + adv.sim_vy * result.normal_y;
-    result.target_impact_zone = classify_impact_zone_from_normal(&target, result.normal_x, result.normal_y);
-    result.adv_impact_zone = classify_impact_zone_from_normal(&adv, -result.normal_x, -result.normal_y);
+    result.target_dot = agents[TARGET_IDX].sim_vx * result.normal_x + agents[TARGET_IDX].sim_vy * result.normal_y;
+    result.adv_dot = agents[ADV_IDX].sim_vx * result.normal_x + agents[ADV_IDX].sim_vy * result.normal_y;
+    result.target_impact_zone = classify_impact_zone_from_normal(&agents[TARGET_IDX], result.normal_x, result.normal_y);
+    result.adv_impact_zone = classify_impact_zone_from_normal(&agents[ADV_IDX], -result.normal_x, -result.normal_y);
     result.passed = expectation_passed(scenario, result.target_responsibility);
     return result;
 }

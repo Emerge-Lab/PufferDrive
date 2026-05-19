@@ -2719,42 +2719,130 @@ static bool check_z_collision_possibility(const Agent *car1, const Agent *car2) 
     return !(car1_top < car2_bottom || car2_top < car1_bottom);
 }
 
-static bool compute_previous_face_normal(const Agent *wall, const Agent *dart, float *normal_x, float *normal_y) {
-    if (wall->prev_sim_x == INVALID_POSITION || dart->prev_sim_x == INVALID_POSITION) {
-        return false;
+static Agent interpolate_agent_pose_for_collision(const Agent *agent, float alpha) {
+    Agent interpolated = *agent;
+    float heading_delta = normalize_heading(agent->sim_heading - agent->prev_sim_heading);
+    interpolated.sim_x = agent->prev_sim_x + alpha * (agent->sim_x - agent->prev_sim_x);
+    interpolated.sim_y = agent->prev_sim_y + alpha * (agent->sim_y - agent->prev_sim_y);
+    interpolated.sim_heading = normalize_heading(agent->prev_sim_heading + alpha * heading_delta);
+    interpolated.cos_heading = cosf(interpolated.sim_heading);
+    interpolated.sin_heading = sinf(interpolated.sim_heading);
+    return interpolated;
+}
+
+static void project_agent_on_axis(const Agent *agent, float axis_x, float axis_y, float *min_out, float *max_out) {
+    float corners[4][2];
+    compute_agent_corners(agent, corners);
+
+    float min_proj = INFINITY;
+    float max_proj = -INFINITY;
+    for (int i = 0; i < 4; i++) {
+        float proj = corners[i][0] * axis_x + corners[i][1] * axis_y;
+        min_proj = fminf(min_proj, proj);
+        max_proj = fmaxf(max_proj, proj);
     }
 
-    float wall_heading = wall->prev_sim_heading;
-    float wall_cos = cosf(wall_heading);
-    float wall_sin = sinf(wall_heading);
-    float dx = dart->prev_sim_x - wall->prev_sim_x;
-    float dy = dart->prev_sim_y - wall->prev_sim_y;
-    float half_length = fmaxf(wall->sim_length * 0.5f, 1e-3f);
-    float half_width = fmaxf(wall->sim_width * 0.5f, 1e-3f);
-    float local_long = dx * wall_cos + dy * wall_sin;
-    float local_lat = -dx * wall_sin + dy * wall_cos;
-    float norm_long = local_long / half_length;
-    float norm_lat = local_lat / half_width;
+    *min_out = min_proj;
+    *max_out = max_proj;
+}
 
-    if (fabsf(norm_long) >= fabsf(norm_lat)) {
-        if (norm_long >= 0.0f) {
-            *normal_x = wall_cos;
-            *normal_y = wall_sin;
+static float interval_gap(float min_a, float max_a, float min_b, float max_b) {
+    if (max_a < min_b)
+        return min_b - max_a;
+    if (max_b < min_a)
+        return min_a - max_b;
+    return -fminf(max_a, max_b) + fmaxf(min_a, min_b);
+}
+
+static float interval_overlap(float min_a, float max_a, float min_b, float max_b) {
+    return fminf(max_a, max_b) - fmaxf(min_a, min_b);
+}
+
+static void orient_axis_from_agent_to_agent(const Agent *agent_a, const Agent *agent_b, float *axis_x, float *axis_y) {
+    float center_dx = agent_b->sim_x - agent_a->sim_x;
+    float center_dy = agent_b->sim_y - agent_a->sim_y;
+    if (center_dx * (*axis_x) + center_dy * (*axis_y) < 0.0f) {
+        *axis_x = -*axis_x;
+        *axis_y = -*axis_y;
+    }
+}
+
+static int compute_first_contact_collision_normal(Agent *agent_a, Agent *agent_b, float *normal_x, float *normal_y) {
+    if (agent_a->prev_sim_x == INVALID_POSITION || agent_b->prev_sim_x == INVALID_POSITION)
+        return 0;
+
+    Agent prev_a = interpolate_agent_pose_for_collision(agent_a, 0.0f);
+    Agent prev_b = interpolate_agent_pose_for_collision(agent_b, 0.0f);
+    if (check_obb_collision(&prev_a, &prev_b))
+        return 0;
+    if (!check_obb_collision(agent_a, agent_b))
+        return 0;
+
+    float lo = 0.0f;
+    float hi = 1.0f;
+    for (int iter = 0; iter < 18; iter++) {
+        float mid = 0.5f * (lo + hi);
+        Agent mid_a = interpolate_agent_pose_for_collision(agent_a, mid);
+        Agent mid_b = interpolate_agent_pose_for_collision(agent_b, mid);
+        if (check_obb_collision(&mid_a, &mid_b)) {
+            hi = mid;
         } else {
-            *normal_x = -wall_cos;
-            *normal_y = -wall_sin;
-        }
-    } else {
-        if (norm_lat >= 0.0f) {
-            *normal_x = -wall_sin;
-            *normal_y = wall_cos;
-        } else {
-            *normal_x = wall_sin;
-            *normal_y = -wall_cos;
+            lo = mid;
         }
     }
 
-    return true;
+    Agent impact_a = interpolate_agent_pose_for_collision(agent_a, hi);
+    Agent impact_b = interpolate_agent_pose_for_collision(agent_b, hi);
+    float axes[4][2] = {
+        {impact_a.cos_heading, impact_a.sin_heading},
+        {-impact_a.sin_heading, impact_a.cos_heading},
+        {impact_b.cos_heading, impact_b.sin_heading},
+        {-impact_b.sin_heading, impact_b.cos_heading},
+    };
+
+    float best_axis_x = 0.0f;
+    float best_axis_y = 0.0f;
+    float best_entry_alpha = -INFINITY;
+    float best_gap = INFINITY;
+    int found = 0;
+
+    for (int i = 0; i < 4; i++) {
+        float axis_x = axes[i][0];
+        float axis_y = axes[i][1];
+        float prev_min_a, prev_max_a, prev_min_b, prev_max_b;
+        float curr_min_a, curr_max_a, curr_min_b, curr_max_b;
+        project_agent_on_axis(&prev_a, axis_x, axis_y, &prev_min_a, &prev_max_a);
+        project_agent_on_axis(&prev_b, axis_x, axis_y, &prev_min_b, &prev_max_b);
+        project_agent_on_axis(agent_a, axis_x, axis_y, &curr_min_a, &curr_max_a);
+        project_agent_on_axis(agent_b, axis_x, axis_y, &curr_min_b, &curr_max_b);
+
+        float prev_gap = interval_gap(prev_min_a, prev_max_a, prev_min_b, prev_max_b);
+        float curr_overlap = interval_overlap(curr_min_a, curr_max_a, curr_min_b, curr_max_b);
+        if (curr_overlap < -1e-5f)
+            continue;
+
+        float entry_alpha = 0.0f;
+        if (prev_gap > 1e-5f) {
+            entry_alpha = prev_gap / fmaxf(prev_gap + curr_overlap, 1e-6f);
+        }
+
+        if (prev_gap >= -1e-4f && (!found || entry_alpha > best_entry_alpha ||
+                                   (fabsf(entry_alpha - best_entry_alpha) < 1e-4f && fabsf(prev_gap) < best_gap))) {
+            found = 1;
+            best_entry_alpha = entry_alpha;
+            best_gap = fabsf(prev_gap);
+            best_axis_x = axis_x;
+            best_axis_y = axis_y;
+        }
+    }
+
+    if (!found)
+        return 0;
+
+    orient_axis_from_agent_to_agent(&impact_a, &impact_b, &best_axis_x, &best_axis_y);
+    *normal_x = best_axis_x;
+    *normal_y = best_axis_y;
+    return 1;
 }
 
 static int classify_impact_zone_from_normal(const Agent *agent, float normal_x, float normal_y) {
@@ -2787,50 +2875,6 @@ static void evaluate_collision_pair(const Agent *agent_a, const Agent *agent_b, 
     }
     if (responsibility != NULL) {
         *responsibility = contrib_a / fmaxf(contrib_a + contrib_b, 1e-6f);
-    }
-}
-
-static void compute_collision_normal(Agent *agent_a, Agent *agent_b, float sat_normal_x, float sat_normal_y,
-                                     float *normal_x, float *normal_y) {
-    float prev_from_a_x = 0.0f;
-    float prev_from_a_y = 0.0f;
-    float prev_from_b_x = 0.0f;
-    float prev_from_b_y = 0.0f;
-    int has_prev_from_a = compute_previous_face_normal(agent_a, agent_b, &prev_from_a_x, &prev_from_a_y);
-    int has_prev_from_b = compute_previous_face_normal(agent_b, agent_a, &prev_from_b_x, &prev_from_b_y);
-    float rel_vx = agent_a->sim_vx - agent_b->sim_vx;
-    float rel_vy = agent_a->sim_vy - agent_b->sim_vy;
-    float best_prev_x = sat_normal_x;
-    float best_prev_y = sat_normal_y;
-    float best_prev_score = -1.0f;
-    float sat_score = fmaxf(0.0f, rel_vx * sat_normal_x + rel_vy * sat_normal_y);
-
-    if (has_prev_from_a) {
-        float score = fmaxf(0.0f, rel_vx * prev_from_a_x + rel_vy * prev_from_a_y);
-        if (score > best_prev_score) {
-            best_prev_score = score;
-            best_prev_x = prev_from_a_x;
-            best_prev_y = prev_from_a_y;
-        }
-    }
-
-    if (has_prev_from_b) {
-        float candidate_x = -prev_from_b_x;
-        float candidate_y = -prev_from_b_y;
-        float score = fmaxf(0.0f, rel_vx * candidate_x + rel_vy * candidate_y);
-        if (score > best_prev_score) {
-            best_prev_score = score;
-            best_prev_x = candidate_x;
-            best_prev_y = candidate_y;
-        }
-    }
-
-    if (best_prev_score >= sat_score) {
-        *normal_x = best_prev_x;
-        *normal_y = best_prev_y;
-    } else {
-        *normal_x = sat_normal_x;
-        *normal_y = sat_normal_y;
     }
 }
 
@@ -2874,8 +2918,13 @@ static int collision_check(Drive *env, int agent_idx, float *collision_normal_x,
         if (check_obb_collision_with_normal(agent, other_agent, &sat_normal_x, &sat_normal_y, &sat_penetration)) {
             car_collided_with_index = index;
             if (collision_normal_x != NULL && collision_normal_y != NULL) {
-                compute_collision_normal(agent, other_agent, sat_normal_x, sat_normal_y, collision_normal_x,
-                                         collision_normal_y);
+                int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
+                int target_involved = agent_idx == target_agent_idx || index == target_agent_idx;
+                if (!target_involved || !compute_first_contact_collision_normal(agent, other_agent, collision_normal_x,
+                                                                                collision_normal_y)) {
+                    *collision_normal_x = sat_normal_x;
+                    *collision_normal_y = sat_normal_y;
+                }
             }
             if (penetration_depth != NULL)
                 *penetration_depth = sat_penetration;
