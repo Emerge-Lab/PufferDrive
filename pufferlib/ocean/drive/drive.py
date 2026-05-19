@@ -143,6 +143,7 @@ class Drive(pufferlib.PufferEnv):
         adv_bonus_only=False,
         adv_reward_collision_offroad_only=False,
         adv_target_hit_at_fault_reward=False,
+        adv_target_hit_reward_shaping="none",
         adv_target_hit_low_responsibility_threshold=-1.0,
         adv_target_hit_low_responsibility_behavior=0,
         min_waypoint_spacing=20.0,
@@ -265,6 +266,26 @@ class Drive(pufferlib.PufferEnv):
         self.adv_bonus_only = adv_bonus_only
         self.adv_reward_collision_offroad_only = bool(adv_reward_collision_offroad_only)
         self.adv_target_hit_at_fault_reward = bool(adv_target_hit_at_fault_reward)
+        shaping_modes = {
+            "none": 0,
+            "off": 0,
+            "disabled": 0,
+            "at_fault": 1,
+            "nuplan": 1,
+            "responsibility": 2,
+        }
+        if isinstance(adv_target_hit_reward_shaping, str):
+            shaping_key = adv_target_hit_reward_shaping.strip().lower().replace("-", "_")
+            if shaping_key not in shaping_modes:
+                raise ValueError(
+                    "adv_target_hit_reward_shaping must be one of 'none', 'at_fault', or 'responsibility'. "
+                    f"Got: {adv_target_hit_reward_shaping}"
+                )
+            self.adv_target_hit_reward_shaping = shaping_modes[shaping_key]
+        else:
+            self.adv_target_hit_reward_shaping = int(adv_target_hit_reward_shaping)
+        if self.adv_target_hit_at_fault_reward and self.adv_target_hit_reward_shaping == 0:
+            self.adv_target_hit_reward_shaping = 1
         self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
         self.adv_target_hit_low_responsibility_behavior = int(adv_target_hit_low_responsibility_behavior)
         self.goal_radius = goal_radius
@@ -872,6 +893,7 @@ class Drive(pufferlib.PufferEnv):
             "adv_bonus_only": self.adv_bonus_only,
             "adv_reward_collision_offroad_only": self.adv_reward_collision_offroad_only,
             "adv_target_hit_at_fault_reward": self.adv_target_hit_at_fault_reward,
+            "adv_target_hit_reward_shaping": self.adv_target_hit_reward_shaping,
             "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
             "adv_target_hit_low_responsibility_behavior": self.adv_target_hit_low_responsibility_behavior,
             "collision_behavior": self.collision_behavior,
