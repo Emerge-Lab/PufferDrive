@@ -36,7 +36,9 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint")
-    parser.add_argument("--map", default=None, help="Map name for auto-lookup (e.g. Town01, tfrecord-00021-of-00150_24)")
+    parser.add_argument(
+        "--map", default=None, help="Map name for auto-lookup (e.g. Town01, tfrecord-00021-of-00150_24)"
+    )
     parser.add_argument("--output-dir", default="renders", help="Output directory for mp4s")
     parser.add_argument("--steps", type=int, default=None, help="Simulation steps (default: 1000 gigaflow, 91 replay)")
     parser.add_argument("--num-agents", type=int, default=None, help="Agents per scenario (gigaflow only, default 100)")
