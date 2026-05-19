@@ -125,6 +125,19 @@ def main():
 
     os.makedirs(cli.output_dir, exist_ok=True)
 
+    # Count .bin files now so num_maps and num_agents can be set in env_overrides.
+    # --map creates a temp dir with exactly 1 .bin; --map-dir may have many.
+    num_bin_files = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+    if num_bin_files == 0:
+        print(f"Error: no .bin files found in {map_dir}")
+        sys.exit(1)
+
+    if cli.all_maps:
+        num_scenarios = num_bin_files
+        print(f"[render_scenario] --all-maps: rendering {num_scenarios} scenarios")
+    else:
+        num_scenarios = 1
+
     from pufferlib.pufferl import eval as puffer_eval, load_config
 
     env_name = "puffer_drive"
@@ -134,10 +147,11 @@ def main():
 
     env_overrides = {
         "map_dir": map_dir,
+        "num_maps": num_bin_files,
+        "num_agents": num_agents * num_scenarios,
         "simulation_mode": cli.simulation_mode,
         "control_mode": control_mode,
         "init_steps": init_steps,
-        # Clean eval — no robustness perturbations
         "partner_blindness_prob": 0.0,
         "phantom_braking_prob": 0.0,
         "phantom_braking_trigger_prob": 0.0,
@@ -153,15 +167,6 @@ def main():
         env_overrides["collision_behavior"] = 0
         env_overrides["scenario_length"] = steps
         env_overrides["resample_frequency"] = steps
-
-    if cli.all_maps:
-        num_scenarios = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
-        if num_scenarios == 0:
-            print(f"Error: no .bin files found in {map_dir}")
-            sys.exit(1)
-        print(f"[render_scenario] --all-maps: rendering {num_scenarios} scenarios")
-    else:
-        num_scenarios = 1
 
     eval_section = {
         "type": eval_type,
