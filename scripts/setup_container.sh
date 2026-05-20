@@ -35,7 +35,11 @@ VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
 # miniforge3 lives on /scratch too so the venv's python symlink resolves
 # from any node without needing the singularity overlay to be mounted.
 MINIFORGE3_DIR="${MINIFORGE3_DIR:-/scratch/$USER/miniforge3}"
-MINIFORGE3_INSTALLER_URL="${MINIFORGE3_INSTALLER_URL:-https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh}"
+# Pin to a miniforge3 release that ships Python 3.12. 25.x switched to 3.13,
+# but torch's cu121 wheels are cp39..cp312 only (no cp313), so 3.13 breaks
+# the install. Bump this once torch publishes cp313 wheels for our index.
+MINIFORGE3_INSTALLER_URL="${MINIFORGE3_INSTALLER_URL:-https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh}"
+MINIFORGE3_PYTHON_VERSION="${MINIFORGE3_PYTHON_VERSION:-3.12}"
 CONTAINER_PYTHON="${CONTAINER_PYTHON:-$MINIFORGE3_DIR/bin/python3}"
 
 create_overlay() {
@@ -89,7 +93,16 @@ EOF
 # node, so the venv's bin/python symlink resolves outside singularity too.
 ensure_miniforge3() {
     if [ -x "$MINIFORGE3_DIR/bin/python3" ]; then
-        return 0
+        # Verify the existing miniforge3 has the python version we expect —
+        # otherwise an earlier install that grabbed "latest" (Python 3.13)
+        # would stay around, and uv venv would happily reuse it.
+        local existing
+        existing="$("$MINIFORGE3_DIR/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+        if [ "$existing" = "$MINIFORGE3_PYTHON_VERSION" ]; then
+            return 0
+        fi
+        echo "=== miniforge3 at $MINIFORGE3_DIR has python $existing (want $MINIFORGE3_PYTHON_VERSION); reinstalling ==="
+        rm -rf "$MINIFORGE3_DIR"
     fi
     echo "=== Installing miniforge3 to $MINIFORGE3_DIR ==="
     mkdir -p "$(dirname "$MINIFORGE3_DIR")"
