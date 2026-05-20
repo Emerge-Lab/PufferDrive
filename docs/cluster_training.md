@@ -173,7 +173,7 @@ sbatch --account=<general-account> --partition=cpu_short \
   `upper/usr/local/` and aren't visible to apptainer's view). Use
   `debugfs -R "ls /upper" overlay.ext3` from a login node to inspect.
 
-### `TORCH_CUDA_ARCH_LIST`: a warning that you can skip
+### `TORCH_CUDA_ARCH_LIST`: a quick warning that won't generally be an issue
 
 PufferDrive's C extension contains CUDA kernels. When `setup.py build_ext`
 compiles them, `nvcc` emits machine code for each architecture listed in
