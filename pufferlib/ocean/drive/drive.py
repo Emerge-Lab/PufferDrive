@@ -47,6 +47,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior=0,
         offroad_behavior=0,
         traffic_light_behavior=0,
+        goal_behavior=0,
         # emit_completed_episodes=True: env emits one summary dict per
         # completed episode via info (drained from a per-env C-side queue).
         # capture_compact_replay=True additionally records per-step agent and
@@ -145,6 +146,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
+        self.goal_behavior = goal_behavior
         self.capture_compact_replay = bool(capture_compact_replay)
         # capture_compact_replay implies emit_completed_episodes, since the
         # bundle rides on the per-episode summary.
@@ -378,6 +380,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "goal_behavior": self.goal_behavior,
             "emit_completed_episodes": int(self.emit_completed_episodes),
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,

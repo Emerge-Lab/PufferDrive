@@ -345,6 +345,7 @@ struct Drive {
     int collision_behavior;     // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int goal_behavior;          // 0 = continue (extend/regen), 1 = stop, 2 = remove on final goal
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
@@ -5297,9 +5298,13 @@ void c_step(Drive *env) {
         }
     }
 
-    // -> 3. Check for episode truncation
+    // -> 3. Check for episode truncation. Early-reset when the inactive
+    // (removed/stopped) ratio exceeds inactive_agent_threshold. Applies in
+    // both gigaflow and replay — under control_sdc_only with goal_behavior
+    // = REMOVE, the single SDC's removal trips this immediately so dead
+    // scenarios don't waste steps until scenario_length.
     int early_reset = 0;
-    if (env->simulation_mode == SIMULATION_GIGAFLOW && env->termination_mode == 1) {
+    if (env->termination_mode == 1) {
         int count_inactive = 0;
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
@@ -5315,7 +5320,17 @@ void c_step(Drive *env) {
 
     if (env->timestep == env->scenario_length || early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
             env->truncations[i] = 1;
+            // Clear per-scenario termination flags so the next scenario
+            // starts fresh. Without this, c_reset's replay branch skips
+            // reset_agent_state for any agent with removed=1 — meaning a
+            // goal_behavior=REMOVE termination, or any other per-scenario
+            // removal, would persist forever. gigaflow's c_reset re-sets
+            // removed=1 inside spawn_agent on respawn failure, so clearing
+            // here doesn't break that path.
+            env->agents[agent_idx].removed = 0;
+            env->agents[agent_idx].stopped = 0;
         }
         add_log(env);
         c_reset(env);
@@ -5329,32 +5344,39 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (env->simulation_mode == SIMULATION_REPLAY) {
-                // Replay: regenerate the full goal triplet via best-effort
-                // lane-graph extension on every goal reach. If the walk
-                // dead-ends at the start lane (no successors — common at
-                // nuPlan recording boundaries), extension is a no-op and we
-                // fall back to advance-alias so the active goal still points
-                // at the next discrete logged trajectory waypoint.
+        if (agent->metrics_array[REACHED_GOAL_IDX] <= 0.0f) {
+            continue;
+        }
+        int final_goal_hit = (agent->current_goal_idx == env->num_target_waypoints);
+        if (final_goal_hit) {
+            // Final goal reached. goal_behavior decides whether to stop /
+            // remove the agent (training-time termination signal) or
+            // regenerate via the mode's default policy (extend in replay,
+            // compute_goals in gigaflow).
+            env->logs[i].num_goals_reached += 1;
+            if (env->goal_behavior == STOP_AGENT && !agent->stopped) {
+                agent->stopped = 1;
+            } else if (env->goal_behavior == REMOVE_AGENT && !agent->removed) {
+                agent->removed = 1;
+            } else if (env->simulation_mode == SIMULATION_REPLAY) {
+                extend_replay_goals_best_effort(env, agent_idx);
+            } else {
+                compute_goals(env, agent_idx);
+            }
+        } else {
+            // Intermediate goal reached. In replay with goal_behavior=0 we
+            // also extend (mining-time always-extend mode); otherwise just
+            // advance the active-goal alias to the next discrete waypoint
+            // so the reward target moves forward.
+            if (env->simulation_mode == SIMULATION_REPLAY && env->goal_behavior == 0) {
                 int saved_idx = agent->current_goal_idx;
                 extend_replay_goals_best_effort(env, agent_idx);
-                if (agent->current_goal_idx == saved_idx) {
-                    if (saved_idx < env->num_target_waypoints) {
-                        agent->goal_position_x = agent->goal_positions_x[saved_idx];
-                        agent->goal_position_y = agent->goal_positions_y[saved_idx];
-                        agent->goal_position_z = agent->goal_positions_z[saved_idx];
-                    }
+                if (agent->current_goal_idx == saved_idx && saved_idx < env->num_target_waypoints) {
+                    agent->goal_position_x = agent->goal_positions_x[saved_idx];
+                    agent->goal_position_y = agent->goal_positions_y[saved_idx];
+                    agent->goal_position_z = agent->goal_positions_z[saved_idx];
                 }
-                if (saved_idx == env->num_target_waypoints) {
-                    env->logs[i].num_goals_reached += 1;
-                }
-            } else if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Gigaflow: last goal reached, regenerate full route.
-                env->logs[i].num_goals_reached += 1;
-                compute_goals(env, agent_idx);
             } else {
-                // Gigaflow intermediate: advance alias to next goal.
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
                 agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
