@@ -145,9 +145,9 @@ python3 scripts/submit_cluster.py \
         vec.backend=Serial
 ```
 
-See [`docs/cluster_training.md`](cluster_training.md) for one-time setup of
-the login-side submitit (`python3 -m pip install --user submitit pyyaml
-cloudpickle`).
+Source the venv before invoking `submit_cluster.py` (`source
+/scratch/$USER/venvs/pufferdrive/bin/activate`) — see
+[`docs/cluster_training.md`](cluster_training.md) for the rationale.
 
 Outputs land on `/scratch`; pull them down with `rsync` for in-browser viewing.
 
