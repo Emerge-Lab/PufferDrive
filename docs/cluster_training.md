@@ -145,15 +145,7 @@ export WANDB_DIR=/scratch/$USER/wandb_data
 ## CPU rebuild path
 
 GPU partitions are routinely saturated by training jobs. `setup_container.sh
-rebuild` doesn't need a GPU even though it compiles CUDA code: `nvcc` is a
-cross-compiler. It generates PTX/SASS for each architecture in
-`TORCH_CUDA_ARCH_LIST` without needing matching hardware on the build host,
-the same way a C compiler can target ARM from an x86 host. The CUDA toolkit
-itself (`nvcc`, headers, libs) lives in the cuda12.8.1 `.sif` image, so any
-node that can mount the image can run the build — CPU partitions included.
-The rebuild script exports `TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"` upfront, so
-the resulting `.so` is a fat binary that runs on every GPU type at job time.
-Submit to a CPU partition for fast turnaround:
+rebuild` doesn't need a GPU — submit to a CPU partition for fast turnaround:
 
 ```bash
 sbatch --account=<general-account> --partition=cpu_short \
