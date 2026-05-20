@@ -142,16 +142,54 @@ export WANDB_DATA_DIR=/scratch/$USER/wandb_data
 export WANDB_DIR=/scratch/$USER/wandb_data
 ```
 
-### `TORCH_CUDA_ARCH_LIST` — why you may need to set it
+## CPU rebuild path
+
+GPU partitions are routinely saturated by training jobs. `setup_container.sh
+rebuild` doesn't need a GPU even though it compiles CUDA code: `nvcc` is a
+cross-compiler. It generates PTX/SASS for each architecture in
+`TORCH_CUDA_ARCH_LIST` without needing matching hardware on the build host,
+the same way a C compiler can target ARM from an x86 host. The CUDA toolkit
+itself (`nvcc`, headers, libs) lives in the cuda12.8.1 `.sif` image, so any
+node that can mount the image can run the build — CPU partitions included.
+The rebuild script exports `TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0"` upfront, so
+the resulting `.so` is a fat binary that runs on every GPU type at job time.
+Submit to a CPU partition for fast turnaround:
+
+```bash
+sbatch --account=<general-account> --partition=cpu_short \
+    --cpus-per-task=8 --mem=16gb --time=20 \
+    --chdir=$PWD \
+    -o /scratch/$USER/rebuild_logs/rebuild_%j.log \
+    --wrap "./scripts/setup_container.sh rebuild"
+```
+
+`--chdir=$PWD` is required because the script uses `./scripts/`. Takes ~40s.
+
+### Common pitfalls
+
+- **`ncclCommShrink` undefined symbol** at `from torch._C import *`. Greene's
+  cuda12.8.1 sif ships `libnccl 2.25.1` in `/usr/lib`, but torch ≥ 2.10 calls
+  `ncclCommShrink` from NCCL ≥ 2.27.5. torch's own NCCL 2.27.5 sits in
+  `site-packages/nvidia/nccl/lib/` and needs to win the loader search.
+  `setup_container.sh install`/`rebuild` patches `/ext3/env.sh` to prepend that
+  dir to `LD_LIBRARY_PATH`; existing overlays from before that patch need the
+  same line appended to `/ext3/env.sh`.
+- **`-lomp5` link errors on Linux** with conda-forge openmp. The default is for
+  older Intel OpenMP packaging. `setup.py` honors `OMP_LIB="-L$prefix/lib -lomp"`.
+- **`du /ext3` undercounts** when the overlay has cruft outside `upper/ext3/`
+  (e.g. failed pip installs that wrote to `/usr/local/lib/...` end up in
+  `upper/usr/local/` and aren't visible to apptainer's view). Use
+  `debugfs -R "ls /upper" overlay.ext3` from a login node to inspect.
+
+### `TORCH_CUDA_ARCH_LIST`: a warning that you can skip
 
 PufferDrive's C extension contains CUDA kernels. When `setup.py build_ext`
 compiles them, `nvcc` emits machine code for each architecture listed in
-the `TORCH_CUDA_ARCH_LIST` env var (and only those); the result is a "fat
-binary" containing one variant per arch. If the env var is unset, the build
-defaults to whatever GPU was visible to the compiler at build time — often
+the `TORCH_CUDA_ARCH_LIST` env var (and only those); the result is a large binary containing one variant per arch. If the env var is unset, the build
+defaults to whatever GPU was visible to the compiler at build time which is often
 just one architecture.
 
-The catch on a heterogeneous cluster like Greene is that you don't get to
+On Greene, you frequently don't get to
 choose which GPU you land on. `_general` accounts queue across L40S
 (sm_89), H100 (sm_90), and H200 (sm_90); `_tandon_*` partitions add A100
 (sm_80). If the `_C.so` was built against only sm_80 and your job lands on
@@ -170,50 +208,3 @@ e.g. an interactive `python setup.py build_ext --inplace --force` inside a
 hand-launched singularity exec. Adding the export to your shell profile
 (or sourcing it before any manual build) saves you from hitting the "no
 kernel image" error after a quick fix-and-rebuild loop.
-
-## CPU rebuild path
-
-GPU partitions are routinely saturated by training jobs. `setup_container.sh
-rebuild` doesn't actually need a GPU as it just runs `python setup.py
-build_ext --inplace --force` plus a smoke import. Submit to a CPU partition
-for fast turnaround:
-
-```bash
-sbatch --account=<general-account> --partition=cpu_short \
-    --cpus-per-task=8 --mem=16gb --time=20 \
-    --chdir=$PWD \
-    -o /scratch/$USER/rebuild_logs/rebuild_%j.log \
-    --wrap "./scripts/setup_container.sh rebuild"
-```
-
-`--chdir=$PWD` is required because the script uses `./scripts/`. Takes ~40s.
-
-## Common pitfalls
-
-- **`ncclCommShrink` undefined symbol** at `from torch._C import *`. Greene's
-  cuda12.8.1 sif ships `libnccl 2.25.1` in `/usr/lib`, but torch ≥ 2.10 calls
-  `ncclCommShrink` from NCCL ≥ 2.27.5. torch's own NCCL 2.27.5 sits in
-  `site-packages/nvidia/nccl/lib/` and needs to win the loader search.
-  `setup_container.sh install`/`rebuild` patches `/ext3/env.sh` to prepend that
-  dir to `LD_LIBRARY_PATH`; existing overlays from before that patch need the
-  same line appended to `/ext3/env.sh`.
-- **`-lomp5` link errors on Linux** with conda-forge openmp. The default is for
-  older Intel OpenMP packaging. `setup.py` honors `OMP_LIB="-L$prefix/lib -lomp"`.
-- **`du /ext3` undercounts** when the overlay has cruft outside `upper/ext3/`
-  (e.g. failed pip installs that wrote to `/usr/local/lib/...` end up in
-  `upper/usr/local/` and aren't visible to apptainer's view). Use
-  `debugfs -R "ls /upper" overlay.ext3` from a login node to inspect.
-
-## Don't chain `sleep` to wait on background jobs
-
-A bare `sleep N` to poll on a submitted job's state is hard on the SLURM
-controller and brittle. Patterns that work:
-
-- **One-shot wait**: a single `sacct -j $JOBID --format=State -n -P` after a
-  generous initial sleep tuned to expected runtime.
-- **Conditional wait**: a `Monitor`-style `until` loop in a single background
-  shell, with a sane upper bound.
-- **Wall-clock interval**: schedule a wake-up rather than long-running `sleep`.
-
-Hammering `squeue` in a tight loop is bad cluster citizenship — the controller
-is shared across all users. Sleep at least 60 s between checks.
