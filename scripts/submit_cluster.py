@@ -250,17 +250,12 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     # Set up executor
     executor = submitit.AutoExecutor(folder=os.path.join(save_dir, "submitit"))
 
-    # When --container is set, run submitit's outer launcher python *inside*
-    # singularity. The default launcher python is sys.executable, which is
-    # either the login-node system python (version-mismatched with the
-    # compute-node system python, so --user installs are invisible) or the
-    # venv python (a symlink into the overlay, which dangles on the compute
-    # node outside singularity). Wrapping the launcher in singularity exec
-    # uses the overlay's miniforge3 python — identical on every node — and
-    # gives submitit a working import of itself (the venv has submitit
-    # installed). launch_training detects the already-in-container state
-    # via /.singularity.d/Singularity and skips its own inner wrap to avoid
-    # nested singularity.
+    # Wrap submitit's outer launcher python in singularity exec so it uses
+    # the overlay's miniforge3 python (cross-node consistent, has submitit
+    # in the venv) instead of sys.executable, which is either a version-
+    # mismatched host python or a venv symlink that dangles outside the
+    # container. launch_training detects the in-container state via
+    # /.singularity.d/Singularity and skips its own wrap so we don't nest.
     if args.container and hasattr(executor, "_executor"):
         scratch_dir = os.environ.get("SCRATCH_DIR", f"/scratch/{os.environ.get('USER', '')}")
         venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
@@ -315,7 +310,6 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import submitit
 
         # Code isolation: symlink top-level entries, hard copy pufferlib/ source
-        # (symlink resources/ to avoid copying 3.7GB of maps/models).
         isolated_root = os.path.join(save_dir, "code")
         if os.path.exists(isolated_root):
             version = 1
@@ -334,8 +328,6 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                     os.remove(dst)
             os.symlink(src, dst)
         # Hard copy pufferlib/ so branch switches don't break running jobs.
-        # Previously used `cp -rs` (symlinks) which meant switching branches
-        # after submission would silently change the code running jobs use.
         # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
         # but hard copy everything else (source code, .so files).
         pufferlib_dst = os.path.join(isolated_root, "pufferlib")
