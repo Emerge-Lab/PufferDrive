@@ -250,12 +250,14 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     # Set up executor
     executor = submitit.AutoExecutor(folder=os.path.join(save_dir, "submitit"))
 
-    # Wrap submitit's outer launcher python in singularity exec so it uses
-    # the overlay's miniforge3 python (cross-node consistent, has submitit
-    # in the venv) instead of sys.executable, which is either a version-
-    # mismatched host python or a venv symlink that dangles outside the
-    # container. launch_training detects the in-container state via
-    # /.singularity.d/Singularity and skips its own wrap so we don't nest.
+    # Override the python submitit invokes on the compute node. Default is
+    # sys.executable (the login-node /usr/bin/python3, version 3.12 on Greene),
+    # but on the compute node /usr/bin/python3 is version 3.9 and can't see
+    # the user-installed submitit at ~/.local/lib/python3.12/. Wrap it in
+    # singularity exec so the compute-side launcher uses the overlay's
+    # miniforge3 python — same on every node, with submitit available in the
+    # venv. launch_training detects /.singularity.d/Singularity and skips
+    # its own singularity wrap so we don't nest.
     if args.container and hasattr(executor, "_executor"):
         scratch_dir = os.environ.get("SCRATCH_DIR", f"/scratch/{os.environ.get('USER', '')}")
         venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
