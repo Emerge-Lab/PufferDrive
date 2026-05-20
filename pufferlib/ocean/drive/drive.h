@@ -4328,23 +4328,26 @@ static void compute_observations(Drive *env) {
                 obs[obs_idx++] = 2.0f * normalized - 1.0f;
             }
         }
-        // Target observations (static or dynamic)
+        // Target observations (static or dynamic).
+        // STATIC: slot wp emits goal_positions[current_goal_idx + wp], clamped
+        // to the last goal once we run off the end. So if reached/idx counts
+        // are [A,B,C] with idx=0, the obs shows A,B,C; after reaching A
+        // (idx=1) it shows B,C,C; after B (idx=2) it shows C,C,C and stays
+        // there persistently (REACHED_GOAL_IDX guard prevents further
+        // increments past num_target_waypoints).
         if (env->target_type == TARGET_STATIC) {
+            int last_wp = env->num_target_waypoints - 1;
             for (int wp = 0; wp < env->num_target_waypoints; wp++) {
-                if (wp < ego_entity->current_goal_idx) {
-                    // Already reached - zeroed
-                    obs[obs_idx++] = 0.0f;
-                    obs[obs_idx++] = 0.0f;
-                    obs[obs_idx++] = 0.0f;
-                } else {
-                    float gx = ego_entity->goal_positions_x[wp] - ego_entity->sim_x;
-                    float gy = ego_entity->goal_positions_y[wp] - ego_entity->sim_y;
-                    obs[obs_idx++]
-                        = (gx * ego_entity->cos_heading + gy * ego_entity->sin_heading) / env->max_goal_position;
-                    obs[obs_idx++]
-                        = (-gx * ego_entity->sin_heading + gy * ego_entity->cos_heading) / env->max_goal_position;
-                    obs[obs_idx++] = (ego_entity->goal_positions_z[wp] - ego_entity->sim_z) / Z_BUFFER;
-                }
+                int src = ego_entity->current_goal_idx + wp;
+                if (src > last_wp)
+                    src = last_wp;
+                float gx = ego_entity->goal_positions_x[src] - ego_entity->sim_x;
+                float gy = ego_entity->goal_positions_y[src] - ego_entity->sim_y;
+                obs[obs_idx++]
+                    = (gx * ego_entity->cos_heading + gy * ego_entity->sin_heading) / env->max_goal_position;
+                obs[obs_idx++]
+                    = (-gx * ego_entity->sin_heading + gy * ego_entity->cos_heading) / env->max_goal_position;
+                obs[obs_idx++] = (ego_entity->goal_positions_z[src] - ego_entity->sim_z) / Z_BUFFER;
             }
         } else if (env->target_type == TARGET_DYNAMIC) {
             if (ego_entity->path != NULL && ego_entity->path->num_waypoints > 0) {
