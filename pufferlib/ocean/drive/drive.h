@@ -78,7 +78,6 @@
 #define COLLISION_QUICK_CHECK_DIST 15.0f  // Quick distance check before OBB SAT
 #define INIT_COLLISION_SHRINK_FACTOR 0.7f // Shrink agent dims at init to prevent collisions
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
-#define MAX_STOPPED_SECONDS 60.0f
 #define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
@@ -125,8 +124,8 @@
 #define TARGET_DYNAMIC 1
 
 // Observation feature counts
-#define EGO_FEATURES_CLASSIC 8
-#define EGO_FEATURES_JERK 10
+#define EGO_FEATURES_CLASSIC 7
+#define EGO_FEATURES_JERK 9
 #define ROAD_FEATURES 7
 #define PARTNER_FEATURES 8
 #define TRAFFIC_CONTROL_FEATURES 7
@@ -1825,7 +1824,6 @@ static inline void initialize_agent_progression(Drive *env, int agent_idx) {
         agent->closest_path_idx_wp = 0;
         agent->path_progression = 0.0f;
         agent->distance_since_spawn = 0.0f;
-        agent->seconds_stopped = 0.0f;
         return;
     }
 
@@ -1833,7 +1831,6 @@ static inline void initialize_agent_progression(Drive *env, int agent_idx) {
     float baseline_progression = compute_progression(agent);
     agent->path_progression = baseline_progression;
     agent->distance_since_spawn = 0.0f;
-    agent->seconds_stopped = 0.0f;
 }
 
 static inline void reset_agent_path_progression(Drive *env, int agent_idx) {
@@ -2912,7 +2909,6 @@ static void reset_agent_state(Agent *agent) {
     agent->steering_angle = 0.0f;
     agent->path_progression = 0.0f;
     agent->distance_since_spawn = 0.0f;
-    agent->seconds_stopped = 0.0f;
     agent->closest_path_idx_wp = 0;
     // Puffer score tracking reset
     agent->wrong_way_distance = 0.0f;
@@ -4220,11 +4216,6 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
     agent->distance_since_spawn += agent->sim_speed * env->dt;
-    if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
-        agent->seconds_stopped += env->dt;
-    } else {
-        agent->seconds_stopped = 0.0f;
-    }
     env->logs[i].episode_return += speed_reward;
 
     // ADE reward (CUSTOM)
@@ -4324,8 +4315,6 @@ static void compute_observations(Drive *env) {
             ? env->road_elements[ego_entity->current_lane_idx].speed_limit
             : -1.0f;
         obs[obs_idx++] = lane_speed_limit / MAX_SPEED;
-        // Seconds the ego has been stopped (clamped to [0, 1])
-        obs[obs_idx++] = fminf(1.0f, ego_entity->seconds_stopped / MAX_STOPPED_SECONDS);
 
         // ====== Reward conditioning and target observations ======
         if (env->reward_conditioning) {
@@ -4606,10 +4595,12 @@ static void compute_observations(Drive *env) {
             target[base + 3] = length / env->max_road_segment_length;
             // Road segment width
             target[base + 4] = LANE_WIDTH / env->max_road_segment_width;
-            // Road segment orientation (cosine)
-            target[base + 5] = cos_angle;
-            // Road segment orientation (sine)
-            target[base + 6] = sin_angle;
+            // Road segment orientation (cosine, sine). Road edges are emitted with
+            // a 0/0 sentinel: edge polylines are tessellated boundaries, not flow
+            // direction, so their per-segment heading is noise the policy shouldn't
+            // condition on. Lanes keep their real heading.
+            target[base + 5] = is_edge ? 0.0f : cos_angle;
+            target[base + 6] = is_edge ? 0.0f : sin_angle;
         }
 
         if (env->road_dropout_enabled) {

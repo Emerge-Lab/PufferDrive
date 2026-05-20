@@ -225,7 +225,6 @@ struct Agent {
     int displacement_sample_count;
     float path_progression;
     float distance_since_spawn;
-    float seconds_stopped;
 
     // Goal positions (N sequential waypoints)
     float goal_positions_x[MAX_TARGET_WAYPOINTS];
