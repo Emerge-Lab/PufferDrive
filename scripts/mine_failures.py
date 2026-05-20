@@ -43,6 +43,8 @@ def build_env(args):
         init_mode="create_all_valid",
         init_steps=args.init_steps,
         scenario_length=args.scenario_length,
+        goal_radius=args.goal_radius,
+        reward_randomization=False,
         # Prevent the auto vec_log from draining env->log mid-rollout; we want
         # completed_episode summaries to land in info as the episodes finish.
         report_interval=args.scenario_length * 10,
@@ -204,6 +206,12 @@ def parse_args():
         help="parallel SDC scenarios per Drive env build (= env.num_envs in control_sdc_only)",
     )
     p.add_argument("--scenario-length", type=int, default=91)
+    p.add_argument(
+        "--goal-radius",
+        type=float,
+        default=6.0,
+        help="xy distance (m) at which a goal counts as reached; z gate is fixed at Z_BUFFER=4m",
+    )
     p.add_argument("--init-steps", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--deterministic", action="store_true", default=True)
