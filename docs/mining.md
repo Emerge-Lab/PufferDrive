@@ -7,20 +7,25 @@ and `pufferlib/mining_viz.py`.
 ## TL;DR
 
 ```bash
-# Roll the policy out for 100 episodes, save compact replays for "failures",
-# render HTML for each + a sortable index.
+# Roll the policy out for 100 episodes, save compact replays for episodes
+# whose episode_return falls below the threshold, render HTML for each +
+# a sortable index.
 puffer mine_failures puffer_drive \
     --load-model-path /path/to/model_011000.pt \
     --mine.output-dir ./failure_mining/baseline_011000 \
     --mine.num-episodes 100 \
-    --vec.backend Serial             # see "Multiprocessing hang" below
+    --mine.score-threshold 1e9 \
+    --vec.backend Serial
+```
 
-# Outputs:
-#   ./failure_mining/baseline_011000/
-#     replays/episode_NNNNNN.replay.zlib   ← one per failed episode
-#     renders/episode_NNNNNN.html          ← per-replay viewer
-#     renders/index.html                   ← sortable summary
-#     episodes.csv                         ← all episodes, all metrics
+Outputs:
+
+```
+./failure_mining/baseline_011000/
+    replays/episode_NNNNNN.replay.zlib   one per saved episode
+    renders/episode_NNNNNN.html          per-replay viewer
+    renders/index.html                   sortable summary
+    episodes.csv                         all episodes, all metrics
 ```
 
 Open the index in a browser:
@@ -33,8 +38,8 @@ open ./failure_mining/baseline_011000/renders/index.html
 
 A compact replay bundle is a pickled+zlib'd `schema_version=2` dict containing
 per-step agent state, traffic state, and observation arrays for a single
-episode. Bundles are produced **C-side** when `capture_compact_replay=True`
-is passed to `Drive(...)`. `mine_failures` sets this automatically.
+episode. Bundles are produced C-side when `capture_compact_replay=True` is
+passed to `Drive(...)`. `mine_failures` sets this automatically.
 
 Each saved bundle is paired with a metadata row in `episodes.csv` including
 `episode_return`, `collision_rate`, `offroad_rate`, `num_goals_reached`,
@@ -43,50 +48,34 @@ reads the bundle and replays it in-browser on a top-down canvas, with optional
 overlays for the agent's observed FOV, partner circle, goal route, and waypoint
 markers.
 
-## `mine.score_threshold` — gotcha
+## `mine.score_threshold` selection
 
-The `mine_failures` selection rule is "save replay if and only if
-`episode_return < score_threshold`". The docstring claims `-inf` means "capture
-every episode" — that's wrong: `episode_return < -inf` is never true, so the
-default captures **nothing**. To actually save episodes:
+The save rule is "write replay if and only if `episode_return < score_threshold`".
 
-```bash
-# Capture every episode (works with any non-degenerate return):
---mine.score-threshold 1e9
+- `--mine.score-threshold 1e9` captures every episode (any real return is
+  less than 1e9).
+- `--mine.score-threshold 0` captures only negative-return ("true failure")
+  episodes.
+- Default `-inf` captures **nothing** — useful only if you want `episodes.csv`
+  metrics without the bundle overhead.
 
-# Capture only "true" failures (negative returns):
---mine.score-threshold 0
-```
+`episodes.csv` always contains all N episodes' metadata regardless of
+threshold; only the bundle save + HTML render is gated.
 
-`episodes.csv` always contains all N episodes' metadata regardless of threshold
-— only the bundle save + HTML render is gated.
+## `--vec.backend Serial`
 
-## Multiprocessing hang — use `--vec.backend Serial`
+Mining must use `--vec.backend Serial`. The drive.ini default
+`Multiprocessing` backend forks workers post-torch-import, which deadlocks on
+CUDA in the child process. Symptom is a parent process at 100% CPU with no
+visible progress and no `[mine_failures] target episodes=...` print.
 
-`pufferl.mine_failures` goes through `pufferlib.vector.make(...)` with the
-drive.ini default `backend=Multiprocessing`. Even with `num_envs=1,
-num_workers=1`, that backend **forks** workers post-torch-import. Forking after
-torch has been imported in the parent is a classic deadlock for CUDA — the
-child can hang on CUDA initialization, and the parent sits forever on the IPC
-pipe.
-
-Symptoms: CPU 100% in the parent, RSS frozen, no `[mine_failures] target
-episodes=...` print, never produces output. If you let it sit for ~10 minutes
-nothing changes.
-
-Fix: force the in-process backend.
-
-```bash
---vec.backend Serial
-```
-
-This keeps the env in the same process as the policy. No fork, no hang. The
-single-env nature of mining means the throughput cost is negligible.
+`Serial` keeps the env in the same process as the policy. Mining is a single
+env / single rollout workflow, so the throughput cost is negligible.
 
 ## Tuning the rollout config
 
 The mining env config comes from drive.ini's `[mine]` section plus per-CLI
-overrides. Useful knobs:
+overrides:
 
 ```bash
 # Larger output (slower):
@@ -99,22 +88,20 @@ overrides. Useful knobs:
 --env.init-steps 10 \
 --env.scenario-length 200
 
-# Looser goal radius (useful if the trained policy struggles with the
-# stricter default; default 2m, max 12m under reward randomization):
+# Looser goal radius (default 2 m, up to 12 m under reward randomization):
 --env.goal-radius 6
 
-# Closer-spaced goals (mining a policy that wasn't trained on these):
+# Closer-spaced goals:
 --env.min-waypoint-spacing 10 \
 --env.max-waypoint-spacing 15
 ```
 
-## Resume + obs-shape gotcha
+## Loading checkpoints with non-default architecture
 
-`mine_failures` does **not** read the sibling `config.yaml` next to
-`load_model_path` — only `pufferl.train` does. If the checkpoint was trained
+`mine_failures` does not read the sibling `config.yaml` next to
+`load_model_path` (only `pufferl.train` does). If the checkpoint was trained
 with non-default `policy.*` or `rnn.*` dimensions (e.g. `input_size=128`,
-`backbone_num_layers=4`), you'll get a shape mismatch on `load_state_dict`
-unless you pass them on the CLI:
+`backbone_num_layers=4`), pass them on the CLI to match the saved state dict:
 
 ```bash
 --policy.input-size 128 \
@@ -131,14 +118,15 @@ unless you pass them on the CLI:
 ```
 
 You can read the right values out of the checkpoint's sibling `config.yaml`
-(under `policy:` and `rnn:`) and pass them through.
+(under `policy:` and `rnn:`) and pass them through. The error if you forget
+is a wall of `size mismatch for ...` lines from `policy.load_state_dict`.
 
 ## On the cluster
 
 Mining is GPU-bound on the policy forward pass but memory-light compared to
 training (single env, no rollout buffer, no PPO update). 48 GB RAM and a
 60-minute time limit are plenty for 100 episodes. The same `submit_cluster.py`
-flow as training works — just override `--main` to invoke `mine_failures`:
+flow as training works — override `--main` to invoke `mine_failures`:
 
 ```bash
 python3 scripts/submit_cluster.py \
@@ -157,13 +145,11 @@ python3 scripts/submit_cluster.py \
         vec.backend=Serial
 ```
 
-See [`docs/cluster_training.md`](cluster_training.md) for the one-time
-submitit setup (`pip install --user submitit pyyaml cloudpickle` on the
-system python) and the rationale for why `submit_cluster.py` must be run
-from the login node rather than inside the container.
+See [`docs/cluster_training.md`](cluster_training.md) for one-time setup of
+the login-side submitit (`python3 -m pip install --user submitit pyyaml
+cloudpickle`).
 
-Outputs land on `/scratch`; pull them down with `rsync` for in-browser
-viewing.
+Outputs land on `/scratch`; pull them down with `rsync` for in-browser viewing.
 
 ## Viewer features (`mining_viz.py`)
 

@@ -12,7 +12,8 @@ Greene workflow but the patterns generalize. Pairs with `scripts/setup_container
 ./scripts/setup_container.sh create-overlay
 sbatch --account=<acct> --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
     --wrap "./scripts/setup_container.sh install"
-#   (b) install submitit on the login-node system python (see "Why" below)
+#   (b) install submitit on the login-node system python (used to compose
+#       the submission; the in-container venv python runs the actual job)
 python3 -m ensurepip --user
 python3 -m pip install --user submitit pyyaml cloudpickle
 
@@ -21,8 +22,7 @@ sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --tim
     --chdir=$PWD -o $LOGDIR/rebuild_%j.log \
     --wrap "./scripts/setup_container.sh rebuild"
 
-# Training: submit_cluster.py from the login node (NOT inside singularity)
-# with --container --heartbeat. Heartbeat is required for runs > ~2h.
+# Training: submit_cluster.py from the login node with --container --heartbeat.
 python3 scripts/submit_cluster.py \
     --save_dir /scratch/$USER/runs \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
@@ -53,7 +53,7 @@ singularity exec --nv \
     '
 ```
 
-`source venv/activate` is **required** — sourcing `/ext3/env.sh` alone gives you
+`source venv/activate` is required — sourcing `/ext3/env.sh` alone gives you
 a torch-less base interpreter (it imports as a namespace-package stub with
 `torch.__file__ == None`).
 
@@ -67,47 +67,39 @@ heartbeat when `--heartbeat` is set, performs code isolation (symlinks the
 top-level entries + hard-copies `pufferlib/` into a per-run sandbox), and
 hands the package to `submitit` for `sbatch`-submission.
 
-### Why submitit needs the system python
+### Two pythons in play
 
-`submitit` serializes the launch function via `cloudpickle` and writes an
-sbatch script that, on the compute node, runs
+A `submit_cluster.py --container` submission uses two distinct python
+environments:
 
-```
-srun <python-path> -m submitit.<launcher> <pkl>
-```
+- **Login-side composer**: the python that runs `submit_cluster.py` itself.
+  Only needs `submitit`, `pyyaml`, `cloudpickle` importable. Used purely to
+  build the sbatch script and submit it to SLURM. On Greene this is
+  `/usr/bin/python3` (system python) with `pip install --user submitit pyyaml
+  cloudpickle` to provide those deps.
+- **Compute-side executor**: the python that runs the training job on the
+  compute node. This is the **venv python** inside the singularity overlay
+  — same on every node because the overlay is content-identical. submitit's
+  outer launcher is wrapped in `singularity exec` so it lands in this
+  environment; `launch_training` then runs `torchrun` inside the same
+  container.
 
-`<python-path>` is `sys.executable` of the python that ran
-`submit_cluster.py`. That python must:
+`submit_cluster.py` handles the wrap automatically when `--container` is set
+— you don't need to think about it. The only setup step is installing the
+three login-side deps once.
 
-1. Have `submitit` importable.
-2. Be invocable from the compute node *outside* singularity (because the
-   `srun` wrapper itself isn't inside the container — only the inner train
-   command is).
-
-The venv python on `/scratch/$USER/venvs/pufferdrive/bin/python` does **not**
-qualify: it's a symlink to `/ext3/miniforge3/bin/python3`, which only exists
-inside the singularity overlay. On the compute node `srun` tries to invoke
-that path outside the container and fails with
-`execve(): /scratch/.../python: No such file or directory`.
-
-The system `/usr/bin/python3` does qualify: it's on every node, no overlay
-symlinks, and the `~/.local` user site is on a shared filesystem so packages
-installed via `pip install --user` are visible from compute nodes.
-
-### One-time setup of submitit on system python
+### One-time login-side setup
 
 ```bash
-# Greene's /usr/bin/python3 is stripped of pip. Bootstrap with ensurepip:
+# Greene's /usr/bin/python3 ships without pip; bootstrap it:
 python3 -m ensurepip --user
 python3 -m pip install --user --upgrade pip
 python3 -m pip install --user submitit pyyaml cloudpickle
 ```
 
-`submitit` is pure-python and the deps are too, so `--user` install works
-without needing a compiler. After this, `python3 -c 'import submitit'` works
-on the login node and all compute nodes.
+After this, `python3 -c 'import submitit'` works on the login node.
 
-### Run submit_cluster.py from the *login node*, not from inside the container
+### Run from the login node
 
 ```bash
 python3 scripts/submit_cluster.py \
@@ -127,14 +119,10 @@ Key flags:
 
 | Flag | Effect |
 |---|---|
-| `--container` | wraps the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE_PATH ...` and prepends `source $VENV/bin/activate && export PYTHONNOUSERSITE=1` |
-| `--heartbeat` | wraps the inner train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` and kills it on train exit, preserving the train exit code |
-| `--args key=value key2=value2 ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
+| `--container` | wraps both submitit's outer launcher and the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE` |
+| `--heartbeat` | wraps the train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` and kills it on train exit, preserving the train exit code |
+| `--args key=value ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
 | `--account` / `--partition` / `--time` | override `compute_config` SLURM settings |
-
-`AutoExecutor` (inside submit_cluster.py) probes for `sbatch` on `$PATH`. The
-login-node `$PATH` includes `/opt/slurm/bin`, so submitit picks
-`SlurmExecutor` automatically — no `cluster="slurm"` hint needed.
 
 ### GPU heartbeat — required for long runs
 
@@ -165,54 +153,12 @@ You may want to set `TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"` in your shell
 profile if you build C extensions across the different GPU types on Greene
 (A100 sm_80, L40S/H100 sm_89/90, H200 sm_90).
 
-### Fallback: direct sbatch (if submitit setup is skipped)
-
-Sometimes you can't or don't want to install submitit on the system python
-(restricted environment, fast smoke test, etc.). A direct sbatch with the
-same singularity-exec + heartbeat pattern is fine. The translation from
-`submit_cluster.py --container --heartbeat` to a hand-written script is
-straightforward:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=mytrain
-#SBATCH --account=<your-account>
-#SBATCH --partition=<gpu-partition>
-#SBATCH --gres=gpu:1 --cpus-per-task=16 --mem=96gb --time=2880
-#SBATCH -o /scratch/$USER/runs/logs/train_%j.log
-
-singularity exec --nv \
-  --overlay /scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3:ro \
-  /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
-  bash -c "
-    source /scratch/$USER/venvs/pufferdrive/bin/activate
-    export PYTHONNOUSERSITE=1
-    export TORCH_CUDA_ARCH_LIST=\"8.0;8.9;9.0\"
-    export XDG_CACHE_HOME=/scratch/$USER/cache
-    cd /scratch/$USER/code/PufferDrive
-    python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 &
-    HB_PID=\$!
-    torchrun --standalone --nproc_per_node 1 -m pufferlib.pufferl train puffer_drive \
-        --train.total-timesteps 10000000000 \
-        --train.checkpoint-interval 250 \
-        --wandb --wandb-project pufferdrive \
-        --train.data-dir /scratch/$USER/runs/mytrain
-    TRAIN_EXIT=\$?
-    kill \$HB_PID 2>/dev/null
-    exit \$TRAIN_EXIT
-"
-```
-
-This skips submit_cluster.py's code isolation and YAML composition but gets
-the job running. Prefer `submit_cluster.py` once the one-time submitit
-install is done.
-
 ## CPU rebuild path
 
-GPU partitions are routinely saturated by training jobs of this same project.
-`setup_container.sh rebuild` doesn't actually need a GPU — it just runs
-`python setup.py build_ext --inplace --force` plus a smoke import. Submit to a
-CPU partition for fast turnaround:
+GPU partitions are routinely saturated by training jobs. `setup_container.sh
+rebuild` doesn't actually need a GPU — it just runs `python setup.py
+build_ext --inplace --force` plus a smoke import. Submit to a CPU partition
+for fast turnaround:
 
 ```bash
 sbatch --account=<general-account> --partition=cpu_short \
@@ -228,20 +174,22 @@ sbatch --account=<general-account> --partition=cpu_short \
 
 NYU Greene exposes `_general` and `_tandon_priority` account tiers, each with
 their own QOS pool per partition. When `squeue` shows your job pending on
-`QOSGrpGRES`, the issue is partition-level pool saturation — **switching
-accounts within the same tier doesn't help**, but switching partitions does.
+`QOSGrpGRES`, the issue is partition-level pool saturation — switching
+accounts within the same tier doesn't help, but switching partitions does.
 
 `QOSMaxGRESPerUser` is different: you're over your own concurrent-GPU cap.
 Cancel a pending job or wait.
 
-Practical recipe for long training:
+Practical recipe:
 
-- For short jobs (rebuilds, eval, mining): try `cpu_short` if CPU-only; else
-  `h200_public + *_general`. Often the fastest GPU slot.
-- For long training: race 2–3 GPU partitions in parallel and cancel the
-  losers as soon as one starts. `tandon_priority` accounts often unblock when
-  `_general` pools are pinned. `l40s_public` typically has multi-hour queues
-  and is the last resort.
+- For short jobs (rebuilds, eval, mining): try `cpu_short` first when no GPU
+  is needed, else `h200_public + <general-account>`. Often the fastest GPU
+  slot.
+- For long training: `_tandon_priority` accounts have their own QOS pools
+  separate from `_general`, so they unblock when `_general` pools are
+  pinned. Race 2–3 partitions in parallel and cancel the losers as soon as
+  one starts. `l40s_public` typically has multi-hour queues and is the last
+  resort.
 
 Quick test-only across combos:
 
@@ -277,37 +225,9 @@ Levers, in order of impact:
   `[eval.validation_gigaflow]` specifically renders 8 × 1080p MP4s in parallel.
 - `--mem=128gb` or `--mem=192gb` if you need the eval signal in wandb.
 
-`vec.*` keys are **not** in pufferl's `KEYS_OF_INTEREST` auto-merge, so a
-sibling `config.yaml` next to a `load_model_path` won't override them. They
-come from `drive.ini` or the CLI.
-
-## Submission pitfalls to avoid
-
-A few mistakes that look reasonable but break the submission flow:
-
-- **Don't run `submit_cluster.py` from inside the container.** It works at the
-  AutoExecutor level (sbatch is reachable; the submission goes through), but
-  the submitted job inherits the in-container venv python as `sys.executable`.
-  On the compute node `srun` tries to invoke that path *outside* singularity
-  and fails with `execve(): /scratch/.../python: No such file or directory`.
-  submit_cluster.py wraps the *inner* train command in singularity-exec but
-  the *outer* submitit launcher is not wrapped.
-
-  The fix is the layout described above: install submitit on the system
-  `/usr/bin/python3` via `pip install --user`, run `submit_cluster.py` from
-  the login node directly (no container, no venv activate).
-
-- **Don't `pip install submitit` into the venv expecting it to work from the
-  login node.** The venv's `pip` and `python` shebangs point at
-  `/ext3/miniforge3/bin/python3` (overlay-internal). Running them outside the
-  container errors with "required file not found". The venv is *runtime*
-  only — its packages are invisible to login-node tooling.
-
-- **Don't bind `/opt/slurm` + `/run/munge` + `/etc/passwd` into the container
-  as a workaround.** It does make `sbatch` callable from inside the container
-  (you'll see "slurm 25.05.4" if you run `sbatch --version`), but you're then
-  back to pitfall #1: the submitted job's outer python is still the venv
-  python. The bindings buy you the submission but not the execution.
+`vec.*` keys are not in pufferl's `KEYS_OF_INTEREST` auto-merge, so a sibling
+`config.yaml` next to a `load_model_path` won't override them. They come from
+`drive.ini` or the CLI.
 
 ## Common pitfalls
 
@@ -324,9 +244,6 @@ A few mistakes that look reasonable but break the submission flow:
   (e.g. failed pip installs that wrote to `/usr/local/lib/...` end up in
   `upper/usr/local/` and aren't visible to apptainer's view). Use
   `debugfs -R "ls /upper" overlay.ext3` from a login node to inspect.
-- **Squash-merging stacked PRs** can hit "stale info" on `--force-with-lease`
-  when the token URL differs from `origin`. Either fetch first or use
-  `--force` with care.
 
 ## Don't chain `sleep` to wait on background jobs
 
