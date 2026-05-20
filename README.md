@@ -148,8 +148,6 @@ renders/index.html           # sortable index of all episodes
 
 Open `renders/index.html` in a browser to triage. The index page filters by "failures only" / "replays only" and sorts by any metric column. Each row links to the per-episode viewer with the scene's full 2D animation.
 
-For the deeper guide — viewer features, `score_threshold` semantics, the required `--vec.backend Serial` flag, loading checkpoints with non-default `policy.*` dims, and the on-cluster `submit_cluster.py` pattern — see [`docs/mining.md`](docs/mining.md).
-
 ## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
 ### `[env]` — Simulation
