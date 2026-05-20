@@ -4401,26 +4401,26 @@ static void compute_observations(Drive *env) {
                 obs[obs_idx++] = 2.0f * normalized - 1.0f;
             }
         }
-        // Target observations (static or dynamic).
-        // STATIC: slot wp emits goal_positions[current_goal_idx + wp], clamped
-        // to the last goal once we run off the end. So if reached/idx counts
-        // are [A,B,C] with idx=0, the obs shows A,B,C; after reaching A
-        // (idx=1) it shows B,C,C; after B (idx=2) it shows C,C,C and stays
-        // there persistently (REACHED_GOAL_IDX guard prevents further
-        // increments past num_target_waypoints).
+        // Target observations (static or dynamic). For STATIC, slots earlier
+        // than current_goal_idx emit zero (already reached); replay mode now
+        // regenerates the full goal triplet via extend_replay_goals_best_effort
+        // on every goal reach, so current_goal_idx is typically 0 here and all
+        // three slots carry fresh goals.
         if (env->target_type == TARGET_STATIC) {
-            int last_wp = env->num_target_waypoints - 1;
             for (int wp = 0; wp < env->num_target_waypoints; wp++) {
-                int src = ego_entity->current_goal_idx + wp;
-                if (src > last_wp)
-                    src = last_wp;
-                float gx = ego_entity->goal_positions_x[src] - ego_entity->sim_x;
-                float gy = ego_entity->goal_positions_y[src] - ego_entity->sim_y;
-                obs[obs_idx++]
-                    = (gx * ego_entity->cos_heading + gy * ego_entity->sin_heading) / env->max_goal_position;
-                obs[obs_idx++]
-                    = (-gx * ego_entity->sin_heading + gy * ego_entity->cos_heading) / env->max_goal_position;
-                obs[obs_idx++] = (ego_entity->goal_positions_z[src] - ego_entity->sim_z) / Z_BUFFER;
+                if (wp < ego_entity->current_goal_idx) {
+                    obs[obs_idx++] = 0.0f;
+                    obs[obs_idx++] = 0.0f;
+                    obs[obs_idx++] = 0.0f;
+                } else {
+                    float gx = ego_entity->goal_positions_x[wp] - ego_entity->sim_x;
+                    float gy = ego_entity->goal_positions_y[wp] - ego_entity->sim_y;
+                    obs[obs_idx++]
+                        = (gx * ego_entity->cos_heading + gy * ego_entity->sin_heading) / env->max_goal_position;
+                    obs[obs_idx++]
+                        = (-gx * ego_entity->sin_heading + gy * ego_entity->cos_heading) / env->max_goal_position;
+                    obs[obs_idx++] = (ego_entity->goal_positions_z[wp] - ego_entity->sim_z) / Z_BUFFER;
+                }
             }
         } else if (env->target_type == TARGET_DYNAMIC) {
             if (ego_entity->path != NULL && ego_entity->path->num_waypoints > 0) {
@@ -5303,23 +5303,31 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached
-                env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Best-effort gigaflow-style extension. Walks the lane graph
-                    // from the SDC's current lane; on nuPlan most walks hit a
-                    // recording-boundary terminal lane well before the canonical
-                    // 360m target, so we accept whatever length comes back and
-                    // distribute the new goals evenly across that span. If the
-                    // walk produces just the start lane (no successors), we leave
-                    // the goals saturated at the last logged trajectory point.
-                    extend_replay_goals_best_effort(env, agent_idx);
-                } else {
-                    compute_goals(env, agent_idx);
+            if (env->simulation_mode == SIMULATION_REPLAY) {
+                // Replay: regenerate the full goal triplet via best-effort
+                // lane-graph extension on every goal reach. If the walk
+                // dead-ends at the start lane (no successors — common at
+                // nuPlan recording boundaries), extension is a no-op and we
+                // fall back to advance-alias so the active goal still points
+                // at the next discrete logged trajectory waypoint.
+                int saved_idx = agent->current_goal_idx;
+                extend_replay_goals_best_effort(env, agent_idx);
+                if (agent->current_goal_idx == saved_idx) {
+                    if (saved_idx < env->num_target_waypoints) {
+                        agent->goal_position_x = agent->goal_positions_x[saved_idx];
+                        agent->goal_position_y = agent->goal_positions_y[saved_idx];
+                        agent->goal_position_z = agent->goal_positions_z[saved_idx];
+                    }
                 }
+                if (saved_idx == env->num_target_waypoints) {
+                    env->logs[i].num_goals_reached += 1;
+                }
+            } else if (agent->current_goal_idx == env->num_target_waypoints) {
+                // Gigaflow: last goal reached, regenerate full route.
+                env->logs[i].num_goals_reached += 1;
+                compute_goals(env, agent_idx);
             } else {
-                // Advance alias to next goal
+                // Gigaflow intermediate: advance alias to next goal.
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
                 agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
