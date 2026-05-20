@@ -137,31 +137,33 @@ You can read the right values out of the checkpoint's sibling `config.yaml`
 
 Mining is GPU-bound on the policy forward pass but memory-light compared to
 training (single env, no rollout buffer, no PPO update). 48 GB RAM and a
-60-minute time limit are plenty for 100 episodes:
+60-minute time limit are plenty for 100 episodes. The same `submit_cluster.py`
+flow as training works — just override `--main` to invoke `mine_failures`:
 
 ```bash
-sbatch --account=<acct> --partition=<gpu-partition> --gres=gpu:1 \
-    --cpus-per-task=8 --mem=48gb --time=60 \
-    --chdir=$PWD -o $LOGDIR/mine_%j.log \
-    --wrap "
-        singularity exec --nv \
-          --overlay /scratch/\$USER/images/PufferDrive/overlay-15GB-500K.ext3:ro \
-          /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
-          bash -c '
-            source /scratch/\$USER/venvs/pufferdrive/bin/activate
-            export PYTHONNOUSERSITE=1
-            cd /scratch/\$USER/code/PufferDrive
-            python -m pufferlib.pufferl mine_failures puffer_drive \
-                --load-model-path \$CKPT \
-                --mine.output-dir \$OUT \
-                --mine.num-episodes 100 \
-                --mine.score-threshold 1e9 \
-                --vec.backend Serial
-          '
-    "
+python3 scripts/submit_cluster.py \
+    --save_dir /scratch/$USER/runs \
+    --prefix mine \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --account <acct> --partition <gpu-partition> --time 60 \
+    --mem 48gb --cpus 8 \
+    --container \
+    --main "-m pufferlib.pufferl mine_failures puffer_drive" \
+    --args \
+        load_model_path=<path-to-ckpt> \
+        mine.output_dir=/scratch/$USER/failure_mining/out \
+        mine.num_episodes=100 \
+        mine.score_threshold=1e9 \
+        vec.backend=Serial
 ```
 
-Outputs land on `/scratch`; pull them down with `rsync` for in-browser viewing.
+See [`docs/cluster_training.md`](cluster_training.md) for the one-time
+submitit setup (`pip install --user submitit pyyaml cloudpickle` on the
+system python) and the rationale for why `submit_cluster.py` must be run
+from the login node rather than inside the container.
+
+Outputs land on `/scratch`; pull them down with `rsync` for in-browser
+viewing.
 
 ## Viewer features (`mining_viz.py`)
 

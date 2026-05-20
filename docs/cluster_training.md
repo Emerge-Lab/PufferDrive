@@ -7,20 +7,29 @@ Greene workflow but the patterns generalize. Pairs with `scripts/setup_container
 ## TL;DR
 
 ```bash
-# One-time per cluster: create the singularity overlay and install deps.
+# One-time per cluster:
+#   (a) create the singularity overlay and install deps into the venv
 ./scripts/setup_container.sh create-overlay
 sbatch --account=<acct> --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
     --wrap "./scripts/setup_container.sh install"
+#   (b) install submitit on the login-node system python (see "Why" below)
+python3 -m ensurepip --user
+python3 -m pip install --user submitit pyyaml cloudpickle
 
 # Per code change to C extensions: rebuild on a CPU partition (no GPU needed).
 sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --time=20 \
     --chdir=$PWD -o $LOGDIR/rebuild_%j.log \
     --wrap "./scripts/setup_container.sh rebuild"
 
-# Training: direct sbatch with inline singularity-exec + heartbeat.
-#   (`submit_cluster.py` has known limitations on this branch lineage —
-#   see "submit_cluster.py" below.)
-sbatch /path/to/my_train.sh   # template in this doc
+# Training: submit_cluster.py from the login node (NOT inside singularity)
+# with --container --heartbeat. Heartbeat is required for runs > ~2h.
+python3 scripts/submit_cluster.py \
+    --save_dir /scratch/$USER/runs \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
+    --container --heartbeat \
+    --account <acct> --partition <gpu-partition> --time 2880 \
+    --args train.checkpoint_interval=250 env.simulation_mode=gigaflow
 ```
 
 ## Container model
@@ -48,21 +57,128 @@ singularity exec --nv \
 a torch-less base interpreter (it imports as a namespace-package stub with
 `torch.__file__ == None`).
 
-## Training sbatch template
+## Submitting training — `submit_cluster.py`
 
-The minimal template below uses a direct `sbatch` (no `submit_cluster.py`),
-includes the GPU heartbeat to prevent idle-reclamation, and wraps everything in
-a singularity-exec. Adapt the `--account`, `--partition`, paths, and CLI args:
+`scripts/submit_cluster.py` is the canonical submission path. It composes a
+`compute_config` YAML (SLURM settings) + a `program_config` YAML (pufferl
+training args) + `--args` CLI overrides, wraps the inner train command in
+`singularity exec` when `--container` is set, optionally injects the GPU
+heartbeat when `--heartbeat` is set, performs code isolation (symlinks the
+top-level entries + hard-copies `pufferlib/` into a per-run sandbox), and
+hands the package to `submitit` for `sbatch`-submission.
+
+### Why submitit needs the system python
+
+`submitit` serializes the launch function via `cloudpickle` and writes an
+sbatch script that, on the compute node, runs
+
+```
+srun <python-path> -m submitit.<launcher> <pkl>
+```
+
+`<python-path>` is `sys.executable` of the python that ran
+`submit_cluster.py`. That python must:
+
+1. Have `submitit` importable.
+2. Be invocable from the compute node *outside* singularity (because the
+   `srun` wrapper itself isn't inside the container — only the inner train
+   command is).
+
+The venv python on `/scratch/$USER/venvs/pufferdrive/bin/python` does **not**
+qualify: it's a symlink to `/ext3/miniforge3/bin/python3`, which only exists
+inside the singularity overlay. On the compute node `srun` tries to invoke
+that path outside the container and fails with
+`execve(): /scratch/.../python: No such file or directory`.
+
+The system `/usr/bin/python3` does qualify: it's on every node, no overlay
+symlinks, and the `~/.local` user site is on a shared filesystem so packages
+installed via `pip install --user` are visible from compute nodes.
+
+### One-time setup of submitit on system python
+
+```bash
+# Greene's /usr/bin/python3 is stripped of pip. Bootstrap with ensurepip:
+python3 -m ensurepip --user
+python3 -m pip install --user --upgrade pip
+python3 -m pip install --user submitit pyyaml cloudpickle
+```
+
+`submitit` is pure-python and the deps are too, so `--user` install works
+without needing a compiler. After this, `python3 -c 'import submitit'` works
+on the login node and all compute nodes.
+
+### Run submit_cluster.py from the *login node*, not from inside the container
+
+```bash
+python3 scripts/submit_cluster.py \
+    --save_dir /scratch/$USER/runs \
+    --prefix mytrain \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
+    --account <acct> --partition <gpu-partition> --time 2880 \
+    --container \
+    --heartbeat \
+    --args \
+        train.total_timesteps=10000000000 \
+        train.checkpoint_interval=250
+```
+
+Key flags:
+
+| Flag | Effect |
+|---|---|
+| `--container` | wraps the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE_PATH ...` and prepends `source $VENV/bin/activate && export PYTHONNOUSERSITE=1` |
+| `--heartbeat` | wraps the inner train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` and kills it on train exit, preserving the train exit code |
+| `--args key=value key2=value2 ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
+| `--account` / `--partition` / `--time` | override `compute_config` SLURM settings |
+
+`AutoExecutor` (inside submit_cluster.py) probes for `sbatch` on `$PATH`. The
+login-node `$PATH` includes `/opt/slurm/bin`, so submitit picks
+`SlurmExecutor` automatically — no `cluster="slurm"` hint needed.
+
+### GPU heartbeat — required for long runs
+
+`--heartbeat` is not optional for jobs over ~2 hours. Without it, the
+cluster's idle-GPU reclaimer issues a `scancel` from `uid 0` (root) during
+the first eval / checkpoint dip in GPU utilization.
+
+`scripts/gpu_heartbeat.py` monitors `nvidia-smi` and runs short matmul bursts
+when utilization drops below 65%, so the cluster always sees the GPU as
+active. It cooperates with real training (steps aside when training is busy).
+
+### Environment knobs the container path sets
+
+When `--container` is on, the inner bash command has these env vars set
+before `cd $PROJECT_ROOT && <train>`:
+
+```bash
+source /scratch/$USER/venvs/pufferdrive/bin/activate
+export PYTHONNOUSERSITE=1
+export XDG_CACHE_HOME=/scratch/$USER/cache
+export WANDB_CACHE_DIR=/scratch/$USER/wandb_cache
+export WANDB_CONFIG_DIR=/scratch/$USER/wandb_config
+export WANDB_DATA_DIR=/scratch/$USER/wandb_data
+export WANDB_DIR=/scratch/$USER/wandb_data
+```
+
+You may want to set `TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"` in your shell
+profile if you build C extensions across the different GPU types on Greene
+(A100 sm_80, L40S/H100 sm_89/90, H200 sm_90).
+
+### Fallback: direct sbatch (if submitit setup is skipped)
+
+Sometimes you can't or don't want to install submitit on the system python
+(restricted environment, fast smoke test, etc.). A direct sbatch with the
+same singularity-exec + heartbeat pattern is fine. The translation from
+`submit_cluster.py --container --heartbeat` to a hand-written script is
+straightforward:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=mytrain
 #SBATCH --account=<your-account>
 #SBATCH --partition=<gpu-partition>
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=96gb
-#SBATCH --time=2880          # 48h
+#SBATCH --gres=gpu:1 --cpus-per-task=16 --mem=96gb --time=2880
 #SBATCH -o /scratch/$USER/runs/logs/train_%j.log
 
 singularity exec --nv \
@@ -73,41 +189,23 @@ singularity exec --nv \
     export PYTHONNOUSERSITE=1
     export TORCH_CUDA_ARCH_LIST=\"8.0;8.9;9.0\"
     export XDG_CACHE_HOME=/scratch/$USER/cache
-    export WANDB_DIR=/scratch/$USER/wandb_data
     cd /scratch/$USER/code/PufferDrive
-
-    # GPU heartbeat: keeps utilization above 65% during eval/checkpoint dips
-    # so the cluster's idle-GPU reclaimer doesn't kill the job (root scancel
-    # at ~2h is the symptom).
     python scripts/gpu_heartbeat.py > /tmp/gpu_heartbeat.log 2>&1 &
     HB_PID=\$!
-
     torchrun --standalone --nproc_per_node 1 -m pufferlib.pufferl train puffer_drive \
         --train.total-timesteps 10000000000 \
         --train.checkpoint-interval 250 \
         --wandb --wandb-project pufferdrive \
         --train.data-dir /scratch/$USER/runs/mytrain
-
     TRAIN_EXIT=\$?
     kill \$HB_PID 2>/dev/null
     exit \$TRAIN_EXIT
 "
 ```
 
-`TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"` covers A100 (sm_80), L40S/H100 (sm_89/90),
-and H200 (sm_90). Without it the C extension is compiled only for the build
-host's GPU type and crashes on different hardware with `no kernel image is available`.
-
-## GPU heartbeat — required for long runs
-
-Without `scripts/gpu_heartbeat.py` backgrounded alongside training, jobs lasting
-~2 hours risk **CANCELLED by uid 0** from the cluster's idle-GPU reclaimer.
-Eval / checkpoint / map-load phases dip GPU utilization briefly, and the
-reclaimer interprets those dips as "idle".
-
-The heartbeat monitors `nvidia-smi` and runs short matmul bursts when
-utilization drops below 65%, so the cluster always sees the GPU as active.
-It cooperates with real training (steps aside when training is active).
+This skips submit_cluster.py's code isolation and YAML composition but gets
+the job running. Prefer `submit_cluster.py` once the one-time submitit
+install is done.
 
 ## CPU rebuild path
 
@@ -183,42 +281,33 @@ Levers, in order of impact:
 sibling `config.yaml` next to a `load_model_path` won't override them. They
 come from `drive.ini` or the CLI.
 
-## submit_cluster.py — known limitations
+## Submission pitfalls to avoid
 
-`scripts/submit_cluster.py` wraps the training launch in submitit + a heartbeat
-wrapper. On the `emerge/temp_training`-derived branch lineage it doesn't work
-end-to-end:
+A few mistakes that look reasonable but break the submission flow:
 
-1. Login-node `/usr/bin/python3` lacks `pip` → can't `pip install submitit`
-   on the login node. The venv's `pip` shebang points at
-   `/ext3/miniforge3/bin/python3` (overlay-internal) so `pip install` outside
-   the container errors with "required file not found".
-2. Running `submit_cluster.py` *inside* the container makes submitit's `srun`
-   launcher inherit the venv python path (`/scratch/.../venvs/.../python`).
-   On the compute node `srun` tries to invoke that path *outside* singularity
-   and fails with `execve(): No such file or directory`. submit_cluster.py
-   wraps the *inner* train command in singularity-exec but the *outer* launcher
-   is not wrapped.
+- **Don't run `submit_cluster.py` from inside the container.** It works at the
+  AutoExecutor level (sbatch is reachable; the submission goes through), but
+  the submitted job inherits the in-container venv python as `sys.executable`.
+  On the compute node `srun` tries to invoke that path *outside* singularity
+  and fails with `execve(): /scratch/.../python: No such file or directory`.
+  submit_cluster.py wraps the *inner* train command in singularity-exec but
+  the *outer* submitit launcher is not wrapped.
 
-Workaround if you really want submitit + sbatch: bind the slurm dirs into the
-container so the in-container python can see sbatch and call it directly:
+  The fix is the layout described above: install submitit on the system
+  `/usr/bin/python3` via `pip install --user`, run `submit_cluster.py` from
+  the login node directly (no container, no venv activate).
 
-```bash
-singularity exec --nv \
-    --bind /opt/slurm:/opt/slurm \
-    --bind /run/munge:/run/munge \
-    --bind /etc/passwd:/etc/passwd \
-    --bind /etc/group:/etc/group \
-    --overlay overlay.ext3:ro \
-    $SIF bash -c 'PATH=/opt/slurm/bin:$PATH ...submit_cluster.py...'
-```
+- **Don't `pip install submitit` into the venv expecting it to work from the
+  login node.** The venv's `pip` and `python` shebangs point at
+  `/ext3/miniforge3/bin/python3` (overlay-internal). Running them outside the
+  container errors with "required file not found". The venv is *runtime*
+  only — its packages are invisible to login-node tooling.
 
-This gets the submission through (real SLURM job ID), but the **submitted job
-itself** still hits (2) above unless you also bind those dirs into the launched
-container, which submit_cluster.py doesn't do.
-
-**Recommended**: use the direct-sbatch template from this doc. The heartbeat
-is a 4-line bash addition; you don't need submitit for that.
+- **Don't bind `/opt/slurm` + `/run/munge` + `/etc/passwd` into the container
+  as a workaround.** It does make `sbatch` callable from inside the container
+  (you'll see "slurm 25.05.4" if you run `sbatch --version`), but you're then
+  back to pitfall #1: the submitted job's outer python is still the venv
+  python. The bindings buy you the submission but not the execution.
 
 ## Common pitfalls
 

@@ -250,6 +250,32 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     # Set up executor
     executor = submitit.AutoExecutor(folder=os.path.join(save_dir, "submitit"))
 
+    # When --container is set, run submitit's outer launcher python *inside*
+    # singularity. The default launcher python is sys.executable, which is
+    # either the login-node system python (version-mismatched with the
+    # compute-node system python, so --user installs are invisible) or the
+    # venv python (a symlink into the overlay, which dangles on the compute
+    # node outside singularity). Wrapping the launcher in singularity exec
+    # uses the overlay's miniforge3 python — identical on every node — and
+    # gives submitit a working import of itself (the venv has submitit
+    # installed). launch_training detects the already-in-container state
+    # via /.singularity.d/Singularity and skips its own inner wrap to avoid
+    # nested singularity.
+    if args.container and hasattr(executor, "_executor"):
+        scratch_dir = os.environ.get("SCRATCH_DIR", f"/scratch/{os.environ.get('USER', '')}")
+        venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
+        cert_binds = []
+        for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
+            if os.path.exists(cert_path):
+                cert_binds.append(f"--bind {cert_path}:{cert_path}:ro")
+        executor._executor.python = (
+            f"singularity exec --nv "
+            f"--overlay {args.container_overlay}:ro "
+            f"{' '.join(cert_binds)} "
+            f"{args.container_image} "
+            f"{venv_path}/bin/python"
+        )
+
     # Build GRES string for GPUs
     if from_config.get("gpu_type") is not None:
         gres = f"gpu:{from_config['gpu_type']}:{from_config['gpus']}"
@@ -404,25 +430,33 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             if args.heartbeat:
                 train_str = wrap_with_heartbeat(train_str)
             inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {train_str}"
-            full_cmd = [
-                "singularity",
-                "exec",
-                "--nv",
-                "--overlay",
-                container_config["overlay"] + ":ro",  # Read-only overlay for running
-            ]
-            # Bind mount SSL certificates for TLS verification (wandb, etc.)
-            for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
-                if os.path.exists(cert_path):
-                    full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
-            full_cmd.extend(
-                [
-                    container_config["image"],
-                    "bash",
-                    "-c",
-                    inner_cmd,
+            # submit_cluster.py also wraps submitit's outer launcher python in
+            # singularity exec when --container is on (see the executor.python
+            # override at submission time). When we land here on the compute
+            # node, we're already inside that singularity context — skip the
+            # second wrap and just run inner_cmd via bash.
+            if os.path.exists("/.singularity.d/Singularity"):
+                full_cmd = ["bash", "-c", inner_cmd]
+            else:
+                full_cmd = [
+                    "singularity",
+                    "exec",
+                    "--nv",
+                    "--overlay",
+                    container_config["overlay"] + ":ro",  # Read-only overlay for running
                 ]
-            )
+                # Bind mount SSL certificates for TLS verification (wandb, etc.)
+                for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
+                    if os.path.exists(cert_path):
+                        full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
+                full_cmd.extend(
+                    [
+                        container_config["image"],
+                        "bash",
+                        "-c",
+                        inner_cmd,
+                    ]
+                )
         elif args.heartbeat:
             # No container: still need to wrap in bash -c so the brace group parses.
             train_str = " ".join(full_cmd)
