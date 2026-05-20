@@ -214,6 +214,3 @@ external/
 # Claude config
 .claude/
 CLAUDE.local.md
-
-# Mining output artifacts (large local-only renders/replays)
-failure_mining/
