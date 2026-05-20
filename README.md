@@ -71,6 +71,8 @@ python scripts/submit_cluster.py \
 
 `scripts/cluster_configs/nyu_greene.yaml` defines `account`, `gpus`, `cpus`, `mem`, `time` — edit `account` to your allocation before first submit. `--container` makes `submit_cluster.py` wrap the job command in `singularity exec --nv --overlay $OVERLAY_PATH:ro $IMAGE_PATH ...`.
 
+For an operational deep-dive — sbatch templates, the GPU heartbeat (required for runs > ~2h or the idle-GPU reclaimer will scancel them), CPU rebuild path, account/partition strategy, replay-mode memory sizing, and known `submit_cluster.py` failure modes — see [`docs/cluster_training.md`](docs/cluster_training.md).
+
 ## Data
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
@@ -145,6 +147,8 @@ renders/index.html           # sortable index of all episodes
 ```
 
 Open `renders/index.html` in a browser to triage. The index page filters by "failures only" / "replays only" and sorts by any metric column. Each row links to the per-episode viewer with the scene's full 2D animation.
+
+For the deeper guide — viewer features, the `score_threshold` semantic gotcha (default `-inf` saves nothing — not what the `mine_failures` docstring claims), the `Multiprocessing`-backend CUDA-after-fork hang and the `--vec.backend Serial` workaround, the shape-mismatch gotcha when loading checkpoints with non-default `policy.*` dims, and the on-cluster sbatch pattern — see [`docs/mining.md`](docs/mining.md).
 
 ## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
