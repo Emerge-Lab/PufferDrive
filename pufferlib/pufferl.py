@@ -1395,7 +1395,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
-            tstate = torch.load(trainer_state_path, map_location=train_config["device"])
+            # torch.load rejects a bare int as map_location (it tries to call it);
+            # wrap so a device index from config (e.g. device: 0) loads onto cuda:N.
+            device = train_config["device"]
+            map_location = torch.device(f"cuda:{device}") if isinstance(device, int) else device
+            tstate = torch.load(trainer_state_path, map_location=map_location)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
