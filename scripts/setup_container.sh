@@ -131,13 +131,22 @@ ensure_uv() {
 # of the box and works against any cpython.
 ensure_venv() {
     ensure_uv
-    # If the venv exists but its python symlink no longer resolves (e.g. it
-    # points into /ext3/miniforge3 from before we moved miniforge3 onto
-    # /scratch), rebuild it. Cheap heuristic — the venv's python is a tiny
-    # symlink that uv will recreate against $CONTAINER_PYTHON.
-    if [ -f "$VENV_PATH/bin/activate" ] && [ ! -e "$VENV_PATH/bin/python" ]; then
-        echo "=== Rebuilding stale venv at $VENV_PATH (python link is broken) ==="
-        rm -rf "$VENV_PATH"
+    # If the venv exists but its python doesn't resolve into the current
+    # $MINIFORGE3_DIR (e.g. it points at /ext3/miniforge3 from before we
+    # moved miniforge3 onto /scratch), rebuild. readlink -f resolves the
+    # whole symlink chain, so this catches the case where the link is
+    # valid inside the container (overlay mounted) but stale relative to
+    # where the new venv should point.
+    if [ -f "$VENV_PATH/bin/activate" ]; then
+        local resolved
+        resolved="$(readlink -f "$VENV_PATH/bin/python" 2>/dev/null || true)"
+        case "$resolved" in
+            "$MINIFORGE3_DIR"/*) ;;
+            *)
+                echo "=== Rebuilding stale venv at $VENV_PATH (python points to '$resolved', not under $MINIFORGE3_DIR) ==="
+                rm -rf "$VENV_PATH"
+                ;;
+        esac
     fi
     if [ ! -f "$VENV_PATH/bin/activate" ]; then
         echo "=== Creating venv at $VENV_PATH ==="
