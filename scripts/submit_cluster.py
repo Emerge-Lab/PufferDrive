@@ -250,29 +250,6 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
     # Set up executor
     executor = submitit.AutoExecutor(folder=os.path.join(save_dir, "submitit"))
 
-    # Override the python submitit invokes on the compute node. Default is
-    # sys.executable (the login-node /usr/bin/python3, version 3.12 on Greene),
-    # but on the compute node /usr/bin/python3 is version 3.9 and can't see
-    # the user-installed submitit at ~/.local/lib/python3.12/. Wrap it in
-    # singularity exec so the compute-side launcher uses the overlay's
-    # miniforge3 python — same on every node, with submitit available in the
-    # venv. launch_training detects /.singularity.d/Singularity and skips
-    # its own singularity wrap so we don't nest.
-    if args.container and hasattr(executor, "_executor"):
-        scratch_dir = os.environ.get("SCRATCH_DIR", f"/scratch/{os.environ.get('USER', '')}")
-        venv_path = os.environ.get("VENV_PATH", f"{scratch_dir}/venvs/pufferdrive")
-        cert_binds = []
-        for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
-            if os.path.exists(cert_path):
-                cert_binds.append(f"--bind {cert_path}:{cert_path}:ro")
-        executor._executor.python = (
-            f"singularity exec --nv "
-            f"--overlay {args.container_overlay}:ro "
-            f"{' '.join(cert_binds)} "
-            f"{args.container_image} "
-            f"{venv_path}/bin/python"
-        )
-
     # Build GRES string for GPUs
     if from_config.get("gpu_type") is not None:
         gres = f"gpu:{from_config['gpu_type']}:{from_config['gpus']}"
@@ -424,33 +401,25 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             if args.heartbeat:
                 train_str = wrap_with_heartbeat(train_str)
             inner_cmd = f"{env_setup} && {cache_exports} && cd {project_root} && {train_str}"
-            # submit_cluster.py also wraps submitit's outer launcher python in
-            # singularity exec when --container is on (see the executor.python
-            # override at submission time). When we land here on the compute
-            # node, we're already inside that singularity context — skip the
-            # second wrap and just run inner_cmd via bash.
-            if os.path.exists("/.singularity.d/Singularity"):
-                full_cmd = ["bash", "-c", inner_cmd]
-            else:
-                full_cmd = [
-                    "singularity",
-                    "exec",
-                    "--nv",
-                    "--overlay",
-                    container_config["overlay"] + ":ro",  # Read-only overlay for running
+            full_cmd = [
+                "singularity",
+                "exec",
+                "--nv",
+                "--overlay",
+                container_config["overlay"] + ":ro",  # Read-only overlay for running
+            ]
+            # Bind mount SSL certificates for TLS verification (wandb, etc.)
+            for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
+                if os.path.exists(cert_path):
+                    full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
+            full_cmd.extend(
+                [
+                    container_config["image"],
+                    "bash",
+                    "-c",
+                    inner_cmd,
                 ]
-                # Bind mount SSL certificates for TLS verification (wandb, etc.)
-                for cert_path in ["/etc/ssl/certs", "/etc/pki"]:
-                    if os.path.exists(cert_path):
-                        full_cmd.extend(["--bind", f"{cert_path}:{cert_path}:ro"])
-                full_cmd.extend(
-                    [
-                        container_config["image"],
-                        "bash",
-                        "-c",
-                        inner_cmd,
-                    ]
-                )
+            )
         elif args.heartbeat:
             # No container: still need to wrap in bash -c so the brace group parses.
             train_str = " ".join(full_cmd)

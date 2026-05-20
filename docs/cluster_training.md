@@ -5,25 +5,23 @@ How to run PufferDrive training on a SLURM cluster. This is written with the NYU
 ## A quick overview of the setup and launch process
 
 ```bash
-# One-time per cluster:
-#   (a) create the singularity overlay and install deps into the venv
+# One-time per cluster: create the singularity overlay and install deps
+# into the venv (this also installs submitit and the other submission
+# deps as part of the project's pyproject.toml).
 ./scripts/setup_container.sh create-overlay
 sbatch --account=<acct> --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
     --wrap "./scripts/setup_container.sh install"
-#   (b) install submitit on the login-node system python (used to compose
-#       the submission; the in-container venv python runs the actual job)
-python3 -m ensurepip --user
-python3 -m pip install --user submitit pyyaml cloudpickle
 
 # If code changes, or we haven't built before, rebuild the C code in the container
 sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --time=20 \
     --chdir=$PWD -o $LOGDIR/rebuild_%j.log \
     --wrap "./scripts/setup_container.sh rebuild"
 
-# Training: submit_cluster.py from the login node with --container --heartbeat.
-# By default launches RL training but can be modified through the --main argument
-# to launch other modes
-python3 scripts/submit_cluster.py \
+# Training: source the venv on the login node, then submit_cluster.py
+# with --container --heartbeat. --main defaults to RL training; override
+# it to launch other modes (e.g. mining, eval).
+source /scratch/$USER/venvs/pufferdrive/bin/activate
+python scripts/submit_cluster.py \
     --save_dir /scratch/$USER/runs \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --program_config scripts/cluster_configs/train_base.yaml \
@@ -65,37 +63,17 @@ It performs code isolation (symlinks the
 top-level entries + hard-copies `pufferlib/` into a per-run sandbox), and
 hands the package to `submitit` for `sbatch`-submission.
 
-### WARNING: two python installation are being used here
+### Source the venv before invoking `submit_cluster.py`
 
-A `submit_cluster.py --container` submission uses two distinct python
-environments:
-
-- **Login-side composer**: the python that runs `submit_cluster.py` itself.
-  Only needs `submitit`, `pyyaml`, `cloudpickle` importable. Used purely to
-  build the sbatch script and submit it to SLURM. On Greene this is
-  `/usr/bin/python3` (system python) and you can run `pip install --user submitit pyyaml
-  cloudpickle` to provide those deps.
-- **Compute-side executor**: the python that runs the training job on the
-  compute node. This is the **venv python** inside the singularity overlay. submitit's
-  outer launcher is wrapped in `singularity exec` so it lands in this
-  environment; `launch_training` then runs `torchrun` inside the same
-  container.
-
-### One-time login-side setup
+`setup_container.sh install` puts submitit + its deps into the project
+venv at `/scratch/$USER/venvs/pufferdrive/`. Sourcing the venv on the
+login node makes that submitit importable and lines up `sys.executable`
+with the same venv python that the compute node will run, so submitit's
+serialization round-trips cleanly.
 
 ```bash
-# Greene's /usr/bin/python3 ships without pip; bootstrap it:
-python3 -m ensurepip --user
-python3 -m pip install --user --upgrade pip
-python3 -m pip install --user submitit pyyaml cloudpickle
-```
-
-After this, `python3 -c 'import submitit'` works on the login node.
-
-### Run from the login node
-
-```bash
-python3 scripts/submit_cluster.py \
+source /scratch/$USER/venvs/pufferdrive/bin/activate
+python scripts/submit_cluster.py \
     --save_dir /scratch/$USER/runs \
     --prefix mytrain \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \

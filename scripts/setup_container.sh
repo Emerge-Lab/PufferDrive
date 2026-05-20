@@ -46,7 +46,6 @@ create_overlay() {
     TEMPLATE_NAME=$(basename "$OVERLAY_TEMPLATE")
     cd "$CONTAINER_DIR"
     gunzip "$TEMPLATE_NAME"
-    mv "${TEMPLATE_NAME%.gz}" overlay.ext3
 
     echo "Overlay created at $OVERLAY_PATH"
     echo ""
