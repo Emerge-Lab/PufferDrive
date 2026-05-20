@@ -2221,26 +2221,93 @@ static void compute_goals(Drive *env, int agent_idx) {
     agent->removed = 1;
 }
 
+// Walk the logged trajectory polyline from init_steps, placing each next
+// goal at random_uniform(min_waypoint_spacing, max_waypoint_spacing) further
+// xy distance than the previous. If the trajectory runs out before
+// num_target_waypoints are placed, duplicate the last placed point into the
+// remaining slots so the agent always has a full goal triplet.
+static void place_replay_goals_along_trajectory(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int num_wp = env->num_target_waypoints;
+    if (num_wp > MAX_TARGET_WAYPOINTS) {
+        num_wp = MAX_TARGET_WAYPOINTS;
+    }
+    if (num_wp <= 0 || agent->trajectory_length <= 0) {
+        return;
+    }
+    int start = env->init_steps > 0 ? env->init_steps : 0;
+    if (start >= agent->trajectory_length) {
+        start = agent->trajectory_length - 1;
+    }
+
+    int placed = 0;
+    float accumulated = 0.0f;
+    float next_target = random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
+    float prev_x = agent->log_trajectory_x[start];
+    float prev_y = agent->log_trajectory_y[start];
+    for (int t = start + 1; t < agent->trajectory_length && placed < num_wp; t++) {
+        float cx = agent->log_trajectory_x[t];
+        float cy = agent->log_trajectory_y[t];
+        float dx = cx - prev_x;
+        float dy = cy - prev_y;
+        accumulated += sqrtf(dx * dx + dy * dy);
+        prev_x = cx;
+        prev_y = cy;
+        while (placed < num_wp && accumulated >= next_target) {
+            agent->goal_positions_x[placed] = cx;
+            agent->goal_positions_y[placed] = cy;
+            agent->goal_positions_z[placed] = agent->log_trajectory_z[t];
+            placed++;
+            next_target += random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
+        }
+    }
+    if (placed == 0) {
+        int t = agent->trajectory_length - 1;
+        agent->goal_positions_x[0] = agent->log_trajectory_x[t];
+        agent->goal_positions_y[0] = agent->log_trajectory_y[t];
+        agent->goal_positions_z[0] = agent->log_trajectory_z[t];
+        placed = 1;
+    }
+    while (placed < num_wp) {
+        agent->goal_positions_x[placed] = agent->goal_positions_x[placed - 1];
+        agent->goal_positions_y[placed] = agent->goal_positions_y[placed - 1];
+        agent->goal_positions_z[placed] = agent->goal_positions_z[placed - 1];
+        placed++;
+    }
+    agent->current_goal_idx = 0;
+    agent->goal_position_x = agent->goal_positions_x[0];
+    agent->goal_position_y = agent->goal_positions_y[0];
+    agent->goal_position_z = agent->goal_positions_z[0];
+}
+
 // Best-effort gigaflow-style goal extension. Replay-only helper called from
-// c_step step-5 when a replay agent has exhausted its logged-trajectory
-// goals. Walks the lane graph from agent->current_lane_idx, accepts whatever
-// path length comes back (nuPlan bins routinely cap at <100m due to
-// recording-boundary terminal lanes), and distributes num_target_waypoints
-// goals evenly across that span. Never sets agent->removed — on failure the
-// goals stay at their current values (saturated last logged trajectory point).
+// c_step step-5 on every goal reach. Walks the lane graph from
+// agent->current_lane_idx and places num_target_waypoints goals at
+// random_uniform(min_waypoint_spacing, max_waypoint_spacing) cumulative
+// arclength along the path. Never sets agent->removed — on failure (no
+// successors, or path too short for even one hop) the goals are left
+// unchanged and the caller's advance-alias fallback handles it.
 static void extend_replay_goals_best_effort(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     int start_lane = agent->current_lane_idx;
     if (start_lane < 0) {
         return;
     }
+    int num_wp = env->num_target_waypoints;
+    if (num_wp > MAX_TARGET_WAYPOINTS) {
+        num_wp = MAX_TARGET_WAYPOINTS;
+    }
+    if (num_wp <= 0) {
+        return;
+    }
 
     int temp_route[MAX_ROUTE_LENGTH];
-    float target_distance = env->max_waypoint_spacing * env->num_target_waypoints * 2.0f;
+    // Worst-case path needed: num_wp * max_waypoint_spacing. 1.5x slack so
+    // the walk has room past the last goal.
+    float target_distance = env->max_waypoint_spacing * num_wp * 1.5f;
     int route_length = generate_random_route(
         env, start_lane, target_distance, temp_route, MAX_ROUTE_LENGTH, agent->sim_x, agent->sim_y);
     if (route_length < 2) {
-        // Walk dead-ended at the start lane — no new geometry to extend onto.
         return;
     }
 
@@ -2261,22 +2328,18 @@ static void extend_replay_goals_best_effort(Drive *env, int agent_idx) {
         return;
     }
 
-    int num_wp = env->num_target_waypoints;
-    if (num_wp > MAX_TARGET_WAYPOINTS) {
-        num_wp = MAX_TARGET_WAYPOINTS;
-    }
     int base_idx = get_closest_waypoint_index_on_path(env, agent_idx);
     float base_s = agent->path->waypoints[base_idx].s;
     float end_s = agent->path->waypoints[agent->path->num_waypoints - 1].s;
-    float span = end_s - base_s;
-    if (span <= 0.0f) {
-        return;
-    }
 
-    // Evenly spaced along whatever path length the walk produced. Last goal
-    // always lands at path end; earlier goals are interior fractions.
-    for (int g = 0; g < num_wp; g++) {
-        float target_s = base_s + ((float)(g + 1) / (float)num_wp) * span;
+    int placed = 0;
+    float cumulative = 0.0f;
+    while (placed < num_wp) {
+        cumulative += random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
+        float target_s = base_s + cumulative;
+        if (target_s > end_s) {
+            break;
+        }
         int wp_idx = agent->path->num_waypoints - 1;
         for (int j = base_idx + 1; j < agent->path->num_waypoints; j++) {
             if (agent->path->waypoints[j].s >= target_s) {
@@ -2284,9 +2347,19 @@ static void extend_replay_goals_best_effort(Drive *env, int agent_idx) {
                 break;
             }
         }
-        agent->goal_positions_x[g] = agent->path->waypoints[wp_idx].x;
-        agent->goal_positions_y[g] = agent->path->waypoints[wp_idx].y;
-        agent->goal_positions_z[g] = agent->path->waypoints[wp_idx].z;
+        agent->goal_positions_x[placed] = agent->path->waypoints[wp_idx].x;
+        agent->goal_positions_y[placed] = agent->path->waypoints[wp_idx].y;
+        agent->goal_positions_z[placed] = agent->path->waypoints[wp_idx].z;
+        placed++;
+    }
+    if (placed == 0) {
+        return;
+    }
+    while (placed < num_wp) {
+        agent->goal_positions_x[placed] = agent->goal_positions_x[placed - 1];
+        agent->goal_positions_y[placed] = agent->goal_positions_y[placed - 1];
+        agent->goal_positions_z[placed] = agent->goal_positions_z[placed - 1];
+        placed++;
     }
     agent->current_goal_idx = 0;
     agent->goal_position_x = agent->goal_positions_x[0];
@@ -3697,35 +3770,7 @@ void init(Drive *env) {
 
     if (env->simulation_mode == SIMULATION_REPLAY) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            Agent *agent = &env->agents[agent_idx];
-            // For replay mode, always place waypoints along the logged
-            // trajectory. Route-based compute_goals can produce goals that
-            // diverge from the actual path the SDC should follow.
-            {
-                int start = env->init_steps > 0 ? env->init_steps : 0;
-                int remaining = agent->trajectory_length - 1 - start;
-                if (remaining < 1) {
-                    remaining = 1;
-                }
-                int num_wp = env->num_target_waypoints;
-                if (num_wp > MAX_TARGET_WAYPOINTS) {
-                    num_wp = MAX_TARGET_WAYPOINTS;
-                }
-                for (int g = 0; g < num_wp; g++) {
-                    int t = start + (g + 1) * remaining / num_wp;
-                    if (t >= agent->trajectory_length) {
-                        t = agent->trajectory_length - 1;
-                    }
-                    agent->goal_positions_x[g] = agent->log_trajectory_x[t];
-                    agent->goal_positions_y[g] = agent->log_trajectory_y[t];
-                    agent->goal_positions_z[g] = agent->log_trajectory_z[t];
-                }
-                agent->current_goal_idx = 0;
-                agent->goal_position_x = agent->goal_positions_x[0];
-                agent->goal_position_y = agent->goal_positions_y[0];
-                agent->goal_position_z = agent->goal_positions_z[0];
-            }
+            place_replay_goals_along_trajectory(env, env->active_agent_indices[i]);
         }
     }
 }
@@ -5184,25 +5229,7 @@ void c_reset(Drive *env) {
         generate_reward_coefs(env, agent);
 
         if (env->simulation_mode == SIMULATION_REPLAY) {
-            int start = env->init_steps > 0 ? env->init_steps : 0;
-            int remaining = agent->trajectory_length - 1 - start;
-            if (remaining < 1)
-                remaining = 1;
-            int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS)
-                num_wp = MAX_TARGET_WAYPOINTS;
-            for (int g = 0; g < num_wp; g++) {
-                int t = start + (g + 1) * remaining / num_wp;
-                if (t >= agent->trajectory_length)
-                    t = agent->trajectory_length - 1;
-                agent->goal_positions_x[g] = agent->log_trajectory_x[t];
-                agent->goal_positions_y[g] = agent->log_trajectory_y[t];
-                agent->goal_positions_z[g] = agent->log_trajectory_z[t];
-            }
-            agent->current_goal_idx = 0;
-            agent->goal_position_x = agent->goal_positions_x[0];
-            agent->goal_position_y = agent->goal_positions_y[0];
-            agent->goal_position_z = agent->goal_positions_z[0];
+            place_replay_goals_along_trajectory(env, agent_idx);
         } else {
             build_path(env, agent_idx);
             compute_goals(env, agent_idx);

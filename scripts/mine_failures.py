@@ -44,6 +44,8 @@ def build_env(args):
         init_steps=args.init_steps,
         scenario_length=args.scenario_length,
         goal_radius=args.goal_radius,
+        min_waypoint_spacing=args.min_waypoint_spacing,
+        max_waypoint_spacing=args.max_waypoint_spacing,
         reward_randomization=False,
         # Prevent the auto vec_log from draining env->log mid-rollout; we want
         # completed_episode summaries to land in info as the episodes finish.
@@ -205,7 +207,9 @@ def parse_args():
         default=16,
         help="parallel SDC scenarios per Drive env build (= env.num_envs in control_sdc_only)",
     )
-    p.add_argument("--scenario-length", type=int, default=91)
+    p.add_argument("--scenario-length", type=int, default=200)
+    p.add_argument("--min-waypoint-spacing", type=float, default=10.0)
+    p.add_argument("--max-waypoint-spacing", type=float, default=15.0)
     p.add_argument(
         "--goal-radius",
         type=float,
