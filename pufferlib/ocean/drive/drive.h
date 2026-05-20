@@ -4092,8 +4092,8 @@ static void compute_metrics(Drive *env, int agent_idx) {
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
 
     // Goal reaching — guard against incrementing past num_target_waypoints
-    if (agent->current_goal_idx < env->num_target_waypoints &&
-        distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+    if (agent->current_goal_idx < env->num_target_waypoints
+        && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent->current_goal_idx++;
     }
@@ -5119,15 +5119,18 @@ void c_reset(Drive *env) {
         if (env->simulation_mode == SIMULATION_REPLAY) {
             int start = env->init_steps > 0 ? env->init_steps : 0;
             int remaining = agent->trajectory_length - 1 - start;
-            if (remaining < 1)
+            if (remaining < 1) {
                 remaining = 1;
+            }
             int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS)
+            if (num_wp > MAX_TARGET_WAYPOINTS) {
                 num_wp = MAX_TARGET_WAYPOINTS;
+            }
             for (int g = 0; g < num_wp; g++) {
                 int t = start + (g + 1) * remaining / num_wp;
-                if (t >= agent->trajectory_length)
+                if (t >= agent->trajectory_length) {
                     t = agent->trajectory_length - 1;
+                }
                 agent->goal_positions_x[g] = agent->log_trajectory_x[t];
                 agent->goal_positions_y[g] = agent->log_trajectory_y[t];
                 agent->goal_positions_z[g] = agent->log_trajectory_z[t];
