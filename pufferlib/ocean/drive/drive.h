@@ -2221,6 +2221,79 @@ static void compute_goals(Drive *env, int agent_idx) {
     agent->removed = 1;
 }
 
+// Best-effort gigaflow-style goal extension. Replay-only helper called from
+// c_step step-5 when a replay agent has exhausted its logged-trajectory
+// goals. Walks the lane graph from agent->current_lane_idx, accepts whatever
+// path length comes back (nuPlan bins routinely cap at <100m due to
+// recording-boundary terminal lanes), and distributes num_target_waypoints
+// goals evenly across that span. Never sets agent->removed — on failure the
+// goals stay at their current values (saturated last logged trajectory point).
+static void extend_replay_goals_best_effort(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int start_lane = agent->current_lane_idx;
+    if (start_lane < 0) {
+        return;
+    }
+
+    int temp_route[MAX_ROUTE_LENGTH];
+    float target_distance = env->max_waypoint_spacing * env->num_target_waypoints * 2.0f;
+    int route_length = generate_random_route(
+        env, start_lane, target_distance, temp_route, MAX_ROUTE_LENGTH, agent->sim_x, agent->sim_y);
+    if (route_length < 2) {
+        // Walk dead-ended at the start lane — no new geometry to extend onto.
+        return;
+    }
+
+    if (agent->route != NULL) {
+        free(agent->route);
+    }
+    agent->route_length = route_length;
+    agent->route = (int *)malloc(route_length * sizeof(int));
+    for (int i = 0; i < route_length; i++) {
+        agent->route[i] = temp_route[i];
+    }
+    agent->current_route_index = 0;
+    build_path(env, agent_idx);
+    agent->closest_path_idx_wp = 0;
+    reset_agent_path_progression(env, agent_idx);
+
+    if (agent->path == NULL || agent->path->num_waypoints < 2) {
+        return;
+    }
+
+    int num_wp = env->num_target_waypoints;
+    if (num_wp > MAX_TARGET_WAYPOINTS) {
+        num_wp = MAX_TARGET_WAYPOINTS;
+    }
+    int base_idx = get_closest_waypoint_index_on_path(env, agent_idx);
+    float base_s = agent->path->waypoints[base_idx].s;
+    float end_s = agent->path->waypoints[agent->path->num_waypoints - 1].s;
+    float span = end_s - base_s;
+    if (span <= 0.0f) {
+        return;
+    }
+
+    // Evenly spaced along whatever path length the walk produced. Last goal
+    // always lands at path end; earlier goals are interior fractions.
+    for (int g = 0; g < num_wp; g++) {
+        float target_s = base_s + ((float)(g + 1) / (float)num_wp) * span;
+        int wp_idx = agent->path->num_waypoints - 1;
+        for (int j = base_idx + 1; j < agent->path->num_waypoints; j++) {
+            if (agent->path->waypoints[j].s >= target_s) {
+                wp_idx = j;
+                break;
+            }
+        }
+        agent->goal_positions_x[g] = agent->path->waypoints[wp_idx].x;
+        agent->goal_positions_y[g] = agent->path->waypoints[wp_idx].y;
+        agent->goal_positions_z[g] = agent->path->waypoints[wp_idx].z;
+    }
+    agent->current_goal_idx = 0;
+    agent->goal_position_x = agent->goal_positions_x[0];
+    agent->goal_position_y = agent->goal_positions_y[0];
+    agent->goal_position_z = agent->goal_positions_z[0];
+}
+
 // ========================================
 // Metrics/Collision Functions
 // ========================================
@@ -5234,9 +5307,14 @@ void c_step(Drive *env) {
                 // Last goal reached
                 env->logs[i].num_goals_reached += 1;
                 if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Replay mode: leave current_goal_idx saturated so the
-                    // reached-goal condition won't fire again. Re-generating
-                    // route-based goals on WOMD maps fails (removed=1).
+                    // Best-effort gigaflow-style extension. Walks the lane graph
+                    // from the SDC's current lane; on nuPlan most walks hit a
+                    // recording-boundary terminal lane well before the canonical
+                    // 360m target, so we accept whatever length comes back and
+                    // distribute the new goals evenly across that span. If the
+                    // walk produces just the start lane (no successors), we leave
+                    // the goals saturated at the last logged trajectory point.
+                    extend_replay_goals_best_effort(env, agent_idx);
                 } else {
                     compute_goals(env, agent_idx);
                 }
