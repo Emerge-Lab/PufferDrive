@@ -1,6 +1,6 @@
 # Cluster training — operational guide
 
-How to run PufferDrive training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster. 
+How to run PufferDrive training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster.
 
 ## A quick overview of the setup and launch process
 
@@ -54,7 +54,7 @@ singularity exec --nv \
 
 ## Submitting training — `submit_cluster.py`
 
-`scripts/submit_cluster.py` is the canonical submission path. It composes: 
+`scripts/submit_cluster.py` is the canonical submission path. It composes:
 - a `compute_config` YAML (SLURM settings)
 - a `program_config` YAML (pufferl training args)
 - `--args` CLI overrides

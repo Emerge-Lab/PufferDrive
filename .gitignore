@@ -81,9 +81,6 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
-
 # PyBuilder
 target/
 
@@ -210,9 +207,6 @@ pufferlib/resources/drive/output*.gif
 
 # External local clones
 external/
-
-# Generated docs (sphinx build output only; docs/*.md is tracked)
-# docs/
 
 # Claude config
 .claude/
