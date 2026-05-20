@@ -4717,12 +4717,10 @@ static void compute_observations(Drive *env) {
             target[base + 3] = length / env->max_road_segment_length;
             // Road segment width
             target[base + 4] = LANE_WIDTH / env->max_road_segment_width;
-            // Road segment orientation (cosine, sine). Road edges are emitted with
-            // a 0/0 sentinel: edge polylines are tessellated boundaries, not flow
-            // direction, so their per-segment heading is noise the policy shouldn't
-            // condition on. Lanes keep their real heading.
-            target[base + 5] = is_edge ? 0.0f : cos_angle;
-            target[base + 6] = is_edge ? 0.0f : sin_angle;
+            // Road segment orientation (cosine)
+            target[base + 5] = cos_angle;
+            // Road segment orientation (sine)
+            target[base + 6] = sin_angle;
         }
 
         if (env->road_dropout_enabled) {
