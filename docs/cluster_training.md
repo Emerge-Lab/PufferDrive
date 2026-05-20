@@ -1,10 +1,8 @@
 # Cluster training — operational guide
 
-How to run PufferDrive training on a SLURM cluster. Written against the NYU
-Greene workflow but the patterns generalize. Pairs with `scripts/setup_container.sh`,
-`scripts/gpu_heartbeat.py`, and `scripts/submit_cluster.py`.
+How to run PufferDrive training on a SLURM cluster. This is written with the NYU cluster in mind but it should mostly hold for any SLURM cluster. 
 
-## TL;DR
+## A quick overview of the setup and launch process
 
 ```bash
 # One-time per cluster:
@@ -17,30 +15,31 @@ sbatch --account=<acct> --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \
 python3 -m ensurepip --user
 python3 -m pip install --user submitit pyyaml cloudpickle
 
-# Per code change to C extensions: rebuild on a CPU partition (no GPU needed).
+# If code changes, or we haven't built before, rebuild the C code in the container
 sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --time=20 \
     --chdir=$PWD -o $LOGDIR/rebuild_%j.log \
     --wrap "./scripts/setup_container.sh rebuild"
 
 # Training: submit_cluster.py from the login node with --container --heartbeat.
+# By default launches RL training but can be modified through the --main argument
+# to launch other modes
 python3 scripts/submit_cluster.py \
     --save_dir /scratch/$USER/runs \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --program_config scripts/cluster_configs/train_base.yaml \
     --container --heartbeat \
     --account <acct> --partition <gpu-partition> --time 2880 \
-    --args train.checkpoint_interval=250 env.simulation_mode=gigaflow
+    --args train.checkpoint_interval=250 env.simulation_mode=gigaflow # use this to override config args
 ```
 
 ## Container model
 
 PufferDrive on Greene runs inside a singularity container. The container provides
 a modern glibc + CUDA toolkit; the project's Python environment lives in a venv
-on `/scratch` (not in the overlay) so installs aren't bottlenecked by fuse2fs.
+on `/scratch` so installs aren't bottlenecked by the slow process of building a venv inside a container.
 
 The container is invoked with a **read-only** overlay mount for the miniforge3
-base interpreter, plus the on-disk venv for project packages:
-
+base interpreter, plus the on-disk venv for project packages. As an example of running such a command:
 ```bash
 singularity exec --nv \
     --overlay /scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3:ro \
@@ -53,21 +52,20 @@ singularity exec --nv \
     '
 ```
 
-`source venv/activate` is required — sourcing `/ext3/env.sh` alone gives you
-a torch-less base interpreter (it imports as a namespace-package stub with
-`torch.__file__ == None`).
-
 ## Submitting training — `submit_cluster.py`
 
-`scripts/submit_cluster.py` is the canonical submission path. It composes a
-`compute_config` YAML (SLURM settings) + a `program_config` YAML (pufferl
-training args) + `--args` CLI overrides, wraps the inner train command in
-`singularity exec` when `--container` is set, optionally injects the GPU
-heartbeat when `--heartbeat` is set, performs code isolation (symlinks the
+`scripts/submit_cluster.py` is the canonical submission path. It composes: 
+- a `compute_config` YAML (SLURM settings)
+- a `program_config` YAML (pufferl training args)
+- `--args` CLI overrides
+- wraps the inner train command in `singularity exec` when `--container` is set
+- optionally injects the GPU heartbeat when `--heartbeat` is set. WARNING: this is specifically for the torch cluster to prevent our jobs being killed. No one else should use this.
+
+It performs code isolation (symlinks the
 top-level entries + hard-copies `pufferlib/` into a per-run sandbox), and
 hands the package to `submitit` for `sbatch`-submission.
 
-### Two pythons in play
+### WARNING: two python installation are being used here
 
 A `submit_cluster.py --container` submission uses two distinct python
 environments:
@@ -75,18 +73,13 @@ environments:
 - **Login-side composer**: the python that runs `submit_cluster.py` itself.
   Only needs `submitit`, `pyyaml`, `cloudpickle` importable. Used purely to
   build the sbatch script and submit it to SLURM. On Greene this is
-  `/usr/bin/python3` (system python) with `pip install --user submitit pyyaml
+  `/usr/bin/python3` (system python) and you can run `pip install --user submitit pyyaml
   cloudpickle` to provide those deps.
 - **Compute-side executor**: the python that runs the training job on the
-  compute node. This is the **venv python** inside the singularity overlay
-  — same on every node because the overlay is content-identical. submitit's
+  compute node. This is the **venv python** inside the singularity overlay. submitit's
   outer launcher is wrapped in `singularity exec` so it lands in this
   environment; `launch_training` then runs `torchrun` inside the same
   container.
-
-`submit_cluster.py` handles the wrap automatically when `--container` is set
-— you don't need to think about it. The only setup step is installing the
-three login-side deps once.
 
 ### One-time login-side setup
 
@@ -120,7 +113,7 @@ Key flags:
 | Flag | Effect |
 |---|---|
 | `--container` | wraps both submitit's outer launcher and the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE` |
-| `--heartbeat` | wraps the train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` and kills it on train exit, preserving the train exit code |
+| `--heartbeat` | wraps the train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` preventing the cluster from killing your job due to low GPU usage |
 | `--args key=value ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
 | `--account` / `--partition` / `--time` | override `compute_config` SLURM settings |
 
@@ -132,7 +125,7 @@ the first eval / checkpoint dip in GPU utilization.
 
 `scripts/gpu_heartbeat.py` monitors `nvidia-smi` and runs short matmul bursts
 when utilization drops below 65%, so the cluster always sees the GPU as
-active. It cooperates with real training (steps aside when training is busy).
+active. It cooperates with training and steps aside when training is busy.
 
 ### Environment knobs the container path sets
 
@@ -149,14 +142,39 @@ export WANDB_DATA_DIR=/scratch/$USER/wandb_data
 export WANDB_DIR=/scratch/$USER/wandb_data
 ```
 
-You may want to set `TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"` in your shell
-profile if you build C extensions across the different GPU types on Greene
-(A100 sm_80, L40S/H100 sm_89/90, H200 sm_90).
+### `TORCH_CUDA_ARCH_LIST` — why you may need to set it
+
+PufferDrive's C extension contains CUDA kernels. When `setup.py build_ext`
+compiles them, `nvcc` emits machine code for each architecture listed in
+the `TORCH_CUDA_ARCH_LIST` env var (and only those); the result is a "fat
+binary" containing one variant per arch. If the env var is unset, the build
+defaults to whatever GPU was visible to the compiler at build time — often
+just one architecture.
+
+The catch on a heterogeneous cluster like Greene is that you don't get to
+choose which GPU you land on. `_general` accounts queue across L40S
+(sm_89), H100 (sm_90), and H200 (sm_90); `_tandon_*` partitions add A100
+(sm_80). If the `_C.so` was built against only sm_80 and your job lands on
+an H100, every CUDA call into the extension dies with
+`no kernel image is available for execution on the device`.
+
+Setting `TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"` covers A100 / L40S+H100 / H200
+in one fat binary — the build is a bit slower (three variants instead of
+one) and the `.so` is a bit larger, but the resulting binary runs on every
+GPU Greene routes you to.
+
+`setup_container.sh rebuild` exports this automatically for the build step,
+so a fresh rebuild on the cluster is already multi-arch. The env var only
+matters when you build the C extension **outside** the rebuild wrapper —
+e.g. an interactive `python setup.py build_ext --inplace --force` inside a
+hand-launched singularity exec. Adding the export to your shell profile
+(or sourcing it before any manual build) saves you from hitting the "no
+kernel image" error after a quick fix-and-rebuild loop.
 
 ## CPU rebuild path
 
 GPU partitions are routinely saturated by training jobs. `setup_container.sh
-rebuild` doesn't actually need a GPU — it just runs `python setup.py
+rebuild` doesn't actually need a GPU as it just runs `python setup.py
 build_ext --inplace --force` plus a smoke import. Submit to a CPU partition
 for fast turnaround:
 
@@ -169,65 +187,6 @@ sbatch --account=<general-account> --partition=cpu_short \
 ```
 
 `--chdir=$PWD` is required because the script uses `./scripts/`. Takes ~40s.
-
-## Account / partition strategy
-
-NYU Greene exposes `_general` and `_tandon_priority` account tiers, each with
-their own QOS pool per partition. When `squeue` shows your job pending on
-`QOSGrpGRES`, the issue is partition-level pool saturation — switching
-accounts within the same tier doesn't help, but switching partitions does.
-
-`QOSMaxGRESPerUser` is different: you're over your own concurrent-GPU cap.
-Cancel a pending job or wait.
-
-Practical recipe:
-
-- For short jobs (rebuilds, eval, mining): try `cpu_short` first when no GPU
-  is needed, else `h200_public + <general-account>`. Often the fastest GPU
-  slot.
-- For long training: `_tandon_priority` accounts have their own QOS pools
-  separate from `_general`, so they unblock when `_general` pools are
-  pinned. Race 2–3 partitions in parallel and cancel the losers as soon as
-  one starts. `l40s_public` typically has multi-hour queues and is the last
-  resort.
-
-Quick test-only across combos:
-
-```bash
-for combo in \
-    "<acct-priority> a100_tandon" \
-    "<acct-priority> h100_tandon" \
-    "<acct-general>  h200_public"; do
-  read ACCT PART <<< "$combo"
-  RES=$(sbatch --test-only --account=$ACCT --partition=$PART \
-        --gres=gpu:1 --cpus-per-task=16 --mem=96gb --time=2880 \
-        --wrap "echo test" 2>&1 | head -1)
-  echo "$ACCT $PART -> $RES"
-done
-```
-
-`--test-only` prints an estimated start time without actually submitting.
-
-## Memory sizing — replay mode is heavier than gigaflow
-
-Gigaflow training with `num_agents=1024` fits comfortably in 96 GB on Greene.
-Replay-mode training on nuPlan does not — each sub-env loads its own bin file
-(parsed lane graph + per-agent trajectories), so `--mem=96gb` OOMs.
-
-Levers, in order of impact:
-
-- `--vec.num-envs N` (drive.ini default `20`). Each vec worker is a fork; each
-  worker holds copy-on-write-divergent state proportional to `num_agents/num_envs`
-  + the loaded map data. Halving from 20→10 saves ~25 GB.
-- Disable subsets of `[eval.*]` evaluators via CLI overrides. The 14 enabled
-  evaluators in `drive.ini` all spin up their own `pufferlib.vector.make` envs
-  at the first eval cycle and can collectively cost 30–50 GB at peak.
-  `[eval.validation_gigaflow]` specifically renders 8 × 1080p MP4s in parallel.
-- `--mem=128gb` or `--mem=192gb` if you need the eval signal in wandb.
-
-`vec.*` keys are not in pufferl's `KEYS_OF_INTEREST` auto-merge, so a sibling
-`config.yaml` next to a `load_model_path` won't override them. They come from
-`drive.ini` or the CLI.
 
 ## Common pitfalls
 
