@@ -1553,6 +1553,32 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
+def _merge_checkpoint_arch(args, model_path):
+    """Adopt a checkpoint's network architecture from its sibling config.yaml.
+
+    A standalone eval may load a checkpoint whose network shape differs from
+    drive.ini. The training run writes config.yaml next to models/, so pull
+    policy.*, rnn.*, policy_name, rnn_name (and the derived use_rnn) from it
+    before the policy is constructed — otherwise load_state_dict mismatches.
+    Env / eval config is intentionally left to the [eval.<name>] section, not
+    the checkpoint.
+    """
+    config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
+    if not os.path.exists(config_yaml_path):
+        return args
+    with open(config_yaml_path) as f:
+        yaml_config = yaml.safe_load(f) or {}
+    for section in ("policy", "rnn"):
+        if isinstance(yaml_config.get(section), dict):
+            args.setdefault(section, {}).update(yaml_config[section])
+    for key in ("rnn_name", "policy_name"):
+        if key in yaml_config:
+            args[key] = yaml_config[key]
+    args.setdefault("train", {})["use_rnn"] = args.get("rnn_name") is not None
+    print(f"[eval] merged policy/rnn architecture from {config_yaml_path}")
+    return args
+
+
 def eval(
     env_name,
     args=None,
@@ -1562,12 +1588,24 @@ def eval(
     out_path=None,
     global_step=None,
     epoch=None,
+    eval_simulation=None,
+    num_scenarios=None,
+    render=None,
+    render_obs=None,
+    num_carla_maps=None,
 ):
     """Run a single named evaluator from drive.ini.
 
     Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
     evaluator's config (env/vec overrides, render flag, etc.) comes from
     the [eval.<name>] section. Loads the policy from `--load-model-path`.
+
+    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
+    gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
+    flags `--num_scenarios`, `--render`, `--render_obs`, `--num_carla_maps`
+    override the chosen evaluator's config for this run (only when passed),
+    so a checkpoint can be evaluated at an arbitrary scale from the CLI
+    without editing drive.ini.
 
     Subprocess form: `--out <json>` writes the result dict to a JSON file
     so the parent EvalManager can read structured metrics back without
@@ -1580,11 +1618,20 @@ def eval(
 
     args = args or load_config(env_name)
 
+    # When evaluating a checkpoint, adopt its network architecture from the
+    # training run's sibling config.yaml so the policy is built to match the
+    # weights regardless of what drive.ini currently says.
+    if args.get("load_model_path"):
+        _merge_checkpoint_arch(args, args["load_model_path"])
+
     if evaluator_name is None:
         evaluator_name = args.get("evaluator")
+    if evaluator_name is None and eval_simulation:
+        evaluator_name = f"validation_{eval_simulation}"
     if evaluator_name is None:
         raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name>; named [eval.<name>] sections live in drive.ini"
+            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
+            "named [eval.<name>] sections live in drive.ini"
         )
 
     # Derive a default render output dir from the model path when none is set.
@@ -1597,6 +1644,21 @@ def eval(
             args["render_results_dir"] = os.path.join("benchmark", f"puffer_{run_id}")
 
     manager = EvalManager.from_config(args)
+    target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
+    if target is None:
+        raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
+
+    # Ad-hoc CLI overrides applied to the chosen evaluator for this run.
+    # The evaluator reads self.config / self.render at rollout time, so
+    # mutating them here takes effect without touching drive.ini.
+    if num_scenarios is not None:
+        target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
+    if num_carla_maps is not None:
+        target.config.setdefault("env", {})["num_maps"] = int(num_carla_maps)
+    if render is not None:
+        target.render = bool(render)
+    if render_obs is not None:
+        target.config.setdefault("eval", {})["render_obs"] = bool(render_obs)
 
     # Build a fresh vecenv inside the manager via the evaluator's overrides.
     # Policy can come from a checkpoint (load_model_path) or be passed in.
@@ -1604,9 +1666,6 @@ def eval(
         # Need a probe vecenv just to construct the policy with the right
         # obs/action spaces. Use the matching evaluator's env_overrides so
         # the obs shape matches what the rollout will see.
-        target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
-        if target is None:
-            raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
         probe_args = manager._build_eval_args(target, env_name=env_name, global_step=None)
         probe_vec = load_env(env_name, probe_args)
         policy = load_policy(probe_args, probe_vec, env_name)
@@ -2700,6 +2759,25 @@ def main():
         out_path = None
         global_step = None
         epoch = None
+        # Ad-hoc overrides for the chosen evaluator (None = not passed, so the
+        # [eval.<name>] section value stands). Pulled from argv here rather
+        # than registered in load_config so we can tell "passed" from
+        # "default" and only override when the user actually set them.
+        eval_simulation = None
+        num_scenarios = None
+        render = None
+        render_obs = None
+        num_carla_maps = None
+        scalar_flags = {
+            "--num-scenarios": "num_scenarios",
+            "--num_scenarios": "num_scenarios",
+            "--render": "render",
+            "--render-obs": "render_obs",
+            "--render_obs": "render_obs",
+            "--num-carla-maps": "num_carla_maps",
+            "--num_carla_maps": "num_carla_maps",
+        }
+        overrides = {}
         i = 0
         while i < len(sys.argv):
             arg = sys.argv[i]
@@ -2719,13 +2797,30 @@ def main():
                 epoch = int(sys.argv[i + 1])
                 del sys.argv[i : i + 2]
                 continue
+            if arg in ("--eval-simulation", "--eval_simulation") and i + 1 < len(sys.argv):
+                eval_simulation = sys.argv[i + 1]
+                del sys.argv[i : i + 2]
+                continue
+            if arg in scalar_flags and i + 1 < len(sys.argv):
+                overrides[scalar_flags[arg]] = int(sys.argv[i + 1])
+                del sys.argv[i : i + 2]
+                continue
             i += 1
+        num_scenarios = overrides.get("num_scenarios")
+        render = overrides.get("render")
+        render_obs = overrides.get("render_obs")
+        num_carla_maps = overrides.get("num_carla_maps")
         eval(
             env_name=env_name,
             evaluator_name=evaluator_name,
             out_path=out_path,
             global_step=global_step,
             epoch=epoch,
+            eval_simulation=eval_simulation,
+            num_scenarios=num_scenarios,
+            render=render,
+            render_obs=render_obs,
+            num_carla_maps=num_carla_maps,
         )
     elif mode == "eval_multi_scenarios":
         eval_multi_scenarios(env_name=env_name)

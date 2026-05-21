@@ -6,7 +6,7 @@ import subprocess
 CSV_FILE_PATH = "benchmark/puffer_drive_0jb42gn1/model_puffer_drive_000700/episode_metrics.csv"
 
 # Base command components
-BASE_COMMAND_PREFIX = "puffer eval_multi_scenarios puffer_drive --load-model-path experiments/puffer_drive_0jb42gn1/best_models/model_puffer_drive_000700.pt --num_scenarios 500 --render 1 --render_obs 1"
+BASE_COMMAND_PREFIX = "puffer eval puffer_drive --eval_simulation replay --load-model-path experiments/puffer_drive_0jb42gn1/best_models/model_puffer_drive_000700.pt --num_scenarios 500 --render 1 --render_obs 1"
 BASE_COMMAND_SUFFIX = ""  # Can be used for extra args if needed
 
 

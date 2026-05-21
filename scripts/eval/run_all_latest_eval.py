@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument("--num_scenarios", type=int, default=20, help="Number of scenarios for eval")
     parser.add_argument(
         "--command-prefix",
-        default="puffer eval_multi_scenarios_render puffer_drive --eval_simulation gigaflow --render 1 --render_obs 1 --num_carla_maps 2",
+        default="puffer eval puffer_drive --eval_simulation gigaflow --render 1 --render_obs 1 --num_carla_maps 2",
         help="Full base command to run before --load-model-path and --num_scenarios are appended",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")

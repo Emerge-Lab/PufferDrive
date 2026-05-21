@@ -1,7 +1,9 @@
 #!/bin/bash
 
 BASE_DIR="experiments"
-COMMAND_PREFIX="puffer eval_multi_scenarios puffer_drive"
+# Unified eval pipeline: --eval_simulation picks validation_<sim>; the simple
+# flags below override that evaluator's [eval.*] section for this run.
+COMMAND_PREFIX="puffer eval puffer_drive"
 
 # Defaults
 NUM_SCENARIOS=50
