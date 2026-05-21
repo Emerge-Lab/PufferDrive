@@ -77,8 +77,7 @@
 
 // Collision and distance thresholds
 #define MAX_CHECKED_LANES 32
-#define COLLISION_QUICK_CHECK_DIST 15.0f  // Quick distance check before OBB SAT
-#define INIT_COLLISION_SHRINK_FACTOR 0.7f // Shrink agent dims at init to prevent collisions
+#define COLLISION_QUICK_CHECK_DIST 15.0f // Quick distance check before OBB SAT
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
 #define MAX_STOPPED_SECONDS 60.0f
 #define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
@@ -128,6 +127,7 @@
 #define ROAD_FEATURES 7
 #define PARTNER_FEATURES 8
 #define TRAFFIC_CONTROL_FEATURES 7
+#define PADDED_OBSERVATION_VALUE -0.001f
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
 
@@ -3010,8 +3010,6 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
 }
 
 static void set_start_position(Drive *env) {
-    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
-
     for (int i = 0; i < env->num_total_agents; i++) {
         int is_active = 0;
         for (int j = 0; j < env->active_agent_count; j++) {
@@ -3072,12 +3070,6 @@ static void set_start_position(Drive *env) {
                 agent->sim_vy = agent->log_velocity_y[step];
                 update_agent_speed(agent);
             }
-
-            // Shrink width and length slightly to avoid initial collisions (not in log-replay)
-            if (!is_log_replay) {
-                agent->sim_length *= INIT_COLLISION_SHRINK_FACTOR;
-                agent->sim_width *= INIT_COLLISION_SHRINK_FACTOR;
-            }
         }
 
         // Reset agent metrics and state
@@ -3096,7 +3088,7 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     if (env->control_mode == CONTROL_SDC_ONLY) {
-        return agent_idx == 0 && agent->route_length != 0;
+        return agent_idx == EGO_IDX && agent->route_length != 0;
     }
 
     if (env->control_mode == CONTROL_WOSAC) {
@@ -3141,13 +3133,6 @@ void set_active_agents(Drive *env) {
 
     // In GIGAFLOW mode, spawn agents dynamically on the map
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
-        if (env->grid_map->num_drivable_grid_cell == 0) {
-            env->agents = (Agent *) calloc(1, sizeof(Agent));
-            env->active_agent_indices = (int *) malloc(sizeof(int));
-            env->active_agent_count = 0;
-            env->num_agents = 0;
-            return;
-        }
         int num_agents_to_create = env->num_controllable_agents;
 
         // Initialize agents for GIGAFLOW mode
@@ -3501,6 +3486,25 @@ static int compute_observation_size(Drive *env) {
     }
 
     return max_obs;
+}
+
+static inline void fill_padded_observation_rows(float *obs, int rows, int features) {
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < features; c++) {
+            obs[r * features + c] = PADDED_OBSERVATION_VALUE;
+        }
+    }
+}
+
+static inline void fill_padded_traffic_control_rows(float *obs, int rows) {
+    for (int r = 0; r < rows; r++) {
+        int base = r * TRAFFIC_CONTROL_FEATURES;
+        for (int c = 0; c < TRAFFIC_CONTROL_FEATURES - 2; c++) {
+            obs[base + c] = PADDED_OBSERVATION_VALUE;
+        }
+        obs[base + TRAFFIC_CONTROL_FEATURES - 2] = TRAFFIC_CONTROL_TYPE_NONE;
+        obs[base + TRAFFIC_CONTROL_FEATURES - 1] = TRAFFIC_CONTROL_STATE_UNKNOWN;
+    }
 }
 
 void allocate(Drive *env) {
@@ -4260,7 +4264,7 @@ static void compute_observations(Drive *env) {
         // ===== Partner observations =====
         if (ego_entity->is_blind_partner && random_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
             int total_partner_floats = env->max_partner_observations * PARTNER_FEATURES;
-            memset(&obs[obs_idx], 0, total_partner_floats * sizeof(float));
+            fill_padded_observation_rows(&obs[obs_idx], env->max_partner_observations, PARTNER_FEATURES);
             obs_idx += total_partner_floats;
         } else {
             // Collect candidate agents within max observation distance, then sort and select closest ones.
@@ -4359,7 +4363,7 @@ static void compute_observations(Drive *env) {
                 }
             }
             int remaining_partner_obs = (env->max_partner_observations - cars_seen) * PARTNER_FEATURES;
-            memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
+            fill_padded_observation_rows(&obs[obs_idx], env->max_partner_observations - cars_seen, PARTNER_FEATURES);
             obs_idx += remaining_partner_obs;
         }
 
@@ -4440,6 +4444,16 @@ static void compute_observations(Drive *env) {
             float dy_norm = (length > 0) ? dy / length : dy;
             float cos_angle = dx_norm * ego_entity->cos_heading + dy_norm * ego_entity->sin_heading;
             float sin_angle = -dx_norm * ego_entity->sin_heading + dy_norm * ego_entity->cos_heading;
+            if (is_edge && length > 0) {
+                float angle = atan2f(sin_angle, cos_angle);
+                if (angle > (float) M_PI / 2.0f) {
+                    angle -= (float) M_PI;
+                } else if (angle < -(float) M_PI / 2.0f) {
+                    angle += (float) M_PI;
+                }
+                cos_angle = cosf(angle);
+                sin_angle = sinf(angle);
+            }
 
             float *target;
             int *counter;
@@ -4483,24 +4497,24 @@ static void compute_observations(Drive *env) {
             subsample_road_observation_rows(lanes_buffer, lanes_collected, lane_to_write);
             subsample_road_observation_rows(boundaries_buffer, boundaries_collected, boundary_to_write);
             memcpy(&obs[lane_obs_idx], lanes_buffer, lane_to_write * ROAD_FEATURES * sizeof(float));
-            memset(
+            fill_padded_observation_rows(
                 &obs[lane_obs_idx + lane_to_write * ROAD_FEATURES],
-                0,
-                (env->obs_lane_segment_count - lane_to_write) * ROAD_FEATURES * sizeof(float));
+                env->obs_lane_segment_count - lane_to_write,
+                ROAD_FEATURES);
             memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundary_to_write * ROAD_FEATURES * sizeof(float));
-            memset(
+            fill_padded_observation_rows(
                 &obs[boundary_obs_idx + boundary_to_write * ROAD_FEATURES],
-                0,
-                (env->obs_boundary_segment_count - boundary_to_write) * ROAD_FEATURES * sizeof(float));
+                env->obs_boundary_segment_count - boundary_to_write,
+                ROAD_FEATURES);
         } else {
-            memset(
+            fill_padded_observation_rows(
                 &obs[lane_obs_idx + lanes_collected * ROAD_FEATURES],
-                0,
-                (env->obs_lane_segment_count - lanes_collected) * ROAD_FEATURES * sizeof(float));
-            memset(
+                env->obs_lane_segment_count - lanes_collected,
+                ROAD_FEATURES);
+            fill_padded_observation_rows(
                 &obs[boundary_obs_idx + boundaries_collected * ROAD_FEATURES],
-                0,
-                (env->obs_boundary_segment_count - boundaries_collected) * ROAD_FEATURES * sizeof(float));
+                env->obs_boundary_segment_count - boundaries_collected,
+                ROAD_FEATURES);
         }
 
         // ===== Traffic control observations =====
@@ -4598,9 +4612,9 @@ static void compute_observations(Drive *env) {
             controls_added++;
         }
 
-        // Zero out remaining traffic control slots
-        int remaining_traffic_obs = (env->max_traffic_control_observations - controls_added) * TRAFFIC_CONTROL_FEATURES;
-        memset(&obs[obs_idx], 0, remaining_traffic_obs * sizeof(float));
+        int remaining_traffic_controls = env->max_traffic_control_observations - controls_added;
+        fill_padded_traffic_control_rows(&obs[obs_idx], remaining_traffic_controls);
+        obs_idx += remaining_traffic_controls * TRAFFIC_CONTROL_FEATURES;
     }
 }
 

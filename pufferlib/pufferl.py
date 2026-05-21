@@ -75,8 +75,43 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_score",
     "multi_lane_time",
     "speed_limit_compliance",
-    "ttc_within_bound_rate",
 }
+
+
+def torch_device(device):
+    if isinstance(device, int):
+        return torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
+    return device
+
+
+def is_cuda_device(device):
+    if isinstance(device, int):
+        return torch.cuda.is_available()
+    device = torch.device(device)
+    return device.type == "cuda"
+
+
+def base_policy(policy):
+    return policy.module if hasattr(policy, "module") else policy
+
+
+def clean_state_key(key):
+    prefixes = ("module.", "_orig_mod.")
+    while key.startswith(prefixes):
+        key = key.split(".", 1)[1]
+    return key
+
+
+def clean_policy_state_dict(state_dict):
+    return {clean_state_key(k): v for k, v in state_dict.items()}
+
+
+def logits_to_float(logits):
+    if isinstance(logits, torch.distributions.Normal):
+        return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
+    if isinstance(logits, torch.Tensor):
+        return logits.float()
+    return tuple(l.float() for l in logits)
 
 
 class PuffeRL:
@@ -113,11 +148,22 @@ class PuffeRL:
             raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
+        precision = config["precision"]
+        if precision not in ("float32", "bfloat16"):
+            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
+        use_cuda = is_cuda_device(device)
+        if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
+            raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
+        if precision == "bfloat16" and not config.get("amp", True):
+            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
+
+        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+
         self.observations = torch.zeros(
             segments,
             horizon,
             *obs_space.shape,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
+            dtype=obs_dtype,
             pin_memory=device == "cuda" and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
         )
@@ -173,14 +219,16 @@ class PuffeRL:
             )
 
         # Torch compile
-        self.uncompiled_policy = policy
+        self.uncompiled_policy = base_policy(policy)
         self.policy = policy
         if config["compile"]:
-            self.policy = torch.compile(policy, mode=config["compile_mode"])
-            self.policy.forward_eval = torch.compile(policy, mode=config["compile_mode"])
-            pufferlib.pytorch.sample_logits = torch.compile(
-                pufferlib.pytorch.sample_logits, mode=config["compile_mode"]
-            )
+            compile_kwargs = {
+                "mode": config["compile_mode"],
+                "fullgraph": config["compile_fullgraph"],
+            }
+            self.policy = torch.compile(policy, **compile_kwargs)
+            self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
+            pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -233,12 +281,9 @@ class PuffeRL:
         self.total_epochs = epochs
 
         # Automatic mixed precision
-        precision = config["precision"]
         self.amp_context = contextlib.nullcontext()
-        if config.get("amp", True) and config["device"] == "cuda":
+        if config.get("amp", True) and use_cuda and precision == "bfloat16":
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
-        if precision not in ("float32", "bfloat16"):
-            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
 
         # Initializations
         self.config = config
@@ -261,6 +306,30 @@ class PuffeRL:
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
+
+    def load_training_state(self, path):
+        device = torch_device(self.config["device"])
+        state = torch.load(path, map_location=device, weights_only=False)
+        policy_state = state.get("policy_state_dict")
+        if policy_state is None:
+            model_name = state["model_name"]
+            model_path = os.path.join(os.path.dirname(path), "models", model_name)
+            policy_state = torch.load(model_path, map_location=device)
+
+        policy_state = clean_policy_state_dict(policy_state)
+        self.uncompiled_policy.load_state_dict(policy_state)
+        self.optimizer.load_state_dict(state["optimizer_state_dict"])
+
+        if "scheduler_state_dict" in state:
+            self.scheduler.load_state_dict(state["scheduler_state_dict"])
+
+        self.epoch = state.get("epoch", state.get("update", 0))
+        self.global_step = state.get("global_step", state.get("agent_step", 0))
+        self.last_log_step = self.global_step
+        self.best_score = state.get("best_score", self.best_score)
+        self.ema_max = state.get("ema_max", self.ema_max)
+        restore_rng_state(state)
+        print(f"Resumed training from {path}: epoch={self.epoch}, global_step={self.global_step}")
 
     @property
     def uptime(self):
@@ -319,7 +388,9 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
+                logits, value = self.policy.forward_eval(o_device.to(self.observations.dtype), state)
+                logits = logits_to_float(logits)
+                value = value.float()
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
@@ -335,12 +406,12 @@ class PuffeRL:
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o
+                    self.observations[batch_rows, l] = o.to(self.observations.dtype)
                 else:
-                    self.observations[batch_rows, l] = o_device
+                    self.observations[batch_rows, l] = o_device.to(self.observations.dtype)
 
                 self.actions[batch_rows, l] = action
-                self.logprobs[batch_rows, l] = logprob
+                self.logprobs[batch_rows, l] = logprob.float()
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
@@ -351,7 +422,7 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
-                self.values[batch_rows, l] = value.flatten()
+                self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
                 # Note: We are not yet handling masks in this version
@@ -391,26 +462,18 @@ class PuffeRL:
     def train(self):
         profile = self.profile
         epoch = self.epoch
+        config = self.config
         profile("train", epoch)
         profile("train_misc", epoch, nest=True)
         losses = defaultdict(float)
-        config = self.config
-        ppo_granularity = config["ppo_granularity"]
-        if ppo_granularity == "auto":
-            ppo_granularity = "trajectory" if config["use_rnn"] else "transition"
-        if config["use_rnn"] and ppo_granularity == "transition":
-            raise ValueError("RNN requires trajectory-level training")
-
-        if ppo_granularity == "trajectory":
-            explained_var = self._train_ppo_trajectory(losses, profile, epoch)
+        if config["use_rnn"]:
+            self._train_ppo_trajectory(losses, profile, epoch)
         else:
-            explained_var = self._train_ppo_transition(losses, profile, epoch)
+            self._train_ppo_transition(losses, profile, epoch)
 
         profile("train_misc", epoch)
         if config["anneal_lr"]:
             self.scheduler.step()
-
-        losses["explained_variance"] = explained_var
 
         profile.end()
         logs = None
@@ -482,24 +545,16 @@ class PuffeRL:
 
         return logs
 
-    def _ppo_loss(
-        self,
-        mb_obs,
-        mb_actions,
-        mb_logprobs,
-        mb_values,
-        mb_returns,
-        mb_adv,
-        clip_coef,
-        vf_clip,
-        adv_weights=None,
-        unbiased_std=False,
-    ):
+    def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
+        config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
-        logits, newvalue = self.policy(mb_obs, state)
+        with self.amp_context:
+            logits, newvalue = self.policy(mb_obs, state)
+        logits = logits_to_float(logits)
+        newvalue = newvalue.float()
         _, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
-        newlogprob = newlogprob.view_as(mb_logprobs)
+        newlogprob = newlogprob.float().view_as(mb_logprobs)
         newvalue = newvalue.view_as(mb_returns)
         logratio = newlogprob - mb_logprobs
         ratio = logratio.exp()
@@ -507,18 +562,18 @@ class PuffeRL:
         with torch.no_grad():
             old_approx_kl = (-logratio).mean()
             approx_kl = ((ratio - 1) - logratio).mean()
-            clipfrac = ((ratio - 1.0).abs() > clip_coef).float().mean()
+            clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=unbiased_std) + 1e-8)
+        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
         if adv_weights is not None:
             mb_adv = adv_weights * mb_adv
 
         pg_loss1 = -mb_adv * ratio
-        pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - clip_coef, 1 + clip_coef)
+        pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-        if vf_clip is not None:
-            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -vf_clip, vf_clip)
+        if config["vf_clip_coef"] is not None:
+            v_clipped = mb_values + torch.clamp(newvalue - mb_values, -config["vf_clip_coef"], config["vf_clip_coef"])
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
             v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
@@ -526,7 +581,7 @@ class PuffeRL:
             v_loss = 0.5 * (newvalue - mb_returns) ** 2
             v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
-        loss = pg_loss + self.config["vf_coef"] * v_loss - self.config["ent_coef"] * entropy_loss
+        loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
 
         return (
             loss,
@@ -542,37 +597,42 @@ class PuffeRL:
             },
         )
 
-    def _train_ppo_trajectory(self, losses, profile, epoch):
+    def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
         device = config["device"]
 
+        masks = self.masks.bool()
+        terminals = torch.maximum(self.terminals, (~masks).float())
+        advantages = compute_puff_advantage(
+            self.values,
+            self.rewards,
+            terminals,
+            ratio,
+            torch.zeros_like(self.values, device=device),
+            config["gamma"],
+            config["gae_lambda"],
+            rho_clip,
+            c_clip,
+        )
+        advantages = advantages.masked_fill(~masks, 0.0)
+        return advantages, advantages + self.values, masks
+
+    def _train_ppo_trajectory(self, losses, profile, epoch):
+        config = self.config
+
         b0 = config["adv_sampling_prio_beta0"]
         a = config["adv_sampling_prio_alpha"]
-        clip_coef = config["clip_coef"]
-        vf_clip = config["vf_clip_coef"]
         anneal_beta = b0 + (1 - b0) * a * self.epoch / self.total_epochs
         self.ratio[:] = 1
-
+        self.optimizer.zero_grad()
         for mb in range(self.total_minibatches):
             profile("train_misc", epoch)
-            self.amp_context.__enter__()
 
-            masks = self.masks.bool()
-            terminals = torch.maximum(self.terminals, (~masks).float())
-            advantages = torch.zeros_like(self.values, device=device)
-            advantages = compute_puff_advantage(
-                self.values,
-                self.rewards,
-                terminals,
+            advantages, returns, masks = self._compute_advantages(
                 self.ratio,
-                advantages,
-                config["gamma"],
-                config["gae_lambda"],
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
-            advantages.masked_fill_(~masks, 0.0)
-
             adv = advantages.abs().sum(axis=1)
             prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
             prio_probs = (prio_weights + 1e-6) / (prio_weights.sum() + 1e-6)
@@ -580,15 +640,15 @@ class PuffeRL:
             mb_prio = (self.segments * prio_probs[idx, None]) ** -anneal_beta
 
             profile("train_copy", epoch)
-            mb_obs = self.observations[idx]
+            if config["cpu_offload"]:
+                mb_obs = self.observations[idx.cpu()].to(config["device"], non_blocking=True)
+            else:
+                mb_obs = self.observations[idx]
             mb_actions = self.actions[idx]
             mb_logprobs = self.logprobs[idx]
             mb_values = self.values[idx]
-            mb_returns = advantages[idx] + mb_values
+            mb_returns = returns[idx]
             mb_adv = advantages[idx]
-
-            if not config["use_rnn"]:
-                mb_obs = mb_obs.reshape(-1, *self.vecenv.single_observation_space.shape)
 
             profile("train_forward", epoch)
             loss, newvalue, ratio, stats = self._ppo_loss(
@@ -598,13 +658,9 @@ class PuffeRL:
                 mb_values,
                 mb_returns,
                 mb_adv,
-                clip_coef,
-                vf_clip,
                 adv_weights=mb_prio,
-                unbiased_std=True,
             )
             self.ratio[idx] = ratio.detach()
-            self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
             self.values[idx] = newvalue.detach().float()
 
@@ -621,50 +677,38 @@ class PuffeRL:
                 self.optimizer.zero_grad()
 
         y_pred = self.values.flatten()
-        y_true = advantages.flatten() + self.values.flatten()
+        y_true = returns.flatten()
         var_y = y_true.var()
-        return float("nan") if var_y == 0 else (1 - (y_true - y_pred).var() / var_y).item()
+        losses["explained_variance"] = (
+            float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
+        )
 
     def _train_ppo_transition(self, losses, profile, epoch):
         config = self.config
         device = config["device"]
 
-        clip_coef = config["clip_coef"]
-        vf_clip = config["vf_clip_coef"]
-
-        masks = self.masks.bool()
-        terminals = torch.maximum(self.terminals, (~masks).float())
-        advantages = compute_puff_advantage(
-            self.values,
-            self.rewards,
-            terminals,
+        advantages, returns, masks = self._compute_advantages(
             torch.ones_like(self.values, device=device),
-            torch.zeros_like(self.values, device=device),
-            config["gamma"],
-            config["gae_lambda"],
             1.0,
             1.0,
         )
-        advantages = advantages.masked_fill(~masks, 0.0)
-        returns = advantages + self.values
 
-        flat_advantages_f = advantages.reshape(-1)
-        flat_masks_f = masks.reshape(-1).bool()
-        total_transitions = flat_masks_f.numel()
-        valid_idx = torch.nonzero(flat_masks_f, as_tuple=False).flatten()
-
-        filter_metrics = {
-            "masked_fraction": 1.0 - (valid_idx.numel() / max(total_transitions, 1)),
-            "kept_fraction": 0.0,
-            "filtered_fraction": 1.0,
-        }
+        obs_shape = self.vecenv.single_observation_space.shape
+        flat_obs = self.observations.reshape(-1, *obs_shape)
+        flat_actions = self.actions.reshape(-1, *self.actions.shape[2:])
+        flat_logprobs = self.logprobs.reshape(-1)
+        flat_values = self.values.reshape(-1)
+        flat_returns = returns.reshape(-1)
+        flat_advantages = advantages.reshape(-1)
+        flat_masks = masks.reshape(-1).bool()
+        total_transitions = flat_masks.numel()
+        valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
+        valid_abs_adv = flat_advantages[valid_idx].abs()
 
         ewma_beta = config["adv_filter_ewma_beta"]
-        threshold_scale = config["adv_filter_threshold_scale"]
-        valid_abs_adv = flat_advantages_f[valid_idx].abs()
         current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
         self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
-        threshold = threshold_scale * self.ema_max
+        threshold = config["adv_filter_threshold_scale"] * self.ema_max
 
         keep_mask = valid_abs_adv >= threshold
         keep_idx = valid_idx[keep_mask]
@@ -674,28 +718,20 @@ class PuffeRL:
             # Synchronize the number of kept transitions in multi-GPU setting to keep synchronization
             kept_tensor = torch.tensor([num_kept], device=device)
             torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
-            _min_num_kept = kept_tensor.item()
-            if num_kept > _min_num_kept:
-                if _min_num_kept == 0:
+            min_num_kept = kept_tensor.item()
+            if num_kept > min_num_kept:
+                if min_num_kept == 0:
                     keep_idx = keep_idx[:0]
                 else:
-                    top_idx = torch.topk(valid_abs_adv[keep_mask], _min_num_kept, largest=True, sorted=False).indices
+                    top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
                     keep_idx = keep_idx[top_idx]
 
-        filter_metrics["kept_fraction"] = num_kept / max(num_valid, 1)
-        filter_metrics["filtered_fraction"] = 1.0 - filter_metrics["kept_fraction"]
-
+        kept_fraction = num_kept / max(num_valid, 1)
         losses["filter_threshold"] = threshold
         losses["ema_max"] = self.ema_max
-        losses.update(filter_metrics)
-
-        obs_shape = self.vecenv.single_observation_space.shape
-        flat_obs = self.observations.reshape(-1, *obs_shape)
-        flat_actions = self.actions.reshape(-1, *self.actions.shape[2:])
-        flat_logprobs = self.logprobs.reshape(-1)
-        flat_values = self.values.reshape(-1)
-        flat_returns = returns.reshape(-1)
-        flat_advantages = advantages.reshape(-1)
+        losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(total_transitions, 1))
+        losses["kept_fraction"] = kept_fraction
+        losses["filtered_fraction"] = 1.0 - kept_fraction
 
         self.optimizer.zero_grad()
         total_minibatches = 0
@@ -706,7 +742,10 @@ class PuffeRL:
             for start in range(0, permutation.numel(), self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
-                mb_obs = flat_obs[mb_idx]
+                if config["cpu_offload"]:
+                    mb_obs = flat_obs[mb_idx.cpu()].to(device, non_blocking=True)
+                else:
+                    mb_obs = flat_obs[mb_idx]
                 mb_actions = flat_actions[mb_idx]
                 mb_logprobs = flat_logprobs[mb_idx]
                 mb_values = flat_values[mb_idx]
@@ -721,11 +760,7 @@ class PuffeRL:
                     mb_values,
                     mb_returns,
                     mb_adv,
-                    clip_coef,
-                    vf_clip,
-                    unbiased_std=False,
                 )
-                self.amp_context.__enter__()  # TODO: AMP needs some debugging
 
                 profile("train_misc", epoch)
                 for key, value in stats.items():
@@ -754,7 +789,9 @@ class PuffeRL:
         y_pred = flat_values[valid_idx]
         y_true = flat_returns[valid_idx]
         var_y = y_true.var(unbiased=False)
-        return float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
+        losses["explained_variance"] = (
+            float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
+        )
 
     def mean_and_log(self):
         config = self.config
@@ -814,28 +851,35 @@ class PuffeRL:
         os.makedirs(models_dir, exist_ok=True)
         model_name = f"model_{self.config['env']}_{self.epoch:06d}.pt"
         model_path = os.path.join(models_dir, model_name)
-        if os.path.exists(model_path):
-            return model_path
+        if not os.path.exists(model_path):
+            torch.save(self.uncompiled_policy.state_dict(), model_path)
 
-        torch.save(self.uncompiled_policy.state_dict(), model_path)
+        current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
+        new_best = current_score > self.best_score
+        if new_best:
+            self.best_score = current_score
 
         state = {
+            "state_version": 2,
+            "policy_state_dict": self.uncompiled_policy.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
             "global_step": self.global_step,
             "agent_step": self.global_step,
+            "epoch": self.epoch,
             "update": self.epoch,
             "model_name": model_name,
             "run_id": run_id,
+            "env": self.config["env"],
+            "best_score": self.best_score,
+            "ema_max": self.ema_max,
+            "rng_state": capture_rng_state(),
         }
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
 
-        current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
-
-        if current_score > self.best_score:
-            self.best_score = current_score
-
+        if new_best:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
@@ -1022,6 +1066,29 @@ def dist_mean(value, device):
         return value
 
     return dist_sum(value, device) / torch.distributed.get_world_size()
+
+
+def capture_rng_state():
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state):
+    rng_state = state.get("rng_state")
+    if not rng_state:
+        return
+
+    random.setstate(rng_state["python"])
+    np.random.set_state(rng_state["numpy"])
+    torch.set_rng_state(rng_state["torch"].cpu())
+    if torch.cuda.is_available() and "cuda" in rng_state:
+        torch.cuda.set_rng_state_all([state.cpu() for state in rng_state["cuda"]])
 
 
 class Profile:
@@ -1248,33 +1315,28 @@ class TensorBoardLogger:
 
 def _get_git_metadata():
     git_metadata = {
-        "commit_hash": None,
-        "commit_message": None,
-        "is_dirty": None,
+        "commit_hash": os.environ.get("GITHUB_SHA") or os.environ.get("COMMIT_SHA"),
     }
 
     try:
         repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-        git_metadata["commit_hash"] = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
+        if shutil.which("git") is None:
+            return git_metadata
+
+        subprocess.check_output(
+            ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=repo_root,
             stderr=subprocess.DEVNULL,
             text=True,
-        ).strip()
-        git_metadata["commit_message"] = subprocess.check_output(
-            ["git", "log", "-1", "--pretty=%s"],
-            cwd=repo_root,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        git_metadata["is_dirty"] = bool(
-            subprocess.check_output(
-                ["git", "status", "--porcelain", "--untracked-files=no"],
+        )
+
+        if git_metadata["commit_hash"] is None:
+            git_metadata["commit_hash"] = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
                 cwd=repo_root,
                 stderr=subprocess.DEVNULL,
                 text=True,
             ).strip()
-        )
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -1316,6 +1378,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "trajectory_scaling_factors",
             "max_boundary_segment_observations",
             "max_lane_segment_observations",
+            "boundary_segment_dropout",
+            "lane_segment_dropout",
             "max_partner_observations",
             "max_traffic_control_observations",
             "traffic_control_scope",
@@ -1344,7 +1408,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         local_rank = int(os.environ["LOCAL_RANK"])
         print(f"rank: {local_rank}, MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
@@ -1354,7 +1417,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
-        args["train"]["device"] = torch.cuda.current_device()
+        args["train"]["device"] = "cuda"
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
         policy = policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
@@ -1377,12 +1440,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             experiment_dir=experiment_dir,
         )
 
-    train_config = dict(
-        **args["train"],
-        env=env_name,
-        eval=args.get("eval", {}),
-    )
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
+
+    if args["train"].get("resume_state_path"):
+        pufferl.load_training_state(args["train"]["resume_state_path"])
 
     from pufferlib.ocean.benchmark.manager import EvalManager
 
@@ -1414,7 +1476,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     all_logs = []
 
     while pufferl.global_step < train_config["total_timesteps"]:
-        if train_config["device"] == "cuda":
+        if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
             pufferl.evaluate()
@@ -1424,7 +1486,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
-        if train_config["device"] == "cuda":
+        if is_cuda_device(train_config["device"]):
             torch.compiler.cudagraph_mark_step_begin()
         try:
             logs = pufferl.train()
@@ -1876,9 +1938,7 @@ def load_policy(args, vecenv, env_name=""):
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
 
-    device = args["train"]["device"]
-    if isinstance(device, int):
-        device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
+    device = torch_device(args["train"]["device"])
     policy_cls = getattr(env_module.torch, args["policy_name"])
     policy = policy_cls(vecenv.driver_env, **args["policy"])
 
@@ -1899,8 +1959,7 @@ def load_policy(args, vecenv, env_name=""):
             raise pufferlib.APIUsageError("No run id provided for eval")
 
         state_dict = torch.load(path, map_location=device)
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        policy.load_state_dict(state_dict)
+        policy.load_state_dict(clean_policy_state_dict(state_dict))
 
     load_path = args["load_model_path"]
     if load_path == "latest":
@@ -1908,8 +1967,7 @@ def load_policy(args, vecenv, env_name=""):
 
     if load_path is not None:
         state_dict = torch.load(load_path, map_location=device)
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        policy.load_state_dict(state_dict)
+        policy.load_state_dict(clean_policy_state_dict(state_dict))
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)
@@ -2012,9 +2070,9 @@ def load_config(env_name, config_dir=None):
     # Use World size to divide Num_Agents / minibatch size in DDP
     if "LOCAL_RANK" in os.environ:
         world_size = int(os.environ.get("WORLD_SIZE", 1))
-        args["env"]["num_agents"] = args["env"]["num_agents"] // world_size
-        args["train"]["minibatch_size"] = args["train"]["minibatch_size"] // world_size
-        args["train"]["max_minibatch_size"] = args["train"]["max_minibatch_size"] // world_size
+        args["env"]["num_agents"] = args["env"]["num_agents"]
+        args["train"]["minibatch_size"] = args["train"]["minibatch_size"]
+        args["train"]["max_minibatch_size"] = args["train"]["max_minibatch_size"]
         args["train"]["total_timesteps"] = args["train"]["total_timesteps"] // world_size
 
     return args
