@@ -67,6 +67,11 @@ def _select_map_files(map_dir, simulation_mode, maps, num_maps):
             f"No .bin files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
         )
 
+    if isinstance(maps, str) and maps.strip().lower() == "all":
+        if simulation_mode != "gigaflow":
+            raise ValueError("The maps selector is only supported in gigaflow mode.")
+        return all_map_files
+
     map_selectors = _normalize_map_selectors(maps)
     if map_selectors is None:
         if num_maps > len(all_map_files):
