@@ -1822,6 +1822,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->eval_spawn_length_max = (float) unpack(kwargs, "eval_spawn_length_max");
     env->eval_spawn_width_min = (float) unpack(kwargs, "eval_spawn_width_min");
     env->eval_spawn_width_max = (float) unpack(kwargs, "eval_spawn_width_max");
+    env->truck_fraction = (float) unpack(kwargs, "truck_fraction");
+    env->truck_spawn_length_min = (float) unpack(kwargs, "truck_spawn_length_min");
+    env->truck_spawn_length_max = (float) unpack(kwargs, "truck_spawn_length_max");
+    env->truck_spawn_width_min = (float) unpack(kwargs, "truck_spawn_width_min");
+    env->truck_spawn_width_max = (float) unpack(kwargs, "truck_spawn_width_max");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
