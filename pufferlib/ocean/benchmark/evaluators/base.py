@@ -269,11 +269,16 @@ class Evaluator:
             cov = self._coverage_report(rows, eval_cfg)
             metrics["coverage_expected"] = float(cov["expected"])
             metrics["coverage_found"] = float(cov["found"])
+            metrics["coverage_unique_maps"] = float(cov["unique"])
             metrics["coverage_complete"] = float(cov["complete"])
             if not cov["complete"]:
-                print(f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s), expected {cov['expected']}.")
+                print(
+                    f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s) "
+                    f"across {cov['unique']} unique map(s), expected {cov['expected']}."
+                )
             if cov["duplicates"]:
-                print(f"[eval.{self.name}] {len(cov['duplicates'])} scenario(s) evaluated more than once.")
+                top = sorted(cov["duplicates"].items(), key=lambda kv: -kv[1])[:5]
+                print(f"[eval.{self.name}] {len(cov['duplicates'])} map(s) evaluated more than once; top: {top}")
 
     def _write_episode_csv(self, rows, out_dir, suffix) -> None:
         """One row per finished episode, all summary fields. Identity columns
@@ -292,14 +297,16 @@ class Evaluator:
         print(f"[eval.{self.name}] wrote {len(df)} per-episode rows to {path}")
 
     def _coverage_report(self, rows, eval_cfg) -> dict:
-        """Count-based coverage with duplicate detection.
+        """Coverage of the scenario set: episode count, unique maps, duplicates.
 
         `expected` is the evaluator's `num_scenarios` target when set, else
         `env.num_maps`, else however many episodes were collected. `found` is
-        the number of `completed_episode` summaries seen. Map-level duplicate
-        detection runs whenever the env tags episodes with a scenario
-        identity (map_name or scenario_id); it's a no-op otherwise.
+        the number of `completed_episode` summaries seen and `unique` the
+        number of distinct maps among them (by basename). `duplicates` maps
+        each repeated scenario to its count — meaningful for unique-scenario
+        sweeps (replay), expected-and-harmless when maps cycle (gigaflow).
         """
+        import os
         from collections import Counter
 
         found = len(rows)
@@ -308,12 +315,17 @@ class Evaluator:
             expected = self.config.get("env", {}).get("num_maps", found)
         expected = int(expected or found)
 
-        names = [r.get("map_name") or r.get("scenario_id") for r in rows]
-        names = [n for n in names if n]
-        duplicates = {n: c for n, c in Counter(names).items() if c > 1}
+        names = []
+        for r in rows:
+            ident = r.get("map_name") or r.get("scenario_id")
+            if ident:
+                names.append(os.path.basename(str(ident)).split(".")[0])
+        counts = Counter(names)
+        duplicates = {n: c for n, c in counts.items() if c > 1}
         return {
             "expected": expected,
             "found": found,
+            "unique": len(counts),
             "complete": found >= expected,
             "duplicates": duplicates,
         }
@@ -325,6 +337,12 @@ class Evaluator:
         clip per (scenario, view), return mp4 paths (egl) or html paths (html).
         Subclasses customize the render env via `_render_env_overrides`.
         """
+        # Observation render (opt-in): an interactive HTML per scenario that
+        # also shows each agent's unpacked observation. CPU-only, so it takes
+        # precedence over the EGL/html backends when eval.render_obs is set.
+        if self.config.get("eval", {}).get("render_obs", False):
+            return self._render_pass_obs(vecenv, policy, args)
+
         backend = args.get("render_backend", "egl")
         if backend == "html":
             return self._render_pass_html(vecenv, policy, args)
@@ -476,6 +494,105 @@ class Evaluator:
         finally:
             vec.close()
 
+        return html_paths
+
+    def _render_pass_obs(self, vecenv, policy, args) -> list:
+        """CPU-only observation render. Rolls out `render_num_scenarios`
+        episodes and writes one interactive HTML per scenario via
+        pufferlib.viz — including each agent's unpacked observation. Reads
+        env state + the obs array, so it needs no EGL/ffmpeg."""
+        import importlib
+        import os
+        from pathlib import Path
+
+        import numpy as np
+        import torch
+
+        import pufferlib
+        from pufferlib import viz
+
+        eval_cfg = self.config.get("eval", {})
+        for required in ("render_num_scenarios", "render_max_steps"):
+            if required not in eval_cfg:
+                raise KeyError(f"[eval.{self.name}] has render_obs but eval.{required} is not set.")
+        num_scenarios = int(eval_cfg["render_num_scenarios"])
+        max_steps = int(eval_cfg["render_max_steps"])
+
+        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "obs" / self.name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        step_suffix = f"_epoch{epoch}_step{global_step}"
+
+        package = args.get("package", "ocean")
+        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+        env_module = importlib.import_module(module_name)
+        make_env = env_module.env_creator(args["env_name"])
+
+        render_env_kwargs = self._render_env_overrides(args)
+        render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
+
+        device = args["train"]["device"]
+        use_traj = "trajectory" in str(args["env"].get("action_type", ""))
+        html_paths = []
+        scenarios_done = 0
+
+        vec = pufferlib.vector.make(make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1)
+        try:
+            state = self._init_lstm_state(vec.observation_space.shape[0], policy, device, args)
+            while scenarios_done < num_scenarios:
+                ob, _ = vec.reset()
+                scenarios = vec.get_state()
+                n_in_batch = len(scenarios)
+                to_render = min(n_in_batch, num_scenarios - scenarios_done)
+                if state:
+                    state["lstm_h"].zero_()
+                    state["lstm_c"].zero_()
+                agent_hist = [[] for _ in range(n_in_batch)]
+                traffic_hist = [[] for _ in range(n_in_batch)]
+                traj_hist = [[] for _ in range(n_in_batch)]
+                obs_hist = [[] for _ in range(n_in_batch)]
+                for t in range(max_steps):
+                    cur = vec.get_state()
+                    start_obs_index = 0
+                    for e in range(n_in_batch):
+                        sc = cur[e]
+                        agent_hist[e].append(viz.fill_agents_state(sc, use_trajectory=use_traj))
+                        traffic_hist[e].append(viz.fill_traffics_state(sc, t))
+                        if use_traj:
+                            traj_hist[e].append(viz.fill_trajectories(sc, t))
+                        if e > 0:
+                            start_obs_index += cur[e - 1]["active_agent_count"]
+                        step_obs = {}
+                        for a in range(sc["active_agent_count"]):
+                            aid = int(sc["active_agent_indices"][a])
+                            step_obs[aid] = viz.extract_obs_frame(
+                                ob, sc, args, timestep=t, obs_index=start_obs_index + a, agent_idx=a, head_north=True
+                            )
+                        obs_hist[e].append(step_obs)
+                    with torch.no_grad():
+                        ob_t = torch.as_tensor(ob).to(device)
+                        logits, _ = policy.forward_eval(ob_t, state)
+                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    if isinstance(logits, torch.distributions.Normal):
+                        action = np.clip(action, vec.action_space.low, vec.action_space.high)
+                    ob, _, _, _, _ = vec.step(action)
+                for e in range(to_render):
+                    map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
+                    path = out_dir / f"{map_name}_{scenarios_done:03d}{step_suffix}.html"
+                    viz.generate_interactive_replay(
+                        scenarios[e], agent_hist[e], traffic_hist[e], traj_hist[e], obs_hist[e], str(path), head_north=True
+                    )
+                    html_paths.append(path)
+                    scenarios_done += 1
+                    if scenarios_done >= num_scenarios:
+                        break
+        finally:
+            vec.close()
+
+        if html_paths:
+            viz.build_gallery_index(str(out_dir))
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:
