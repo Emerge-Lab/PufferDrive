@@ -201,6 +201,10 @@ struct CompletedEpisodeSummary {
     float total_infractions;
     float n;
     int episode_index;
+    // Scenario identity captured at completion (before c_reset resamples the
+    // env slot), so per-episode consumers can attribute each row to its map.
+    char map_name[256];
+    char scenario_id[128];
 };
 typedef struct RoadMapElement RoadMapElement;
 typedef struct TrafficControlElement TrafficControlElement;
@@ -2604,6 +2608,14 @@ static void add_log(Drive *env) {
         s->total_infractions = 0.0f;
         s->n = (float) env->active_agent_count;
         s->episode_index = env->next_episode_index++;
+        s->map_name[0] = '\0';
+        if (env->map_name) {
+            strncpy(s->map_name, env->map_name, sizeof(s->map_name) - 1);
+            s->map_name[sizeof(s->map_name) - 1] = '\0';
+        }
+        s->scenario_id[0] = '\0';
+        strncpy(s->scenario_id, env->scenario_id, sizeof(s->scenario_id) - 1);
+        s->scenario_id[sizeof(s->scenario_id) - 1] = '\0';
         for (int i = 0; i < env->active_agent_count; i++) {
             Agent *agent_i = &env->agents[env->active_agent_indices[i]];
             int collided = env->logs[i].collision_rate;
