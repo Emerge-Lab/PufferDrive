@@ -290,8 +290,7 @@ class PuffeRL:
             optim_param_arg = build_param_groups(self.policy, base_lr_for_opt, lora_lr)
             if not optim_param_arg:
                 raise pufferlib.APIUsageError(
-                    "[finetune] no trainable params after applying freeze/LoRA. "
-                    "Check freeze_regex / lora_target."
+                    "[finetune] no trainable params after applying freeze/LoRA. Check freeze_regex / lora_target."
                 )
         else:
             optim_param_arg = self.policy.parameters()
@@ -600,24 +599,12 @@ class PuffeRL:
             # last save_checkpoint() from `checkpoint_interval`.
             if self._eval_manager.has_subprocess_evals_at(self.epoch):
                 self.save_checkpoint()
-            firing = [
-                ev.name for ev in self._eval_manager.evaluators
-                if ev.enabled and ev.interval > 0 and self.epoch % ev.interval == 0
-            ]
-            proc = psutil.Process(os.getpid())
-            rss_pre = proc.memory_info().rss / 1e9
-            print(f"[mem] epoch={self.epoch} pre-eval rss={rss_pre:.2f}GB firing={firing}", flush=True)
             self._eval_manager.maybe_run(
                 epoch=self.epoch,
                 policy=self.uncompiled_policy,
                 env_name=self.config["env"],
                 logger=self.logger,
                 global_step=self.global_step,
-            )
-            rss_post = proc.memory_info().rss / 1e9
-            print(
-                f"[mem] epoch={self.epoch} post-eval rss={rss_post:.2f}GB delta={rss_post - rss_pre:+.2f}GB",
-                flush=True,
             )
 
         return logs
@@ -1491,10 +1478,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if finetune_enabled:
         base_lr = finetune_cfg.get("base_lr", None)
         if base_lr is not None:
-            print(
-                f"[finetune] overriding train.learning_rate "
-                f"{args['train']['learning_rate']} -> {base_lr}"
-            )
+            print(f"[finetune] overriding train.learning_rate {args['train']['learning_rate']} -> {base_lr}")
             args["train"]["learning_rate"] = base_lr
 
     train_config = dict(
@@ -2200,9 +2184,7 @@ def load_policy(args, vecenv, env_name=""):
                     f"lora_target={lora_target!r} — training will run as mode=full."
                 )
         if mode not in ("full", "freeze", "lora"):
-            raise pufferlib.APIUsageError(
-                f"[finetune] unknown mode={mode!r}; expected one of full / freeze / lora"
-            )
+            raise pufferlib.APIUsageError(f"[finetune] unknown mode={mode!r}; expected one of full / freeze / lora")
         print(trainable_summary(policy))
 
     return policy
