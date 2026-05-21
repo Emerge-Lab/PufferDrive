@@ -18,9 +18,7 @@ from pufferlib.pufferl import load_env, load_policy, load_config
 from pufferlib.ocean.benchmark.evaluator_minimal import CheckpointEvaluator
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-CPT_PATH = (
-    "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt"  # "models/scaling_cpts/unreg_delta_50k_maps.pt" #
-)
+CPT_PATH = "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_delta_50k_maps.pt"  #"models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt"  # "models/scaling_cpts/unreg_delta_50k_maps.pt" #
 ENV_NAME = "puffer_drive"
 TRAIN_MAP_DIR = "resources/drive/binaries/training"  # 50k maps used for training
 VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
@@ -34,8 +32,8 @@ OUTPUT_CSV = "single_checkpoint_eval.csv"
 
 # Optional rendering
 RENDER_OUTPUT_DIR = "eval_videos"
-NUM_ENVS_TO_RENDER = 20
-RENDER_MODE = "random"  # "first", "random", or "worst_collision"
+NUM_ENVS_TO_RENDER = 10
+RENDER_MODE = "worst_collision"  # "first", "random", or "worst_collision"
 
 # GIF conversion settings
 CONVERT_TO_GIF = True
@@ -229,9 +227,9 @@ def run_eval_and_render(checkpoint_path, base_config, episode_len=91):  # <-- ad
     all_rows = []
 
     eval_modes = [
-        # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000),
-        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000),
-        # ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000),
+        # ("sp_train", TRAIN_MAP_DIR, "control_vehicles", 50_000, None),
+        # ("sp_val", VAL_MAP_DIR, "control_vehicles", 10_000, None),
+        ("hr_val", VAL_MAP_DIR, "control_sdc_only", 10_000, None),
         ("hr_interactive", INTERACTIVE_MAP_DIR_REPLAY, "control_sdc_only", INTERACTIVE_MAP_NUM_FILES, None),
         (
             "idm_interactive",

@@ -4,15 +4,15 @@
 \caption{BC anchor evaluation. Open-loop metrics on the held-out validation set; closed-loop metrics averaged over validation scenes. Within-5-bin accuracy is the average of $\Delta x$, $\Delta y$, $\Delta\mathrm{yaw}$ accuracies at the final training step.}
 \label{tab:anchor_results}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{r|rrr|rr|rr}
+\begin{tabular}{r|rr|rr|rr}
 \toprule
- & \multicolumn{3}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\
-Human data (h) & Acc. (\%) & Acc. $\pm 5$ bins (\%) & Loss & Route prog. & Score & Route prog. & Score \\
+ & \multicolumn{2}{c|}{Open-loop} & \multicolumn{2}{c|}{Closed-loop self-play} & \multicolumn{2}{c}{Closed-loop human-replay (SDC only)} \\
+Human data (h) & Acc. (\%) & Loss & Route prog. & Score & Route prog. & Score \\
 \midrule
-0.2 & \cellcolor{green!5} 69.4 & \cellcolor{green!5} 72.4 & \cellcolor{red!50} 1.923 & \cellcolor{green!5} $0.600 \pm 0.013$ & \cellcolor{green!5} $0.178 \pm 0.013$ & \cellcolor{green!5} $0.680 \pm 0.007$ & \cellcolor{green!5} $0.253 \pm 0.010$ \\
-0.5 & \cellcolor{green!38} 87.8 & \cellcolor{green!34} 87.3 & \cellcolor{red!17} 0.663 & \cellcolor{green!35} $0.743 \pm 0.011$ & \cellcolor{green!29} $0.318 \pm 0.015$ & \cellcolor{green!41} $0.763 \pm 0.007$ & \cellcolor{green!29} $0.366 \pm 0.011$ \\
-3.0 & \cellcolor{green!49} 93.8 & \cellcolor{green!45} 92.6 & \cellcolor{red!5} 0.202 & \cellcolor{green!40} $0.767 \pm 0.012$ & \cellcolor{green!46} $0.420 \pm 0.016$ & \cellcolor{green!50} $\bm{0.783 \pm 0.007}$ & \cellcolor{green!50} $\bm{0.460 \pm 0.011}$ \\
-30.0 & \cellcolor{green!50} \textbf{94.1} & \cellcolor{green!50} \textbf{94.9} & \cellcolor{red!5} \textbf{0.184} & \cellcolor{green!50} $\bm{0.811 \pm 0.010}$ & \cellcolor{green!50} $\bm{0.439 \pm 0.017}$ & \cellcolor{green!46} $0.776 \pm 0.008$ & \cellcolor{green!46} $0.446 \pm 0.011$ \\
+0.2 & \cellcolor{green!5} 69.4 & \cellcolor{red!50} 1.923 & \cellcolor{green!5} $0.600 \pm 0.013$ & \cellcolor{green!5} $0.178 \pm 0.013$ & \cellcolor{green!5} $0.680 \pm 0.007$ & \cellcolor{green!5} $0.253 \pm 0.010$ \\
+0.5 & \cellcolor{green!38} 87.8 & \cellcolor{red!17} 0.663 & \cellcolor{green!35} $0.743 \pm 0.011$ & \cellcolor{green!29} $0.318 \pm 0.015$ & \cellcolor{green!41} $0.763 \pm 0.007$ & \cellcolor{green!29} $0.366 \pm 0.011$ \\
+3.0 & \cellcolor{green!49} 93.8 & \cellcolor{red!5} 0.202 & \cellcolor{green!40} $0.767 \pm 0.012$ & \cellcolor{green!46} $0.420 \pm 0.016$ & \cellcolor{green!50} $\bm{0.783 \pm 0.007}$ & \cellcolor{green!50} $\bm{0.460 \pm 0.011}$ \\
+30.0 & \cellcolor{green!50} \textbf{94.1} & \cellcolor{red!5} \textbf{0.184} & \cellcolor{green!50} $\bm{0.811 \pm 0.010}$ & \cellcolor{green!50} $\bm{0.439 \pm 0.017}$ & \cellcolor{green!46} $0.776 \pm 0.008$ & \cellcolor{green!46} $0.446 \pm 0.011$ \\
 \bottomrule
 \end{tabular}}
 \end{table}

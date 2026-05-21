@@ -33,12 +33,12 @@ VAL_MAP_DIR = "resources/drive/binaries/validation"  # 10k maps
 INTERACTIVE_MAP_DIR = "resources/drive/binaries/interactive_data_validation"  # 200 maps selected for SDC interactivity
 IDM_MAP_DIR = "resources/drive/binaries/interactive_200_idm"  # Same 200 maps selected for SDC interactivity but processed in a different way
 INTERACTIVE_MAP_DIR_MAPS = 200
-NUM_TOTAL_EVAL_AGENTS = 1024 * 5
-NUM_TOTAL_INTERACTIVE_EVAL_AGENTS = 1024  # Interactive maps are small (200); avoid excessive resampling
+NUM_TOTAL_EVAL_AGENTS = 1024 * 10
+NUM_TOTAL_INTERACTIVE_EVAL_AGENTS = 2048  # Interactive maps are small (200); avoid excessive resampling
 NUM_AGENTS_PER_VECENV = 1024
 ENV_NAME = "puffer_drive"
 DATASET = "womd"
-OUTPUT_CSV = "results/checkpoint_eval_results.csv"
+OUTPUT_CSV = "results/checkpoint_eval_result_20B_all_det_false.csv"
 MAKE_FIGURES = False
 
 METRICS = [
@@ -349,8 +349,7 @@ def evaluate_scaling_checkpoints(base_config):
             total_eval_agents=NUM_TOTAL_INTERACTIVE_EVAL_AGENTS,
         )
 
-        # Attach scaling metadata to every row
-        for row in sp_train_rows + sp_val_rows + hr_val_rows + hr_interactive_rows:
+        for row in sp_train_rows + sp_val_rows + hr_val_rows + hr_interactive_rows + idm_interactive_rows:
             row["sp_maps"] = sp_maps
             row["is_regularized"] = is_reg
             row["dynamics"] = dynamics

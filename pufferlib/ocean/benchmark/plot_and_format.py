@@ -2551,30 +2551,9 @@ def plot_collision_severity(
     modes=("hr_interactive", "scaling_hr_interactive"),
     sp_maps_filter=50000,
 ):
-    """Compare collision severity (Delta-V) between regularized and unregularized models.
-
-    Three panels:
-      0) ECDF of per-event Delta-V — distributional comparison.
-         Single-collision agents contribute their exact dv (= delta_v_max).
-         Multi-collision agents contribute mean = delta_v_sum / delta_v_count
-         and max = delta_v_max as separate proxy points (count is typically
-         small in practice; a header note prints the multi-collision share).
-         A dashed vertical line marks the Waymo 1 mph (0.447 m/s) threshold.
-      1) Bar of mean Delta-V per collision event (conditional on collision).
-      2) KDE (density-normalized) of per-event Delta-V, overlaid by
-         group. X-axis clipped at the 99th percentile across both groups
-         so the long tail doesn't compress the body of the distribution.
-
-    Pulls only rows from `modes` and (optionally) restricts to a single
-    metadata-map count via `sp_maps_filter` to match the human-data figure.
-    Pass sp_maps_filter=None to use all rows (e.g. main eval CSV without
-    scaling metadata).
-
-    Returns the matplotlib Figure, or None if there's not enough data.
-    """
     CHECKPOINTS_OF_INTEREST = {
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_12k_maps.pt": "regularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
     }
 
     # ── Filter ──────────────────────────────────────────────────────────────
@@ -2597,7 +2576,6 @@ def plot_collision_severity(
     sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
 
     coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
-
     if coll.empty:
         print("  No collision events in filtered data — skipping plot_collision_severity.")
         return None
@@ -2608,29 +2586,22 @@ def plot_collision_severity(
     if multi_frac > 0.10:
         print("  Note: multi-collision share > 10%; CDF/histogram are approximate.")
 
-    # ── Build per-event proxy frame ─────────────────────────────────────────
-    # Single-collision rows: dv == delta_v_max exactly.
+    # ── Per-event proxy frame ────────────────────────────────────────────────
     single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy()
     single = single.rename(columns={"delta_v_max": "dv"})
-
-    # Multi-collision rows: emit max and mean as separate proxy events.
     multi = coll[coll["delta_v_count"] > 1].copy()
     multi_max = multi[["group", "delta_v_max"]].rename(columns={"delta_v_max": "dv"})
     multi_mean = multi[["group"]].copy()
     multi_mean["dv"] = multi["delta_v_sum"] / multi["delta_v_count"]
-
     events = pd.concat([single, multi_max, multi_mean], ignore_index=True)
-    events = events[events["dv"] > 0]  # drop any zeros from edge cases
+    events = events[events["dv"] > 0]
 
-    # ── Headline aggregates (used in panels 1 and 2) ────────────────────────
+    # ── Headline aggregates ──────────────────────────────────────────────────
     def _agg(group_df):
         total_sum = group_df["delta_v_sum"].sum()
         total_count = group_df["delta_v_count"].sum()
         if total_count == 0:
             return pd.Series({"mean_dv": np.nan, "frac_under_1mph": np.nan, "n_events": 0})
-        # frac_under_1mph: per-agent indicator (1 if agent's worst collision
-        # was under 1 mph). This is the cleanest agent-level summary, even
-        # though a strictly per-event version would require a C-side log.
         return pd.Series(
             {
                 "mean_dv": total_sum / total_count,
@@ -2640,52 +2611,43 @@ def plot_collision_severity(
         )
 
     headline = coll.groupby("group").apply(_agg).reset_index()
-
-    # Stable ordering: unreg first, reg second (matches rest of file)
     group_order = ["unregularized", "regularized"]
     headline = headline.set_index("group").reindex(group_order).reset_index()
     colors = [PALETTE["selfplay"], PALETTE["ours"]]
 
-    # ── Plot ────────────────────────────────────────────────────────────────
+    # ── Threshold landmarks shared between panel 0 and panel 2 ──────────────
+    # (label, m/s value)
+    THRESHOLDS = [
+        ("1 mph", 0.447),
+        ("5 mph", 2.235),
+        ("15 mph", 6.706),
+    ]
+
+    one_mph_mps = THRESHOLDS[0][1]
+
+    # ── Plot ─────────────────────────────────────────────────────────────────
     _set_style(2)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
 
-    one_mph_mps = 0.447  # 1 mph = 0.447 m/s, Waymo's threshold
-
-    # Panel 0: ECDF
+    # ── Panel 0: ECDF ────────────────────────────────────────────────────────
     ax = axes[0]
     for group, color in zip(group_order, colors):
         dv = np.sort(events.loc[events["group"] == group, "dv"].values)
         if dv.size == 0:
             continue
         ecdf = np.arange(1, dv.size + 1) / dv.size
-        ax.plot(
-            dv,
-            ecdf,
-            color=color,
-            linewidth=2.0,
-            label=f"{group} (n={dv.size})",
-            zorder=3,
-        )
-    ax.axvline(
-        one_mph_mps,
-        color="gray",
-        linestyle="--",
-        linewidth=1.2,
-        alpha=0.8,
-        zorder=2,
-        label="1 mph (0.45 m/s)",
-    )
+        ax.plot(dv, ecdf, color=color, linewidth=2.0, label=f"{group} (n={dv.size})", zorder=3)
+    ax.axvline(one_mph_mps, color="gray", linestyle="--", linewidth=1.2, alpha=0.8, zorder=2, label="1 mph (0.45 m/s)")
     ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
     ax.set_ylabel("Cumulative fraction of events")
-    ax.set_title("Distribution of collision severity")
+    ax.set_title("ECDF of collision severity")
     ax.set_ylim(0, 1.02)
     ax.set_xlim(left=0)
     ax.grid(alpha=0.3, linestyle="--")
     ax.legend(fontsize=9, loc="lower right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
     sns.despine(ax=ax)
 
-    # Panel 1: mean Delta-V per event
+    # ── Panel 1: mean Δv bar ─────────────────────────────────────────────────
     ax = axes[1]
     x = np.arange(len(group_order))
     means = headline["mean_dv"].values
@@ -2701,48 +2663,33 @@ def plot_collision_severity(
     ax.grid(axis="y", alpha=0.3, linestyle="--")
     sns.despine(ax=ax)
 
-    # Panel 2: KDE of per-event Delta-V, overlaid by group.
-    # KDE leaks a small amount of mass past the dv >= 0 boundary (kernel
-    # smoothing artifact); we clip the x-axis at 0 to hide it. Bandwidth
-    # uses seaborn's default (Scott's rule), which is fine for n in 100s+.
+    # ── Panel 2: survival function (1 – ECDF) on log-y ──────────────────────
+    # Reads directly as "X% of collision events exceed Δv = y m/s",
+    # exactly what the table captures — and log-y stretches the tail.
     ax = axes[2]
-    all_dvs = events["dv"].values
-    if all_dvs.size > 0:
-        x_hi = np.percentile(all_dvs, 99)
-    else:
-        x_hi = 1.0
-    x_hi = float(np.ceil(x_hi * 2) / 2)  # nearest 0.5
-
     for group, color in zip(group_order, colors):
-        dv = events.loc[events["group"] == group, "dv"].values
-        if dv.size < 2:  # KDE needs at least 2 points
+        dv = np.sort(events.loc[events["group"] == group, "dv"].values)
+        if dv.size == 0:
             continue
-        sns.kdeplot(
-            x=dv,
-            ax=ax,
-            color=color,
-            fill=True,
-            alpha=0.35,
-            linewidth=2.0,
-            label=f"{group} (n={dv.size})",
-            clip=(0, None),  # don't extrapolate to negative Delta-V
-            zorder=3,
-        )
-    ax.axvline(
-        one_mph_mps,
-        color="gray",
-        linestyle="--",
-        linewidth=1.2,
-        alpha=0.8,
-        zorder=2,
-        label="1 mph",
-    )
+        # survival(t) = P(Δv > t); prepend 0 so the step starts at 100 %.
+        surv_pct = (1 - np.arange(0, dv.size) / dv.size) * 100
+        dv_plot = np.concatenate([[0.0], dv])
+        surv_plot = np.concatenate([[100.0], surv_pct])
+        ax.step(dv_plot, surv_plot, where="post", color=color, linewidth=2.0, label=f"{group} (n={dv.size})", zorder=3)
+
+    # Vertical lines at threshold landmarks
+    for label, thresh in THRESHOLDS:
+        ax.axvline(thresh, color="tab:red", linestyle=":", linewidth=1.5, alpha=0.75, zorder=2)
+        ax.text(thresh + 0.05, 1.3, label, fontsize=10, color="grey", ha="left", va="top", rotation=90)
+
+    ax.set_yscale("log")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:g}%"))
     ax.set_xlabel(r"Per-event $\Delta v$ (m/s)")
-    ax.set_ylabel("Density")
-    ax.set_title(rf"Severity density (KDE, view clipped at {x_hi:.1f} m/s)")
-    ax.set_xlim(0, x_hi)
-    ax.set_ylim(bottom=0)
-    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.set_ylabel("% of events exceeding threshold (log scale)")
+    ax.set_title("Collision severity tail")
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0.5, top=110)  # headroom above 100 % for the label
+    ax.grid(alpha=0.3, linestyle="--", which="both")
     ax.legend(fontsize=9, loc="upper right", framealpha=1.0, facecolor="white", edgecolor="lightgray")
     sns.despine(ax=ax)
 
@@ -2759,53 +2706,35 @@ def generate_collision_severity_latex_table(
     modes=("hr_interactive", "scaling_hr_interactive"),
     sp_maps_filter=50000,
 ):
-    """LaTeX table for the collision severity tail breakdown at 50k metadata maps.
+    """Collision severity table — three thresholds (1 / 5 / 15 mph)."""
 
-    Companion to plot_collision_severity. For each group (regularized vs
-    unregularized) reports:
-      - Total collision events
-      - Mean and max per-event Delta-V (m/s)
-      - % of events above injury-risk thresholds (1, 5, 10, 15, 20 mph)
-
-    Best value per metric column is bolded. For severity columns, lower
-    is better.
-
-    Required LaTeX packages:
-      \\usepackage{booktabs}, \\usepackage{graphicx},
-      \\usepackage{makecell}, \\usepackage{bm}
-    """
     CHECKPOINTS_OF_INTEREST = {
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "regularized",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "regularized",
     }
 
-    # ── Filter ──────────────────────────────────────────────────────────────
+    # ── Filter ───────────────────────────────────────────────────────────────
     sub = df[df["mode"].isin(modes)].copy()
     if sub.empty:
-        print(f"  No rows in modes={modes} — skipping plot_collision_severity.")
+        print(f"  No rows in modes={modes} — skipping severity table.")
         return None
-
     sub = sub[sub["checkpoint"].isin(CHECKPOINTS_OF_INTEREST)].copy()
     if sub.empty:
-        print("  No rows for checkpoints of interest — skipping plot_collision_severity.")
+        print("  No rows for checkpoints of interest — skipping severity table.")
         return None
-
     if sp_maps_filter is not None and "sp_maps" in sub.columns:
         sub = sub[sub["sp_maps"] == sp_maps_filter]
         if sub.empty:
-            print(f"  No rows with sp_maps={sp_maps_filter} — skipping plot_collision_severity.")
+            print(f"  No rows with sp_maps={sp_maps_filter} — skipping severity table.")
             return None
 
     sub["group"] = sub["checkpoint"].map(CHECKPOINTS_OF_INTEREST)
-
     coll = sub[(sub["delta_v_count"] > 0) & (sub["at_fault_collision_rate"] > 0)].copy()
     if coll.empty:
         print("  No collision events — skipping severity table.")
         return None
 
-    # Per-event proxy frame (same construction as plot_collision_severity).
-    single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy()
-    single = single.rename(columns={"delta_v_max": "dv"})
+    single = coll[coll["delta_v_count"] == 1][["group", "delta_v_max"]].copy().rename(columns={"delta_v_max": "dv"})
     multi = coll[coll["delta_v_count"] > 1].copy()
     multi_max = multi[["group", "delta_v_max"]].rename(columns={"delta_v_max": "dv"})
     multi_mean = multi[["group"]].copy()
@@ -2813,31 +2742,29 @@ def generate_collision_severity_latex_table(
     events = pd.concat([single, multi_max, multi_mean], ignore_index=True)
     events = events[events["dv"] > 0]
 
-    # Severity thresholds (matches stdout printout in plot_collision_severity).
-    # 1 mph: cosmetic / Waymo "minor" floor.
-    # 5 mph: typical airbag-deployment threshold.
-    # 10 mph: MAIS2+ injury risk begins climbing in V2V crashes.
-    # 15 mph: moderate; MAIS2+ ~15-25%.
-    # 20 mph: elevated serious-injury risk.
+    # Three thresholds matching the survival plot landmarks
     thresholds = [
-        (r"$> 1$ mph", 0.447),
-        (r"$> 5$ mph", 2.235),
-        (r"$> 10$ mph", 4.470),
-        (r"$> 15$ mph", 6.706),
-        (r"$> 20$ mph", 8.941),
+        (r"$> 1$ mph", 0.447),  # cosmetic / Waymo minor floor
+        (r"$> 5$ mph", 2.235),  # typical airbag-deployment threshold
+        (r"$> 15$ mph", 6.706),  # serious injury risk
     ]
 
-    # Aggregate per group.
+    # Collision rate per group from the full (unfiltered) sub frame
+    coll_rate = sub.groupby("group")["at_fault_collision_rate"].mean().rename("coll_rate_pct") * 100
+
     rows = []
-    for group in ["unregularized", "regularized"]:  # stable order
+    for group in ["unregularized", "regularized"]:
+        grp = coll[coll["group"] == group]
+        mean_dv = grp["delta_v_sum"].sum() / grp["delta_v_count"].sum()
         dv = events.loc[events["group"] == group, "dv"].values
         if dv.size == 0:
             continue
         row = {
             "group": group,
             "n_events": int(dv.size),
-            "mean_dv": float(dv.mean()),
-            "max_dv": float(dv.max()),
+            "coll_rate_pct": float(coll_rate.get(group, np.nan)),
+            "mean_dv": mean_dv,  # ← from coll, not from events
+            "max_dv": float(dv.max()),  # max still comes from the proxy frame
         }
         for _label, thresh in thresholds:
             row[f"pct_{thresh:.3f}"] = float((dv > thresh).mean() * 100.0)
@@ -2849,76 +2776,71 @@ def generate_collision_severity_latex_table(
 
     table = pd.DataFrame(rows)
 
-    # Column specs. The 4th tuple element (higher_is_better) drives bolding
-    # direction for each column — False means "lower wins", True "higher wins".
-    # (mean_col, sem_col, header, higher_is_better, as_pct, decimals)
+    # (mean_col, header, higher_is_better, decimals)
     metric_specs = [
-        ("mean_dv", None, r"Mean $\Delta v$ (m/s) $\downarrow$", False, False, 2),
-        ("max_dv", None, r"Max $\Delta v$ (m/s) $\downarrow$", False, False, 2),
+        ("mean_dv", r"Mean $\Delta v$ (m/s) $\downarrow$", False, 2),
+        ("max_dv", r"Max $\Delta v$ (m/s) $\downarrow$", False, 2),
     ]
     for label, thresh in thresholds:
-        col = f"pct_{thresh:.3f}"
-        metric_specs.append((col, None, label + r" (\%) $\downarrow$", False, False, 1))
+        metric_specs.append((f"pct_{thresh:.3f}", label + r" (\%) $\downarrow$", False, 1))
 
-    # Best-per-column for bolding. Ties share "best".
     best_per_col = {}
-    for spec in metric_specs:
-        col = spec[0]
-        higher_is_better = spec[3]
+    for col, _, higher_is_better, _ in metric_specs:
         vals = table[col].dropna()
         if vals.empty:
             best_per_col[col] = None
             continue
         best_per_col[col] = vals.max() if higher_is_better else vals.min()
 
-    def _fmt_cell(val, mean_col, row_idx, decimals):
+    def _fmt(val, col, decimals):
         if pd.isna(val):
             return "---"
-        target = best_per_col.get(mean_col)
+        target = best_per_col.get(col)
         is_best = target is not None and np.isclose(val, target)
-        fmt = f".{decimals}f"
-        body = f"{val:{fmt}}"
+        body = f"{val:.{decimals}f}"
         return f"\\textbf{{{body}}}" if is_best else body
 
     n_metric_cols = len(metric_specs)
+    # Events column is widened to accommodate "N (XX%)" — use 'r' for the
+    # metric block; the events cell is formatted inline, not ranked.
     col_spec = "l|r|" + "r" * n_metric_cols
 
-    lines = []
-    lines.append(
-        r"% Requires: \usepackage{booktabs}, \usepackage{graphicx}, "
-        r"\usepackage{makecell}, \usepackage{bm}"
-    )
-    lines.append(r"\begin{table}[ht]")
-    lines.append(r"\centering")
-    lines.append(
-        r"\caption{Collision severity tail breakdown at 50k metadata maps "
-        r"(human-replay evaluation). For each group we report the mean and "
-        r"max per-event $\Delta v$, and the percentage of collision events "
-        r"exceeding common injury-risk thresholds ($1$ mph: cosmetic; "
-        r"$5$ mph: typical airbag-deployment floor; $10$+ mph: MAIS2+ "
-        r"injury risk begins climbing). Best value per column in bold. "
-        r"All severity metrics: lower is better.}"
-    )
-    lines.append(r"\label{tab:collision_severity}")
-    lines.append(r"\resizebox{\textwidth}{!}{%")
-    lines.append(r"\begin{tabular}{" + col_spec + "}")
-    lines.append(r"\toprule")
+    lines = [
+        r"% Requires: \usepackage{booktabs}, \usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}",
+        r"\begin{table}[ht]",
+        r"\centering",
+        (
+            r"\caption{Collision severity tail breakdown at 50k metadata maps "
+            r"(human-replay evaluation). \emph{Events} shows the count and share "
+            r"of all collision events attributed to each group. "
+            r"Per-event $\Delta v$ statistics and "
+            r"the fraction of events exceeding three injury-risk thresholds "
+            r"($1$ mph: cosmetic; $5$ mph: airbag-deployment floor; "
+            r"$15$ mph: elevated serious-injury risk). "
+            r"Best value per column in \textbf{bold}; lower is better throughout.}"
+        ),
+        r"\label{tab:collision_severity}",
+        r"\resizebox{\textwidth}{!}{%",
+        r"\begin{tabular}{" + col_spec + "}",
+        r"\toprule",
+    ]
 
-    headers = ["Method", "Events"] + [s[2] for s in metric_specs]
-    lines.append(" & ".join(headers) + r" \\")
+    # Header — "Events" spans count + share in one cell
+    header_cells = ["Method", r"\makecell{Events \\ (at-fault coll. rate)}"] + [s[1] for s in metric_specs]
+    lines.append(" & ".join(header_cells) + r" \\")
     lines.append(r"\midrule")
 
     for i, row in table.iterrows():
-        cells = [row["group"], f"{int(row['n_events'])}"]
-        for spec in metric_specs:
-            mean_col = spec[0]
-            decimals = spec[5]
-            cells.append(_fmt_cell(row[mean_col], mean_col, i, decimals))
+        n = int(row["n_events"])
+        cr = row["coll_rate_pct"]
+        cr_str = f"{cr:.1f}\\%" if pd.notna(cr) else "---"
+        event_cell = f"{n} ({cr_str})"
+        cells = [row["group"], event_cell]
+        for col, _, _, decimals in metric_specs:
+            cells.append(_fmt(row[col], col, decimals))
         lines.append(" & ".join(cells) + r" \\")
 
-    lines.append(r"\bottomrule")
-    lines.append(r"\end{tabular}}")
-    lines.append(r"\end{table}")
+    lines += [r"\bottomrule", r"\end{tabular}}", r"\end{table}"]
 
     latex_str = "\n".join(lines)
     _ensure_dir(save_path)
@@ -3071,11 +2993,11 @@ def generate_main_comparison_latex_table(
     """
     CHECKPOINTS_OF_INTEREST = {
         "models/scaling_cpts/unreg_delta_50k_maps.pt": "Unregularized",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt": "Regularized (ours)",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt": "Regularized (ours)",
     }
     ROW_ORDER = [
         "models/scaling_cpts/unreg_delta_50k_maps.pt",
-        "models/scaling_cpts/reg_delta_50k_maps_anchor_1200_maps.pt",
+        "models/scaling_cpts/reg_delta_50k_maps_anchor_200_maps.pt",
     ]
 
     # ── Per-mode aggregation ────────────────────────────────────────────────
@@ -3187,6 +3109,200 @@ def generate_main_comparison_latex_table(
     for cpt in ROW_ORDER:
         label = CHECKPOINTS_OF_INTEREST[cpt]
         cells = [label] + [_fmt_cell(key, cpt, as_pct, decimals) for key, _, _, as_pct, decimals in col_specs]
+        lines.append(" & ".join(cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}}")
+    lines.append(r"\end{table}")
+
+    latex_str = "\n".join(lines)
+    _ensure_dir(save_path)
+    with open(save_path, "w") as f:
+        f.write(latex_str)
+    print(f"  LaTeX table written to {save_path}")
+    return latex_str
+
+
+def generate_interactive_comparison_latex_table(
+    df,
+    save_path="results/figures/eval_interactive_comparison_table.tex",
+):
+    """LaTeX table of all interactive-mode metrics across all scaling checkpoints.
+
+    Rows:    one per (sp_maps, anchor_maps) pair — unreg first, then reg,
+             each sorted by sp_maps. Identical layout to generate_scaling_latex_table.
+    Columns (all from *_interactive modes):
+             HR score | IDM score |
+             IDM at-fault coll. | HR at-fault coll. |
+             IDM coll. | HR coll.
+
+    Top-3 values per column are highlighted with the shared tier palette;
+    best value additionally bolded. The best unregularized value per column
+    is marked with a gray cell (tierunregbest).
+
+    Required LaTeX packages:
+      \\usepackage{booktabs}, \\usepackage[table]{xcolor},
+      \\usepackage{graphicx}, \\usepackage{makecell}, \\usepackage{bm}
+    """
+    MODES = {
+        "hr": "scaling_hr_interactive",
+        "idm": "scaling_idm_interactive",
+    }
+
+    # ── Filter to interactive modes only ────────────────────────────────────
+    sub = df[df["mode"].isin(MODES.values())].copy()
+    if sub.empty:
+        print("  No interactive-mode data found — skipping generate_interactive_comparison_latex_table.")
+        return None
+
+    sub["anchor_maps"] = sub["anchor_maps"].fillna(0).astype(int)
+
+    # ── Aggregate each mode separately, then merge ───────────────────────────
+    def _agg(mode_key, metrics):
+        mode_str = MODES[mode_key]
+        grp = sub[sub["mode"] == mode_str]
+        available = [m for m in metrics if m in grp.columns]
+        if grp.empty or not available:
+            return pd.DataFrame(columns=["sp_maps", "anchor_maps"])
+        agg = grp.groupby(["sp_maps", "anchor_maps"])[available].agg(["mean", "sem"]).reset_index()
+        flat = ["sp_maps", "anchor_maps"]
+        for m in available:
+            flat += [f"{mode_key}_{m}_mean", f"{mode_key}_{m}_sem"]
+        agg.columns = flat
+        return agg
+
+    hr_agg = _agg("hr", ["score", "at_fault_collision_rate", "collision_rate"])
+    idm_agg = _agg("idm", ["score", "at_fault_collision_rate", "collision_rate"])
+
+    merged = hr_agg.merge(idm_agg, on=["sp_maps", "anchor_maps"], how="outer")
+
+    # unreg rows first, then reg, each sorted by sp_maps
+    unreg = merged[merged["anchor_maps"] == 0].sort_values("sp_maps")
+    reg = merged[merged["anchor_maps"] != 0].sort_values(["sp_maps", "anchor_maps"])
+    merged = pd.concat([unreg, reg]).reset_index(drop=True)
+
+    # ── Column specs ─────────────────────────────────────────────────────────
+    # (mean_col, sem_col, header, higher_is_better, as_pct, decimals)
+    all_specs = [
+        ("hr_score_mean", "hr_score_sem", r"HR Score $\uparrow$", True, False, 3),
+        ("idm_score_mean", "idm_score_sem", r"IDM Score $\uparrow$", True, False, 3),
+        (
+            "idm_at_fault_collision_rate_mean",
+            "idm_at_fault_collision_rate_sem",
+            r"IDM At-fault (\%) $\downarrow$",
+            False,
+            True,
+            1,
+        ),
+        (
+            "hr_at_fault_collision_rate_mean",
+            "hr_at_fault_collision_rate_sem",
+            r"HR At-fault (\%) $\downarrow$",
+            False,
+            True,
+            1,
+        ),
+        ("idm_collision_rate_mean", "idm_collision_rate_sem", r"IDM Coll. (\%) $\downarrow$", False, True, 1),
+        ("hr_collision_rate_mean", "hr_collision_rate_sem", r"HR Coll. (\%) $\downarrow$", False, True, 1),
+    ]
+    all_specs = [s for s in all_specs if s[0] in merged.columns]
+
+    rank_lookup = _build_tier_rank_lookup(merged, all_specs)
+
+    # Best unregularized value per column (gray highlight)
+    unreg_mask = merged["anchor_maps"] == 0
+    unreg_best_cells = set()
+    for spec in all_specs:
+        mean_col, _, _, higher_is_better, _, _ = spec
+        unreg_vals = merged.loc[unreg_mask, mean_col].dropna()
+        if unreg_vals.empty:
+            continue
+        target = unreg_vals.max() if higher_is_better else unreg_vals.min()
+        for i, v in merged[mean_col].items():
+            if unreg_mask.iloc[i] and pd.notna(v) and np.isclose(v, target):
+                unreg_best_cells.add((mean_col, i))
+
+    def _fmt_cell(mean, sem, mean_col, row_idx, as_pct, decimals):
+        if pd.isna(mean):
+            return "---"
+        tier = rank_lookup.get((mean_col, row_idx))
+        is_best = tier == 1
+        is_unreg_best = (mean_col, row_idx) in unreg_best_cells
+        m_val = mean * 100 if as_pct else mean
+        s_val = sem * 100 if (as_pct and pd.notna(sem)) else sem
+        fmt = f".{decimals}f"
+        if pd.notna(s_val) and s_val != 0:
+            body = f"{m_val:{fmt}} \\pm {s_val:{fmt}}"
+            text = f"$\\bm{{{body}}}$" if is_best else f"${body}$"
+        else:
+            body = f"{m_val:{fmt}}"
+            text = f"\\textbf{{{body}}}" if is_best else body
+        if is_unreg_best:
+            return f"\\cellcolor{{tierunregbest}} {text}"
+        if tier is None:
+            return text
+        return f"\\cellcolor{{{_TIER_NAMES[tier]}}} {text}"
+
+    # ── Build LaTeX ──────────────────────────────────────────────────────────
+    n_score = 2  # HR / IDM score
+    n_coll = len(all_specs) - n_score
+    col_spec = "rr" + "|" + "r" * n_score + "|" + "r" * n_coll
+
+    lines = []
+    lines.append(
+        r"% Requires: \usepackage{booktabs}, \usepackage[table]{xcolor}, "
+        r"\usepackage{graphicx}, \usepackage{makecell}, \usepackage{bm}"
+    )
+    lines.extend(_tier_latex_preamble())
+    lines.append(r"\begin{table}[ht]")
+    lines.append(r"\centering")
+    lines.append(
+        r"\caption{Interactive evaluation across all scaling checkpoints. "
+        r"All metrics are computed on the interactive validation subset. "
+        r"Top-3 values per column are highlighted "
+        r"(\colorbox{tierbest}{best}, \colorbox{tiersecond}{2nd}, "
+        r"\colorbox{tierthird}{3rd}); best value additionally in bold. "
+        r"\colorbox{tierunregbest}{Gray} marks the best unregularized value per column.}"
+    )
+    lines.append(r"\label{tab:interactive_comparison}")
+    lines.append(r"\resizebox{\textwidth}{!}{%")
+    lines.append(r"\begin{tabular}{" + col_spec + "}")
+    lines.append(r"\toprule")
+
+    # Block header
+    lines.append(
+        r" & & \multicolumn{" + str(n_score) + r"}{c|}{Score} & "
+        r"\multicolumn{" + str(n_coll) + r"}{c}{Collision rates} \\"
+    )
+
+    # Column header
+    headers = [s[2] for s in all_specs]
+    lines.append(
+        r"\makecell{Self-play maps \\ (metadata)} & "
+        r"\makecell{Anchor data \\ (human demos)} & " + " & ".join(headers) + r" \\"
+    )
+    lines.append(r"\midrule")
+
+    prev_was_unreg = None
+    for i, row in merged.iterrows():
+        is_unreg = int(row["anchor_maps"]) == 0
+        if prev_was_unreg is True and not is_unreg:
+            lines.append(r"\midrule")
+        prev_was_unreg = is_unreg
+
+        anchor_label = "0 (unreg.)" if is_unreg else _maps_to_human_time(int(row["anchor_maps"]))
+        cells = [_fmt_maps(int(row["sp_maps"])), anchor_label]
+        for mean_col, sem_col, _, _, as_pct, decimals in all_specs:
+            cells.append(
+                _fmt_cell(
+                    row.get(mean_col, np.nan),
+                    row.get(sem_col, np.nan),
+                    mean_col,
+                    i,
+                    as_pct,
+                    decimals,
+                )
+            )
         lines.append(" & ".join(cells) + r" \\")
 
     lines.append(r"\bottomrule")
@@ -3389,14 +3505,14 @@ def make_all_figures(df=None, wosac_df=None, anchor_df=None):
         print("  Saved eval_anchor.pdf")
         generate_anchor_latex_table(anchor_df)
         print("  Saved anchor_eval_table.tex")
-
+    generate_interactive_comparison_latex_table(df)
     plot_learning_curves()
 
 
 if __name__ == "__main__":
     import os
 
-    EVAL_CSV = "results/checkpoint_eval_results.csv"
+    EVAL_CSV = "results/checkpoint_eval_result_20B_all_det_false.csv"  # "results/checkpoint_eval_result_20B_all.csv" #"results/checkpoint_eval_results.csv"
     WOSAC_CSV = "results/checkpoint_wosac_results.csv"
     ANCHOR_CSV = "results/anchor_eval.csv"
 

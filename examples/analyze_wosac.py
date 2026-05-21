@@ -29,7 +29,7 @@ import torch
 from pufferlib.pufferl import load_env, load_policy, load_config
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────────
-SCALING_CHECKPOINTS_PATH = "models/best_cpts"
+SCALING_CHECKPOINTS_PATH = "models/new_cpts"
 ENV_NAME = "puffer_drive"
 OUTPUT_CSV = "results/checkpoint_wosac_results.csv"
 
