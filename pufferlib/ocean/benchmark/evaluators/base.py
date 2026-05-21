@@ -90,6 +90,10 @@ class Evaluator:
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)
+        # Opt-in per-episode CSV + coverage check (writes files, folds
+        # coverage_* scalars into metrics). No-op unless the evaluator set
+        # eval.export_episode_csv / eval.verify_coverage.
+        self._maybe_export_episodes(args, metrics)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:
@@ -105,6 +109,12 @@ class Evaluator:
         obs = self._initial_reset(vecenv, args)
 
         infos_collected: list = []
+        # Per-episode `completed_episode` summaries, collected only when an
+        # evaluator opts into emit_completed_episodes (via the manager) for
+        # the CSV / coverage features. Kept out of `infos_collected` so the
+        # default my_log weighted-mean aggregation and `_should_stop` are
+        # unaffected.
+        episode_rows: list = []
         steps = 0
         while not self._should_stop(args, infos_collected, steps):
             with torch.no_grad():
@@ -116,7 +126,11 @@ class Evaluator:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
             obs, _, terminals, truncations, infos = vecenv.step(action)
-            infos_collected.extend(self._flatten_infos(infos))
+            for d in self._flatten_infos(infos):
+                if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
+                    episode_rows.append(d)
+                else:
+                    infos_collected.append(d)
             # Mask LSTM state per-agent for envs that just terminated or
             # truncated — those agents' next obs is from a fresh scenario
             # and the recurrent memory of the previous one would bias
@@ -129,6 +143,7 @@ class Evaluator:
                 state["lstm_c"] *= mask
             steps += 1
 
+        self._last_episode_rows = episode_rows
         return self._aggregate_infos(infos_collected)
 
     # -- Loop hooks (subclass-overridable) ------------------------------
@@ -216,6 +231,95 @@ class Evaluator:
             if den > 0:
                 out[k] = num / den
         return out
+
+    # -- Per-episode CSV + scenario coverage (opt-in) -------------------
+
+    def _maybe_export_episodes(self, args, metrics) -> None:
+        """Write a per-episode metrics CSV and/or a scenario-coverage report.
+
+        Both are off by default and enabled per-evaluator via the
+        [eval.<name>] section:
+
+            eval.export_episode_csv = true
+            eval.verify_coverage    = true
+
+        Either flag makes the manager turn on `emit_completed_episodes` for
+        this evaluator's env, so the rollout collects one `completed_episode`
+        summary per finished episode into `self._last_episode_rows`. The
+        default weighted-mean metric path is untouched.
+        """
+        from pathlib import Path
+
+        eval_cfg = self.config.get("eval", {})
+        want_csv = bool(eval_cfg.get("export_episode_csv", False))
+        want_coverage = bool(eval_cfg.get("verify_coverage", False))
+        if not (want_csv or want_coverage):
+            return
+
+        rows = list(getattr(self, "_last_episode_rows", []) or [])
+        out_dir = Path(args.get("eval_results_dir") or args.get("render_results_dir") or ".") / "episode_metrics"
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        suffix = f"_epoch{epoch}_step{global_step}"
+
+        if want_csv:
+            self._write_episode_csv(rows, out_dir, suffix)
+
+        if want_coverage:
+            cov = self._coverage_report(rows, eval_cfg)
+            metrics["coverage_expected"] = float(cov["expected"])
+            metrics["coverage_found"] = float(cov["found"])
+            metrics["coverage_complete"] = float(cov["complete"])
+            if not cov["complete"]:
+                print(
+                    f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s), "
+                    f"expected {cov['expected']}."
+                )
+            if cov["duplicates"]:
+                print(f"[eval.{self.name}] {len(cov['duplicates'])} scenario(s) evaluated more than once.")
+
+    def _write_episode_csv(self, rows, out_dir, suffix) -> None:
+        """One row per finished episode, all summary fields. Identity columns
+        (episode_index / scenario_id / map_name) lead when present."""
+        if not rows:
+            print(f"[eval.{self.name}] export_episode_csv set but no per-episode summaries were collected.")
+            return
+        import pandas as pd
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame(rows)
+        lead = [c for c in ("episode_index", "scenario_id", "map_name") if c in df.columns]
+        df = df[lead + [c for c in df.columns if c not in lead]]
+        path = out_dir / f"{self.name}{suffix}.csv"
+        df.to_csv(path, index=False)
+        print(f"[eval.{self.name}] wrote {len(df)} per-episode rows to {path}")
+
+    def _coverage_report(self, rows, eval_cfg) -> dict:
+        """Count-based coverage with duplicate detection.
+
+        `expected` is the evaluator's `num_scenarios` target when set, else
+        `env.num_maps`, else however many episodes were collected. `found` is
+        the number of `completed_episode` summaries seen. Map-level duplicate
+        detection runs whenever the env tags episodes with a scenario
+        identity (map_name or scenario_id); it's a no-op otherwise.
+        """
+        from collections import Counter
+
+        found = len(rows)
+        expected = eval_cfg.get("num_scenarios")
+        if expected is None:
+            expected = self.config.get("env", {}).get("num_maps", found)
+        expected = int(expected or found)
+
+        names = [r.get("map_name") or r.get("scenario_id") for r in rows]
+        names = [n for n in names if n]
+        duplicates = {n: c for n, c in Counter(names).items() if c > 1}
+        return {
+            "expected": expected,
+            "found": found,
+            "complete": found >= expected,
+            "duplicates": duplicates,
+        }
 
     # -- Render (default EGL → ffmpeg mp4 pipeline) ----------------------
 
