@@ -82,6 +82,9 @@
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
 #define MAX_STOPPED_SECONDS 60.0f
 #define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
+#define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
+#define DTC_OPPOSITE_HEADING_COS_THRESHOLD -0.90f // Exclude near-perfect opposite directions
+#define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
 
@@ -89,6 +92,8 @@
 #define DEFAULT_TTC 5.0f
 // TTC violation threshold for "within bound" rate
 #define TTC_VIOLATION_THRESHOLD 0.95f
+#define METRIC_SCORE_WINDOW_SECONDS 10.0f
+#define PUFFER_PROGRESS_REFERENCE_SPEED 10.0f
 // Multi-lane detection thresholds
 #define LANE_WIDTH 3.7f
 #define LANE_MARGIN 0.2f
@@ -172,6 +177,10 @@ static const int z_computation_offsets[Z_COMPUTATION_OFFSET_COUNT][2] = {
     {1, 1},
 };
 
+static inline struct ttc_result default_ttc_result(void) {
+    return (struct ttc_result) {DEFAULT_TTC, -1, DEFAULT_DTC, 0.0f};
+}
+
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
@@ -212,6 +221,7 @@ struct Log {
     float num_waypoints_reached;
     float num_goals_reached;
     float comfort_violation_count;
+    float comfort_violation_timestep_count;
     float velocity_progress_sum;
     float lane_center_rate;
     float lane_heading_aligned_rate;
@@ -236,6 +246,14 @@ struct Log {
     float multi_lane_score;
     float total_distance_travelled;
     float total_infractions;
+    // Agent-only puffer display fields (for serialization)
+    float no_at_fault;
+    float no_offroad;
+    float no_red_light;
+    float making_progress;
+    float ttc_puffer_rate;
+    float multiplier;
+    float weighted_average;
 };
 
 struct GridMapEntity {
@@ -2284,20 +2302,10 @@ static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     return true;
 }
 
-static inline struct ttc_result default_ttc_result(void) {
-    return (struct ttc_result) {DEFAULT_TTC, -1, INFINITY, 0.0f};
-}
-
-static inline void ttc_update_min_result(
-    Agent *ego,
-    int other_idx,
-    float distance_to_collision,
-    float closing_speed,
-    float ttc) {
-    if (ttc < ego->cached_ttc.min_ttc) {
+static inline void ttc_update_min_result(Agent *ego, int other_idx, float closing_speed, float ttc) {
+    if (ego->cached_ttc.other_idx == -1 || ttc < ego->cached_ttc.min_ttc) {
         ego->cached_ttc.min_ttc = ttc;
         ego->cached_ttc.other_idx = other_idx;
-        ego->cached_ttc.distance_to_collision = distance_to_collision;
         ego->cached_ttc.closing_speed = closing_speed;
     }
 }
@@ -2316,68 +2324,97 @@ static inline void compute_pairwise_ttc(Agent *ego, int ego_idx, Agent *other, i
     float other_x = other->sim_x;
     float other_y = other->sim_y;
 
+    float center_dx = other_x - ego_x;
+    float center_dy = other_y - ego_y;
+    float center_distance = sqrtf(center_dx * center_dx + center_dy * center_dy);
+    if (center_distance <= 1e-6f || center_distance >= DEFAULT_DTC) {
+        return;
+    }
+
     float ego_heading_x = ego->cos_heading;
     float ego_heading_y = ego->sin_heading;
     float other_heading_x = other->cos_heading;
     float other_heading_y = other->sin_heading;
 
+    float forward_cos = (center_dx * ego_heading_x + center_dy * ego_heading_y) / center_distance;
+    float heading_align_cos = ego_heading_x * other_heading_x + ego_heading_y * other_heading_y;
+    if (forward_cos < DTC_FRONT_CONE_COS_THRESHOLD || heading_align_cos <= DTC_OPPOSITE_HEADING_COS_THRESHOLD) {
+        return;
+    }
+
     float ego_front_x = ego_x + 0.5f * ego->sim_length * ego_heading_x;
     float ego_front_y = ego_y + 0.5f * ego->sim_length * ego_heading_y;
+    float ego_rear_x = ego_x - 0.5f * ego->sim_length * ego_heading_x;
+    float ego_rear_y = ego_y - 0.5f * ego->sim_length * ego_heading_y;
+    float ego_left_x = -ego_heading_y;
+    float ego_left_y = ego_heading_x;
+    float ego_half_width = 0.5f * ego->sim_width;
+
+    float other_front_x = other_x + 0.5f * other->sim_length * other_heading_x;
+    float other_front_y = other_y + 0.5f * other->sim_length * other_heading_y;
     float other_rear_x = other_x - 0.5f * other->sim_length * other_heading_x;
     float other_rear_y = other_y - 0.5f * other->sim_length * other_heading_y;
+    float other_left_x = -other_heading_y;
+    float other_left_y = other_heading_x;
+    float other_half_width = 0.5f * other->sim_width;
 
-    float rel_x = other_rear_x - ego_front_x;
-    float rel_y = other_rear_y - ego_front_y;
-    float ahead = rel_x * ego_heading_x + rel_y * ego_heading_y;
-    if (ahead <= 0.0f) {
-        return;
+    float ego_corners_x[4] = {
+        ego_front_x + ego_half_width * ego_left_x,
+        ego_front_x - ego_half_width * ego_left_x,
+        ego_rear_x + ego_half_width * ego_left_x,
+        ego_rear_x - ego_half_width * ego_left_x,
+    };
+    float ego_corners_y[4] = {
+        ego_front_y + ego_half_width * ego_left_y,
+        ego_front_y - ego_half_width * ego_left_y,
+        ego_rear_y + ego_half_width * ego_left_y,
+        ego_rear_y - ego_half_width * ego_left_y,
+    };
+    float other_corners_x[4] = {
+        other_front_x + other_half_width * other_left_x,
+        other_front_x - other_half_width * other_left_x,
+        other_rear_x + other_half_width * other_left_x,
+        other_rear_x - other_half_width * other_left_x,
+    };
+    float other_corners_y[4] = {
+        other_front_y + other_half_width * other_left_y,
+        other_front_y - other_half_width * other_left_y,
+        other_rear_y + other_half_width * other_left_y,
+        other_rear_y - other_half_width * other_left_y,
+    };
+
+    float min_dtc_sq = DEFAULT_DTC * DEFAULT_DTC;
+    for (int ego_corner = 0; ego_corner < 4; ego_corner++) {
+        for (int other_corner = 0; other_corner < 4; other_corner++) {
+            float dx = ego_corners_x[ego_corner] - other_corners_x[other_corner];
+            float dy = ego_corners_y[ego_corner] - other_corners_y[other_corner];
+            min_dtc_sq = fminf(min_dtc_sq, dx * dx + dy * dy);
+        }
     }
 
-    float lateral = fabsf(rel_x * ego_heading_y - rel_y * ego_heading_x);
-    float allowed = 0.5f * (ego->sim_width + other->sim_width);
-    if (lateral > allowed) {
-        return;
+    float distance_to_collision = sqrtf(min_dtc_sq);
+    if (distance_to_collision < ego->cached_ttc.distance_to_collision) {
+        ego->cached_ttc.distance_to_collision = distance_to_collision;
     }
-
-    float distance_to_collision = sqrtf(rel_x * rel_x + rel_y * rel_y);
-    float ego_radius = 0.5f * ego->sim_width;
-    float other_radius = 0.5f * other->sim_width;
-    float combined_radius = ego_radius + other_radius;
 
     float rel_vx = other->sim_vx - ego->sim_vx;
     float rel_vy = other->sim_vy - ego->sim_vy;
-    float a = rel_vx * rel_vx + rel_vy * rel_vy;
-    float c = rel_x * rel_x + rel_y * rel_y - combined_radius * combined_radius;
-    if (c <= 0.0f) {
-        ttc_update_min_result(ego, other_idx, distance_to_collision, INFINITY, 0.0f);
+    float rel_dot_v = center_dx * rel_vx + center_dy * rel_vy;
+    float closing_speed = fmaxf(0.0f, -rel_dot_v / center_distance);
+    if (distance_to_collision <= 1e-4f) {
+        ttc_update_min_result(ego, other_idx, closing_speed, 0.0f);
         return;
     }
-    if (a < 1e-6f) {
-        return;
-    }
-
-    float b = 2.0f * (rel_x * rel_vx + rel_y * rel_vy);
-    float disc = b * b - 4.0f * a * c;
-    if (disc < 0.0f) {
+    if (closing_speed <= 1e-4f) {
         return;
     }
 
-    float sqrt_disc = sqrtf(disc);
-    float inv_two_a = 0.5f / a;
-    float t1 = (-b - sqrt_disc) * inv_two_a;
-    float t2 = (-b + sqrt_disc) * inv_two_a;
-    float ttc = INFINITY;
-    if (t1 > 0.0f) {
-        ttc = t1;
-    } else if (t2 > 0.0f) {
-        ttc = t2;
-    }
+    float ttc = fminf(DEFAULT_TTC, distance_to_collision / closing_speed);
     if (!isfinite(ttc)) {
         return;
     }
 
-    float closing_speed = sqrtf(a);
-    ttc_update_min_result(ego, other_idx, distance_to_collision, closing_speed, ttc);
+    ttc_update_min_result(ego, other_idx, closing_speed, ttc);
 }
 
 // Compute TTC for a single ego agent against all other agents using ahead and lateral filters.
@@ -2402,15 +2439,22 @@ static void compute_agent_ttc(Drive *env, int ego_idx) {
 
 // Puffer score computation
 // Uses hybrid weighted average: multiplier weights (binary gates) + average weights (continuous)
-static float calculate_puffer_score(Log *log_agent, int scenario_length, float dt) {
+static float calculate_duration_scaled_violation_score(float violation_timestep_count, float duration_steps, float dt) {
+    float duration_s = fmaxf(duration_steps * dt, dt);
+    float windows = ceilf(duration_s / METRIC_SCORE_WINDOW_SECONDS);
+    float safe_windows = fmaxf(windows, 1.0f);
+    float score = 1.0f - (violation_timestep_count / safe_windows);
+
+    return fmaxf(0.0f, fminf(1.0f, score));
+}
+
+static float calculate_puffer_score(Log *log_agent, float duration_steps, float dt) {
     if (!log_agent) {
         return 0.0f;
     }
 
-    float T = scenario_length * dt;
-    if (T <= 0.0f) {
-        T = 1.0f; // Avoid division by zero
-    }
+    float safe_duration_steps = fmaxf(duration_steps, 1.0f);
+    float T = fmaxf(safe_duration_steps * dt, dt);
 
     float no_at_fault = (log_agent->at_fault_collision_rate > 0) ? 0.0f : 1.0f;
     float no_offroad = (log_agent->offroad_rate > 0) ? 0.0f : 1.0f;
@@ -2423,10 +2467,6 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
 
     float multiplier = no_at_fault * no_offroad * no_red_light * making_progress * direction_compliance;
 
-    if (multiplier == 0.0f) {
-        return 0.0f;
-    }
-
     // TTC within bound (>0.95s): weight 5
     float ttc_score = log_agent->ttc_within_bound_rate; // Already 0-1
 
@@ -2437,8 +2477,8 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
     float speed_threshold = fmaxf(T, 1e-3f);
     float speed_score = fmaxf(0.0f, 1.0f - log_agent->speed_violation_sum / speed_threshold);
 
-    // Comfort (binary per episode): weight 2
-    float comfort_score = log_agent->comfort_score; // 0 or 1
+    // Comfort (duration-scaled 10s windows): weight 2
+    float comfort_score = log_agent->comfort_score; // 0-1
 
     // Multi-lane (weight 3): tiered score based on accumulated time
     float multi_lane_score = log_agent->multi_lane_score;
@@ -2447,17 +2487,29 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
     float weighted_sum
         = 5 * ttc_score + 5 * progress_score + 4 * speed_score + 3 * multi_lane_score + 2 * comfort_score;
     float total_weight = 5 + 5 + 4 + 3 + 2; // = 19
+    float weighted_avg = weighted_sum / total_weight;
 
-    return multiplier * (weighted_sum / total_weight);
+    // Store agent-only display fields
+    log_agent->no_at_fault = no_at_fault;
+    log_agent->no_offroad = no_offroad;
+    log_agent->no_red_light = no_red_light;
+    log_agent->making_progress = making_progress;
+    log_agent->driving_direction_score = direction_compliance;
+    log_agent->ttc_puffer_rate = ttc_score;
+    log_agent->speed_limit_compliance = speed_score;
+    log_agent->multiplier = multiplier;
+    log_agent->weighted_average = weighted_avg;
+    log_agent->puffer_score = multiplier * weighted_avg;
+
+    return log_agent->puffer_score;
 }
 
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
-    const float progress_ref_speed = 10.0f;
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
         float episode_duration_s = env->logs[i].episode_length * env->dt;
-        float reference_progress_distance = progress_ref_speed * episode_duration_s;
+        float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
         reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
         env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
 
@@ -2499,6 +2551,11 @@ static void add_log(Drive *env) {
         env->log.lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
+            env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
+                env->logs[i].comfort_violation_timestep_count,
+                env->logs[i].episode_length,
+                env->dt);
+            calculate_puffer_score(&env->logs[i], env->logs[i].episode_length, env->dt);
             env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
             env->log.ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
             env->log.wrong_way_distance += env->logs[i].wrong_way_distance;
@@ -2520,7 +2577,7 @@ static void add_log(Drive *env) {
 
             float making_progress = (env->logs[i].progress_ratio > 0.2f) ? 1.0f : 0.0f;
             env->log.making_progress_rate += making_progress;
-            env->log.puffer_score += calculate_puffer_score(&env->logs[i], safe_timestep, env->dt);
+            env->log.puffer_score += env->logs[i].puffer_score;
         }
 
         env->log.n += 1;
@@ -3095,11 +3152,12 @@ void set_active_agents(Drive *env) {
 
         // Initialize agents for GIGAFLOW mode
         env->agents = (Agent *) calloc(num_agents_to_create, sizeof(Agent));
+        int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
         int successfully_created = 0;
         for (int i = 0; i < num_agents_to_create; i++) {
-            // Pass the number of already successfully created agents for collision checking
-            if (spawn_agent(env, i, successfully_created)) {
+            if (spawn_agent(env, i, i)) {
+                active_agent_indices[successfully_created] = i;
                 successfully_created++;
             } else {
                 // Failed spawn: ensure agent is properly invalidated
@@ -3108,21 +3166,18 @@ void set_active_agents(Drive *env) {
             }
         }
 
-        env->num_total_agents = successfully_created;
-
-        // Set up active agent indices
-        env->active_agent_indices = (int *) malloc(env->num_total_agents * sizeof(int));
+        env->num_total_agents = num_agents_to_create;
+        env->active_agent_indices = (int *) malloc(successfully_created * sizeof(int));
         env->static_agent_indices = NULL;
         env->expert_static_agent_indices = NULL;
 
-        for (int i = 0; i < env->num_total_agents; i++) {
-            env->active_agent_indices[i] = i;
+        for (int i = 0; i < successfully_created; i++) {
+            env->active_agent_indices[i] = active_agent_indices[i];
         }
+        free(active_agent_indices);
 
-        env->active_agent_count = env->num_total_agents;
-        env->num_agents = env->num_total_agents;
-        env->static_agent_count = 0;
-        env->expert_static_agent_count = 0;
+        env->active_agent_count = successfully_created;
+        env->num_agents = successfully_created;
 
         return;
     }
@@ -4089,7 +4144,10 @@ static void compute_rewards(Drive *env, int i) {
             env->logs[i].ttc_within_bound_rate = 1.0f;
         }
 
-        env->logs[i].comfort_score = (env->logs[i].comfort_violation_count > 0) ? 0.0f : 1.0f;
+        env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
+            env->logs[i].comfort_violation_timestep_count,
+            env->logs[i].episode_length,
+            env->dt);
     } else {
         struct ttc_result default_ttc = default_ttc_result();
         agent->metrics_array[TTC_IDX] = default_ttc.min_ttc;
@@ -4922,8 +4980,7 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
-    // Update masks: exclude stopped/removed agents AND erratic drivers (blind/phantom-braker)
-    // from the training rollout buffer, per GIGAFLOW paper Appendix B.4.
+    // Update masks for stopped/removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *a = &env->agents[agent_idx];
