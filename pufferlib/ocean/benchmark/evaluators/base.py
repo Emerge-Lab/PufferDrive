@@ -271,10 +271,7 @@ class Evaluator:
             metrics["coverage_found"] = float(cov["found"])
             metrics["coverage_complete"] = float(cov["complete"])
             if not cov["complete"]:
-                print(
-                    f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s), "
-                    f"expected {cov['expected']}."
-                )
+                print(f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s), expected {cov['expected']}.")
             if cov["duplicates"]:
                 print(f"[eval.{self.name}] {len(cov['duplicates'])} scenario(s) evaluated more than once.")
 
