@@ -600,12 +600,24 @@ class PuffeRL:
             # last save_checkpoint() from `checkpoint_interval`.
             if self._eval_manager.has_subprocess_evals_at(self.epoch):
                 self.save_checkpoint()
+            firing = [
+                ev.name for ev in self._eval_manager.evaluators
+                if ev.enabled and ev.interval > 0 and self.epoch % ev.interval == 0
+            ]
+            proc = psutil.Process(os.getpid())
+            rss_pre = proc.memory_info().rss / 1e9
+            print(f"[mem] epoch={self.epoch} pre-eval rss={rss_pre:.2f}GB firing={firing}", flush=True)
             self._eval_manager.maybe_run(
                 epoch=self.epoch,
                 policy=self.uncompiled_policy,
                 env_name=self.config["env"],
                 logger=self.logger,
                 global_step=self.global_step,
+            )
+            rss_post = proc.memory_info().rss / 1e9
+            print(
+                f"[mem] epoch={self.epoch} post-eval rss={rss_post:.2f}GB delta={rss_post - rss_pre:+.2f}GB",
+                flush=True,
             )
 
         return logs

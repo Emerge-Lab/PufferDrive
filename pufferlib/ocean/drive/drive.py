@@ -64,6 +64,11 @@ class Drive(pufferlib.PufferEnv):
         eval_spawn_length_max=5.5,
         eval_spawn_width_min=1.5,
         eval_spawn_width_max=2.5,
+        truck_fraction=0.0,
+        truck_spawn_length_min=9.0,
+        truck_spawn_length_max=15.0,
+        truck_spawn_width_min=2.0,
+        truck_spawn_width_max=2.6,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -124,6 +129,11 @@ class Drive(pufferlib.PufferEnv):
         self.eval_spawn_length_max = float(eval_spawn_length_max)
         self.eval_spawn_width_min = float(eval_spawn_width_min)
         self.eval_spawn_width_max = float(eval_spawn_width_max)
+        self.truck_fraction = float(truck_fraction)
+        self.truck_spawn_length_min = float(truck_spawn_length_min)
+        self.truck_spawn_length_max = float(truck_spawn_length_max)
+        self.truck_spawn_width_min = float(truck_spawn_width_min)
+        self.truck_spawn_width_max = float(truck_spawn_width_max)
         self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
@@ -418,6 +428,11 @@ class Drive(pufferlib.PufferEnv):
             "eval_spawn_length_max": self.eval_spawn_length_max,
             "eval_spawn_width_min": self.eval_spawn_width_min,
             "eval_spawn_width_max": self.eval_spawn_width_max,
+            "truck_fraction": self.truck_fraction,
+            "truck_spawn_length_min": self.truck_spawn_length_min,
+            "truck_spawn_length_max": self.truck_spawn_length_max,
+            "truck_spawn_width_min": self.truck_spawn_width_min,
+            "truck_spawn_width_max": self.truck_spawn_width_max,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

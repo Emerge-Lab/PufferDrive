@@ -354,6 +354,18 @@ struct Drive {
     float eval_spawn_length_max;
     float eval_spawn_width_min;
     float eval_spawn_width_max;
+    // Mixed-population spawn: per-agent P(is_truck). When truck_fraction == 0
+    // (default), every agent samples dims from the spawn_*_{min,max} range above
+    // and behavior is identical to the single-population path. When > 0, a
+    // Bernoulli(truck_fraction) draw at spawn time picks between the car range
+    // (spawn_*) and the truck range (truck_spawn_*). Used for co-training a
+    // single policy on a realistic mixed-vehicle population (~10% trucks).
+    // Eval mode reuses the same truck range; eval_spawn_* still covers cars.
+    float truck_fraction;
+    float truck_spawn_length_min;
+    float truck_spawn_length_max;
+    float truck_spawn_width_min;
+    float truck_spawn_width_max;
     float goal_radius;
     float goal_speed;
     float min_waypoint_spacing;
@@ -2910,9 +2922,19 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // Vehicle dimensions sampled from configured ranges. Training and eval
     // modes use independent ranges so e.g. a truck-trained policy can be
     // eval'd on truck-sized agents instead of falling back to cars.
+    // Mixed population: when truck_fraction > 0, draw is_truck ~
+    // Bernoulli(truck_fraction) per agent and sample dims from the
+    // truck_spawn_* range; otherwise sample from the standard (car) range.
+    // The truck range is shared across train and eval — only the car range
+    // differs between modes.
     // width = min(width, length) is enforced below.
     float spawn_length, spawn_width;
-    if (env->eval_mode) {
+    int is_truck = (env->truck_fraction > 0.0f)
+                   && (random_uniform(0.0f, 1.0f) < env->truck_fraction);
+    if (is_truck) {
+        spawn_length = random_uniform(env->truck_spawn_length_min, env->truck_spawn_length_max);
+        spawn_width = random_uniform(env->truck_spawn_width_min, env->truck_spawn_width_max);
+    } else if (env->eval_mode) {
         spawn_length = random_uniform(env->eval_spawn_length_min, env->eval_spawn_length_max);
         spawn_width = random_uniform(env->eval_spawn_width_min, env->eval_spawn_width_max);
     } else {
