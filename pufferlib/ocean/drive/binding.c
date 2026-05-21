@@ -1846,6 +1846,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_segment_count = (int) unpack(kwargs, "obs_lane_segment_count");
     env->obs_boundary_segment_count = (int) unpack(kwargs, "obs_boundary_segment_count");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
+    env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
@@ -1895,7 +1896,6 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         // Puffer score components
         assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
         assign_to_dict(dict, "puffer_score", log->puffer_score);
-        assign_to_dict(dict, "ttc_within_bound_rate", log->ttc_within_bound_rate);
         assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
         assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);
         assign_to_dict(dict, "making_progress_rate", log->making_progress_rate);
