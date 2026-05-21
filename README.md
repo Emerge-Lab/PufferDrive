@@ -90,27 +90,27 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 
 ## Eval
 
+All evaluation runs through the unified `Evaluator`/`EvalManager` pipeline.
+`[eval.<name>]` sections in `drive.ini` define each evaluator; the same ones
+run inline during training and standalone here.
+
 ```bash
-# Multi-scenario eval (replay mode)
-puffer eval_multi_scenarios puffer_drive \
-  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
-  --num_scenarios 250 --eval_simulation replay
+# Run a named evaluator on a checkpoint (config from [eval.<name>])
+puffer eval puffer_drive --evaluator validation_gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
 
-# Multi-scenario eval (gigaflow mode)
-puffer eval_multi_scenarios puffer_drive \
-  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
-  --num_scenarios 10 --eval_simulation gigaflow
+# Ad-hoc: pick by simulation + override scale from the CLI
+puffer eval puffer_drive --eval_simulation replay \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 250 --render 1
 
-# Multi-scenario eval with rendering
-puffer eval_multi_scenarios_render puffer_drive \
-  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
-  --num_scenarios 10 --eval_simulation gigaflow --render 1 --render_obs 0
-
-# Save eval as GIF
-puffer eval_multi_scenarios_render puffer_drive \
-  --load-model-path experiments/puffer_drive_177193887946/models/model_puffer_drive_000001.pt \
-  --num_scenarios 5 --eval_simulation gigaflow --save-frames 1 --gif-path eval.gif --fps 15
+# Render the agent's observations (interactive HTML)
+puffer eval puffer_drive --eval_simulation gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 10 --render 1 --render_obs 1
 ```
+
+**For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
 
 ## Failure mining
 
