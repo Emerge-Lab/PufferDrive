@@ -322,11 +322,18 @@ class Evaluator:
                 names.append(os.path.basename(str(ident)).split(".")[0])
         counts = Counter(names)
         duplicates = {n: c for n, c in counts.items() if c > 1}
+        unique = len(counts)
+        # For a unique-scenario sweep (the target fits within the loaded map
+        # set, e.g. replay) completeness means we covered that many *distinct*
+        # maps; when maps cycle (expected > num_maps, e.g. gigaflow) it means
+        # we ran that many episodes.
+        num_maps = int(self.config.get("env", {}).get("num_maps", 0) or 0)
+        measure = unique if (num_maps and expected <= num_maps) else found
         return {
             "expected": expected,
             "found": found,
-            "unique": len(counts),
-            "complete": found >= expected,
+            "unique": unique,
+            "complete": measure >= expected,
             "duplicates": duplicates,
         }
 
@@ -580,7 +587,9 @@ class Evaluator:
                     ob, _, _, _, _ = vec.step(action)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
-                    path = out_dir / f"{map_name}_{scenarios_done:03d}{step_suffix}.html"
+                    # Numeric index last so build_gallery_index's `*_<N>.html`
+                    # pattern matches.
+                    path = out_dir / f"{map_name}{step_suffix}_{scenarios_done:03d}.html"
                     viz.generate_interactive_replay(
                         scenarios[e], agent_hist[e], traffic_hist[e], traj_hist[e], obs_hist[e], str(path), head_north=True
                     )
