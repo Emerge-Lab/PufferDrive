@@ -1575,8 +1575,8 @@ def generate_interactive_replay(
     <div id="help-hint">SPACE: Play | ARROWS: Step | ESC: Free | CLICK: Follow | ENTER: Search</div>
 
     <div id="ui-layer">
-        <div id="hud-global" class="panel">
-            <h3 onclick="toggleGlobalPanel()" title="Click to minimize">Scenario Info <span id="globalChevron" style="float:right;">&#9662;</span></h3>
+        <div id="hud-global" class="panel collapsed">
+            <h3 onclick="toggleGlobalPanel()" title="Click to expand/minimize">Scenario Info <span id="globalChevron" style="float:right;">&#9656;</span></h3>
             <div class="label">Map</div> <div class="value" id="meta-map">-</div>
             <div class="label">ID</div> <div class="value small-val" id="meta-id" style="font-size:12px">-</div>
             <hr style="border: 0; border-top: 1px solid #555; margin: 12px 0;">
