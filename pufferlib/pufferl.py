@@ -3716,6 +3716,30 @@ def render_mined_failures(env_name, args=None, quiet=False):
         replay_records.append(record)
     replay_records.sort(key=lambda item: item["episode_id"])
 
+    navigation_columns = [
+        "episode_id",
+        "href",
+        "map_name",
+        "scenario_id",
+        "did_target_fail",
+        "did_target_collide",
+        "did_target_offroad",
+        "did_target_run_light",
+        "did_target_have_at_fault_collision",
+        "target_hit_responsibility",
+        "target_hit_at_fault_rate",
+        "target_collision_responsibility",
+        "target_collision_severity",
+        "target_episode_return",
+        "target_episode_length",
+        "adv_reward_weight_drive",
+        "adv_drive_weight",
+    ]
+    navigation_episodes = [
+        {key: pufferlib.mining_viz._safe_value(item.get(key)) for key in navigation_columns if key in item}
+        for item in replay_records
+    ]
+
     for idx, record in enumerate(replay_records):
         output_path = os.path.join(render_dir, f"episode_{record['episode_id']:06d}.html")
         render_context = {
@@ -3723,18 +3747,7 @@ def render_mined_failures(env_name, args=None, quiet=False):
                 "index_html": "index.html",
                 "prev_html": replay_records[idx - 1]["href"] if idx > 0 else None,
                 "next_html": replay_records[idx + 1]["href"] if idx + 1 < len(replay_records) else None,
-                "episodes": [
-                    {
-                        "episode_id": item["episode_id"],
-                        "href": item["href"],
-                        "map_name": item.get("map_name"),
-                        "scenario_id": item.get("scenario_id"),
-                        "did_target_fail": item.get("did_target_fail", 0),
-                        "adv_reward_weight_drive": item.get("adv_reward_weight_drive"),
-                        "adv_drive_weight": item.get("adv_drive_weight"),
-                    }
-                    for item in replay_records
-                ],
+                "episodes": navigation_episodes,
             },
             "summary": dict(record),
         }

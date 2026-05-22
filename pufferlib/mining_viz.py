@@ -456,22 +456,24 @@ HTML_TEMPLATE = """<!doctype html>
         <a id="next-link" href="#">Next</a>
       </div>
       <div class="meta">
-        <div class="meta-item"><span class="meta-label">Episode</span><span class="meta-value" id="meta-episode"></span></div>
+        <div class="meta-item"><span class="meta-label">Focused Speed</span><span class="meta-value" id="focus-speed">n/a</span></div>
+        <div class="meta-item"><span class="meta-label">Did Target Collide</span><span class="meta-value" id="meta-collide"></span></div>
+        <div class="meta-item"><span class="meta-label">Did Target Offroad</span><span class="meta-value" id="meta-offroad"></span></div>
+        <div class="meta-item"><span class="meta-label">Did Target Run Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
+        <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
+        <div class="meta-item"><span class="meta-label">Episode</span><span class="meta-value" id="meta-episode"></span></div>
         <div class="meta-item"><span class="meta-label">Scenario</span><span class="meta-value" id="meta-scenario"></span></div>
         <div class="meta-item"><span class="meta-label">Episode Length</span><span class="meta-value" id="meta-length"></span></div>
-        <div class="meta-item"><span class="meta-label">Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
         <div class="meta-item"><span class="meta-label">Impact Zone</span><span class="meta-value" id="meta-impact-zone"></span></div>
-        <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
-        <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
         <div class="meta-item"><span class="meta-label">Made Progress</span><span class="meta-value" id="meta-made-progress"></span></div>
-        <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
         <div class="meta-item"><span class="meta-label">Goals Reached</span><span class="meta-value" id="meta-goals"></span></div>
         <div class="meta-item"><span class="meta-label">TTC Within Bound</span><span class="meta-value" id="meta-ttc"></span></div>
         <div class="meta-item"><span class="meta-label">Progress Ratio</span><span class="meta-value" id="meta-progress-ratio"></span></div>
         <div class="meta-item"><span class="meta-label">Puffer Score</span><span class="meta-value" id="meta-puffer-score"></span></div>
         <div class="meta-item"><span class="meta-label">Focused Agent</span><span class="meta-value" id="focus-agent">none</span></div>
-        <div class="meta-item"><span class="meta-label">Focused Speed</span><span class="meta-value" id="focus-speed">n/a</span></div>
         <div class="meta-item"><span class="meta-label">Focused Velocity</span><span class="meta-value" id="focus-velocity">n/a</span></div>
       </div>
       <div class="legend">
@@ -544,6 +546,76 @@ HTML_TEMPLATE = """<!doctype html>
       return fallback;
     }
 
+    function metricEnabled(item, key) {
+      return Number((item && item[key]) || 0) > 0;
+    }
+
+    function atFaultEnabled(item) {
+      return metricEnabled(item, 'did_target_have_at_fault_collision') || metricEnabled(item, 'target_hit_at_fault_rate');
+    }
+
+    function compareNavigationValues(a, b, key, dir) {
+      const av = a[key];
+      const bv = b[key];
+      if (av === bv) return 0;
+      if (av == null || av === '') return 1;
+      if (bv == null || bv === '') return -1;
+
+      const an = Number(av);
+      const bn = Number(bv);
+      if (!Number.isNaN(an) && !Number.isNaN(bn)) {
+        if (an === bn) return 0;
+        return an > bn ? dir : -dir;
+      }
+
+      return String(av).toLowerCase().localeCompare(String(bv).toLowerCase()) * dir;
+    }
+
+    function navigationState() {
+      const params = new URLSearchParams(window.location.search);
+      return {
+        sortKey: params.get('sort') || 'did_target_fail',
+        sortDir: Number(params.get('dir') || '-1') >= 0 ? 1 : -1,
+        replayOnly: params.get('replay') === '1',
+        failuresOnly: params.get('failures') === '1',
+        offroadOnly: params.get('offroad') === '1',
+        atFaultOnly: params.get('atfault') === '1',
+        search: (params.get('q') || '').toLowerCase(),
+      };
+    }
+
+    function stateQuery(state) {
+      const params = new URLSearchParams();
+      params.set('sort', state.sortKey);
+      params.set('dir', String(state.sortDir));
+      if (state.replayOnly) params.set('replay', '1');
+      if (state.failuresOnly) params.set('failures', '1');
+      if (state.offroadOnly) params.set('offroad', '1');
+      if (state.atFaultOnly) params.set('atfault', '1');
+      if (state.search) params.set('q', state.search);
+      const query = params.toString();
+      return query ? `?${query}` : '';
+    }
+
+    function hrefWithState(href, state) {
+      if (!href || href === '#') return '#';
+      return `${href}${stateQuery(state)}`;
+    }
+
+    function orderedNavigationEpisodes() {
+      const state = navigationState();
+      const items = (navigation.episodes || []).filter(item => {
+        if (state.replayOnly && !item.href) return false;
+        if (state.failuresOnly && !metricEnabled(item, 'did_target_fail')) return false;
+        if (state.offroadOnly && !metricEnabled(item, 'did_target_offroad')) return false;
+        if (state.atFaultOnly && !atFaultEnabled(item)) return false;
+        if (state.search && !JSON.stringify(item).toLowerCase().includes(state.search)) return false;
+        return true;
+      });
+      items.sort((a, b) => compareNavigationValues(a, b, state.sortKey, state.sortDir));
+      return {items, state};
+    }
+
     function formatMetric(value, digits=3) {
       const num = Number(value);
       if (!Number.isFinite(num)) return 'n/a';
@@ -576,6 +648,8 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById('meta-map').innerText = metadata.map_name || 'N/A';
       document.getElementById('meta-scenario').innerText = metadata.scenario_id || 'N/A';
       document.getElementById('meta-length').innerText = metadata.episode_length ?? frames.length;
+      document.getElementById('meta-collide').innerText = Number(summaryValue('did_target_collide', 0) || 0) > 0 ? 'yes' : 'no';
+      document.getElementById('meta-offroad').innerText = Number(summaryValue('did_target_offroad', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-run-light').innerText = Number(summaryValue('did_target_run_light', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
       document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
@@ -589,20 +663,24 @@ HTML_TEMPLATE = """<!doctype html>
       const failed = Number(summaryValue('did_target_fail', 0) || 0) > 0;
       statusPill.className = failed ? 'pill' : 'pill ok';
       statusPill.innerText = failed ? 'Target failed' : 'Target survived';
-      backLink.href = navigation.index_html || 'index.html';
-      prevLink.href = navigation.prev_html || '#';
-      nextLink.href = navigation.next_html || '#';
-      prevLink.style.pointerEvents = navigation.prev_html ? 'auto' : 'none';
-      nextLink.style.pointerEvents = navigation.next_html ? 'auto' : 'none';
-      prevLink.style.opacity = navigation.prev_html ? '1' : '0.4';
-      nextLink.style.opacity = navigation.next_html ? '1' : '0.4';
-      const items = navigation.episodes || [];
+      const nav = orderedNavigationEpisodes();
+      const items = nav.items;
+      const activeIdx = items.findIndex(item => item.episode_id === metadata.episode_id);
+      const prevHref = activeIdx > 0 ? items[activeIdx - 1].href : null;
+      const nextHref = activeIdx >= 0 && activeIdx + 1 < items.length ? items[activeIdx + 1].href : null;
+      backLink.href = hrefWithState(navigation.index_html || 'index.html', nav.state);
+      prevLink.href = hrefWithState(prevHref, nav.state);
+      nextLink.href = hrefWithState(nextHref, nav.state);
+      prevLink.style.pointerEvents = prevHref ? 'auto' : 'none';
+      nextLink.style.pointerEvents = nextHref ? 'auto' : 'none';
+      prevLink.style.opacity = prevHref ? '1' : '0.4';
+      nextLink.style.opacity = nextHref ? '1' : '0.4';
       episodeList.innerHTML = items.map(item => {
         const active = item.episode_id === metadata.episode_id ? 'episode-link active' : 'episode-link';
         const badge = item.did_target_fail ? '<span class="badge fail">fail</span>' : '<span class="badge">ok</span>';
         const lambda = item.adv_reward_weight_drive ?? item.adv_drive_weight;
         const lambdaText = lambda == null ? '' : ` | λ=${formatAdvDriveWeight(lambda)}`;
-        return `<a class="${active}" href="${item.href}">${badge}<strong>Episode ${item.episode_id}${lambdaText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
+        return `<a class="${active}" href="${hrefWithState(item.href, nav.state)}">${badge}<strong>Episode ${item.episode_id}${lambdaText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
       }).join('');
     }
 
@@ -1102,6 +1180,8 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       <input id="search" type="search" placeholder="Filter rows">
       <button id="filter-replay" class="toggle" type="button">Replay Only</button>
       <button id="filter-failures" class="toggle" type="button">Failures Only</button>
+      <button id="filter-offroad" class="toggle" type="button">Offroad Only</button>
+      <button id="filter-at-fault" class="toggle" type="button">At-Fault Collision Only</button>
       <span class="muted" id="count"></span>
     </div>
     <table id="failure-table">
@@ -1118,10 +1198,57 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     const search = document.getElementById('search');
     const replayFilter = document.getElementById('filter-replay');
     const failuresFilter = document.getElementById('filter-failures');
+    const offroadFilter = document.getElementById('filter-offroad');
+    const atFaultFilter = document.getElementById('filter-at-fault');
     let sortKey = 'did_target_fail';
     let sortDir = -1;
     let replayOnly = false;
     let failuresOnly = false;
+    let offroadOnly = false;
+    let atFaultOnly = false;
+
+    function readStateFromUrl() {{
+      const params = new URLSearchParams(window.location.search);
+      sortKey = params.get('sort') || sortKey;
+      sortDir = Number(params.get('dir') || sortDir) >= 0 ? 1 : -1;
+      replayOnly = params.get('replay') === '1';
+      failuresOnly = params.get('failures') === '1';
+      offroadOnly = params.get('offroad') === '1';
+      atFaultOnly = params.get('atfault') === '1';
+      search.value = params.get('q') || '';
+    }}
+
+    function stateParams() {{
+      const params = new URLSearchParams();
+      params.set('sort', sortKey);
+      params.set('dir', String(sortDir));
+      if (replayOnly) params.set('replay', '1');
+      if (failuresOnly) params.set('failures', '1');
+      if (offroadOnly) params.set('offroad', '1');
+      if (atFaultOnly) params.set('atfault', '1');
+      if (search.value) params.set('q', search.value);
+      return params;
+    }}
+
+    function updateUrlState() {{
+      const query = stateParams().toString();
+      const nextUrl = query ? `${{window.location.pathname}}?${{query}}` : window.location.pathname;
+      window.history.replaceState(null, '', nextUrl);
+    }}
+
+    function hrefWithState(href) {{
+      if (!href) return href;
+      const query = stateParams().toString();
+      return query ? `${{href}}?${{query}}` : href;
+    }}
+
+    function metricEnabled(row, key) {{
+      return Number((row && row[key]) || 0) > 0;
+    }}
+
+    function atFaultEnabled(row) {{
+      return metricEnabled(row, 'did_target_have_at_fault_collision') || metricEnabled(row, 'target_hit_at_fault_rate');
+    }}
 
     function compareValues(a, b, key, dir) {{
       if (key === 'rendered_html') {{
@@ -1156,12 +1283,14 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       const filtered = ROWS.filter(row => {{
         if (replayOnly && !row.rendered_html) return false;
         if (failuresOnly && !(Number(row.did_target_fail || 0) > 0)) return false;
+        if (offroadOnly && !metricEnabled(row, 'did_target_offroad')) return false;
+        if (atFaultOnly && !atFaultEnabled(row)) return false;
         return JSON.stringify(row).toLowerCase().includes(term);
       }});
       filtered.sort((a, b) => compareValues(a, b, sortKey, sortDir));
       tbody.innerHTML = filtered.map(row => {{
         const cells = COLS.map(col => `<td class="${{LAMBDA_COLS.has(col) ? 'lambda-col' : ''}}">${{row[col] == null ? '' : row[col]}}</td>`).join('');
-        const link = row.rendered_html ? `<a href="${{row.rendered_html}}">open</a>` : '<span class="muted">n/a</span>';
+        const link = row.rendered_html ? `<a href="${{hrefWithState(row.rendered_html)}}">open</a>` : '<span class="muted">n/a</span>';
         return `<tr><td>${{link}}</td>${{cells}}</tr>`;
       }}).join('');
       count.innerText = `${{filtered.length}} rows`;
@@ -1175,6 +1304,9 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       }});
       replayFilter.classList.toggle('active', replayOnly);
       failuresFilter.classList.toggle('active', failuresOnly);
+      offroadFilter.classList.toggle('active', offroadOnly);
+      atFaultFilter.classList.toggle('active', atFaultOnly);
+      updateUrlState();
     }}
 
     document.querySelectorAll('th[data-key]').forEach(th => {{
@@ -1197,6 +1329,15 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       failuresOnly = !failuresOnly;
       renderTable();
     }});
+    offroadFilter.addEventListener('click', () => {{
+      offroadOnly = !offroadOnly;
+      renderTable();
+    }});
+    atFaultFilter.addEventListener('click', () => {{
+      atFaultOnly = !atFaultOnly;
+      renderTable();
+    }});
+    readStateFromUrl();
     renderTable();
   </script>
 </body>
