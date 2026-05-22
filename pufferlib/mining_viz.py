@@ -264,15 +264,15 @@ HTML_TEMPLATE = """<!doctype html>
     }
     .meta-label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
     .meta-value { display: block; margin-top: 4px; font-size: 16px; font-weight: 600; }
-    .lambda-card {
+    .drive-weight-card {
       margin: 14px 0 16px;
       padding: 14px 16px;
       border-radius: 16px;
       background: linear-gradient(135deg, rgba(18,97,160,0.16), rgba(18,97,160,0.04));
       border: 1px solid rgba(18,97,160,0.18);
     }
-    .lambda-card .meta-label { color: #365f7e; }
-    .lambda-card .meta-value { font-size: 28px; color: #0f4c81; letter-spacing: -0.03em; }
+    .drive-weight-card .meta-label { color: #365f7e; }
+    .drive-weight-card .meta-value { font-size: 28px; color: #0f4c81; letter-spacing: -0.03em; }
     .controls {
       display: grid;
       gap: 12px;
@@ -433,7 +433,7 @@ HTML_TEMPLATE = """<!doctype html>
     <aside class="panel sidebar">
       <h1 class="title" id="title"></h1>
       <p class="subtitle" id="subtitle"></p>
-      <div class="lambda-card" id="lambda-card">
+      <div class="drive-weight-card" id="drive-weight-card">
         <span class="meta-label">Adv Drive Weight</span>
         <span class="meta-value" id="meta-adv-drive-weight">n/a</span>
       </div>
@@ -623,7 +623,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     function advDriveWeightValue() {
-      return summaryValue('adv_reward_weight_drive', summaryValue('adv_drive_weight', null));
+      return summaryValue('adv_reward_weight_drive', null);
     }
 
     function formatAdvDriveWeight(value) {
@@ -678,9 +678,9 @@ HTML_TEMPLATE = """<!doctype html>
       episodeList.innerHTML = items.map(item => {
         const active = item.episode_id === metadata.episode_id ? 'episode-link active' : 'episode-link';
         const badge = item.did_target_fail ? '<span class="badge fail">fail</span>' : '<span class="badge">ok</span>';
-        const lambda = item.adv_reward_weight_drive ?? item.adv_drive_weight;
-        const lambdaText = lambda == null ? '' : ` | λ=${formatAdvDriveWeight(lambda)}`;
-        return `<a class="${active}" href="${hrefWithState(item.href, nav.state)}">${badge}<strong>Episode ${item.episode_id}${lambdaText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
+        const driveWeight = item.adv_reward_weight_drive;
+        const driveWeightText = driveWeight == null ? '' : ` | drive=${formatAdvDriveWeight(driveWeight)}`;
+        return `<a class="${active}" href="${hrefWithState(item.href, nav.state)}">${badge}<strong>Episode ${item.episode_id}${driveWeightText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
       }).join('');
     }
 
@@ -1084,8 +1084,6 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     preferred_columns = [
         "episode_id",
         "adv_reward_weight_drive",
-        "adv_drive_weight",
-        "adv_reward_weight_drive_bin",
         "map_name",
         "scenario_id",
         "did_target_fail",
@@ -1122,9 +1120,9 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
 
     rows.sort(key=lambda item: (-(item.get("did_target_fail") or 0), item.get("target_episode_return") or 0))
     title = Path(output_path).parent.name
-    lambda_columns = {"adv_reward_weight_drive", "adv_drive_weight", "adv_reward_weight_drive_bin"}
+    drive_weight_columns = {"adv_reward_weight_drive"}
     header_cells = "".join(
-        f"<th data-key='{col}' class='{'lambda-col' if col in lambda_columns else ''}'>{col}<span class='sort-indicator'></span></th>"
+        f"<th data-key='{col}' class='{'drive-weight-col' if col in drive_weight_columns else ''}'>{col}<span class='sort-indicator'></span></th>"
         for col in existing_columns
     )
     html = f"""<!doctype html>
@@ -1163,8 +1161,8 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     th .sort-indicator {{ margin-left: 6px; color: #7b8794; font-size: 12px; }}
     th.active .sort-indicator {{ color: #1261a0; }}
     thead th {{ position: sticky; top: 0; z-index: 1; background: #eaf0f6; }}
-    .lambda-col {{ background: rgba(18,97,160,0.08); color: #0f4c81; font-weight: 700; }}
-    thead th.lambda-col {{ background: #dbeaf7; }}
+    .drive-weight-col {{ background: rgba(18,97,160,0.08); color: #0f4c81; font-weight: 700; }}
+    thead th.drive-weight-col {{ background: #dbeaf7; }}
     tbody tr:hover {{ background: #f8fbff; }}
     a {{ color: #1261a0; text-decoration: none; font-weight: 600; }}
     .muted {{ color: #7b8794; }}
@@ -1192,7 +1190,7 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
   <script>
     const ROWS = {json.dumps(rows, separators=(",", ":"))};
     const COLS = {json.dumps(existing_columns)};
-    const LAMBDA_COLS = new Set({json.dumps(sorted(lambda_columns))});
+    const DRIVE_WEIGHT_COLS = new Set({json.dumps(sorted(drive_weight_columns))});
     const tbody = document.querySelector('#failure-table tbody');
     const count = document.getElementById('count');
     const search = document.getElementById('search');
@@ -1289,7 +1287,7 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       }});
       filtered.sort((a, b) => compareValues(a, b, sortKey, sortDir));
       tbody.innerHTML = filtered.map(row => {{
-        const cells = COLS.map(col => `<td class="${{LAMBDA_COLS.has(col) ? 'lambda-col' : ''}}">${{row[col] == null ? '' : row[col]}}</td>`).join('');
+        const cells = COLS.map(col => `<td class="${{DRIVE_WEIGHT_COLS.has(col) ? 'drive-weight-col' : ''}}">${{row[col] == null ? '' : row[col]}}</td>`).join('');
         const link = row.rendered_html ? `<a href="${{hrefWithState(row.rendered_html)}}">open</a>` : '<span class="muted">n/a</span>';
         return `<tr><td>${{link}}</td>${{cells}}</tr>`;
       }}).join('');

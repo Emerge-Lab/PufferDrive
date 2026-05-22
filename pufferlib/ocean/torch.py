@@ -66,8 +66,8 @@ class DriveBackbone(nn.Module):
             + binding.NUM_TRAFFIC_CONTROL_TYPES
             + binding.NUM_TRAFFIC_CONTROL_STATES
         )
-        # Conditioning size (reward coefficients + optional adversary drive scalar + target info)
-        self.conditioning_dim = env.num_reward_coefs + env.num_adv_reward_weight_drive_features + env.target_dim
+        # Conditioning size (reward coefficients + target info)
+        self.conditioning_dim = env.num_reward_coefs + env.target_dim
 
         num_feature_sets = 1
 

@@ -144,14 +144,9 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_offroad=0.5,
         adv_reward_weight_traffic_light=0.5,
         adv_reward_weight_drive=0.5,
-        adv_reward_weight_adversarial=1.0,
-        adv_bonus_only=False,
-        adv_reward_collision_offroad_only=False,
-        adv_target_hit_at_fault_reward=False,
-        adv_target_hit_reward_shaping="none",
-        adv_target_hit_reward_min_responsibility=0.0,
         adv_target_hit_at_fault_bonus=0.0,
         adv_target_hit_low_responsibility_threshold=-1.0,
+        adv_target_hit_low_responsibility_penalty=0.0,
         adv_target_hit_low_responsibility_behavior=0,
         min_waypoint_spacing=20.0,
         max_waypoint_spacing=60.0,
@@ -198,8 +193,6 @@ class Drive(pufferlib.PufferEnv):
         target_type="static",
         reward_conditioning=False,
         reward_randomization=False,
-        adv_reward_weight_drive_conditioning=False,
-        adv_reward_weight_drive_override=-1.0,
         compute_eval_metrics=True,
         split_network=False,
         max_lane_segment_observations=32,
@@ -241,8 +234,6 @@ class Drive(pufferlib.PufferEnv):
         self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
-        self.adv_reward_weight_drive_conditioning = bool(adv_reward_weight_drive_conditioning)
-        self.adv_reward_weight_drive_override = float(adv_reward_weight_drive_override)
         self.compute_eval_metrics = compute_eval_metrics
         self.split_network = split_network
         self.render_mode = render_mode
@@ -266,34 +257,9 @@ class Drive(pufferlib.PufferEnv):
         self.adv_reward_weight_offroad = adv_reward_weight_offroad
         self.adv_reward_weight_traffic_light = adv_reward_weight_traffic_light
         self.adv_reward_weight_drive = adv_reward_weight_drive
-        self.adv_reward_weight_adversarial = adv_reward_weight_adversarial
-        self.adv_bonus_only = adv_bonus_only
-        self.adv_reward_collision_offroad_only = bool(adv_reward_collision_offroad_only)
-        self.adv_target_hit_at_fault_reward = bool(adv_target_hit_at_fault_reward)
-        shaping_modes = {
-            "none": 0,
-            "off": 0,
-            "disabled": 0,
-            "at_fault": 1,
-            "nuplan": 1,
-            "responsibility": 2,
-            "hybrid": 3,
-        }
-        if isinstance(adv_target_hit_reward_shaping, str):
-            shaping_key = adv_target_hit_reward_shaping.strip().lower().replace("-", "_")
-            if shaping_key not in shaping_modes:
-                raise ValueError(
-                    "adv_target_hit_reward_shaping must be one of 'none', 'at_fault', 'responsibility', or 'hybrid'. "
-                    f"Got: {adv_target_hit_reward_shaping}"
-                )
-            self.adv_target_hit_reward_shaping = shaping_modes[shaping_key]
-        else:
-            self.adv_target_hit_reward_shaping = int(adv_target_hit_reward_shaping)
-        if self.adv_target_hit_at_fault_reward and self.adv_target_hit_reward_shaping == 0:
-            self.adv_target_hit_reward_shaping = 1
-        self.adv_target_hit_reward_min_responsibility = float(adv_target_hit_reward_min_responsibility)
         self.adv_target_hit_at_fault_bonus = float(adv_target_hit_at_fault_bonus)
         self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
+        self.adv_target_hit_low_responsibility_penalty = float(adv_target_hit_low_responsibility_penalty)
         self.adv_target_hit_low_responsibility_behavior = int(adv_target_hit_low_responsibility_behavior)
         self.goal_radius = goal_radius
         self.min_waypoint_spacing = min_waypoint_spacing
@@ -387,7 +353,6 @@ class Drive(pufferlib.PufferEnv):
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
-        self.num_adv_reward_weight_drive_features = 1 if self.adv_reward_weight_drive_conditioning else 0
 
         # Target features based on target_type
         if target_type == "static":
@@ -399,7 +364,6 @@ class Drive(pufferlib.PufferEnv):
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
-            + self.num_adv_reward_weight_drive_features
             + self.target_dim
             + self.max_partner_observations * self.partner_features
             + self.obs_lane_segment_count * self.road_features
@@ -886,14 +850,9 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_offroad": self.adv_reward_weight_offroad,
             "adv_reward_weight_traffic_light": self.adv_reward_weight_traffic_light,
             "adv_reward_weight_drive": self.adv_reward_weight_drive,
-            "adv_reward_weight_adversarial": self.adv_reward_weight_adversarial,
-            "adv_bonus_only": self.adv_bonus_only,
-            "adv_reward_collision_offroad_only": self.adv_reward_collision_offroad_only,
-            "adv_target_hit_at_fault_reward": self.adv_target_hit_at_fault_reward,
-            "adv_target_hit_reward_shaping": self.adv_target_hit_reward_shaping,
-            "adv_target_hit_reward_min_responsibility": self.adv_target_hit_reward_min_responsibility,
             "adv_target_hit_at_fault_bonus": self.adv_target_hit_at_fault_bonus,
             "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
+            "adv_target_hit_low_responsibility_penalty": self.adv_target_hit_low_responsibility_penalty,
             "adv_target_hit_low_responsibility_behavior": self.adv_target_hit_low_responsibility_behavior,
             "collision_behavior": self.collision_behavior,
             "ignore_target_collision_behavior": bool(self.ignore_target_collision_behavior),
@@ -935,8 +894,6 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
-            "adv_reward_weight_drive_conditioning": self.adv_reward_weight_drive_conditioning,
-            "adv_reward_weight_drive_override": self.adv_reward_weight_drive_override,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "max_goal_position": self.max_goal_position,

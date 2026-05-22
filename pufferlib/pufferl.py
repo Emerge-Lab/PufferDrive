@@ -174,8 +174,6 @@ class TargetTorchActor:
         self.env = env
         self.hidden_size = getattr(policy, "hidden_size", None)
         self.target_max_partner_obs_distance = float(getattr(env, "target_max_partner_obs_distance", 0.0))
-        self.adv_reward_weight_drive_conditioning = bool(getattr(env, "adv_reward_weight_drive_conditioning", False))
-        self.adv_reward_weight_drive_feature_start = env.ego_features + env.num_reward_coefs
         self.partner_start = env.ego_features + env.num_reward_coefs + env.target_dim
         self.max_partner_observations = env.max_partner_observations
         self.partner_features = env.partner_features
@@ -183,15 +181,6 @@ class TargetTorchActor:
 
     def prepare_observation(self, raw_observation):
         observations = raw_observation.clone()
-        if self.adv_reward_weight_drive_conditioning:
-            observations = torch.cat(
-                [
-                    observations[:, : self.adv_reward_weight_drive_feature_start],
-                    observations[:, self.adv_reward_weight_drive_feature_start + 1 :],
-                ],
-                dim=-1,
-            )
-
         if self.target_max_partner_obs_distance <= 0.0 or self.max_partner_observations <= 0:
             return observations
 
@@ -221,18 +210,6 @@ class TargetTorchActor:
 
 def _make_target_policy_env_view(env):
     target_env = copy.copy(env)
-    removed_features = int(getattr(env, "num_adv_reward_weight_drive_features", 0) or 0)
-    target_env.adv_reward_weight_drive_conditioning = False
-    target_env.num_adv_reward_weight_drive_features = 0
-    if hasattr(env, "num_obs"):
-        target_env.num_obs = int(env.num_obs) - removed_features
-    if hasattr(env, "single_observation_space") and hasattr(env.single_observation_space, "dtype"):
-        target_env.single_observation_space = gymnasium.spaces.Box(
-            low=-1,
-            high=1,
-            shape=(target_env.num_obs,),
-            dtype=env.single_observation_space.dtype,
-        )
     return target_env
 
 
@@ -1775,7 +1752,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "num_target_waypoints",
             "reward_conditioning",
             "reward_randomization",
-            "adv_reward_weight_drive_conditioning",
             "trajectory_prediction_length",
             "num_trajectory_scaling_factors",
             "trajectory_scaling_factors",
@@ -3397,7 +3373,6 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     args["append_mining_run"] = bool(tmp_args.get("append_mining_run", 0))
     fixed_adv_reward_weight_drive = tmp_args.get("adv_reward_weight_drive")
     args["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
-    args["adv_reward_weight_drive_bin"] = tmp_args.get("adv_reward_weight_drive_bin")
     if requested_agents_per_scene is None:
         args["env"]["min_agents_per_env"] = requested_min_agents_per_env
         args["env"]["max_agents_per_env"] = requested_max_agents_per_env
@@ -3437,7 +3412,6 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
     fixed_adv_reward_weight_drive = args.get("adv_reward_weight_drive")
-    fixed_adv_reward_weight_drive_bin = args.get("adv_reward_weight_drive_bin")
     if fixed_adv_reward_weight_drive is not None:
         fixed_adv_reward_weight_drive = float(fixed_adv_reward_weight_drive)
         if not 0.0 <= fixed_adv_reward_weight_drive <= 1.0:
@@ -3458,8 +3432,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["compute_eval_metrics"] = True
         worker_kwargs["deterministic_traffic_lights"] = True
         if fixed_adv_reward_weight_drive is not None:
-            worker_kwargs["adv_reward_weight_drive_conditioning"] = True
-            worker_kwargs["adv_reward_weight_drive_override"] = fixed_adv_reward_weight_drive
+            worker_kwargs["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
         worker_kwargs["eval_mode"] = 0
         worker_kwargs["resample_frequency"] = 0
         worker_kwargs["starting_map"] = 0
@@ -3581,8 +3554,6 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     summary["map_name"] = os.path.basename(map_name).split(".")[0]
                 if fixed_adv_reward_weight_drive is not None:
                     summary["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
-                    if fixed_adv_reward_weight_drive_bin is not None:
-                        summary["adv_reward_weight_drive_bin"] = int(fixed_adv_reward_weight_drive_bin)
                 summary["has_replay"] = 0
                 summary["replay_path"] = None
                 if replay_bundle is not None:
@@ -3637,40 +3608,6 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"Total mining time: {time.time() - t0:.2f} seconds.")
 
     return episodes_df
-
-
-def mine_adv_reward_weight_drive_sweep(env_name, args=None, quiet=False):
-    base_args = args or load_config(env_name)
-    n_bins = base_args.get("adv_reward_weight_drive_bins")
-    if n_bins is None:
-        n_bins = 10
-    n_bins = int(n_bins)
-    episodes_per_bin = int(base_args.get("episodes_per_lambda_bin") or base_args.get("num_episodes") or 1000)
-    if n_bins < 1:
-        raise pufferlib.APIUsageError("--adv-reward-weight-drive-bins must be >= 1")
-    if episodes_per_bin < 1:
-        raise pufferlib.APIUsageError("--episodes-per-lambda-bin must be >= 1")
-
-    drive_weight_values = [idx / n_bins for idx in range(n_bins + 1)]
-    merged_df = None
-    if not quiet:
-        print("Adv reward weight drive sweep:")
-        print(f"  Bins: {n_bins} ({len(drive_weight_values)} values)")
-        print(f"  Episodes per value: {episodes_per_bin}")
-        print(f"  Total episodes: {episodes_per_bin * len(drive_weight_values)}")
-
-    for bin_idx, drive_weight in enumerate(drive_weight_values):
-        run_args = copy.deepcopy(base_args)
-        run_args["num_episodes"] = episodes_per_bin
-        run_args["adv_reward_weight_drive"] = float(drive_weight)
-        run_args["adv_reward_weight_drive_bin"] = bin_idx
-        run_args["append_mining_run"] = bool(base_args.get("append_mining_run", 0)) or bin_idx > 0
-        prepared_args = _prepare_mine_failures_args(env_name, run_args)
-        if not quiet:
-            print(f"\nAdv reward weight drive bin {bin_idx}/{n_bins}: value={drive_weight:.6g}")
-        merged_df = mine_failures(env_name, args=prepared_args, quiet=quiet)
-
-    return merged_df
 
 
 def render_mined_failures(env_name, args=None, quiet=False):
@@ -3733,7 +3670,6 @@ def render_mined_failures(env_name, args=None, quiet=False):
         "target_episode_return",
         "target_episode_length",
         "adv_reward_weight_drive",
-        "adv_drive_weight",
     ]
     navigation_episodes = [
         {key: pufferlib.mining_viz._safe_value(item.get(key)) for key in navigation_columns if key in item}
@@ -4058,19 +3994,7 @@ def load_config(env_name, config_dir=None):
         "--adv-reward-weight-drive",
         type=float,
         default=None,
-        help="Fixed adversarial drive reward coefficient for mine_failures. If unset, adversaries use env sampling.",
-    )
-    parser.add_argument(
-        "--adv-reward-weight-drive-bins",
-        type=int,
-        default=None,
-        help="Number of intervals for mine_adv_reward_weight_drive_sweep; values include both 0 and 1.",
-    )
-    parser.add_argument(
-        "--episodes-per-lambda-bin",
-        type=int,
-        default=None,
-        help="Completed episodes to mine for each value in mine_adv_reward_weight_drive_sweep.",
+        help="Override adversarial drive reward coefficient for mine_failures.",
     )
     parser.add_argument(
         "--append-mining-run",
@@ -4217,7 +4141,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, mine_adv_reward_weight_drive_sweep, render_mined_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, eval_adversarial, eval_multi_scenarios, eval_multi_scenarios_render, render_adversarial, mine_failures, render_mined_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -4237,9 +4161,6 @@ def main():
         print("")
     elif mode == "mine_failures":
         mine_failures(env_name=env_name)
-        print("")
-    elif mode == "mine_adv_reward_weight_drive_sweep":
-        mine_adv_reward_weight_drive_sweep(env_name=env_name)
         print("")
     elif mode == "render_mined_failures":
         render_mined_failures(env_name=env_name)

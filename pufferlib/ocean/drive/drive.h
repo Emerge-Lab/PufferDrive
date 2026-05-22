@@ -72,11 +72,6 @@
 #define COLLISION_TYPE_ACTIVE_REAR 3
 #define COLLISION_TYPE_ACTIVE_FRONT 4
 #define COLLISION_TYPE_ACTIVE_LATERAL 5
-#define TARGET_HIT_REWARD_SHAPING_NONE 0
-#define TARGET_HIT_REWARD_SHAPING_AT_FAULT 1
-#define TARGET_HIT_REWARD_SHAPING_RESPONSIBILITY 2
-#define TARGET_HIT_REWARD_SHAPING_HYBRID 3
-
 // Collision state
 #define NO_COLLISION 0
 #define VEHICLE_COLLISION 1
@@ -383,14 +378,9 @@ struct Drive {
     float adv_reward_weight_offroad;
     float adv_reward_weight_traffic_light;
     float adv_reward_weight_drive;
-    float adv_reward_weight_adversarial;
-    int adv_bonus_only;
-    int adv_reward_collision_offroad_only;
-    int adv_target_hit_at_fault_reward;
-    int adv_target_hit_reward_shaping;
-    float adv_target_hit_reward_min_responsibility;
     float adv_target_hit_at_fault_bonus;
     float adv_target_hit_low_responsibility_threshold;
+    float adv_target_hit_low_responsibility_penalty;
     int adv_target_hit_low_responsibility_behavior;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
@@ -400,7 +390,6 @@ struct Drive {
     float target_hit_responsibility_episode;
     float target_hit_low_responsibility_count_episode;
     float target_hit_at_fault_count_episode;
-    float current_adv_reward_weight_drive;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -445,8 +434,6 @@ struct Drive {
     int terminate_ep_on_target_failure;
     int reward_conditioning;
     int reward_randomization;
-    int adv_reward_weight_drive_conditioning;
-    float adv_reward_weight_drive_override;
     int compute_eval_metrics;
     int max_boundary_segment_observations;
     int max_lane_segment_observations;
@@ -864,24 +851,6 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
     }
-}
-
-static inline void generate_env_adv_reward_weight_drive(Drive *env) {
-    if (env->adv_reward_weight_drive_override >= 0.0f) {
-        env->current_adv_reward_weight_drive = fmaxf(0.0f, fminf(1.0f, env->adv_reward_weight_drive_override));
-        return;
-    }
-
-    env->current_adv_reward_weight_drive = random_uniform(0.0f, 1.0f);
-}
-
-static inline void assign_adv_reward_weight_drive(Drive *env, Agent *agent, int agent_idx) {
-    if (!env->adv_reward_weight_drive_conditioning || agent_idx == 0) {
-        agent->adv_reward_weight_drive = 1.0f;
-        return;
-    }
-
-    agent->adv_reward_weight_drive = env->current_adv_reward_weight_drive;
 }
 
 // Generate procedural traffic light states for GIGAFLOW mode
@@ -3315,7 +3284,6 @@ static void reset_agent_state(Agent *agent) {
     agent->phantom_braking_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
-    agent->adv_reward_weight_drive = 1.0f;
 }
 
 // Check if a spawn position collides with any existing agent
@@ -4324,9 +4292,6 @@ static int compute_observation_size(Drive *env) {
     if (env->reward_conditioning) {
         max_obs += NUM_REWARD_COEFS;
     }
-    if (env->adv_reward_weight_drive_conditioning) {
-        max_obs += 1;
-    }
     if (env->target_type == TARGET_STATIC) {
         max_obs += num_target_waypoints * STATIC_TARGET_FEATURES;
     } else if (env->target_type == TARGET_DYNAMIC) {
@@ -4979,10 +4944,6 @@ static void compute_observations(Drive *env) {
                 // Scale to [-1, 1]
                 obs[obs_idx++] = 2.0f * normalized - 1.0f;
             }
-        }
-        if (env->adv_reward_weight_drive_conditioning) {
-            float normalized = fmaxf(0.0f, fminf(1.0f, ego_entity->adv_reward_weight_drive));
-            obs[obs_idx++] = 2.0f * normalized - 1.0f;
         }
         // Target observations (static or dynamic)
         if (env->target_type == TARGET_STATIC) {
@@ -5693,6 +5654,30 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->phantom_braking_counter = 0;
 }
 
+static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *target_terms) {
+    float bonus = 0.0f;
+    if (target_terms->offroad < 0.0f) {
+        bonus += env->adv_reward_weight_offroad;
+    }
+
+    if (!env->target_hit_this_step) {
+        return bonus;
+    }
+
+    float responsibility = fmaxf(0.0f, fminf(1.0f, env->target_hit_responsibility_this_step));
+    int low_responsibility = env->adv_target_hit_low_responsibility_threshold >= 0.0f &&
+                             responsibility < env->adv_target_hit_low_responsibility_threshold;
+    if (low_responsibility) {
+        return bonus - env->adv_target_hit_low_responsibility_penalty;
+    }
+
+    bonus += responsibility * env->adv_reward_weight_collision;
+    if (env->target_hit_at_fault_this_step) {
+        bonus += env->adv_target_hit_at_fault_bonus;
+    }
+    return bonus;
+}
+
 void c_reset(Drive *env) {
     env->target_hit_this_step = 0;
     env->target_hit_hitter_idx_this_step = -1;
@@ -5742,7 +5727,6 @@ void c_reset(Drive *env) {
 
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.
         // Only need to generate reward coefs and compute initial metrics.
-        generate_env_adv_reward_weight_drive(env);
         for (int x = 0; x < env->active_agent_count; x++) {
             env->logs[x] = (Log){0};
             int agent_idx = env->active_agent_indices[x];
@@ -5753,7 +5737,6 @@ void c_reset(Drive *env) {
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
-            assign_adv_reward_weight_drive(env, agent, agent_idx);
             initialize_agent_progression(env, agent_idx);
             compute_metrics(env, agent_idx);
         }
@@ -5762,7 +5745,6 @@ void c_reset(Drive *env) {
     }
 
     set_start_position(env);
-    generate_env_adv_reward_weight_drive(env);
     for (int x = 0; x < env->active_agent_count; x++) {
         env->logs[x] = (Log){0};
         int agent_idx = env->active_agent_indices[x];
@@ -5773,7 +5755,6 @@ void c_reset(Drive *env) {
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
-        assign_adv_reward_weight_drive(env, agent, agent_idx);
 
         compute_goals(env, agent_idx);
         initialize_agent_progression(env, agent_idx);
@@ -5856,49 +5837,16 @@ void c_step(Drive *env) {
 
     // Adversarial reward: agent 0 is the target in both replay and gigaflow modes.
     if (env->active_agent_count > 0) {
-        float target_reward = total_reward_terms(&reward_terms[0]);
-        if (env->adv_reward_collision_offroad_only) {
-            target_reward = reward_terms[0].collision + reward_terms[0].offroad;
-        }
-        float target_hit_reward_multiplier = 1.0f;
-        if (env->target_hit_this_step) {
-            if (env->adv_target_hit_reward_shaping == TARGET_HIT_REWARD_SHAPING_AT_FAULT ||
-                env->adv_target_hit_at_fault_reward) {
-                target_hit_reward_multiplier = env->target_hit_at_fault_this_step ? 1.0f : 0.0f;
-            } else if (env->adv_target_hit_reward_shaping == TARGET_HIT_REWARD_SHAPING_RESPONSIBILITY) {
-                float responsibility = fmaxf(0.0f, fminf(1.0f, env->target_hit_responsibility_this_step));
-                target_hit_reward_multiplier =
-                    (responsibility >= env->adv_target_hit_reward_min_responsibility) ? responsibility : 0.0f;
-            } else if (env->adv_target_hit_reward_shaping == TARGET_HIT_REWARD_SHAPING_HYBRID) {
-                float responsibility = fmaxf(0.0f, fminf(1.0f, env->target_hit_responsibility_this_step));
-                int bad_target_hit = env->adv_target_hit_low_responsibility_threshold >= 0.0f &&
-                                     responsibility < env->adv_target_hit_low_responsibility_threshold;
-                if (bad_target_hit) {
-                    target_hit_reward_multiplier = 0.0f;
-                } else {
-                    target_hit_reward_multiplier =
-                        (responsibility >= env->adv_target_hit_reward_min_responsibility) ? responsibility : 0.0f;
-                    if (env->target_hit_at_fault_this_step) {
-                        target_hit_reward_multiplier += env->adv_target_hit_at_fault_bonus;
-                    }
-                }
-            }
-        }
+        float adversarial_bonus = compute_adversarial_target_bonus(env, &reward_terms[0]);
 
         for (int i = 1; i < env->active_agent_count; i++) {
             reward_terms[i].collision *= env->adv_reward_weight_collision;
             reward_terms[i].offroad *= env->adv_reward_weight_offroad;
             reward_terms[i].red_light *= env->adv_reward_weight_traffic_light;
-
-            float drive_weight = env->adv_reward_weight_drive_conditioning
-                                     ? env->agents[env->active_agent_indices[i]].adv_reward_weight_drive
-                                     : env->adv_reward_weight_drive;
-            reward_terms[i].drive *= drive_weight;
+            reward_terms[i].drive *= env->adv_reward_weight_drive;
 
             // Assign adversarial reward.
-            float adversarial_bonus = env->adv_bonus_only ? fmaxf(-target_reward, 0.0f) : -target_reward;
-            adversarial_bonus *= target_hit_reward_multiplier;
-            reward_terms[i].adversarial = adversarial_bonus * env->adv_reward_weight_adversarial;
+            reward_terms[i].adversarial = adversarial_bonus;
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
             // reward_terms[i].offroad = 0.0f;

@@ -244,7 +244,6 @@ struct Agent {
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
-    float adv_reward_weight_drive;
 
     // Puffer score tracking (per-episode accumulators)
     struct ttc_result cached_ttc; // Filled once per step before reward computation

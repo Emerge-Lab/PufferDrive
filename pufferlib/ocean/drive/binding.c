@@ -1869,15 +1869,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_reward_weight_offroad = (float)unpack(kwargs, "adv_reward_weight_offroad");
     env->adv_reward_weight_traffic_light = (float)unpack(kwargs, "adv_reward_weight_traffic_light");
     env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
-    env->adv_reward_weight_adversarial = (float)unpack(kwargs, "adv_reward_weight_adversarial");
-    env->adv_bonus_only = (bool)unpack(kwargs, "adv_bonus_only");
-    env->adv_reward_collision_offroad_only = (bool)unpack(kwargs, "adv_reward_collision_offroad_only");
-    env->adv_target_hit_at_fault_reward = (bool)unpack(kwargs, "adv_target_hit_at_fault_reward");
-    env->adv_target_hit_reward_shaping = (int)unpack(kwargs, "adv_target_hit_reward_shaping");
-    env->adv_target_hit_reward_min_responsibility = (float)unpack(kwargs, "adv_target_hit_reward_min_responsibility");
     env->adv_target_hit_at_fault_bonus = (float)unpack(kwargs, "adv_target_hit_at_fault_bonus");
     env->adv_target_hit_low_responsibility_threshold =
         (float)unpack(kwargs, "adv_target_hit_low_responsibility_threshold");
+    env->adv_target_hit_low_responsibility_penalty = (float)unpack(kwargs, "adv_target_hit_low_responsibility_penalty");
     env->adv_target_hit_low_responsibility_behavior = (int)unpack(kwargs, "adv_target_hit_low_responsibility_behavior");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->ignore_target_collision_behavior = (bool)unpack(kwargs, "ignore_target_collision_behavior");
@@ -1925,8 +1920,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->simulation_mode = (int)unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
-    env->adv_reward_weight_drive_conditioning = (bool)unpack(kwargs, "adv_reward_weight_drive_conditioning");
-    env->adv_reward_weight_drive_override = (float)unpack(kwargs, "adv_reward_weight_drive_override");
     env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int)unpack(kwargs, "eval_mode");
     env->max_goal_position = (float)unpack(kwargs, "max_goal_position");
