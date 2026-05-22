@@ -351,6 +351,12 @@ def _route_actor_actions(
     )
 
 
+def _action_array_or_zeros(actor_output, vecenv):
+    if actor_output.action is None:
+        return np.zeros(vecenv.action_space.shape, dtype=vecenv.action_space.dtype)
+    return actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, target_policy=None, logger=None):
         # Backend perf optimization
@@ -3051,7 +3057,7 @@ def _render_adversarial_serial(
                         target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
                         deterministic=True,
                     )
-                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+                    action = _action_array_or_zeros(actor_output, vecenv)
 
                 if actor_output.clip_actions:
                     action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
@@ -3285,7 +3291,7 @@ def _render_adversarial_buffered(
                         target_recurrent_state=target_state if args["train"]["use_rnn"] else None,
                         deterministic=True,
                     )
-                    action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+                    action = _action_array_or_zeros(actor_output, vecenv)
 
                 if actor_output.clip_actions:
                     action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
@@ -3554,7 +3560,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     target_recurrent_state=target_state,
                     deterministic=True,
                 )
-                action = actor_output.action.cpu().numpy().reshape(vecenv.action_space.shape)
+                action = _action_array_or_zeros(actor_output, vecenv)
 
             if actor_output.clip_actions:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
