@@ -568,7 +568,9 @@ class Evaluator:
         html_paths = []
         scenarios_done = 0
 
-        vec = pufferlib.vector.make(make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1)
+        vec = pufferlib.vector.make(
+            make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1
+        )
         try:
             state = self._init_lstm_state(vec.observation_space.shape[0], policy, device, args)
             while scenarios_done < num_scenarios:
@@ -615,7 +617,13 @@ class Evaluator:
                     # pattern matches.
                     path = out_dir / f"{map_name}{step_suffix}_{scenarios_done:03d}.html"
                     viz.generate_interactive_replay(
-                        scenarios[e], agent_hist[e], traffic_hist[e], traj_hist[e], obs_hist[e], str(path), head_north=True
+                        scenarios[e],
+                        agent_hist[e],
+                        traffic_hist[e],
+                        traj_hist[e],
+                        obs_hist[e],
+                        str(path),
+                        head_north=True,
                     )
                     html_paths.append(path)
                     scenarios_done += 1
