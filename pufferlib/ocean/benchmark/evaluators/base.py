@@ -110,12 +110,19 @@ class Evaluator:
 
         infos_collected: list = []
         # Per-episode `completed_episode` summaries, collected only when an
-        # evaluator opts into emit_completed_episodes (via the manager) for
-        # the CSV / coverage features. Kept out of `infos_collected` so the
-        # default my_log weighted-mean aggregation and `_should_stop` are
-        # unaffected.
-        episode_rows: list = []
+        # evaluator opts into emit_completed_episodes (via the manager) for the
+        # CSV / coverage features. Kept out of `infos_collected` so the default
+        # my_log weighted-mean aggregation is unaffected. Stored on self so
+        # `_should_stop` can count episodes as they complete.
+        self._episode_rows = []
         steps = 0
+        # Stall backstop: if the env stops producing episodes/emissions (e.g.
+        # eval_mode exhausted its map sweep) the stop target may never be met,
+        # so bail after a few scenario-lengths of no progress.
+        scenario_length = int(args["env"].get("scenario_length", 0) or 0)
+        stall_limit = 3 * scenario_length if scenario_length else 0
+        last_progress = 0
+        stall_steps = 0
         while not self._should_stop(args, infos_collected, steps):
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
@@ -128,7 +135,7 @@ class Evaluator:
             obs, _, terminals, truncations, infos = vecenv.step(action)
             for d in self._flatten_infos(infos):
                 if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
-                    episode_rows.append(d)
+                    self._episode_rows.append(d)
                 else:
                     infos_collected.append(d)
             # Mask LSTM state per-agent for envs that just terminated or
@@ -141,9 +148,21 @@ class Evaluator:
                 mask = torch.as_tensor(~done, device=device, dtype=state["lstm_h"].dtype).reshape(-1, 1)
                 state["lstm_h"] *= mask
                 state["lstm_c"] *= mask
+
+            progress = len(infos_collected) + len(self._episode_rows)
+            if progress > last_progress:
+                last_progress = progress
+                stall_steps = 0
+            elif stall_limit:
+                stall_steps += 1
+                if stall_steps >= stall_limit:
+                    print(
+                        f"[eval.{self.name}] no new episodes for {stall_limit} steps; "
+                        f"stopping at {len(self._episode_rows)} episode(s)."
+                    )
+                    break
             steps += 1
 
-        self._last_episode_rows = episode_rows
         return self._aggregate_infos(infos_collected)
 
     # -- Loop hooks (subclass-overridable) ------------------------------
@@ -256,7 +275,7 @@ class Evaluator:
         if not (want_csv or want_coverage):
             return
 
-        rows = list(getattr(self, "_last_episode_rows", []) or [])
+        rows = list(getattr(self, "_episode_rows", []) or [])
         out_dir = Path(args.get("eval_results_dir") or args.get("render_results_dir") or ".") / "episode_metrics"
         epoch = int(args.get("epoch") or 0)
         global_step = int(args.get("global_step") or 0)
