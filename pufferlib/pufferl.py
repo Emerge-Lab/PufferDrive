@@ -1558,19 +1558,37 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 # offsets, so they come from the checkpoint — unlike the eval-policy env config
 # (sim mode, maps, rewards, behaviors), which the [eval.<name>] section owns.
 _ARCH_ENV_KEYS = (
+    # action / dynamics
     "action_type",
     "dynamics_model",
-    "target_type",
-    "num_target_waypoints",
-    "reward_conditioning",
+    "trajectory_prediction_length",
+    "num_trajectory_scaling_factors",
+    "trajectory_scaling_factors",
+    # observation token counts + scope
     "max_partner_observations",
     "max_lane_segment_observations",
     "max_boundary_segment_observations",
     "max_traffic_control_observations",
     "traffic_control_scope",
-    "trajectory_prediction_length",
-    "num_trajectory_scaling_factors",
-    "trajectory_scaling_factors",
+    "reward_conditioning",
+    # target / goal representation
+    "target_type",
+    "num_target_waypoints",
+    "min_waypoint_spacing",
+    "max_waypoint_spacing",
+    # observation normalization scales + spatial extent — the policy was
+    # trained against these, so wrong values feed it mis-scaled / clipped obs.
+    "max_position",
+    "max_goal_position",
+    "max_veh_len",
+    "max_veh_width",
+    "max_road_segment_length",
+    "max_road_segment_width",
+    "max_traffic_control_distance",
+    "agent_obs_max_dist",
+    "road_obs_front_dist",
+    "road_obs_behind_dist",
+    "road_obs_side_dist",
 )
 
 
