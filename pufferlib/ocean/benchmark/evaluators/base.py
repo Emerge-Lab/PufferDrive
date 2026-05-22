@@ -90,6 +90,10 @@ class Evaluator:
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)
+        # Opt-in per-episode CSV + coverage check (writes files, folds
+        # coverage_* scalars into metrics). No-op unless the evaluator set
+        # eval.export_episode_csv / eval.verify_coverage.
+        self._maybe_export_episodes(args, metrics)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:
@@ -105,7 +109,20 @@ class Evaluator:
         obs = self._initial_reset(vecenv, args)
 
         infos_collected: list = []
+        # Per-episode `completed_episode` summaries, collected only when an
+        # evaluator opts into emit_completed_episodes (via the manager) for the
+        # CSV / coverage features. Kept out of `infos_collected` so the default
+        # my_log weighted-mean aggregation is unaffected. Stored on self so
+        # `_should_stop` can count episodes as they complete.
+        self._episode_rows = []
         steps = 0
+        # Stall backstop: if the env stops producing episodes/emissions (e.g.
+        # eval_mode exhausted its map sweep) the stop target may never be met,
+        # so bail after a few scenario-lengths of no progress.
+        scenario_length = int(args["env"].get("scenario_length", 0) or 0)
+        stall_limit = 3 * scenario_length if scenario_length else 0
+        last_progress = 0
+        stall_steps = 0
         while not self._should_stop(args, infos_collected, steps):
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
@@ -116,7 +133,11 @@ class Evaluator:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
             obs, _, terminals, truncations, infos = vecenv.step(action)
-            infos_collected.extend(self._flatten_infos(infos))
+            for d in self._flatten_infos(infos):
+                if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
+                    self._episode_rows.append(d)
+                else:
+                    infos_collected.append(d)
             # Mask LSTM state per-agent for envs that just terminated or
             # truncated — those agents' next obs is from a fresh scenario
             # and the recurrent memory of the previous one would bias
@@ -127,6 +148,19 @@ class Evaluator:
                 mask = torch.as_tensor(~done, device=device, dtype=state["lstm_h"].dtype).reshape(-1, 1)
                 state["lstm_h"] *= mask
                 state["lstm_c"] *= mask
+
+            progress = len(infos_collected) + len(self._episode_rows)
+            if progress > last_progress:
+                last_progress = progress
+                stall_steps = 0
+            elif stall_limit:
+                stall_steps += 1
+                if stall_steps >= stall_limit:
+                    print(
+                        f"[eval.{self.name}] no new episodes for {stall_limit} steps; "
+                        f"stopping at {len(self._episode_rows)} episode(s)."
+                    )
+                    break
             steps += 1
 
         return self._aggregate_infos(infos_collected)
@@ -217,18 +251,128 @@ class Evaluator:
                 out[k] = num / den
         return out
 
+    # -- Per-episode CSV + scenario coverage (opt-in) -------------------
+
+    def _maybe_export_episodes(self, args, metrics) -> None:
+        """Write a per-episode metrics CSV and/or a scenario-coverage report.
+
+        Both are off by default and enabled per-evaluator via the
+        [eval.<name>] section:
+
+            eval.export_episode_csv = true
+            eval.verify_coverage    = true
+
+        Either flag makes the manager turn on `emit_completed_episodes` for
+        this evaluator's env, so the rollout collects one `completed_episode`
+        summary per finished episode into `self._last_episode_rows`. The
+        default weighted-mean metric path is untouched.
+        """
+        from pathlib import Path
+
+        eval_cfg = self.config.get("eval", {})
+        want_csv = bool(eval_cfg.get("export_episode_csv", False))
+        want_coverage = bool(eval_cfg.get("verify_coverage", False))
+        if not (want_csv or want_coverage):
+            return
+
+        rows = list(getattr(self, "_episode_rows", []) or [])
+        out_dir = Path(args.get("eval_results_dir") or args.get("render_results_dir") or ".") / "episode_metrics"
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        suffix = f"_epoch{epoch}_step{global_step}"
+
+        if want_csv:
+            self._write_episode_csv(rows, out_dir, suffix)
+
+        if want_coverage:
+            cov = self._coverage_report(rows, eval_cfg)
+            metrics["coverage_expected"] = float(cov["expected"])
+            metrics["coverage_found"] = float(cov["found"])
+            metrics["coverage_unique_maps"] = float(cov["unique"])
+            metrics["coverage_complete"] = float(cov["complete"])
+            if not cov["complete"]:
+                print(
+                    f"[eval.{self.name}] coverage: evaluated {cov['found']} episode(s) "
+                    f"across {cov['unique']} unique map(s), expected {cov['expected']}."
+                )
+            if cov["duplicates"]:
+                top = sorted(cov["duplicates"].items(), key=lambda kv: -kv[1])[:5]
+                print(f"[eval.{self.name}] {len(cov['duplicates'])} map(s) evaluated more than once; top: {top}")
+
+    def _write_episode_csv(self, rows, out_dir, suffix) -> None:
+        """One row per finished episode, all summary fields. Identity columns
+        (episode_index / scenario_id / map_name) lead when present."""
+        if not rows:
+            print(f"[eval.{self.name}] export_episode_csv set but no per-episode summaries were collected.")
+            return
+        import pandas as pd
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame(rows)
+        lead = [c for c in ("episode_index", "scenario_id", "map_name") if c in df.columns]
+        df = df[lead + [c for c in df.columns if c not in lead]]
+        path = out_dir / f"{self.name}{suffix}.csv"
+        df.to_csv(path, index=False)
+        print(f"[eval.{self.name}] wrote {len(df)} per-episode rows to {path}")
+
+    def _coverage_report(self, rows, eval_cfg) -> dict:
+        """Coverage of the scenario set: episode count, unique maps, duplicates.
+
+        `expected` is the evaluator's `num_scenarios` target when set, else
+        `env.num_maps`, else however many episodes were collected. `found` is
+        the number of `completed_episode` summaries seen and `unique` the
+        number of distinct maps among them (by basename). `duplicates` maps
+        each repeated scenario to its count — meaningful for unique-scenario
+        sweeps (replay), expected-and-harmless when maps cycle (gigaflow).
+        """
+        import os
+        from collections import Counter
+
+        found = len(rows)
+        expected = eval_cfg.get("num_scenarios")
+        if expected is None:
+            expected = self.config.get("env", {}).get("num_maps", found)
+        expected = int(expected or found)
+
+        names = []
+        for r in rows:
+            ident = r.get("map_name") or r.get("scenario_id")
+            if ident:
+                names.append(os.path.basename(str(ident)).split(".")[0])
+        counts = Counter(names)
+        duplicates = {n: c for n, c in counts.items() if c > 1}
+        unique = len(counts)
+        # For a unique-scenario sweep (the target fits within the loaded map
+        # set, e.g. replay) completeness means we covered that many *distinct*
+        # maps; when maps cycle (expected > num_maps, e.g. gigaflow) it means
+        # we ran that many episodes.
+        num_maps = int(self.config.get("env", {}).get("num_maps", 0) or 0)
+        measure = unique if (num_maps and expected <= num_maps) else found
+        return {
+            "expected": expected,
+            "found": found,
+            "unique": unique,
+            "complete": measure >= expected,
+            "duplicates": duplicates,
+        }
+
     # -- Render (default EGL → ffmpeg mp4 pipeline) ----------------------
 
     def _render_pass(self, vecenv, policy, args) -> list:
-        """Build a fresh PufferEnv with `render_mode=headless`, render one
-        clip per (scenario, view), return mp4 paths (egl) or html paths (html).
+        """Render the rollout via the configured `render_backend`:
+          "egl"         — top-down sim camera → one mp4 per (scenario, view)
+          "triage_html" — scene playback + per-episode metrics, rebuilt from the
+                          captured compact-replay bundle; for triaging episodes
+          "obs_html"    — interactive scene + the agent's unpacked NN observation
         Subclasses customize the render env via `_render_env_overrides`.
         """
         backend = args.get("render_backend", "egl")
-        if backend == "html":
+        if backend == "obs_html":
+            return self._render_pass_obs(vecenv, policy, args)
+        if backend == "triage_html":
             return self._render_pass_html(vecenv, policy, args)
-        if backend not in ["egl", "html"]:
-            raise ValueError(f"Evaluator: _render_pass only accepts egl, html backends but got {backend} instead.")
+        if backend != "egl":
+            raise ValueError(f"render_backend must be 'egl', 'triage_html', or 'obs_html'; got {backend!r}.")
 
         import importlib
         from pathlib import Path
@@ -280,10 +424,11 @@ class Evaluator:
         return all_paths
 
     def _render_pass_html(self, vecenv, policy, args) -> list:
-        """CPU-only HTML render path. Creates a fresh env with
-        capture_compact_replay=True, runs one episode per requested scenario,
-        and writes one .html file per episode via mining_viz."""
+        """`triage_html` backend. CPU-only scene-playback viewer for triaging
+        episodes: captures each episode's compact-replay bundle, then writes one
+        mining_viz .html per episode (scene + per-episode metrics, no NN obs)."""
         import importlib
+        import os
         import pickle
         import tempfile
         import zlib
@@ -298,7 +443,7 @@ class Evaluator:
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
             if required not in eval_cfg:
-                raise KeyError(f"[eval.{self.name}] has render=true but eval.{required} is not set.")
+                raise KeyError(f"[eval.{self.name}] has render_backend=triage_html but eval.{required} is not set.")
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
@@ -354,11 +499,15 @@ class Evaluator:
                     state["lstm_c"] *= mask
 
                 for info in infos or []:
+                    if not isinstance(info, dict):
+                        continue
                     bundle_bytes = info.get("compact_replay_bundle")
                     if bundle_bytes is None:
                         continue
                     scenario_id = info.get("scenario_id") or f"{scenarios_done:04d}"
-                    map_name = info.get("map_name") or "map"
+                    # basename: map_name is the full bin path, and an absolute
+                    # value would make `out_dir / stem` escape out_dir.
+                    map_name = os.path.basename(str(info.get("map_name") or "map")).split(".")[0]
                     stem = f"{map_name}_{scenario_id}{step_suffix}"
                     tmp_path = out_dir / f"{stem}.pkl.zlib"
                     html_path = out_dir / f"{stem}.html"
@@ -375,6 +524,115 @@ class Evaluator:
         finally:
             vec.close()
 
+        return html_paths
+
+    def _render_pass_obs(self, vecenv, policy, args) -> list:
+        """`obs_html` backend. CPU-only interactive viewer for inspecting policy
+        inputs: rolls out `render_num_scenarios` episodes and writes one
+        pufferlib.viz HTML per scenario showing the scene + each agent's unpacked
+        NN observation. Reads env state + the obs array, so it needs no EGL/ffmpeg."""
+        import importlib
+        import os
+        from pathlib import Path
+
+        import numpy as np
+        import torch
+
+        import pufferlib
+        from pufferlib import viz
+
+        eval_cfg = self.config.get("eval", {})
+        for required in ("render_num_scenarios", "render_max_steps"):
+            if required not in eval_cfg:
+                raise KeyError(f"[eval.{self.name}] has render_backend=obs_html but eval.{required} is not set.")
+        num_scenarios = int(eval_cfg["render_num_scenarios"])
+        max_steps = int(eval_cfg["render_max_steps"])
+
+        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "obs" / self.name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        epoch = int(args.get("epoch") or 0)
+        global_step = int(args.get("global_step") or 0)
+        step_suffix = f"_epoch{epoch}_step{global_step}"
+
+        package = args.get("package", "ocean")
+        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+        env_module = importlib.import_module(module_name)
+        make_env = env_module.env_creator(args["env_name"])
+
+        render_env_kwargs = self._render_env_overrides(args)
+        render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
+
+        device = args["train"]["device"]
+        use_traj = "trajectory" in str(args["env"].get("action_type", ""))
+        html_paths = []
+        scenarios_done = 0
+
+        vec = pufferlib.vector.make(
+            make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1
+        )
+        try:
+            state = self._init_lstm_state(vec.observation_space.shape[0], policy, device, args)
+            while scenarios_done < num_scenarios:
+                ob, _ = vec.reset()
+                scenarios = vec.get_state()
+                n_in_batch = len(scenarios)
+                to_render = min(n_in_batch, num_scenarios - scenarios_done)
+                if state:
+                    state["lstm_h"].zero_()
+                    state["lstm_c"].zero_()
+                agent_hist = [[] for _ in range(n_in_batch)]
+                traffic_hist = [[] for _ in range(n_in_batch)]
+                traj_hist = [[] for _ in range(n_in_batch)]
+                obs_hist = [[] for _ in range(n_in_batch)]
+                for t in range(max_steps):
+                    cur = vec.get_state()
+                    start_obs_index = 0
+                    for e in range(n_in_batch):
+                        sc = cur[e]
+                        agent_hist[e].append(viz.fill_agents_state(sc, use_trajectory=use_traj))
+                        traffic_hist[e].append(viz.fill_traffics_state(sc, t))
+                        if use_traj:
+                            traj_hist[e].append(viz.fill_trajectories(sc, t))
+                        if e > 0:
+                            start_obs_index += cur[e - 1]["active_agent_count"]
+                        step_obs = {}
+                        for a in range(sc["active_agent_count"]):
+                            aid = int(sc["active_agent_indices"][a])
+                            step_obs[aid] = viz.extract_obs_frame(
+                                ob, sc, args, timestep=t, obs_index=start_obs_index + a, agent_idx=a, head_north=True
+                            )
+                        obs_hist[e].append(step_obs)
+                    with torch.no_grad():
+                        ob_t = torch.as_tensor(ob).to(device)
+                        logits, _ = policy.forward_eval(ob_t, state)
+                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    if isinstance(logits, torch.distributions.Normal):
+                        action = np.clip(action, vec.action_space.low, vec.action_space.high)
+                    ob, _, _, _, _ = vec.step(action)
+                for e in range(to_render):
+                    map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
+                    # Numeric index last so build_gallery_index's `*_<N>.html`
+                    # pattern matches.
+                    path = out_dir / f"{map_name}{step_suffix}_{scenarios_done:03d}.html"
+                    viz.generate_interactive_replay(
+                        scenarios[e],
+                        agent_hist[e],
+                        traffic_hist[e],
+                        traj_hist[e],
+                        obs_hist[e],
+                        str(path),
+                        head_north=True,
+                    )
+                    html_paths.append(path)
+                    scenarios_done += 1
+                    if scenarios_done >= num_scenarios:
+                        break
+        finally:
+            vec.close()
+
+        if html_paths:
+            viz.build_gallery_index(str(out_dir))
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:

@@ -1552,6 +1552,80 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
+# Env keys that define the observation / action layout a checkpoint was trained
+# with. They must match at eval or the policy unpacks the obs at the wrong
+# offsets, so they come from the checkpoint — unlike the eval-policy env config
+# (sim mode, maps, rewards, behaviors), which the [eval.<name>] section owns.
+_ARCH_ENV_KEYS = (
+    # action / dynamics
+    "action_type",
+    "dynamics_model",
+    "trajectory_prediction_length",
+    "num_trajectory_scaling_factors",
+    "trajectory_scaling_factors",
+    # observation token counts + scope
+    "max_partner_observations",
+    "max_lane_segment_observations",
+    "max_boundary_segment_observations",
+    "max_traffic_control_observations",
+    "traffic_control_scope",
+    "reward_conditioning",
+    # target / goal representation
+    "target_type",
+    "num_target_waypoints",
+    "min_waypoint_spacing",
+    "max_waypoint_spacing",
+    # observation normalization scales + spatial extent — the policy was
+    # trained against these, so wrong values feed it mis-scaled / clipped obs.
+    "max_position",
+    "max_goal_position",
+    "max_veh_len",
+    "max_veh_width",
+    "max_road_segment_length",
+    "max_road_segment_width",
+    "max_traffic_control_distance",
+    "agent_obs_max_dist",
+    "road_obs_front_dist",
+    "road_obs_behind_dist",
+    "road_obs_side_dist",
+)
+
+
+def _merge_checkpoint_arch(args, model_path):
+    """Adopt a checkpoint's architecture from its sibling config.yaml.
+
+    A standalone eval may load a checkpoint whose network shape or observation
+    layout differs from drive.ini. The training run writes config.yaml next to
+    models/, so pull from it before the policy/env are built:
+      - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
+        else load_state_dict mismatches.
+      - the obs/action-layout env keys (_ARCH_ENV_KEYS) — else the eval env
+        packs observations the policy can't unpack.
+    The eval-policy env config (simulation_mode, map_dir, num_*, rewards,
+    behaviors) is intentionally left to the [eval.<name>] section.
+    """
+    config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
+    if not os.path.exists(config_yaml_path):
+        return args
+    with open(config_yaml_path) as f:
+        yaml_config = yaml.safe_load(f) or {}
+    for section in ("policy", "rnn"):
+        if isinstance(yaml_config.get(section), dict):
+            args.setdefault(section, {}).update(yaml_config[section])
+    for key in ("rnn_name", "policy_name"):
+        if key in yaml_config:
+            args[key] = yaml_config[key]
+    args.setdefault("train", {})["use_rnn"] = args.get("rnn_name") is not None
+    env_cfg = yaml_config.get("env", {})
+    if isinstance(env_cfg, dict):
+        args.setdefault("env", {})
+        for key in _ARCH_ENV_KEYS:
+            if key in env_cfg:
+                args["env"][key] = env_cfg[key]
+    print(f"[eval] merged policy/rnn + obs-layout config from {config_yaml_path}")
+    return args
+
+
 def eval(
     env_name,
     args=None,
@@ -1561,12 +1635,24 @@ def eval(
     out_path=None,
     global_step=None,
     epoch=None,
+    eval_simulation=None,
+    num_scenarios=None,
+    render=None,
+    render_backend=None,
+    num_maps=None,
 ):
     """Run a single named evaluator from drive.ini.
 
     Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
     evaluator's config (env/vec overrides, render flag, etc.) comes from
     the [eval.<name>] section. Loads the policy from `--load-model-path`.
+
+    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
+    gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
+    flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
+    override the chosen evaluator's config for this run (only when passed),
+    so a checkpoint can be evaluated at an arbitrary scale from the CLI
+    without editing drive.ini.
 
     Subprocess form: `--out <json>` writes the result dict to a JSON file
     so the parent EvalManager can read structured metrics back without
@@ -1579,11 +1665,20 @@ def eval(
 
     args = args or load_config(env_name)
 
+    # When evaluating a checkpoint, adopt its network architecture from the
+    # training run's sibling config.yaml so the policy is built to match the
+    # weights regardless of what drive.ini currently says.
+    if args.get("load_model_path"):
+        _merge_checkpoint_arch(args, args["load_model_path"])
+
     if evaluator_name is None:
         evaluator_name = args.get("evaluator")
+    if evaluator_name is None and eval_simulation:
+        evaluator_name = f"validation_{eval_simulation}"
     if evaluator_name is None:
         raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name>; named [eval.<name>] sections live in drive.ini"
+            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
+            "named [eval.<name>] sections live in drive.ini"
         )
 
     # Derive a default render output dir from the model path when none is set.
@@ -1596,6 +1691,21 @@ def eval(
             args["render_results_dir"] = os.path.join("benchmark", f"puffer_{run_id}")
 
     manager = EvalManager.from_config(args)
+    target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
+    if target is None:
+        raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
+
+    # Ad-hoc CLI overrides applied to the chosen evaluator for this run.
+    # The evaluator reads self.config / self.render at rollout time, so
+    # mutating them here takes effect without touching drive.ini.
+    if num_scenarios is not None:
+        target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
+    if num_maps is not None:
+        target.config.setdefault("env", {})["num_maps"] = int(num_maps)
+    if render is not None:
+        target.render = bool(render)
+    if render_backend is not None:
+        target.config["render_backend"] = render_backend
 
     # Build a fresh vecenv inside the manager via the evaluator's overrides.
     # Policy can come from a checkpoint (load_model_path) or be passed in.
@@ -1603,9 +1713,6 @@ def eval(
         # Need a probe vecenv just to construct the policy with the right
         # obs/action spaces. Use the matching evaluator's env_overrides so
         # the obs shape matches what the rollout will see.
-        target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
-        if target is None:
-            raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
         probe_args = manager._build_eval_args(target, env_name=env_name, global_step=None)
         probe_vec = load_env(env_name, probe_args)
         policy = load_policy(probe_args, probe_vec, env_name)
@@ -1767,609 +1874,6 @@ def mine_failures(env_name, args=None):
         print(f"[mine_failures] rendered {rendered} replays + index at {index_path}")
 
     return episodes_df
-
-
-def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=None):
-    """Load config for evaluation, merging experiment YAML with defaults."""
-    args = load_config(env_name)
-    if model_path:
-        experiment_dir = os.path.dirname(os.path.dirname(model_path))
-        config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-        EXCLUDE_KEYS = eval_overrides["env"].keys()
-        # Override Policy and RNN dimensions from training config
-        if os.path.exists(config_yaml_path):
-            print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
-            with open(config_yaml_path, "r") as f:
-                yaml_config = yaml.safe_load(f)
-
-            for section in ["env", "policy", "rnn"]:
-                if section in yaml_config and isinstance(yaml_config[section], dict):
-                    for k, v in yaml_config[section].items():
-                        if k not in EXCLUDE_KEYS:
-                            args[section][k] = v
-
-            # Also copy root-level keys like rnn_name, policy_name
-            for key in ["rnn_name", "policy_name"]:
-                if key in yaml_config:
-                    args[key] = yaml_config[key]
-
-            # Update use_rnn based on rnn_name
-            args["train"]["use_rnn"] = args["rnn_name"] is not None
-
-    # Override env parameters from evaluation config
-    if eval_overrides:
-        for section, section_overrides in eval_overrides.items():
-            if isinstance(section_overrides, dict):
-                for k, v in section_overrides.items():
-                    args[section][k] = v
-            else:
-                args[section] = section_overrides
-
-    return args
-
-
-def build_eval_overrides(simulation_mode, num_agents, num_scenarios, map_dir=None, num_carla_maps=8):
-    """Build evaluation overrides for a given simulation mode.
-
-    Args:
-        simulation_mode: "gigaflow" or "replay"
-        num_agents: agent slot budget for evaluation
-        map_dir: replay dataset directory, required for replay mode
-    """
-    # Common reward coefficients (same for both modes)
-    common_env = {
-        "eval_mode": 1,
-        "collision_behavior": 1,
-        "offroad_behavior": 1,
-        "traffic_light_behavior": 0,
-        "reward_randomization": False,
-        "reward_vehicle_collision": 3.0,
-        "reward_offroad_collision": 3.0,
-        "reward_stop_line": 1.0,
-        "reward_ade": 0.0,
-        "reward_goal": 1.0,
-        "reward_overspeed": 0.05,
-        "reward_comfort": 0.05,
-        "reward_velocity": 0.0025,
-        "reward_lane_align": 0.025,
-        "reward_lane_center": 0.0038,
-        "reward_timestep": 0.000025,
-        "reward_reverse": 0.005,
-        "goal_speed": 3.0,
-        "target_type": "static",
-        # "num_target_waypoints": 4,
-        # "min_waypoint_spacing": 20.0,
-        # "max_waypoint_spacing": 100.0,
-        "lane_segment_dropout": 0.0,
-        "boundary_segment_dropout": 0.0,
-        "max_lane_segment_observations": 80,
-        "max_boundary_segment_observations": 80,
-    }
-
-    if simulation_mode == "gigaflow":
-        eval_overrides = {
-            "env": {
-                **common_env,
-                "simulation_mode": "gigaflow",
-                "min_agents_per_env": 40,
-                "max_agents_per_env": 40,
-                "resample_frequency": 500,
-                "scenario_length": 500,
-                "map_dir": "pufferlib/resources/drive/binaries/v0.2/carla",
-                "num_maps": num_carla_maps,
-                "num_agents": num_agents,
-                "termination_mode": 0.0,
-            }
-        }
-    elif simulation_mode == "replay":
-        eval_overrides = {
-            "env": {
-                **common_env,
-                "simulation_mode": "replay",
-                "resample_frequency": 200,
-                "scenario_length": 200,
-                "max_agents_per_env": 64,
-                "map_dir": "pufferlib/resources/drive/binaries/v0.3/nuplan_train",
-                "num_maps": num_scenarios,
-                "num_agents": num_agents,
-                "termination_mode": 0.0,
-                "control_mode": "control_sdc_only",
-            },
-        }
-    else:
-        raise ValueError(f"Invalid simulation_mode: {simulation_mode}. Must be 'gigaflow' or 'replay'.")
-
-    return eval_overrides
-
-
-def verify_scenario_coverage(csv_path: str, num_scenarios: int) -> dict:
-    """
-    Verify that episode_metrics.csv contains all expected scenarios.
-
-    Args:
-        csv_path: Path to episode_metrics.csv
-        num_scenarios: Expected number of scenarios (e.g., 1000)
-
-    Returns:
-        dict with keys:
-            - complete: bool - True if all scenarios present
-            - expected_count: number of expected scenarios
-            - found_count: number of unique scenarios found
-            - missing: sorted list of missing map names
-            - extra: sorted list of unexpected map names
-            - duplicates: dict mapping map_name -> count (if >1)
-    """
-    df = pd.read_csv(csv_path)
-
-    # Expected: map_000, map_001, ..., map_{num_scenarios-1}
-    expected = {f"map_{i:03d}" for i in range(num_scenarios)}
-    found = set(df["map_name"].unique())
-
-    missing = expected - found
-    extra = found - expected
-
-    # Check for duplicates
-    counts = df["map_name"].value_counts()
-    duplicates = {name: count for name, count in counts.items() if count > 1}
-
-    complete = len(missing) == 0
-
-    return {
-        "complete": complete,
-        "expected_count": num_scenarios,
-        "found_count": len(found),
-        "missing": sorted(missing),
-        "extra": sorted(extra),
-        "duplicates": duplicates,
-    }
-
-
-def verify_scenario_coverage_gigaflow(csv_path: str, num_scenarios: int) -> dict:
-    """
-    Verify gigaflow evaluation CSV: maps repeat across scenarios, so check total
-    row count rather than unique map names.
-    """
-    df = pd.read_csv(csv_path)
-    total_rows = len(df)
-    complete = total_rows == num_scenarios
-    return {
-        "complete": complete,
-        "expected_count": num_scenarios,
-        "found_count": total_rows,
-    }
-
-
-# Helper functions for eval_multi_scenarios and eval_multi_scenarios_render
-def _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False, simulation_mode="replay"):
-    """Export episode and summary CSVs, return avg_infos dict."""
-    # Episode Metrics
-    try:
-        df_episodes = pd.DataFrame(global_infos)
-        first_cols = ["episode_id", "map_name"]
-        other_cols = [col for col in df_episodes.columns if col not in first_cols]
-        new_col_order = first_cols + other_cols
-        df_episodes = df_episodes[new_col_order]
-
-        if verify_coverage:
-            df_episodes = df_episodes.sort_values(by=["map_name", "episode_id"])
-
-        episode_csv_path = os.path.join(eval_folder, "episode_metrics.csv")
-        df_episodes.to_csv(episode_csv_path, index=False)
-        if not quiet:
-            print(f"\n✅ Per-episode metrics exported to {episode_csv_path}")
-
-        if verify_coverage:
-            if simulation_mode == "gigaflow":
-                result = verify_scenario_coverage_gigaflow(episode_csv_path, num_scenarios)
-                if not quiet:
-                    if result["complete"]:
-                        print(f"✅ All {num_scenarios} episodes present in CSV")
-                    else:
-                        print(
-                            f"⚠️ Episode count mismatch: expected {result['expected_count']}, found {result['found_count']}"
-                        )
-            else:
-                result = verify_scenario_coverage(episode_csv_path, num_scenarios)
-                if not quiet:
-                    if result["complete"]:
-                        print(f"✅ All {num_scenarios} scenarios present in CSV")
-                    else:
-                        print(f"⚠️ Scenario coverage incomplete:")
-                        print(f"   Expected: {result['expected_count']}, Found: {result['found_count']}")
-                        if result["missing"]:
-                            print(f"   Missing ({len(result['missing'])}): {result['missing']}")
-                        if result["extra"]:
-                            print(f"   Extra: {result['extra'][:10]}...")
-                    if result["duplicates"]:
-                        print(f"   Duplicates: {len(result['duplicates'])} scenarios have multiple entries")
-                        for name, count in sorted(result["duplicates"].items()):
-                            print(f"      {name}: {count} entries")
-    except Exception as e:
-        print(f"\n⚠️ Could not export per-episode CSV. Error: {e}")
-        print("Global infos data:", global_infos)
-
-    # Evaluation average metrics
-    avg_infos = {}
-    for k, v in global_infos.items():
-        if k == "num_scenarios":
-            avg_infos[k] = np.sum(v)
-        elif v and isinstance(v[0], numbers.Number):
-            avg_infos[k] = np.mean(v)
-    df_summary = pd.DataFrame(list(avg_infos.items()), columns=["Metric", "Average"])
-    summary_csv_path = os.path.join(eval_folder, "evaluation_summary.csv")
-    df_summary.to_csv(summary_csv_path, index=False)
-    if not quiet:
-        print(f"\n✅ Average results exported to {summary_csv_path}")
-        print(df_summary.to_string(index=False))
-
-    return avg_infos
-
-
-def _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet):
-    """Log metrics to TensorBoard/wandb if logger is provided."""
-    if logger is None or args.get("global_step") is None:
-        return
-
-    global_step = args["global_step"]
-
-    # Create log dict with metric prefix (use / for TensorBoard grouping)
-    log_dict = {}
-    for metric_key, metric_value in avg_infos.items():
-        if isinstance(metric_value, (int, float)):
-            log_dict[f"{metric_prefix}/{metric_key}"] = float(metric_value)
-
-    # Log to TensorBoard if available
-    if hasattr(logger, "local_writer") and logger.local_writer:
-        for key, value in log_dict.items():
-            logger.local_writer.add_scalar(key, value, global_step)
-        if not quiet:
-            print(f"✅ Logged {len(log_dict)} validation metrics to TensorBoard at step {global_step}")
-
-    # Also log to wandb/neptune if available
-    if hasattr(logger, "log"):
-        logger.log(log_dict, global_step)
-
-
-def eval_multi_scenarios(
-    env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
-):
-    t0 = time.time()
-
-    if args is None:
-        tmp_args = load_config(env_name)
-        model_path = tmp_args.get("load_model_path")
-        num_agents_eval = tmp_args["eval"]["num_agents"]
-        map_dir = tmp_args["eval"]["map_dir"]
-
-        eval_overrides = build_eval_overrides(
-            simulation_mode=tmp_args["eval_simulation"],
-            num_agents=num_agents_eval,
-            num_scenarios=tmp_args["num_scenarios"],
-            map_dir=map_dir,
-            num_carla_maps=tmp_args.get("num_carla_maps", 8),
-        )
-        args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
-
-    # Reproducibility — same approach as training
-    seed = args["train"]["seed"] or 42
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-    backend = args["vec"]["backend"]
-    num_scenarios = args["num_scenarios"]
-
-    num_workers = min(args["vec"]["num_envs"], num_scenarios)
-
-    # Distribute scenarios across workers
-    scenarios_per_worker = num_scenarios // num_workers
-    remainder = num_scenarios % num_workers
-    current_start = 0
-    env_kwargs_list = []
-    for j in range(num_workers):
-        worker_kwargs = copy.deepcopy(args["env"])
-        worker_num_scenario = scenarios_per_worker + (1 if j < remainder else 0)
-        worker_kwargs["starting_map"] = current_start
-        worker_kwargs["num_eval_scenarios"] = worker_num_scenario
-        env_kwargs_list.append(worker_kwargs)
-        current_start += worker_num_scenario
-
-    print(f"Distributing {num_scenarios} scenarios across {num_workers} workers:")
-    for j, w in enumerate(env_kwargs_list):
-        start = w["starting_map"]
-        count = w["num_eval_scenarios"]
-        print(f"  Worker {j}: maps {start}-{start + count - 1} ({count} scenarios)")
-
-    args["vec"] = dict(backend=backend, num_envs=num_workers, num_workers=num_workers, batch_size=num_workers)
-
-    if vecenv is None:
-        package = args["package"]
-        module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-        env_module = importlib.import_module(module_name)
-        make_env = env_module.env_creator(env_name)
-        # Pass as lists to preserve per-worker env_kwargs
-        env_creators = [make_env] * num_workers
-        env_args = [[]] * num_workers
-        vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs_list, **args["vec"])
-
-    policy = policy or load_policy(args, vecenv, env_name)
-    policy.eval()
-    num_agents = vecenv.observation_space.shape[0]
-    device = args["train"]["device"]
-
-    state = {}
-    if args["train"]["use_rnn"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-        )
-
-    # Folder for evaluation results
-    # For inline evaluation during training, use eval_results_dir in experiments folder
-    # For standalone evaluation, use benchmark folder
-    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
-        eval_folder = args["eval_results_dir"]
-    else:
-        # Standalone evaluation path (in benchmark folder)
-        model_path = args["load_model_path"]
-        if model_path is None:
-            eval_folder = os.path.join("benchmark", "no_policy", args["eval_simulation"])
-        else:
-            model_filename_with_ext = os.path.basename(model_path)
-            model_name = os.path.splitext(model_filename_with_ext)[0]
-            models_dir = os.path.dirname(model_path)
-            experiment_dir = os.path.dirname(models_dir)
-            experiment_name = os.path.basename(experiment_dir)
-            eval_folder = os.path.join("benchmark", experiment_name, model_name, args["eval_simulation"])
-    os.makedirs(eval_folder, exist_ok=True)
-
-    global_infos = {}
-    scenarios_processed = 0
-    vecenv.async_reset(42)
-
-    ob, _, _, _, infos, _, _ = vecenv.recv()
-    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
-        while scenarios_processed < num_scenarios:
-            # Reset LSTM
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
-
-            for _ in range(args["env"]["scenario_length"]):
-                with torch.no_grad():
-                    ob = torch.as_tensor(ob).to(device)
-                    logits, _ = policy.forward_eval(ob, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-                ob, _, _, _, infos = vecenv.step(action)
-
-                # Multi-worker backend returns infos as list of lists (one per worker)
-                if infos and infos[0]:
-                    for sub_env in infos:
-                        for env_idx, summary in enumerate(sub_env):
-                            env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
-                            summary["episode_id"] = env_idx
-                            summary["map_name"] = env_map_name
-                            scenarios_processed += 1
-                            pbar.update(1)
-
-                            for k, v in summary.items():
-                                if k not in global_infos:
-                                    global_infos[k] = []
-                                global_infos[k].append(v)
-
-    avg_infos = _export_metrics(
-        global_infos,
-        eval_folder,
-        num_scenarios,
-        quiet,
-        verify_coverage=True,
-        simulation_mode=args["env"]["simulation_mode"],
-    )
-    print(f"\nTotal evaluation time: {time.time() - t0:.2f} seconds for {num_scenarios} scenarios.")
-    _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
-
-    # Close vectorized environment to avoid file descriptor leaks
-    vecenv.close()
-
-
-def eval_multi_scenarios_render(
-    env_name, args=None, vecenv=None, policy=None, logger=None, metric_prefix="validation", quiet=False
-):
-    # Set fixed seed for reproducible evaluation
-    np.random.seed(42)
-    torch.manual_seed(42)
-
-    if args is None:
-        tmp_args = load_config(env_name)
-        model_path = tmp_args.get("load_model_path")
-        num_agents_eval = tmp_args["eval"]["num_agents"]
-        map_dir = tmp_args["eval"]["map_dir"]
-        eval_overrides = build_eval_overrides(
-            simulation_mode=tmp_args["eval_simulation"],
-            num_agents=num_agents_eval,
-            num_scenarios=tmp_args["num_scenarios"],
-            map_dir=map_dir,
-            num_carla_maps=tmp_args.get("num_carla_maps", 8),
-        )
-        args = load_eval_multi_scenarios_config(env_name, model_path, eval_overrides)
-
-    backend = args["vec"]["backend"]
-    if backend != "PufferEnv":
-        backend = "Serial"
-
-    args["vec"] = dict(backend=backend, num_envs=1)
-    args["env"]["num_eval_scenarios"] = args["num_scenarios"]  # first batch: fill as many scenarios as fit
-
-    vecenv = vecenv or load_env(env_name, args)
-
-    policy = policy or load_policy(args, vecenv, env_name)
-    policy.eval()
-    num_agents = vecenv.observation_space.shape[0]
-    device = args["train"]["device"]
-
-    state = {}
-    if args["train"]["use_rnn"]:
-        state = dict(
-            lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-            lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-        )
-
-    # Folder for evaluation results
-    # For inline evaluation during training, use eval_results_dir in experiments folder
-    # For standalone evaluation, use benchmark folder
-    if "inline_eval" in args and args["inline_eval"] and "eval_results_dir" in args:
-        eval_folder = args["eval_results_dir"]
-    else:
-        # Standalone evaluation path (in benchmark folder)
-        model_path = args["load_model_path"]
-        if model_path is None:
-            eval_folder = os.path.join("benchmark", "no_policy", args["eval_simulation"])
-        else:
-            model_filename_with_ext = os.path.basename(model_path)
-            model_name = os.path.splitext(model_filename_with_ext)[0]
-            models_dir = os.path.dirname(model_path)
-            experiment_dir = os.path.dirname(models_dir)
-            experiment_name = os.path.basename(experiment_dir)
-            eval_folder = os.path.join("benchmark", experiment_name, model_name, args["eval_simulation"])
-    os.makedirs(eval_folder, exist_ok=True)
-
-    if args["render"]:
-        gif_folder = eval_folder + "/gif"
-        os.makedirs(gif_folder, exist_ok=True)
-
-    global_infos = {}
-    num_scenarios = args["num_scenarios"]
-
-    scenarios_processed = 0
-    with tqdm(total=num_scenarios, desc="Processing scenarios", disable=quiet) as pbar:
-        while scenarios_processed < num_scenarios:
-            ob, _ = vecenv.reset()
-
-            # Get initial states for all environments in the batch
-            scenarios = vecenv.get_state()
-            num_envs_in_batch = len(scenarios)
-            batch_start = scenarios_processed
-
-            # Prepare batch_size_eval for the resample that fires at end of the step loop.
-            # That resample will load the NEXT batch, so cap it at remaining_after_this.
-            remaining_after_this = num_scenarios - scenarios_processed - num_envs_in_batch
-            vecenv.envs[0].batch_size_eval = max(1, remaining_after_this)
-
-            map_names = []
-            for env_idx in range(num_envs_in_batch):
-                map_names.append(scenarios[env_idx]["map_name"].split("/")[-1].split(".")[0])
-
-            # Reset LSTM
-            if args["train"]["use_rnn"]:
-                state = dict(
-                    lstm_h=torch.zeros(num_agents, policy.hidden_size, device=device),
-                    lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
-                )
-
-            # Initialize histories as lists of lists (one list per environment)
-            if args["render"]:
-                agent_histories = [[] for _ in range(num_envs_in_batch)]
-                traffic_histories = [[] for _ in range(num_envs_in_batch)]
-                trajectory_histories = [[] for _ in range(num_envs_in_batch)]
-                all_agents_obs_histories = [[] for _ in range(num_envs_in_batch)]
-
-            for t in range(args["env"]["scenario_length"]):
-                if args["render"]:
-                    current_scenarios = vecenv.get_state()
-                    start_obs_index = 0
-
-                    # Loop through every environment in the batch to record its history
-                    for env_idx in range(num_envs_in_batch):
-                        env_scenario = current_scenarios[env_idx]
-
-                        agent_histories[env_idx].append(
-                            pufferlib.viz.fill_agents_state(
-                                env_scenario, use_trajectory="trajectory" in args["env"]["action_type"]
-                            )
-                        )
-                        traffic_histories[env_idx].append(pufferlib.viz.fill_traffics_state(env_scenario, t))
-
-                        if "trajectory" in args["env"]["action_type"]:
-                            trajectory_histories[env_idx].append(pufferlib.viz.fill_trajectories(env_scenario, t))
-
-                        # Collect observation dictionaries for ALL active agents in THIS environment at timestep t
-                        if args["render_obs"]:
-                            step_obs_dict = {}
-                            if env_idx > 0:
-                                start_obs_index += current_scenarios[env_idx - 1]["active_agent_count"]
-                            for agent_idx in range(env_scenario["active_agent_count"]):
-                                agent_id = env_scenario["active_agent_indices"][agent_idx]
-                                step_obs_dict[int(agent_id)] = pufferlib.viz.extract_obs_frame(
-                                    ob,
-                                    env_scenario,
-                                    args,
-                                    timestep=t,
-                                    obs_index=start_obs_index + agent_idx,
-                                    agent_idx=agent_idx,
-                                    head_north=True,
-                                )
-                            all_agents_obs_histories[env_idx].append(step_obs_dict)
-
-                with torch.no_grad():
-                    ob = torch.as_tensor(ob).to(device)
-                    logits, _ = policy.forward_eval(ob, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                    action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-                ob, _, _, _, infos = vecenv.step(action)
-
-                # Serial backend returns infos as single list (infos[0] is the env's info list)
-                if infos and infos[0]:
-                    for env_idx, summary in enumerate(infos[0]):
-                        env_map_name = summary["map_name"].split("/")[-1].split(".")[0]
-                        summary["episode_id"] = batch_start + env_idx
-                        summary["env_id"] = env_idx
-                        summary["map_name"] = env_map_name
-
-                        for k, v in summary.items():
-                            if k not in global_infos:
-                                global_infos[k] = []
-                            global_infos[k].append(v)
-
-            if args["render"]:
-                # Loop through every environment to generate its specific HTML replay
-                for env_idx in range(num_envs_in_batch):
-                    global_episode_id = batch_start + env_idx
-                    # Ensure we don't render padding environments if num_scenarios isn't perfectly divisible by batch_size
-                    if global_episode_id >= num_scenarios:
-                        break
-                    env_map_name = map_names[env_idx]
-
-                    pufferlib.viz.generate_interactive_replay(
-                        current_scenarios[env_idx],
-                        agent_histories[env_idx],
-                        traffic_histories[env_idx],
-                        trajectory_histories[env_idx],
-                        all_agents_obs_histories[env_idx],
-                        f"{gif_folder}/{env_map_name}_{global_episode_id:03d}.html",
-                        head_north=True,
-                    )
-
-            scenarios_processed += num_envs_in_batch
-            pbar.update(num_envs_in_batch)
-
-    if args["render"]:
-        pufferlib.viz.build_gallery_index(gif_folder)
-
-    avg_infos = _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
-    _log_eval_metrics(logger, avg_infos, args, metric_prefix, quiet)
-
-    # Close vectorized environment to avoid file descriptor leaks
-    vecenv.close()
 
 
 def sweep(args=None, env_name=None):
@@ -2595,13 +2099,7 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
-    parser.add_argument(
-        "--num_carla_maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
-    )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
-    parser.add_argument(
-        "--render_obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"
-    )
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
@@ -2699,6 +2197,30 @@ def main():
         out_path = None
         global_step = None
         epoch = None
+        # Ad-hoc overrides for the chosen evaluator (None = not passed, so the
+        # [eval.<name>] section value stands). Pulled from argv here rather
+        # than registered in load_config so we can tell "passed" from
+        # "default" and only override when the user actually set them.
+        eval_simulation = None
+        render_backend = None
+        num_scenarios = None
+        render = None
+        num_maps = None
+        scalar_flags = {
+            "--num-scenarios": "num_scenarios",
+            "--num_scenarios": "num_scenarios",
+            "--render": "render",
+            "--num-maps": "num_maps",
+            "--num_maps": "num_maps",
+        }
+        str_flags = {
+            "--eval-simulation": "eval_simulation",
+            "--eval_simulation": "eval_simulation",
+            "--render-backend": "render_backend",
+            "--render_backend": "render_backend",
+        }
+        str_overrides = {}
+        overrides = {}
         i = 0
         while i < len(sys.argv):
             arg = sys.argv[i]
@@ -2718,18 +2240,32 @@ def main():
                 epoch = int(sys.argv[i + 1])
                 del sys.argv[i : i + 2]
                 continue
+            if arg in str_flags and i + 1 < len(sys.argv):
+                str_overrides[str_flags[arg]] = sys.argv[i + 1]
+                del sys.argv[i : i + 2]
+                continue
+            if arg in scalar_flags and i + 1 < len(sys.argv):
+                overrides[scalar_flags[arg]] = int(sys.argv[i + 1])
+                del sys.argv[i : i + 2]
+                continue
             i += 1
+        eval_simulation = str_overrides.get("eval_simulation")
+        render_backend = str_overrides.get("render_backend")
+        num_scenarios = overrides.get("num_scenarios")
+        render = overrides.get("render")
+        num_maps = overrides.get("num_maps")
         eval(
             env_name=env_name,
             evaluator_name=evaluator_name,
             out_path=out_path,
             global_step=global_step,
             epoch=epoch,
+            eval_simulation=eval_simulation,
+            num_scenarios=num_scenarios,
+            render=render,
+            render_backend=render_backend,
+            num_maps=num_maps,
         )
-    elif mode == "eval_multi_scenarios":
-        eval_multi_scenarios(env_name=env_name)
-    elif mode == "eval_multi_scenarios_render":
-        eval_multi_scenarios_render(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

@@ -1868,6 +1868,26 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "score", summary->score);
     assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
     assign_to_dict(dict, "total_infractions", summary->total_infractions);
+
+    PyObject *mn = PyUnicode_FromString(summary->map_name);
+    if (!mn) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "map_name", mn) < 0) {
+        Py_DECREF(mn);
+        return -1;
+    }
+    Py_DECREF(mn);
+
+    PyObject *sid = PyUnicode_FromString(summary->scenario_id);
+    if (!sid) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "scenario_id", sid) < 0) {
+        Py_DECREF(sid);
+        return -1;
+    }
+    Py_DECREF(sid);
     return 0;
 }
 
