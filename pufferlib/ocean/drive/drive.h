@@ -3488,16 +3488,6 @@ static int compute_observation_size(Drive *env) {
     return max_obs;
 }
 
-// Fold a heading into [-pi/2, pi/2] so opposite directions map to one orientation.
-static inline float wrap_heading(float angle) {
-    if (angle > (float) M_PI / 2.0f) {
-        angle -= (float) M_PI;
-    } else if (angle < -(float) M_PI / 2.0f) {
-        angle += (float) M_PI;
-    }
-    return angle;
-}
-
 // Fill `rows` x `features` observation slots with the padding sentinel.
 static inline void fill_padded_observation_rows(float *obs, int rows, int features) {
     for (int r = 0; r < rows; r++) {
@@ -4456,9 +4446,16 @@ static void compute_observations(Drive *env) {
             float dy_norm = (length > 0) ? dy / length : dy;
             float cos_angle = dx_norm * ego_entity->cos_heading + dy_norm * ego_entity->sin_heading;
             float sin_angle = -dx_norm * ego_entity->sin_heading + dy_norm * ego_entity->cos_heading;
-            // Road edges are undirected, so fold the heading to a single orientation.
+            // TODO: road edge headings are not always consistent on new maps. We wrap the
+            // heading to [-pi/2, pi/2] so that if the edge heading convention changes for
+            // new maps, the agent still sees the same edge heading.
             if (is_edge && length > 0) {
-                float angle = wrap_heading(atan2f(sin_angle, cos_angle));
+                float angle = atan2f(sin_angle, cos_angle);
+                if (angle > (float) M_PI / 2.0f) {
+                    angle -= (float) M_PI;
+                } else if (angle < -(float) M_PI / 2.0f) {
+                    angle += (float) M_PI;
+                }
                 cos_angle = cosf(angle);
                 sin_angle = sinf(angle);
             }
