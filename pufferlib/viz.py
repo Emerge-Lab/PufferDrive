@@ -1677,6 +1677,16 @@ def generate_interactive_replay(
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
 
+                // Select the SDC by default: the controlled agent the
+                // observations were recorded for (first id present in ALL_OBS).
+                // draw() then centers on it and opens its obs view.
+                if (ALL_OBS && ALL_OBS.length) {
+                    for (const frame of ALL_OBS) {
+                        const ids = frame ? Object.keys(frame) : [];
+                        if (ids.length) { followedId = parseInt(ids[0]); break; }
+                    }
+                }
+
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
 
@@ -1715,6 +1725,16 @@ def generate_interactive_replay(
                 META = data.meta;
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
+
+                // Select the SDC by default: the controlled agent the
+                // observations were recorded for (first id present in ALL_OBS).
+                // draw() then centers on it and opens its obs view.
+                if (ALL_OBS && ALL_OBS.length) {
+                    for (const frame of ALL_OBS) {
+                        const ids = frame ? Object.keys(frame) : [];
+                        if (ids.length) { followedId = parseInt(ids[0]); break; }
+                    }
+                }
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
