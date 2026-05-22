@@ -429,6 +429,7 @@ class Evaluator:
         capture_compact_replay=True, runs one episode per requested scenario,
         and writes one .html file per episode via mining_viz."""
         import importlib
+        import os
         import pickle
         import tempfile
         import zlib
@@ -499,11 +500,15 @@ class Evaluator:
                     state["lstm_c"] *= mask
 
                 for info in infos or []:
+                    if not isinstance(info, dict):
+                        continue
                     bundle_bytes = info.get("compact_replay_bundle")
                     if bundle_bytes is None:
                         continue
                     scenario_id = info.get("scenario_id") or f"{scenarios_done:04d}"
-                    map_name = info.get("map_name") or "map"
+                    # basename: map_name is the full bin path, and an absolute
+                    # value would make `out_dir / stem` escape out_dir.
+                    map_name = os.path.basename(str(info.get("map_name") or "map")).split(".")[0]
                     stem = f"{map_name}_{scenario_id}{step_suffix}"
                     tmp_path = out_dir / f"{stem}.pkl.zlib"
                     html_path = out_dir / f"{stem}.html"
