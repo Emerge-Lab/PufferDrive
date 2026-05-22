@@ -107,7 +107,7 @@ puffer eval puffer_drive --eval_simulation replay \
 # Render the agent's observations (interactive HTML)
 puffer eval puffer_drive --eval_simulation gigaflow \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 10 --render 1 --render_obs 1
+  --num_scenarios 10 --render 1 --render-backend obs_html
 ```
 
 **For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**

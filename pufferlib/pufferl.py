@@ -1639,8 +1639,8 @@ def eval(
     eval_simulation=None,
     num_scenarios=None,
     render=None,
-    render_obs=None,
-    num_carla_maps=None,
+    render_backend=None,
+    num_maps=None,
 ):
     """Run a single named evaluator from drive.ini.
 
@@ -1650,7 +1650,7 @@ def eval(
 
     Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
     gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
-    flags `--num_scenarios`, `--render`, `--render_obs`, `--num_carla_maps`
+    flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
     override the chosen evaluator's config for this run (only when passed),
     so a checkpoint can be evaluated at an arbitrary scale from the CLI
     without editing drive.ini.
@@ -1701,12 +1701,12 @@ def eval(
     # mutating them here takes effect without touching drive.ini.
     if num_scenarios is not None:
         target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
-    if num_carla_maps is not None:
-        target.config.setdefault("env", {})["num_maps"] = int(num_carla_maps)
+    if num_maps is not None:
+        target.config.setdefault("env", {})["num_maps"] = int(num_maps)
     if render is not None:
         target.render = bool(render)
-    if render_obs is not None:
-        target.config.setdefault("eval", {})["render_obs"] = bool(render_obs)
+    if render_backend is not None:
+        target.config["render_backend"] = render_backend
 
     # Build a fresh vecenv inside the manager via the evaluator's overrides.
     # Policy can come from a checkpoint (load_model_path) or be passed in.
@@ -2100,13 +2100,7 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
-    parser.add_argument(
-        "--num_carla_maps", type=int, default=8, help="Number of CARLA maps to use in gigaflow mode (max 8)"
-    )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
-    parser.add_argument(
-        "--render_obs", type=int, default=0, help="Rendering the observation of first agent in evaluation"
-    )
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
@@ -2209,19 +2203,24 @@ def main():
         # than registered in load_config so we can tell "passed" from
         # "default" and only override when the user actually set them.
         eval_simulation = None
+        render_backend = None
         num_scenarios = None
         render = None
-        render_obs = None
-        num_carla_maps = None
+        num_maps = None
         scalar_flags = {
             "--num-scenarios": "num_scenarios",
             "--num_scenarios": "num_scenarios",
             "--render": "render",
-            "--render-obs": "render_obs",
-            "--render_obs": "render_obs",
-            "--num-carla-maps": "num_carla_maps",
-            "--num_carla_maps": "num_carla_maps",
+            "--num-maps": "num_maps",
+            "--num_maps": "num_maps",
         }
+        str_flags = {
+            "--eval-simulation": "eval_simulation",
+            "--eval_simulation": "eval_simulation",
+            "--render-backend": "render_backend",
+            "--render_backend": "render_backend",
+        }
+        str_overrides = {}
         overrides = {}
         i = 0
         while i < len(sys.argv):
@@ -2242,8 +2241,8 @@ def main():
                 epoch = int(sys.argv[i + 1])
                 del sys.argv[i : i + 2]
                 continue
-            if arg in ("--eval-simulation", "--eval_simulation") and i + 1 < len(sys.argv):
-                eval_simulation = sys.argv[i + 1]
+            if arg in str_flags and i + 1 < len(sys.argv):
+                str_overrides[str_flags[arg]] = sys.argv[i + 1]
                 del sys.argv[i : i + 2]
                 continue
             if arg in scalar_flags and i + 1 < len(sys.argv):
@@ -2251,10 +2250,11 @@ def main():
                 del sys.argv[i : i + 2]
                 continue
             i += 1
+        eval_simulation = str_overrides.get("eval_simulation")
+        render_backend = str_overrides.get("render_backend")
         num_scenarios = overrides.get("num_scenarios")
         render = overrides.get("render")
-        render_obs = overrides.get("render_obs")
-        num_carla_maps = overrides.get("num_carla_maps")
+        num_maps = overrides.get("num_maps")
         eval(
             env_name=env_name,
             evaluator_name=evaluator_name,
@@ -2264,8 +2264,8 @@ def main():
             eval_simulation=eval_simulation,
             num_scenarios=num_scenarios,
             render=render,
-            render_obs=render_obs,
-            num_carla_maps=num_carla_maps,
+            render_backend=render_backend,
+            num_maps=num_maps,
         )
     elif mode == "sweep":
         sweep(env_name=env_name)

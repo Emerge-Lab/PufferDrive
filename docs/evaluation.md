@@ -29,8 +29,8 @@ mode          = "inline"           ; "inline" (block training) | "subprocess"
 inherits      = "<other_section>"  ; optional: pull defaults from another section
 clean         = true               ; zero perturbations/dropout + enforce red lights
 render        = true               ; capture renders during the rollout
-render_views  = ["sim_state","bev"]; camera views for the EGL/mp4 backend
-render_backend = "html"            ; "egl" (mp4, default) | "html" (compact-replay)
+render_views  = ["sim_state","bev"]; camera views for the egl backend
+render_backend = "egl"             ; egl | triage_html | obs_html (see Render backends)
 env.<key>     = <value>            ; any [env] override (dotted)
 eval.<key>    = <value>            ; evaluator-specific knob (see below)
 vec.<key>     = <value>            ; any [vec] override
@@ -49,7 +49,6 @@ templates.
 | `eval.verify_coverage` | report expected-vs-evaluated counts + duplicate maps |
 | `eval.render_num_scenarios` | how many scenarios to render (caps render cost) |
 | `eval.render_max_steps` | steps per rendered clip |
-| `eval.render_obs` | render each agent's observation (interactive HTML, CPU-only) |
 
 The `clean` macro zeros `lane_segment_dropout`, `boundary_segment_dropout`,
 `partner_blindness_prob`, `phantom_braking_prob`,
@@ -93,16 +92,16 @@ The flags below override that evaluator's config for this run, and each applies
 ```bash
 puffer eval puffer_drive --eval_simulation gigaflow \
     --load-model-path <ckpt> \
-    --num_scenarios 50 --render 1 --render_obs 1 --num_carla_maps 4
+    --num_scenarios 50 --render 1 --render-backend obs_html --num_maps 4
 ```
 
 | Flag | Effect |
 |---|---|
 | `--eval_simulation gigaflow\|replay` | selects `validation_<sim>` when `--evaluator` is absent |
 | `--num_scenarios N` | override the evaluator's `eval.num_scenarios` |
-| `--render 0\|1` | toggle rendering |
-| `--render_obs 0\|1` | render agent observations (HTML) instead of mp4 |
-| `--num_carla_maps N` | override `env.num_maps` |
+| `--render 0\|1` | toggle rendering on/off |
+| `--render-backend egl\|triage_html\|obs_html` | choose the renderer (see Render backends) |
+| `--num_maps N` | override `env.num_maps` (CARLA maps for gigaflow, bin count for replay) |
 
 Any other section value can be overridden with the generic dotted form, e.g.
 `--eval.validation_replay.env.scenario-length 91`.
@@ -128,11 +127,23 @@ from the training process.
   metrics and logs any maps evaluated more than once. For a unique-scenario
   sweep (replay) duplicates flag a problem; for cycling maps (gigaflow) they
   are expected.
-- **Renders** — `render_backend = "egl"` writes mp4 per (scenario, view);
-  `"html"` writes a compact-replay HTML viewer; `eval.render_obs = true` writes
-  an interactive HTML with the agent observation overlaid (and a gallery
-  `index.html`). `render_num_scenarios` caps how many scenarios are rendered so
-  render cost stays bounded regardless of `num_scenarios`.
+- **Renders** — selected by `render_backend` (see below). `render_num_scenarios`
+  caps how many scenarios are rendered, so render cost stays bounded regardless
+  of `num_scenarios`.
+
+### Render backends
+
+`render_backend` picks one renderer (it is not a stack — exactly one runs):
+
+| `render_backend` | Output | Shows | Built from | Use it to |
+|---|---|---|---|---|
+| `egl` (default) | mp4 per (scenario, view) | top-down sim camera | GPU EGL → ffmpeg | get a shareable video clip |
+| `triage_html` | one HTML per episode → `gif/<name>/` | scene playback **+ per-episode metrics** | the captured compact-replay bundle (no re-sim) | triage *which* episodes failed |
+| `obs_html` | one HTML per scenario (+ gallery `index.html`) → `obs/<name>/` | interactive scene **+ each agent's NN observation** | a CPU re-roll capturing state + obs | inspect *what the policy sees* |
+
+Both HTML backends are CPU-only (no EGL/ffmpeg). `triage_html` is lighter (it
+reuses data already captured during the rollout); `obs_html` re-simulates to
+record the observation, so it's heavier but shows the policy's actual inputs.
 
 ## The built-in evaluators
 

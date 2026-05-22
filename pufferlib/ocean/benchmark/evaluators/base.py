@@ -359,21 +359,20 @@ class Evaluator:
     # -- Render (default EGL → ffmpeg mp4 pipeline) ----------------------
 
     def _render_pass(self, vecenv, policy, args) -> list:
-        """Build a fresh PufferEnv with `render_mode=headless`, render one
-        clip per (scenario, view), return mp4 paths (egl) or html paths (html).
+        """Render the rollout via the configured `render_backend`:
+          "egl"         — top-down sim camera → one mp4 per (scenario, view)
+          "triage_html" — scene playback + per-episode metrics, rebuilt from the
+                          captured compact-replay bundle; for triaging episodes
+          "obs_html"    — interactive scene + the agent's unpacked NN observation
         Subclasses customize the render env via `_render_env_overrides`.
         """
-        # Observation render (opt-in): an interactive HTML per scenario that
-        # also shows each agent's unpacked observation. CPU-only, so it takes
-        # precedence over the EGL/html backends when eval.render_obs is set.
-        if self.config.get("eval", {}).get("render_obs", False):
-            return self._render_pass_obs(vecenv, policy, args)
-
         backend = args.get("render_backend", "egl")
-        if backend == "html":
+        if backend == "obs_html":
+            return self._render_pass_obs(vecenv, policy, args)
+        if backend == "triage_html":
             return self._render_pass_html(vecenv, policy, args)
-        if backend not in ["egl", "html"]:
-            raise ValueError(f"Evaluator: _render_pass only accepts egl, html backends but got {backend} instead.")
+        if backend != "egl":
+            raise ValueError(f"render_backend must be 'egl', 'triage_html', or 'obs_html'; got {backend!r}.")
 
         import importlib
         from pathlib import Path
@@ -425,9 +424,9 @@ class Evaluator:
         return all_paths
 
     def _render_pass_html(self, vecenv, policy, args) -> list:
-        """CPU-only HTML render path. Creates a fresh env with
-        capture_compact_replay=True, runs one episode per requested scenario,
-        and writes one .html file per episode via mining_viz."""
+        """`triage_html` backend. CPU-only scene-playback viewer for triaging
+        episodes: captures each episode's compact-replay bundle, then writes one
+        mining_viz .html per episode (scene + per-episode metrics, no NN obs)."""
         import importlib
         import os
         import pickle
@@ -444,7 +443,7 @@ class Evaluator:
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
             if required not in eval_cfg:
-                raise KeyError(f"[eval.{self.name}] has render=true but eval.{required} is not set.")
+                raise KeyError(f"[eval.{self.name}] has render_backend=triage_html but eval.{required} is not set.")
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
@@ -528,10 +527,10 @@ class Evaluator:
         return html_paths
 
     def _render_pass_obs(self, vecenv, policy, args) -> list:
-        """CPU-only observation render. Rolls out `render_num_scenarios`
-        episodes and writes one interactive HTML per scenario via
-        pufferlib.viz — including each agent's unpacked observation. Reads
-        env state + the obs array, so it needs no EGL/ffmpeg."""
+        """`obs_html` backend. CPU-only interactive viewer for inspecting policy
+        inputs: rolls out `render_num_scenarios` episodes and writes one
+        pufferlib.viz HTML per scenario showing the scene + each agent's unpacked
+        NN observation. Reads env state + the obs array, so it needs no EGL/ffmpeg."""
         import importlib
         import os
         from pathlib import Path
@@ -545,7 +544,7 @@ class Evaluator:
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
             if required not in eval_cfg:
-                raise KeyError(f"[eval.{self.name}] has render_obs but eval.{required} is not set.")
+                raise KeyError(f"[eval.{self.name}] has render_backend=obs_html but eval.{required} is not set.")
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
