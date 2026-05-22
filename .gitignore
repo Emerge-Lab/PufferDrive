@@ -211,8 +211,8 @@ pufferlib/resources/drive/output*.gif
 # External local clones
 external/
 
-# Generated docs
-docs/
+# Generated docs (sphinx build output only; docs/*.md is tracked)
+docs/_build/
 
 # Claude config
 .claude/
