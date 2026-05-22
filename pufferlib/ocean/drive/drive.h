@@ -284,6 +284,49 @@ struct GridMap {
     int num_drivable_grid_cell;
 };
 
+// Shared map data: loaded once per unique map file, referenced by multiple Drive envs.
+// Road geometry, grid map, and spatial index are read-only after create_shared_map_data().
+// Reference-counted: freed by free_shared_map_data() when no longer needed.
+typedef struct SharedMapData SharedMapData;
+struct SharedMapData {
+    // Road geometry (read-only, never modified after load)
+    RoadMapElement *road_elements;
+    int num_road_elements;
+
+    // Spatial index (read-only after init_grid_map + cache_neighbor_offsets)
+    GridMap *grid_map;
+    int *neighbor_offsets;
+
+    // Lane graph (read-only after load)
+    struct LaneGraph lane_graph;
+
+    // Scenario metadata
+    char scenario_id[128];
+    char dataset_name[32];
+    int log_length;
+    float log_dt;
+    float world_mean_x;
+    float world_mean_y;
+
+    // Template traffic elements (always cloned per-env so GIGAFLOW can rewrite states)
+    TrafficControlElement *template_traffic_elements;
+    int num_traffic_elements;
+
+    // Template agents (deep-cloned per-env for REPLAY; unused placeholder for GIGAFLOW)
+    Agent *template_agents;
+    int num_total_agents;
+    int num_objects;
+
+    // Small per-scenario arrays (copied into each env, not shared)
+    int *objects_of_interest;
+    int num_objects_of_interest;
+    int *tracks_to_predict;
+    int num_tracks_to_predict;
+
+    int ref_count;
+    int detached; // set when released from g_map_cache while refs still live; c_close frees when ref_count reaches 0
+};
+
 struct Drive {
     Client *client;
     // Render mode: RENDER_WINDOW (0) for interactive viewer, RENDER_HEADLESS (1)
@@ -430,6 +473,9 @@ struct Drive {
     int next_episode_index;
     int completed_episodes_count;
     CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
+
+    // NULL if this env owns its map data; non-NULL if using shared map cache.
+    SharedMapData *shared_map;
 };
 
 typedef struct {
@@ -2929,8 +2975,7 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // differs between modes.
     // width = min(width, length) is enforced below.
     float spawn_length, spawn_width;
-    int is_truck = (env->truck_fraction > 0.0f)
-                   && (random_uniform(0.0f, 1.0f) < env->truck_fraction);
+    int is_truck = (env->truck_fraction > 0.0f) && (random_uniform(0.0f, 1.0f) < env->truck_fraction);
     if (is_truck) {
         spawn_length = random_uniform(env->truck_spawn_length_min, env->truck_spawn_length_max);
         spawn_width = random_uniform(env->truck_spawn_width_min, env->truck_spawn_width_max);
@@ -3389,9 +3434,280 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
+// ========================================
+// Shared Map Cache Functions
+// ========================================
+
+void free_shared_map_data(SharedMapData *shared) {
+    if (shared == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < shared->num_road_elements; i++) {
+        free_road_element(&shared->road_elements[i]);
+    }
+    free(shared->road_elements);
+
+    for (int i = 0; i < shared->num_traffic_elements; i++) {
+        free_traffic_element(&shared->template_traffic_elements[i]);
+    }
+    free(shared->template_traffic_elements);
+
+    int grid_cell_count = shared->grid_map->grid_cols * shared->grid_map->grid_rows;
+    for (int i = 0; i < grid_cell_count; i++) {
+        free(shared->grid_map->cells[i]);
+    }
+    free(shared->grid_map->cells);
+    free(shared->grid_map->cell_entities_count);
+    free(shared->grid_map->grid_index_drivable);
+    free(shared->neighbor_offsets);
+    for (int i = 0; i < grid_cell_count; i++) {
+        free(shared->grid_map->neighbor_cache_entities[i]);
+    }
+    free(shared->grid_map->neighbor_cache_entities);
+    free(shared->grid_map->neighbor_cache_count);
+    free(shared->grid_map);
+
+    free_lane_graph(&shared->lane_graph);
+
+    for (int i = 0; i < shared->num_total_agents; i++) {
+        free_agent(&shared->template_agents[i]);
+    }
+    free(shared->template_agents);
+
+    free(shared->objects_of_interest);
+    free(shared->tracks_to_predict);
+
+    free(shared);
+}
+
+SharedMapData *create_shared_map_data(
+    const char *map_file_path,
+    float road_obs_front_dist,
+    float road_obs_behind_dist,
+    float road_obs_side_dist) {
+    SharedMapData *shared = (SharedMapData *) calloc(1, sizeof(SharedMapData));
+
+    Drive temp = {0};
+    temp.road_obs_front_dist = road_obs_front_dist;
+    temp.road_obs_behind_dist = road_obs_behind_dist;
+    temp.road_obs_side_dist = road_obs_side_dist;
+
+    load_map_binary(map_file_path, &temp);
+
+    // Transfer ownership from temp to shared
+    shared->road_elements = temp.road_elements;
+    shared->num_road_elements = temp.num_road_elements;
+    shared->template_traffic_elements = temp.traffic_elements;
+    shared->num_traffic_elements = temp.num_traffic_elements;
+    shared->template_agents = temp.agents;
+    shared->num_total_agents = temp.num_total_agents;
+    shared->num_objects = temp.num_objects;
+    shared->lane_graph = temp.lane_graph;
+    memcpy(shared->scenario_id, temp.scenario_id, sizeof(temp.scenario_id));
+    memcpy(shared->dataset_name, temp.dataset_name, sizeof(temp.dataset_name));
+    shared->log_length = temp.log_length;
+    shared->log_dt = temp.log_dt;
+    shared->world_mean_x = temp.world_mean_x;
+    shared->world_mean_y = temp.world_mean_y;
+    shared->objects_of_interest = temp.objects_of_interest;
+    shared->num_objects_of_interest = temp.num_objects_of_interest;
+    shared->tracks_to_predict = temp.tracks_to_predict;
+    shared->num_tracks_to_predict = temp.num_tracks_to_predict;
+
+    // Build grid map and spatial index (temp.road_elements is now shared->road_elements)
+    init_grid_map(&temp);
+    int vision_half_range
+        = (int) ceilf(fmaxf(fmaxf(road_obs_front_dist, road_obs_behind_dist), road_obs_side_dist) / GRID_CELL_SIZE);
+    temp.grid_map->vision_range = 2 * vision_half_range + 1;
+    init_neighbor_offsets(&temp);
+    cache_neighbor_offsets(&temp);
+    shared->grid_map = temp.grid_map;
+    shared->neighbor_offsets = temp.neighbor_offsets;
+
+    shared->ref_count = 0;
+    shared->detached = 0;
+    return shared;
+}
+
+void init_from_shared(Drive *env, SharedMapData *shared) {
+    env->human_agent_idx = 0;
+    env->timestep = 0;
+    env->shared_map = shared;
+    shared->ref_count++;
+
+    // Point to shared read-only map data
+    env->road_elements = shared->road_elements;
+    env->num_road_elements = shared->num_road_elements;
+    env->grid_map = shared->grid_map;
+    env->neighbor_offsets = shared->neighbor_offsets;
+    env->lane_graph = shared->lane_graph; // struct copy; pointers owned by SharedMapData
+    env->world_mean_x = shared->world_mean_x;
+    env->world_mean_y = shared->world_mean_y;
+    env->log_length = shared->log_length;
+    env->log_dt = shared->log_dt;
+    memcpy(env->scenario_id, shared->scenario_id, sizeof(env->scenario_id));
+    memcpy(env->dataset_name, shared->dataset_name, sizeof(env->dataset_name));
+    env->num_total_agents = shared->num_total_agents;
+    env->num_objects = shared->num_objects;
+
+    // Deep-copy small per-scenario arrays so c_close can always free them
+    if (shared->num_objects_of_interest > 0) {
+        env->objects_of_interest = (int *) malloc(shared->num_objects_of_interest * sizeof(int));
+        memcpy(env->objects_of_interest, shared->objects_of_interest, shared->num_objects_of_interest * sizeof(int));
+    } else {
+        env->objects_of_interest = NULL;
+    }
+    env->num_objects_of_interest = shared->num_objects_of_interest;
+
+    if (shared->num_tracks_to_predict > 0) {
+        env->tracks_to_predict = (int *) malloc(shared->num_tracks_to_predict * sizeof(int));
+        memcpy(env->tracks_to_predict, shared->tracks_to_predict, shared->num_tracks_to_predict * sizeof(int));
+    } else {
+        env->tracks_to_predict = NULL;
+    }
+    env->num_tracks_to_predict = shared->num_tracks_to_predict;
+
+    // Clone traffic elements per-env (GIGAFLOW rewrites states; REPLAY just reads them)
+    env->num_traffic_elements = shared->num_traffic_elements;
+    if (shared->num_traffic_elements > 0) {
+        env->traffic_elements
+            = (TrafficControlElement *) calloc(shared->num_traffic_elements, sizeof(TrafficControlElement));
+        for (int i = 0; i < shared->num_traffic_elements; i++) {
+            TrafficControlElement *src = &shared->template_traffic_elements[i];
+            TrafficControlElement *dst = &env->traffic_elements[i];
+            *dst = *src;
+            if (src->num_controlled_lanes > 0) {
+                dst->controlled_lanes = (int *) malloc(src->num_controlled_lanes * sizeof(int));
+                memcpy(dst->controlled_lanes, src->controlled_lanes, src->num_controlled_lanes * sizeof(int));
+            } else {
+                dst->controlled_lanes = NULL;
+            }
+            if (src->state_length > 0) {
+                dst->states = (int *) malloc(src->state_length * sizeof(int));
+                memcpy(dst->states, src->states, src->state_length * sizeof(int));
+            } else {
+                dst->states = NULL;
+            }
+        }
+    } else {
+        env->traffic_elements = NULL;
+    }
+
+    // Clone agents for REPLAY (each env needs independent mutable sim state).
+    // For GIGAFLOW, set_active_agents will allocate agents from scratch via spawn_agent.
+    if (env->simulation_mode == SIMULATION_REPLAY && shared->num_total_agents > 0) {
+        env->agents = (Agent *) calloc(shared->num_total_agents, sizeof(Agent));
+        for (int i = 0; i < shared->num_total_agents; i++) {
+            Agent *src = &shared->template_agents[i];
+            Agent *dst = &env->agents[i];
+            *dst = *src;
+            int tlen = src->trajectory_length;
+            dst->log_trajectory_x = (float *) malloc(tlen * sizeof(float));
+            dst->log_trajectory_y = (float *) malloc(tlen * sizeof(float));
+            dst->log_trajectory_z = (float *) malloc(tlen * sizeof(float));
+            dst->log_heading = (float *) malloc(tlen * sizeof(float));
+            dst->log_velocity_x = (float *) malloc(tlen * sizeof(float));
+            dst->log_velocity_y = (float *) malloc(tlen * sizeof(float));
+            dst->log_length = (float *) malloc(tlen * sizeof(float));
+            dst->log_width = (float *) malloc(tlen * sizeof(float));
+            dst->log_height = (float *) malloc(tlen * sizeof(float));
+            dst->log_valid = (int *) malloc(tlen * sizeof(int));
+            memcpy(dst->log_trajectory_x, src->log_trajectory_x, tlen * sizeof(float));
+            memcpy(dst->log_trajectory_y, src->log_trajectory_y, tlen * sizeof(float));
+            memcpy(dst->log_trajectory_z, src->log_trajectory_z, tlen * sizeof(float));
+            memcpy(dst->log_heading, src->log_heading, tlen * sizeof(float));
+            memcpy(dst->log_velocity_x, src->log_velocity_x, tlen * sizeof(float));
+            memcpy(dst->log_velocity_y, src->log_velocity_y, tlen * sizeof(float));
+            memcpy(dst->log_length, src->log_length, tlen * sizeof(float));
+            memcpy(dst->log_width, src->log_width, tlen * sizeof(float));
+            memcpy(dst->log_height, src->log_height, tlen * sizeof(float));
+            memcpy(dst->log_valid, src->log_valid, tlen * sizeof(int));
+            if (src->route_length > 0) {
+                dst->route = (int *) malloc(src->route_length * sizeof(int));
+                memcpy(dst->route, src->route, src->route_length * sizeof(int));
+            } else {
+                dst->route = NULL;
+            }
+            dst->path = NULL; // path is computed at runtime, not from template
+        }
+    } else {
+        env->agents = NULL;
+        env->num_total_agents = 0;
+    }
+
+    // Per-env observation flag (depends on per-env obs segment count params)
+    env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations)
+        || (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
+
+    // Run per-env init logic (agent selection, start positions, etc.)
+    env->logs_capacity = 0;
+    set_active_agents(env);
+    env->logs_capacity = env->active_agent_count;
+    if (env->simulation_mode == SIMULATION_REPLAY) {
+        remove_bad_trajectories(env);
+    }
+    set_start_position(env);
+    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+        int steps = env->scenario_length;
+        if (steps > 0) {
+            for (int i = 0; i < env->num_traffic_elements; i++) {
+                TrafficControlElement *traffic = &env->traffic_elements[i];
+                if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+                    continue;
+                }
+                if (traffic->states && traffic->state_length != steps) {
+                    free(traffic->states);
+                    traffic->states = NULL;
+                }
+                if (traffic->states == NULL) {
+                    traffic->states = (int *) malloc(steps * sizeof(int));
+                    if (traffic->states == NULL) {
+                        traffic->state_length = 0;
+                        continue;
+                    }
+                }
+                traffic->state_length = steps;
+            }
+        }
+        generate_traffic_light_states(env);
+    }
+    env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
+
+    if (env->simulation_mode == SIMULATION_REPLAY) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            Agent *agent = &env->agents[agent_idx];
+            int start = env->init_steps > 0 ? env->init_steps : 0;
+            int remaining = agent->trajectory_length - 1 - start;
+            if (remaining < 1) {
+                remaining = 1;
+            }
+            int num_wp = env->num_target_waypoints;
+            if (num_wp > MAX_TARGET_WAYPOINTS) {
+                num_wp = MAX_TARGET_WAYPOINTS;
+            }
+            for (int g = 0; g < num_wp; g++) {
+                int t = start + (g + 1) * remaining / num_wp;
+                if (t >= agent->trajectory_length) {
+                    t = agent->trajectory_length - 1;
+                }
+                agent->goal_positions_x[g] = agent->log_trajectory_x[t];
+                agent->goal_positions_y[g] = agent->log_trajectory_y[t];
+                agent->goal_positions_z[g] = agent->log_trajectory_z[t];
+            }
+            agent->current_goal_idx = 0;
+            agent->goal_position_x = agent->goal_positions_x[0];
+            agent->goal_position_y = agent->goal_positions_y[0];
+            agent->goal_position_z = agent->goal_positions_z[0];
+        }
+    }
+}
+
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env->shared_map = NULL;
     load_map_binary(env->map_name, env);
     env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations)
         || (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
@@ -3470,41 +3786,59 @@ void init(Drive *env) {
 }
 
 void c_close(Drive *env) {
+    // Per-env agent data (always owned by the env)
     for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
-    for (int i = 0; i < env->num_road_elements; i++) {
-        free_road_element(&env->road_elements[i]);
-    }
+    free(env->agents);
+
+    // Traffic elements are always cloned per-env (see init_from_shared)
     for (int i = 0; i < env->num_traffic_elements; i++) {
         free_traffic_element(&env->traffic_elements[i]);
     }
-    free(env->agents);
-    free(env->road_elements);
     free(env->traffic_elements);
-    free(env->active_agent_indices);
-    free(env->logs);
-    // GridMap cleanup
-    int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(env->grid_map->cells[grid_index]);
-    }
-    free(env->grid_map->cells);
-    free(env->grid_map->cell_entities_count);
-    free(env->grid_map->grid_index_drivable);
-    free(env->neighbor_offsets);
 
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(env->grid_map->neighbor_cache_entities[i]);
-    }
-    free(env->grid_map->neighbor_cache_entities);
-    free(env->grid_map->neighbor_cache_count);
-    free(env->grid_map);
+    free(env->active_agent_indices);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
+
+    // objects_of_interest and tracks_to_predict are always per-env copies
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
-    free_lane_graph(&env->lane_graph);
+    free(env->logs);
+
+    if (env->shared_map != NULL) {
+        // road_elements, grid_map, neighbor_offsets, lane_graph are owned by SharedMapData
+        env->shared_map->ref_count--;
+        if (env->shared_map->ref_count == 0 && env->shared_map->detached) {
+            free_shared_map_data(env->shared_map);
+        }
+        env->shared_map = NULL;
+    } else {
+        // This env owns all map data — free it
+        for (int i = 0; i < env->num_road_elements; i++) {
+            free_road_element(&env->road_elements[i]);
+        }
+        free(env->road_elements);
+
+        int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
+        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+            free(env->grid_map->cells[grid_index]);
+        }
+        free(env->grid_map->cells);
+        free(env->grid_map->cell_entities_count);
+        free(env->grid_map->grid_index_drivable);
+        free(env->neighbor_offsets);
+        for (int i = 0; i < grid_cell_count; i++) {
+            free(env->grid_map->neighbor_cache_entities[i]);
+        }
+        free(env->grid_map->neighbor_cache_entities);
+        free(env->grid_map->neighbor_cache_count);
+        free(env->grid_map);
+
+        free_lane_graph(&env->lane_graph);
+    }
+
     free(env->map_name);
     free(env->ini_file);
 }
