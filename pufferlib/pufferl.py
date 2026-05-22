@@ -390,7 +390,7 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device.to(self.observations.dtype), state)
+                logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config["normalize_rewards"]:
@@ -407,9 +407,9 @@ class PuffeRL:
                 batch_rows = slice(self.ep_indices[env_id.start].item(), 1 + self.ep_indices[env_id.stop - 1].item())
 
                 if config["cpu_offload"]:
-                    self.observations[batch_rows, l] = o.to(self.observations.dtype)
+                    self.observations[batch_rows, l] = o
                 else:
-                    self.observations[batch_rows, l] = o_device.to(self.observations.dtype)
+                    self.observations[batch_rows, l] = o_device
 
                 self.actions[batch_rows, l] = action
                 self.logprobs[batch_rows, l] = logprob.float()
