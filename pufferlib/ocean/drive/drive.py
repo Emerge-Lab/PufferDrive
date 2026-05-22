@@ -141,8 +141,12 @@ class Drive(pufferlib.PufferEnv):
             self.target_type = binding.TARGET_STATIC
         elif target_type == "dynamic":
             self.target_type = binding.TARGET_DYNAMIC
+        elif target_type == "dijkstra":
+            self.target_type = binding.TARGET_DIJKSTRA
+            self.num_target_waypoints = 4
+            num_target_waypoints = 4
         else:
-            raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
+            raise ValueError(f"target_type must be 'static', 'dynamic', or 'dijkstra'. Got: {target_type}")
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -213,7 +217,7 @@ class Drive(pufferlib.PufferEnv):
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         # Target features based on target_type
-        if target_type == "static":
+        if target_type == "static" or target_type == "dijkstra":
             self.target_features = binding.STATIC_TARGET_FEATURES
         else:
             self.target_features = binding.DYNAMIC_TARGET_FEATURES

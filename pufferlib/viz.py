@@ -68,6 +68,7 @@ _map_cache = {}
 
 MULTI_LANE_FULL_SCORE_TIME = binding.MULTI_LANE_FULL_SCORE_TIME
 MULTI_LANE_HALF_SCORE_TIME = binding.MULTI_LANE_HALF_SCORE_TIME
+PADDED_OBSERVATION_VALUE = -0.001
 
 METRIC_LABELS = [
     "collision",
@@ -154,6 +155,10 @@ def _scale_ratio(numerator, denominator, default=1.0):
     return default if denominator == 0 else float(numerator) / float(denominator)
 
 
+def _is_empty_obs_row(row):
+    return np.all(row == 0) or np.all(row == PADDED_OBSERVATION_VALUE)
+
+
 def _obs_scales(
     env_cfg=None,
     max_goal_position=100.0,
@@ -179,6 +184,38 @@ def _obs_scales(
         "road_length_to_position": _scale_ratio(max_road_segment_length, max_position),
         "road_width_to_position": _scale_ratio(max_road_segment_width, max_position),
     }
+
+
+def _target_type_name(target_type):
+    if target_type == binding.TARGET_DYNAMIC:
+        return "dynamic"
+    if target_type == binding.TARGET_DIJKSTRA:
+        return "dijkstra"
+    if isinstance(target_type, str):
+        target_type = target_type.strip('"')
+        if target_type == str(binding.TARGET_STATIC):
+            return "static"
+        if target_type == str(binding.TARGET_DYNAMIC):
+            return "dynamic"
+        if target_type == str(binding.TARGET_DIJKSTRA):
+            return "dijkstra"
+        return target_type
+    return "static"
+
+
+def _dynamics_model_name(dynamics_model):
+    if dynamics_model == 1:
+        return "jerk"
+    if isinstance(dynamics_model, str):
+        dynamics_model = dynamics_model.strip('"')
+        if dynamics_model == "0":
+            return "classic"
+        return "jerk" if dynamics_model == "1" else dynamics_model
+    return "classic"
+
+
+def _target_waypoint_count(target_type, num_target_waypoints):
+    return 4 if _target_type_name(target_type) == "dijkstra" else num_target_waypoints
 
 
 def _init_fig_ax(config: VizConfig, reuse_key: str = None, with_metrics: bool = False):
@@ -852,11 +889,11 @@ def unpack_obs(
     dynamics_model: int = 0,
     target_type: str = "static",
     reward_conditioning: bool = False,
-    num_target_waypoints: int = 5,
+    num_target_waypoints: int = 3,
     max_partners: int = 16,
-    max_lane_segments: int = 16,
-    max_boundary_segments: int = 16,
-    max_traffic_control_observations: int = 16,
+    max_lane_segments: int = 32,
+    max_boundary_segments: int = 32,
+    max_traffic_control_observations: int = 4,
     lane_segment_dropout: float = 0.0,
     boundary_segment_dropout: float = 0.0,
     agent_idx: int = 0,
@@ -873,6 +910,9 @@ def unpack_obs(
     if obs_flat.ndim == 1:
         obs_flat = obs_flat[None, :]
 
+    dynamics_model = _dynamics_model_name(dynamics_model)
+    target_type = _target_type_name(target_type)
+    num_target_waypoints = _target_waypoint_count(target_type, num_target_waypoints)
     ego_dim = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES_CLASSIC
 
     # Partner obs
@@ -885,7 +925,7 @@ def unpack_obs(
     boundary_segment_count = compute_effective_road_obs_count(max_boundary_segments, boundary_segment_dropout)
 
     # Target obs
-    target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
+    target_features = binding.DYNAMIC_TARGET_FEATURES if target_type == "dynamic" else binding.STATIC_TARGET_FEATURES
     target_dim = num_target_waypoints * target_features
 
     # Extract ego state
@@ -902,20 +942,29 @@ def unpack_obs(
     # Extract partners
     partners_start = target_end
     partners_end = partners_start + max_partners * partner_feature_size
-    partners_obs = obs_flat[:, partners_start:partners_end]
-    partners_obs = partners_obs.reshape(-1, max_partners, partner_feature_size)
+    if max_partners > 0:
+        partners_obs = obs_flat[:, partners_start:partners_end]
+        partners_obs = partners_obs.reshape(-1, max_partners, partner_feature_size)
+    else:
+        partners_obs = np.zeros((obs_flat.shape[0], 0, partner_feature_size))
 
     # Extract lane elements
     lane_start = partners_end
     lane_end = lane_start + lane_segment_count * road_feature_size
-    lane_obs = obs_flat[:, lane_start:lane_end]
-    lane_obs = lane_obs.reshape(-1, lane_segment_count, road_feature_size)
+    if lane_segment_count > 0:
+        lane_obs = obs_flat[:, lane_start:lane_end]
+        lane_obs = lane_obs.reshape(-1, lane_segment_count, road_feature_size)
+    else:
+        lane_obs = np.zeros((obs_flat.shape[0], 0, road_feature_size))
 
     # Extract boundary elements
     boundary_start = lane_end
     boundary_end = boundary_start + boundary_segment_count * road_feature_size
-    boundary_obs = obs_flat[:, boundary_start:boundary_end]
-    boundary_obs = boundary_obs.reshape(-1, boundary_segment_count, road_feature_size)
+    if boundary_segment_count > 0:
+        boundary_obs = obs_flat[:, boundary_start:boundary_end]
+        boundary_obs = boundary_obs.reshape(-1, boundary_segment_count, road_feature_size)
+    else:
+        boundary_obs = np.zeros((obs_flat.shape[0], 0, road_feature_size))
 
     # Extract traffic controls
     traffic_start = boundary_end
@@ -943,7 +992,7 @@ def plot_observation(
     dynamics_model="classic",
     target_type="static",
     reward_conditioning=False,
-    num_target_waypoints=10,
+    num_target_waypoints=3,
     max_partners=16,
     max_lane_segments=32,
     max_boundary_segments=32,
@@ -966,6 +1015,9 @@ def plot_observation(
         target_type: 0 for goal only, 1 for waypoints only, 2 for both
     """
     fig, ax = plt.subplots(figsize=(20, 20))
+    dynamics_model = _dynamics_model_name(dynamics_model)
+    target_type = _target_type_name(target_type)
+    num_target_waypoints = _target_waypoint_count(target_type, num_target_waypoints)
 
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
@@ -989,12 +1041,14 @@ def plot_observation(
         max_road_segment_length=max_road_segment_length,
         max_road_segment_width=max_road_segment_width,
     )
-    target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
+    target_position_scale = scales["goal_to_position"] if target_type != "dynamic" else 1.0
 
     if dynamics_model == "jerk":
-        ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit = ego_state
+        ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit, stopped = (
+            ego_state
+        )
     else:
-        ego_speed, ego_width, ego_length, lcenter, lalign, speed_limit = ego_state
+        ego_speed, ego_width, ego_length, steering_angle, lcenter, lalign, speed_limit, stopped = ego_state
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -1005,25 +1059,12 @@ def plot_observation(
             (-ego_length / 2, -ego_width / 2),
             ego_length,
             ego_width,
-            facecolor="#0055FF",
-            edgecolor="#FFD700",
-            linewidth=4,
-            alpha=0.9,
+            facecolor="blue",
+            edgecolor="black",
+            linewidth=2,
+            alpha=0.7,
             zorder=10,
         )
-    )
-    # SDC label above the vehicle
-    ax.text(
-        0,
-        ego_width / 2 + 0.03,
-        "SDC",
-        ha="center",
-        va="bottom",
-        fontsize=11,
-        fontweight="bold",
-        color="#FFD700",
-        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0055FF", edgecolor="#FFD700", linewidth=1.5),
-        zorder=11,
     )
 
     # Draw target waypoints
@@ -1032,7 +1073,7 @@ def plot_observation(
             continue
         wp_x = target_obs[i][0] * target_position_scale
         wp_y = target_obs[i][1] * target_position_scale
-        if target_type == "static":
+        if target_type != "dynamic":
             color = "red" if i == 0 else "orange"
             marker = "*" if i == 0 else "o"
             s = 200 if i == 0 else 80
@@ -1043,10 +1084,10 @@ def plot_observation(
         ax.scatter(wp_x, wp_y, color=color, marker=marker, s=s, zorder=15)
 
     # Add dynamics info text for JERK model
-    ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
+    ego_info = f"Speed: {ego_speed:.2f}\nSteering: {steering_angle:.3f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}\nStopped: {stopped:.2f}"
 
     if dynamics_model == "jerk":
-        ego_info += f"\nSteering: {steering_angle:.3f}\na_long: {a_long:.2f}\na_lat: {a_lat:.2f}"
+        ego_info += f"\na_long: {a_long:.2f}\na_lat: {a_lat:.2f}"
 
     ax.text(
         0.02,
@@ -1060,7 +1101,7 @@ def plot_observation(
 
     # Partner agents
     for i in range(partners_obs.shape[0]):
-        if np.all(partners_obs[i] == 0):
+        if _is_empty_obs_row(partners_obs[i]):
             continue
         rel_x, rel_y = partners_obs[i][0], partners_obs[i][1]
         length = partners_obs[i][3] * scales["veh_len_to_position"]
@@ -1086,7 +1127,7 @@ def plot_observation(
     rw2p = scales["road_width_to_position"]
     count_lane = 0
     for i in range(lane_obs.shape[0]):
-        if np.all(lane_obs[i] == 0):
+        if _is_empty_obs_row(lane_obs[i]):
             continue
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
@@ -1095,16 +1136,15 @@ def plot_observation(
         color = "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
-            [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
-            [rel_y + dir_sin * length / 2, rel_y - dir_sin * length / 2],
+            [rel_x + dir_cos * length, rel_x - dir_cos * length],
+            [rel_y + dir_sin * length, rel_y - dir_sin * length],
             color=color,
             linewidth=1,
             zorder=1,
         )
-
     count_boundary = 0
     for i in range(boundary_obs.shape[0]):
-        if np.all(boundary_obs[i] == 0):
+        if _is_empty_obs_row(boundary_obs[i]):
             continue
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
@@ -1113,8 +1153,8 @@ def plot_observation(
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
-            [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
-            [rel_y + dir_sin * length / 2, rel_y - dir_sin * length / 2],
+            [rel_x + dir_cos * length, rel_x - dir_cos * length],
+            [rel_y + dir_sin * length, rel_y - dir_sin * length],
             color=color,
             linewidth=1,
             zorder=1,
@@ -1132,10 +1172,12 @@ def plot_observation(
 
     # Traffic controls
     for i in range(traffic_controls_obs.shape[0]):
-        if np.all(traffic_controls_obs[i] == 0):
+        if _is_empty_obs_row(traffic_controls_obs[i]):
             continue
         rel_x1, rel_y1, rel_x2, rel_y2, _, control_type, state = traffic_controls_obs[i]
         control_type = int(control_type)
+        if _traffic_control_kind(control_type) is None:
+            continue
         if control_type == binding.TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT:
             ax.plot(
                 [rel_x1, rel_x2],
@@ -1276,12 +1318,15 @@ def fill_trajectories(scenario, timestep):
 
 
 def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, head_north=False):
+    dynamics_model = _dynamics_model_name(args["env"]["dynamics_model"])
+    target_type = _target_type_name(args["env"]["target_type"])
+    num_target_waypoints = _target_waypoint_count(target_type, args["env"]["num_target_waypoints"])
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
-        dynamics_model=args["env"]["dynamics_model"],
-        target_type=args["env"]["target_type"],
+        dynamics_model=dynamics_model,
+        target_type=target_type,
         reward_conditioning=args["env"]["reward_conditioning"],
-        num_target_waypoints=args["env"]["num_target_waypoints"],
+        num_target_waypoints=num_target_waypoints,
         max_partners=args["env"]["max_partner_observations"],
         max_lane_segments=args["env"]["max_lane_segment_observations"],
         max_boundary_segments=args["env"]["max_boundary_segment_observations"],
@@ -1291,7 +1336,8 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         agent_idx=obs_index,
     )
     scales = _obs_scales(args.get("env"))
-    target_position_scale = scales["goal_to_position"] if args["env"]["target_type"] == "static" else 1.0
+    max_position = scales["max_position"]
+    target_position_scale = scales["goal_to_position"] if target_type != "dynamic" else 1.0
 
     # --- Rotation Helper ---
     def _rot(x, y):
@@ -1299,11 +1345,11 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         return (-y, x) if head_north else (x, y)
 
     # --- Parse Ego ---
-    if args["env"]["dynamics_model"] == "jerk":
+    if dynamics_model == "jerk":
         ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat = ego_state[:6]
     else:
-        ego_speed, ego_width, ego_length = ego_state[:3]
-        steering_angle, a_long, a_lat = 0.0, 0.0, 0.0
+        ego_speed, ego_width, ego_length, steering_angle = ego_state[:4]
+        a_long, a_lat = 0.0, 0.0
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -1324,7 +1370,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
     def parse_roads(roads):
         res = []
         for r in roads:
-            if np.all(r == 0):
+            if _is_empty_obs_row(r):
                 continue
             x, y = r[0], r[1]
             length, width = r[3] * rl2p, r[4] * rw2p
@@ -1335,22 +1381,21 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
             else:
                 x_rot, y_rot = x, y
                 cos_rot, sin_rot = cos_a, sin_a
-            res.append(
-                [
-                    round(float(x_rot), 4),
-                    round(float(y_rot), 4),
-                    round(float(length), 4),
-                    round(float(width), 4),
-                    round(float(cos_rot), 4),
-                    round(float(sin_rot), 4),
-                ]
-            )
+            row = [
+                round(float(x_rot), 4),
+                round(float(y_rot), 4),
+                round(float(length), 4),
+                round(float(width), 4),
+                round(float(cos_rot), 4),
+                round(float(sin_rot), 4),
+            ]
+            res.append(row)
         return res
 
     # --- Parse Partners ---
     parsed_partners = []
     for p in partners_obs:
-        if np.all(p == 0):
+        if _is_empty_obs_row(p):
             continue
 
         px, py = _rot(p[0], p[1])
@@ -1376,7 +1421,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
     # --- Parse Traffic Controls ---
     parsed_traffic_controls = []
     for t in traffic_controls_obs:
-        if np.all(t == 0):
+        if _is_empty_obs_row(t):
             continue
         kind = _traffic_control_kind(t[5])
         if kind is None:
@@ -1410,6 +1455,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         gps_data.append([round(float(gx), 3), round(float(gy), 3)])
 
     return {
+        "target_type": target_type,
         "ego": ego_data,
         "partners": parsed_partners,
         "lanes": parse_roads(lane_obs),
@@ -1417,6 +1463,11 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         "traffic_controls": parsed_traffic_controls,
         "traj": traj_data,
         "gps": gps_data,
+        "view": {
+            "front": round(float(args["env"].get("road_obs_front_dist", max_position)) / max_position, 4),
+            "behind": round(float(args["env"].get("road_obs_behind_dist", max_position)) / max_position, 4),
+            "side": round(float(args["env"].get("road_obs_side_dist", max_position)) / max_position, 4),
+        },
     }
 
 
@@ -1510,10 +1561,6 @@ def generate_interactive_replay(
         .panel { background: var(--panel-bg); padding: 18px; border-radius: 16px; box-shadow: 0 8px 30px var(--shadow); pointer-events: auto; backdrop-filter: blur(5px); }
 
         #hud-global { position: absolute; top: 20px; left: 20px; min-width: 220px; }
-        #hud-global h3 { cursor: pointer; user-select: none; }
-        #hud-global.collapsed { min-width: 0; padding-bottom: 14px; }
-        #hud-global.collapsed > :not(h3) { display: none; }
-        #hud-global.collapsed h3 { margin: 0; }
 
         #hud-telemetry { position: absolute; top: 80px; right: 20px; width: 340px; display: none; border-left: 6px solid var(--accent); background: rgba(15, 15, 15, 0.98); color: white; z-index: 20; }
 
@@ -1575,8 +1622,8 @@ def generate_interactive_replay(
     <div id="help-hint">SPACE: Play | ARROWS: Step | ESC: Free | CLICK: Follow | ENTER: Search</div>
 
     <div id="ui-layer">
-        <div id="hud-global" class="panel collapsed">
-            <h3 onclick="toggleGlobalPanel()" title="Click to expand/minimize">Scenario Info <span id="globalChevron" style="float:right;">&#9656;</span></h3>
+        <div id="hud-global" class="panel">
+            <h3>Scenario Info</h3>
             <div class="label">Map</div> <div class="value" id="meta-map">-</div>
             <div class="label">ID</div> <div class="value small-val" id="meta-id" style="font-size:12px">-</div>
             <hr style="border: 0; border-top: 1px solid #555; margin: 12px 0;">
@@ -1677,16 +1724,6 @@ def generate_interactive_replay(
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
 
-                // Select the SDC by default: the controlled agent the
-                // observations were recorded for (first id present in ALL_OBS).
-                // draw() then centers on it and opens its obs view.
-                if (ALL_OBS && ALL_OBS.length) {
-                    for (const frame of ALL_OBS) {
-                        const ids = frame ? Object.keys(frame) : [];
-                        if (ids.length) { followedId = parseInt(ids[0]); break; }
-                    }
-                }
-
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
 
@@ -1725,16 +1762,6 @@ def generate_interactive_replay(
                 META = data.meta;
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
-
-                // Select the SDC by default: the controlled agent the
-                // observations were recorded for (first id present in ALL_OBS).
-                // draw() then centers on it and opens its obs view.
-                if (ALL_OBS && ALL_OBS.length) {
-                    for (const frame of ALL_OBS) {
-                        const ids = frame ? Object.keys(frame) : [];
-                        if (ids.length) { followedId = parseInt(ids[0]); break; }
-                    }
-                }
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
@@ -1809,11 +1836,6 @@ def generate_interactive_replay(
         window.onresize = () => { c.width=window.innerWidth; c.height=window.innerHeight; draw(); };
 
         function toggleTheme() { darkMode = !darkMode; document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light'); draw(); }
-        function toggleGlobalPanel() {
-            const p = document.getElementById('hud-global');
-            const collapsed = p.classList.toggle('collapsed');
-            document.getElementById('globalChevron').innerHTML = collapsed ? '&#9656;' : '&#9662;';
-        }
 
         function toggleCamMode() {
             if(followedId !== null) {
@@ -1887,31 +1909,37 @@ def generate_interactive_replay(
         }
 
         function drawObs(frame) {
-            const zoomLevel = 2.2;
-            const bScale = (obsC.width / 2) * zoomLevel;
+            const view = frame.view || {front: 1, behind: 1, side: 1};
+            const frameTargetType = frame.target_type || META.target_type || "static";
+            const headNorth = typeof HEAD_NORTH !== 'undefined' && HEAD_NORTH;
+            const xSpan = headNorth ? 2 * view.side : view.front + view.behind;
+            const ySpan = headNorth ? view.front + view.behind : 2 * view.side;
+            const bScale = 0.92 * Math.min(obsC.width / (xSpan || 1), obsC.height / (ySpan || 1));
             const px = dpr / bScale;
+            const cx = headNorth ? 0 : (view.front - view.behind) / 2;
+            const cy = headNorth ? (view.front - view.behind) / 2 : 0;
 
             obsCtx.fillStyle = "#ffffff"; obsCtx.fillRect(0, 0, obsC.width, obsC.height);
-            obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(bScale, -bScale);
+            obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(bScale, -bScale); obsCtx.translate(-cx, -cy);
 
             obsCtx.lineCap = "round"; obsCtx.strokeStyle = "#bbb"; obsCtx.lineWidth = 1.5 * px;
             if(frame.lanes) frame.lanes.forEach(r => {
-                obsCtx.beginPath(); obsCtx.moveTo(r[0] + r[4]*r[2]/2, r[1] + r[5]*r[2]/2);
-                obsCtx.lineTo(r[0] - r[4]*r[2]/2, r[1] - r[5]*r[2]/2); obsCtx.stroke();
+                obsCtx.beginPath(); obsCtx.moveTo(r[0] + r[4]*r[2], r[1] + r[5]*r[2]);
+                obsCtx.lineTo(r[0] - r[4]*r[2], r[1] - r[5]*r[2]); obsCtx.stroke();
             });
 
             obsCtx.strokeStyle = "#333"; obsCtx.lineWidth = 3 * px;
             if(frame.bounds) frame.bounds.forEach(r => {
-                obsCtx.beginPath(); obsCtx.moveTo(r[0] + r[4]*r[2]/2, r[1] + r[5]*r[2]/2);
-                obsCtx.lineTo(r[0] - r[4]*r[2]/2, r[1] - r[5]*r[2]/2); obsCtx.stroke();
+                obsCtx.beginPath(); obsCtx.moveTo(r[0] + r[4]*r[2], r[1] + r[5]*r[2]);
+                obsCtx.lineTo(r[0] - r[4]*r[2], r[1] - r[5]*r[2]); obsCtx.stroke();
             });
 
             if (frame.gps && frame.gps.length > 0) {
-                const tType = META.target_type || "static";
+                const tType = frameTargetType;
                 frame.gps.forEach((g, i) => {
                     if (g[0] === 0 && g[1] === 0) return;
                     let color, isStar = false, r;
-                    if (tType === "static") {
+                    if (tType === "static" || tType === "dijkstra") {
                         color = (i === 0) ? "red" : "orange";
                         isStar = (i === 0);
                         r = (i === 0) ? 8 * px : 4 * px;
@@ -1991,7 +2019,7 @@ def generate_interactive_replay(
 
             if (frame.ego) {
                 obsCtx.save();
-                if (typeof HEAD_NORTH !== 'undefined' && HEAD_NORTH) {
+                if (headNorth) {
                     obsCtx.rotate(Math.PI / 2);
                 }
                 obsCtx.fillStyle = "rgba(0, 102, 255, 0.8)"; // Semi-transparent blue

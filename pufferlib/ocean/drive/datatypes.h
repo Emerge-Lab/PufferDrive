@@ -236,7 +236,10 @@ struct Agent {
     float goal_position_x; // alias = goal_positions_x[current_goal_idx]
     float goal_position_y; // alias = goal_positions_y[current_goal_idx]
     float goal_position_z; // alias = goal_positions_z[current_goal_idx]
-    int current_goal_idx;  // index of next goal to reach (0..N-1)
+    int goal_lane_ids[MAX_TARGET_WAYPOINTS];
+    float goal_lane_s[MAX_TARGET_WAYPOINTS];
+    int num_active_goals;
+    int current_goal_idx; // index of next goal to reach (0..N-1)
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
@@ -280,6 +283,8 @@ struct RoadMapElement {
     int num_exits;
     int *exit_lanes;
     float speed_limit;
+    float length;
+    float *cum_lengths;
 };
 
 struct TrafficControlElement {
@@ -302,7 +307,6 @@ typedef struct {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *lane_lengths;
     float *distances; // n_lanes * n_lanes row-major
 };
 
@@ -328,6 +332,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->headings);
     free(element->entry_lanes);
     free(element->exit_lanes);
+    free(element->cum_lengths);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {
@@ -337,6 +342,5 @@ void free_traffic_element(struct TrafficControlElement *element) {
 
 void free_lane_graph(struct LaneGraph *graph) {
     free(graph->lane_ids);
-    free(graph->lane_lengths);
     free(graph->distances);
 }

@@ -120,11 +120,12 @@
 // TARGET_TYPE modes (controls what target info is in observations)
 #define TARGET_STATIC 0
 #define TARGET_DYNAMIC 1
+#define TARGET_DIJKSTRA 2
 
 // Observation feature counts
 #define EGO_FEATURES_CLASSIC 8
 #define EGO_FEATURES_JERK 10
-#define ROAD_FEATURES 7
+#define ROAD_FEATURES 9
 #define PARTNER_FEATURES 8
 #define TRAFFIC_CONTROL_FEATURES 7
 #define PADDED_OBSERVATION_VALUE -0.001f
@@ -133,6 +134,10 @@
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
+#define DIJKSTRA_TARGET_SLOTS 4
+#define DIJKSTRA_MIN_GOAL_DISTANCE 20.0f
+#define DIJKSTRA_MAX_GOAL_DISTANCE 200.0f
+#define DIJKSTRA_MAX_ROUTE_ATTEMPTS 64
 // Traffic light generation
 #define TL_DEFAULT_RED_DURATION 2.0f
 #define TL_DEFAULT_YELLOW_DURATION 3.0f
@@ -314,6 +319,7 @@ struct Drive {
     int num_traffic_elements;
     int num_objects;
     struct LaneGraph lane_graph;
+    int *lane_graph_index_by_lane;
     int static_agent_count;
     int *static_agent_indices;
     int expert_static_agent_count;
@@ -492,6 +498,27 @@ static int traffic_control_in_scope(int type, int scope) {
             || type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN;
     } else {
         return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
+    }
+}
+
+static void build_lane_graph_index(Drive *env) {
+    free(env->lane_graph_index_by_lane);
+    env->lane_graph_index_by_lane = NULL;
+    if (env->num_road_elements <= 0 || env->lane_graph.n_lanes <= 0 || env->lane_graph.lane_ids == NULL) {
+        return;
+    }
+    env->lane_graph_index_by_lane = (int *) malloc(env->num_road_elements * sizeof(int));
+    if (env->lane_graph_index_by_lane == NULL) {
+        return;
+    }
+    for (int i = 0; i < env->num_road_elements; i++) {
+        env->lane_graph_index_by_lane[i] = -1;
+    }
+    for (int i = 0; i < env->lane_graph.n_lanes; i++) {
+        int lane_idx = env->lane_graph.lane_ids[i];
+        if (lane_idx >= 0 && lane_idx < env->num_road_elements) {
+            env->lane_graph_index_by_lane[lane_idx] = i;
+        }
     }
 }
 
@@ -1134,12 +1161,23 @@ int load_map_binary(const char *filename, Drive *drive) {
                 fclose(file);
                 return -1;
             }
+            if (fread(&road->length, sizeof(float), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+            road->cum_lengths = (float *) malloc(slen * sizeof(float));
+            if ((size_t) slen > 0 && fread(road->cum_lengths, sizeof(float), slen, file) != (size_t) slen) {
+                fclose(file);
+                return -1;
+            }
         } else {
             road->num_entries = 0;
             road->num_exits = 0;
             road->entry_lanes = NULL;
             road->exit_lanes = NULL;
             road->speed_limit = 0.0f;
+            road->length = 0.0f;
+            road->cum_lengths = NULL;
         }
     }
 
@@ -1220,16 +1258,10 @@ int load_map_binary(const char *filename, Drive *drive) {
     }
     drive->lane_graph.n_lanes = n_lanes_graph;
     drive->lane_graph.lane_ids = NULL;
-    drive->lane_graph.lane_lengths = NULL;
     drive->lane_graph.distances = NULL;
     if (n_lanes_graph > 0) {
         drive->lane_graph.lane_ids = (int *) malloc(n_lanes_graph * sizeof(int));
         if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t) n_lanes_graph) {
-            fclose(file);
-            return -1;
-        }
-        drive->lane_graph.lane_lengths = (float *) malloc(n_lanes_graph * sizeof(float));
-        if (fread(drive->lane_graph.lane_lengths, sizeof(float), n_lanes_graph, file) != (size_t) n_lanes_graph) {
             fclose(file);
             return -1;
         }
@@ -1240,6 +1272,7 @@ int load_map_binary(const char *filename, Drive *drive) {
             return -1;
         }
     }
+    build_lane_graph_index(drive);
 
     // Metadata
     if (fread(drive->scenario_id, sizeof(char), 128, file) != 128) {
@@ -1298,17 +1331,6 @@ int load_map_binary(const char *filename, Drive *drive) {
 // Road Utility Functions
 // ========================================
 
-// Compute the length of a lane
-static float compute_lane_length(RoadMapElement *lane) {
-    float length = 0.0f;
-    for (int i = 1; i < lane->segment_length; i++) {
-        float dx = lane->x[i] - lane->x[i - 1];
-        float dy = lane->y[i] - lane->y[i - 1];
-        length += sqrtf(dx * dx + dy * dy);
-    }
-    return length;
-}
-
 // Compute the remaining distance on a lane from a given position to the end of the lane
 static float compute_remaining_lane_distance(RoadMapElement *lane, float pos_x, float pos_y) {
     // Find the closest segment to the position
@@ -1343,23 +1365,9 @@ static float compute_remaining_lane_distance(RoadMapElement *lane, float pos_x, 
         }
     }
 
-    // Compute remaining distance from closest point to end of lane
-    float remaining = 0.0f;
-
-    // Partial distance in current segment (from t to end of segment)
-    float dx = lane->x[closest_seg + 1] - lane->x[closest_seg];
-    float dy = lane->y[closest_seg + 1] - lane->y[closest_seg];
-    float seg_len = sqrtf(dx * dx + dy * dy);
-    remaining += (1.0f - closest_t) * seg_len;
-
-    // Full distance of remaining segments
-    for (int i = closest_seg + 1; i < lane->segment_length - 1; i++) {
-        dx = lane->x[i + 1] - lane->x[i];
-        dy = lane->y[i + 1] - lane->y[i];
-        remaining += sqrtf(dx * dx + dy * dy);
-    }
-
-    return remaining;
+    float progress = lane->cum_lengths[closest_seg]
+        + closest_t * (lane->cum_lengths[closest_seg + 1] - lane->cum_lengths[closest_seg]);
+    return fmaxf(0.0f, lane->length - progress);
 }
 
 static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, float origin_y) {
@@ -1371,6 +1379,118 @@ static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, 
     float dx = lane->x[last_idx] - origin_x;
     float dy = lane->y[last_idx] - origin_y;
     return dx * dx + dy * dy;
+}
+
+static int get_lane_graph_index(Drive *env, int lane_idx) {
+    if (lane_idx < 0 || lane_idx >= env->num_road_elements || env->lane_graph_index_by_lane == NULL) {
+        return -1;
+    }
+    return env->lane_graph_index_by_lane[lane_idx];
+}
+
+static int valid_route_distance(float distance) {
+    return isfinite(distance) && distance >= 0.0f && distance < 1e8f;
+}
+
+static float lane_graph_distance(Drive *env, int from_lane_idx, int to_lane_idx) {
+    int from_idx = get_lane_graph_index(env, from_lane_idx);
+    int to_idx = get_lane_graph_index(env, to_lane_idx);
+    if (from_idx < 0 || to_idx < 0 || env->lane_graph.distances == NULL) {
+        return INFINITY;
+    }
+    return env->lane_graph.distances[from_idx * env->lane_graph.n_lanes + to_idx];
+}
+
+static float lane_s_at_position(RoadMapElement *lane, float pos_x, float pos_y) {
+    if (lane->cum_lengths == NULL || lane->segment_length < 2) {
+        return 0.0f;
+    }
+
+    int closest_seg = 0;
+    float closest_t = 0.0f;
+    float min_dist_sq = 1e30f;
+
+    for (int i = 0; i < lane->segment_length - 1; i++) {
+        float x0 = lane->x[i];
+        float y0 = lane->y[i];
+        float x1 = lane->x[i + 1];
+        float y1 = lane->y[i + 1];
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float seg_len_sq = dx * dx + dy * dy;
+        float t = 0.0f;
+        if (seg_len_sq > 1e-6f) {
+            t = ((pos_x - x0) * dx + (pos_y - y0) * dy) / seg_len_sq;
+            t = fmaxf(0.0f, fminf(1.0f, t));
+        }
+        float proj_x = x0 + t * dx;
+        float proj_y = y0 + t * dy;
+        float dist_sq = (pos_x - proj_x) * (pos_x - proj_x) + (pos_y - proj_y) * (pos_y - proj_y);
+        if (dist_sq < min_dist_sq) {
+            min_dist_sq = dist_sq;
+            closest_seg = i;
+            closest_t = t;
+        }
+    }
+
+    float s = lane->cum_lengths[closest_seg]
+        + closest_t * (lane->cum_lengths[closest_seg + 1] - lane->cum_lengths[closest_seg]);
+    return clip(s, 0.0f, lane->length);
+}
+
+static float lane_midpoint_s(RoadMapElement *lane, int geometry_idx) {
+    if (lane->cum_lengths == NULL || geometry_idx < 0 || geometry_idx >= lane->segment_length - 1) {
+        return 0.0f;
+    }
+    return 0.5f * (lane->cum_lengths[geometry_idx] + lane->cum_lengths[geometry_idx + 1]);
+}
+
+static int lane_segment_at_s(RoadMapElement *lane, float lane_s) {
+    if (lane->segment_length < 2 || lane->cum_lengths == NULL) {
+        return 0;
+    }
+    float s = clip(lane_s, 0.0f, lane->length);
+    for (int i = 0; i < lane->segment_length - 1; i++) {
+        if (s <= lane->cum_lengths[i + 1]) {
+            return i;
+        }
+    }
+    return lane->segment_length - 2;
+}
+
+static float route_distance_between_lane_positions(
+    Drive *env,
+    int from_lane_idx,
+    float from_s,
+    int to_lane_idx,
+    float to_s) {
+    if (from_lane_idx < 0 || from_lane_idx >= env->num_road_elements || to_lane_idx < 0
+        || to_lane_idx >= env->num_road_elements) {
+        return INFINITY;
+    }
+    RoadMapElement *from_lane = &env->road_elements[from_lane_idx];
+    RoadMapElement *to_lane = &env->road_elements[to_lane_idx];
+    if (!is_drivable_road_lane(from_lane->type) || !is_drivable_road_lane(to_lane->type)) {
+        return INFINITY;
+    }
+    float from_clamped = clip(from_s, 0.0f, from_lane->length);
+    float to_clamped = clip(to_s, 0.0f, to_lane->length);
+    if (from_lane_idx == to_lane_idx) {
+        return (to_clamped >= from_clamped) ? (to_clamped - from_clamped) : INFINITY;
+    }
+
+    float graph_distance = lane_graph_distance(env, from_lane_idx, to_lane_idx);
+    if (!valid_route_distance(graph_distance)) {
+        return INFINITY;
+    }
+    return fmaxf(0.0f, from_lane->length - from_clamped) + graph_distance + to_clamped;
+}
+
+static int get_agent_goal_count(Drive *env, Agent *agent) {
+    if (env->target_type == TARGET_DIJKSTRA) {
+        return agent->num_active_goals;
+    }
+    return env->num_target_waypoints;
 }
 
 static float compute_progression(Agent *agent) {
@@ -1792,7 +1912,7 @@ static int generate_random_route(
 
         // Accumulate distance
         RoadMapElement *exit_lane = &env->road_elements[chosen_exit_idx];
-        accumulated_distance += compute_lane_length(exit_lane);
+        accumulated_distance += exit_lane->length;
         if (chosen_exit_dist_sq > max_end_distance_sq) {
             max_end_distance_sq = chosen_exit_dist_sq;
         }
@@ -1862,8 +1982,247 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
+static void set_agent_goal_from_lane_s(Drive *env, Agent *agent, int goal_idx, int lane_idx, float lane_s) {
+    RoadMapElement *lane = &env->road_elements[lane_idx];
+    int seg_idx = lane_segment_at_s(lane, lane_s);
+    float s0 = lane->cum_lengths[seg_idx];
+    float s1 = lane->cum_lengths[seg_idx + 1];
+    float denom = fmaxf(s1 - s0, 1e-6f);
+    float t = clip((lane_s - s0) / denom, 0.0f, 1.0f);
+    agent->goal_positions_x[goal_idx] = lane->x[seg_idx] + t * (lane->x[seg_idx + 1] - lane->x[seg_idx]);
+    agent->goal_positions_y[goal_idx] = lane->y[seg_idx] + t * (lane->y[seg_idx + 1] - lane->y[seg_idx]);
+    agent->goal_positions_z[goal_idx] = lane->z[seg_idx] + t * (lane->z[seg_idx + 1] - lane->z[seg_idx]);
+    agent->goal_lane_ids[goal_idx] = lane_idx;
+    agent->goal_lane_s[goal_idx] = clip(lane_s, 0.0f, lane->length);
+}
+
+static int build_dijkstra_route_to_goal(
+    Drive *env,
+    int start_lane_idx,
+    int goal_lane_idx,
+    int *route,
+    int max_route_length) {
+    if (start_lane_idx < 0 || goal_lane_idx < 0 || max_route_length <= 0) {
+        return 0;
+    }
+    int current_lane_idx = start_lane_idx;
+    int route_length = 0;
+    route[route_length++] = current_lane_idx;
+
+    for (int step = 0; step < DIJKSTRA_MAX_ROUTE_ATTEMPTS && route_length < max_route_length; step++) {
+        if (current_lane_idx == goal_lane_idx) {
+            return route_length;
+        }
+        RoadMapElement *current_lane = &env->road_elements[current_lane_idx];
+        float current_dist = lane_graph_distance(env, current_lane_idx, goal_lane_idx);
+        if (!valid_route_distance(current_dist)) {
+            return 0;
+        }
+
+        int best_exit = -1;
+        float best_dist = current_dist;
+        for (int e = 0; e < current_lane->num_exits; e++) {
+            int exit_lane_idx = current_lane->exit_lanes[e];
+            if (exit_lane_idx < 0 || exit_lane_idx >= env->num_road_elements) {
+                continue;
+            }
+            if (!is_drivable_road_lane(env->road_elements[exit_lane_idx].type)) {
+                continue;
+            }
+            float exit_dist = lane_graph_distance(env, exit_lane_idx, goal_lane_idx);
+            if (valid_route_distance(exit_dist) && exit_dist < best_dist - 1e-3f) {
+                best_dist = exit_dist;
+                best_exit = exit_lane_idx;
+            }
+        }
+        if (best_exit == -1) {
+            return 0;
+        }
+        route[route_length++] = best_exit;
+        current_lane_idx = best_exit;
+    }
+    return current_lane_idx == goal_lane_idx ? route_length : 0;
+}
+
+static int set_agent_route_from_buffer(Drive *env, int agent_idx, int *route, int route_length) {
+    Agent *agent = &env->agents[agent_idx];
+    if (route_length <= 0) {
+        return 0;
+    }
+    free(agent->route);
+    agent->route = (int *) malloc(route_length * sizeof(int));
+    if (agent->route == NULL) {
+        agent->route_length = 0;
+        return 0;
+    }
+    agent->route_length = route_length;
+    for (int i = 0; i < route_length; i++) {
+        agent->route[i] = route[i];
+    }
+    agent->current_route_index = 0;
+    build_path(env, agent_idx);
+    agent->closest_path_idx_wp = 0;
+    agent->closest_path_idx_wp = get_closest_waypoint_index_on_path(env, agent_idx);
+    agent->path_progression = compute_progression(agent);
+    return 1;
+}
+
+static int rebuild_dijkstra_route_to_current_goal(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int goal_count = get_agent_goal_count(env, agent);
+    if (agent->current_goal_idx < 0 || agent->current_goal_idx >= goal_count) {
+        return 0;
+    }
+    int start_lane_idx = agent->current_lane_idx;
+    if (start_lane_idx < 0) {
+        start_lane_idx = agent->previous_lane_idx;
+    }
+    int goal_lane_idx = agent->goal_lane_ids[agent->current_goal_idx];
+    int temp_route[MAX_ROUTE_LENGTH];
+    int route_length = build_dijkstra_route_to_goal(env, start_lane_idx, goal_lane_idx, temp_route, MAX_ROUTE_LENGTH);
+    return set_agent_route_from_buffer(env, agent_idx, temp_route, route_length);
+}
+
+static int compute_dijkstra_goals(Drive *env, int agent_idx) {
+    assert(env != NULL);
+    assert(agent_idx >= 0 && agent_idx < env->num_total_agents);
+
+    Agent *agent = &env->agents[agent_idx];
+    int active_goal_count = 1 + (rand() % DIJKSTRA_TARGET_SLOTS);
+    for (int i = 0; i < MAX_TARGET_WAYPOINTS; i++) {
+        agent->goal_positions_x[i] = 0.0f;
+        agent->goal_positions_y[i] = 0.0f;
+        agent->goal_positions_z[i] = 0.0f;
+        agent->goal_lane_ids[i] = -1;
+        agent->goal_lane_s[i] = 0.0f;
+    }
+
+    int start_lane_idx = agent->current_lane_idx;
+    if (start_lane_idx < 0) {
+        return 0;
+    }
+    RoadMapElement *start_lane = &env->road_elements[start_lane_idx];
+    float start_s = lane_s_at_position(start_lane, agent->sim_x, agent->sim_y);
+
+    int first_route[MAX_ROUTE_LENGTH];
+    int first_route_length = 0;
+    int first_goal_lane_idx = -1;
+    float first_goal_lane_s = 0.0f;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        int idx = rand() % env->num_road_elements;
+        if (!is_drivable_road_lane(env->road_elements[idx].type)) {
+            continue;
+        }
+        float graph_dist = lane_graph_distance(env, start_lane_idx, idx);
+        if (!valid_route_distance(graph_dist)) {
+            continue;
+        }
+        float lane_len = env->road_elements[idx].length;
+        float s = random_uniform(0.0f, lane_len);
+        float total_dist = graph_dist + s - start_s;
+        if (total_dist < DIJKSTRA_MIN_GOAL_DISTANCE) {
+            continue;
+        }
+        int temp_route[MAX_ROUTE_LENGTH];
+        int route_length = build_dijkstra_route_to_goal(env, start_lane_idx, idx, temp_route, MAX_ROUTE_LENGTH);
+        if (route_length > 0) {
+            first_goal_lane_idx = idx;
+            first_route_length = route_length;
+            first_goal_lane_s = s;
+            for (int i = 0; i < route_length; i++) {
+                first_route[i] = temp_route[i];
+            }
+            break;
+        }
+    }
+
+    if (first_goal_lane_idx == -1) {
+        first_goal_lane_idx = start_lane_idx;
+        first_route_length = 1;
+        first_route[0] = start_lane_idx;
+        float fallback_s = start_s + DIJKSTRA_MIN_GOAL_DISTANCE;
+        float lane_len = env->road_elements[start_lane_idx].length;
+        if (fallback_s > lane_len) {
+            fallback_s = lane_len;
+        }
+        first_goal_lane_s = fallback_s;
+    }
+
+    set_agent_goal_from_lane_s(env, agent, 0, first_goal_lane_idx, first_goal_lane_s);
+
+    int current_lane_idx = first_goal_lane_idx;
+    float current_s = first_goal_lane_s;
+    int sampled_count = 1;
+
+    for (int goal_idx = 1; goal_idx < active_goal_count; goal_idx++) {
+        float remaining_dist = random_uniform(DIJKSTRA_MIN_GOAL_DISTANCE + 5.0f, DIJKSTRA_MAX_GOAL_DISTANCE - 5.0f);
+        int next_lane_idx = current_lane_idx;
+        float next_s = current_s;
+
+        int step = 0;
+        int max_steps = 100;
+        while (remaining_dist > 0.0f && step < max_steps) {
+            step++;
+            RoadMapElement *lane = &env->road_elements[next_lane_idx];
+            float segment_rem = lane->length - next_s;
+            if (remaining_dist <= segment_rem) {
+                next_s += remaining_dist;
+                remaining_dist = 0.0f;
+                break;
+            } else {
+                remaining_dist -= segment_rem;
+                if (lane->num_exits > 0) {
+                    int valid_exits[MAX_ROUTE_LENGTH];
+                    int valid_count = 0;
+                    for (int e = 0; e < lane->num_exits && e < MAX_ROUTE_LENGTH; e++) {
+                        int exit_lane_idx = lane->exit_lanes[e];
+                        if (exit_lane_idx >= 0 && exit_lane_idx < env->num_road_elements) {
+                            if (is_drivable_road_lane(env->road_elements[exit_lane_idx].type)) {
+                                valid_exits[valid_count++] = exit_lane_idx;
+                            }
+                        }
+                    }
+                    if (valid_count > 0) {
+                        next_lane_idx = valid_exits[rand() % valid_count];
+                        next_s = 0.0f;
+                    } else {
+                        next_s = lane->length;
+                        remaining_dist = 0.0f;
+                        break;
+                    }
+                } else {
+                    next_s = lane->length;
+                    remaining_dist = 0.0f;
+                    break;
+                }
+            }
+        }
+
+        set_agent_goal_from_lane_s(env, agent, goal_idx, next_lane_idx, next_s);
+        current_lane_idx = next_lane_idx;
+        current_s = next_s;
+        sampled_count++;
+    }
+
+    agent->num_active_goals = sampled_count;
+    agent->current_goal_idx = 0;
+    agent->goal_position_x = agent->goal_positions_x[0];
+    agent->goal_position_y = agent->goal_positions_y[0];
+    agent->goal_position_z = agent->goal_positions_z[0];
+    return set_agent_route_from_buffer(env, agent_idx, first_route, first_route_length);
+}
+
 static void compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
+    if (env->target_type == TARGET_DIJKSTRA) {
+        if (!compute_dijkstra_goals(env, agent_idx)) {
+            printf("[GIGAFLOW WARNING] -> Failed to compute dijkstra goals for agent %d\n", agent_idx);
+            agent->removed = 1;
+        }
+        return;
+    }
+
     struct Path *path = agent->path;
 
     // Validate path exists
@@ -1930,6 +2289,12 @@ static void compute_goals(Drive *env, int agent_idx) {
             agent->goal_positions_x[i] = path->waypoints[wp_idx].x;
             agent->goal_positions_y[i] = path->waypoints[wp_idx].y;
             agent->goal_positions_z[i] = path->waypoints[wp_idx].z;
+            int goal_lane_idx = path->waypoints[wp_idx].lane_idx;
+            agent->goal_lane_ids[i] = goal_lane_idx;
+            agent->goal_lane_s[i] = lane_s_at_position(
+                &env->road_elements[goal_lane_idx],
+                agent->goal_positions_x[i],
+                agent->goal_positions_y[i]);
         }
 
         // Reset goal index and update alias
@@ -3009,14 +3374,22 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
-    // Compute initial route
-    if (!compute_new_route(env, agent_idx, start_lane_idx)) {
-        printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
-        return 0; // Failed to compute new goal
-    }
+    if (env->target_type == TARGET_DIJKSTRA) {
+        agent->current_lane_idx = start_lane_idx;
+        if (!compute_dijkstra_goals(env, agent_idx)) {
+            printf("[GIGAFLOW WARNING] -> Failed to compute dijkstra goals for agent %d\n", agent_idx);
+            return 0;
+        }
+    } else {
+        // Compute initial route
+        if (!compute_new_route(env, agent_idx, start_lane_idx)) {
+            printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
+            return 0; // Failed to compute new goal
+        }
 
-    // Compute initial goal
-    compute_goals(env, agent_idx);
+        // Compute initial goal
+        compute_goals(env, agent_idx);
+    }
 
     return 1; // Success
 }
@@ -3361,6 +3734,9 @@ void remove_bad_trajectories(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    if (env->target_type == TARGET_DIJKSTRA) {
+        env->num_target_waypoints = DIJKSTRA_TARGET_SLOTS;
+    }
     load_map_binary(env->map_name, env);
     env->road_dropout_enabled = (env->obs_lane_segment_count < env->max_lane_segment_observations)
         || (env->obs_boundary_segment_count < env->max_boundary_segment_observations);
@@ -3491,7 +3867,7 @@ static int compute_observation_size(Drive *env) {
     if (env->reward_conditioning) {
         max_obs += NUM_REWARD_COEFS;
     }
-    if (env->target_type == TARGET_STATIC) {
+    if (env->target_type == TARGET_STATIC || env->target_type == TARGET_DIJKSTRA) {
         max_obs += num_target_waypoints * STATIC_TARGET_FEATURES;
     } else if (env->target_type == TARGET_DYNAMIC) {
         max_obs += num_target_waypoints * DYNAMIC_TARGET_FEATURES;
@@ -3976,9 +4352,8 @@ static void compute_metrics(Drive *env, int agent_idx) {
         = compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
 
-    // Goal reaching — guard against incrementing past num_target_waypoints
-    if (agent->current_goal_idx < env->num_target_waypoints
-        && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+    // Goal reaching
+    if (distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent->current_goal_idx++;
     }
@@ -4025,8 +4400,9 @@ static void compute_rewards(Drive *env, int i) {
     // Goal reward
     if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
         float weight = 1.0f;
+        int goal_count = get_agent_goal_count(env, agent);
         if (env->simulation_mode == SIMULATION_GIGAFLOW) {
-            if (agent->current_goal_idx == env->num_target_waypoints
+            if (agent->current_goal_idx == goal_count
                 && agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED]) {
                 weight = 0.0f;
             }
@@ -4228,9 +4604,10 @@ static void compute_observations(Drive *env) {
             }
         }
         // Target observations (static or dynamic)
-        if (env->target_type == TARGET_STATIC) {
+        if (env->target_type == TARGET_STATIC || env->target_type == TARGET_DIJKSTRA) {
+            int goal_count = get_agent_goal_count(env, ego_entity);
             for (int wp = 0; wp < env->num_target_waypoints; wp++) {
-                if (wp < ego_entity->current_goal_idx) {
+                if (wp < ego_entity->current_goal_idx || wp >= goal_count) {
                     // Already reached - zeroed
                     obs[obs_idx++] = 0.0f;
                     obs[obs_idx++] = 0.0f;
@@ -4401,6 +4778,24 @@ static void compute_observations(Drive *env) {
         float *boundaries_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
         int lanes_collected = 0;
         int boundaries_collected = 0;
+        int goal_count = get_agent_goal_count(env, ego_entity);
+        int goal_lane_idx = -1;
+        float goal_lane_s = 0.0f;
+        float ego_goal_route_distance = INFINITY;
+        if (ego_entity->current_goal_idx >= 0 && ego_entity->current_goal_idx < goal_count) {
+            goal_lane_idx = ego_entity->goal_lane_ids[ego_entity->current_goal_idx];
+            goal_lane_s = ego_entity->goal_lane_s[ego_entity->current_goal_idx];
+        }
+        if (goal_lane_idx >= 0 && ego_entity->current_lane_idx >= 0) {
+            RoadMapElement *ego_lane = &env->road_elements[ego_entity->current_lane_idx];
+            float ego_lane_s = lane_s_at_position(ego_lane, ego_entity->sim_x, ego_entity->sim_y);
+            ego_goal_route_distance = route_distance_between_lane_positions(
+                env,
+                ego_entity->current_lane_idx,
+                ego_lane_s,
+                goal_lane_idx,
+                goal_lane_s);
+        }
 
         for (int k = 0; k < list_size; k++) {
             if (lanes_collected >= env->max_lane_segment_observations
@@ -4503,6 +4898,28 @@ static void compute_observations(Drive *env) {
             target[base + 5] = cos_angle;
             // Road segment orientation (sine)
             target[base + 6] = sin_angle;
+            if (is_lane) {
+                float segment_s = lane_midpoint_s(element, geometry_idx);
+                float segment_goal_distance
+                    = route_distance_between_lane_positions(env, entity_idx, segment_s, goal_lane_idx, goal_lane_s);
+                if (valid_route_distance(segment_goal_distance)) {
+                    target[base + 7] = clip(segment_goal_distance / env->max_goal_position, -1.0f, 1.0f);
+                    if (valid_route_distance(ego_goal_route_distance)) {
+                        target[base + 8] = clip(
+                            (segment_goal_distance - ego_goal_route_distance) / env->max_goal_position,
+                            -1.0f,
+                            1.0f);
+                    } else {
+                        target[base + 8] = 0.0f;
+                    }
+                } else {
+                    target[base + 7] = 1.0f;
+                    target[base + 8] = 0.0f;
+                }
+            } else {
+                target[base + 7] = 0.0f;
+                target[base + 8] = 0.0f;
+            }
         }
 
         if (env->road_dropout_enabled) {
@@ -5095,8 +5512,9 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached
+            int goal_count = get_agent_goal_count(env, agent);
+            if (agent->current_goal_idx == goal_count) {
+                // Last goal reached - generate new set of goals
                 env->logs[i].num_goals_reached += 1;
                 if (env->simulation_mode == SIMULATION_REPLAY) {
                     // Replay mode: leave current_goal_idx saturated so the
@@ -5110,6 +5528,9 @@ void c_step(Drive *env) {
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
                 agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
+                if (env->target_type == TARGET_DIJKSTRA) {
+                    rebuild_dijkstra_route_to_current_goal(env, agent_idx);
+                }
             }
         }
     }

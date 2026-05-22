@@ -1268,6 +1268,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
     PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);
+    PyModule_AddIntConstant(m, "TARGET_DIJKSTRA", TARGET_DIJKSTRA);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 

@@ -94,6 +94,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->target_type = 0; // TARGET_STATIC
         } else if (strcmp(value, "\"dynamic\"") == 0 || strcmp(value, "dynamic") == 0) {
             env_config->target_type = 1; // TARGET_DYNAMIC
+        } else if (strcmp(value, "\"dijkstra\"") == 0 || strcmp(value, "dijkstra") == 0) {
+            env_config->target_type = 2; // TARGET_DIJKSTRA
         } else {
             printf("Warning: Unknown target_type value '%s', defaulting to static\n", value);
             env_config->target_type = 0;
