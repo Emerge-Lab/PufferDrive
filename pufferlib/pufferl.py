@@ -2111,6 +2111,35 @@ def load_env(env_name, args):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
 
 
+def _load_and_verify_checkpoint(policy, ckpt_path, device, source):
+    """Load `ckpt_path` into `policy` strictly, then verify every tensor in
+    the checkpoint was copied in exactly. Raises on mismatch; logs a single-
+    line confirmation on success so finetune runs can prove which weights
+    they started from.
+    """
+    state_dict = torch.load(ckpt_path, map_location=device)
+    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+
+    # strict=True: raises RuntimeError on any missing or unexpected key.
+    policy.load_state_dict(state_dict, strict=True)
+
+    policy_sd = policy.state_dict()
+    mismatched = [k for k, v in state_dict.items() if not torch.equal(policy_sd[k], v.to(policy_sd[k].device))]
+    if mismatched:
+        raise RuntimeError(
+            f"[load] {len(mismatched)}/{len(state_dict)} tensors did not match after load from {ckpt_path}: "
+            f"{mismatched[:5]}{'...' if len(mismatched) > 5 else ''}"
+        )
+
+    total_params = sum(v.numel() for v in state_dict.values())
+    # Content fingerprint: tiny but stable across machines for the same .pt.
+    fingerprint = sum(float(v.detach().to(torch.float64).sum().item()) for v in state_dict.values())
+    print(
+        f"[load] {source}: loaded {len(state_dict)} tensors ({total_params:,} params) "
+        f"from {ckpt_path}; all values verified (sum-fingerprint={fingerprint:.6e})."
+    )
+
+
 def load_policy(args, vecenv, env_name=""):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -2136,16 +2165,14 @@ def load_policy(args, vecenv, env_name=""):
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
-        state_dict = torch.load(path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        _load_and_verify_checkpoint(policy, path, device, source=f"load_id={load_id}")
 
     load_path = args["load_model_path"]
     if load_path == "latest":
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
-        policy.load_state_dict(clean_policy_state_dict(state_dict))
+        _load_and_verify_checkpoint(policy, load_path, device, source="load_model_path")
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']
         # pufferl.optimizer.load_state_dict(optim_state)
