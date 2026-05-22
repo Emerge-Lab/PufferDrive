@@ -80,8 +80,15 @@ useful for smoke-testing the eval path itself.
 
 ### Standalone, ad-hoc
 
-Pick the evaluator by simulation and override its scale from the CLI without
-editing `drive.ini`. The simple flags only override when passed:
+Same as by-name, except instead of naming an evaluator you select one of the two
+built-in `validation_*` evaluators by simulation and override its config from the
+CLI — no `drive.ini` edit needed:
+
+- `--eval_simulation gigaflow` → runs the `validation_gigaflow` section
+- `--eval_simulation replay` → runs the `validation_replay` section
+
+The flags below override that evaluator's config for this run, and each applies
+**only when passed** — omit one and the evaluator's own `[eval.*]` value stands:
 
 ```bash
 puffer eval puffer_drive --eval_simulation gigaflow \
