@@ -392,7 +392,6 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device.to(self.observations.dtype), state)
                 logits = logits_to_float(logits)
-                value = value.float()
                 action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
