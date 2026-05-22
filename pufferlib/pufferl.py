@@ -1553,15 +1553,39 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
-def _merge_checkpoint_arch(args, model_path):
-    """Adopt a checkpoint's network architecture from its sibling config.yaml.
+# Env keys that define the observation / action layout a checkpoint was trained
+# with. They must match at eval or the policy unpacks the obs at the wrong
+# offsets, so they come from the checkpoint — unlike the eval-policy env config
+# (sim mode, maps, rewards, behaviors), which the [eval.<name>] section owns.
+_ARCH_ENV_KEYS = (
+    "action_type",
+    "dynamics_model",
+    "target_type",
+    "num_target_waypoints",
+    "reward_conditioning",
+    "max_partner_observations",
+    "max_lane_segment_observations",
+    "max_boundary_segment_observations",
+    "max_traffic_control_observations",
+    "traffic_control_scope",
+    "trajectory_prediction_length",
+    "num_trajectory_scaling_factors",
+    "trajectory_scaling_factors",
+)
 
-    A standalone eval may load a checkpoint whose network shape differs from
-    drive.ini. The training run writes config.yaml next to models/, so pull
-    policy.*, rnn.*, policy_name, rnn_name (and the derived use_rnn) from it
-    before the policy is constructed — otherwise load_state_dict mismatches.
-    Env / eval config is intentionally left to the [eval.<name>] section, not
-    the checkpoint.
+
+def _merge_checkpoint_arch(args, model_path):
+    """Adopt a checkpoint's architecture from its sibling config.yaml.
+
+    A standalone eval may load a checkpoint whose network shape or observation
+    layout differs from drive.ini. The training run writes config.yaml next to
+    models/, so pull from it before the policy/env are built:
+      - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
+        else load_state_dict mismatches.
+      - the obs/action-layout env keys (_ARCH_ENV_KEYS) — else the eval env
+        packs observations the policy can't unpack.
+    The eval-policy env config (simulation_mode, map_dir, num_*, rewards,
+    behaviors) is intentionally left to the [eval.<name>] section.
     """
     config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
     if not os.path.exists(config_yaml_path):
@@ -1575,7 +1599,13 @@ def _merge_checkpoint_arch(args, model_path):
         if key in yaml_config:
             args[key] = yaml_config[key]
     args.setdefault("train", {})["use_rnn"] = args.get("rnn_name") is not None
-    print(f"[eval] merged policy/rnn architecture from {config_yaml_path}")
+    env_cfg = yaml_config.get("env", {})
+    if isinstance(env_cfg, dict):
+        args.setdefault("env", {})
+        for key in _ARCH_ENV_KEYS:
+            if key in env_cfg:
+                args["env"][key] = env_cfg[key]
+    print(f"[eval] merged policy/rnn + obs-layout config from {config_yaml_path}")
     return args
 
 
