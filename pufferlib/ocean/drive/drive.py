@@ -101,6 +101,7 @@ class Drive(pufferlib.PufferEnv):
         lane_segment_dropout=0.0,
         boundary_segment_dropout=0.0,
         partner_blindness_prob=0.0,
+        partner_blindness_trigger_prob=0.1,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration=10,
@@ -202,6 +203,7 @@ class Drive(pufferlib.PufferEnv):
             self.boundary_segment_dropout,
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
+        self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration = int(phantom_braking_duration)
@@ -253,7 +255,8 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 3
         else:
             raise ValueError(
-                f"control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or 'control_sdc_only'. Got: {self.control_mode_str}"
+                "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
+                f"'control_sdc_only'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
@@ -420,6 +423,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_segment_count": self.obs_lane_segment_count,
             "obs_boundary_segment_count": self.obs_boundary_segment_count,
             "partner_blindness_prob": self.partner_blindness_prob,
+            "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration": self.phantom_braking_duration,

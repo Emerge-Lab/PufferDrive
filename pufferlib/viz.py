@@ -1510,6 +1510,10 @@ def generate_interactive_replay(
         .panel { background: var(--panel-bg); padding: 18px; border-radius: 16px; box-shadow: 0 8px 30px var(--shadow); pointer-events: auto; backdrop-filter: blur(5px); }
 
         #hud-global { position: absolute; top: 20px; left: 20px; min-width: 220px; }
+        #hud-global h3 { cursor: pointer; user-select: none; }
+        #hud-global.collapsed { min-width: 0; padding-bottom: 14px; }
+        #hud-global.collapsed > :not(h3) { display: none; }
+        #hud-global.collapsed h3 { margin: 0; }
 
         #hud-telemetry { position: absolute; top: 80px; right: 20px; width: 340px; display: none; border-left: 6px solid var(--accent); background: rgba(15, 15, 15, 0.98); color: white; z-index: 20; }
 
@@ -1571,8 +1575,8 @@ def generate_interactive_replay(
     <div id="help-hint">SPACE: Play | ARROWS: Step | ESC: Free | CLICK: Follow | ENTER: Search</div>
 
     <div id="ui-layer">
-        <div id="hud-global" class="panel">
-            <h3>Scenario Info</h3>
+        <div id="hud-global" class="panel collapsed">
+            <h3 onclick="toggleGlobalPanel()" title="Click to expand/minimize">Scenario Info <span id="globalChevron" style="float:right;">&#9656;</span></h3>
             <div class="label">Map</div> <div class="value" id="meta-map">-</div>
             <div class="label">ID</div> <div class="value small-val" id="meta-id" style="font-size:12px">-</div>
             <hr style="border: 0; border-top: 1px solid #555; margin: 12px 0;">
@@ -1673,6 +1677,16 @@ def generate_interactive_replay(
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
 
+                // Select the SDC by default: the controlled agent the
+                // observations were recorded for (first id present in ALL_OBS).
+                // draw() then centers on it and opens its obs view.
+                if (ALL_OBS && ALL_OBS.length) {
+                    for (const frame of ALL_OBS) {
+                        const ids = frame ? Object.keys(frame) : [];
+                        if (ids.length) { followedId = parseInt(ids[0]); break; }
+                    }
+                }
+
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
 
@@ -1711,6 +1725,16 @@ def generate_interactive_replay(
                 META = data.meta;
                 ALL_OBS = data.obs;
                 HEAD_NORTH = data.head_north;
+
+                // Select the SDC by default: the controlled agent the
+                // observations were recorded for (first id present in ALL_OBS).
+                // draw() then centers on it and opens its obs view.
+                if (ALL_OBS && ALL_OBS.length) {
+                    for (const frame of ALL_OBS) {
+                        const ids = frame ? Object.keys(frame) : [];
+                        if (ids.length) { followedId = parseInt(ids[0]); break; }
+                    }
+                }
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
@@ -1785,6 +1809,11 @@ def generate_interactive_replay(
         window.onresize = () => { c.width=window.innerWidth; c.height=window.innerHeight; draw(); };
 
         function toggleTheme() { darkMode = !darkMode; document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light'); draw(); }
+        function toggleGlobalPanel() {
+            const p = document.getElementById('hud-global');
+            const collapsed = p.classList.toggle('collapsed');
+            document.getElementById('globalChevron').innerHTML = collapsed ? '&#9656;' : '&#9662;';
+        }
 
         function toggleCamMode() {
             if(followedId !== null) {

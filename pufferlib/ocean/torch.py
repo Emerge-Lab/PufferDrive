@@ -35,6 +35,9 @@ class DriveBackbone(nn.Module):
                 pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
             )
 
+    def _encode_and_pool(self, objects, encoder):
+        return encoder(objects).max(dim=1).values
+
     def __init__(
         self,
         env,
@@ -46,6 +49,7 @@ class DriveBackbone(nn.Module):
         dropout,
     ):
         super().__init__()
+        self.input_size = input_size
 
         # Observation dimensions from environment config
         self.max_partner_observations = env.max_partner_observations
@@ -145,19 +149,17 @@ class DriveBackbone(nn.Module):
         # Encode Lanes and Boundaries separately
         if self.obs_lane_segment_count > 0:
             lane_objects = lane_observations.view(-1, self.obs_lane_segment_count, self.road_features_count)
-            lane_features, _ = self.lane_encoder(lane_objects).max(dim=1)
+            lane_features = self._encode_and_pool(lane_objects, self.lane_encoder)
             feature_list.append(lane_features)
         if self.obs_boundary_segment_count > 0:
             boundary_objects = boundary_observations.view(-1, self.obs_boundary_segment_count, self.road_features_count)
-
-            boundary_features, _ = self.boundary_encoder(boundary_objects).max(dim=1)
+            boundary_features = self._encode_and_pool(boundary_objects, self.boundary_encoder)
             feature_list.append(boundary_features)
 
         # Encode Partners
         if self.max_partner_observations > 0:
             partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
-            partner_encoded = self.partner_encoder(partner_objects)
-            partner_features, _ = partner_encoded.max(dim=1)
+            partner_features = self._encode_and_pool(partner_objects, self.partner_encoder)
             feature_list.append(partner_features)
 
         # Encode Traffic Controls
@@ -171,16 +173,16 @@ class DriveBackbone(nn.Module):
             traffic_control_type_onehot = F.one_hot(
                 traffic_control_type.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
-            ).float()
+            ).to(traffic_control_continuous.dtype)
             traffic_control_state_onehot = F.one_hot(
                 traffic_control_state.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
-            ).float()
+            ).to(traffic_control_continuous.dtype)
             traffic_control_objects = torch.cat(
                 [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
                 dim=2,
             )
-            traffic_control_features, _ = self.traffic_control_encoder(traffic_control_objects).max(dim=1)
+            traffic_control_features = self._encode_and_pool(traffic_control_objects, self.traffic_control_encoder)
             feature_list.append(traffic_control_features)
 
         # Add optional features if enabled

@@ -238,6 +238,11 @@ class EvalManager:
         if ev_eval:
             args.setdefault("eval", {})
             args["eval"].update(ev_eval)
+            # The per-episode CSV + coverage report consume `completed_episode`
+            # summaries, which the env only emits when this is on. Enabling it
+            # is additive — it doesn't change the my_log metric stream.
+            if ev_eval.get("export_episode_csv") or ev_eval.get("verify_coverage"):
+                args["env"]["emit_completed_episodes"] = True
         # Forward top-level render config so _render_pass can read it.
         for key in ("render_backend", "render_results_dir", "eval_results_dir"):
             if key in ev.config:

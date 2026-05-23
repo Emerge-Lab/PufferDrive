@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 // -- REWARD CONDITIONING COEFFICIENTS
 #define REWARD_COEF_GOAL_RADIUS 0
 #define REWARD_COEF_GOAL_SPEED 1
@@ -99,7 +101,7 @@ struct Waypoint {
     float cos_heading; // Cached cosf(heading) - set in build_path
     float sin_heading; // Cached sinf(heading) - set in build_path
     float kappa;       // Curvature at this point
-    int lane_idx;      // Index of the lane this waypoint belongs to (for GT path) or closest to (for expert path)
+    int lane_idx;      // Index of the lane this waypoint
 };
 struct Path {
     struct Waypoint waypoints[MAX_NUM_WP_PATH];

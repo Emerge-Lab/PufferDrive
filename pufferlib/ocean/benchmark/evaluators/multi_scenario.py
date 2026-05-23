@@ -17,10 +17,22 @@ class MultiScenarioEvaluator(Evaluator):
             "reward_randomization": False,
         }
         env.update(self.config.get("env", {}))
+        # Replay scenarios are unique: make C eval_mode sweep exactly
+        # num_scenarios distinct maps (its default, 16, would re-evaluate only
+        # the first 16). Gigaflow maps cycle, so leave its default alone.
+        # Skip when the section pins num_eval_scenarios explicitly.
+        if env.get("simulation_mode") == "replay" and "num_eval_scenarios" not in self.config.get("env", {}):
+            env["num_eval_scenarios"] = int(self.config.get("eval", {}).get("num_scenarios", env.get("num_maps", 1)))
         return env
 
     def _should_stop(self, args, infos_collected, steps) -> bool:
         target = int(self.config.get("eval", {}).get("num_scenarios", 1))
+        eval_cfg = self.config.get("eval", {})
+        # When per-episode summaries are being collected (CSV / coverage), count
+        # actual completed episodes — they map 1:1 to scenarios. Otherwise count
+        # my_log emissions (the legacy behaviour for evaluators without them).
+        if eval_cfg.get("export_episode_csv") or eval_cfg.get("verify_coverage"):
+            return len(getattr(self, "_episode_rows", [])) >= target
         return len(infos_collected) >= target
 
     def _render_env_overrides(self, args) -> dict:
