@@ -289,7 +289,6 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import submitit
 
         # Code isolation: symlink top-level entries, hard copy pufferlib/ source
-        # (symlink resources/ to avoid copying 3.7GB of maps/models).
         isolated_root = os.path.join(save_dir, "code")
         if os.path.exists(isolated_root):
             version = 1
@@ -308,8 +307,6 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                     os.remove(dst)
             os.symlink(src, dst)
         # Hard copy pufferlib/ so branch switches don't break running jobs.
-        # Previously used `cp -rs` (symlinks) which meant switching branches
-        # after submission would silently change the code running jobs use.
         # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
         # but hard copy everything else (source code, .so files).
         pufferlib_dst = os.path.join(isolated_root, "pufferlib")
