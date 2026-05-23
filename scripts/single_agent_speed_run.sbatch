@@ -40,6 +40,18 @@ WANDB_GROUP="${WANDB_GROUP:-Nightly Test}"
 SEED_BASE="${SEED_BASE:-0}"
 SEED=$((SEED_BASE + SLURM_ARRAY_TASK_ID))      # one seed per array task: SEED_BASE .. SEED_BASE+2
 
+# Disable the nuPlan-based evaluators (replay + behavior buckets); they are
+# irrelevant to single-map CARLA training and spawn their own envs. validation_gigaflow
+# (CARLA) stays on. enabled 0 -> bool(0)=False in the eval manager. Note: dotted CLI
+# flags use hyphens (the argparser maps _ -> -), so section names are hyphenated here.
+DISABLE_EVALS=""
+for ev in validation-replay behaviors-full-dir behaviors-hard-stop behaviors-highway-straight \
+          behaviors-lane-change behaviors-merge behaviors-parked-cars behaviors-roundabout \
+          behaviors-stopped-traffic behaviors-traffic-light-green behaviors-traffic-light-stop \
+          behaviors-unprotected-left behaviors-unprotected-right; do
+    DISABLE_EVALS="$DISABLE_EVALS --eval.$ev.enabled 0"
+done
+
 OVERLAY="/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3"
 IMAGE="/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif"
 
@@ -64,17 +76,17 @@ singularity exec --nv --overlay "${OVERLAY}:ro" "$IMAGE" bash -c '
     HEARTBEAT_PID=$!
 
     python -m pufferlib.pufferl train puffer_drive \
-        --env.map_dir pufferlib/resources/drive/binaries/carla_town02 \
-        --env.num_maps 1 \
-        --env.max_agents_per_env 1 \
-        --env.num_agents '"$NUM_AGENTS"' \
-        --env.use_map_cache 1 \
-        --env.traffic_light_behavior 0 \
-        --env.goal_placement 1 \
-        --env.num_target_waypoints 1 \
-        --env.max_goal_position '"$MAX_GOAL_POSITION"' \
-        --train.total_timesteps '"$TOTAL_TIMESTEPS"' \
-        --train.seed '"$SEED"' \
+        --env.map-dir pufferlib/resources/drive/binaries/carla_town02 \
+        --env.num-maps 1 \
+        --env.max-agents-per-env 1 \
+        --env.num-agents '"$NUM_AGENTS"' \
+        --env.use-map-cache 1 \
+        --env.traffic-light-behavior 0 \
+        --env.goal-placement 1 \
+        --env.num-target-waypoints 1 \
+        --env.max-goal-position '"$MAX_GOAL_POSITION"' \
+        --train.total-timesteps '"$TOTAL_TIMESTEPS"' \
+        --train.seed '"$SEED"' '"$DISABLE_EVALS"' \
         --wandb --wandb-project puffer_drive --wandb-group "'"$WANDB_GROUP"'" --tag seed'"$SEED"'
     TRAIN_EXIT=$?
 
