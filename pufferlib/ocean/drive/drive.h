@@ -378,6 +378,8 @@ struct Drive {
     float adv_reward_weight_offroad;
     float adv_reward_weight_traffic_light;
     float adv_reward_weight_drive;
+    float adv_target_offroad_reward;
+    float adv_target_collision_reward;
     float adv_target_hit_at_fault_bonus;
     float adv_target_hit_low_responsibility_threshold;
     float adv_target_hit_low_responsibility_penalty;
@@ -5657,7 +5659,7 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
 static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *target_terms) {
     float bonus = 0.0f;
     if (target_terms->offroad < 0.0f) {
-        bonus += env->adv_reward_weight_offroad;
+        bonus += env->adv_target_offroad_reward;
     }
 
     if (!env->target_hit_this_step) {
@@ -5671,7 +5673,7 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus - env->adv_target_hit_low_responsibility_penalty;
     }
 
-    bonus += responsibility * env->adv_reward_weight_collision;
+    bonus += responsibility * env->adv_target_collision_reward;
     if (env->target_hit_at_fault_this_step) {
         bonus += env->adv_target_hit_at_fault_bonus;
     }

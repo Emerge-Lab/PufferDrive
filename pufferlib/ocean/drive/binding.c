@@ -1869,6 +1869,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_reward_weight_offroad = (float)unpack(kwargs, "adv_reward_weight_offroad");
     env->adv_reward_weight_traffic_light = (float)unpack(kwargs, "adv_reward_weight_traffic_light");
     env->adv_reward_weight_drive = (float)unpack(kwargs, "adv_reward_weight_drive");
+    env->adv_target_offroad_reward = (float)unpack(kwargs, "adv_target_offroad_reward");
+    env->adv_target_collision_reward = (float)unpack(kwargs, "adv_target_collision_reward");
     env->adv_target_hit_at_fault_bonus = (float)unpack(kwargs, "adv_target_hit_at_fault_bonus");
     env->adv_target_hit_low_responsibility_threshold =
         (float)unpack(kwargs, "adv_target_hit_low_responsibility_threshold");
