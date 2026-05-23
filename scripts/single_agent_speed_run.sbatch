@@ -17,10 +17,6 @@
 #   NUM_AGENTS=2048 sbatch scripts/single_agent_speed_run.sbatch
 #   SEED_BASE=100 sbatch scripts/single_agent_speed_run.sbatch   # seeds 100,101,102
 #
-# Logs land in slurm-<jobid>_<seedidx>.out in the directory you submit from.
-# The h200_tandon QOS pool is often full (QOSGrpGRES); if it won't schedule,
-# resubmit with --partition=a100_tandon or --partition=h100_tandon.
-#
 #SBATCH --job-name=single_agent_speed_run
 #SBATCH --account=torch_pr_924_tandon_advanced
 #SBATCH --partition=h200_tandon
