@@ -121,6 +121,10 @@
 #define TARGET_STATIC 0
 #define TARGET_DYNAMIC 1
 
+// GOAL_PLACEMENT modes (controls how gigaflow goals are sampled)
+#define GOAL_PLACEMENT_ROUTE 0  // goals lie ahead along a forward random-walk route
+#define GOAL_PLACEMENT_RANDOM 1 // goals are random drivable points anywhere on the map
+
 // Observation feature counts
 #define EGO_FEATURES_CLASSIC 8
 #define EGO_FEATURES_JERK 10
@@ -354,6 +358,7 @@ struct Drive {
     int collision_behavior;     // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
     int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int goal_placement;         // 0 = route (forward waypoints), 1 = random (anywhere on map)
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
@@ -1862,9 +1867,79 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
+// Place each target waypoint at a random drivable point anywhere on the map,
+// rejecting points closer than min_waypoint_spacing so goals are never trivially
+// close. Goals can land in any direction, including behind the agent. The route
+// and path are still built at spawn (used for lane observations and progression);
+// only the goal positions are overridden here.
+static void compute_goals_random(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+
+    int num_target_waypoints = env->num_target_waypoints;
+    if (num_target_waypoints <= 0 || num_target_waypoints > MAX_TARGET_WAYPOINTS) {
+        num_target_waypoints = MAX_TARGET_WAYPOINTS;
+    }
+
+    float min_dist_sq = env->min_waypoint_spacing * env->min_waypoint_spacing;
+    const int MAX_GOAL_ATTEMPTS = 30;
+
+    for (int i = 0; i < num_target_waypoints; i++) {
+        // Fall back to the agent's own position if no distant point is found.
+        float goal_x = agent->sim_x;
+        float goal_y = agent->sim_y;
+        float goal_z = agent->sim_z;
+
+        for (int attempt = 0; attempt < MAX_GOAL_ATTEMPTS; attempt++) {
+            int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
+            int grid_idx = env->grid_map->grid_index_drivable[list_idx];
+
+            GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
+            int candidate_count = 0;
+            for (int j = 0; j < env->grid_map->cell_entities_count[grid_idx]; j++) {
+                GridMapEntity entity = env->grid_map->cells[grid_idx][j];
+                if (is_drivable_road_lane(env->road_elements[entity.entity_idx].type)) {
+                    cell_candidates[candidate_count++] = entity;
+                }
+            }
+            if (candidate_count == 0) {
+                continue;
+            }
+
+            GridMapEntity chosen = cell_candidates[rand() % candidate_count];
+            RoadMapElement *lane = &env->road_elements[chosen.entity_idx];
+            float cx = lane->x[chosen.geometry_idx];
+            float cy = lane->y[chosen.geometry_idx];
+            float dx = cx - agent->sim_x;
+            float dy = cy - agent->sim_y;
+            if (dx * dx + dy * dy < min_dist_sq) {
+                continue;
+            }
+
+            goal_x = cx;
+            goal_y = cy;
+            goal_z = lane->z[chosen.geometry_idx];
+            break;
+        }
+
+        agent->goal_positions_x[i] = goal_x;
+        agent->goal_positions_y[i] = goal_y;
+        agent->goal_positions_z[i] = goal_z;
+    }
+
+    agent->current_goal_idx = 0;
+    agent->goal_position_x = agent->goal_positions_x[0];
+    agent->goal_position_y = agent->goal_positions_y[0];
+    agent->goal_position_z = agent->goal_positions_z[0];
+}
+
 static void compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     struct Path *path = agent->path;
+
+    if (env->goal_placement == GOAL_PLACEMENT_RANDOM) {
+        compute_goals_random(env, agent_idx);
+        return;
+    }
 
     // Validate path exists
     if (path == NULL || path->num_waypoints == 0) {
