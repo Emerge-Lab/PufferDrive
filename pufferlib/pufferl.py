@@ -276,7 +276,9 @@ def _route_actor_actions(
     full_logprob = torch.zeros(batch_size, device=device)
     full_value = torch.zeros(batch_size, device=device)
     # PPO only trains the adversarial actor, so target rows stay zero-padded in rollout observations.
-    rollout_observation = _allocate_rollout_observation(policy_actor, batch_size, device)
+    rollout_observation = None
+    if policy_actor is not None:
+        rollout_observation = _allocate_rollout_observation(policy_actor, batch_size, device)
     clip_actions = False
 
     adv_output = _run_actor_subset(
@@ -2470,6 +2472,7 @@ def _get_eval_folder(args, adversarial=False):
 
 
 def _get_failure_mining_folder(args):
+    identity = _get_failure_mining_identity(args)
     model_path = args.get("load_model_path")
     if model_path is None:
         experiment_name, model_name = _get_no_model_run_names(args)
@@ -2480,7 +2483,70 @@ def _get_failure_mining_folder(args):
         experiment_dir = os.path.dirname(models_dir)
         experiment_name = os.path.basename(experiment_dir)
 
-    return os.path.join("failure_runs", experiment_name, model_name, args["eval_simulation"])
+    parts = ["failure_runs", experiment_name, model_name, args["eval_simulation"]]
+    if identity["env_config_name"] is not None:
+        parts.append(identity["env_config_name"])
+    if identity["eval_mode"] is not None:
+        parts.append(identity["eval_mode"])
+    parts.append(identity["run_name"])
+    return os.path.join(*parts)
+
+
+def _infer_failure_mining_eval_mode(args):
+    env_args = args.get("env", {})
+    sdc_controller = str(env_args.get("sdc_controller", "policy")).lower()
+    non_sdc_controller = str(env_args.get("non_sdc_controller", "policy")).lower()
+
+    if sdc_controller == non_sdc_controller:
+        return "homogeneous"
+    if non_sdc_controller == "idm":
+        return "idm_reactive"
+    if non_sdc_controller == "policy":
+        return "learned_traffic"
+    return f"traffic_{_sanitize_path_component(non_sdc_controller)}"
+
+
+def _get_failure_mining_identity(args):
+    env_args = args.get("env", {})
+    sdc_controller = _sanitize_path_component(env_args.get("sdc_controller", "policy")).lower()
+    non_sdc_controller = _sanitize_path_component(env_args.get("non_sdc_controller", "policy")).lower()
+    eval_mode = args.get("mine_eval_mode") or _infer_failure_mining_eval_mode(args)
+    env_config_name = args.get("mine_env_config")
+    traffic_policy_label = args.get("traffic_policy_label")
+
+    eval_mode = _sanitize_path_component(eval_mode).lower() if eval_mode is not None else None
+    env_config_name = (
+        _sanitize_path_component(env_config_name).lower()
+        if env_config_name is not None and str(env_config_name).lower() != "none"
+        else None
+    )
+    traffic_policy_label = (
+        _sanitize_path_component(traffic_policy_label).lower()
+        if traffic_policy_label is not None and str(traffic_policy_label).lower() != "none"
+        else None
+    )
+
+    if traffic_policy_label is None and non_sdc_controller == "policy" and args.get("load_model_path") is not None:
+        traffic_policy_label = os.path.splitext(os.path.basename(args["load_model_path"]))[0]
+        traffic_policy_label = _sanitize_path_component(traffic_policy_label).lower()
+
+    run_parts = [f"target_{sdc_controller}", f"traffic_{non_sdc_controller}"]
+    if traffic_policy_label is not None:
+        run_parts.append(f"traffic_policy_{traffic_policy_label}")
+    run_name = args.get("mine_run_name")
+    if run_name is None or str(run_name).lower() in ("", "none"):
+        run_name = "__".join(run_parts)
+    else:
+        run_name = _sanitize_path_component(run_name).lower()
+
+    return {
+        "eval_mode": eval_mode,
+        "env_config_name": env_config_name,
+        "run_name": run_name,
+        "target_controller": sdc_controller,
+        "traffic_controller": non_sdc_controller,
+        "traffic_policy_label": traffic_policy_label,
+    }
 
 
 def _resolve_gigaflow_mining_maps(args):
@@ -3356,6 +3422,10 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     requested_max_agents_per_env = tmp_args["env"].get("max_agents_per_env")
     capture_mining_replay = bool(tmp_args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(tmp_args.get("capture_mining_replay_failures_only", 1))
+    mine_eval_mode = tmp_args.get("mine_eval_mode")
+    mine_env_config = tmp_args.get("mine_env_config")
+    mine_run_name = tmp_args.get("mine_run_name")
+    traffic_policy_label = tmp_args.get("traffic_policy_label")
     eval_overrides = build_eval_overrides(
         simulation_mode=tmp_args["eval_simulation"],
         num_agents=num_agents_eval,
@@ -3371,6 +3441,10 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     args["capture_mining_replay"] = capture_mining_replay
     args["capture_mining_replay_failures_only"] = capture_mining_replay_failures_only
     args["append_mining_run"] = bool(tmp_args.get("append_mining_run", 0))
+    args["mine_eval_mode"] = mine_eval_mode
+    args["mine_env_config"] = mine_env_config
+    args["mine_run_name"] = mine_run_name
+    args["traffic_policy_label"] = traffic_policy_label
     fixed_adv_reward_weight_drive = tmp_args.get("adv_reward_weight_drive")
     args["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
     if requested_agents_per_scene is None:
@@ -3412,6 +3486,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
     fixed_adv_reward_weight_drive = args.get("adv_reward_weight_drive")
+    mining_identity = _get_failure_mining_identity(args)
     if fixed_adv_reward_weight_drive is not None:
         fixed_adv_reward_weight_drive = float(fixed_adv_reward_weight_drive)
         if not 0.0 <= fixed_adv_reward_weight_drive <= 1.0:
@@ -3453,6 +3528,11 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print("Failure mining configuration:")
         print(f"  SDC controller: {args['env'].get('sdc_controller', 'policy')}")
         print(f"  Non-SDC controller: {args['env'].get('non_sdc_controller', 'policy')}")
+        print(f"  Mining eval mode: {mining_identity['eval_mode']}")
+        print(f"  Mining env config: {mining_identity['env_config_name']}")
+        print(f"  Mining run name: {mining_identity['run_name']}")
+        if mining_identity["traffic_policy_label"] is not None:
+            print(f"  Traffic policy label: {mining_identity['traffic_policy_label']}")
         print(f"  Target episodes: {target_num_episodes}")
         print(f"  Worker count: {num_workers}")
         print(f"  Worker agent budget: {worker_agent_budget}")
@@ -3479,12 +3559,28 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         env_args = [[]] * num_workers
         vecenv = pufferlib.vector.make(env_creators, env_args=env_args, env_kwargs=env_kwargs_list, **args["vec"])
 
-    policy = policy or load_policy(args, vecenv, env_name)
-    target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy)
-    policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+    sdc_controller = str(args["env"].get("sdc_controller", "policy")).lower()
+    non_sdc_controller = str(args["env"].get("non_sdc_controller", "policy")).lower()
+    needs_traffic_policy = non_sdc_controller == "policy"
+    needs_target_policy = sdc_controller == "policy"
+
+    if needs_traffic_policy and policy is None and args.get("load_model_path") is None and args.get("load_id") is None:
+        raise pufferlib.APIUsageError(
+            "mine_failures with env.non_sdc_controller=policy requires --load-model-path or --load-id. "
+            "Use a controller baseline for env.non_sdc_controller to run without a model."
+        )
+
+    if needs_traffic_policy:
+        policy = policy or load_policy(args, vecenv, env_name)
+        policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+    else:
+        policy_actor = None
+
+    target_policy = _load_target_policy_for_eval(args, vecenv, env_name, target_policy) if needs_target_policy else None
     target_actor = TargetTorchActor(target_policy, vecenv.driver_env) if target_policy is not None else None
     num_agents = vecenv.observation_space.shape[0]
     device = args["train"]["device"]
+    needs_torch_actions = policy_actor is not None or target_actor is not None
 
     state = None
     target_state = None
@@ -3519,20 +3615,24 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     replay_bytes_written = 0
     with tqdm(total=target_num_episodes, desc="Mining episodes", disable=quiet) as pbar:
         while len(completed_episode_rows) < target_num_episodes:
-            with torch.no_grad():
-                ob_tensor = torch.as_tensor(ob).to(device)
-                target_mask = _build_eval_target_mask(infos, vecenv, device)
-                step_context = dict(reward=None, done=None, env_id=None, mask=None)
-                actor_output = _route_actor_actions(
-                    ob_tensor,
-                    target_mask,
-                    policy_actor,
-                    step_context,
-                    policy_recurrent_state=state,
-                    target_actor=target_actor,
-                    target_recurrent_state=target_state,
-                    deterministic=True,
-                )
+            if needs_torch_actions:
+                with torch.no_grad():
+                    ob_tensor = torch.as_tensor(ob).to(device)
+                    target_mask = _build_eval_target_mask(infos, vecenv, device)
+                    step_context = dict(reward=None, done=None, env_id=None, mask=None)
+                    actor_output = _route_actor_actions(
+                        ob_tensor,
+                        target_mask,
+                        policy_actor,
+                        step_context,
+                        policy_recurrent_state=state,
+                        target_actor=target_actor,
+                        target_recurrent_state=target_state,
+                        deterministic=True,
+                    )
+                    action = _action_array_or_zeros(actor_output, vecenv)
+            else:
+                actor_output = ActorOutput(action=None)
                 action = _action_array_or_zeros(actor_output, vecenv)
 
             if actor_output.clip_actions:
@@ -3554,6 +3654,17 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     summary["map_name"] = os.path.basename(map_name).split(".")[0]
                 if fixed_adv_reward_weight_drive is not None:
                     summary["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
+                summary["mine_eval_mode"] = mining_identity["eval_mode"]
+                summary["mine_env_config"] = mining_identity["env_config_name"]
+                summary["mine_run_name"] = mining_identity["run_name"]
+                summary["target_controller"] = mining_identity["target_controller"]
+                summary["traffic_controller"] = mining_identity["traffic_controller"]
+                summary["traffic_policy_label"] = mining_identity["traffic_policy_label"]
+                summary["targeted_spawn_mode"] = args["env"].get("targeted_spawn_mode")
+                summary["min_agents_per_env"] = args["env"].get("min_agents_per_env")
+                summary["max_agents_per_env"] = args["env"].get("max_agents_per_env")
+                summary["eval_agents_per_scene"] = agents_per_scene
+                summary["eval_scenario_length"] = args["env"].get("scenario_length")
                 summary["has_replay"] = 0
                 summary["replay_path"] = None
                 if replay_bundle is not None:
@@ -3590,6 +3701,21 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                 "elapsed_seconds": time.time() - t0,
                 "replay_files_written": int(replay_files_written),
                 "replay_megabytes_written": float(replay_bytes_written / (1024 * 1024)),
+                "mining_identity": mining_identity,
+                "controllers": {
+                    "target_controller": mining_identity["target_controller"],
+                    "traffic_controller": mining_identity["traffic_controller"],
+                    "traffic_policy_label": mining_identity["traffic_policy_label"],
+                },
+                "env_config": {
+                    "name": mining_identity["env_config_name"],
+                    "targeted_spawn_mode": args["env"].get("targeted_spawn_mode"),
+                    "min_agents_per_env": args["env"].get("min_agents_per_env"),
+                    "max_agents_per_env": args["env"].get("max_agents_per_env"),
+                    "eval_agents_per_scene": agents_per_scene,
+                    "scenario_length": args["env"].get("scenario_length"),
+                    "maps": selected_map_names,
+                },
                 "metrics_mean": {k: float(v) for k, v in numeric_means.items()},
             },
             f,
@@ -3656,6 +3782,12 @@ def render_mined_failures(env_name, args=None, quiet=False):
     navigation_columns = [
         "episode_id",
         "href",
+        "mine_eval_mode",
+        "mine_env_config",
+        "mine_run_name",
+        "target_controller",
+        "traffic_controller",
+        "traffic_policy_label",
         "map_name",
         "scenario_id",
         "did_target_fail",
@@ -4001,6 +4133,30 @@ def load_config(env_name, config_dir=None):
         type=int,
         default=0,
         help="Append new mined episodes to an existing mining CSV instead of overwriting it",
+    )
+    parser.add_argument(
+        "--mine-eval-mode",
+        type=str,
+        default=None,
+        help="Optional explicit mining evaluation mode label, e.g. homogeneous or idm_reactive",
+    )
+    parser.add_argument(
+        "--mine-env-config",
+        type=str,
+        default=None,
+        help="Optional mining environment configuration label, e.g. targeted or large",
+    )
+    parser.add_argument(
+        "--mine-run-name",
+        type=str,
+        default=None,
+        help="Optional explicit mining run folder name",
+    )
+    parser.add_argument(
+        "--traffic-policy-label",
+        type=str,
+        default=None,
+        help="Optional label for policy-controlled traffic, useful for transfer evaluations",
     )
     parser.add_argument("--episodes-csv-path", type=str, default=None, help="Path to a mined episodes CSV")
     parser.add_argument(
