@@ -3487,6 +3487,16 @@ static void map_cache_insert(struct SharedMapData *entry) {
     if (g_map_cache_pid == 0) {
         g_map_cache_pid = getpid();
     }
+    // Reuse a slot vacated by free_shared_map_data before growing the array, so a
+    // resample cycle (vec_close frees every entry, then the rebuild re-inserts)
+    // keeps g_map_cache_count bounded by the number of distinct maps instead of
+    // appending past NULL holes on every cycle.
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] == NULL) {
+            g_map_cache[i] = entry;
+            return;
+        }
+    }
     g_map_cache =
         (struct SharedMapData **) realloc(g_map_cache, (g_map_cache_count + 1) * sizeof(struct SharedMapData *));
     g_map_cache[g_map_cache_count++] = entry;
