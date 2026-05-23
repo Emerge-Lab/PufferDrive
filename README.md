@@ -71,6 +71,8 @@ python scripts/submit_cluster.py \
 
 `scripts/cluster_configs/nyu_greene.yaml` defines `account`, `gpus`, `cpus`, `mem`, `time` — edit `account` to your allocation before first submit. `--container` makes `submit_cluster.py` wrap the job command in `singularity exec --nv --overlay $OVERLAY_PATH:ro $IMAGE_PATH ...`.
 
+**For a full guide on how to use this see [`docs/cluster_training.md`](docs/cluster_training.md).**
+
 ## Data
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
