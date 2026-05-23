@@ -69,6 +69,7 @@ singularity exec --nv --overlay "${OVERLAY}:ro" "$IMAGE" bash -c '
         --env.max_agents_per_env 1 \
         --env.num_agents '"$NUM_AGENTS"' \
         --env.use_map_cache 1 \
+        --env.traffic_light_behavior 0 \
         --env.goal_placement 1 \
         --env.num_target_waypoints 1 \
         --env.max_goal_position '"$MAX_GOAL_POSITION"' \
