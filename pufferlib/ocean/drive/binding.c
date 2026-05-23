@@ -1797,6 +1797,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->goal_placement = (int) unpack(kwargs, "goal_placement");
+    env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
     env->next_episode_index = 0;
     env->completed_episodes_count = 0;
