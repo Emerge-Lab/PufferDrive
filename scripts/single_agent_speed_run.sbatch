@@ -35,6 +35,8 @@ TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-1000000000}"  # cap the run at 1B steps
 WANDB_GROUP="${WANDB_GROUP:-Nightly Test}"
 SEED_BASE="${SEED_BASE:-0}"
 SEED=$((SEED_BASE + SLURM_ARRAY_TASK_ID))      # one seed per array task: SEED_BASE .. SEED_BASE+2
+LAUNCH_DATE="$(date +%Y-%m-%d)"                 # stamp the wandb run name with the launch date
+WANDB_NAME="${LAUNCH_DATE}_single_agent_seed${SEED}"
 
 # Disable the nuPlan-based evaluators (replay + behavior buckets); they are
 # irrelevant to single-map CARLA training and spawn their own envs. validation_gigaflow
@@ -55,6 +57,7 @@ singularity exec --nv --overlay "${OVERLAY}:ro" "$IMAGE" bash -c '
     source /scratch/'"$USER"'/venvs/pufferdrive/bin/activate
     export TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0"
     export PYTHONNOUSERSITE=1
+    export WANDB_NAME='"$WANDB_NAME"'  # wandb run name (no name= in WandbLogger -> env var wins)
     NCCL_DIR=$(compgen -G "/scratch/'"$USER"'/venvs/pufferdrive/lib/python3.12/site-packages/nvidia/nccl/lib" 2>/dev/null) \
         && export LD_LIBRARY_PATH="$NCCL_DIR:$LD_LIBRARY_PATH"
     cd /scratch/'"$USER"'/code/PufferDrive
