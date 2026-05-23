@@ -1893,11 +1893,12 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
-// Place each target waypoint at a random drivable point anywhere on the map,
-// rejecting points closer than min_waypoint_spacing so goals are never trivially
-// close. Goals can land in any direction, including behind the agent. The route
-// and path are still built at spawn (used for lane observations and progression);
-// only the goal positions are overridden here.
+// Place each target waypoint at a random drivable point whose distance from the
+// agent falls in [min_waypoint_spacing, max_waypoint_spacing]. With a very large
+// max this is effectively "anywhere on the map"; a small max keeps goals nearby.
+// Goals can land in any direction, including behind the agent. The route and path
+// are still built at spawn (used for lane observations and progression); only the
+// goal positions are overridden here.
 static void compute_goals_random(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
@@ -1907,13 +1908,15 @@ static void compute_goals_random(Drive *env, int agent_idx) {
     }
 
     float min_dist_sq = env->min_waypoint_spacing * env->min_waypoint_spacing;
+    float max_dist_sq = env->max_waypoint_spacing * env->max_waypoint_spacing;
     const int MAX_GOAL_ATTEMPTS = 30;
 
     for (int i = 0; i < num_target_waypoints; i++) {
-        // Fall back to the agent's own position if no distant point is found.
+        // Fall back to the agent's own position if no drivable point is sampled at all.
         float goal_x = agent->sim_x;
         float goal_y = agent->sim_y;
         float goal_z = agent->sim_z;
+        float best_band_miss = -1.0f; // <0: nothing sampled yet; else closest-to-band distance
 
         for (int attempt = 0; attempt < MAX_GOAL_ATTEMPTS; attempt++) {
             int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
@@ -1935,16 +1938,28 @@ static void compute_goals_random(Drive *env, int agent_idx) {
             RoadMapElement *lane = &env->road_elements[chosen.entity_idx];
             float cx = lane->x[chosen.geometry_idx];
             float cy = lane->y[chosen.geometry_idx];
+            float cz = lane->z[chosen.geometry_idx];
             float dx = cx - agent->sim_x;
             float dy = cy - agent->sim_y;
-            if (dx * dx + dy * dy < min_dist_sq) {
-                continue;
+            float d2 = dx * dx + dy * dy;
+
+            if (d2 >= min_dist_sq && d2 <= max_dist_sq) {
+                // Inside the [min_waypoint_spacing, max_waypoint_spacing] band: take it.
+                goal_x = cx;
+                goal_y = cy;
+                goal_z = cz;
+                break;
             }
 
-            goal_x = cx;
-            goal_y = cy;
-            goal_z = lane->z[chosen.geometry_idx];
-            break;
+            // Out of band: keep the point closest to the band so a tight max still
+            // yields a nearby goal instead of falling back to the agent's position.
+            float miss = (d2 > max_dist_sq) ? (d2 - max_dist_sq) : (min_dist_sq - d2);
+            if (best_band_miss < 0.0f || miss < best_band_miss) {
+                best_band_miss = miss;
+                goal_x = cx;
+                goal_y = cy;
+                goal_z = cz;
+            }
         }
 
         agent->goal_positions_x[i] = goal_x;

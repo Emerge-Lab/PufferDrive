@@ -31,6 +31,7 @@ set -euo pipefail
 # Tunables (override via the environment, e.g. NUM_AGENTS=2048 sbatch ...).
 NUM_AGENTS="${NUM_AGENTS:-1024}"                # number of single-agent environments
 MAX_GOAL_POSITION="${MAX_GOAL_POSITION:-1000}"  # obs goal-vector normalization (m); cover Town02's extent
+MAX_WAYPOINT_SPACING="${MAX_WAYPOINT_SPACING:-1000000}"  # random-goal upper distance bound; huge = anywhere on map
 TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-1000000000}"  # cap the run at 1B steps
 WANDB_GROUP="${WANDB_GROUP:-Nightly Test}"
 SEED_BASE="${SEED_BASE:-0}"
@@ -85,6 +86,7 @@ singularity exec --nv --overlay "${OVERLAY}:ro" "$IMAGE" bash -c '
         --env.goal-placement 1 \
         --env.num-target-waypoints 1 \
         --env.min-waypoint-spacing 0 \
+        --env.max-waypoint-spacing '"$MAX_WAYPOINT_SPACING"' \
         --env.max-goal-position '"$MAX_GOAL_POSITION"' \
         --train.total-timesteps '"$TOTAL_TIMESTEPS"' \
         --train.seed '"$SEED"' '"$DISABLE_EVALS"' \
