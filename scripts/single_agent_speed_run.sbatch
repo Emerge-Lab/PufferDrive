@@ -84,6 +84,7 @@ singularity exec --nv --overlay "${OVERLAY}:ro" "$IMAGE" bash -c '
         --env.traffic-light-behavior 0 \
         --env.goal-placement 1 \
         --env.num-target-waypoints 1 \
+        --env.min-waypoint-spacing 0 \
         --env.max-goal-position '"$MAX_GOAL_POSITION"' \
         --train.total-timesteps '"$TOTAL_TIMESTEPS"' \
         --train.seed '"$SEED"' '"$DISABLE_EVALS"' \
