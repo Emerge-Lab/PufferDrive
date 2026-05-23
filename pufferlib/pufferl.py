@@ -2549,6 +2549,35 @@ def _get_failure_mining_identity(args):
     }
 
 
+def _apply_failure_mining_env_preset(args, identity):
+    env_args = args["env"]
+    env_config_name = identity["env_config_name"]
+    eval_mode = identity["eval_mode"]
+
+    if env_config_name is None:
+        return
+
+    if env_config_name == "targeted":
+        return
+
+    if env_config_name == "large":
+        env_args["min_agents_per_env"] = 8
+        env_args["max_agents_per_env"] = 64
+        env_args["targeted_spawn_mode"] = 0
+
+        if eval_mode == "homogeneous":
+            env_args["remove_target_on_collision_or_offroad"] = True
+            env_args["termination_mode"] = 1
+            env_args["inactive_agent_threshold"] = 0.999
+            env_args["adversarial_termination_mode"] = 0
+            env_args["terminate_ep_on_target_failure"] = False
+        return
+
+    raise pufferlib.APIUsageError(
+        f"Unknown --mine-env-config {env_config_name!r}. Expected 'targeted', 'large', or unset."
+    )
+
+
 def _resolve_gigaflow_mining_maps(args):
     map_dir = args["env"]["map_dir"]
     all_map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
@@ -3478,15 +3507,16 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         backend = "Multiprocessing"
 
     num_workers = min(args["vec"]["num_envs"], target_num_episodes)
-    agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
-    min_agents_per_env = args["env"].get("min_agents_per_env")
-    max_agents_per_env = args["env"].get("max_agents_per_env")
-    worker_agent_budget = args["env"].get("num_agents")
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
     fixed_adv_reward_weight_drive = args.get("adv_reward_weight_drive")
     mining_identity = _get_failure_mining_identity(args)
+    _apply_failure_mining_env_preset(args, mining_identity)
+    agents_per_scene = args.get("eval_agents_per_scene") or args["eval"].get("agents_per_scene")
+    min_agents_per_env = args["env"].get("min_agents_per_env")
+    max_agents_per_env = args["env"].get("max_agents_per_env")
+    worker_agent_budget = args["env"].get("num_agents")
     if fixed_adv_reward_weight_drive is not None:
         fixed_adv_reward_weight_drive = float(fixed_adv_reward_weight_drive)
         if not 0.0 <= fixed_adv_reward_weight_drive <= 1.0:
@@ -3665,6 +3695,13 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                 summary["max_agents_per_env"] = args["env"].get("max_agents_per_env")
                 summary["eval_agents_per_scene"] = agents_per_scene
                 summary["eval_scenario_length"] = args["env"].get("scenario_length")
+                summary["remove_target_on_collision_or_offroad"] = args["env"].get(
+                    "remove_target_on_collision_or_offroad"
+                )
+                summary["termination_mode"] = args["env"].get("termination_mode")
+                summary["inactive_agent_threshold"] = args["env"].get("inactive_agent_threshold")
+                summary["adversarial_termination_mode"] = args["env"].get("adversarial_termination_mode")
+                summary["terminate_ep_on_target_failure"] = args["env"].get("terminate_ep_on_target_failure")
                 summary["has_replay"] = 0
                 summary["replay_path"] = None
                 if replay_bundle is not None:
@@ -3714,6 +3751,11 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     "max_agents_per_env": args["env"].get("max_agents_per_env"),
                     "eval_agents_per_scene": agents_per_scene,
                     "scenario_length": args["env"].get("scenario_length"),
+                    "remove_target_on_collision_or_offroad": args["env"].get("remove_target_on_collision_or_offroad"),
+                    "termination_mode": args["env"].get("termination_mode"),
+                    "inactive_agent_threshold": args["env"].get("inactive_agent_threshold"),
+                    "adversarial_termination_mode": args["env"].get("adversarial_termination_mode"),
+                    "terminate_ep_on_target_failure": args["env"].get("terminate_ep_on_target_failure"),
                     "maps": selected_map_names,
                 },
                 "metrics_mean": {k: float(v) for k, v in numeric_means.items()},
