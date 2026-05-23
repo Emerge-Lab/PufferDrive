@@ -45,7 +45,7 @@ SEED=$((SEED_BASE + SLURM_ARRAY_TASK_ID))      # one seed per array task: SEED_B
 # (CARLA) stays on. enabled 0 -> bool(0)=False in the eval manager. Note: dotted CLI
 # flags use hyphens (the argparser maps _ -> -), so section names are hyphenated here.
 DISABLE_EVALS=""
-for ev in behaviors-full-dir behaviors-hard-stop behaviors-highway-straight \
+for ev in validation-replay behaviors-full-dir behaviors-hard-stop behaviors-highway-straight \
           behaviors-lane-change behaviors-merge behaviors-parked-cars behaviors-roundabout \
           behaviors-stopped-traffic behaviors-traffic-light-green behaviors-traffic-light-stop \
           behaviors-unprotected-left behaviors-unprotected-right; do
