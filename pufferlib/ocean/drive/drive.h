@@ -186,6 +186,13 @@ struct Log {
     float score;
     float offroad_rate;
     float collision_rate;
+    float adversaries_offroad_rate;
+    float adversaries_collision_rate;
+    float adversaries_target_collision_rate;
+    float adversaries_adversary_collision_rate;
+    float adversaries_red_light_violation_rate;
+    float adversaries_at_fault_collision_rate;
+    float adversaries_making_progress_rate;
     float did_target_collide;
     float did_target_offroad;
     float did_target_run_light;
@@ -530,6 +537,13 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float did_target_fail = log->did_target_fail;
     float did_target_make_progress = log->did_target_make_progress;
     float did_target_have_at_fault_collision = log->did_target_have_at_fault_collision;
+    float adversaries_offroad_rate = log->adversaries_offroad_rate;
+    float adversaries_collision_rate = log->adversaries_collision_rate;
+    float adversaries_target_collision_rate = log->adversaries_target_collision_rate;
+    float adversaries_adversary_collision_rate = log->adversaries_adversary_collision_rate;
+    float adversaries_red_light_violation_rate = log->adversaries_red_light_violation_rate;
+    float adversaries_at_fault_collision_rate = log->adversaries_at_fault_collision_rate;
+    float adversaries_making_progress_rate = log->adversaries_making_progress_rate;
     float target_num_goals_reached = log->target_num_goals_reached;
     float target_ttc_within_bound_rate = log->target_ttc_within_bound_rate;
     float target_progress_ratio = log->target_progress_ratio;
@@ -606,6 +620,17 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     log->episode_return_drive =
         adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
     log->episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+    log->adversaries_offroad_rate = adversary_n > 0.0f ? adversaries_offroad_rate / adversary_n : 0.0f;
+    log->adversaries_collision_rate = adversary_n > 0.0f ? adversaries_collision_rate / adversary_n : 0.0f;
+    log->adversaries_target_collision_rate =
+        adversary_n > 0.0f ? adversaries_target_collision_rate / adversary_n : 0.0f;
+    log->adversaries_adversary_collision_rate =
+        adversary_n > 0.0f ? adversaries_adversary_collision_rate / adversary_n : 0.0f;
+    log->adversaries_red_light_violation_rate =
+        adversary_n > 0.0f ? adversaries_red_light_violation_rate / adversary_n : 0.0f;
+    log->adversaries_at_fault_collision_rate =
+        adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
+    log->adversaries_making_progress_rate = adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
     log->num_goals_reached = adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
     log->ttc_within_bound_rate =
         adversary_n > 0.0f ? (ttc_within_bound_rate - target_ttc_within_bound_rate) / adversary_n : 0.0f;
@@ -3127,6 +3152,7 @@ static float calculate_puffer_score(Log *log_agent, int scenario_length, float d
 static void build_episode_log_contributions(Drive *env, Log *episode_log) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     const float progress_ref_speed = 10.0f;
+    int target_agent_idx = env->active_agent_count > 0 ? env->active_agent_indices[0] : -1;
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
         float episode_duration_s = env->logs[i].episode_length * env->dt;
@@ -3138,6 +3164,20 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         episode_log->offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         episode_log->collision_rate += collided;
+        if (i > 0) {
+            episode_log->adversaries_offroad_rate += offroad;
+            episode_log->adversaries_collision_rate += collided;
+            episode_log->adversaries_red_light_violation_rate += env->logs[i].red_light_violation_rate;
+            episode_log->adversaries_at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
+
+            if (collided > 0.0f) {
+                if (agent->collided_with_agent_idx == target_agent_idx) {
+                    episode_log->adversaries_target_collision_rate += 1.0f;
+                } else if (is_adversarial_agent(env, agent->collided_with_agent_idx)) {
+                    episode_log->adversaries_adversary_collision_rate += 1.0f;
+                }
+            }
+        }
         if (i > 0 && collided > 0.0f) {
             episode_log->adversaries_collision_count += 1.0f;
             episode_log->adversaries_collision_severity += agent->collision_severity;
@@ -3202,6 +3242,9 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
 
             float making_progress = (env->logs[i].progress_ratio > 0.2f) ? 1.0f : 0.0f;
             episode_log->making_progress_rate += making_progress;
+            if (i > 0) {
+                episode_log->adversaries_making_progress_rate += making_progress;
+            }
             episode_log->puffer_score += calculate_puffer_score(&env->logs[i], safe_timestep, env->dt);
         }
 

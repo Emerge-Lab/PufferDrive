@@ -708,6 +708,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float did_target_fail = env->log.did_target_fail;
             float did_target_make_progress = env->log.did_target_make_progress;
             float did_target_have_at_fault_collision = env->log.did_target_have_at_fault_collision;
+            float adversaries_offroad_rate = env->log.adversaries_offroad_rate;
+            float adversaries_collision_rate = env->log.adversaries_collision_rate;
+            float adversaries_target_collision_rate = env->log.adversaries_target_collision_rate;
+            float adversaries_adversary_collision_rate = env->log.adversaries_adversary_collision_rate;
+            float adversaries_red_light_violation_rate = env->log.adversaries_red_light_violation_rate;
+            float adversaries_at_fault_collision_rate = env->log.adversaries_at_fault_collision_rate;
+            float adversaries_making_progress_rate = env->log.adversaries_making_progress_rate;
             float target_num_goals_reached = env->log.target_num_goals_reached;
             float target_ttc_within_bound_rate = env->log.target_ttc_within_bound_rate;
             float target_progress_ratio = env->log.target_progress_ratio;
@@ -786,6 +793,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             env->log.episode_return_drive =
                 adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
             env->log.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+            env->log.adversaries_offroad_rate = adversary_n > 0.0f ? adversaries_offroad_rate / adversary_n : 0.0f;
+            env->log.adversaries_collision_rate = adversary_n > 0.0f ? adversaries_collision_rate / adversary_n : 0.0f;
+            env->log.adversaries_target_collision_rate =
+                adversary_n > 0.0f ? adversaries_target_collision_rate / adversary_n : 0.0f;
+            env->log.adversaries_adversary_collision_rate =
+                adversary_n > 0.0f ? adversaries_adversary_collision_rate / adversary_n : 0.0f;
+            env->log.adversaries_red_light_violation_rate =
+                adversary_n > 0.0f ? adversaries_red_light_violation_rate / adversary_n : 0.0f;
+            env->log.adversaries_at_fault_collision_rate =
+                adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
+            env->log.adversaries_making_progress_rate =
+                adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
             env->log.num_goals_reached =
                 adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
             env->log.ttc_within_bound_rate =
@@ -864,6 +883,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float did_target_fail = aggregate.did_target_fail;
         float did_target_make_progress = aggregate.did_target_make_progress;
         float did_target_have_at_fault_collision = aggregate.did_target_have_at_fault_collision;
+        float adversaries_offroad_rate = aggregate.adversaries_offroad_rate;
+        float adversaries_collision_rate = aggregate.adversaries_collision_rate;
+        float adversaries_target_collision_rate = aggregate.adversaries_target_collision_rate;
+        float adversaries_adversary_collision_rate = aggregate.adversaries_adversary_collision_rate;
+        float adversaries_red_light_violation_rate = aggregate.adversaries_red_light_violation_rate;
+        float adversaries_at_fault_collision_rate = aggregate.adversaries_at_fault_collision_rate;
+        float adversaries_making_progress_rate = aggregate.adversaries_making_progress_rate;
         float target_num_goals_reached = aggregate.target_num_goals_reached;
         float target_ttc_within_bound_rate = aggregate.target_ttc_within_bound_rate;
         float target_progress_ratio = aggregate.target_progress_ratio;
@@ -943,6 +969,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         aggregate.episode_return_drive =
             adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
         aggregate.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+        aggregate.adversaries_offroad_rate = adversary_n > 0.0f ? adversaries_offroad_rate / adversary_n : 0.0f;
+        aggregate.adversaries_collision_rate = adversary_n > 0.0f ? adversaries_collision_rate / adversary_n : 0.0f;
+        aggregate.adversaries_target_collision_rate =
+            adversary_n > 0.0f ? adversaries_target_collision_rate / adversary_n : 0.0f;
+        aggregate.adversaries_adversary_collision_rate =
+            adversary_n > 0.0f ? adversaries_adversary_collision_rate / adversary_n : 0.0f;
+        aggregate.adversaries_red_light_violation_rate =
+            adversary_n > 0.0f ? adversaries_red_light_violation_rate / adversary_n : 0.0f;
+        aggregate.adversaries_at_fault_collision_rate =
+            adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
+        aggregate.adversaries_making_progress_rate =
+            adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
         aggregate.num_goals_reached =
             adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
         aggregate.ttc_within_bound_rate =
