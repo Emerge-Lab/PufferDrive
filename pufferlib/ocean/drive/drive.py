@@ -27,8 +27,8 @@ class Drive(pufferlib.PufferEnv):
         height=1024,
         human_agent_idx=0,
         reward_goal=1.0,
-        reward_vehicle_collision=3.0,
-        reward_offroad_collision=3.0,
+        reward_collision=3.0,
+        reward_offroad=3.0,
         reward_comfort=0.05,
         reward_lane_align=0.025,
         reward_vel_align=1.0,
@@ -70,7 +70,7 @@ class Drive(pufferlib.PufferEnv):
         inactive_agent_threshold=0.4,
         buf=None,
         seed=1,
-        init_steps=0,
+        init_step=0,
         eval_mode=0,
         num_eval_scenarios=16,
         init_mode="create_all_valid",
@@ -81,25 +81,25 @@ class Drive(pufferlib.PufferEnv):
         reward_randomization=False,
         compute_eval_metrics=True,
         split_network=False,
-        max_lane_segment_observations=32,
-        max_boundary_segment_observations=32,
-        max_partner_observations=16,
-        max_traffic_control_observations=4,
+        obs_slots_lane=32,
+        obs_slots_boundary=32,
+        obs_slots_partners=16,
+        obs_slots_traffic_controls=4,
         traffic_control_scope=0,
         starting_map=0,
-        max_goal_position=100.0,
-        max_position=100.0,
-        max_veh_len=15.0,
-        max_veh_width=10.0,
-        max_road_segment_length=5.0,
-        max_road_segment_width=5.0,
-        max_traffic_control_distance=100.0,
-        agent_obs_max_dist=100.0,
-        road_obs_front_dist=120.0,
-        road_obs_behind_dist=20.0,
-        road_obs_side_dist=30.0,
-        lane_segment_dropout=0.0,
-        boundary_segment_dropout=0.0,
+        obs_norm_goal_offset_m=100.0,
+        obs_norm_xy_offset_m=100.0,
+        obs_norm_veh_length_m=15.0,
+        obs_norm_veh_width_m=10.0,
+        obs_norm_road_seg_length_m=5.0,
+        obs_norm_road_seg_width_m=5.0,
+        obs_range_traffic_control_m=100.0,
+        obs_range_partner_m=100.0,
+        obs_range_road_front_m=120.0,
+        obs_range_road_behind_m=20.0,
+        obs_range_road_side_m=30.0,
+        obs_dropout_lane=0.0,
+        obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
         partner_blindness_trigger_prob=0.1,
         phantom_braking_prob=0.0,
@@ -117,8 +117,8 @@ class Drive(pufferlib.PufferEnv):
         self.num_maps = num_maps
         self.report_interval = report_interval
         self.reward_goal = reward_goal
-        self.reward_vehicle_collision = reward_vehicle_collision
-        self.reward_offroad_collision = reward_offroad_collision
+        self.reward_collision = reward_collision
+        self.reward_offroad = reward_offroad
         self.reward_comfort = reward_comfort
         self.reward_lane_align = reward_lane_align
         self.reward_vel_align = reward_vel_align
@@ -169,38 +169,34 @@ class Drive(pufferlib.PufferEnv):
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
 
-        # Observation space calculation based on target_type
-        self.ego_features = {
-            "classic": binding.EGO_FEATURES_CLASSIC,
-            "jerk": binding.EGO_FEATURES_JERK,
-        }.get(dynamics_model)
+        self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
-        self.max_lane_segment_observations = max_lane_segment_observations
-        self.max_boundary_segment_observations = max_boundary_segment_observations
-        self.max_partner_observations = max_partner_observations
+        self.obs_slots_lane = obs_slots_lane
+        self.obs_slots_boundary = obs_slots_boundary
+        self.obs_slots_partners = obs_slots_partners
         self.traffic_control_scope = traffic_control_scope
-        self.max_traffic_control_observations = max_traffic_control_observations
-        self.max_goal_position = float(max_goal_position)
-        self.max_position = float(max_position)
-        self.max_veh_len = float(max_veh_len)
-        self.max_veh_width = float(max_veh_width)
-        self.max_road_segment_length = float(max_road_segment_length)
-        self.max_road_segment_width = float(max_road_segment_width)
-        self.max_traffic_control_distance = float(max_traffic_control_distance)
-        self.agent_obs_max_dist = float(agent_obs_max_dist)
-        self.road_obs_front_dist = float(road_obs_front_dist)
-        self.road_obs_behind_dist = float(road_obs_behind_dist)
-        self.road_obs_side_dist = float(road_obs_side_dist)
-        self.lane_segment_dropout = float(lane_segment_dropout)
-        self.boundary_segment_dropout = float(boundary_segment_dropout)
-        self.obs_lane_segment_count = compute_effective_road_obs_count(
-            self.max_lane_segment_observations,
-            self.lane_segment_dropout,
+        self.obs_slots_traffic_controls = obs_slots_traffic_controls
+        self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
+        self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
+        self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
+        self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
+        self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
+        self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
+        self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
+        self.obs_range_partner_m = float(obs_range_partner_m)
+        self.obs_range_road_front_m = float(obs_range_road_front_m)
+        self.obs_range_road_behind_m = float(obs_range_road_behind_m)
+        self.obs_range_road_side_m = float(obs_range_road_side_m)
+        self.obs_dropout_lane = float(obs_dropout_lane)
+        self.obs_dropout_boundary = float(obs_dropout_boundary)
+        self.obs_slots_lane_kept = compute_effective_road_obs_count(
+            self.obs_slots_lane,
+            self.obs_dropout_lane,
         )
-        self.obs_boundary_segment_count = compute_effective_road_obs_count(
-            self.max_boundary_segment_observations,
-            self.boundary_segment_dropout,
+        self.obs_slots_boundary_kept = compute_effective_road_obs_count(
+            self.obs_slots_boundary,
+            self.obs_dropout_boundary,
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
@@ -217,21 +213,21 @@ class Drive(pufferlib.PufferEnv):
             self.target_features = binding.STATIC_TARGET_FEATURES
         else:
             self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.target_dim = num_target_waypoints * self.target_features
+        self.target_dim = self.num_target_waypoints * self.target_features
 
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
             + self.target_dim
-            + self.max_partner_observations * self.partner_features
-            + self.obs_lane_segment_count * self.road_features
-            + self.obs_boundary_segment_count * self.road_features
-            + self.max_traffic_control_observations * self.traffic_control_features
+            + self.obs_slots_partners * self.partner_features
+            + self.obs_slots_lane_kept * self.road_features
+            + self.obs_slots_boundary_kept * self.road_features
+            + self.obs_slots_traffic_controls * self.traffic_control_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
-        self.init_steps = init_steps
+        self.init_step = init_step
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.simulation_mode_str = simulation_mode
@@ -316,11 +312,11 @@ class Drive(pufferlib.PufferEnv):
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             simulation_mode=self.simulation_mode,
-            init_steps=self.init_steps,
+            init_step=self.init_step,
             seed=self.random_seed,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
-            num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+            num_eval_scenarios=self.current_num_eval_scenarios,
             goal_radius=self.goal_radius,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
@@ -365,8 +361,8 @@ class Drive(pufferlib.PufferEnv):
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
-            "reward_vehicle_collision": self.reward_vehicle_collision,
-            "reward_offroad_collision": self.reward_offroad_collision,
+            "reward_collision": self.reward_collision,
+            "reward_offroad": self.reward_offroad,
             "reward_comfort": self.reward_comfort,
             "reward_lane_align": self.reward_lane_align,
             "reward_vel_align": self.reward_vel_align,
@@ -387,10 +383,10 @@ class Drive(pufferlib.PufferEnv):
             "max_waypoint_spacing": self.max_waypoint_spacing,
             "num_target_waypoints": self.num_target_waypoints,
             "target_type": self.target_type,
-            "max_lane_segment_observations": self.max_lane_segment_observations,
-            "max_boundary_segment_observations": self.max_boundary_segment_observations,
-            "max_partner_observations": self.max_partner_observations,
-            "max_traffic_control_observations": self.max_traffic_control_observations,
+            "obs_slots_lane": self.obs_slots_lane,
+            "obs_slots_boundary": self.obs_slots_boundary,
+            "obs_slots_partners": self.obs_slots_partners,
+            "obs_slots_traffic_controls": self.obs_slots_traffic_controls,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,
@@ -401,7 +397,7 @@ class Drive(pufferlib.PufferEnv):
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
-            "init_steps": self.init_steps,
+            "init_step": self.init_step,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "simulation_mode": self.simulation_mode,
@@ -409,19 +405,19 @@ class Drive(pufferlib.PufferEnv):
             "reward_randomization": self.reward_randomization,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
-            "max_goal_position": self.max_goal_position,
-            "max_position": self.max_position,
-            "max_veh_len": self.max_veh_len,
-            "max_veh_width": self.max_veh_width,
-            "max_road_segment_length": self.max_road_segment_length,
-            "max_road_segment_width": self.max_road_segment_width,
-            "max_traffic_control_distance": self.max_traffic_control_distance,
-            "agent_obs_max_dist": self.agent_obs_max_dist,
-            "road_obs_front_dist": self.road_obs_front_dist,
-            "road_obs_behind_dist": self.road_obs_behind_dist,
-            "road_obs_side_dist": self.road_obs_side_dist,
-            "obs_lane_segment_count": self.obs_lane_segment_count,
-            "obs_boundary_segment_count": self.obs_boundary_segment_count,
+            "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
+            "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
+            "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
+            "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
+            "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
+            "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
+            "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
+            "obs_range_partner_m": self.obs_range_partner_m,
+            "obs_range_road_front_m": self.obs_range_road_front_m,
+            "obs_range_road_behind_m": self.obs_range_road_behind_m,
+            "obs_range_road_side_m": self.obs_range_road_side_m,
+            "obs_slots_lane_kept": self.obs_slots_lane_kept,
+            "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
             "phantom_braking_prob": self.phantom_braking_prob,
@@ -494,7 +490,7 @@ class Drive(pufferlib.PufferEnv):
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     simulation_mode=self.simulation_mode,
-                    init_steps=self.init_steps,
+                    init_step=self.init_step,
                     map_files=self.map_files,
                     seed=self.random_seed,
                     min_agents_per_env=self.min_agents_per_env,
@@ -568,11 +564,11 @@ class Drive(pufferlib.PufferEnv):
         num_agents = self.num_agents
 
         trajectories = {
-            "x": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "y": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "z": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.float32),
-            "valid": np.zeros((num_agents, self.scenario_length - self.init_steps), dtype=np.int32),
+            "x": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "y": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "z": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.int32),
             "id": np.zeros(num_agents, dtype=np.int32),
             "scenario_id": np.zeros(num_agents, dtype=np.int32),
         }

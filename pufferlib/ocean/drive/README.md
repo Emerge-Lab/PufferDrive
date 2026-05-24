@@ -10,7 +10,7 @@ Determines which agents are **created** in the environment.
 
 | Option                   | Description                                                                  |
 | ------------------------ | ---------------------------------------------------------------------------- |
-| `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_steps] == 1`). |
+| `create_all_valid`       | Create all entities valid at initialization (`traj_valid[init_step] == 1`). |
 | `create_only_controlled` | Create only those agents that are controlled by the policy.                  |
 
 ### `control_mode`

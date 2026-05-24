@@ -61,7 +61,7 @@ def main():
         help="Simulation mode: gigaflow (random spawn) or replay (log trajectories, policy controls SDC)",
     )
     parser.add_argument(
-        "--init-steps", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
+        "--init-step", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
     )
     parser.add_argument(
         "--control-mode",
@@ -85,13 +85,13 @@ def main():
         steps = cli.steps or 91
         num_agents = cli.num_agents or 1
         control_mode = cli.control_mode or "control_sdc_only"
-        init_steps = cli.init_steps if cli.init_steps is not None else 10
+        init_step = cli.init_step if cli.init_step is not None else 10
         eval_type = "human_replay"
     else:
         steps = cli.steps or 1000
         num_agents = cli.num_agents or 100
         control_mode = cli.control_mode or "control_vehicles"
-        init_steps = cli.init_steps if cli.init_steps is not None else 0
+        init_step = cli.init_step if cli.init_step is not None else 0
         eval_type = "multi_scenario"
 
     # Find the project root (parent of scripts/)
@@ -155,12 +155,12 @@ def main():
         "seed": seed,
         "simulation_mode": cli.simulation_mode,
         "control_mode": control_mode,
-        "init_steps": init_steps,
+        "init_step": init_step,
         "partner_blindness_prob": 0.0,
         "phantom_braking_prob": 0.0,
         "phantom_braking_trigger_prob": 0.0,
-        "lane_segment_dropout": 0.0,
-        "boundary_segment_dropout": 0.0,
+        "obs_dropout_lane": 0.0,
+        "obs_dropout_boundary": 0.0,
     }
     if cli.simulation_mode == "gigaflow":
         env_overrides["min_agents_per_env"] = num_agents
