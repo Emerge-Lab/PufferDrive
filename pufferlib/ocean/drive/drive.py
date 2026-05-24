@@ -269,8 +269,9 @@ class Drive(pufferlib.PufferEnv):
             "static": binding.CONTROLLER_STATIC,
             "policy": binding.CONTROLLER_POLICY,
             "replay": binding.CONTROLLER_REPLAY,
+            "idm": binding.CONTROLLER_IDM,
         }
-        controller_options = "'static', 'policy', or 'replay'"
+        controller_options = "'static', 'policy', 'replay', or 'idm'"
         if self.sdc_controller_str not in controller_values:
             raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
         if self.non_sdc_controller_str not in controller_values:
@@ -278,7 +279,10 @@ class Drive(pufferlib.PufferEnv):
                 f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
             )
         if self.non_vehicle_controller_str == "auto":
-            self.non_vehicle_controller_str = self.non_sdc_controller_str
+            if self.non_sdc_controller_str == "idm":
+                self.non_vehicle_controller_str = "replay"
+            else:
+                self.non_vehicle_controller_str = self.non_sdc_controller_str
         elif self.non_vehicle_controller_str not in controller_values:
             raise ValueError(
                 f"non_vehicle_controller must be 'auto' or one of {controller_options}. "
