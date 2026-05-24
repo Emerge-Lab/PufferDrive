@@ -32,6 +32,7 @@
 #define CONTROLLER_IDM 3
 #define CONTROLLER_CORRIDOR_IDM 4
 #define CONTROLLER_PDM 5
+#define CONTROLLER_NUPLAN_IDM 6
 
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
@@ -5628,6 +5629,11 @@ static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx
 
     if (controller == CONTROLLER_IDM) {
         move_idm(env, agent_idx);
+        return;
+    }
+
+    if (controller == CONTROLLER_NUPLAN_IDM) {
+        move_nuplan_idm(env, agent_idx);
         return;
     }
 

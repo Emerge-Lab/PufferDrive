@@ -17,6 +17,16 @@
 #define IDM_ROUTE_SAMPLE_DS 1.0f
 #define IDM_MAX_CANDIDATES 256
 
+#define NUPLAN_IDM_MIN_SPACING 1.0f
+#define NUPLAN_IDM_SAFE_TIME_HEADWAY 1.5f
+#define NUPLAN_IDM_MAX_ACCEL 1.0f
+#define NUPLAN_IDM_MAX_DECEL 3.0f
+#define NUPLAN_IDM_LOOKAHEAD_TIME 5.0f
+#define NUPLAN_IDM_MIN_LOOKAHEAD 20.0f
+#define NUPLAN_IDM_MAX_LOOKAHEAD 40.0f
+#define NUPLAN_IDM_DEFAULT_DESIRED_SPEED 10.0f
+#define NUPLAN_IDM_MAX_CANDIDATES 64
+
 typedef struct {
     int has_leader;
     int leader_agent_idx;
@@ -346,6 +356,218 @@ static inline void idm_update_sample_agent_pose(Agent *sample, RoadMapElement *l
     sample->sin_heading = sinf(sample->sim_heading);
 }
 
+static inline float nuplan_idm_projected_footprint_length(const Agent *agent) {
+    return 0.5f * agent->sim_length + fmaxf(0.0f, agent->sim_speed_signed) * NUPLAN_IDM_SAFE_TIME_HEADWAY;
+}
+
+static int nuplan_idm_collect_route_candidates(Drive *env, int ego_idx, float lookahead, int *candidates,
+                                               int max_candidates) {
+    Agent *ego = &env->agents[ego_idx];
+    int count = 0;
+
+    for (int i = 0; i < env->num_agents && count < max_candidates; i++) {
+        int other_idx = -1;
+        if (i < env->active_agent_count) {
+            other_idx = env->active_agent_indices[i];
+        } else {
+            other_idx = env->static_agent_indices[i - env->active_agent_count];
+        }
+        if (other_idx == -1 || other_idx == ego_idx) {
+            continue;
+        }
+
+        Agent *other = &env->agents[other_idx];
+        if (other->removed || other->sim_x == INVALID_POSITION || other->sim_valid == 0) {
+            continue;
+        }
+        if (!check_z_collision_possibility(ego, other)) {
+            continue;
+        }
+
+        float dx = other->sim_x - ego->sim_x;
+        float dy = other->sim_y - ego->sim_y;
+        float max_dist = lookahead + 0.5f * ego->sim_length + nuplan_idm_projected_footprint_length(other) + 5.0f +
+                         2.0f * IDM_BBOX_MARGIN;
+        if (dx * dx + dy * dy > max_dist * max_dist) {
+            continue;
+        }
+
+        candidates[count++] = other_idx;
+    }
+
+    return count;
+}
+
+static int nuplan_idm_boxes_overlap(const Agent *sample, const Agent *other) {
+    if (!check_z_collision_possibility(sample, other)) {
+        return 0;
+    }
+
+    float dx = other->sim_x - sample->sim_x;
+    float dy = other->sim_y - sample->sim_y;
+    float local_radius = 0.5f * sample->sim_length + 0.5f * other->sim_length + sample->sim_width + other->sim_width +
+                         1.0f + 2.0f * IDM_BBOX_MARGIN;
+    if (dx * dx + dy * dy > local_radius * local_radius) {
+        return 0;
+    }
+
+    Agent sample_expanded = *sample;
+    Agent other_expanded = *other;
+    other_expanded.sim_length = other->sim_length + 2.0f * IDM_BBOX_MARGIN;
+    other_expanded.sim_width = other->sim_width + 2.0f * IDM_BBOX_MARGIN;
+    return check_obb_collision(&sample_expanded, &other_expanded);
+}
+
+static int nuplan_idm_set_projected_agent_pose(Drive *env, Agent *agent, IDMLaneProjection projection, float distance) {
+    int route_idx = projection.route_idx;
+    int seg_idx = projection.segment_idx;
+    float t = projection.t;
+
+    while (route_idx < agent->route_length) {
+        int lane_idx = agent->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            return 0;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2) {
+            return 0;
+        }
+
+        while (seg_idx < lane->segment_length - 1) {
+            float seg_len = idm_lane_segment_length(lane, seg_idx);
+            if (seg_len < 1e-6f) {
+                seg_idx++;
+                t = 0.0f;
+                continue;
+            }
+
+            float remaining = (1.0f - t) * seg_len;
+            if (distance <= remaining) {
+                float next_t = t + distance / seg_len;
+                idm_update_sample_agent_pose(agent, lane, seg_idx, clip(next_t, 0.0f, 1.0f));
+                return 1;
+            }
+
+            distance -= remaining;
+            seg_idx++;
+            t = 0.0f;
+        }
+
+        route_idx++;
+        seg_idx = 0;
+        t = 0.0f;
+    }
+
+    return 0;
+}
+
+static int nuplan_idm_sample_hits_projected_agent(Drive *env, const Agent *sample, int other_idx) {
+    Agent *other = &env->agents[other_idx];
+    if (nuplan_idm_boxes_overlap(sample, other)) {
+        return 1;
+    }
+
+    IDMLaneProjection projection = idm_project_to_route_lanes(env, other);
+    if (!projection.valid) {
+        return 0;
+    }
+
+    Agent projected = *other;
+    float end_s = nuplan_idm_projected_footprint_length(other);
+    for (float s = IDM_ROUTE_SAMPLE_DS; s <= end_s + 1e-4f; s += IDM_ROUTE_SAMPLE_DS) {
+        projected = *other;
+        if (!nuplan_idm_set_projected_agent_pose(env, &projected, projection, s)) {
+            return 0;
+        }
+        if (nuplan_idm_boxes_overlap(sample, &projected)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static IDMLeader nuplan_idm_find_leader_by_route_boxes(Drive *env, int ego_idx) {
+    Agent *ego = &env->agents[ego_idx];
+    IDMLeader no_leader = idm_no_leader();
+    IDMLaneProjection projection = idm_project_to_route_lanes(env, ego);
+    if (!projection.valid) {
+        return no_leader;
+    }
+
+    float speed = fmaxf(0.0f, ego->sim_speed_signed);
+    float lookahead = clip(speed * NUPLAN_IDM_LOOKAHEAD_TIME, NUPLAN_IDM_MIN_LOOKAHEAD, NUPLAN_IDM_MAX_LOOKAHEAD);
+    int candidates[NUPLAN_IDM_MAX_CANDIDATES];
+    int num_candidates =
+        nuplan_idm_collect_route_candidates(env, ego_idx, lookahead, candidates, NUPLAN_IDM_MAX_CANDIDATES);
+
+    Agent sample = idm_make_sample_agent(ego, ego->sim_x, ego->sim_y, ego->sim_z, ego->sim_heading);
+    float next_sample_s = IDM_ROUTE_SAMPLE_DS;
+    float traveled_s = 0.0f;
+    int route_idx = projection.route_idx;
+    int seg_idx = projection.segment_idx;
+    float t = projection.t;
+
+    while (route_idx < ego->route_length && next_sample_s <= lookahead + 1e-4f) {
+        int lane_idx = ego->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            break;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2) {
+            break;
+        }
+
+        while (seg_idx < lane->segment_length - 1 && next_sample_s <= lookahead + 1e-4f) {
+            float seg_len = idm_lane_segment_length(lane, seg_idx);
+            if (seg_len < 1e-6f) {
+                seg_idx++;
+                t = 0.0f;
+                continue;
+            }
+
+            float remaining = (1.0f - t) * seg_len;
+            if (traveled_s + remaining + 1e-4f < next_sample_s) {
+                traveled_s += remaining;
+                seg_idx++;
+                t = 0.0f;
+                continue;
+            }
+
+            float sample_t = t + (next_sample_s - traveled_s) / seg_len;
+            sample_t = clip(sample_t, 0.0f, 1.0f);
+            idm_update_sample_agent_pose(&sample, lane, seg_idx, sample_t);
+
+            if (idm_sample_hits_red_light(env, &sample, lane_idx)) {
+                idm_update_best_leader(&no_leader, -1, 1, next_sample_s, 0.0f);
+                return no_leader;
+            }
+
+            IDMLeader best_at_sample = idm_no_leader();
+            for (int i = 0; i < num_candidates; i++) {
+                int other_idx = candidates[i];
+                Agent *other = &env->agents[other_idx];
+                if (!nuplan_idm_sample_hits_projected_agent(env, &sample, other_idx)) {
+                    continue;
+                }
+                float leader_speed = other->sim_vx * sample.cos_heading + other->sim_vy * sample.sin_heading;
+                idm_update_best_leader(&best_at_sample, other_idx, 0, next_sample_s, leader_speed);
+            }
+            if (best_at_sample.has_leader) {
+                return best_at_sample;
+            }
+
+            next_sample_s += IDM_ROUTE_SAMPLE_DS;
+        }
+
+        route_idx++;
+        seg_idx = 0;
+        t = 0.0f;
+    }
+
+    return no_leader;
+}
+
 static IDMLeader idm_find_leader_by_route_boxes(Drive *env, int ego_idx) {
     Agent *ego = &env->agents[ego_idx];
     IDMLeader no_leader = idm_no_leader();
@@ -469,6 +691,46 @@ static float idm_compute_acceleration(Drive *env, Agent *agent, IDMLeader leader
     }
 
     return IDM_MAX_ACCEL * (1.0f - free_road_term - leader_term);
+}
+
+static float nuplan_idm_desired_speed(Drive *env, Agent *agent) {
+    float desired_speed = idm_lane_speed_limit(env, agent->current_lane_idx);
+
+    if (desired_speed <= 0.0f && agent->route != NULL && agent->route_length > 0) {
+        int route_idx = agent->current_route_index;
+        if (route_idx < 0) {
+            route_idx = 0;
+        } else if (route_idx >= agent->route_length) {
+            route_idx = agent->route_length - 1;
+        }
+        desired_speed = idm_lane_speed_limit(env, agent->route[route_idx]);
+    }
+
+    if (desired_speed <= 0.0f) {
+        desired_speed = NUPLAN_IDM_DEFAULT_DESIRED_SPEED;
+    }
+
+    desired_speed = fminf(desired_speed, NUPLAN_IDM_DEFAULT_DESIRED_SPEED);
+    return clip(desired_speed, 1.0f, MAX_SPEED);
+}
+
+static float nuplan_idm_compute_acceleration(Drive *env, Agent *agent, IDMLeader leader) {
+    float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
+    float desired_speed = nuplan_idm_desired_speed(env, agent);
+    float speed_ratio = current_speed / desired_speed;
+    float free_road_term = powf(speed_ratio, IDM_DELTA);
+    float leader_term = 0.0f;
+
+    if (leader.has_leader) {
+        float s_star =
+            NUPLAN_IDM_MIN_SPACING + fmaxf(0.0f, current_speed * NUPLAN_IDM_SAFE_TIME_HEADWAY +
+                                                     current_speed * (current_speed - leader.leader_speed) /
+                                                         (2.0f * sqrtf(NUPLAN_IDM_MAX_ACCEL * NUPLAN_IDM_MAX_DECEL)));
+        float lead_dist = fmaxf(leader.gap, IDM_MINIMUM_LEAD_DISTANCE);
+        leader_term = (s_star / lead_dist) * (s_star / lead_dist);
+    }
+
+    return NUPLAN_IDM_MAX_ACCEL * (1.0f - free_road_term - leader_term);
 }
 
 static IDMLaneProjection idm_project_to_route_lanes(Drive *env, Agent *agent) {
@@ -711,6 +973,58 @@ static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
     update_agent_speed(agent);
 }
 
+static void nuplan_idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
+    Agent *agent = &env->agents[agent_idx];
+
+    if (agent->removed) {
+        invalidate_agent(agent);
+        return;
+    }
+
+    if (agent->stopped || agent->sim_x == INVALID_POSITION) {
+        agent->sim_vx = 0.0f;
+        agent->sim_vy = 0.0f;
+        agent->yaw_rate = 0.0f;
+        agent->sim_speed = 0.0f;
+        agent->sim_speed_signed = 0.0f;
+        agent->a_long = 0.0f;
+        agent->a_lat = 0.0f;
+        agent->jerk_long = 0.0f;
+        agent->jerk_lat = 0.0f;
+        agent->steering_angle = 0.0f;
+        return;
+    }
+
+    float old_a_long = agent->a_long;
+    float accel = nuplan_idm_compute_acceleration(env, agent, leader);
+    accel = clip(accel, -NUPLAN_IDM_MAX_DECEL, NUPLAN_IDM_MAX_ACCEL);
+
+    float current_speed = fmaxf(0.0f, agent->sim_speed_signed);
+    float new_speed = current_speed + accel * env->dt;
+    if (new_speed < 0.0f) {
+        new_speed = 0.0f;
+    }
+    accel = (new_speed - current_speed) / env->dt;
+
+    float old_heading = agent->sim_heading;
+    float distance = new_speed * env->dt;
+    if (!idm_advance_along_route_lanes(env, agent_idx, distance, &old_heading)) {
+        agent->stopped = 1;
+        new_speed = 0.0f;
+        accel = (new_speed - current_speed) / env->dt;
+    }
+    agent->sim_vx = new_speed * agent->cos_heading;
+    agent->sim_vy = new_speed * agent->sin_heading;
+    agent->yaw_rate = compute_heading_diff(agent->sim_heading, old_heading) / env->dt;
+    agent->jerk_long = (accel - old_a_long) / env->dt;
+    float new_a_lat = new_speed * agent->yaw_rate;
+    agent->jerk_lat = (new_a_lat - agent->a_lat) / env->dt;
+    agent->a_long = accel;
+    agent->a_lat = new_a_lat;
+    agent->steering_angle = 0.0f;
+    update_agent_speed(agent);
+}
+
 static void move_corridor_idm(Drive *env, int agent_idx) {
     IDMLeader leader = idm_find_leader_by_corridor(env, agent_idx);
     idm_move_with_leader(env, agent_idx, leader);
@@ -719,6 +1033,11 @@ static void move_corridor_idm(Drive *env, int agent_idx) {
 static void move_idm(Drive *env, int agent_idx) {
     IDMLeader leader = idm_find_leader_by_route_boxes(env, agent_idx);
     idm_move_with_leader(env, agent_idx, leader);
+}
+
+static void move_nuplan_idm(Drive *env, int agent_idx) {
+    IDMLeader leader = nuplan_idm_find_leader_by_route_boxes(env, agent_idx);
+    nuplan_idm_move_with_leader(env, agent_idx, leader);
 }
 
 #endif
