@@ -75,6 +75,9 @@ class Drive(pufferlib.PufferEnv):
         num_eval_scenarios=16,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        sdc_controller="policy",
+        non_sdc_controller="policy",
+        non_vehicle_controller="auto",
         map_dir=None,
         target_type="static",
         reward_conditioning=False,
@@ -234,6 +237,9 @@ class Drive(pufferlib.PufferEnv):
         self.init_steps = init_steps
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.sdc_controller_str = sdc_controller
+        self.non_sdc_controller_str = non_sdc_controller
+        self.non_vehicle_controller_str = non_vehicle_controller
         self.simulation_mode_str = simulation_mode
         self.map_dir = map_dir
         self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
@@ -258,6 +264,30 @@ class Drive(pufferlib.PufferEnv):
                 "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
                 f"'control_sdc_only'. Got: {self.control_mode_str}"
             )
+
+        controller_values = {
+            "static": binding.CONTROLLER_STATIC,
+            "policy": binding.CONTROLLER_POLICY,
+            "replay": binding.CONTROLLER_REPLAY,
+        }
+        controller_options = "'static', 'policy', or 'replay'"
+        if self.sdc_controller_str not in controller_values:
+            raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
+        if self.non_sdc_controller_str not in controller_values:
+            raise ValueError(
+                f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
+            )
+        if self.non_vehicle_controller_str == "auto":
+            self.non_vehicle_controller_str = self.non_sdc_controller_str
+        elif self.non_vehicle_controller_str not in controller_values:
+            raise ValueError(
+                f"non_vehicle_controller must be 'auto' or one of {controller_options}. "
+                f"Got: {self.non_vehicle_controller_str}"
+            )
+        self.sdc_controller = controller_values[self.sdc_controller_str]
+        self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
+        self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
+
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
@@ -315,6 +345,9 @@ class Drive(pufferlib.PufferEnv):
             eval_mode=self.eval_mode,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
+            sdc_controller=self.sdc_controller,
+            non_sdc_controller=self.non_sdc_controller,
+            non_vehicle_controller=self.non_vehicle_controller,
             simulation_mode=self.simulation_mode,
             init_steps=self.init_steps,
             seed=self.random_seed,
@@ -404,6 +437,9 @@ class Drive(pufferlib.PufferEnv):
             "init_steps": self.init_steps,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
+            "sdc_controller": self.sdc_controller,
+            "non_sdc_controller": self.non_sdc_controller,
+            "non_vehicle_controller": self.non_vehicle_controller,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
@@ -493,6 +529,9 @@ class Drive(pufferlib.PufferEnv):
                     eval_mode=self.eval_mode,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
+                    sdc_controller=self.sdc_controller,
+                    non_sdc_controller=self.non_sdc_controller,
+                    non_vehicle_controller=self.non_vehicle_controller,
                     simulation_mode=self.simulation_mode,
                     init_steps=self.init_steps,
                     map_files=self.map_files,

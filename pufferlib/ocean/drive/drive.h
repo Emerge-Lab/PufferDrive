@@ -64,6 +64,11 @@
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
 
+// Controller modes
+#define CONTROLLER_STATIC 0
+#define CONTROLLER_POLICY 1
+#define CONTROLLER_REPLAY 2
+
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
 #define SIMULATION_REPLAY 1
@@ -370,6 +375,9 @@ struct Drive {
     int *tracks_to_predict;
     int init_mode;
     int control_mode;
+    int sdc_controller;
+    int non_sdc_controller;
+    int non_vehicle_controller;
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
@@ -3136,6 +3144,28 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     return agent->route_length != 0;
 }
 
+static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default) {
+    if (replay_by_default) {
+        return CONTROLLER_REPLAY;
+    }
+
+    Agent *agent = &env->agents[agent_idx];
+    int requested_controller = CONTROLLER_STATIC;
+    if (agent_idx == EGO_IDX) {
+        requested_controller = env->sdc_controller;
+    } else if (agent->type == VEHICLE) {
+        requested_controller = env->non_sdc_controller;
+    } else {
+        requested_controller = env->non_vehicle_controller;
+    }
+
+    if (requested_controller == CONTROLLER_POLICY && !is_active) {
+        return CONTROLLER_STATIC;
+    }
+
+    return requested_controller;
+}
+
 void set_active_agents(Drive *env) {
     // Initialize
     env->active_agent_count = 0;        // Policy-controlled agents
@@ -3170,6 +3200,8 @@ void set_active_agents(Drive *env) {
 
         for (int i = 0; i < successfully_created; i++) {
             env->active_agent_indices[i] = active_agent_indices[i];
+            env->agents[active_agent_indices[i]].controller
+                = resolve_agent_controller(env, active_agent_indices[i], 1, 0);
         }
         free(active_agent_indices);
 
@@ -3222,12 +3254,15 @@ void set_active_agents(Drive *env) {
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->agents[i].active_agent = 1;
+            env->agents[i].controller = resolve_agent_controller(env, i, 1, 0);
         } else if (is_log_replay || env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
-            // In log-replay mode, all non-controlled agents become expert_static
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            if (is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents) {
+            int replay_by_default
+                = is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents;
+            env->agents[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
+            if (env->agents[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->agents[i].mark_as_expert = 1;
@@ -4895,6 +4930,25 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+
+    if (agent->controller == CONTROLLER_STATIC) {
+        return;
+    }
+
+    if (agent->controller == CONTROLLER_REPLAY) {
+        if (env->simulation_mode == SIMULATION_REPLAY) {
+            move_expert(env, env->actions, agent_idx);
+        }
+        return;
+    }
+
+    if (agent->controller == CONTROLLER_POLICY && action_idx >= 0) {
+        move_dynamics(env, action_idx, agent_idx);
+    }
+}
+
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->is_blind_partner
         = (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
@@ -5025,18 +5079,17 @@ void c_step(Drive *env) {
     env->timestep++;
 
     // -> 1. Apply actions and move agents
-    // Move static experts
-    for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int expert_idx = env->expert_static_agent_indices[i];
-        move_expert(env, env->actions, expert_idx);
+    // Move background agents according to their per-agent controller.
+    for (int i = 0; i < env->static_agent_count; i++) {
+        int background_idx = env->static_agent_indices[i];
+        move_agent_with_controller(env, -1, background_idx);
     }
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
-        move_dynamics(env, i, agent_idx);
-        // move_expert(env, env->actions, agent_idx);
+        move_agent_with_controller(env, i, agent_idx);
     }
 
     // -> 2. Compute metrics and rewards
