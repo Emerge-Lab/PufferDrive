@@ -86,7 +86,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertEqual(args["train"]["gae_lambda"], 0.95)
             self.assertEqual(args["train"]["ent_coef"], 0.001)
             self.assertEqual(args["env"]["reward_collision"], -0.5)
-            self.assertEqual(args["env"]["reward_offroad_collision"], -0.2)
+            self.assertEqual(args["env"]["reward_offroad"], -0.2)
             self.assertEqual(args["env"]["num_maps"], 1)
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
