@@ -200,6 +200,10 @@ struct Log {
     float target_collision_severity;
     float target_collision_responsibility;
     float target_collision_impact_zone;
+    float adversaries_collision_count;
+    float adversaries_collision_severity;
+    float adversaries_collision_responsibility;
+    float adversaries_collision_impact_zone;
     float target_hit_count;
     float target_hit_responsibility;
     float target_hit_low_responsibility_rate;
@@ -534,6 +538,10 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
     float target_collision_impact_zone = log->target_collision_impact_zone;
+    float adversaries_collision_count = log->adversaries_collision_count;
+    float adversaries_collision_severity = log->adversaries_collision_severity;
+    float adversaries_collision_responsibility = log->adversaries_collision_responsibility;
+    float adversaries_collision_impact_zone = log->adversaries_collision_impact_zone;
     float target_hit_count = log->target_hit_count;
     float target_hit_responsibility = log->target_hit_responsibility;
     float target_hit_low_responsibility_rate = log->target_hit_low_responsibility_rate;
@@ -572,6 +580,13 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_impact_zone = target_collision_impact_zone / target_collision_count;
     }
     log->target_collision_count = target_collision_count;
+
+    if (adversaries_collision_count > 0.0f) {
+        log->adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
+        log->adversaries_collision_responsibility = adversaries_collision_responsibility / adversaries_collision_count;
+        log->adversaries_collision_impact_zone = adversaries_collision_impact_zone / adversaries_collision_count;
+    }
+    log->adversaries_collision_count = adversaries_collision_count;
 
     if (target_hit_count > 0.0f) {
         log->target_hit_responsibility = target_hit_responsibility / target_hit_count;
@@ -3123,6 +3138,12 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         episode_log->offroad_rate += offroad;
         int collided = env->logs[i].collision_rate;
         episode_log->collision_rate += collided;
+        if (i > 0 && collided > 0.0f) {
+            episode_log->adversaries_collision_count += 1.0f;
+            episode_log->adversaries_collision_severity += agent->collision_severity;
+            episode_log->adversaries_collision_responsibility += agent->collision_responsibility;
+            episode_log->adversaries_collision_impact_zone += (float)agent->collision_impact_zone;
+        }
         int red_light_violations = env->logs[i].red_light_violation_rate;
         episode_log->red_light_violation_rate += red_light_violations;
         int total_infractions = (offroad || collided || red_light_violations) ? 1 : 0;

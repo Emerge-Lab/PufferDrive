@@ -716,10 +716,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_collision_severity = env->log.target_collision_severity;
             float target_collision_responsibility = env->log.target_collision_responsibility;
             float target_collision_impact_zone = env->log.target_collision_impact_zone;
+            float adversaries_collision_count = env->log.adversaries_collision_count;
+            float adversaries_collision_severity = env->log.adversaries_collision_severity;
+            float adversaries_collision_responsibility = env->log.adversaries_collision_responsibility;
+            float adversaries_collision_impact_zone = env->log.adversaries_collision_impact_zone;
             float target_hit_count = env->log.target_hit_count;
             float target_hit_responsibility = env->log.target_hit_responsibility;
             float target_hit_low_responsibility_rate = env->log.target_hit_low_responsibility_rate;
             float target_hit_at_fault_count = env->log.target_hit_at_fault_count;
+            float num_goals_reached = env->log.num_goals_reached;
+            float ttc_within_bound_rate = env->log.ttc_within_bound_rate;
+            float progress_ratio = env->log.progress_ratio;
+            float puffer_score = env->log.puffer_score;
             // Average across agents
             for (int i = 0; i < num_keys; i++) {
                 ((float *)&env->log)[i] /= n;
@@ -749,6 +757,15 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             }
             env->log.target_collision_count = target_collision_count;
 
+            if (adversaries_collision_count > 0.0f) {
+                env->log.adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
+                env->log.adversaries_collision_responsibility =
+                    adversaries_collision_responsibility / adversaries_collision_count;
+                env->log.adversaries_collision_impact_zone =
+                    adversaries_collision_impact_zone / adversaries_collision_count;
+            }
+            env->log.adversaries_collision_count = adversaries_collision_count;
+
             if (target_hit_count > 0.0f) {
                 env->log.target_hit_responsibility = target_hit_responsibility / target_hit_count;
                 env->log.target_hit_low_responsibility_rate = target_hit_low_responsibility_rate / target_hit_count;
@@ -769,6 +786,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             env->log.episode_return_drive =
                 adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
             env->log.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+            env->log.num_goals_reached =
+                adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
+            env->log.ttc_within_bound_rate =
+                adversary_n > 0.0f ? (ttc_within_bound_rate - target_ttc_within_bound_rate) / adversary_n : 0.0f;
+            env->log.progress_ratio =
+                adversary_n > 0.0f ? (progress_ratio - target_progress_ratio) / adversary_n : 0.0f;
+            env->log.puffer_score = adversary_n > 0.0f ? (puffer_score - target_puffer_score) / adversary_n : 0.0f;
             my_log(dict, env, &env->log, n);
             assign_to_dict(dict, "n", n);
             // Add map_name to dict
@@ -848,10 +872,18 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_collision_severity = aggregate.target_collision_severity;
         float target_collision_responsibility = aggregate.target_collision_responsibility;
         float target_collision_impact_zone = aggregate.target_collision_impact_zone;
+        float adversaries_collision_count = aggregate.adversaries_collision_count;
+        float adversaries_collision_severity = aggregate.adversaries_collision_severity;
+        float adversaries_collision_responsibility = aggregate.adversaries_collision_responsibility;
+        float adversaries_collision_impact_zone = aggregate.adversaries_collision_impact_zone;
         float target_hit_count = aggregate.target_hit_count;
         float target_hit_responsibility = aggregate.target_hit_responsibility;
         float target_hit_low_responsibility_rate = aggregate.target_hit_low_responsibility_rate;
         float target_hit_at_fault_count = aggregate.target_hit_at_fault_count;
+        float num_goals_reached = aggregate.num_goals_reached;
+        float ttc_within_bound_rate = aggregate.ttc_within_bound_rate;
+        float progress_ratio = aggregate.progress_ratio;
+        float puffer_score = aggregate.puffer_score;
 
         // Average across agents
         for (int i = 0; i < num_keys; i++) {
@@ -884,6 +916,15 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         }
         aggregate.target_collision_count = target_collision_count;
 
+        if (adversaries_collision_count > 0.0f) {
+            aggregate.adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
+            aggregate.adversaries_collision_responsibility =
+                adversaries_collision_responsibility / adversaries_collision_count;
+            aggregate.adversaries_collision_impact_zone =
+                adversaries_collision_impact_zone / adversaries_collision_count;
+        }
+        aggregate.adversaries_collision_count = adversaries_collision_count;
+
         if (target_hit_count > 0.0f) {
             aggregate.target_hit_responsibility = target_hit_responsibility / target_hit_count;
             aggregate.target_hit_low_responsibility_rate = target_hit_low_responsibility_rate / target_hit_count;
@@ -902,6 +943,12 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         aggregate.episode_return_drive =
             adversary_n > 0.0f ? (episode_return_drive - target_episode_return_drive) / adversary_n : 0.0f;
         aggregate.episode_return_adversarial = adversary_n > 0.0f ? episode_return_adversarial / adversary_n : 0.0f;
+        aggregate.num_goals_reached =
+            adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
+        aggregate.ttc_within_bound_rate =
+            adversary_n > 0.0f ? (ttc_within_bound_rate - target_ttc_within_bound_rate) / adversary_n : 0.0f;
+        aggregate.progress_ratio = adversary_n > 0.0f ? (progress_ratio - target_progress_ratio) / adversary_n : 0.0f;
+        aggregate.puffer_score = adversary_n > 0.0f ? (puffer_score - target_puffer_score) / adversary_n : 0.0f;
 
         // User populates dict
         my_log(dict, env, &aggregate, n);

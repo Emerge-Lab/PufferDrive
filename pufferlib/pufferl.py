@@ -114,6 +114,26 @@ def metric_log_key(metric_name):
         "target_mean_reward_offroad": "mean_reward_offroad",
         "target_mean_reward_drive": "mean_reward_drive",
     }
+    adversaries_metrics = {
+        "adversaries_episode_length": "episode_length",
+        "adversaries_episode_return": "episode_return",
+        "adversaries_episode_return_collision": "episode_return_collision",
+        "adversaries_episode_return_offroad": "episode_return_offroad",
+        "adversaries_episode_return_drive": "episode_return_drive",
+        "adversaries_episode_return_adversarial": "episode_return_adversarial",
+        "adversaries_mean_reward": "mean_reward",
+        "adversaries_mean_reward_collision": "mean_reward_collision",
+        "adversaries_mean_reward_offroad": "mean_reward_offroad",
+        "adversaries_mean_reward_drive": "mean_reward_drive",
+        "adversaries_mean_reward_adversarial": "mean_reward_adversarial",
+        "adversaries_collision_severity": "collision_severity",
+        "adversaries_collision_responsibility": "collision_responsibility",
+        "adversaries_collision_impact_zone": "collision_impact_zone",
+        "adversaries_num_goals_reached": "num_goals_reached",
+        "adversaries_ttc_within_bound_rate": "ttc_within_bound_rate",
+        "adversaries_progress_ratio": "progress_ratio",
+        "adversaries_puffer_score": "puffer_score",
+    }
     overview_metrics = {
         "episode_length",
         "target_episode_length",
@@ -132,6 +152,8 @@ def metric_log_key(metric_name):
         return f"policy/{metric_name}"
     if metric_name in target_metrics:
         return f"target/{target_metrics[metric_name]}"
+    if metric_name in adversaries_metrics:
+        return f"adversaries/{adversaries_metrics[metric_name]}"
     if metric_name in overview_metrics:
         return f"overview/{metric_name}"
     return f"environment/{metric_name}"

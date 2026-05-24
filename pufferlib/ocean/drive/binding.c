@@ -1968,6 +1968,17 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "mean_reward_offroad", log->episode_return_offroad / safe_episode_length);
     assign_to_dict(dict, "mean_reward_drive", log->episode_return_drive / safe_episode_length);
     assign_to_dict(dict, "mean_reward_adversarial", log->episode_return_adversarial / safe_episode_length);
+    assign_to_dict(dict, "adversaries_episode_length", log->episode_length);
+    assign_to_dict(dict, "adversaries_episode_return", log->episode_return);
+    assign_to_dict(dict, "adversaries_episode_return_collision", log->episode_return_collision);
+    assign_to_dict(dict, "adversaries_episode_return_offroad", log->episode_return_offroad);
+    assign_to_dict(dict, "adversaries_episode_return_drive", log->episode_return_drive);
+    assign_to_dict(dict, "adversaries_episode_return_adversarial", log->episode_return_adversarial);
+    assign_to_dict(dict, "adversaries_mean_reward", log->episode_return / safe_episode_length);
+    assign_to_dict(dict, "adversaries_mean_reward_collision", log->episode_return_collision / safe_episode_length);
+    assign_to_dict(dict, "adversaries_mean_reward_offroad", log->episode_return_offroad / safe_episode_length);
+    assign_to_dict(dict, "adversaries_mean_reward_drive", log->episode_return_drive / safe_episode_length);
+    assign_to_dict(dict, "adversaries_mean_reward_adversarial", log->episode_return_adversarial / safe_episode_length);
     assign_to_dict(dict, "target_episode_return", log->target_episode_return);
     assign_to_dict(dict, "target_episode_return_collision", log->target_episode_return_collision);
     assign_to_dict(dict, "target_episode_return_offroad", log->target_episode_return_offroad);
@@ -1990,6 +2001,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);
+    assign_to_dict(dict, "adversaries_collision_severity", log->adversaries_collision_severity);
+    assign_to_dict(dict, "adversaries_collision_responsibility", log->adversaries_collision_responsibility);
+    assign_to_dict(dict, "adversaries_collision_impact_zone", log->adversaries_collision_impact_zone);
     assign_to_dict(dict, "target_hit_responsibility", log->target_hit_responsibility);
     assign_to_dict(dict, "target_hit_low_responsibility_rate", log->target_hit_low_responsibility_rate);
     assign_to_dict(dict, "target_hit_at_fault_rate", log->target_hit_at_fault_rate);
@@ -1998,6 +2012,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
     assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
+    assign_to_dict(dict, "adversaries_num_goals_reached", log->num_goals_reached);
     assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
     assign_to_dict(dict, "dnf_rate", log->dnf_rate);
     assign_to_dict(dict, "score", log->score);
@@ -2009,11 +2024,14 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
         assign_to_dict(dict, "puffer_score", log->puffer_score);
         assign_to_dict(dict, "ttc_within_bound_rate", log->ttc_within_bound_rate);
+        assign_to_dict(dict, "adversaries_ttc_within_bound_rate", log->ttc_within_bound_rate);
         assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
         assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);
         assign_to_dict(dict, "making_progress_rate", log->making_progress_rate);
         assign_to_dict(dict, "progress_ratio", log->progress_ratio);
+        assign_to_dict(dict, "adversaries_progress_ratio", log->progress_ratio);
         assign_to_dict(dict, "comfort_score", log->comfort_score);
+        assign_to_dict(dict, "adversaries_puffer_score", log->puffer_score);
         assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
         assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
     }
