@@ -86,7 +86,7 @@
 #define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
-#define NUPLAN_BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
+#define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
 // TTC default value when no vehicle ahead
 #define DEFAULT_TTC 5.0f
@@ -2331,7 +2331,7 @@ static bool is_agent_behind_rear_axle(const Agent *ego, const Agent *other) {
     }
 
     float dot = (ego->cos_heading * dx + ego->sin_heading * dy) / dist;
-    return dot < NUPLAN_BEHIND_COS_THRESHOLD;
+    return dot < BEHIND_COS_THRESHOLD;
 }
 
 static bool is_agent_cleanly_in_lane(const Agent *agent) {
