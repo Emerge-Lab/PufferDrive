@@ -2,17 +2,16 @@
 #define PUFFERLIB_OCEAN_DRIVE_IDM_H
 
 #define IDM_MINIMUM_LEAD_DISTANCE 0.1f
-#define IDM_MIN_SPACING 2.0f
-#define IDM_SAFE_TIME_HEADWAY 2.0f
-#define NUM_ACCELERATION_VALUES ((int) (sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0])))
-#define IDM_MAX_ACCEL ACCELERATION_VALUES[NUM_ACCELERATION_VALUES - 1]
-#define IDM_MAX_DECEL (-ACCELERATION_VALUES[0])
+#define IDM_MIN_SPACING 1.0f
+#define IDM_SAFE_TIME_HEADWAY 1.5f
+#define IDM_MAX_ACCEL 1.0f
+#define IDM_MAX_DECEL 3.0f
 #define IDM_DELTA 4.0f
 #define IDM_LOOKAHEAD_TIME 5.0f
 #define IDM_MIN_LOOKAHEAD 20.0f
-#define IDM_MAX_LOOKAHEAD 80.0f
+#define IDM_MAX_LOOKAHEAD 40.0f
 #define IDM_BBOX_MARGIN 0.05f
-#define IDM_DEFAULT_DESIRED_SPEED 15.0f
+#define IDM_DEFAULT_DESIRED_SPEED 10.0f
 #define IDM_ROUTE_SAMPLE_DS 1.0f
 #define IDM_MAX_CANDIDATES 64
 
@@ -66,6 +65,10 @@ static inline int idm_check_z_overlap(const Agent *a, const Agent *b) {
     float b_bottom = b->sim_z;
     float b_top = b->sim_z + b->sim_height;
     return !(a_top < b_bottom || b_top < a_bottom);
+}
+
+static inline float idm_projected_footprint_length(const Agent *agent) {
+    return 0.5f * agent->sim_length + fmaxf(0.0f, agent->sim_speed_signed) * IDM_SAFE_TIME_HEADWAY;
 }
 
 static int idm_traffic_light_controls_lane(TrafficControlElement *traffic, int lane_idx) {
@@ -124,7 +127,8 @@ static int idm_collect_route_candidates(Drive *env, int ego_idx, float lookahead
 
         float dx = other->sim_x - ego->sim_x;
         float dy = other->sim_y - ego->sim_y;
-        float max_dist = lookahead + 0.5f * ego->sim_length + 0.5f * other->sim_length + 5.0f + 2.0f * IDM_BBOX_MARGIN;
+        float max_dist = lookahead + 0.5f * ego->sim_length + idm_projected_footprint_length(other) + 5.0f
+            + 2.0f * IDM_BBOX_MARGIN;
         if (dx * dx + dy * dy > max_dist * max_dist) {
             continue;
         }
@@ -150,7 +154,7 @@ static inline Agent idm_make_sample_agent(const Agent *ego, float x, float y, fl
     return sample;
 }
 
-static int idm_sample_hits_agent(const Agent *sample, Agent *other) {
+static int idm_boxes_overlap(const Agent *sample, const Agent *other) {
     if (!idm_check_z_overlap(sample, other)) {
         return 0;
     }
@@ -169,7 +173,6 @@ static int idm_sample_hits_agent(const Agent *sample, Agent *other) {
     other_expanded.sim_width = other->sim_width + 2.0f * IDM_BBOX_MARGIN;
     return check_obb_collision(&sample_expanded, &other_expanded);
 }
-
 static int idm_sample_hits_red_light(Drive *env, Agent *sample, int lane_idx) {
     float corners[4][2];
     idm_agent_corners(sample, corners);
@@ -231,6 +234,75 @@ static inline void idm_update_sample_agent_pose(Agent *sample, RoadMapElement *l
     sample->sin_heading = sinf(sample->sim_heading);
 }
 
+static int idm_set_projected_agent_pose(Drive *env, Agent *agent, IDMLaneProjection projection, float distance) {
+    int route_idx = projection.route_idx;
+    int seg_idx = projection.segment_idx;
+    float t = projection.t;
+
+    while (route_idx < agent->route_length) {
+        int lane_idx = agent->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            return 0;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2) {
+            return 0;
+        }
+
+        while (seg_idx < lane->segment_length - 1) {
+            float seg_len = idm_lane_segment_length(lane, seg_idx);
+            if (seg_len < 1e-6f) {
+                seg_idx++;
+                t = 0.0f;
+                continue;
+            }
+
+            float remaining = (1.0f - t) * seg_len;
+            if (distance <= remaining) {
+                float next_t = t + distance / seg_len;
+                idm_update_sample_agent_pose(agent, lane, seg_idx, clip(next_t, 0.0f, 1.0f));
+                return 1;
+            }
+
+            distance -= remaining;
+            seg_idx++;
+            t = 0.0f;
+        }
+
+        route_idx++;
+        seg_idx = 0;
+        t = 0.0f;
+    }
+
+    return 0;
+}
+
+static int idm_sample_hits_projected_agent(Drive *env, const Agent *sample, int other_idx) {
+    Agent *other = &env->agents[other_idx];
+    if (idm_boxes_overlap(sample, other)) {
+        return 1;
+    }
+
+    IDMLaneProjection projection = idm_project_to_route_lanes(env, other);
+    if (!projection.valid) {
+        return 0;
+    }
+
+    Agent projected = *other;
+    float end_s = idm_projected_footprint_length(other);
+    for (float s = IDM_ROUTE_SAMPLE_DS; s <= end_s + 1e-4f; s += IDM_ROUTE_SAMPLE_DS) {
+        projected = *other;
+        if (!idm_set_projected_agent_pose(env, &projected, projection, s)) {
+            return 0;
+        }
+        if (idm_boxes_overlap(sample, &projected)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static IDMLeader idm_find_leader_by_route_boxes(Drive *env, int ego_idx) {
     Agent *ego = &env->agents[ego_idx];
     IDMLeader no_leader = idm_no_leader();
@@ -290,7 +362,7 @@ static IDMLeader idm_find_leader_by_route_boxes(Drive *env, int ego_idx) {
             for (int i = 0; i < num_candidates; i++) {
                 int other_idx = candidates[i];
                 Agent *other = &env->agents[other_idx];
-                if (!idm_sample_hits_agent(&sample, other)) {
+                if (!idm_sample_hits_projected_agent(env, &sample, other_idx)) {
                     continue;
                 }
                 float leader_speed = other->sim_vx * sample.cos_heading + other->sim_vy * sample.sin_heading;
