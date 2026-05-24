@@ -252,7 +252,9 @@ def _run_actor_subset(actor, raw_observation, indices, step_context, recurrent_s
 
 
 def _allocate_rollout_observation(policy_actor, batch_size, device):
-    obs_space = policy_actor.rollout_observation_space
+    obs_space = getattr(policy_actor, "rollout_observation_space", None)
+    if obs_space is None:
+        return None
     obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
     return torch.zeros(batch_size, *obs_space.shape, dtype=obs_dtype, device=device)
 
@@ -298,7 +300,7 @@ def _route_actor_actions(
             full_logprob.index_copy_(0, adv_idx, adv_output.logprob)
         if adv_output.value is not None:
             full_value.index_copy_(0, adv_idx, adv_output.value)
-        if adv_output.rollout_observation is not None:
+        if adv_output.rollout_observation is not None and rollout_observation is not None:
             rollout_observation.index_copy_(0, adv_idx, adv_output.rollout_observation)
         clip_actions = clip_actions or adv_output.clip_actions
 
@@ -2349,12 +2351,14 @@ def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
         return None
 
     if target_policy is not None:
+        if target_policy.__class__.__name__ != "TargetDrive":
+            raise pufferlib.APIUsageError("Target policy eval requires a TargetDrive policy instance")
         target_policy.eval()
         return target_policy
 
     target_policy_path = args.get("target_policy_path") or args["train"].get("target_policy")
     if target_policy_path is None or str(target_policy_path).lower() == "none":
-        raise pufferlib.APIUsageError("Adversarial eval requires train.target_policy")
+        raise pufferlib.APIUsageError("Target-policy eval requires train.target_policy or --target-policy-path")
 
     target_args = copy.deepcopy(args)
     target_args["load_model_path"] = target_policy_path
@@ -3470,6 +3474,8 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     args["capture_mining_replay"] = capture_mining_replay
     args["capture_mining_replay_failures_only"] = capture_mining_replay_failures_only
     args["append_mining_run"] = bool(tmp_args.get("append_mining_run", 0))
+    args["target_policy_path"] = tmp_args.get("target_policy_path")
+    args["mine_policy_homogeneous_target_actor"] = bool(tmp_args.get("mine_policy_homogeneous_target_actor", 0))
     args["mine_eval_mode"] = mine_eval_mode
     args["mine_env_config"] = mine_env_config
     args["mine_run_name"] = mine_run_name
@@ -3561,6 +3567,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         print(f"  Mining eval mode: {mining_identity['eval_mode']}")
         print(f"  Mining env config: {mining_identity['env_config_name']}")
         print(f"  Mining run name: {mining_identity['run_name']}")
+        print(f"  Policy homogeneous target actor: {bool(args.get('mine_policy_homogeneous_target_actor', 0))}")
         if mining_identity["traffic_policy_label"] is not None:
             print(f"  Traffic policy label: {mining_identity['traffic_policy_label']}")
         print(f"  Target episodes: {target_num_episodes}")
@@ -3593,6 +3600,21 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     non_sdc_controller = str(args["env"].get("non_sdc_controller", "policy")).lower()
     needs_traffic_policy = non_sdc_controller == "policy"
     needs_target_policy = sdc_controller == "policy"
+    policy_homogeneous_target_actor = bool(args.get("mine_policy_homogeneous_target_actor", 0))
+    is_policy_homogeneous = (
+        needs_target_policy and needs_traffic_policy and mining_identity["eval_mode"] == "homogeneous"
+    )
+
+    if is_policy_homogeneous and not policy_homogeneous_target_actor:
+        raise pufferlib.APIUsageError(
+            "mine_failures policy homogeneous eval must use --mine-policy-homogeneous-target-actor 1 "
+            "so all policy-controlled agents load TargetDrive and target observation preprocessing."
+        )
+
+    if policy_homogeneous_target_actor and not is_policy_homogeneous:
+        raise pufferlib.APIUsageError(
+            "--mine-policy-homogeneous-target-actor is only valid for homogeneous policy/policy mine_failures eval."
+        )
 
     if needs_traffic_policy and policy is None and args.get("load_model_path") is None and args.get("load_id") is None:
         raise pufferlib.APIUsageError(
@@ -3601,8 +3623,30 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         )
 
     if needs_traffic_policy:
-        policy = policy or load_policy(args, vecenv, env_name)
-        policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
+        if policy_homogeneous_target_actor:
+            target_policy_path = (
+                args.get("target_policy_path") or args.get("load_model_path") or args["train"].get("target_policy")
+            )
+            if target_policy_path is None or str(target_policy_path).lower() == "none":
+                raise pufferlib.APIUsageError(
+                    "policy homogeneous target-actor mining requires --target-policy-path or --load-model-path"
+                )
+            if policy is not None and policy.__class__.__name__ != "TargetDrive":
+                raise pufferlib.APIUsageError("policy homogeneous target-actor mining requires a TargetDrive policy")
+
+            target_args = copy.deepcopy(args)
+            target_args["load_model_path"] = target_policy_path
+            target_args["target_policy_path"] = target_policy_path
+            target_args["policy_name"] = "TargetDrive"
+            target_env = _make_target_policy_env_view(vecenv.driver_env)
+            policy = policy or load_policy(target_args, vecenv, env_name, policy_env=target_env)
+            policy.eval()
+            policy_actor = TargetTorchActor(policy, vecenv.driver_env)
+            if target_policy is None:
+                target_policy = policy
+        else:
+            policy = policy or load_policy(args, vecenv, env_name)
+            policy_actor = TrainableTorchActor(policy, vecenv.single_observation_space)
     else:
         policy_actor = None
 
@@ -3687,6 +3731,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                 summary["mine_eval_mode"] = mining_identity["eval_mode"]
                 summary["mine_env_config"] = mining_identity["env_config_name"]
                 summary["mine_run_name"] = mining_identity["run_name"]
+                summary["mine_policy_homogeneous_target_actor"] = int(policy_homogeneous_target_actor)
                 summary["target_controller"] = mining_identity["target_controller"]
                 summary["traffic_controller"] = mining_identity["traffic_controller"]
                 summary["traffic_policy_label"] = mining_identity["traffic_policy_label"]
@@ -3743,6 +3788,7 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     "target_controller": mining_identity["target_controller"],
                     "traffic_controller": mining_identity["traffic_controller"],
                     "traffic_policy_label": mining_identity["traffic_policy_label"],
+                    "policy_homogeneous_target_actor": bool(policy_homogeneous_target_actor),
                 },
                 "env_config": {
                     "name": mining_identity["env_config_name"],
@@ -4199,6 +4245,12 @@ def load_config(env_name, config_dir=None):
         type=str,
         default=None,
         help="Optional label for policy-controlled traffic, useful for transfer evaluations",
+    )
+    parser.add_argument(
+        "--mine-policy-homogeneous-target-actor",
+        type=int,
+        default=0,
+        help="Use the target policy architecture and observation preprocessing for policy/policy mining eval",
     )
     parser.add_argument("--episodes-csv-path", type=str, default=None, help="Path to a mined episodes CSV")
     parser.add_argument(
