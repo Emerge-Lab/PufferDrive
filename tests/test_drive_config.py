@@ -40,7 +40,7 @@ class TestDriveConfig(unittest.TestCase):
 
             # Test for a value from the base default.ini ([train] section)
             # This value is not in drive.ini, so it should come from default.ini
-            self.assertEqual(args["train"]["torch_deterministic"], True)
+            self.assertEqual(args["train"]["torch_deterministic"], False)
 
             # Test for a value from the [base] section, which is at the top level.
             # This value is overridden in drive.ini.
@@ -50,7 +50,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertEqual(args["env"]["num_agents"], 1024)
 
             # Test for a value from the [policy] section in drive.ini
-            self.assertEqual(args["policy"]["hidden_size"], 256)
+            self.assertEqual(args["policy"]["backbone_hidden_size"], 512)
 
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")
@@ -65,15 +65,15 @@ class TestDriveConfig(unittest.TestCase):
         self.assertEqual(args["package"], "ocean")
         self.assertEqual(args["env_name"], "puffer_drive")
         self.assertEqual(args["policy_name"], "Drive")
-        self.assertEqual(args["rnn_name"], "Recurrent")
+        self.assertEqual(args["rnn_name"], None)
         self.assertEqual(args["env"]["num_agents"], 1024)
         self.assertEqual(args["env"]["action_type"], "discrete")
         self.assertEqual(args["policy"]["input_size"], 64)
-        self.assertEqual(args["policy"]["hidden_size"], 256)
-        self.assertEqual(args["rnn"]["input_size"], 256)
-        self.assertEqual(args["rnn"]["hidden_size"], 256)
-        self.assertEqual(args["vec"]["num_workers"], 16)
-        self.assertEqual(args["vec"]["num_envs"], 16)
+        self.assertEqual(args["policy"]["backbone_hidden_size"], 512)
+        self.assertEqual(args["rnn"]["input_size"], 512)
+        self.assertEqual(args["rnn"]["hidden_size"], 512)
+        self.assertEqual(args["vec"]["num_workers"], "auto")
+        self.assertEqual(args["vec"]["num_envs"], 20)
 
         # --- Tunable hyperparameters (tested at high strictness) ---
         if ASSERTION_LEVEL >= 3:
