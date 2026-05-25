@@ -120,6 +120,13 @@ def metric_log_key(metric_name):
         "target_collision_other_active": "collision_other_active",
         "target_collision_other_stopped": "collision_other_stopped",
         "target_collision_other_removed": "collision_other_removed",
+        "target_comfort_violations_per_timestep": "comfort_violations_per_timestep",
+        "target_comfort_longitudinal_accel_violations_per_timestep": (
+            "comfort_longitudinal_accel_violations_per_timestep"
+        ),
+        "target_comfort_lateral_accel_violations_per_timestep": "comfort_lateral_accel_violations_per_timestep",
+        "target_comfort_jerk_violations_per_timestep": "comfort_jerk_violations_per_timestep",
+        "target_uncomfortable_timestep_rate": "uncomfortable_timestep_rate",
     }
     adversaries_metrics = {
         "adversaries_episode_length": "episode_length",
@@ -140,6 +147,25 @@ def metric_log_key(metric_name):
         "adversaries_red_light_violation_rate": "red_light_violation_rate",
         "adversaries_at_fault_collision_rate": "at_fault_collision_rate",
         "adversaries_making_progress_rate": "making_progress_rate",
+        "adversaries_comfort_score": "comfort_score",
+        "adversaries_comfort_violations_per_agent_timestep": "comfort_violations_per_agent_timestep",
+        "adversaries_comfort_longitudinal_accel_violations_per_timestep": (
+            "comfort_longitudinal_accel_violations_per_timestep"
+        ),
+        "adversaries_comfort_lateral_accel_violations_per_timestep": ("comfort_lateral_accel_violations_per_timestep"),
+        "adversaries_comfort_jerk_violations_per_timestep": "comfort_jerk_violations_per_timestep",
+        "adversaries_uncomfortable_timestep_rate": "uncomfortable_timestep_rate",
+        "adversaries_avg_speed": "avg_speed",
+        "adversaries_lane_center_rate": "lane_center_rate",
+        "adversaries_lane_heading_aligned_rate": "lane_heading_aligned_rate",
+        "adversaries_velocity_progress": "velocity_progress",
+        "adversaries_speed_limit_compliance": "speed_limit_compliance",
+        "adversaries_driving_direction_score": "driving_direction_score",
+        "adversaries_multi_lane_time": "multi_lane_time",
+        "adversaries_multi_lane_score": "multi_lane_score",
+        "adversaries_dnf_rate": "dnf_rate",
+        "adversaries_score": "score",
+        "adversaries_num_waypoints_reached": "num_waypoints_reached",
         "adversaries_collision_severity": "collision_severity",
         "adversaries_collision_responsibility": "collision_responsibility",
         "adversaries_collision_impact_zone": "collision_impact_zone",
@@ -3547,6 +3573,20 @@ def _numeric_series(df, column, default=0.0):
     return pd.to_numeric(df[column], errors="coerce").fillna(default)
 
 
+def _masked_mean(series, mask):
+    values = series[mask]
+    if values.empty:
+        return 0.0
+    return float(values.mean())
+
+
+def _masked_median(series, mask):
+    values = series[mask]
+    if values.empty:
+        return 0.0
+    return float(values.median())
+
+
 def _summarize_target_collision_diagnostics(episodes_df):
     """Aggregate per-episode target collision diagnostics from mine_failures."""
     num_episodes = int(len(episodes_df))
@@ -3560,6 +3600,11 @@ def _summarize_target_collision_diagnostics(episodes_df):
     did_collide = _numeric_series(episodes_df, "did_target_collide") > 0.0
     did_at_fault = _numeric_series(episodes_df, "did_target_have_at_fault_collision") > 0.0
     collision_type = _numeric_series(episodes_df, "target_collision_type").round().astype(int)
+    responsibility = _numeric_series(episodes_df, "target_collision_responsibility")
+    severity = _numeric_series(episodes_df, "target_collision_severity")
+    target_speed = _numeric_series(episodes_df, "target_collision_target_speed")
+    other_speed = _numeric_series(episodes_df, "target_collision_other_speed")
+    relative_speed = _numeric_series(episodes_df, "target_collision_relative_speed")
     other_active = _numeric_series(episodes_df, "target_collision_other_active") > 0.0
     other_stopped = _numeric_series(episodes_df, "target_collision_other_stopped") > 0.0
     other_removed = _numeric_series(episodes_df, "target_collision_other_removed") > 0.0
@@ -3572,6 +3617,9 @@ def _summarize_target_collision_diagnostics(episodes_df):
     inactive_non_target_count = int((did_collide & other_inactive).sum())
     stopped_non_target_count = int((did_collide & other_stopped).sum())
     removed_non_target_count = int((did_collide & other_removed).sum())
+    responsibility_above_epsilon = responsibility > 1e-6
+    responsibility_above_half = responsibility > 0.5
+    at_fault_collision_mask = did_collide & did_at_fault
 
     flat_metrics = {
         "target_no_collision_count": int((~did_collide).sum()),
@@ -3580,6 +3628,24 @@ def _summarize_target_collision_diagnostics(episodes_df):
         "target_collision_rate": _safe_rate(target_collision_count, num_episodes),
         "target_at_fault_collision_count": target_at_fault_collision_count,
         "target_at_fault_collision_rate": _safe_rate(target_at_fault_collision_count, num_episodes),
+        "mean_rho_given_target_collision": _masked_mean(responsibility, did_collide),
+        "median_rho_given_target_collision": _masked_median(responsibility, did_collide),
+        "mean_rho_given_target_at_fault_collision": _masked_mean(responsibility, at_fault_collision_mask),
+        "target_collision_rho_above_epsilon_rate": _safe_rate(
+            (did_collide & responsibility_above_epsilon).sum(), target_collision_count
+        ),
+        "target_collision_rho_above_0_5_rate": _safe_rate(
+            (did_collide & responsibility_above_half).sum(), target_collision_count
+        ),
+        "target_at_fault_collision_rho_above_epsilon_rate": _safe_rate(
+            (at_fault_collision_mask & responsibility_above_epsilon).sum(), target_at_fault_collision_count
+        ),
+        "target_at_fault_collision_rho_above_0_5_rate": _safe_rate(
+            (at_fault_collision_mask & responsibility_above_half).sum(), target_at_fault_collision_count
+        ),
+        "mean_severity_given_target_collision": _masked_mean(severity, did_collide),
+        "median_severity_given_target_collision": _masked_median(severity, did_collide),
+        "mean_severity_given_target_at_fault_collision": _masked_mean(severity, at_fault_collision_mask),
         "target_collision_with_active_non_target_count": active_non_target_count,
         "target_collision_with_active_non_target_rate": _safe_rate(active_non_target_count, num_episodes),
         "target_collision_with_active_non_target_share": _safe_rate(active_non_target_count, target_collision_count),
@@ -3612,6 +3678,11 @@ def _summarize_target_collision_diagnostics(episodes_df):
         at_fault_type_mask = type_mask & did_at_fault
         type_count = int(type_mask.sum())
         at_fault_type_count = int(at_fault_type_mask.sum())
+        mean_severity = _masked_mean(severity, type_mask)
+        mean_target_speed = _masked_mean(target_speed, type_mask)
+        mean_other_speed = _masked_mean(other_speed, type_mask)
+        mean_relative_speed = _masked_mean(relative_speed, type_mask)
+        mean_rho = _masked_mean(responsibility, type_mask)
 
         type_summary = {
             "id": type_id,
@@ -3621,6 +3692,11 @@ def _summarize_target_collision_diagnostics(episodes_df):
             "at_fault_count": at_fault_type_count,
             "at_fault_rate": _safe_rate(at_fault_type_count, num_episodes),
             "share_given_target_at_fault_collision": _safe_rate(at_fault_type_count, target_at_fault_collision_count),
+            "mean_severity": mean_severity,
+            "mean_target_speed": mean_target_speed,
+            "mean_other_speed": mean_other_speed,
+            "mean_relative_speed": mean_relative_speed,
+            "mean_rho": mean_rho,
         }
         collision_types[type_name] = type_summary
 
@@ -3633,6 +3709,11 @@ def _summarize_target_collision_diagnostics(episodes_df):
         flat_metrics[f"{prefix}_share_given_target_at_fault_collision"] = type_summary[
             "share_given_target_at_fault_collision"
         ]
+        flat_metrics[f"mean_severity_given_{type_name}"] = mean_severity
+        flat_metrics[f"mean_target_speed_given_{type_name}"] = mean_target_speed
+        flat_metrics[f"mean_other_speed_given_{type_name}"] = mean_other_speed
+        flat_metrics[f"mean_relative_speed_given_{type_name}"] = mean_relative_speed
+        flat_metrics[f"mean_rho_given_{type_name}"] = mean_rho
 
     return {
         "num_episodes": num_episodes,
@@ -3930,6 +4011,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         episodes_df = pd.concat([existing_episodes_df, new_episodes_df], ignore_index=True, sort=False)
     else:
         episodes_df = new_episodes_df
+    episodes_df["did_any_adversary_adversary_collision"] = (
+        _numeric_series(episodes_df, "adversaries_adversary_collision_rate") > 0.0
+    ).astype(int)
     episodes_df.to_csv(episodes_csv_path, index=False)
 
     numeric_means = episodes_df.select_dtypes(include=[np.number]).mean(numeric_only=True).to_dict()

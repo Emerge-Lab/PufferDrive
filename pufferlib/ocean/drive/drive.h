@@ -65,6 +65,8 @@
 #define MULTI_LANE_THRESHOLD (LANE_WIDTH / 2.0f + LANE_MARGIN) // 2.05m
 #define MULTI_LANE_FULL_SCORE_TIME 3.4f                        // seconds
 #define MULTI_LANE_HALF_SCORE_TIME 5.7f                        // seconds
+#define COMFORT_ACCEL_THRESHOLD 3.0f                           // m/s^2
+#define COMFORT_JERK_THRESHOLD 5.0f                            // m/s^3
 
 // nuPlan-style collision classification
 #define COLLISION_TYPE_NONE 0
@@ -193,6 +195,23 @@ struct Log {
     float adversaries_red_light_violation_rate;
     float adversaries_at_fault_collision_rate;
     float adversaries_making_progress_rate;
+    float adversaries_comfort_score;
+    float adversaries_comfort_violation_rate;
+    float adversaries_comfort_longitudinal_accel_violations_per_timestep;
+    float adversaries_comfort_lateral_accel_violations_per_timestep;
+    float adversaries_comfort_jerk_violations_per_timestep;
+    float adversaries_uncomfortable_timestep_rate;
+    float adversaries_avg_speed;
+    float adversaries_lane_center_rate;
+    float adversaries_lane_heading_aligned_rate;
+    float adversaries_velocity_progress;
+    float adversaries_speed_limit_compliance;
+    float adversaries_driving_direction_score;
+    float adversaries_multi_lane_time;
+    float adversaries_multi_lane_score;
+    float adversaries_dnf_rate;
+    float adversaries_score;
+    float adversaries_num_waypoints_reached;
     float did_target_collide;
     float did_target_offroad;
     float did_target_run_light;
@@ -203,6 +222,11 @@ struct Log {
     float target_ttc_within_bound_rate;
     float target_progress_ratio;
     float target_puffer_score;
+    float target_comfort_violations_per_timestep;
+    float target_comfort_longitudinal_accel_violations_per_timestep;
+    float target_comfort_lateral_accel_violations_per_timestep;
+    float target_comfort_jerk_violations_per_timestep;
+    float target_uncomfortable_timestep_rate;
     float target_collision_count;
     float target_collision_severity;
     float target_collision_responsibility;
@@ -227,6 +251,10 @@ struct Log {
     float num_waypoints_reached;
     float num_goals_reached;
     float comfort_violation_count;
+    float comfort_longitudinal_accel_violation_count;
+    float comfort_lateral_accel_violation_count;
+    float comfort_jerk_violation_count;
+    float uncomfortable_timestep_count;
     float velocity_progress_sum;
     float lane_center_rate;
     float lane_heading_aligned_rate;
@@ -558,10 +586,36 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float adversaries_red_light_violation_rate = log->adversaries_red_light_violation_rate;
     float adversaries_at_fault_collision_rate = log->adversaries_at_fault_collision_rate;
     float adversaries_making_progress_rate = log->adversaries_making_progress_rate;
+    float adversaries_comfort_score = log->adversaries_comfort_score;
+    float adversaries_comfort_violation_rate = log->adversaries_comfort_violation_rate;
+    float adversaries_comfort_longitudinal_accel_violations_per_timestep =
+        log->adversaries_comfort_longitudinal_accel_violations_per_timestep;
+    float adversaries_comfort_lateral_accel_violations_per_timestep =
+        log->adversaries_comfort_lateral_accel_violations_per_timestep;
+    float adversaries_comfort_jerk_violations_per_timestep = log->adversaries_comfort_jerk_violations_per_timestep;
+    float adversaries_uncomfortable_timestep_rate = log->adversaries_uncomfortable_timestep_rate;
+    float adversaries_avg_speed = log->adversaries_avg_speed;
+    float adversaries_lane_center_rate = log->adversaries_lane_center_rate;
+    float adversaries_lane_heading_aligned_rate = log->adversaries_lane_heading_aligned_rate;
+    float adversaries_velocity_progress = log->adversaries_velocity_progress;
+    float adversaries_speed_limit_compliance = log->adversaries_speed_limit_compliance;
+    float adversaries_driving_direction_score = log->adversaries_driving_direction_score;
+    float adversaries_multi_lane_time = log->adversaries_multi_lane_time;
+    float adversaries_multi_lane_score = log->adversaries_multi_lane_score;
+    float adversaries_dnf_rate = log->adversaries_dnf_rate;
+    float adversaries_score = log->adversaries_score;
+    float adversaries_num_waypoints_reached = log->adversaries_num_waypoints_reached;
     float target_num_goals_reached = log->target_num_goals_reached;
     float target_ttc_within_bound_rate = log->target_ttc_within_bound_rate;
     float target_progress_ratio = log->target_progress_ratio;
     float target_puffer_score = log->target_puffer_score;
+    float target_comfort_violations_per_timestep = log->target_comfort_violations_per_timestep;
+    float target_comfort_longitudinal_accel_violations_per_timestep =
+        log->target_comfort_longitudinal_accel_violations_per_timestep;
+    float target_comfort_lateral_accel_violations_per_timestep =
+        log->target_comfort_lateral_accel_violations_per_timestep;
+    float target_comfort_jerk_violations_per_timestep = log->target_comfort_jerk_violations_per_timestep;
+    float target_uncomfortable_timestep_rate = log->target_uncomfortable_timestep_rate;
     float target_collision_count = log->target_collision_count;
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
@@ -607,6 +661,13 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_ttc_within_bound_rate = target_ttc_within_bound_rate / target_n;
         log->target_progress_ratio = target_progress_ratio / target_n;
         log->target_puffer_score = target_puffer_score / target_n;
+        log->target_comfort_violations_per_timestep = target_comfort_violations_per_timestep / target_n;
+        log->target_comfort_longitudinal_accel_violations_per_timestep =
+            target_comfort_longitudinal_accel_violations_per_timestep / target_n;
+        log->target_comfort_lateral_accel_violations_per_timestep =
+            target_comfort_lateral_accel_violations_per_timestep / target_n;
+        log->target_comfort_jerk_violations_per_timestep = target_comfort_jerk_violations_per_timestep / target_n;
+        log->target_uncomfortable_timestep_rate = target_uncomfortable_timestep_rate / target_n;
     }
 
     if (target_collision_count > 0.0f) {
@@ -659,6 +720,32 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     log->adversaries_at_fault_collision_rate =
         adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
     log->adversaries_making_progress_rate = adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
+    log->adversaries_comfort_score = adversary_n > 0.0f ? adversaries_comfort_score / adversary_n : 0.0f;
+    log->adversaries_comfort_violation_rate =
+        adversary_n > 0.0f ? adversaries_comfort_violation_rate / adversary_n : 0.0f;
+    log->adversaries_comfort_longitudinal_accel_violations_per_timestep =
+        adversary_n > 0.0f ? adversaries_comfort_longitudinal_accel_violations_per_timestep / adversary_n : 0.0f;
+    log->adversaries_comfort_lateral_accel_violations_per_timestep =
+        adversary_n > 0.0f ? adversaries_comfort_lateral_accel_violations_per_timestep / adversary_n : 0.0f;
+    log->adversaries_comfort_jerk_violations_per_timestep =
+        adversary_n > 0.0f ? adversaries_comfort_jerk_violations_per_timestep / adversary_n : 0.0f;
+    log->adversaries_uncomfortable_timestep_rate =
+        adversary_n > 0.0f ? adversaries_uncomfortable_timestep_rate / adversary_n : 0.0f;
+    log->adversaries_avg_speed = adversary_n > 0.0f ? adversaries_avg_speed / adversary_n : 0.0f;
+    log->adversaries_lane_center_rate = adversary_n > 0.0f ? adversaries_lane_center_rate / adversary_n : 0.0f;
+    log->adversaries_lane_heading_aligned_rate =
+        adversary_n > 0.0f ? adversaries_lane_heading_aligned_rate / adversary_n : 0.0f;
+    log->adversaries_velocity_progress = adversary_n > 0.0f ? adversaries_velocity_progress / adversary_n : 0.0f;
+    log->adversaries_speed_limit_compliance =
+        adversary_n > 0.0f ? adversaries_speed_limit_compliance / adversary_n : 0.0f;
+    log->adversaries_driving_direction_score =
+        adversary_n > 0.0f ? adversaries_driving_direction_score / adversary_n : 0.0f;
+    log->adversaries_multi_lane_time = adversary_n > 0.0f ? adversaries_multi_lane_time / adversary_n : 0.0f;
+    log->adversaries_multi_lane_score = adversary_n > 0.0f ? adversaries_multi_lane_score / adversary_n : 0.0f;
+    log->adversaries_dnf_rate = adversary_n > 0.0f ? adversaries_dnf_rate / adversary_n : 0.0f;
+    log->adversaries_score = adversary_n > 0.0f ? adversaries_score / adversary_n : 0.0f;
+    log->adversaries_num_waypoints_reached =
+        adversary_n > 0.0f ? adversaries_num_waypoints_reached / adversary_n : 0.0f;
     log->num_goals_reached = adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
     log->ttc_within_bound_rate =
         adversary_n > 0.0f ? (ttc_within_bound_rate - target_ttc_within_bound_rate) / adversary_n : 0.0f;
@@ -3217,17 +3304,29 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         int total_infractions = (offroad || collided || red_light_violations) ? 1 : 0;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
         episode_log->avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
+        if (i > 0) {
+            episode_log->adversaries_avg_speed += avg_speed_per_agent / safe_timestep;
+        }
         int num_waypoints_reached = env->logs[i].num_waypoints_reached;
         episode_log->num_waypoints_reached += num_waypoints_reached;
+        if (i > 0) {
+            episode_log->adversaries_num_waypoints_reached += num_waypoints_reached;
+        }
         int num_goals_reached = env->logs[i].num_goals_reached;
         episode_log->num_goals_reached += num_goals_reached;
         // TODO: define better scoring criteria ?
         // FIXME
         if (num_goals_reached >= 4 && !agent->removed && !agent->stopped) {
             episode_log->score += 1.0f;
+            if (i > 0) {
+                episode_log->adversaries_score += 1.0f;
+            }
         }
         if (!offroad && !collided && !red_light_violations && num_waypoints_reached < 1) {
             episode_log->dnf_rate += 1.0f;
+            if (i > 0) {
+                episode_log->adversaries_dnf_rate += 1.0f;
+            }
         }
         episode_log->total_distance_travelled += agent->distance_since_spawn;
         if (total_infractions > 0) {
@@ -3242,11 +3341,48 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
         episode_log->episode_return_drive += env->logs[i].episode_return_drive;
         episode_log->episode_return_adversarial += env->logs[i].episode_return_adversarial;
         // Comfort and velocity metrics (normalized per timestep)
-        episode_log->comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
+        float comfort_violations_per_timestep = env->logs[i].comfort_violation_count / safe_timestep;
+        float comfort_longitudinal_accel_violations_per_timestep =
+            env->logs[i].comfort_longitudinal_accel_violation_count / safe_timestep;
+        float comfort_lateral_accel_violations_per_timestep =
+            env->logs[i].comfort_lateral_accel_violation_count / safe_timestep;
+        float comfort_jerk_violations_per_timestep = env->logs[i].comfort_jerk_violation_count / safe_timestep;
+        float uncomfortable_timestep_rate = env->logs[i].uncomfortable_timestep_count / safe_timestep;
+
+        episode_log->comfort_violation_count += comfort_violations_per_timestep;
+        episode_log->comfort_longitudinal_accel_violation_count += comfort_longitudinal_accel_violations_per_timestep;
+        episode_log->comfort_lateral_accel_violation_count += comfort_lateral_accel_violations_per_timestep;
+        episode_log->comfort_jerk_violation_count += comfort_jerk_violations_per_timestep;
+        episode_log->uncomfortable_timestep_count += uncomfortable_timestep_rate;
+        if (i > 0) {
+            episode_log->adversaries_comfort_violation_rate += comfort_violations_per_timestep;
+            episode_log->adversaries_comfort_longitudinal_accel_violations_per_timestep +=
+                comfort_longitudinal_accel_violations_per_timestep;
+            episode_log->adversaries_comfort_lateral_accel_violations_per_timestep +=
+                comfort_lateral_accel_violations_per_timestep;
+            episode_log->adversaries_comfort_jerk_violations_per_timestep += comfort_jerk_violations_per_timestep;
+            episode_log->adversaries_uncomfortable_timestep_rate += uncomfortable_timestep_rate;
+        } else {
+            episode_log->target_comfort_violations_per_timestep += comfort_violations_per_timestep;
+            episode_log->target_comfort_longitudinal_accel_violations_per_timestep +=
+                comfort_longitudinal_accel_violations_per_timestep;
+            episode_log->target_comfort_lateral_accel_violations_per_timestep +=
+                comfort_lateral_accel_violations_per_timestep;
+            episode_log->target_comfort_jerk_violations_per_timestep += comfort_jerk_violations_per_timestep;
+            episode_log->target_uncomfortable_timestep_rate += uncomfortable_timestep_rate;
+        }
         episode_log->velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
+        if (i > 0) {
+            episode_log->adversaries_velocity_progress += env->logs[i].velocity_progress_sum / safe_timestep;
+        }
         // Lane metrics (normalized per timestep for average per episode)
         episode_log->lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         episode_log->lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        if (i > 0) {
+            episode_log->adversaries_lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+            episode_log->adversaries_lane_heading_aligned_rate +=
+                env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        }
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
             episode_log->at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
@@ -3255,6 +3391,9 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->speed_violation_sum += env->logs[i].speed_violation_sum;
             episode_log->progress_ratio += env->logs[i].progress_ratio;
             episode_log->comfort_score += env->logs[i].comfort_score;
+            if (i > 0) {
+                episode_log->adversaries_comfort_score += env->logs[i].comfort_score;
+            }
             episode_log->ttc_violations += env->logs[i].ttc_violations;
             episode_log->ttc_samples += env->logs[i].ttc_samples;
             episode_log->multi_lane_time += env->logs[i].multi_lane_time;
@@ -3263,10 +3402,16 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             float wrong_dist = env->logs[i].wrong_way_distance;
             float direction_score = (wrong_dist <= 2.0f) ? 1.0f : (wrong_dist <= 6.0f) ? 0.5f : 0.0f;
             episode_log->driving_direction_score += direction_score;
+            if (i > 0) {
+                episode_log->adversaries_driving_direction_score += direction_score;
+            }
 
             float T = safe_timestep * env->dt;
             float speed_compliance = fmaxf(0.0f, 1.0f - env->logs[i].speed_violation_sum / fmaxf(T, 1e-3f));
             episode_log->speed_limit_compliance += speed_compliance;
+            if (i > 0) {
+                episode_log->adversaries_speed_limit_compliance += speed_compliance;
+            }
 
             float making_progress = (env->logs[i].progress_ratio > 0.2f) ? 1.0f : 0.0f;
             episode_log->making_progress_rate += making_progress;
@@ -3274,6 +3419,10 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
                 episode_log->adversaries_making_progress_rate += making_progress;
             }
             episode_log->puffer_score += calculate_puffer_score(&env->logs[i], safe_timestep, env->dt);
+            if (i > 0) {
+                episode_log->adversaries_multi_lane_time += env->logs[i].multi_lane_time;
+                episode_log->adversaries_multi_lane_score += env->logs[i].multi_lane_score;
+            }
         }
 
         episode_log->n += 1;
@@ -4680,13 +4829,12 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     // Comfort metric (GIGAFLOW)
-    const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
-    const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
-    int accel_violation =
-        (fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD);
+    int longitudinal_accel_violation = fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD;
+    int lateral_accel_violation = fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD;
     int jerk_violation =
         (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
-    agent->metrics_array[COMFORT_VIOLATION_IDX] = (float)(accel_violation + jerk_violation);
+    agent->metrics_array[COMFORT_VIOLATION_IDX] =
+        (float)(longitudinal_accel_violation + lateral_accel_violation + jerk_violation);
 
     // Handle terminal events - NOTE: move it elsewhere?
     // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
@@ -4931,6 +5079,13 @@ static RewardTerms compute_rewards(Drive *env, int i) {
     float comfort_penalty = -agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
 
     env->logs[i].comfort_violation_count += comfort_violations;
+    env->logs[i].comfort_longitudinal_accel_violation_count +=
+        fabsf(agent->a_long) > COMFORT_ACCEL_THRESHOLD ? 1.0f : 0.0f;
+    env->logs[i].comfort_lateral_accel_violation_count += fabsf(agent->a_lat) > COMFORT_ACCEL_THRESHOLD ? 1.0f : 0.0f;
+    env->logs[i].comfort_jerk_violation_count +=
+        (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1.0f
+                                                                                                              : 0.0f;
+    env->logs[i].uncomfortable_timestep_count += comfort_violations > 0.0f ? 1.0f : 0.0f;
     terms.drive += comfort_penalty;
 
     // Velocity reward (GIGAFLOW)

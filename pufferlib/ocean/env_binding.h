@@ -715,10 +715,37 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float adversaries_red_light_violation_rate = env->log.adversaries_red_light_violation_rate;
             float adversaries_at_fault_collision_rate = env->log.adversaries_at_fault_collision_rate;
             float adversaries_making_progress_rate = env->log.adversaries_making_progress_rate;
+            float adversaries_comfort_score = env->log.adversaries_comfort_score;
+            float adversaries_comfort_violation_rate = env->log.adversaries_comfort_violation_rate;
+            float adversaries_comfort_longitudinal_accel_violations_per_timestep =
+                env->log.adversaries_comfort_longitudinal_accel_violations_per_timestep;
+            float adversaries_comfort_lateral_accel_violations_per_timestep =
+                env->log.adversaries_comfort_lateral_accel_violations_per_timestep;
+            float adversaries_comfort_jerk_violations_per_timestep =
+                env->log.adversaries_comfort_jerk_violations_per_timestep;
+            float adversaries_uncomfortable_timestep_rate = env->log.adversaries_uncomfortable_timestep_rate;
+            float adversaries_avg_speed = env->log.adversaries_avg_speed;
+            float adversaries_lane_center_rate = env->log.adversaries_lane_center_rate;
+            float adversaries_lane_heading_aligned_rate = env->log.adversaries_lane_heading_aligned_rate;
+            float adversaries_velocity_progress = env->log.adversaries_velocity_progress;
+            float adversaries_speed_limit_compliance = env->log.adversaries_speed_limit_compliance;
+            float adversaries_driving_direction_score = env->log.adversaries_driving_direction_score;
+            float adversaries_multi_lane_time = env->log.adversaries_multi_lane_time;
+            float adversaries_multi_lane_score = env->log.adversaries_multi_lane_score;
+            float adversaries_dnf_rate = env->log.adversaries_dnf_rate;
+            float adversaries_score = env->log.adversaries_score;
+            float adversaries_num_waypoints_reached = env->log.adversaries_num_waypoints_reached;
             float target_num_goals_reached = env->log.target_num_goals_reached;
             float target_ttc_within_bound_rate = env->log.target_ttc_within_bound_rate;
             float target_progress_ratio = env->log.target_progress_ratio;
             float target_puffer_score = env->log.target_puffer_score;
+            float target_comfort_violations_per_timestep = env->log.target_comfort_violations_per_timestep;
+            float target_comfort_longitudinal_accel_violations_per_timestep =
+                env->log.target_comfort_longitudinal_accel_violations_per_timestep;
+            float target_comfort_lateral_accel_violations_per_timestep =
+                env->log.target_comfort_lateral_accel_violations_per_timestep;
+            float target_comfort_jerk_violations_per_timestep = env->log.target_comfort_jerk_violations_per_timestep;
+            float target_uncomfortable_timestep_rate = env->log.target_uncomfortable_timestep_rate;
             float target_collision_count = env->log.target_collision_count;
             float target_collision_severity = env->log.target_collision_severity;
             float target_collision_responsibility = env->log.target_collision_responsibility;
@@ -762,6 +789,14 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_ttc_within_bound_rate = target_ttc_within_bound_rate / target_n;
                 env->log.target_progress_ratio = target_progress_ratio / target_n;
                 env->log.target_puffer_score = target_puffer_score / target_n;
+                env->log.target_comfort_violations_per_timestep = target_comfort_violations_per_timestep / target_n;
+                env->log.target_comfort_longitudinal_accel_violations_per_timestep =
+                    target_comfort_longitudinal_accel_violations_per_timestep / target_n;
+                env->log.target_comfort_lateral_accel_violations_per_timestep =
+                    target_comfort_lateral_accel_violations_per_timestep / target_n;
+                env->log.target_comfort_jerk_violations_per_timestep =
+                    target_comfort_jerk_violations_per_timestep / target_n;
+                env->log.target_uncomfortable_timestep_rate = target_uncomfortable_timestep_rate / target_n;
             }
 
             if (target_collision_count > 0.0f) {
@@ -819,6 +854,37 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
             env->log.adversaries_making_progress_rate =
                 adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
+            env->log.adversaries_comfort_score = adversary_n > 0.0f ? adversaries_comfort_score / adversary_n : 0.0f;
+            env->log.adversaries_comfort_violation_rate =
+                adversary_n > 0.0f ? adversaries_comfort_violation_rate / adversary_n : 0.0f;
+            env->log.adversaries_comfort_longitudinal_accel_violations_per_timestep =
+                adversary_n > 0.0f ? adversaries_comfort_longitudinal_accel_violations_per_timestep / adversary_n
+                                   : 0.0f;
+            env->log.adversaries_comfort_lateral_accel_violations_per_timestep =
+                adversary_n > 0.0f ? adversaries_comfort_lateral_accel_violations_per_timestep / adversary_n : 0.0f;
+            env->log.adversaries_comfort_jerk_violations_per_timestep =
+                adversary_n > 0.0f ? adversaries_comfort_jerk_violations_per_timestep / adversary_n : 0.0f;
+            env->log.adversaries_uncomfortable_timestep_rate =
+                adversary_n > 0.0f ? adversaries_uncomfortable_timestep_rate / adversary_n : 0.0f;
+            env->log.adversaries_avg_speed = adversary_n > 0.0f ? adversaries_avg_speed / adversary_n : 0.0f;
+            env->log.adversaries_lane_center_rate =
+                adversary_n > 0.0f ? adversaries_lane_center_rate / adversary_n : 0.0f;
+            env->log.adversaries_lane_heading_aligned_rate =
+                adversary_n > 0.0f ? adversaries_lane_heading_aligned_rate / adversary_n : 0.0f;
+            env->log.adversaries_velocity_progress =
+                adversary_n > 0.0f ? adversaries_velocity_progress / adversary_n : 0.0f;
+            env->log.adversaries_speed_limit_compliance =
+                adversary_n > 0.0f ? adversaries_speed_limit_compliance / adversary_n : 0.0f;
+            env->log.adversaries_driving_direction_score =
+                adversary_n > 0.0f ? adversaries_driving_direction_score / adversary_n : 0.0f;
+            env->log.adversaries_multi_lane_time =
+                adversary_n > 0.0f ? adversaries_multi_lane_time / adversary_n : 0.0f;
+            env->log.adversaries_multi_lane_score =
+                adversary_n > 0.0f ? adversaries_multi_lane_score / adversary_n : 0.0f;
+            env->log.adversaries_dnf_rate = adversary_n > 0.0f ? adversaries_dnf_rate / adversary_n : 0.0f;
+            env->log.adversaries_score = adversary_n > 0.0f ? adversaries_score / adversary_n : 0.0f;
+            env->log.adversaries_num_waypoints_reached =
+                adversary_n > 0.0f ? adversaries_num_waypoints_reached / adversary_n : 0.0f;
             env->log.num_goals_reached =
                 adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
             env->log.ttc_within_bound_rate =
@@ -904,10 +970,37 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float adversaries_red_light_violation_rate = aggregate.adversaries_red_light_violation_rate;
         float adversaries_at_fault_collision_rate = aggregate.adversaries_at_fault_collision_rate;
         float adversaries_making_progress_rate = aggregate.adversaries_making_progress_rate;
+        float adversaries_comfort_score = aggregate.adversaries_comfort_score;
+        float adversaries_comfort_violation_rate = aggregate.adversaries_comfort_violation_rate;
+        float adversaries_comfort_longitudinal_accel_violations_per_timestep =
+            aggregate.adversaries_comfort_longitudinal_accel_violations_per_timestep;
+        float adversaries_comfort_lateral_accel_violations_per_timestep =
+            aggregate.adversaries_comfort_lateral_accel_violations_per_timestep;
+        float adversaries_comfort_jerk_violations_per_timestep =
+            aggregate.adversaries_comfort_jerk_violations_per_timestep;
+        float adversaries_uncomfortable_timestep_rate = aggregate.adversaries_uncomfortable_timestep_rate;
+        float adversaries_avg_speed = aggregate.adversaries_avg_speed;
+        float adversaries_lane_center_rate = aggregate.adversaries_lane_center_rate;
+        float adversaries_lane_heading_aligned_rate = aggregate.adversaries_lane_heading_aligned_rate;
+        float adversaries_velocity_progress = aggregate.adversaries_velocity_progress;
+        float adversaries_speed_limit_compliance = aggregate.adversaries_speed_limit_compliance;
+        float adversaries_driving_direction_score = aggregate.adversaries_driving_direction_score;
+        float adversaries_multi_lane_time = aggregate.adversaries_multi_lane_time;
+        float adversaries_multi_lane_score = aggregate.adversaries_multi_lane_score;
+        float adversaries_dnf_rate = aggregate.adversaries_dnf_rate;
+        float adversaries_score = aggregate.adversaries_score;
+        float adversaries_num_waypoints_reached = aggregate.adversaries_num_waypoints_reached;
         float target_num_goals_reached = aggregate.target_num_goals_reached;
         float target_ttc_within_bound_rate = aggregate.target_ttc_within_bound_rate;
         float target_progress_ratio = aggregate.target_progress_ratio;
         float target_puffer_score = aggregate.target_puffer_score;
+        float target_comfort_violations_per_timestep = aggregate.target_comfort_violations_per_timestep;
+        float target_comfort_longitudinal_accel_violations_per_timestep =
+            aggregate.target_comfort_longitudinal_accel_violations_per_timestep;
+        float target_comfort_lateral_accel_violations_per_timestep =
+            aggregate.target_comfort_lateral_accel_violations_per_timestep;
+        float target_comfort_jerk_violations_per_timestep = aggregate.target_comfort_jerk_violations_per_timestep;
+        float target_uncomfortable_timestep_rate = aggregate.target_uncomfortable_timestep_rate;
         float target_collision_count = aggregate.target_collision_count;
         float target_collision_severity = aggregate.target_collision_severity;
         float target_collision_responsibility = aggregate.target_collision_responsibility;
@@ -954,6 +1047,14 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_ttc_within_bound_rate = target_ttc_within_bound_rate / target_n;
             aggregate.target_progress_ratio = target_progress_ratio / target_n;
             aggregate.target_puffer_score = target_puffer_score / target_n;
+            aggregate.target_comfort_violations_per_timestep = target_comfort_violations_per_timestep / target_n;
+            aggregate.target_comfort_longitudinal_accel_violations_per_timestep =
+                target_comfort_longitudinal_accel_violations_per_timestep / target_n;
+            aggregate.target_comfort_lateral_accel_violations_per_timestep =
+                target_comfort_lateral_accel_violations_per_timestep / target_n;
+            aggregate.target_comfort_jerk_violations_per_timestep =
+                target_comfort_jerk_violations_per_timestep / target_n;
+            aggregate.target_uncomfortable_timestep_rate = target_uncomfortable_timestep_rate / target_n;
         }
 
         if (target_collision_count > 0.0f) {
@@ -1009,6 +1110,33 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             adversary_n > 0.0f ? adversaries_at_fault_collision_rate / adversary_n : 0.0f;
         aggregate.adversaries_making_progress_rate =
             adversary_n > 0.0f ? adversaries_making_progress_rate / adversary_n : 0.0f;
+        aggregate.adversaries_comfort_score = adversary_n > 0.0f ? adversaries_comfort_score / adversary_n : 0.0f;
+        aggregate.adversaries_comfort_violation_rate =
+            adversary_n > 0.0f ? adversaries_comfort_violation_rate / adversary_n : 0.0f;
+        aggregate.adversaries_comfort_longitudinal_accel_violations_per_timestep =
+            adversary_n > 0.0f ? adversaries_comfort_longitudinal_accel_violations_per_timestep / adversary_n : 0.0f;
+        aggregate.adversaries_comfort_lateral_accel_violations_per_timestep =
+            adversary_n > 0.0f ? adversaries_comfort_lateral_accel_violations_per_timestep / adversary_n : 0.0f;
+        aggregate.adversaries_comfort_jerk_violations_per_timestep =
+            adversary_n > 0.0f ? adversaries_comfort_jerk_violations_per_timestep / adversary_n : 0.0f;
+        aggregate.adversaries_uncomfortable_timestep_rate =
+            adversary_n > 0.0f ? adversaries_uncomfortable_timestep_rate / adversary_n : 0.0f;
+        aggregate.adversaries_avg_speed = adversary_n > 0.0f ? adversaries_avg_speed / adversary_n : 0.0f;
+        aggregate.adversaries_lane_center_rate = adversary_n > 0.0f ? adversaries_lane_center_rate / adversary_n : 0.0f;
+        aggregate.adversaries_lane_heading_aligned_rate =
+            adversary_n > 0.0f ? adversaries_lane_heading_aligned_rate / adversary_n : 0.0f;
+        aggregate.adversaries_velocity_progress =
+            adversary_n > 0.0f ? adversaries_velocity_progress / adversary_n : 0.0f;
+        aggregate.adversaries_speed_limit_compliance =
+            adversary_n > 0.0f ? adversaries_speed_limit_compliance / adversary_n : 0.0f;
+        aggregate.adversaries_driving_direction_score =
+            adversary_n > 0.0f ? adversaries_driving_direction_score / adversary_n : 0.0f;
+        aggregate.adversaries_multi_lane_time = adversary_n > 0.0f ? adversaries_multi_lane_time / adversary_n : 0.0f;
+        aggregate.adversaries_multi_lane_score = adversary_n > 0.0f ? adversaries_multi_lane_score / adversary_n : 0.0f;
+        aggregate.adversaries_dnf_rate = adversary_n > 0.0f ? adversaries_dnf_rate / adversary_n : 0.0f;
+        aggregate.adversaries_score = adversary_n > 0.0f ? adversaries_score / adversary_n : 0.0f;
+        aggregate.adversaries_num_waypoints_reached =
+            adversary_n > 0.0f ? adversaries_num_waypoints_reached / adversary_n : 0.0f;
         aggregate.num_goals_reached =
             adversary_n > 0.0f ? (num_goals_reached - target_num_goals_reached) / adversary_n : 0.0f;
         aggregate.ttc_within_bound_rate =

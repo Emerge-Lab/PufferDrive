@@ -2001,10 +2001,38 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "adversaries_red_light_violation_rate", log->adversaries_red_light_violation_rate);
     assign_to_dict(dict, "adversaries_at_fault_collision_rate", log->adversaries_at_fault_collision_rate);
     assign_to_dict(dict, "adversaries_making_progress_rate", log->adversaries_making_progress_rate);
+    assign_to_dict(dict, "adversaries_comfort_score", log->adversaries_comfort_score);
+    assign_to_dict(dict, "adversaries_comfort_violations_per_agent_timestep", log->adversaries_comfort_violation_rate);
+    assign_to_dict(dict, "adversaries_comfort_longitudinal_accel_violations_per_timestep",
+                   log->adversaries_comfort_longitudinal_accel_violations_per_timestep);
+    assign_to_dict(dict, "adversaries_comfort_lateral_accel_violations_per_timestep",
+                   log->adversaries_comfort_lateral_accel_violations_per_timestep);
+    assign_to_dict(dict, "adversaries_comfort_jerk_violations_per_timestep",
+                   log->adversaries_comfort_jerk_violations_per_timestep);
+    assign_to_dict(dict, "adversaries_uncomfortable_timestep_rate", log->adversaries_uncomfortable_timestep_rate);
+    assign_to_dict(dict, "adversaries_avg_speed", log->adversaries_avg_speed);
+    assign_to_dict(dict, "adversaries_lane_center_rate", log->adversaries_lane_center_rate);
+    assign_to_dict(dict, "adversaries_lane_heading_aligned_rate", log->adversaries_lane_heading_aligned_rate);
+    assign_to_dict(dict, "adversaries_velocity_progress", log->adversaries_velocity_progress);
+    assign_to_dict(dict, "adversaries_speed_limit_compliance", log->adversaries_speed_limit_compliance);
+    assign_to_dict(dict, "adversaries_driving_direction_score", log->adversaries_driving_direction_score);
+    assign_to_dict(dict, "adversaries_multi_lane_time", log->adversaries_multi_lane_time);
+    assign_to_dict(dict, "adversaries_multi_lane_score", log->adversaries_multi_lane_score);
+    assign_to_dict(dict, "adversaries_dnf_rate", log->adversaries_dnf_rate);
+    assign_to_dict(dict, "adversaries_score", log->adversaries_score);
+    assign_to_dict(dict, "adversaries_num_waypoints_reached", log->adversaries_num_waypoints_reached);
     assign_to_dict(dict, "target_num_goals_reached", log->target_num_goals_reached);
     assign_to_dict(dict, "target_ttc_within_bound_rate", log->target_ttc_within_bound_rate);
     assign_to_dict(dict, "target_progress_ratio", log->target_progress_ratio);
     assign_to_dict(dict, "target_puffer_score", log->target_puffer_score);
+    assign_to_dict(dict, "target_comfort_violations_per_timestep", log->target_comfort_violations_per_timestep);
+    assign_to_dict(dict, "target_comfort_longitudinal_accel_violations_per_timestep",
+                   log->target_comfort_longitudinal_accel_violations_per_timestep);
+    assign_to_dict(dict, "target_comfort_lateral_accel_violations_per_timestep",
+                   log->target_comfort_lateral_accel_violations_per_timestep);
+    assign_to_dict(dict, "target_comfort_jerk_violations_per_timestep",
+                   log->target_comfort_jerk_violations_per_timestep);
+    assign_to_dict(dict, "target_uncomfortable_timestep_rate", log->target_uncomfortable_timestep_rate);
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);
