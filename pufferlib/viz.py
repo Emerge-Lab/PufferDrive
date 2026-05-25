@@ -1684,6 +1684,9 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         chunks["policy_mean"] = replay["policy_mean"].astype(np.float32, copy=False)
         chunks["policy_std"] = replay["policy_std"].astype(np.float32, copy=False)
         chunks["policy_log_prob"] = replay["policy_log_prob"].astype(np.float32, copy=False)
+    for pool_name in ("pool_partner", "pool_lane", "pool_boundary", "pool_traffic"):
+        if replay.get(pool_name) is not None:
+            chunks[pool_name] = replay[pool_name].astype(np.int16, copy=False)
 
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
@@ -1744,8 +1747,10 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         .tele-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
         .tel-big { font-size:28px; font-family:ui-monospace,Consolas,monospace; font-weight:900; }
         .tel-mono { font-family:ui-monospace,Consolas,monospace; font-weight:800; }
-        #obs-container { position:absolute; left:14px; bottom:18px; width:390px; height:390px; display:none; overflow:hidden; border:2px solid var(--accent); border-radius:8px; background:white; }
-        #obs-title { position:absolute; top:0; left:0; right:0; z-index:2; padding:7px 10px; background:var(--accent); color:white; font-size:11px; font-weight:900; letter-spacing:.06em; cursor:grab; }
+        #obs-container { position:absolute; left:14px; bottom:18px; width:390px; height:390px; min-width:250px; min-height:250px; max-width:92vw; max-height:86vh; display:none; overflow:hidden; resize:both; pointer-events:auto; border:2px solid var(--accent); border-radius:8px; background:white; }
+        #obs-title { position:absolute; top:0; left:0; right:0; z-index:2; padding:6px 8px; display:flex; gap:6px; align-items:center; background:var(--accent); color:white; font-size:11px; font-weight:900; letter-spacing:.06em; cursor:grab; }
+        #obs-title span { flex:1; }
+        .obs-tool { padding:4px 7px; border-radius:5px; background:rgba(0,0,0,.28); font-size:10px; }
         #obs-canvas { width:100%; height:100%; }
         .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:8px; }
         .item { padding:6px; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:rgba(255,255,255,.05); }
@@ -1801,7 +1806,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>▾</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
-        <div id="obs-container"><div id="obs-title">EGO-CENTRIC NN OBS</div><canvas id="obs-canvas"></canvas></div>
+        <div id="obs-container"><div id="obs-title"><span>EGO-CENTRIC NN OBS</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1X</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">EXPAND</button></div><canvas id="obs-canvas"></canvas></div>
         <div id="search-box"><input type="number" id="agentSearch" placeholder="ID" onkeydown="if(event.key==='Enter') searchAgent()"><button onclick="searchAgent()" class="panel">Search</button></div>
         <div id="controls" class="panel">
             <button id="btnPlay" onclick="toggle()">PLAY</button>
@@ -1821,10 +1826,11 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
-        obsC.width = 390 * dpr; obsC.height = 390 * dpr;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false;
+        let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
+        const OBS_MODES = ["ALL","POOL","BOTH"];
 
         function chunk(name) {
             const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1}[m.dtype]);
@@ -1833,6 +1839,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             if (m.dtype === "int16") return new Int16Array(H.buffer, start, n);
             return new Uint8Array(H.buffer, start, n);
         }
+        function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
         async function initReplay() {
             const binary = atob(B64_PAYLOAD), bytes = new Uint8Array(binary.length);
             for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
@@ -1844,7 +1851,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
-            document.getElementById('sld').max = H.frames - 1;
+            document.getElementById('sld').max = frameMax();
             const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
             document.getElementById('loading-overlay').style.display = 'none';
             window.onresize();
@@ -1883,18 +1890,33 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         }
         function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
         function getColors() { const s = getComputedStyle(document.documentElement); return {bg:s.getPropertyValue('--bg'), road:s.getPropertyValue('--road'), line:s.getPropertyValue('--line'), edge:s.getPropertyValue('--edge'), text:s.getPropertyValue('--text')}; }
-        window.onresize = () => { c.width = innerWidth; c.height = innerHeight; draw(true); };
+        function resizeObsCanvas() {
+            const r = obsC.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return;
+            const w = Math.max(1, Math.floor(r.width * dpr)), h = Math.max(1, Math.floor(r.height * dpr));
+            if (obsC.width !== w || obsC.height !== h) { obsC.width = w; obsC.height = h; draw(true); }
+        }
+        new ResizeObserver(resizeObsCanvas).observe(document.getElementById('obs-container'));
+        window.onresize = () => { c.width = innerWidth; c.height = innerHeight; resizeObsCanvas(); draw(true); };
         function toggleTheme(){ darkMode=!darkMode; document.documentElement.setAttribute('data-theme', darkMode?'dark':'light'); draw(true); }
         function toggleGlobalPanel(){ const p=document.getElementById('hud-global'), collapsed=!p.classList.contains('collapsed'); p.classList.toggle('collapsed', collapsed); document.getElementById('globalChevron').innerHTML=collapsed?'&#9656;':'&#9662;'; }
         function toggleCamMode(){ if(followedId !== null){ isEgoCam=!isEgoCam; draw(true); } }
+        function resetObsZoom(e){ if(e) e.stopPropagation(); obsZoom=2.2; draw(true); }
+        function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
+        function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'COLLAPSE':'EXPAND'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,H.frames-1); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } });
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
         c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
         c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
-        function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
+        obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(.45, Math.min(8, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
+        function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { if(e.target.closest('button')) return; on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
         dragPanel('tel-drag-handle','hud-telemetry'); dragPanel('obs-title','obs-container');
+        document.querySelectorAll('.obs-tool').forEach(btn => {
+            btn.addEventListener('mousedown', e => e.stopPropagation());
+            btn.addEventListener('click', e => e.stopPropagation());
+        });
         document.querySelectorAll('.toggle-header').forEach(header => header.addEventListener('click', () => {
             const body = document.getElementById(header.dataset.target);
             if (!body) return;
@@ -1903,6 +1925,29 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             header.classList.toggle('is-collapsed', collapsed);
         }));
 
+        function poolAt(name, frame, slot, idx) {
+            if (!C[name] || slot < 0) return 0;
+            const n = H.chunks[name].shape[2];
+            return C[name][(frame * H.active_count + slot) * n + idx] || 0;
+        }
+        function poolAlpha(n) { return Math.min(.58, .22 + n / 140); }
+        function selectedGoals(frame, agent) {
+            if (!agent || agent.slot < 0) return [];
+            const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs;
+            let p = base + 10;
+            if (H.reward_conditioning) p += 17;
+            const scale = H.target_type === "static" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m;
+            const out = [];
+            for (let i=0;i<H.num_target_waypoints;i++) {
+                const o = p + i * H.target_features;
+                let empty = true;
+                for (let j=0;j<H.target_features;j++) if (obs[o+j] !== 0) empty = false;
+                if (empty) continue;
+                const rx = obs[o] * scale, ry = obs[o+1] * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
+                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch, i:i});
+            }
+            return out;
+        }
         function decodeObs(frame, slot) {
             if (slot < 0 || slot >= H.active_count) return null;
             const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
@@ -1915,21 +1960,24 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             const trafficStart = p;
             const rot = (x,y) => H.head_north ? [-y,x] : [x,y];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=H.head_north?rot(obs[o+5],obs[o+6]):[obs[o+5],obs[o+6]]; out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1]]); } return out; };
-            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); if(H.head_north) h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7]}); }
+            const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=H.head_north?rot(obs[o+5],obs[o+6]):[obs[o+5],obs[o+6]]; out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); if(H.head_north) h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1]}); }
-            return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count), bounds:roads(boundsStart,H.boundary_count), gps, traffic_controls:controls};
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
-            const scale = (obsC.width / 2) * 2.2, px = dpr / scale;
+            resizeObsCanvas();
+            const scale = (Math.min(obsC.width, obsC.height) / 2) * obsZoom, px = dpr / scale;
+            const showAll = obsMode !== 1, showPool = obsMode !== 0;
             obsCtx.fillStyle = "#fff"; obsCtx.fillRect(0,0,obsC.width,obsC.height);
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
-            obsCtx.strokeStyle="#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); }
-            obsCtx.strokeStyle="#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); }
+            if(showAll){ obsCtx.strokeStyle="#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+            if(showAll){ obsCtx.strokeStyle="#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
-            for(const t of frame.traffic_controls){ obsCtx.strokeStyle = t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); }
-            for(const p of frame.partners){ obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); obsCtx.fillStyle="rgba(136,136,136,.8)"; obsCtx.strokeStyle="#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
+            for(const t of frame.traffic_controls){ if(showPool && t.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(t.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 3.2 : 2.4)*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showAll){ obsCtx.strokeStyle = t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
+            for(const p of frame.partners){ if(!showAll && !(showPool && p.pool > 0)) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle="rgba(136,136,136,.8)"; obsCtx.strokeStyle="#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(showPool && p.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(p.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 2.4 : 2.0)*px; obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
             if(frame.ego){ obsCtx.save(); if(H.head_north) obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
             obsCtx.restore();
         }
@@ -1954,7 +2002,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             return html;
         }
         function updateUI(agent=null) {
-            const f = Math.floor(step); document.getElementById('stepDisplay').textContent = f; document.getElementById('sld').value = f;
+            const f = Math.max(0, Math.min(frameMax(), Math.floor(step))); document.getElementById('stepDisplay').textContent = f; document.getElementById('sld').value = f;
             const hud = document.getElementById('hud-telemetry'), obsBox = document.getElementById('obs-container');
             if (followedId === null || !agent) { hud.style.display='none'; obsBox.style.display='none'; document.getElementById('crash-overlay').style.display='none'; document.getElementById('camMode').textContent='Free Roam'; return; }
             hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'LOCKED (EGO)' : 'LOCKED (WORLD)';
@@ -1968,7 +2016,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         }
         function draw(force=false) {
             if(!H || (!force && Math.floor(step) === lastDrawn && !play)) return;
-            const f = Math.max(0, Math.min(H.frames - 1, Math.floor(step)));
+            const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
             const target = followedId !== null ? findAgent(f, followedId) : null;
             if (target) { cam.x = target.x; cam.y = target.y; }
             updateUI(target);
@@ -1976,6 +2024,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); ctx.fillStyle=a.c; ctx.strokeStyle=darkMode?'#fff':'#111'; ctx.lineWidth=.1; ctx.beginPath(); ctx.rect(-a.l/2,-a.w/2,a.l,a.w); ctx.fill(); ctx.stroke(); ctx.fillStyle='rgba(255,255,0,.55)'; ctx.fillRect(a.l/2-.5,-a.w/2,.5,a.w); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='bold '+(14/cam.z)+'px Arial'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle='#00ff00'; ctx.lineWidth=4/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.max(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.max(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
+            if(target){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
         }
         function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }
@@ -1987,7 +2036,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
             const dt = Math.min((ts-lastTick)/1000, 0.25);
             lastTick = ts;
             step += dt * speed * 10;
-            while(step >= H.frames) step -= H.frames;
+            while(step > frameMax()) step -= frameMax() + 1;
             draw(Math.floor(step) !== prev);
             requestAnimationFrame(loop);
         }

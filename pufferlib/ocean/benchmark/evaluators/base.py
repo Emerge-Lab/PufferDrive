@@ -570,6 +570,9 @@ class Evaluator:
         html_paths = []
         scenarios_done = 0
         progress = tqdm(total=num_scenarios * (max_steps + 1), desc=f"{self.name} obs_html", unit="step")
+        pool_method = getattr(policy, "pool_slot_counts", None)
+        if pool_method is None and getattr(policy, "policy", None) is not None:
+            pool_method = getattr(policy.policy, "pool_slot_counts", None)
 
         vec = pufferlib.vector.make(
             make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1
@@ -613,12 +616,23 @@ class Evaluator:
                 policy_mean_hist = [[] for _ in range(n_in_batch)]
                 policy_std_hist = [[] for _ in range(n_in_batch)]
                 policy_log_prob_hist = [[] for _ in range(n_in_batch)]
+                pool_hist = None
                 for t in range(max_steps):
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, value = policy.forward_eval(ob_t, state)
+                        pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
                         action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
                         raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
+                    if pool_hist is None and pool_outputs:
+                        pool_hist = {
+                            k: [
+                                np.zeros((max_steps, active_counts[e], values.shape[1]), dtype=np.int16)
+                                for e in range(n_in_batch)
+                            ]
+                            for k, values in pool_outputs.items()
+                        }
                     clipped_action = raw_action
                     if isinstance(logits, torch.distributions.Normal):
                         clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
@@ -655,6 +669,9 @@ class Evaluator:
                         )
                         value_hist[e].append(value_np[start_obs_index:end_obs_index].copy())
                         entropy_hist[e].append(entropy_np[start_obs_index:end_obs_index].copy())
+                        if pool_hist and pool_outputs:
+                            for k, values in pool_outputs.items():
+                                pool_hist[k][e][t] = values[start_obs_index:end_obs_index]
                         if isinstance(policy_outputs, dict):
                             policy_mean_hist[e].append(
                                 np.asarray(
@@ -703,6 +720,9 @@ class Evaluator:
                             np.stack(policy_log_prob_hist[e], axis=0) if policy_log_prob_hist[e] else None
                         ),
                     }
+                    if pool_hist:
+                        for k, hists in pool_hist.items():
+                            compact_replay[k] = hists[e]
                     viz.generate_interactive_replay(
                         scenarios[e],
                         compact_replay,
