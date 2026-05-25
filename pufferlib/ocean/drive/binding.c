@@ -306,8 +306,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         if (!agents_list) {
             return NULL;
         }
+        int next_active_log_idx = 0;
         for (int i = 0; i < env->num_total_agents; i++) {
             Agent *a = &env->agents[i];
+            int active_log_idx = -1;
+            if (env->active_agent_indices && next_active_log_idx < env->active_agent_count
+                && env->active_agent_indices[next_active_log_idx] == i) {
+                active_log_idx = next_active_log_idx;
+                next_active_log_idx++;
+            }
 
             PyObject *agent = PyDict_New();
             if (!agent) {
@@ -600,6 +607,76 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
+            pf = PyFloat_FromDouble((double) a->steering_angle);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "sim_steering", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_lat", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_lat", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
             pf = PyFloat_FromDouble((double) a->sim_length);
             if (!pf) {
                 Py_DECREF(agent);
@@ -880,6 +957,58 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             Py_DECREF(metrics);
+
+            if (env->compute_eval_metrics && env->logs && active_log_idx >= 0 && active_log_idx < env->logs_capacity) {
+                Log *log = &env->logs[active_log_idx];
+
+                pf = PyFloat_FromDouble((double) log->puffer_score);
+                if (!pf) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_score", pf) < 0) {
+                    Py_DECREF(pf);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(pf);
+
+                PyObject *puffer_metrics = PyDict_New();
+                if (!puffer_metrics) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (assign_to_dict(puffer_metrics, "score", log->puffer_score)
+                    || assign_to_dict(puffer_metrics, "no_at_fault", log->no_at_fault)
+                    || assign_to_dict(puffer_metrics, "no_offroad", log->no_offroad)
+                    || assign_to_dict(puffer_metrics, "no_red_light", log->no_red_light)
+                    || assign_to_dict(puffer_metrics, "making_progress", log->making_progress)
+                    || assign_to_dict(puffer_metrics, "direction_score", log->driving_direction_score)
+                    || assign_to_dict(puffer_metrics, "ttc_puffer_rate", log->ttc_puffer_rate)
+                    || assign_to_dict(puffer_metrics, "progress_ratio", log->progress_ratio)
+                    || assign_to_dict(puffer_metrics, "speed_limit_compliance", log->speed_limit_compliance)
+                    || assign_to_dict(puffer_metrics, "comfort_score", log->comfort_score)
+                    || assign_to_dict(puffer_metrics, "multi_lane_score", log->multi_lane_score)
+                    || assign_to_dict(puffer_metrics, "wrong_way_distance", log->wrong_way_distance)
+                    || assign_to_dict(puffer_metrics, "speed_violation_sum", log->speed_violation_sum)
+                    || assign_to_dict(puffer_metrics, "multiplier", log->multiplier)
+                    || assign_to_dict(puffer_metrics, "weighted_average", log->weighted_average)) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_metrics", puffer_metrics) < 0) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(puffer_metrics);
+            }
 
             /* Export route information */
             tmp = PyLong_FromLong(a->route_length);

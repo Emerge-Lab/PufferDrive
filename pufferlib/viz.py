@@ -16,6 +16,7 @@ import os
 import json
 import zlib
 import base64
+import struct
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
@@ -68,6 +69,10 @@ _map_cache = {}
 
 MULTI_LANE_FULL_SCORE_TIME = binding.MULTI_LANE_FULL_SCORE_TIME
 MULTI_LANE_HALF_SCORE_TIME = binding.MULTI_LANE_HALF_SCORE_TIME
+JERK_LONG_VALUES = np.asarray([-15.0, -4.0, 0.0, 4.0], dtype=np.float32)
+JERK_LAT_VALUES = np.asarray([-4.0, 0.0, 4.0], dtype=np.float32)
+ACCELERATION_VALUES = np.asarray([-4.0, -2.667, -1.333, 0.0, 1.333, 2.667, 4.0], dtype=np.float32)
+STEERING_VALUES = np.asarray([-0.667, -0.5, -0.333, -0.167, 0.0, 0.167, 0.333, 0.5, 0.667], dtype=np.float32)
 
 METRIC_LABELS = [
     "collision",
@@ -849,7 +854,7 @@ def close_figure(reuse_key: str):
 
 def unpack_obs(
     obs_flat,
-    dynamics_model: int = 0,
+    dynamics_model=None,
     target_type: str = "static",
     reward_conditioning: bool = False,
     num_target_waypoints: int = 5,
@@ -865,7 +870,6 @@ def unpack_obs(
     Unpack the flattened observation into ego, map, partner, and traffic-control views.
     Args:
         obs_flat: flattened observation tensor of shape (batch_size, obs_dim) or (obs_dim,)
-        dynamics_model: 0 for CLASSIC, 1 for JERK
     Return:
         ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs
     """
@@ -940,7 +944,7 @@ def unpack_obs(
 
 def plot_observation(
     obs,
-    dynamics_model="classic",
+    dynamics_model=None,
     target_type="static",
     reward_conditioning=False,
     num_target_waypoints=10,
@@ -962,24 +966,22 @@ def plot_observation(
 
     Args:
         obs: flattened observation tensor
-        dynamics_model: 0 for CLASSIC, 1 for JERK
         target_type: 0 for goal only, 1 for waypoints only, 2 for both
     """
     fig, ax = plt.subplots(figsize=(20, 20))
 
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
-        dynamics_model,
-        target_type,
-        reward_conditioning,
-        num_target_waypoints,
-        max_partners,
-        max_lane_segments,
-        max_boundary_segments,
-        obs_slots_traffic_controls,
-        obs_dropout_lane,
-        obs_dropout_boundary,
-        agent_idx,
+        target_type=target_type,
+        reward_conditioning=reward_conditioning,
+        num_target_waypoints=num_target_waypoints,
+        max_partners=max_partners,
+        max_lane_segments=max_lane_segments,
+        max_boundary_segments=max_boundary_segments,
+        obs_slots_traffic_controls=obs_slots_traffic_controls,
+        obs_dropout_lane=obs_dropout_lane,
+        obs_dropout_boundary=obs_dropout_boundary,
+        agent_idx=agent_idx,
     )
     scales = _obs_scales(
         obs_norm_goal_offset_m=obs_norm_goal_offset_m,
@@ -1042,8 +1044,7 @@ def plot_observation(
     # Add dynamics info text for JERK model
     ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
-    if dynamics_model == "jerk":
-        ego_info += f"\nSteering: {steering_angle:.3f}\na_long: {a_long:.2f}\na_lat: {a_lat:.2f}"
+    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {a_long:.2f}\naccel_lat: {a_lat:.2f}"
 
     ax.text(
         0.02,
@@ -1179,16 +1180,7 @@ def plot_observation(
 def fill_agents_state(scenario, use_trajectory=False):
     current_agents_data = []
     active_indices = scenario.get("active_agent_indices", [])
-
-    # Actions
-    if use_trajectory:
-        raw_actions = scenario.get("ctrl_trajectory_actions", [])
-    else:
-        raw_actions = scenario.get("actions", [])
-    action_map = {}
-    if raw_actions and len(raw_actions) == len(active_indices):
-        for i, agent_idx in enumerate(active_indices):
-            action_map[agent_idx] = raw_actions[i]
+    road_elements = scenario.get("road_elements", [])
 
     for idx, agent in enumerate(scenario.get("agents", [])):
         if not agent.get("sim_valid"):
@@ -1196,16 +1188,17 @@ def fill_agents_state(scenario, use_trajectory=False):
 
         agent_id = agent.get("id", idx)
         is_active = idx in active_indices
+        color = "red" if agent.get("stopped", False) else get_agent_color(agent_id, is_active)
 
-        # Couleur
-        if agent.get("stopped", False):
-            color = "red"
-        else:
-            color = get_agent_color(agent_id, is_active)
-        req_acc = float(action_map[idx][0]) if idx in action_map else 0.0
-        req_str = float(action_map[idx][1]) if idx in action_map else 0.0
+        metrics = agent.get("metrics_array", [])
+        puffer_metrics = agent.get("puffer_metrics") if isinstance(agent.get("puffer_metrics"), dict) else None
+        current_lane_idx = int(agent.get("current_lane_idx", -1))
+        current_lane_id = -1
+        if 0 <= current_lane_idx < len(road_elements):
+            road_elem = road_elements[current_lane_idx]
+            if isinstance(road_elem, dict):
+                current_lane_id = int(road_elem.get("id", current_lane_idx))
 
-        # On arrondit tout pour alléger le JSON final
         current_agents_data.append(
             {
                 "id": int(agent_id),
@@ -1213,18 +1206,25 @@ def fill_agents_state(scenario, use_trajectory=False):
                 "y": round(float(agent["sim_y"]), 2),
                 "z": round(float(agent.get("sim_z", 0)), 2),
                 "h": round(float(agent["sim_heading"]), 3),
+                "cl": current_lane_id,
                 "l": round(float(agent["sim_length"]), 2),
                 "w": round(float(agent["sim_width"]), 2),
                 "s": round(float(agent.get("sim_speed", 0)), 2),
                 "st": round(float(agent.get("sim_steering", 0)), 3),
+                "al": round(float(agent.get("accel_long", 0)), 3),
+                "alat": round(float(agent.get("accel_lat", 0)), 3),
+                "jl": round(float(agent.get("jerk_long", 0)), 3),
+                "jlat": round(float(agent.get("jerk_lat", 0)), 3),
                 "c": color,
-                # Commandes
-                "ra": round(req_acc, 2),
-                "rs": round(req_str, 2),
-                # Compact metrics array (M1..M18)
-                "m": [round(float(m), 2) for m in agent.get("metrics_array")],
+                "m": [round(float(m), 2) for m in metrics],
             }
         )
+        if puffer_metrics:
+            current_agents_data[-1]["pf"] = {k: round(float(v), 3) for k, v in puffer_metrics.items()}
+        if puffer_metrics or "puffer_score" in agent:
+            current_agents_data[-1]["ps"] = round(
+                float(agent.get("puffer_score", puffer_metrics.get("score", 0.0) if puffer_metrics else 0.0)), 3
+            )
 
     return current_agents_data
 
@@ -1272,10 +1272,186 @@ def fill_trajectories(scenario, timestep):
     return current_trajectories
 
 
+def _scale_continuous_action(clipped_action, dynamics_model):
+    clipped = np.asarray(clipped_action, dtype=np.float32)
+    if clipped.size < 2:
+        return clipped
+
+    if dynamics_model == "jerk":
+        j_long_action = float(clipped[0])
+        j_long = j_long_action * (-JERK_LONG_VALUES[0]) if j_long_action < 0.0 else j_long_action * JERK_LONG_VALUES[-1]
+        j_lat = float(clipped[1]) * JERK_LAT_VALUES[-1]
+        return np.asarray([j_long, j_lat], dtype=np.float32)
+
+    return np.asarray(
+        [
+            float(clipped[0]) * ACCELERATION_VALUES[-1],
+            float(clipped[1]) * STEERING_VALUES[-1],
+        ],
+        dtype=np.float32,
+    )
+
+
+def _decode_discrete_action(action_value, dynamics_model):
+    action_val = int(round(float(action_value)))
+    if dynamics_model == "jerk":
+        num_lat = len(JERK_LAT_VALUES)
+        long_idx = int(np.clip(action_val // num_lat, 0, len(JERK_LONG_VALUES) - 1))
+        lat_idx = int(np.clip(action_val % num_lat, 0, len(JERK_LAT_VALUES) - 1))
+        raw = np.asarray([long_idx, lat_idx], dtype=np.float32)
+        scaled = np.asarray([JERK_LONG_VALUES[long_idx], JERK_LAT_VALUES[lat_idx]], dtype=np.float32)
+        labels = ["jerk_long", "jerk_lat"]
+        return labels, raw, scaled
+
+    num_steer = len(STEERING_VALUES)
+    accel_idx = int(np.clip(action_val // num_steer, 0, len(ACCELERATION_VALUES) - 1))
+    steer_idx = int(np.clip(action_val % num_steer, 0, len(STEERING_VALUES) - 1))
+    raw = np.asarray([accel_idx, steer_idx], dtype=np.float32)
+    scaled = np.asarray([ACCELERATION_VALUES[accel_idx], STEERING_VALUES[steer_idx]], dtype=np.float32)
+    labels = ["accel", "steer"]
+    return labels, raw, scaled
+
+
+def _discrete_action_rows(probabilities, selected_action, dynamics_model):
+    probs = np.asarray(probabilities, dtype=np.float32).reshape(-1)
+    rows = []
+    for action_idx, probability in enumerate(probs):
+        _, _, scaled = _decode_discrete_action(action_idx, dynamics_model)
+        if dynamics_model == "jerk":
+            detail = f"jerk_long {float(scaled[0]):.3g}, jerk_lat {float(scaled[1]):.3g}"
+        else:
+            detail = f"accel {float(scaled[0]):.3g}, steer {float(scaled[1]):.3g}"
+        rows.append(
+            {
+                "index": int(action_idx),
+                "label": f"{action_idx}: {detail}",
+                "probability": float(probability),
+                "selected": int(action_idx) == int(selected_action),
+            }
+        )
+    return rows
+
+
+def _scale_policy_params(action_type, clipped_action, trajectory_scaling_factors, dynamics_model):
+    clipped = np.asarray(clipped_action, dtype=np.float32)
+
+    if action_type == "continuous":
+        return _scale_continuous_action(clipped, dynamics_model)
+
+    if action_type == "discrete":
+        return clipped
+
+    scale_array = np.asarray(trajectory_scaling_factors, dtype=np.float32)
+    if scale_array.size != clipped.shape[0]:
+        return clipped
+
+    scaled = clipped * scale_array
+    if action_type in ("trajectory", "trajectory_frenet"):
+        negative_longitudinal = clipped[:2] < 0.0
+        scaled[:2] = clipped[:2] * scale_array[:2] * np.where(negative_longitudinal, 2.0, 1.0)
+    return scaled
+
+
+def _policy_param_labels(action_type, num_params, dynamics_model):
+    if action_type == "continuous":
+        if dynamics_model == "jerk":
+            return ["jerk_long", "jerk_lat"][:num_params]
+        return ["accel", "steer"][:num_params]
+    if action_type == "discrete":
+        if dynamics_model == "jerk":
+            return ["jerk_long_idx", "jerk_lat_idx"]
+        return ["accel_idx", "steer_idx"]
+    return [f"p{idx}" for idx in range(num_params)]
+
+
+def fill_policy_state(
+    scenario,
+    raw_actions,
+    clipped_actions,
+    values,
+    entropies,
+    action_type,
+    trajectory_scaling_factors,
+    dynamics_model,
+    policy_outputs=None,
+):
+    active_indices = scenario.get("active_agent_indices", [])
+    if (
+        raw_actions is None
+        or clipped_actions is None
+        or values is None
+        or entropies is None
+        or len(active_indices) == 0
+    ):
+        return {}
+
+    raw_array = np.asarray(raw_actions, dtype=np.float32)
+    clipped_array = np.asarray(clipped_actions, dtype=np.float32)
+    values_array = np.asarray(values, dtype=np.float32).reshape(-1)
+    entropies_array = np.asarray(entropies, dtype=np.float32).reshape(-1)
+    if raw_array.ndim == 1:
+        raw_array = raw_array.reshape(-1, 1)
+    if clipped_array.ndim == 1:
+        clipped_array = clipped_array.reshape(-1, 1)
+
+    if (
+        raw_array.shape[0] != len(active_indices)
+        or clipped_array.shape[0] != len(active_indices)
+        or values_array.shape[0] != len(active_indices)
+        or entropies_array.shape[0] != len(active_indices)
+    ):
+        return {}
+
+    policy_state = {}
+    agents = scenario.get("agents", [])
+    output_array = None
+    if policy_outputs is not None and not isinstance(policy_outputs, dict):
+        output_array = np.asarray(policy_outputs, dtype=np.float32)
+    for i, agent_idx in enumerate(active_indices):
+        raw = raw_array[i].astype(np.float32, copy=False)
+        clipped = clipped_array[i].astype(np.float32, copy=False)
+        extra = {}
+
+        if action_type == "discrete":
+            labels, raw_display, scaled = _decode_discrete_action(raw[0], dynamics_model)
+            if output_array is not None and output_array.shape[0] == len(active_indices):
+                extra["selected_action"] = int(round(float(raw[0])))
+                extra["action_probs"] = _discrete_action_rows(output_array[i], extra["selected_action"], dynamics_model)
+        else:
+            scaled = _scale_policy_params(action_type, clipped, trajectory_scaling_factors, dynamics_model)
+            labels = _policy_param_labels(action_type, int(scaled.shape[0]), dynamics_model)
+            raw_display = raw
+            if action_type == "continuous" and isinstance(policy_outputs, dict):
+                means = np.asarray(policy_outputs.get("mean"), dtype=np.float32)
+                stds = np.asarray(policy_outputs.get("std"), dtype=np.float32)
+                log_probs = np.asarray(policy_outputs.get("log_prob"), dtype=np.float32).reshape(-1)
+                if means.shape[0] == len(active_indices) and stds.shape[0] == len(active_indices):
+                    extra["density"] = {
+                        "labels": labels,
+                        "mean": [float(val) for val in means[i].reshape(-1).tolist()],
+                        "std": [float(val) for val in stds[i].reshape(-1).tolist()],
+                        "log_prob": float(log_probs[i]),
+                    }
+
+        agent_id = int(agent_idx)
+        if 0 <= agent_idx < len(agents):
+            agent_id = int(agents[agent_idx].get("id", agent_idx))
+
+        policy_state[agent_id] = {
+            "value": float(values_array[i]),
+            "entropy": float(entropies_array[i]),
+            "labels": labels,
+            "raw": [float(val) for val in raw_display.tolist()],
+            "scaled": [float(val) for val in scaled.tolist()],
+        }
+        policy_state[agent_id].update(extra)
+
+    return policy_state
+
+
 def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, head_north=False):
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
-        dynamics_model=args["env"]["dynamics_model"],
         target_type=args["env"]["target_type"],
         reward_conditioning=args["env"]["reward_conditioning"],
         num_target_waypoints=args["env"]["num_target_waypoints"],
@@ -1296,11 +1472,7 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         return (-y, x) if head_north else (x, y)
 
     # --- Parse Ego ---
-    if args["env"]["dynamics_model"] == "jerk":
-        ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat = ego_state[:6]
-    else:
-        ego_speed, ego_width, ego_length = ego_state[:3]
-        steering_angle, a_long, a_lat = 0.0, 0.0, 0.0
+    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat = ego_state[:6]
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -1310,8 +1482,8 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         "w": round(float(ego_width), 3),
         "l": round(float(ego_length), 3),
         "st": round(float(steering_angle), 3),
-        "al": round(float(a_long), 3),
-        "alat": round(float(a_lat), 3),
+        "al": round(float(accel_long), 3),
+        "alat": round(float(accel_lat), 3),
     }
 
     # --- Parse Road Segments ---
@@ -1417,15 +1589,438 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
     }
 
 
+def _pack_replay_binary(header, chunks):
+    packed = {}
+    blob_parts = []
+    offset = 0
+    dtype_names = {
+        np.dtype(np.float32): "float32",
+        np.dtype(np.int32): "int32",
+        np.dtype(np.int16): "int16",
+        np.dtype(np.uint8): "uint8",
+    }
+    for name, arr in chunks.items():
+        arr = np.ascontiguousarray(arr)
+        dtype = dtype_names[arr.dtype]
+        raw = arr.tobytes()
+        packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": len(raw)}
+        blob_parts.append(raw)
+        offset += len(raw)
+        pad = (-offset) % 4
+        if pad:
+            blob_parts.append(b"\0" * pad)
+            offset += pad
+
+    header = dict(header)
+    header["chunks"] = packed
+    header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    pad = (-(4 + len(header_bytes))) % 4
+    payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
+    return base64.b64encode(zlib.compress(payload, level=9)).decode("ascii")
+
+
+def _generate_compact_interactive_replay(scenario, replay, filename="replay.html", head_north=False):
+    road_points = []
+    road_lengths = []
+    road_types = []
+    for elem in scenario.get("road_elements", []) or []:
+        if not isinstance(elem, dict):
+            continue
+        elem_type = int(elem.get("type", 0))
+        xs = elem.get("x") or []
+        ys = elem.get("y") or []
+        if not xs or not ys:
+            continue
+        if 1 <= elem_type <= 3:
+            draw_type = 0
+        elif 11 <= elem_type <= 18:
+            draw_type = 1
+        elif 21 <= elem_type <= 23:
+            draw_type = 2
+        else:
+            continue
+        count = min(len(xs), len(ys))
+        road_lengths.append(count)
+        road_types.append(draw_type)
+        for i in range(count):
+            road_points.append((float(xs[i]), float(ys[i])))
+
+    traffic_stop_lines = []
+    traffic_types = []
+    for elem in scenario.get("traffic_elements", []) or []:
+        if not isinstance(elem, dict):
+            continue
+        stop_line = elem.get("stop_line") or [0, 0, 0, 0, 0, 0]
+        traffic_stop_lines.append([float(v) for v in stop_line[:6]])
+        traffic_types.append(int(elem.get("type", 0)))
+
+    env_cfg = replay["env"]
+    scales = _obs_scales(env_cfg)
+    lane_count = compute_effective_road_obs_count(env_cfg["obs_slots_lane"], env_cfg.get("obs_dropout_lane", 0.0))
+    boundary_count = compute_effective_road_obs_count(
+        env_cfg["obs_slots_boundary"], env_cfg.get("obs_dropout_boundary", 0.0)
+    )
+
+    chunks = {
+        "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
+        "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
+        "road_types": np.asarray(road_types or [0], dtype=np.int16),
+        "traffic_stop_lines": np.asarray(traffic_stop_lines or [[0, 0, 0, 0, 0, 0]], dtype=np.float32),
+        "traffic_types": np.asarray(traffic_types or [0], dtype=np.int16),
+        "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
+        "agent_i32": replay["agent_i32"].astype(np.int32, copy=False),
+        "metrics_f32": replay["metrics_f32"].astype(np.float32, copy=False),
+        "puffer_f32": replay["puffer_f32"].astype(np.float32, copy=False),
+        "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
+        "obs": replay["obs"].astype(np.float32, copy=False),
+        "raw_action": replay["raw_action"].astype(np.float32, copy=False),
+        "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
+        "value": replay["value"].astype(np.float32, copy=False),
+        "entropy": replay["entropy"].astype(np.float32, copy=False),
+    }
+    if replay.get("policy_probs") is not None:
+        chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
+    if replay.get("policy_mean") is not None:
+        chunks["policy_mean"] = replay["policy_mean"].astype(np.float32, copy=False)
+        chunks["policy_std"] = replay["policy_std"].astype(np.float32, copy=False)
+        chunks["policy_log_prob"] = replay["policy_log_prob"].astype(np.float32, copy=False)
+
+    metadata = {
+        "map_name": scenario.get("map_name", "Unknown"),
+        "scenario_id": scenario.get("scenario_id", "Unknown"),
+        "target_type": scenario.get("target_type", env_cfg.get("target_type", "static")),
+        "active_indices": scenario.get("active_agent_indices", []),
+        "frames": int(replay["agent_f32"].shape[0]),
+        "agent_cap": int(replay["agent_f32"].shape[1]),
+        "traffic_cap": int(replay["traffic_i16"].shape[1]),
+        "active_count": int(replay["obs"].shape[1]),
+        "obs_dim": int(replay["obs"].shape[2]),
+        "action_type": env_cfg.get("action_type", "continuous"),
+        "dynamics_model": env_cfg.get("dynamics_model", "classic"),
+        "trajectory_scaling_factors": env_cfg.get("trajectory_scaling_factors", []),
+        "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
+        "reward_conditioning": bool(env_cfg["reward_conditioning"]),
+        "max_partners": int(env_cfg["obs_slots_partners"]),
+        "lane_count": int(lane_count),
+        "boundary_count": int(boundary_count),
+        "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls"]),
+        "target_features": 3 if env_cfg.get("target_type", "static") == "static" else 5,
+        "head_north": bool(head_north),
+        "scales": scales,
+        "road_polyline_count": len(road_lengths),
+        "traffic_static_count": len(traffic_types),
+    }
+    payload = _pack_replay_binary(metadata, chunks)
+
+    html_template = """
+<!DOCTYPE html>
+<html data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <title>PufferDrive Replay</title>
+    <style>
+        :root { --bg:#f3f4f6; --text:#111827; --panel:rgba(255,255,255,.94); --muted:#6b7280; --road:#c9cdd2; --line:#8a9099; --edge:#222831; --accent:#0b6bcb; --danger:#d71920; --shadow:rgba(15,23,42,.18); }
+        [data-theme="dark"] { --bg:#111316; --text:#f3f4f6; --panel:rgba(28,31,36,.94); --muted:#aeb6c2; --road:#3c424a; --line:#6d7683; --edge:#050607; --accent:#48a6ff; --danger:#ff4d55; --shadow:rgba(0,0,0,.45); }
+        body { margin:0; overflow:hidden; background:var(--bg); color:var(--text); font-family:system-ui,Segoe UI,sans-serif; user-select:none; }
+        canvas { display:block; width:100vw; height:100vh; cursor:crosshair; }
+        #ui-layer { position:absolute; inset:0; pointer-events:none; z-index:10; }
+        .panel { background:var(--panel); border:1px solid rgba(127,127,127,.18); border-radius:8px; box-shadow:0 8px 28px var(--shadow); pointer-events:auto; backdrop-filter:blur(6px); }
+        #loading-overlay { position:absolute; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text); font-size:18px; font-weight:800; }
+        #hud-global { position:absolute; top:14px; left:14px; width:230px; padding:12px; }
+        #hud-global.collapsed > *:not(h3) { display:none; }
+        h3 { margin:0 0 10px 0; padding-bottom:6px; border-bottom:1px solid rgba(127,127,127,.35); color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+        .label { margin-top:8px; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+        .value { color:var(--text); font-size:15px; font-weight:800; overflow-wrap:anywhere; }
+        .highlight { color:var(--accent); }
+        button, select { border:0; border-radius:8px; padding:8px 10px; background:#23272f; color:white; font-weight:800; cursor:pointer; }
+        button:hover { filter:brightness(1.12); }
+        input[type=range] { width:320px; accent-color:var(--accent); }
+        input[type=number] { width:74px; padding:8px; border:1px solid rgba(127,127,127,.35); border-radius:8px; background:var(--panel); color:var(--text); font-weight:800; }
+        #controls { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); padding:10px; display:flex; gap:10px; align-items:center; }
+        #btnPlay { min-width:76px; }
+        #search-box { position:absolute; right:14px; bottom:82px; display:flex; gap:8px; align-items:center; }
+        #hud-telemetry { position:absolute; top:60px; right:14px; width:330px; max-height:calc(100vh - 92px); padding:12px; overflow-y:auto; display:none; border-left:5px solid var(--accent); color:white; background:rgba(18,20,24,.96); }
+        #tel-drag-handle { cursor:grab; color:#dbeafe; }
+        .tele-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
+        .tel-big { font-size:28px; font-family:ui-monospace,Consolas,monospace; font-weight:900; }
+        .tel-mono { font-family:ui-monospace,Consolas,monospace; font-weight:800; }
+        #obs-container { position:absolute; left:14px; bottom:18px; width:390px; height:390px; display:none; overflow:hidden; border:2px solid var(--accent); border-radius:8px; background:white; }
+        #obs-title { position:absolute; top:0; left:0; right:0; z-index:2; padding:7px 10px; background:var(--accent); color:white; font-size:11px; font-weight:900; letter-spacing:.06em; cursor:grab; }
+        #obs-canvas { width:100%; height:100%; }
+        .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:8px; }
+        .item { padding:6px; border:1px solid rgba(255,255,255,.08); border-radius:6px; background:rgba(255,255,255,.05); }
+        .name { display:block; color:#aeb6c2; font-size:9px; font-weight:900; text-transform:uppercase; }
+        .num { color:#74d99f; font-family:ui-monospace,Consolas,monospace; font-weight:900; font-size:12px; }
+        .bar-row { position:relative; min-height:18px; overflow:hidden; border-radius:5px; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); }
+        .bar-row.selected { border-color:var(--accent); background:rgba(72,166,255,.16); }
+        .bar { position:absolute; inset:0 auto 0 0; background:rgba(72,166,255,.28); }
+        .bar-text { position:relative; z-index:1; display:flex; justify-content:space-between; gap:8px; padding:2px 5px; font-size:10px; font-family:ui-monospace,Consolas,monospace; }
+        .toggle-header { width:100%; margin-top:10px; padding:6px 0; display:flex; justify-content:space-between; align-items:center; background:transparent; color:#aeb6c2; border:0; border-bottom:1px solid rgba(255,255,255,.14); border-radius:0; font-size:10px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; text-align:left; }
+        .toggle-header:hover { filter:brightness(1.18); }
+        .toggle-header span:last-child { transition:transform .15s ease; }
+        .toggle-header.is-collapsed span:last-child { transform:rotate(-90deg); }
+        .toggle-body.is-collapsed { display:none; }
+        #crash-overlay { position:absolute; inset:0; z-index:5; display:none; pointer-events:none; background:radial-gradient(circle,transparent 45%,rgba(215,25,32,.38)); }
+        #crash-msg { display:none; margin-bottom:10px; padding:7px; border:2px solid var(--danger); color:#ff777d; text-align:center; font-weight:950; }
+    </style>
+</head>
+<body>
+    <div id="loading-overlay">Loading replay...</div>
+    <div id="crash-overlay"></div>
+    <div id="ui-layer">
+        <div id="hud-global" class="panel collapsed">
+            <h3 onclick="toggleGlobalPanel()">Scenario <span id="globalChevron" style="float:right">&#9656;</span></h3>
+            <div class="label">Map</div><div class="value" id="meta-map">-</div>
+            <div class="label">ID</div><div class="value" id="meta-id">-</div>
+            <div class="label">Step</div><div class="value highlight" id="stepDisplay" style="font-size:30px">0</div>
+            <div class="label">Camera</div><div class="value highlight" id="camMode" onclick="toggleCamMode()">Free Roam</div>
+            <button onclick="toggleTheme()" style="width:100%; margin-top:10px">Theme</button>
+        </div>
+        <div id="hud-telemetry" class="panel">
+            <div id="crash-msg"></div>
+            <h3 id="tel-drag-handle">Agent <span id="tel-id" class="highlight">?</span></h3>
+            <div class="tele-row">
+                <div><div class="label">Speed</div><div><span id="tel-speed" class="tel-big">0.0</span> km/h</div></div>
+                <div><div class="label">Lane</div><div id="tel-lane-top" class="value highlight">-1</div></div>
+            </div>
+            <div class="tele-row">
+                <div><div class="label">Steer</div><div id="tel-st" class="tel-mono">0.0</div></div>
+                <div></div>
+            </div>
+            <div class="tele-row">
+                <div><div class="label">Accel L/Lat</div><div class="tel-mono"><span id="tel-al">0</span> / <span id="tel-alat">0</span></div></div>
+                <div><div class="label">Jerk L/Lat</div><div class="tel-mono"><span id="tel-jl">0</span> / <span id="tel-jlat">0</span></div></div>
+            </div>
+            <div class="label">Position (X/Y/H/Lane)</div>
+            <div class="tel-mono"><span id="tel-x">0</span>, <span id="tel-y">0</span>, <span id="tel-h">0</span>, <span id="tel-lane">-1</span></div>
+            <div class="label">Policy Outputs</div><div id="policy-grid" class="grid"></div>
+            <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer Score</span><span>▾</span></button>
+            <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="tel-mono" style="margin-top:6px;">0.000</div></div>
+            <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer Metrics</span><span>▾</span></button>
+            <div id="puffer-grid" class="grid toggle-body"></div>
+            <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>▾</span></button>
+            <div id="metrics-grid" class="grid toggle-body"></div>
+        </div>
+        <div id="obs-container"><div id="obs-title">EGO-CENTRIC NN OBS</div><canvas id="obs-canvas"></canvas></div>
+        <div id="search-box"><input type="number" id="agentSearch" placeholder="ID" onkeydown="if(event.key==='Enter') searchAgent()"><button onclick="searchAgent()" class="panel">Search</button></div>
+        <div id="controls" class="panel">
+            <button id="btnPlay" onclick="toggle()">PLAY</button>
+            <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+            <input id="sld" type="range" min="0" value="0" step="1">
+        </div>
+    </div>
+    <canvas id="c"></canvas>
+    <script>
+        const B64_PAYLOAD = "__B64_PAYLOAD__";
+        const METRIC_LABELS = __METRIC_LABELS__;
+        const VEHICLE_COLORS = __VEHICLE_COLORS__;
+        const PUFFER_KEYS = [["score","score"],["no_at_fault","no at fault"],["no_offroad","no offroad"],["no_red_light","no red light"],["making_progress","progress > .2"],["direction_score","direction"],["ttc_puffer_rate","ttc"],["progress_ratio","progress"],["speed_limit_compliance","speed"],["comfort_score","comfort"],["multi_lane_score","multi lane"],["multiplier","multiplier"],["weighted_average","weighted avg"]];
+        const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
+        const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
+        let H, C = {}, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
+        const c = document.getElementById('c'), ctx = c.getContext('2d');
+        const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        obsC.width = 390 * dpr; obsC.height = 390 * dpr;
+        let step = 0, play = false, speed = 1, lastTick = 0;
+        let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
+        let followedId = null, isEgoCam = false, darkMode = false;
+
+        function chunk(name) {
+            const m = H.chunks[name], start = H.dataStart + m.offset, n = m.nbytes / ({float32:4,int32:4,int16:2,uint8:1}[m.dtype]);
+            if (m.dtype === "float32") return new Float32Array(H.buffer, start, n);
+            if (m.dtype === "int32") return new Int32Array(H.buffer, start, n);
+            if (m.dtype === "int16") return new Int16Array(H.buffer, start, n);
+            return new Uint8Array(H.buffer, start, n);
+        }
+        async function initReplay() {
+            const binary = atob(B64_PAYLOAD), bytes = new Uint8Array(binary.length);
+            for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+            const ds = new DecompressionStream('deflate');
+            const buf = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+            const view = new DataView(buf), headerLen = view.getUint32(0, true);
+            H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
+            H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
+            for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
+            document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
+            document.getElementById('meta-id').textContent = H.scenario_id || "-";
+            document.getElementById('sld').max = H.frames - 1;
+            const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
+            document.getElementById('loading-overlay').style.display = 'none';
+            window.onresize();
+            requestAnimationFrame(() => { buildMapPaths(); draw(true); });
+        }
+        initReplay().catch(err => { console.error(err); document.getElementById('loading-overlay').textContent = 'Replay load failed. See console.'; });
+
+        function buildMapPaths() {
+            paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
+            let p = 0;
+            for (let i=0;i<H.road_polyline_count;i++) {
+                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type];
+                if (len <= 0) continue;
+                path.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
+                for (let j=1;j<len;j++) path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                p += len;
+            }
+        }
+        function colorFor(id, active, stopped) { return stopped ? "red" : (active ? VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length] : "#808080"); }
+        function agentAt(frame, idx) {
+            const ib = (frame * H.agent_cap + idx) * 8, fb = (frame * H.agent_cap + idx) * 12;
+            if (!C.agent_i32[ib+2]) return null;
+            const mb = (frame * H.agent_cap + idx) * 18, pb = (frame * H.agent_cap + idx) * 15;
+            const m = Array.from(C.metrics_f32.subarray(mb, mb + 18));
+            const pfVals = Array.from(C.puffer_f32.subarray(pb, pb + 15));
+            const pf = {}; PUFFER_KEYS.forEach((row, i) => pf[row[0]] = pfVals[i]);
+            return {id:C.agent_i32[ib], type:C.agent_i32[ib+1], active:C.agent_i32[ib+3], stopped:C.agent_i32[ib+4], removed:C.agent_i32[ib+5], cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], z:C.agent_f32[fb+2], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:colorFor(C.agent_i32[ib], C.agent_i32[ib+3], C.agent_i32[ib+4]), m:m, pf:pf, ps:pf.score};
+        }
+        function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
+        function findAgent(frame, id) { for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a && a.id === id) return a; } return null; }
+        function trafficAt(frame, idx) {
+            const db = (frame * H.traffic_cap + idx) * 3;
+            if (!C.traffic_i16[db]) return null;
+            const sb = idx * 6, type = C.traffic_types[idx] || C.traffic_i16[db+1], state = C.traffic_i16[db+2];
+            return {type, state, stop_line:Array.from(C.traffic_stop_lines.subarray(sb, sb + 6))};
+        }
+        function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
+        function getColors() { const s = getComputedStyle(document.documentElement); return {bg:s.getPropertyValue('--bg'), road:s.getPropertyValue('--road'), line:s.getPropertyValue('--line'), edge:s.getPropertyValue('--edge'), text:s.getPropertyValue('--text')}; }
+        window.onresize = () => { c.width = innerWidth; c.height = innerHeight; draw(true); };
+        function toggleTheme(){ darkMode=!darkMode; document.documentElement.setAttribute('data-theme', darkMode?'dark':'light'); draw(true); }
+        function toggleGlobalPanel(){ const p=document.getElementById('hud-global'), collapsed=!p.classList.contains('collapsed'); p.classList.toggle('collapsed', collapsed); document.getElementById('globalChevron').innerHTML=collapsed?'&#9656;':'&#9662;'; }
+        function toggleCamMode(){ if(followedId !== null){ isEgoCam=!isEgoCam; draw(true); } }
+        function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
+        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,H.frames-1); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } });
+        c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
+        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
+        window.onmouseup = () => cam.drag = false;
+        c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
+        function dragPanel(handleId, panelId) { const h=document.getElementById(handleId), p=document.getElementById(panelId); let on=false,sx=0,sy=0,sl=0,st=0; h.addEventListener('mousedown', e => { on=true; sx=e.clientX; sy=e.clientY; const r=p.getBoundingClientRect(); sl=r.left; st=r.top; p.style.right='auto'; p.style.bottom='auto'; p.style.left=sl+'px'; p.style.top=st+'px'; }); window.addEventListener('mousemove', e => { if(on){ p.style.left=(sl+e.clientX-sx)+'px'; p.style.top=(st+e.clientY-sy)+'px'; }}); window.addEventListener('mouseup', () => on=false); }
+        dragPanel('tel-drag-handle','hud-telemetry'); dragPanel('obs-title','obs-container');
+        document.querySelectorAll('.toggle-header').forEach(header => header.addEventListener('click', () => {
+            const body = document.getElementById(header.dataset.target);
+            if (!body) return;
+            const collapsed = !body.classList.contains('is-collapsed');
+            body.classList.toggle('is-collapsed', collapsed);
+            header.classList.toggle('is-collapsed', collapsed);
+        }));
+
+        function decodeObs(frame, slot) {
+            if (slot < 0 || slot >= H.active_count) return null;
+            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
+            let p = base, ego = obs.subarray(p, p+10); p += 10;
+            if (H.reward_conditioning) p += 17;
+            const targetStart = p; p += H.num_target_waypoints * H.target_features;
+            const partnersStart = p; p += H.max_partners * 8;
+            const lanesStart = p; p += H.lane_count * 7;
+            const boundsStart = p; p += H.boundary_count * 7;
+            const trafficStart = p;
+            const rot = (x,y) => H.head_north ? [-y,x] : [x,y];
+            const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
+            const roads = (start,count) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=H.head_north?rot(obs[o+5],obs[o+6]):[obs[o+5],obs[o+6]]; out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1]]); } return out; };
+            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); if(H.head_north) h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7]}); }
+            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1]}); }
+            return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count), bounds:roads(boundsStart,H.boundary_count), gps, traffic_controls:controls};
+        }
+        function drawObs(frame) {
+            const scale = (obsC.width / 2) * 2.2, px = dpr / scale;
+            obsCtx.fillStyle = "#fff"; obsCtx.fillRect(0,0,obsC.width,obsC.height);
+            obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
+            obsCtx.strokeStyle="#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); }
+            obsCtx.strokeStyle="#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); }
+            for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
+            for(const t of frame.traffic_controls){ obsCtx.strokeStyle = t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); }
+            for(const p of frame.partners){ obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); obsCtx.fillStyle="rgba(136,136,136,.8)"; obsCtx.strokeStyle="#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
+            if(frame.ego){ obsCtx.save(); if(H.head_north) obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
+            obsCtx.restore();
+        }
+        function policyFor(frame, agent) {
+            if (agent.slot < 0) return "";
+            const v = C.value[frame * H.active_count + agent.slot], ent = C.entropy[frame * H.active_count + agent.slot];
+            const actionShape = H.chunks.raw_action.shape, actionDims = actionShape.length > 2 ? actionShape[2] : 1;
+            const ab = (frame * H.active_count + agent.slot) * actionDims;
+            const raw = Array.from(C.raw_action.subarray(ab, ab + actionDims)), clipped = Array.from(C.clipped_action.subarray(ab, ab + actionDims));
+            let html = `<div class="item"><span class="name">value</span><span class="num">${v.toFixed(3)}</span></div><div class="item"><span class="name">entropy</span><span class="num">${ent.toFixed(3)}</span></div>`;
+            if (H.action_type === "discrete" && C.policy_probs) {
+                const n = H.chunks.policy_probs.shape[2], pb = (frame * H.active_count + agent.slot) * n, selected = Math.round(raw[0]);
+                for(let i=0;i<n;i++){ const prob=Math.max(0,Math.min(1,C.policy_probs[pb+i])), values=H.dynamics_model==="jerk"?[JLONG[Math.floor(i/JLAT.length)],JLAT[i%JLAT.length]]:[ACCEL[Math.floor(i/STEER.length)],STEER[i%STEER.length]]; html += `<div class="bar-row ${i===selected?'selected':''}"><div class="bar" style="width:${(prob*100).toFixed(2)}%"></div><div class="bar-text"><span>${i}: ${values[0].toFixed(2)}, ${values[1].toFixed(2)}</span><span>${(prob*100).toFixed(1)}%</span></div></div>`; }
+                return html;
+            }
+            let labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : raw.map((_,i)=>`p${i}`);
+            let scaled = clipped.slice();
+            if (H.action_type === "continuous") scaled = H.dynamics_model === "jerk" ? [clipped[0] < 0 ? clipped[0] * 15 : clipped[0] * 4, clipped[1] * 4] : [clipped[0] * 4, clipped[1] * .667];
+            if (H.action_type.includes("trajectory") && H.trajectory_scaling_factors.length === clipped.length) scaled = clipped.map((x,i)=>x*H.trajectory_scaling_factors[i]*(i<2 && x<0 ? 2 : 1));
+            labels.forEach((label,i) => html += `<div class="item"><span class="name">${label}</span><span class="num">${Number(scaled[i]).toFixed(2)} / ${Number(raw[i]).toFixed(2)}</span></div>`);
+            if (C.policy_mean) { const mb = ab; labels.forEach((label,i) => html += `<div class="item"><span class="name">mean ${label}</span><span class="num">${C.policy_mean[mb+i].toFixed(3)}</span></div><div class="item"><span class="name">std ${label}</span><span class="num">${C.policy_std[mb+i].toFixed(3)}</span></div>`); html += `<div class="item"><span class="name">log prob</span><span class="num">${C.policy_log_prob[frame * H.active_count + agent.slot].toFixed(3)}</span></div>`; }
+            return html;
+        }
+        function updateUI(agent=null) {
+            const f = Math.floor(step); document.getElementById('stepDisplay').textContent = f; document.getElementById('sld').value = f;
+            const hud = document.getElementById('hud-telemetry'), obsBox = document.getElementById('obs-container');
+            if (followedId === null || !agent) { hud.style.display='none'; obsBox.style.display='none'; document.getElementById('crash-overlay').style.display='none'; document.getElementById('camMode').textContent='Free Roam'; return; }
+            hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'LOCKED (EGO)' : 'LOCKED (WORLD)';
+            for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-lane-top",agent.cl],["tel-ps",agent.ps.toFixed(3)]]) document.getElementById(id).textContent = val;
+            document.getElementById('metrics-grid').innerHTML = agent.m.map((v,i)=>`<div class="item"><span class="name">${METRIC_LABELS[i] || 'M'+i}</span><span class="num">${Number(v).toFixed(2)}</span></div>`).join('');
+            document.getElementById('puffer-grid').innerHTML = PUFFER_KEYS.map(([k,n])=>`<div class="item"><span class="name">${n}</span><span class="num">${Number(agent.pf[k]).toFixed(3)}</span></div>`).join('');
+            document.getElementById('policy-grid').innerHTML = policyFor(f, agent);
+            const warnings = []; if(agent.m[0] === 1) warnings.push("COLLISION"); if(agent.m[1] === 1) warnings.push("OFFROAD"); if(agent.m[2] === 1) warnings.push("RED LIGHT"); if(agent.m[3] === 1) warnings.push("STOP SIGN");
+            document.getElementById('crash-overlay').style.display = warnings.length ? 'block' : 'none'; document.getElementById('crash-msg').style.display = warnings.length ? 'block' : 'none'; document.getElementById('crash-msg').innerHTML = warnings.join('<br>');
+            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs); } else obsBox.style.display='none';
+        }
+        function draw(force=false) {
+            if(!H || (!force && Math.floor(step) === lastDrawn && !play)) return;
+            const f = Math.max(0, Math.min(H.frames - 1, Math.floor(step)));
+            const target = followedId !== null ? findAgent(f, followedId) : null;
+            if (target) { cam.x = target.x; cam.y = target.y; }
+            updateUI(target);
+            const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
+            ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
+            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); ctx.fillStyle=a.c; ctx.strokeStyle=darkMode?'#fff':'#111'; ctx.lineWidth=.1; ctx.beginPath(); ctx.rect(-a.l/2,-a.w/2,a.l,a.w); ctx.fill(); ctx.stroke(); ctx.fillStyle='rgba(255,255,0,.55)'; ctx.fillRect(a.l/2-.5,-a.w/2,.5,a.w); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='bold '+(14/cam.z)+'px Arial'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle='#00ff00'; ctx.lineWidth=4/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.max(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.max(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
+            ctx.restore(); lastDrawn = f;
+        }
+        function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }
+        function updateBtn(){ document.getElementById('btnPlay').textContent = play ? 'PAUSE' : 'PLAY'; }
+        function changeSpeed(){ speed=parseFloat(document.getElementById('speedSel').value); lastTick=performance.now(); }
+        function loop(ts){
+            if(!play) return;
+            const prev = Math.floor(step);
+            const dt = Math.min((ts-lastTick)/1000, 0.25);
+            lastTick = ts;
+            step += dt * speed * 10;
+            while(step >= H.frames) step -= H.frames;
+            draw(Math.floor(step) !== prev);
+            requestAnimationFrame(loop);
+        }
+        document.getElementById('sld').oninput = e => { step = +e.target.value; play=false; updateBtn(); draw(true); };
+    </script>
+</body>
+</html>
+    """
+    final_html = (
+        html_template.replace("__B64_PAYLOAD__", payload)
+        .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
+        .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+    )
+    with open(filename, "w") as f:
+        f.write(final_html)
+
+
 def generate_interactive_replay(
     scenario,
     agent_history,
     traffic_history,
     trajectory_history,
     all_agents_obs_history,
+    policy_history=None,
     filename="replay.html",
     head_north=False,
 ):
+    if isinstance(policy_history, (str, os.PathLike)):
+        filename = policy_history
+        policy_history = None
+    if isinstance(agent_history, dict) and agent_history.get("schema") == "obs_html_compact_v1":
+        return _generate_compact_interactive_replay(scenario, agent_history, filename=filename, head_north=head_north)
+
     # --- 0. COMPRESSION HELPER ---
     def pack_and_compress_data(data, decimals=3):
         # Recursively round all floats to save string space
@@ -1447,14 +2042,9 @@ def generate_interactive_replay(
         # Return as Base64 string for safe HTML embedding
         return base64.b64encode(compressed_bytes).decode("ascii")
 
-    # --- 1. METADATA ---
-    raw_dyn = scenario.get("dynamics_model", 0)
-    dyn_str = "Jerk" if raw_dyn == 1 else "Classic"
-
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
-        "dynamics_model": dyn_str,
         "target_type": scenario.get("target_type", "static"),
         "active_indices": str(scenario.get("active_agent_indices", [])),
     }
@@ -1501,68 +2091,94 @@ def generate_interactive_replay(
 
         body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; transition: background 0.3s, color 0.3s; }
         canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
-
         #ui-layer { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
-
         .panel { background: var(--panel-bg); padding: 18px; border-radius: 16px; box-shadow: 0 8px 30px var(--shadow); pointer-events: auto; backdrop-filter: blur(5px); }
-
         #hud-global { position: absolute; top: 20px; left: 20px; min-width: 220px; }
-        #hud-global h3 { cursor: pointer; user-select: none; }
-        #hud-global.collapsed { min-width: 0; padding-bottom: 14px; }
-        #hud-global.collapsed > :not(h3) { display: none; }
-        #hud-global.collapsed h3 { margin: 0; }
-
-        #hud-telemetry { position: absolute; top: 80px; right: 20px; width: 340px; display: none; border-left: 6px solid var(--accent); background: rgba(15, 15, 15, 0.98); color: white; z-index: 20; }
-
-        #tel-drag-handle { margin: 0 0 12px 0; font-size: 16px; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid #444; padding-bottom: 6px; color: #eee; cursor: grab; }
+        #hud-global.collapsed > *:not(h3) { display: none; }
+        #hud-global h3 { cursor: pointer; margin-bottom: 0; }
+        #hud-global:not(.collapsed) h3 { margin-bottom: 12px; }
+        #hud-telemetry {
+            position: absolute; top: 80px; right: 20px; width: 320px; max-height: calc(100vh - 120px);
+            display: none; overflow-y: auto; border-left: 6px solid var(--accent);
+            background: rgba(15, 15, 15, 0.98); color: white; z-index: 20;
+        }
+        #tel-drag-handle { margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; border-bottom: 1px solid #444; padding-bottom: 5px; color: #eee; cursor: grab; }
         #tel-drag-handle:active { cursor: grabbing; }
-
         #controls { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); padding: 12px 30px; border-radius: 50px; display: flex; gap: 20px; align-items: center; z-index: 20; }
-
-        #search-box { position: absolute; bottom: 110px; right: 20px; display: flex; gap: 8px; align-items: center; pointer-events: auto; z-index: 20;}
-
-        /* PiP OBSERVATION CONTAINER */
+        #search-box { position: absolute; bottom: 110px; right: 20px; display: flex; gap: 8px; align-items: center; pointer-events: auto; z-index: 20; }
         #obs-container {
             position: absolute; bottom: 30px; left: 20px; width: 400px; height: 400px;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 16px; box-shadow: 0 8px 30px var(--shadow);
+            background: rgba(255, 255, 255, 0.95); border-radius: 16px; box-shadow: 0 8px 30px var(--shadow);
             display: none; border: 3px solid var(--accent); overflow: hidden; pointer-events: auto;
             backdrop-filter: blur(5px); z-index: 20;
         }
         #obs-canvas { width: 100%; height: 100%; display: block; }
         #obs-title { position: absolute; top: 0; left: 0; width: 100%; padding: 8px 12px; font-size: 11px; font-weight: 900; color: #fff; background: var(--accent); z-index: 2; letter-spacing: 1px; cursor: grab; box-sizing: border-box;}
         #obs-title:active { cursor: grabbing; }
-
         h3 { margin: 0 0 12px 0; font-size: 16px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--hud-label); border-bottom: 1px solid #444; padding-bottom: 6px; }
-        .label { font-size: 12px; color: #888; margin-top: 12px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+        .label { font-size: 11px; color: #888; margin-top: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.4px; }
         .value { font-size: 18px; font-weight: 800; color: var(--hud-val); }
-        .highlight { color: var(--accent); cursor: pointer; }
-        .highlight:hover { filter: brightness(1.3); text-decoration: underline; }
-
-        .val-speed { font-size: 36px; color: #fff; font-family: 'Courier New', monospace; }
-        .val-action { font-size: 24px; color: var(--accent); font-family: 'Courier New', monospace; }
-
-        .sparkline { width: 100%; height: 40px; margin-top: 8px; background: rgba(0,0,0,0.4); border-radius: 4px; display: block; }
-
-        #metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); }
-        .metric-item { display: flex; flex-direction: column; border-bottom: 1px solid #333; padding-bottom: 6px; }
-        .m-name { color: #aaa; font-weight: bold; font-size: 11px; text-transform: uppercase; margin-bottom: 2px; }
-        .m-val { color: #00ff88; font-family: 'Courier New', monospace; font-weight: 900; font-size: 18px; }
-
+        .highlight { color: var(--accent); }
+        .val-speed { font-size: 28px; color: #fff; font-family: 'Courier New', monospace; }
+        .val-action { font-size: 18px; color: var(--accent); font-family: 'Courier New', monospace; }
+        .val-subtle { font-size: 12px; color: #9eb0bb; font-family: 'Courier New', monospace; }
+        #puffer-score-wrap { display: none; margin-top: 12px; }
+        #policy-block { display: none; margin-top: 14px; }
+        #policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+        .policy-item {
+            display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: 8px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+        }
+        .policy-name { color: #aaa; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+        .policy-values { display: flex; justify-content: space-between; gap: 8px; font-family: 'Courier New', monospace; }
+        .policy-scaled { color: #7ed7ff; font-size: 13px; font-weight: 900; }
+        .policy-raw { color: #c8c8c8; font-size: 10px; }
+        .policy-hist { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 3px; }
+        .policy-row {
+            position: relative; min-height: 18px; overflow: hidden; border-radius: 6px;
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+        }
+        .policy-row.selected { border-color: var(--accent); background: rgba(0, 229, 255, 0.12); }
+        .policy-bar { position: absolute; inset: 0 auto 0 0; background: rgba(126,215,255,0.24); }
+        .policy-row-text {
+            position: relative; z-index: 1; display: flex; justify-content: space-between; gap: 8px;
+            padding: 2px 6px; color: #c8d3d9; font-family: 'Courier New', monospace; font-size: 10px;
+        }
+        .policy-row.selected .policy-row-text { color: #fff; font-weight: 900; }
+        #puffer-block { display: none; margin-top: 14px; }
+        #puffer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+        .puffer-header { grid-column: 1 / -1; margin-top: 10px; border-bottom: 1px solid #444; font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; padding-bottom: 4px; }
+        .puffer-item {
+            display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: 8px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+        }
+        .puffer-name { color: #aaa; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+        .puffer-val { color: #ffd166; font-family: 'Courier New', monospace; font-weight: 900; font-size: 13px; }
+        #metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); }
+        .metric-item { display: flex; flex-direction: column; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .m-name { color: #aaa; font-weight: bold; font-size: 10px; text-transform: uppercase; margin-bottom: 2px; }
+        .m-val { color: #00ff88; font-family: 'Courier New', monospace; font-weight: 900; font-size: 15px; }
+        .collapsible-section { margin-top: 14px; }
+        button.collapsible-header {
+            width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            padding: 0; margin: 0; background: transparent; color: var(--accent); border: 0; border-bottom: 1px solid #333;
+            border-radius: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; text-align: left;
+            transform: none; filter: none;
+        }
+        button.collapsible-header:hover { transform: none; filter: brightness(1.15); }
+        .collapsible-icon { color: #bbb; font-size: 12px; transition: transform 0.15s ease; }
+        .collapsible-body { overflow: hidden; }
+        .collapsible-section.is-collapsed .collapsible-icon { transform: rotate(-90deg); }
         button { cursor: pointer; padding: 10px 20px; background: var(--btn-bg); color: var(--btn-txt); border: none; border-radius: 25px; font-weight: 800; font-size: 13px; transition: 0.2s; }
         button:hover { transform: scale(1.05); filter: brightness(1.2); }
         select { padding: 8px; border-radius: 20px; font-weight: bold; cursor: pointer; border: none; }
         input[type=range] { width: 280px; cursor: pointer; accent-color: var(--accent); }
-
         input[type=number] { width: 80px; padding: 12px; border-radius: 15px; border: 2px solid #444; background: var(--panel-bg); color: var(--text); font-weight: bold; text-align: center; outline: none; transition: border-color 0.2s; }
         input[type=number]:focus { border-color: var(--accent); }
-
         .crash-overlay { position: absolute; inset: 0; background: radial-gradient(circle, transparent 40%, rgba(255,0,0,0.6) 100%); display: none; pointer-events: none; z-index: 999; animation: pulse 0.4s infinite; }
         @keyframes pulse { 0% {opacity: 0.4;} 50% {opacity: 1;} 100% {opacity: 0.4;} }
         #crash-msg { color: #ff3333; font-weight: 950; font-size: 24px; display: none; text-align: center; margin-bottom: 15px; border: 3px solid red; padding: 8px; background: rgba(0,0,0,0.5); }
-
         #help-hint { position: absolute; bottom: 10px; right: 20px; font-size: 12px; color: var(--hud-label); opacity: 0.6; }
-
         #loading-overlay { position: absolute; inset: 0; background: var(--bg); color: var(--text); z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 24px; font-weight: bold; }
     </style>
 </head>
@@ -1580,50 +2196,108 @@ def generate_interactive_replay(
             <div class="label">Step</div> <div class="value" style="font-size: 32px; color:var(--accent)" id="stepDisplay">0</div>
             <div class="label">Camera Mode</div>
             <div class="value highlight" id="camMode" onclick="toggleCamMode()" title="Click to Toggle World/Ego">Free Roam</div>
-            <button onclick="toggleTheme()" style="width:100%; margin-top:15px; font-size:11px">🌙 THEME</button>
+            <button onclick="toggleTheme()" style="width:100%; margin-top:15px; font-size:11px">THEME</button>
         </div>
 
         <div id="hud-telemetry" class="panel">
-            <div id="crash-msg">⚠ COLLISION ⚠</div>
-            <h3 id="tel-drag-handle">☰ DRAG | Agent <span id="tel-id" style="color:var(--accent)">?</span></h3>
+            <div id="crash-msg">COLLISION</div>
+            <h3 id="tel-drag-handle">DRAG | Agent <span id="tel-id" style="color:var(--accent)">?</span></h3>
 
             <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div>
                     <div class="label" style="margin-top:0;">Speed</div>
                     <div><span class="val-speed" id="tel-speed">0.0</span> <span style="font-size:14px; color:#888">km/h</span></div>
+                    <div style="margin-top:6px;">
+                        <div class="label" style="margin-top:0;">Steering Angle</div>
+                        <div class="val-subtle"><span id="tel-st">0.0</span><span style="margin-left:2px;">°</span></div>
+                    </div>
                 </div>
                 <div style="text-align: right;">
-                    <div class="label" style="margin-top:0;">Req Acc/Str</div>
-                    <div class="val-action" style="margin-top:5px;"><span id="tel-ra">0.0</span> <span style="color:#444">/</span> <span id="tel-rs">0.0</span></div>
+                    <div class="label" style="margin-top:0;">Lane</div>
+                    <div class="value highlight" id="tel-lane-top">-1</div>
                 </div>
             </div>
 
-            <canvas id="spark-speed" class="sparkline"></canvas>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 12px;">
+                <div>
+                    <div class="label" style="margin-top:0;">Accel Long</div>
+                    <div class="value highlight" id="tel-al">0.00</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="label" style="margin-top:0;">Accel Lat</div>
+                    <div class="value highlight" id="tel-alat">0.00</div>
+                </div>
+            </div>
 
-            <div class="label" style="margin-top: 15px; color: var(--accent); border-bottom: 1px solid #333">Metrics Table</div>
-            <div id="metrics-grid"></div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 10px;">
+                <div>
+                    <div class="label" style="margin-top:0;">Jerk Long</div>
+                    <div class="value highlight" id="tel-jl">0.00</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="label" style="margin-top:0;">Jerk Lat</div>
+                    <div class="value highlight" id="tel-jlat">0.00</div>
+                </div>
+            </div>
 
-            <div class="label" style="margin-top: 15px;">Position (X/Y/Z)</div>
-            <div style="font-family: monospace; font-size: 15px; color: #ccc; font-weight: bold;"><span id="tel-x">0</span> , <span id="tel-y">0</span> , <span id="tel-z">0</span></div>
+            <div id="puffer-score-wrap" class="collapsible-section">
+                <button type="button" class="collapsible-header" data-target="puffer-score-body" aria-expanded="true">
+                    <span>Puffer Score</span>
+                    <span class="collapsible-icon">▾</span>
+                </button>
+                <div id="puffer-score-body" class="collapsible-body">
+                    <div class="value highlight" id="tel-ps" style="margin-top: 8px;">0.000</div>
+                </div>
+            </div>
+
+            <div id="policy-block" class="collapsible-section">
+                <button type="button" class="collapsible-header" data-target="policy-grid" aria-expanded="true">
+                    <span>Policy Outputs</span>
+                    <span class="collapsible-icon">▾</span>
+                </button>
+                <div id="policy-grid" class="collapsible-body"></div>
+            </div>
+
+            <div id="puffer-block" class="collapsible-section">
+                <button type="button" class="collapsible-header" data-target="puffer-grid" aria-expanded="true">
+                    <span>Puffer Metrics</span>
+                    <span class="collapsible-icon">▾</span>
+                </button>
+                <div id="puffer-grid" class="collapsible-body"></div>
+            </div>
+
+            <div id="metrics-block" class="collapsible-section">
+                <button type="button" class="collapsible-header" data-target="metrics-grid" aria-expanded="true">
+                    <span>Metrics Table</span>
+                    <span class="collapsible-icon">▾</span>
+                </button>
+                <div id="metrics-grid" class="collapsible-body"></div>
+            </div>
+
+            <div class="label" style="margin-top: 15px;">Position (X/Y/H/Lane)</div>
+            <div style="font-family: monospace; font-size: 15px; color: #ccc; font-weight: bold;">
+                <span id="tel-x">0</span> , <span id="tel-y">0</span> , <span id="tel-h">0</span> , <span id="tel-lane">-1</span>
+            </div>
         </div>
 
         <div id="obs-container">
-            <div id="obs-title">☰ DRAG TO MOVE | EGO-CENTRIC NN OBS</div>
+            <div id="obs-title">DRAG TO MOVE | EGO-CENTRIC NN OBS</div>
             <canvas id="obs-canvas"></canvas>
         </div>
 
         <div id="search-box">
              <input type="number" id="agentSearch" placeholder="ID" onkeydown="if(event.key==='Enter') searchAgent()">
-             <button onclick="searchAgent()" class="panel" style="border-radius:15px; padding: 12px 18px;">🔍</button>
+             <button onclick="searchAgent()" class="panel" style="border-radius:15px; padding: 12px 18px;">Search</button>
         </div>
 
         <div id="controls" class="panel">
             <button id="btnPlay" onclick="toggle()" style="min-width: 100px; font-size: 16px;">PLAY</button>
             <select id="speedSel" onchange="changeSpeed()">
-                <option value="0.1">0.1x</option>
-                <option value="0.25" selected>0.25x</option>
-                <option value="0.5" selected>0.5x</option>
-                <option value="1.0">1.0x</option>
+                <option value="0.25">0.25x</option>
+                <option value="0.5">0.5x</option>
+                <option value="1.0" selected>1x</option>
+                <option value="2.0">2x</option>
+                <option value="4.0">4x</option>
             </select>
             <input id="sld" type="range" min="0" value="0" step="1">
         </div>
@@ -1632,27 +2306,41 @@ def generate_interactive_replay(
     <canvas id="c"></canvas>
 
     <script>
-        // Payload Placeholder
         const B64_PAYLOAD = "__COMPRESSED_PAYLOAD__";
-
-        // Globals (populated after decompression)
-        let MAP, AGENTS, TRAFFIC, TRAJ, META, ALL_OBS, HEAD_NORTH;
+        let MAP, AGENTS, TRAFFIC, TRAJ, META, ALL_OBS, POLICY, HEAD_NORTH;
 
         const c=document.getElementById('c'), ctx=c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
         obsC.width = 400 * dpr; obsC.height = 400 * dpr;
 
-        const sparkSpeed = document.getElementById('spark-speed');
-        sparkSpeed.width = sparkSpeed.clientWidth * dpr; sparkSpeed.height = sparkSpeed.clientHeight * dpr;
-
-        let step=0, play=false, speed=0.5;
+        let step=0, play=false, speed=1.0, lastTick=0;
         let cam={x:0, y:0, z:5, drag:false, lx:0, ly:0};
         let followedId = null, darkMode = false, isEgoCam = false;
-
+        const collapsedPanels = {
+            "policy-grid": false,
+            "puffer-score-body": false,
+            "puffer-grid": false,
+            "metrics-grid": false,
+        };
         const METRIC_LABELS = ["collision", "offroad", "red_light", "stop_sign", "reached_goal", "lane_dist", "lane_angle", "comfort_violation", "velocity_progress", "speed_limit", "ADE", "progression", "at_fault_collision", "ttc", "ttc_tfl", "progress_ratio", "multi_lane_time", "multi_lane_score"];
+        const PUFFER_MULTIPLIERS = [
+            ["no_at_fault", "No At Fault"],
+            ["no_offroad", "No Offroad"],
+            ["no_red_light", "No Red Light"],
+            ["making_progress", "Progress > 0.2"],
+            ["direction_score", "Direction"],
+            ["multiplier", "Multiplier"]
+        ];
+        const PUFFER_WEIGHTED = [
+            ["ttc_puffer_rate", "TTC (w5)"],
+            ["progress_ratio", "Progress (w5)"],
+            ["speed_limit_compliance", "Speed Compliance (w4)"],
+            ["comfort_score", "Comfort (w2)"],
+            ["multi_lane_score", "Multi Lane (w3)"],
+            ["weighted_average", "Weighted Avg"]
+        ];
 
-        // --- Data Unpacking ---
         async function initReplay() {
             try {
                 const binaryStr = atob(B64_PAYLOAD);
@@ -1664,97 +2352,33 @@ def generate_interactive_replay(
                 const ds = new DecompressionStream('deflate');
                 const stream = new Blob([bytes]).stream().pipeThrough(ds);
                 const decompressedText = await new Response(stream).text();
-
                 const data = JSON.parse(decompressedText);
+
                 MAP = data.map;
                 AGENTS = data.agents;
                 TRAFFIC = data.traffic;
                 TRAJ = data.traj;
                 META = data.meta;
                 ALL_OBS = data.obs;
+                POLICY = data.policy || [];
                 HEAD_NORTH = data.head_north;
-
-                // Select the SDC by default: the controlled agent the
-                // observations were recorded for (first id present in ALL_OBS).
-                // draw() then centers on it and opens its obs view.
-                if (ALL_OBS && ALL_OBS.length) {
-                    for (const frame of ALL_OBS) {
-                        const ids = frame ? Object.keys(frame) : [];
-                        if (ids.length) { followedId = parseInt(ids[0]); break; }
-                    }
-                }
 
                 document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
                 document.getElementById('meta-id').innerText = META.scenario_id;
-
-                if(AGENTS[0]?.length) { cam.x=AGENTS[0][0].x; cam.y=AGENTS[0][0].y; }
-                document.getElementById('sld').max = AGENTS.length-1;
-
+                if (AGENTS[0]?.length) { cam.x = AGENTS[0][0].x; cam.y = AGENTS[0][0].y; }
+                document.getElementById('sld').max = AGENTS.length - 1;
                 document.getElementById('loading-overlay').style.display = 'none';
-                window.onresize(); // Initial draw
-
+                window.onresize();
             } catch (err) {
                 console.error("Failed to unpack replay data:", err);
                 document.getElementById('loading-overlay').innerText = "Error loading replay data. Check console.";
             }
         }
-
         initReplay();
 
-        // --- Data Unpacking ---
-        async function initReplay() {
-            try {
-                const binaryStr = atob(B64_PAYLOAD);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
-
-                const ds = new DecompressionStream('deflate');
-                const stream = new Blob([bytes]).stream().pipeThrough(ds);
-                const decompressedText = await new Response(stream).text();
-
-                const data = JSON.parse(decompressedText);
-                MAP = data.map;
-                AGENTS = data.agents;
-                TRAFFIC = data.traffic;
-                TRAJ = data.traj;
-                META = data.meta;
-                ALL_OBS = data.obs;
-                HEAD_NORTH = data.head_north;
-
-                // Select the SDC by default: the controlled agent the
-                // observations were recorded for (first id present in ALL_OBS).
-                // draw() then centers on it and opens its obs view.
-                if (ALL_OBS && ALL_OBS.length) {
-                    for (const frame of ALL_OBS) {
-                        const ids = frame ? Object.keys(frame) : [];
-                        if (ids.length) { followedId = parseInt(ids[0]); break; }
-                    }
-                }
-
-                document.getElementById('meta-map').innerText = META.map_name.split('binaries/')[1] || META.map_name;
-                document.getElementById('meta-id').innerText = META.scenario_id;
-
-                if(AGENTS[0]?.length) { cam.x=AGENTS[0][0].x; cam.y=AGENTS[0][0].y; }
-                document.getElementById('sld').max = AGENTS.length-1;
-
-                document.getElementById('loading-overlay').style.display = 'none';
-                window.onresize(); // Initial draw
-
-            } catch (err) {
-                console.error("Failed to unpack replay data:", err);
-                document.getElementById('loading-overlay').innerText = "Error loading replay data. Check console.";
-            }
-        }
-
-        initReplay();
-
-        // --- Draggable PiP & Telemetry Window Logic ---
         const obsTitle = document.getElementById('obs-title');
         const obsCont = document.getElementById('obs-container');
         let isDraggingPiP = false, startX, startY, startLeft, startTop;
-
         const telHandle = document.getElementById('tel-drag-handle');
         const telCont = document.getElementById('hud-telemetry');
         let isDraggingTel = false, telStartX, telStartY, telStartLeft, telStartTop;
@@ -1797,23 +2421,72 @@ def generate_interactive_replay(
         function getColors() {
             const style = getComputedStyle(document.body);
             return {
-                bg: style.getPropertyValue('--bg').trim(), road: style.getPropertyValue('--road').trim(),
-                line: style.getPropertyValue('--line').trim(), edge: style.getPropertyValue('--edge').trim(),
+                bg: style.getPropertyValue('--bg').trim(),
+                road: style.getPropertyValue('--road').trim(),
+                line: style.getPropertyValue('--line').trim(),
+                edge: style.getPropertyValue('--edge').trim(),
                 text: style.getPropertyValue('--text').trim()
             };
         }
 
         window.onresize = () => { c.width=window.innerWidth; c.height=window.innerHeight; draw(); };
-
         function toggleTheme() { darkMode = !darkMode; document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light'); draw(); }
+
         function toggleGlobalPanel() {
-            const p = document.getElementById('hud-global');
-            const collapsed = p.classList.toggle('collapsed');
-            document.getElementById('globalChevron').innerHTML = collapsed ? '&#9656;' : '&#9662;';
+            const panel = document.getElementById('hud-global');
+            const chevron = document.getElementById('globalChevron');
+            const collapsed = !panel.classList.contains('collapsed');
+            panel.classList.toggle('collapsed', collapsed);
+            chevron.innerHTML = collapsed ? '&#9656;' : '&#9662;';
         }
 
+        function setSectionCollapsed(targetId, collapsed) {
+            collapsedPanels[targetId] = collapsed;
+            const body = document.getElementById(targetId);
+            if (!body) return;
+            const section = body.closest('.collapsible-section');
+            if (!section) return;
+            section.classList.toggle('is-collapsed', collapsed);
+            body.style.display = collapsed ? 'none' : '';
+            const header = section.querySelector('.collapsible-header');
+            if (header) {
+                header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            }
+        }
+
+        function toggleSection(targetId) {
+            setSectionCollapsed(targetId, !collapsedPanels[targetId]);
+        }
+
+        function ensureTelemetrySectionOrder() {
+            const policyBlock = document.getElementById('policy-block');
+            const pufferBlock = document.getElementById('puffer-block');
+            const metricsBlock = document.getElementById('metrics-block');
+            if (!policyBlock || !pufferBlock || !metricsBlock) return;
+
+            const parent = policyBlock.parentNode;
+            if (!parent || parent !== pufferBlock.parentNode || parent !== metricsBlock.parentNode) return;
+
+            if (parent.firstElementChild !== policyBlock) {
+                parent.insertBefore(policyBlock, pufferBlock);
+            }
+            if (policyBlock.nextElementSibling !== pufferBlock) {
+                parent.insertBefore(pufferBlock, metricsBlock);
+            }
+            if (pufferBlock.nextElementSibling !== metricsBlock) {
+                parent.appendChild(metricsBlock);
+            }
+        }
+
+        document.querySelectorAll('.collapsible-header').forEach((header) => {
+            header.addEventListener('click', () => toggleSection(header.dataset.target));
+        });
+
+        Object.keys(collapsedPanels).forEach((targetId) => setSectionCollapsed(targetId, collapsedPanels[targetId]));
+        ensureTelemetrySectionOrder();
+
         function toggleCamMode() {
-            if(followedId !== null) {
+            if (followedId !== null) {
                 isEgoCam = !isEgoCam;
                 updateUI(AGENTS[Math.floor(step)].find(a => a.id === followedId));
                 draw();
@@ -1821,67 +2494,44 @@ def generate_interactive_replay(
         }
 
         function searchAgent() {
-            if(!AGENTS) return;
+            if (!AGENTS) return;
             const id = parseInt(document.getElementById('agentSearch').value);
-            if(!isNaN(id)) {
-                followedId = id; play = false; updateBtn(); draw();
+            if (!isNaN(id)) {
+                followedId = id;
+                play = false;
+                updateBtn();
+                draw();
             }
         }
 
         document.addEventListener('keydown', (e) => {
-            if(!AGENTS) return;
+            if (!AGENTS) return;
             if (e.target.tagName === 'INPUT') return;
             if (e.code === "Space") { toggle(); e.preventDefault(); }
-            if (e.code === "ArrowRight") { play=false; updateBtn(); step=Math.min(step+1, AGENTS.length-1); draw(); }
-            if (e.code === "ArrowLeft") { play=false; updateBtn(); step=Math.max(step-1, 0); draw(); }
+            if (e.code === "ArrowRight") { play = false; updateBtn(); step = Math.min(step + 1, AGENTS.length - 1); draw(); }
+            if (e.code === "ArrowLeft") { play = false; updateBtn(); step = Math.max(step - 1, 0); draw(); }
             if (e.code === "Escape") { followedId = null; isEgoCam = false; updateUI(); draw(); }
         });
 
-        c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY*0.001); draw(); };
+        c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * 0.001); draw(); };
         c.onmousedown = e => {
-            if(!AGENTS) return;
+            if (!AGENTS) return;
             const r = c.getBoundingClientRect();
             const wx = (e.clientX - r.left - c.width/2)/cam.z + cam.x;
             const wy = (e.clientY - r.top - c.height/2)/-cam.z + cam.y;
             let hit = null;
             const idx = Math.floor(step);
-            if(AGENTS[idx] && !isEgoCam) {
-                for(let a of AGENTS[idx]) {
-                    if(Math.sqrt((wx-a.x)**2 + (wy-a.y)**2) < Math.max(a.l, 3.0)) { hit = a.id; break; }
+            if (AGENTS[idx] && !isEgoCam) {
+                for (let a of AGENTS[idx]) {
+                    if (Math.sqrt((wx-a.x)**2 + (wy-a.y)**2) < Math.max(a.l, 3.0)) { hit = a.id; break; }
                 }
             }
-            if(hit !== null) { followedId = hit; cam.drag = false; }
-            else { followedId = null; isEgoCam = false; cam.drag = true; cam.lx=e.clientX; cam.ly=e.clientY; }
+            if (hit !== null) { followedId = hit; cam.drag = false; }
+            else { followedId = null; isEgoCam = false; cam.drag = true; cam.lx = e.clientX; cam.ly = e.clientY; }
             updateUI(); draw();
         };
-        window.onmouseup = () => cam.drag=false;
-        c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x-=(e.clientX-cam.lx)/cam.z; cam.y-=(e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(); }};
-
-        function drawSparkline(canvasCtx, data, color, minVal, maxVal) {
-            const w = canvasCtx.canvas.width;
-            const h = canvasCtx.canvas.height;
-            canvasCtx.clearRect(0, 0, w, h);
-            if(data.length < 2) return;
-
-            canvasCtx.beginPath();
-            canvasCtx.strokeStyle = color;
-            canvasCtx.lineWidth = 2 * dpr;
-            canvasCtx.lineCap = "round";
-            canvasCtx.lineJoin = "round";
-
-            const range = maxVal - minVal || 1;
-            for(let i=0; i<data.length; i++) {
-                const x = (i / (data.length - 1)) * w;
-                const y = h - ((data[i] - minVal) / range) * h;
-                if(i===0) canvasCtx.moveTo(x, y);
-                else canvasCtx.lineTo(x, y);
-            }
-            canvasCtx.stroke();
-            canvasCtx.lineTo(w, h);
-            canvasCtx.lineTo(0, h);
-            canvasCtx.fillStyle = color + "44";
-            canvasCtx.fill();
-        }
+        window.onmouseup = () => cam.drag = false;
+        c.onmousemove = e => { if (cam.drag && !isEgoCam) { cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx = e.clientX; cam.ly = e.clientY; draw(); }};
 
         function drawObs(frame) {
             const zoomLevel = 2.2;
@@ -2000,6 +2650,53 @@ def generate_interactive_replay(
             obsCtx.restore();
         }
 
+        function renderPufferMetrics(agent) {
+            const pufferScoreWrap = document.getElementById('puffer-score-wrap');
+            const pufferBlock = document.getElementById('puffer-block');
+            const pufferGrid = document.getElementById('puffer-grid');
+            const pufferMetrics = agent && agent.pf ? agent.pf : null;
+            const hasScore = agent && typeof agent.ps === "number";
+
+            if (!pufferMetrics && !hasScore) {
+                pufferScoreWrap.style.display = "none";
+                pufferBlock.style.display = "none";
+                pufferGrid.innerHTML = "";
+                return;
+            }
+
+            const livePufferScore = pufferMetrics && pufferMetrics.score !== undefined ? pufferMetrics.score : agent.ps;
+            document.getElementById('tel-ps').innerText = Number(livePufferScore).toFixed(3);
+            pufferScoreWrap.style.display = "block";
+
+            if (!pufferMetrics) {
+                pufferGrid.innerHTML = "";
+                pufferBlock.style.display = "none";
+                return;
+            }
+
+            const renderGroup = (label, list) => {
+                const items = list.map(([key, name]) => {
+                    const value = pufferMetrics[key];
+                    const display = (value === undefined || value === null) ? "-" : Number(value).toFixed(3);
+                    return `
+                        <div class="puffer-item">
+                            <span class="puffer-name">${name}</span>
+                            <span class="puffer-val">${display}</span>
+                        </div>
+                    `;
+                }).join('');
+                return `
+                    <div class="puffer-header">${label}</div>
+                    ${items}
+                `;
+            };
+
+            pufferGrid.innerHTML =
+                renderGroup("Multipliers", PUFFER_MULTIPLIERS) +
+                renderGroup("Weighted Score Components", PUFFER_WEIGHTED);
+            pufferBlock.style.display = "block";
+        }
+
         function updateUI(agent=null) {
             document.getElementById('stepDisplay').innerText = Math.floor(step);
             document.getElementById('sld').value = Math.floor(step);
@@ -2009,50 +2706,137 @@ def generate_interactive_replay(
             if(followedId !== null && agent) {
                 document.getElementById('camMode').innerText = isEgoCam ? "LOCKED (EGO)" : "LOCKED (WORLD)";
                 hudTel.style.display = "block";
-
                 document.getElementById('tel-id').innerText = agent.id;
                 document.getElementById('tel-speed').innerText = (agent.s * 3.6).toFixed(1);
-                document.getElementById('tel-ra').innerText = agent.ra.toFixed(2);
-                document.getElementById('tel-rs').innerText = agent.rs.toFixed(2);
+                document.getElementById('tel-st').innerText = (((agent.st ?? 0) * 180) / Math.PI).toFixed(1);
+                document.getElementById('tel-al').innerText = agent.al.toFixed(2);
+                document.getElementById('tel-alat').innerText = agent.alat.toFixed(2);
+                document.getElementById('tel-jl').innerText = (agent.jl ?? 0).toFixed(2);
+                document.getElementById('tel-jlat').innerText = (agent.jlat ?? 0).toFixed(2);
                 document.getElementById('tel-x').innerText = agent.x.toFixed(1);
                 document.getElementById('tel-y').innerText = agent.y.toFixed(1);
-                document.getElementById('tel-z').innerText = (agent.z || 0).toFixed(1);
+                document.getElementById('tel-h').innerText = agent.h.toFixed(3);
+                document.getElementById('tel-lane').innerText = String(agent.cl ?? -1);
+                document.getElementById('tel-lane-top').innerText = String(agent.cl ?? -1);
 
-                let histLen = 50;
-                let startIdx = Math.max(0, Math.floor(step) - histLen);
-                let speedData = [];
-                for(let i=startIdx; i<=Math.floor(step); i++) {
-                    let pastA = AGENTS[i] ? AGENTS[i].find(a => a.id === agent.id) : null;
-                    if(pastA) {
-                        speedData.push(pastA.s * 3.6);
-                    } else {
-                        speedData.push(0);
-                    }
-                }
-                drawSparkline(sparkSpeed.getContext('2d'), speedData, '#00ff88', 0, Math.max(50, ...speedData));
+                let currentIdx = Math.floor(step);
 
+                const metricsBlock = document.getElementById('metrics-block');
                 const mGrid = document.getElementById('metrics-grid');
                 if (agent.m) {
-                    mGrid.innerHTML = agent.m.map((val, i) => `
+                    const metricItems = agent.m.map((val, i) => `
                         <div class="metric-item">
                             <span class="m-name">${METRIC_LABELS[i] || "M"+(i+1)}</span>
-                            <span class="m-val">${val.toFixed(2)}</span>
+                            <span class="m-val">${typeof val === "number" ? val.toFixed(2) : "inf"}</span>
                         </div>
                     `).join('');
+                    metricsBlock.style.display = "block";
+                    mGrid.innerHTML = metricItems;
+                } else {
+                    metricsBlock.style.display = "none";
+                    mGrid.innerHTML = "";
+                }
+
+                renderPufferMetrics(agent);
+
+                const policyBlock = document.getElementById('policy-block');
+                const policyGrid = document.getElementById('policy-grid');
+                const currentPolicy = POLICY[currentIdx] ? POLICY[currentIdx][agent.id] : null;
+
+                if (currentPolicy && currentPolicy.labels && currentPolicy.scaled && currentPolicy.raw) {
+                    const policyItems = [];
+                    if (typeof currentPolicy.value === "number") {
+                        policyItems.push(`
+                        <div class="policy-item">
+                            <span class="policy-name">value</span>
+                            <div class="policy-values">
+                                <span class="policy-scaled">${currentPolicy.value.toFixed(3)}</span>
+                                <span class="policy-raw">critic</span>
+                            </div>
+                        </div>
+                    `);
+                    }
+                    if (typeof currentPolicy.entropy === "number") {
+                        policyItems.push(`
+                        <div class="policy-item">
+                            <span class="policy-name">entropy</span>
+                            <div class="policy-values">
+                                <span class="policy-scaled">${currentPolicy.entropy.toFixed(3)}</span>
+                                <span class="policy-raw">policy</span>
+                            </div>
+                        </div>
+                    `);
+                    }
+                    policyItems.push(...currentPolicy.labels.map((label, i) => `
+                        <div class="policy-item">
+                            <span class="policy-name">${label}</span>
+                            <div class="policy-values">
+                                <span class="policy-scaled">${Number(currentPolicy.scaled[i]).toFixed(2)}</span>
+                                <span class="policy-raw">${Number(currentPolicy.raw[i]).toFixed(2)}</span>
+                            </div>
+                        </div>
+                    `));
+                    if (currentPolicy.density) {
+                        policyItems.push(...currentPolicy.density.labels.map((label, i) => `
+                            <div class="policy-item">
+                                <span class="policy-name">mean ${label}</span>
+                                <div class="policy-values">
+                                    <span class="policy-scaled">${Number(currentPolicy.density.mean[i]).toFixed(3)}</span>
+                                    <span class="policy-raw">mu</span>
+                                </div>
+                            </div>
+                            <div class="policy-item">
+                                <span class="policy-name">std ${label}</span>
+                                <div class="policy-values">
+                                    <span class="policy-scaled">${Number(currentPolicy.density.std[i]).toFixed(3)}</span>
+                                    <span class="policy-raw">sigma</span>
+                                </div>
+                            </div>
+                        `));
+                        policyItems.push(`
+                            <div class="policy-item">
+                                <span class="policy-name">log_prob(action)</span>
+                                <div class="policy-values">
+                                    <span class="policy-scaled">${Number(currentPolicy.density.log_prob).toFixed(3)}</span>
+                                    <span class="policy-raw">density</span>
+                                </div>
+                            </div>
+                        `);
+                    }
+                    if (Array.isArray(currentPolicy.action_probs)) {
+                        const rows = currentPolicy.action_probs.map((row) => {
+                            const probability = Math.max(0, Math.min(1, Number(row.probability) || 0));
+                            return `
+                                <div class="policy-row ${row.selected ? "selected" : ""}">
+                                    <div class="policy-bar" style="width: ${(probability * 100).toFixed(2)}%;"></div>
+                                    <div class="policy-row-text">
+                                        <span>${row.selected ? "> " : ""}${row.label}</span>
+                                        <span>${(probability * 100).toFixed(2)}%</span>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                        policyItems.push(`<div class="policy-hist">${rows}</div>`);
+                    }
+                    policyGrid.innerHTML = policyItems.join('');
+                    policyBlock.style.display = "block";
+                } else {
+                    policyBlock.style.display = "none";
+                    policyGrid.innerHTML = "";
                 }
 
                 let warnings = [];
                 if (agent.m) {
-                    if (agent.m[0] === 1) warnings.push("⚠ COLLISION ⚠");
-                    if (agent.m[1] === 1) warnings.push("⚠ OFFROAD ⚠");
-                    if (agent.m[2] === 1) warnings.push("⚠ RED LIGHT ⚠");
-                    if (agent.m[3] === 1) warnings.push("⚠ STOP SIGN VIOLATION ⚠");
+                    if (agent.m[0] === 1) warnings.push("COLLISION");
+                    if (agent.m[1] === 1) warnings.push("OFFROAD");
+                    if (agent.m[2] === 1) warnings.push("RED LIGHT");
+                    if (agent.m[3] === 1) warnings.push("STOP SIGN");
                 }
 
                 const crashMsgEl = document.getElementById('crash-msg');
                 const crashOverlayEl = document.getElementById('crash-overlay');
 
-                if(warnings.length > 0) {
+                if (warnings.length > 0) {
                     crashOverlayEl.style.display = "block";
                     crashMsgEl.style.display = "block";
                     crashMsgEl.innerHTML = warnings.join("<br>");
@@ -2063,7 +2847,6 @@ def generate_interactive_replay(
                     hudTel.style.borderLeftColor = "var(--accent)";
                 }
 
-                let currentIdx = Math.floor(step);
                 if (ALL_OBS[currentIdx] && ALL_OBS[currentIdx][agent.id]) {
                     obsCont.style.display = "block";
                     drawObs(ALL_OBS[currentIdx][agent.id]);
@@ -2076,6 +2859,13 @@ def generate_interactive_replay(
                 hudTel.style.display = "none";
                 obsCont.style.display = "none";
                 document.getElementById('crash-overlay').style.display = "none";
+                document.getElementById('puffer-score-wrap').style.display = "none";
+                document.getElementById('puffer-block').style.display = "none";
+                document.getElementById('policy-block').style.display = "none";
+                document.getElementById('metrics-block').style.display = "none";
+                document.getElementById('puffer-grid').innerHTML = "";
+                document.getElementById('policy-grid').innerHTML = "";
+                document.getElementById('metrics-grid').innerHTML = "";
             }
         }
 
@@ -2144,15 +2934,17 @@ def generate_interactive_replay(
             });
 
             if(TRAFFIC[idx]) TRAFFIC[idx].forEach(t => {
-                let sl=t.stop_line; if(!sl) return;
-                ctx.lineWidth=Math.max(1.5, 3/cam.z); ctx.lineCap="butt";
-                if(t.type=='light') {
-                    ctx.strokeStyle=t.c; ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke();
+                let sl = t.stop_line; if(!sl || sl.length < 6) return;
+                ctx.lineCap = "butt";
+                if(t.type == 'light') {
+                    ctx.strokeStyle = t.c; ctx.lineWidth = Math.max(1.5, 3/cam.z);
+                    ctx.beginPath(); ctx.moveTo(sl[0], sl[1]); ctx.lineTo(sl[3], sl[4]); ctx.stroke();
                 } else {
-                    ctx.strokeStyle=t.c2||"black"; ctx.lineWidth=Math.max(2, 4/cam.z);
-                    ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke();
-                    ctx.strokeStyle=t.c; ctx.lineWidth=Math.max(1.2, 2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]);
-                    ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke();
+                    ctx.strokeStyle = t.c2 || "black"; ctx.lineWidth = Math.max(2, 4/cam.z);
+                    ctx.beginPath(); ctx.moveTo(sl[0], sl[1]); ctx.lineTo(sl[3], sl[4]); ctx.stroke();
+                    ctx.strokeStyle = t.c; ctx.lineWidth = Math.max(1.2, 2.5/cam.z);
+                    ctx.setLineDash([6/cam.z, 4/cam.z]);
+                    ctx.beginPath(); ctx.moveTo(sl[0], sl[1]); ctx.lineTo(sl[3], sl[4]); ctx.stroke();
                     ctx.setLineDash([]);
                 }
             });
@@ -2160,11 +2952,20 @@ def generate_interactive_replay(
         }
 
         function line(p){if(p.length<2)return;ctx.beginPath();ctx.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0],p[i][1]);ctx.stroke();}
-        function toggle(){ play=!play; updateBtn(); if(play) loop(); }
+        function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }
         function updateBtn(){ document.getElementById('btnPlay').innerText=play?"PAUSE":"PLAY"; }
-        function changeSpeed() { speed = parseFloat(document.getElementById('speedSel').value); }
-        function loop(){ if(!play)return; step+=speed; if(step>=AGENTS.length)step=0; draw(); requestAnimationFrame(loop); }
-        document.getElementById('sld').oninput = e => { step=+e.target.value; draw(); };
+        function changeSpeed() { speed = parseFloat(document.getElementById('speedSel').value); lastTick=performance.now(); }
+        function loop(ts){
+            if(!play)return;
+            const prev = Math.floor(step);
+            const dt = Math.min((ts-lastTick)/1000, 0.25);
+            lastTick = ts;
+            step += dt * speed * 10;
+            while(step>=AGENTS.length)step-=AGENTS.length;
+            draw();
+            requestAnimationFrame(loop);
+        }
+        document.getElementById('sld').oninput = e => { play=false; updateBtn(); step=+e.target.value; draw(); };
     </script>
 </body>
 </html>
@@ -2178,6 +2979,7 @@ def generate_interactive_replay(
         "traj": trajectory_history,
         "meta": metadata,
         "obs": all_agents_obs_history,
+        "policy": policy_history or [],
         "head_north": head_north,
     }
 

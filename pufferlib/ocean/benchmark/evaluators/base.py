@@ -563,7 +563,6 @@ class Evaluator:
         render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
 
         device = args["train"]["device"]
-        use_traj = "trajectory" in str(args["env"].get("action_type", ""))
         html_paths = []
         scenarios_done = 0
 
@@ -580,48 +579,131 @@ class Evaluator:
                 if state:
                     state["lstm_h"].zero_()
                     state["lstm_c"].zero_()
-                agent_hist = [[] for _ in range(n_in_batch)]
-                traffic_hist = [[] for _ in range(n_in_batch)]
-                traj_hist = [[] for _ in range(n_in_batch)]
-                obs_hist = [[] for _ in range(n_in_batch)]
+                agent_caps = [int(sc["num_total_agents"]) for sc in scenarios]
+                traffic_caps = [int(sc["num_traffic_elements"]) for sc in scenarios]
+                active_counts = [int(sc["active_agent_count"]) for sc in scenarios]
+                max_agent_cap = max(agent_caps)
+                max_traffic_cap = max(max(traffic_caps), 1) if traffic_caps else 1
+                obs_dim = int(ob.shape[-1])
+                agent_f32 = np.zeros((n_in_batch, max_agent_cap, 12), dtype=np.float32)
+                agent_i32 = np.zeros((n_in_batch, max_agent_cap, 8), dtype=np.int32)
+                metrics_f32 = np.zeros((n_in_batch, max_agent_cap, 18), dtype=np.float32)
+                puffer_f32 = np.zeros((n_in_batch, max_agent_cap, 15), dtype=np.float32)
+                traffic_i16 = np.zeros((n_in_batch, max_traffic_cap, 3), dtype=np.int16)
+                agent_f32_hist = [np.zeros((max_steps, agent_caps[e], 12), dtype=np.float32) for e in range(n_in_batch)]
+                agent_i32_hist = [np.zeros((max_steps, agent_caps[e], 8), dtype=np.int32) for e in range(n_in_batch)]
+                metrics_hist = [np.zeros((max_steps, agent_caps[e], 18), dtype=np.float32) for e in range(n_in_batch)]
+                puffer_hist = [np.zeros((max_steps, agent_caps[e], 15), dtype=np.float32) for e in range(n_in_batch)]
+                traffic_hist = [
+                    np.zeros((max_steps, max(traffic_caps[e], 1), 3), dtype=np.int16) for e in range(n_in_batch)
+                ]
+                obs_hist = [
+                    np.zeros((max_steps, active_counts[e], obs_dim), dtype=np.float32) for e in range(n_in_batch)
+                ]
+                raw_action_hist = [[] for _ in range(n_in_batch)]
+                clipped_action_hist = [[] for _ in range(n_in_batch)]
+                value_hist = [[] for _ in range(n_in_batch)]
+                entropy_hist = [[] for _ in range(n_in_batch)]
+                policy_prob_hist = [[] for _ in range(n_in_batch)]
+                policy_mean_hist = [[] for _ in range(n_in_batch)]
+                policy_std_hist = [[] for _ in range(n_in_batch)]
+                policy_log_prob_hist = [[] for _ in range(n_in_batch)]
                 for t in range(max_steps):
-                    cur = vec.get_state()
-                    start_obs_index = 0
-                    for e in range(n_in_batch):
-                        sc = cur[e]
-                        agent_hist[e].append(viz.fill_agents_state(sc, use_trajectory=use_traj))
-                        traffic_hist[e].append(viz.fill_traffics_state(sc, t))
-                        if use_traj:
-                            traj_hist[e].append(viz.fill_trajectories(sc, t))
-                        if e > 0:
-                            start_obs_index += cur[e - 1]["active_agent_count"]
-                        step_obs = {}
-                        for a in range(sc["active_agent_count"]):
-                            aid = int(sc["active_agent_indices"][a])
-                            step_obs[aid] = viz.extract_obs_frame(
-                                ob, sc, args, timestep=t, obs_index=start_obs_index + a, agent_idx=a, head_north=True
-                            )
-                        obs_hist[e].append(step_obs)
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
-                        logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                        action = action.cpu().numpy().reshape(vec.action_space.shape)
+                        logits, value = policy.forward_eval(ob_t, state)
+                        action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    clipped_action = raw_action
                     if isinstance(logits, torch.distributions.Normal):
-                        action = np.clip(action, vec.action_space.low, vec.action_space.high)
-                    ob, _, _, _, _ = vec.step(action)
+                        clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
+                        policy_outputs = {
+                            "mean": logits.loc.cpu().numpy().reshape(vec.action_space.shape),
+                            "std": logits.scale.cpu().numpy().reshape(vec.action_space.shape),
+                            "log_prob": logprob.cpu().numpy().reshape(-1),
+                        }
+                    elif isinstance(logits, torch.Tensor):
+                        policy_outputs = torch.softmax(logits, dim=-1).cpu().numpy()
+                    else:
+                        policy_outputs = torch.softmax(logits[0], dim=-1).cpu().numpy()
+                    value_np = value.cpu().numpy().reshape(-1)
+                    entropy_np = entropy.cpu().numpy().reshape(-1)
+
+                    vec.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16)
+                    start_obs_index = 0
+                    for e in range(n_in_batch):
+                        active_count = active_counts[e]
+                        end_obs_index = start_obs_index + active_count
+                        agent_cap = agent_caps[e]
+                        traffic_cap = max(traffic_caps[e], 1)
+                        agent_f32_hist[e][t] = agent_f32[e, :agent_cap]
+                        agent_i32_hist[e][t] = agent_i32[e, :agent_cap]
+                        metrics_hist[e][t] = metrics_f32[e, :agent_cap]
+                        puffer_hist[e][t] = puffer_f32[e, :agent_cap]
+                        traffic_hist[e][t] = traffic_i16[e, :traffic_cap]
+                        obs_hist[e][t] = ob[start_obs_index:end_obs_index]
+                        raw_action_hist[e].append(
+                            np.asarray(raw_action[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                        )
+                        clipped_action_hist[e].append(
+                            np.asarray(clipped_action[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                        )
+                        value_hist[e].append(value_np[start_obs_index:end_obs_index].copy())
+                        entropy_hist[e].append(entropy_np[start_obs_index:end_obs_index].copy())
+                        if isinstance(policy_outputs, dict):
+                            policy_mean_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["mean"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                            policy_std_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["std"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                            policy_log_prob_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["log_prob"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                        else:
+                            policy_prob_hist[e].append(
+                                np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                            )
+                        start_obs_index = end_obs_index
+                    ob, _, _, _, _ = vec.step(clipped_action)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
                     # Numeric index last so build_gallery_index's `*_<N>.html`
                     # pattern matches.
                     path = out_dir / f"{map_name}{step_suffix}_{scenarios_done:03d}.html"
+                    compact_replay = {
+                        "schema": "obs_html_compact_v1",
+                        "env": dict(args["env"]),
+                        "agent_f32": agent_f32_hist[e],
+                        "agent_i32": agent_i32_hist[e],
+                        "metrics_f32": metrics_hist[e],
+                        "puffer_f32": puffer_hist[e],
+                        "traffic_i16": traffic_hist[e],
+                        "obs": obs_hist[e],
+                        "raw_action": np.stack(raw_action_hist[e], axis=0),
+                        "clipped_action": np.stack(clipped_action_hist[e], axis=0),
+                        "value": np.stack(value_hist[e], axis=0),
+                        "entropy": np.stack(entropy_hist[e], axis=0),
+                        "policy_probs": np.stack(policy_prob_hist[e], axis=0) if policy_prob_hist[e] else None,
+                        "policy_mean": np.stack(policy_mean_hist[e], axis=0) if policy_mean_hist[e] else None,
+                        "policy_std": np.stack(policy_std_hist[e], axis=0) if policy_std_hist[e] else None,
+                        "policy_log_prob": (
+                            np.stack(policy_log_prob_hist[e], axis=0) if policy_log_prob_hist[e] else None
+                        ),
+                    }
                     viz.generate_interactive_replay(
                         scenarios[e],
-                        agent_hist[e],
-                        traffic_hist[e],
-                        traj_hist[e],
-                        obs_hist[e],
-                        str(path),
+                        compact_replay,
+                        None,
+                        None,
+                        None,
+                        filename=str(path),
                         head_north=True,
                     )
                     html_paths.append(path)
