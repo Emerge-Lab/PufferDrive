@@ -35,9 +35,6 @@ class DriveBackbone(nn.Module):
                 pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
             )
 
-    def _encode_and_pool(self, objects, encoder):
-        return encoder(objects).max(dim=1).values
-
     def __init__(
         self,
         env,

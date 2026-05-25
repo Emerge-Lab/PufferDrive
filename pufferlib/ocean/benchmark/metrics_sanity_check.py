@@ -93,7 +93,7 @@ def main():
     config["env"]["num_agents"] = config["eval"]["wosac_num_agents"]
     config["env"]["init_mode"] = config["eval"]["wosac_init_mode"]
     config["env"]["control_mode"] = config["eval"]["wosac_control_mode"]
-    config["env"]["init_steps"] = config["eval"]["wosac_init_steps"]
+    config["env"]["init_step"] = config["eval"]["wosac_init_steps"]
     config["env"]["goal_behavior"] = config["eval"]["wosac_goal_behavior"]
 
     vecenv = load_env(args.env, config)

@@ -1568,6 +1568,8 @@ _ARCH_ENV_KEYS = (
     "obs_slots_lane",
     "obs_slots_boundary",
     "obs_slots_traffic_controls",
+    "obs_dropout_lane",
+    "obs_dropout_boundary",
     "traffic_control_scope",
     "reward_conditioning",
     # target / goal representation
