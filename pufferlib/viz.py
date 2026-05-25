@@ -1616,7 +1616,7 @@ def _pack_replay_binary(header, chunks):
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
     payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
-    return base64.b64encode(zlib.compress(payload, level=9)).decode("ascii")
+    return base64.b64encode(zlib.compress(payload, level=3)).decode("ascii")
 
 
 def _generate_compact_interactive_replay(scenario, replay, filename="replay.html", head_north=False):

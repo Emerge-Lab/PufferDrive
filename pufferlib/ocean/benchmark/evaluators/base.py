@@ -3,6 +3,7 @@
 import time
 from dataclasses import dataclass, field
 from typing import ClassVar
+from tqdm import tqdm
 
 
 @dataclass
@@ -466,6 +467,7 @@ class Evaluator:
         device = args["train"]["device"]
         html_paths = []
         scenarios_done = 0
+        progress = tqdm(total=num_scenarios, desc=f"{self.name} triage_html", unit="html")
 
         vec = pufferlib.vector.make(
             make_env,
@@ -516,6 +518,7 @@ class Evaluator:
                     tmp_path.unlink(missing_ok=True)
                     html_paths.append(html_path)
                     scenarios_done += 1
+                    progress.update(1)
                     if scenarios_done >= num_scenarios:
                         break
 
@@ -523,6 +526,7 @@ class Evaluator:
                     break
         finally:
             vec.close()
+            progress.close()
 
         return html_paths
 
@@ -565,6 +569,7 @@ class Evaluator:
         device = args["train"]["device"]
         html_paths = []
         scenarios_done = 0
+        progress = tqdm(total=num_scenarios * (max_steps + 1), desc=f"{self.name} obs_html", unit="step")
 
         vec = pufferlib.vector.make(
             make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1
@@ -672,6 +677,7 @@ class Evaluator:
                             )
                         start_obs_index = end_obs_index
                     ob, _, _, _, _ = vec.step(clipped_action)
+                    progress.update(to_render)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
                     # Numeric index last so build_gallery_index's `*_<N>.html`
@@ -708,10 +714,12 @@ class Evaluator:
                     )
                     html_paths.append(path)
                     scenarios_done += 1
+                    progress.update(1)
                     if scenarios_done >= num_scenarios:
                         break
         finally:
             vec.close()
+            progress.close()
 
         if html_paths:
             viz.build_gallery_index(str(out_dir))
