@@ -379,11 +379,11 @@ struct Drive {
     int logs_capacity;
     int target_type;
     char *ini_file;
-    int collision_behavior;     // 0 = none, 1=stop, 2 = remove
-    int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
-    int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
-    int goal_placement;         // 0 = route (forward waypoints), 1 = random (anywhere on map)
-    int use_map_cache;          // 0 = each env owns its map copy, 1 = share static geometry across envs
+    int collision_behavior;           // 0 = none, 1=stop, 2 = remove
+    int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
+    int traffic_light_behavior;       // 0 = none, 1=stop, 2 = remove
+    int goal_placement;               // 0 = route (forward waypoints), 1 = random (anywhere on map)
+    int use_map_cache;                // 0 = each env owns its map copy, 1 = share static geometry across envs
     struct SharedMapData *shared_map; // non-NULL when this env borrows cached geometry
     // Metadata fields
     char scenario_id[128];
@@ -3497,8 +3497,8 @@ static void map_cache_insert(struct SharedMapData *entry) {
             return;
         }
     }
-    g_map_cache =
-        (struct SharedMapData **) realloc(g_map_cache, (g_map_cache_count + 1) * sizeof(struct SharedMapData *));
+    g_map_cache
+        = (struct SharedMapData **) realloc(g_map_cache, (g_map_cache_count + 1) * sizeof(struct SharedMapData *));
     g_map_cache[g_map_cache_count++] = entry;
 }
 
@@ -3564,7 +3564,8 @@ void init(Drive *env) {
         load_map_binary(env->map_name, env);
         init_grid_map(env);
         int vision_half_range = (int) ceilf(
-            fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist) / GRID_CELL_SIZE);
+            fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist)
+            / GRID_CELL_SIZE);
         env->grid_map->vision_range = 2 * vision_half_range + 1;
         init_neighbor_offsets(env);
         cache_neighbor_offsets(env);
