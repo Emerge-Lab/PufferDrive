@@ -1805,7 +1805,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         <div id="search-box"><input type="number" id="agentSearch" placeholder="ID" onkeydown="if(event.key==='Enter') searchAgent()"><button onclick="searchAgent()" class="panel">Search</button></div>
         <div id="controls" class="panel">
             <button id="btnPlay" onclick="toggle()">PLAY</button>
-            <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+            <select id="speedSel" onchange="changeSpeed()"><option value="0.25">0.25x</option><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option></select>
             <input id="sld" type="range" min="0" value="0" step="1">
         </div>
     </div>
@@ -1822,7 +1822,7 @@ def _generate_compact_interactive_replay(scenario, replay, filename="replay.html
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
         obsC.width = 390 * dpr; obsC.height = 390 * dpr;
-        let step = 0, play = false, speed = 1, lastTick = 0;
+        let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false;
 
@@ -2293,11 +2293,11 @@ def generate_interactive_replay(
         <div id="controls" class="panel">
             <button id="btnPlay" onclick="toggle()" style="min-width: 100px; font-size: 16px;">PLAY</button>
             <select id="speedSel" onchange="changeSpeed()">
-                <option value="0.25">0.25x</option>
                 <option value="0.5">0.5x</option>
-                <option value="1.0" selected>1x</option>
+                <option value="1.0">1x</option>
                 <option value="2.0">2x</option>
-                <option value="4.0">4x</option>
+                <option value="4.0" selected>4x</option>
+                <option value="8.0">8x</option>
             </select>
             <input id="sld" type="range" min="0" value="0" step="1">
         </div>
@@ -2314,7 +2314,7 @@ def generate_interactive_replay(
         const dpr = window.devicePixelRatio || 1;
         obsC.width = 400 * dpr; obsC.height = 400 * dpr;
 
-        let step=0, play=false, speed=1.0, lastTick=0;
+        let step=0, play=false, speed=4.0, lastTick=0;
         let cam={x:0, y:0, z:5, drag:false, lx:0, ly:0};
         let followedId = null, darkMode = false, isEgoCam = false;
         const collapsedPanels = {
