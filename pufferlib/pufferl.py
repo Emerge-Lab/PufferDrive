@@ -3524,6 +3524,130 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     return args
 
 
+TARGET_COLLISION_TYPE_NAMES = {
+    0: "none",
+    1: "stopped_ego",
+    2: "stopped_track",
+    3: "active_rear",
+    4: "active_front",
+    5: "active_lateral",
+}
+
+
+def _safe_rate(numerator, denominator):
+    denominator = float(denominator)
+    if denominator <= 0:
+        return 0.0
+    return float(numerator) / denominator
+
+
+def _numeric_series(df, column, default=0.0):
+    if column not in df:
+        return pd.Series(default, index=df.index, dtype=np.float64)
+    return pd.to_numeric(df[column], errors="coerce").fillna(default)
+
+
+def _summarize_target_collision_diagnostics(episodes_df):
+    """Aggregate per-episode target collision diagnostics from mine_failures."""
+    num_episodes = int(len(episodes_df))
+    if num_episodes == 0:
+        return {
+            "num_episodes": 0,
+            "flat_metrics": {},
+            "collision_types": {},
+        }
+
+    did_collide = _numeric_series(episodes_df, "did_target_collide") > 0.0
+    did_at_fault = _numeric_series(episodes_df, "did_target_have_at_fault_collision") > 0.0
+    collision_type = _numeric_series(episodes_df, "target_collision_type").round().astype(int)
+    other_active = _numeric_series(episodes_df, "target_collision_other_active") > 0.0
+    other_stopped = _numeric_series(episodes_df, "target_collision_other_stopped") > 0.0
+    other_removed = _numeric_series(episodes_df, "target_collision_other_removed") > 0.0
+    other_inactive = other_stopped | other_removed | (~other_active)
+
+    target_collision_count = int(did_collide.sum())
+    target_at_fault_collision_count = int((did_collide & did_at_fault).sum())
+    active_non_target_count = int((did_collide & other_active).sum())
+    active_at_fault_collision_count = int((did_collide & did_at_fault & other_active).sum())
+    inactive_non_target_count = int((did_collide & other_inactive).sum())
+    stopped_non_target_count = int((did_collide & other_stopped).sum())
+    removed_non_target_count = int((did_collide & other_removed).sum())
+
+    flat_metrics = {
+        "target_no_collision_count": int((~did_collide).sum()),
+        "target_no_collision_rate": _safe_rate((~did_collide).sum(), num_episodes),
+        "target_collision_count": target_collision_count,
+        "target_collision_rate": _safe_rate(target_collision_count, num_episodes),
+        "target_at_fault_collision_count": target_at_fault_collision_count,
+        "target_at_fault_collision_rate": _safe_rate(target_at_fault_collision_count, num_episodes),
+        "target_collision_with_active_non_target_count": active_non_target_count,
+        "target_collision_with_active_non_target_rate": _safe_rate(active_non_target_count, num_episodes),
+        "target_collision_with_active_non_target_share": _safe_rate(active_non_target_count, target_collision_count),
+        "active_target_collision_count": active_non_target_count,
+        "active_target_collision_rate": _safe_rate(active_non_target_count, num_episodes),
+        "active_at_fault_collision_count": active_at_fault_collision_count,
+        "active_at_fault_collision_rate": _safe_rate(active_at_fault_collision_count, num_episodes),
+        "active_at_fault_collision_share_given_target_at_fault_collision": _safe_rate(
+            active_at_fault_collision_count, target_at_fault_collision_count
+        ),
+        "target_collision_with_inactive_non_target_count": inactive_non_target_count,
+        "target_collision_with_inactive_non_target_rate": _safe_rate(inactive_non_target_count, num_episodes),
+        "target_collision_with_inactive_non_target_share": _safe_rate(
+            inactive_non_target_count, target_collision_count
+        ),
+        "target_collision_with_stopped_non_target_count": stopped_non_target_count,
+        "target_collision_with_stopped_non_target_rate": _safe_rate(stopped_non_target_count, num_episodes),
+        "target_collision_with_stopped_non_target_share": _safe_rate(stopped_non_target_count, target_collision_count),
+        "target_collision_with_removed_non_target_count": removed_non_target_count,
+        "target_collision_with_removed_non_target_rate": _safe_rate(removed_non_target_count, num_episodes),
+        "target_collision_with_removed_non_target_share": _safe_rate(removed_non_target_count, target_collision_count),
+    }
+
+    collision_types = {}
+    for type_id, type_name in TARGET_COLLISION_TYPE_NAMES.items():
+        if type_id == 0:
+            continue
+
+        type_mask = did_collide & (collision_type == type_id)
+        at_fault_type_mask = type_mask & did_at_fault
+        type_count = int(type_mask.sum())
+        at_fault_type_count = int(at_fault_type_mask.sum())
+
+        type_summary = {
+            "id": type_id,
+            "count": type_count,
+            "rate": _safe_rate(type_count, num_episodes),
+            "share_given_target_collision": _safe_rate(type_count, target_collision_count),
+            "at_fault_count": at_fault_type_count,
+            "at_fault_rate": _safe_rate(at_fault_type_count, num_episodes),
+            "share_given_target_at_fault_collision": _safe_rate(at_fault_type_count, target_at_fault_collision_count),
+        }
+        collision_types[type_name] = type_summary
+
+        prefix = f"target_collision_type_{type_name}"
+        flat_metrics[f"{prefix}_count"] = type_count
+        flat_metrics[f"{prefix}_rate"] = type_summary["rate"]
+        flat_metrics[f"{prefix}_share_given_target_collision"] = type_summary["share_given_target_collision"]
+        flat_metrics[f"{prefix}_at_fault_count"] = at_fault_type_count
+        flat_metrics[f"{prefix}_at_fault_rate"] = type_summary["at_fault_rate"]
+        flat_metrics[f"{prefix}_share_given_target_at_fault_collision"] = type_summary[
+            "share_given_target_at_fault_collision"
+        ]
+
+    return {
+        "num_episodes": num_episodes,
+        "target_collision_count": target_collision_count,
+        "target_at_fault_collision_count": target_at_fault_collision_count,
+        "denominators": {
+            "rate": "num_episodes",
+            "share_given_target_collision": "target_collision_count",
+            "share_given_target_at_fault_collision": "target_at_fault_collision_count",
+        },
+        "collision_types": collision_types,
+        "flat_metrics": flat_metrics,
+    }
+
+
 def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=None, quiet=False):
     t0 = time.time()
 
@@ -3809,6 +3933,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     episodes_df.to_csv(episodes_csv_path, index=False)
 
     numeric_means = episodes_df.select_dtypes(include=[np.number]).mean(numeric_only=True).to_dict()
+    target_collision_diagnostics = _summarize_target_collision_diagnostics(episodes_df)
+    derived_metrics = target_collision_diagnostics["flat_metrics"]
     with open(summary_path, "w") as f:
         json.dump(
             {
@@ -3841,6 +3967,8 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
                     "maps": selected_map_names,
                 },
                 "metrics_mean": {k: float(v) for k, v in numeric_means.items()},
+                "metrics_derived": {k: float(v) for k, v in derived_metrics.items()},
+                "target_collision_diagnostics": target_collision_diagnostics,
             },
             f,
             indent=2,
