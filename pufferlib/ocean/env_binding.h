@@ -723,6 +723,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_collision_severity = env->log.target_collision_severity;
             float target_collision_responsibility = env->log.target_collision_responsibility;
             float target_collision_impact_zone = env->log.target_collision_impact_zone;
+            float target_collision_type = env->log.target_collision_type;
+            float target_collision_target_speed = env->log.target_collision_target_speed;
+            float target_collision_other_speed = env->log.target_collision_other_speed;
+            float target_collision_relative_speed = env->log.target_collision_relative_speed;
+            float target_collision_other_active = env->log.target_collision_other_active;
+            float target_collision_other_stopped = env->log.target_collision_other_stopped;
+            float target_collision_other_removed = env->log.target_collision_other_removed;
             float adversaries_collision_count = env->log.adversaries_collision_count;
             float adversaries_collision_severity = env->log.adversaries_collision_severity;
             float adversaries_collision_responsibility = env->log.adversaries_collision_responsibility;
@@ -761,6 +768,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_collision_severity = target_collision_severity / target_collision_count;
                 env->log.target_collision_responsibility = target_collision_responsibility / target_collision_count;
                 env->log.target_collision_impact_zone = target_collision_impact_zone / target_collision_count;
+                env->log.target_collision_type = target_collision_type / target_collision_count;
+                env->log.target_collision_target_speed = target_collision_target_speed / target_collision_count;
+                env->log.target_collision_other_speed = target_collision_other_speed / target_collision_count;
+                env->log.target_collision_relative_speed = target_collision_relative_speed / target_collision_count;
+                env->log.target_collision_other_active = target_collision_other_active / target_collision_count;
+                env->log.target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
+                env->log.target_collision_other_removed = target_collision_other_removed / target_collision_count;
             }
             env->log.target_collision_count = target_collision_count;
 
@@ -898,6 +912,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_collision_severity = aggregate.target_collision_severity;
         float target_collision_responsibility = aggregate.target_collision_responsibility;
         float target_collision_impact_zone = aggregate.target_collision_impact_zone;
+        float target_collision_type = aggregate.target_collision_type;
+        float target_collision_target_speed = aggregate.target_collision_target_speed;
+        float target_collision_other_speed = aggregate.target_collision_other_speed;
+        float target_collision_relative_speed = aggregate.target_collision_relative_speed;
+        float target_collision_other_active = aggregate.target_collision_other_active;
+        float target_collision_other_stopped = aggregate.target_collision_other_stopped;
+        float target_collision_other_removed = aggregate.target_collision_other_removed;
         float adversaries_collision_count = aggregate.adversaries_collision_count;
         float adversaries_collision_severity = aggregate.adversaries_collision_severity;
         float adversaries_collision_responsibility = aggregate.adversaries_collision_responsibility;
@@ -939,6 +960,13 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_collision_severity = target_collision_severity / target_collision_count;
             aggregate.target_collision_responsibility = target_collision_responsibility / target_collision_count;
             aggregate.target_collision_impact_zone = target_collision_impact_zone / target_collision_count;
+            aggregate.target_collision_type = target_collision_type / target_collision_count;
+            aggregate.target_collision_target_speed = target_collision_target_speed / target_collision_count;
+            aggregate.target_collision_other_speed = target_collision_other_speed / target_collision_count;
+            aggregate.target_collision_relative_speed = target_collision_relative_speed / target_collision_count;
+            aggregate.target_collision_other_active = target_collision_other_active / target_collision_count;
+            aggregate.target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
+            aggregate.target_collision_other_removed = target_collision_other_removed / target_collision_count;
         }
         aggregate.target_collision_count = target_collision_count;
 

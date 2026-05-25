@@ -113,6 +113,13 @@ def metric_log_key(metric_name):
         "target_mean_reward_collision": "mean_reward_collision",
         "target_mean_reward_offroad": "mean_reward_offroad",
         "target_mean_reward_drive": "mean_reward_drive",
+        "target_collision_type": "collision_type",
+        "target_collision_target_speed": "collision_target_speed",
+        "target_collision_other_speed": "collision_other_speed",
+        "target_collision_relative_speed": "collision_relative_speed",
+        "target_collision_other_active": "collision_other_active",
+        "target_collision_other_stopped": "collision_other_stopped",
+        "target_collision_other_removed": "collision_other_removed",
     }
     adversaries_metrics = {
         "adversaries_episode_length": "episode_length",

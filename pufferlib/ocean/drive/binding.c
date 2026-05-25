@@ -2008,6 +2008,13 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_severity", log->target_collision_severity);
     assign_to_dict(dict, "target_collision_responsibility", log->target_collision_responsibility);
     assign_to_dict(dict, "target_collision_impact_zone", log->target_collision_impact_zone);
+    assign_to_dict(dict, "target_collision_type", log->target_collision_type);
+    assign_to_dict(dict, "target_collision_target_speed", log->target_collision_target_speed);
+    assign_to_dict(dict, "target_collision_other_speed", log->target_collision_other_speed);
+    assign_to_dict(dict, "target_collision_relative_speed", log->target_collision_relative_speed);
+    assign_to_dict(dict, "target_collision_other_active", log->target_collision_other_active);
+    assign_to_dict(dict, "target_collision_other_stopped", log->target_collision_other_stopped);
+    assign_to_dict(dict, "target_collision_other_removed", log->target_collision_other_removed);
     assign_to_dict(dict, "adversaries_collision_severity", log->adversaries_collision_severity);
     assign_to_dict(dict, "adversaries_collision_responsibility", log->adversaries_collision_responsibility);
     assign_to_dict(dict, "adversaries_collision_impact_zone", log->adversaries_collision_impact_zone);

@@ -207,6 +207,13 @@ struct Log {
     float target_collision_severity;
     float target_collision_responsibility;
     float target_collision_impact_zone;
+    float target_collision_type;
+    float target_collision_target_speed;
+    float target_collision_other_speed;
+    float target_collision_relative_speed;
+    float target_collision_other_active;
+    float target_collision_other_stopped;
+    float target_collision_other_removed;
     float adversaries_collision_count;
     float adversaries_collision_severity;
     float adversaries_collision_responsibility;
@@ -404,6 +411,13 @@ struct Drive {
     float target_hit_responsibility_episode;
     float target_hit_low_responsibility_count_episode;
     float target_hit_at_fault_count_episode;
+    int target_collision_type_episode;
+    float target_collision_target_speed_episode;
+    float target_collision_other_speed_episode;
+    float target_collision_relative_speed_episode;
+    float target_collision_other_active_episode;
+    float target_collision_other_stopped_episode;
+    float target_collision_other_removed_episode;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -552,6 +566,13 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_severity = log->target_collision_severity;
     float target_collision_responsibility = log->target_collision_responsibility;
     float target_collision_impact_zone = log->target_collision_impact_zone;
+    float target_collision_type = log->target_collision_type;
+    float target_collision_target_speed = log->target_collision_target_speed;
+    float target_collision_other_speed = log->target_collision_other_speed;
+    float target_collision_relative_speed = log->target_collision_relative_speed;
+    float target_collision_other_active = log->target_collision_other_active;
+    float target_collision_other_stopped = log->target_collision_other_stopped;
+    float target_collision_other_removed = log->target_collision_other_removed;
     float adversaries_collision_count = log->adversaries_collision_count;
     float adversaries_collision_severity = log->adversaries_collision_severity;
     float adversaries_collision_responsibility = log->adversaries_collision_responsibility;
@@ -592,6 +613,13 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_severity = target_collision_severity / target_collision_count;
         log->target_collision_responsibility = target_collision_responsibility / target_collision_count;
         log->target_collision_impact_zone = target_collision_impact_zone / target_collision_count;
+        log->target_collision_type = target_collision_type / target_collision_count;
+        log->target_collision_target_speed = target_collision_target_speed / target_collision_count;
+        log->target_collision_other_speed = target_collision_other_speed / target_collision_count;
+        log->target_collision_relative_speed = target_collision_relative_speed / target_collision_count;
+        log->target_collision_other_active = target_collision_other_active / target_collision_count;
+        log->target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
+        log->target_collision_other_removed = target_collision_other_removed / target_collision_count;
     }
     log->target_collision_count = target_collision_count;
 
@@ -3271,13 +3299,20 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->target_puffer_score += calculate_puffer_score(&env->logs[0], safe_timestep, env->dt);
         }
 
-        if (env->logs[0].collision_rate > 0.0f) {
+        if (env->logs[0].collision_rate > 0.0f || env->target_collision_type_episode != COLLISION_TYPE_NONE) {
             episode_log->did_target_collide += 1.0f;
             episode_log->did_target_fail += 1.0f;
             episode_log->target_collision_count += 1.0f;
             episode_log->target_collision_severity += target_agent->collision_severity;
             episode_log->target_collision_responsibility += target_agent->collision_responsibility;
             episode_log->target_collision_impact_zone += (float)target_agent->collision_impact_zone;
+            episode_log->target_collision_type += (float)env->target_collision_type_episode;
+            episode_log->target_collision_target_speed += env->target_collision_target_speed_episode;
+            episode_log->target_collision_other_speed += env->target_collision_other_speed_episode;
+            episode_log->target_collision_relative_speed += env->target_collision_relative_speed_episode;
+            episode_log->target_collision_other_active += env->target_collision_other_active_episode;
+            episode_log->target_collision_other_stopped += env->target_collision_other_stopped_episode;
+            episode_log->target_collision_other_removed += env->target_collision_other_removed_episode;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {
@@ -4478,6 +4513,7 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 
 static void record_target_hit_responsibility(Drive *env, int agent_idx, int other_agent_idx, float normal_x,
                                              float normal_y);
+static void record_target_collision_diagnostics(Drive *env, int target_agent_idx, int other_agent_idx);
 
 static void compute_metrics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
@@ -4704,6 +4740,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
             record_target_hit_responsibility(env, agent_idx, car_collided_with_index, collision_normal_x,
                                              collision_normal_y);
             int other_idx = (agent_idx == target_agent_idx) ? car_collided_with_index : agent_idx;
+            record_target_collision_diagnostics(env, target_agent_idx, other_idx);
             if (target_agent_idx >= 0 && other_idx >= 0 && is_at_fault_collision(env, target_agent_idx, other_idx)) {
                 env->target_hit_at_fault_this_step = 1;
             }
@@ -4781,6 +4818,30 @@ static void record_target_hit_responsibility(Drive *env, int agent_idx, int othe
         env->target_hit_hitter_idx_this_step = hitter_idx;
         env->target_hit_responsibility_this_step = target_responsibility;
     }
+}
+
+static void record_target_collision_diagnostics(Drive *env, int target_agent_idx, int other_agent_idx) {
+    if (!env->compute_eval_metrics)
+        return;
+
+    if (env->target_collision_type_episode != COLLISION_TYPE_NONE)
+        return;
+
+    if (target_agent_idx < 0 || other_agent_idx < 0)
+        return;
+
+    Agent *target = &env->agents[target_agent_idx];
+    Agent *other = &env->agents[other_agent_idx];
+    float rel_vx = target->sim_vx - other->sim_vx;
+    float rel_vy = target->sim_vy - other->sim_vy;
+
+    env->target_collision_type_episode = classify_collision_type(target, other);
+    env->target_collision_target_speed_episode = target->sim_speed;
+    env->target_collision_other_speed_episode = other->sim_speed;
+    env->target_collision_relative_speed_episode = sqrtf(rel_vx * rel_vx + rel_vy * rel_vy);
+    env->target_collision_other_stopped_episode = other->stopped ? 1.0f : 0.0f;
+    env->target_collision_other_removed_episode = other->removed ? 1.0f : 0.0f;
+    env->target_collision_other_active_episode = (!other->stopped && !other->removed) ? 1.0f : 0.0f;
 }
 
 static RewardTerms compute_rewards(Drive *env, int i) {
@@ -5759,6 +5820,13 @@ void c_reset(Drive *env) {
     env->target_hit_responsibility_episode = 0.0f;
     env->target_hit_low_responsibility_count_episode = 0.0f;
     env->target_hit_at_fault_count_episode = 0.0f;
+    env->target_collision_type_episode = COLLISION_TYPE_NONE;
+    env->target_collision_target_speed_episode = 0.0f;
+    env->target_collision_other_speed_episode = 0.0f;
+    env->target_collision_relative_speed_episode = 0.0f;
+    env->target_collision_other_active_episode = 0.0f;
+    env->target_collision_other_stopped_episode = 0.0f;
+    env->target_collision_other_removed_episode = 0.0f;
 
     // Replay envs should expose the constructor-time initial state on the first reset.
     // Gigaflow envs need to fully respawn so explicit reset seeds affect the first scenario.
