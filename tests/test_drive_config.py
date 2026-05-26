@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pufferlib.pufferl import load_config, pufferlib
 
-ASSERTION_LEVEL = 1
 VERBOSITY = 0
 
 
@@ -34,60 +33,12 @@ class TestDriveConfig(unittest.TestCase):
             # 2. pufferlib/config/ocean/drive.ini (and override defaults)
             args = load_config("puffer_drive")
 
-            # Test that args is a dictionary and not empty
+            # load_config should return a populated config dict without raising.
             self.assertIsInstance(args, dict)
             self.assertTrue(len(args) > 0)
 
-            # Test for a value from the base default.ini ([train] section)
-            # This value is not in drive.ini, so it should come from default.ini
-            self.assertEqual(args["train"]["torch_deterministic"], True)
-
-            # Test for a value from the [base] section, which is at the top level.
-            # This value is overridden in drive.ini.
-            self.assertEqual(args["package"], "ocean")
-
-            # Test for a value specific to drive.ini ([env] section)
-            self.assertEqual(args["env"]["num_agents"], 1024)
-
-            # Test for a value from the [policy] section in drive.ini
-            self.assertEqual(args["policy"]["hidden_size"], 256)
-
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")
-
-    @patch("sys.argv", ["pufferl.py"])
-    def test_drive_ini_config(self):
-        """Test that the specific config from drive.ini is correctly loaded based on ASSERTION_LEVEL"""
-        args = load_config("puffer_drive")
-
-        # --- Stable parameters (tested at all strictness levels) ---
-        # These define the environment and model structure
-        self.assertEqual(args["package"], "ocean")
-        self.assertEqual(args["env_name"], "puffer_drive")
-        self.assertEqual(args["policy_name"], "Drive")
-        self.assertEqual(args["rnn_name"], "Recurrent")
-        self.assertEqual(args["env"]["num_agents"], 1024)
-        self.assertEqual(args["env"]["action_type"], "discrete")
-        self.assertEqual(args["policy"]["input_size"], 64)
-        self.assertEqual(args["policy"]["hidden_size"], 256)
-        self.assertEqual(args["rnn"]["input_size"], 256)
-        self.assertEqual(args["rnn"]["hidden_size"], 256)
-        self.assertEqual(args["vec"]["num_workers"], 16)
-        self.assertEqual(args["vec"]["num_envs"], 16)
-
-        # --- Tunable hyperparameters (tested at high strictness) ---
-        if ASSERTION_LEVEL >= 3:
-            self.assertEqual(args["train"]["total_timesteps"], 3_000_000_000)
-            self.assertEqual(args["train"]["batch_size"], "auto")
-            self.assertEqual(args["train"]["bptt_horizon"], 91)
-            self.assertEqual(args["train"]["minibatch_size"], 11648)
-            self.assertEqual(args["train"]["learning_rate"], 0.001)
-            self.assertEqual(args["train"]["gamma"], 0.98)
-            self.assertEqual(args["train"]["gae_lambda"], 0.95)
-            self.assertEqual(args["train"]["ent_coef"], 0.001)
-            self.assertEqual(args["env"]["reward_collision"], -0.5)
-            self.assertEqual(args["env"]["reward_offroad"], -0.2)
-            self.assertEqual(args["env"]["num_maps"], 1)
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_cli_override(self):

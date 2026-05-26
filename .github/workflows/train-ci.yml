@@ -2,9 +2,9 @@ name: train-ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
   push:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
 
 jobs:
   test-training:
@@ -39,6 +39,8 @@ jobs:
           python -m pip install -U pip
           pip install -e .
           python setup.py build_ext --inplace --force
+        env:
+          PUFFER_CPU: 1
 
       - name: Check disk space (after install)
         run: df -h

@@ -2,9 +2,9 @@ name: Unit tests
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
   push:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
 
 jobs:
   test:
@@ -38,13 +38,16 @@ jobs:
 
       - name: Install pufferlib
         run: |
-          pip install -e .[cpu] --no-cache-dir
+          pip install -e . --no-cache-dir
         env:
           TMPDIR: ${{ runner.temp }}/build
           PIP_NO_CACHE_DIR: 1
+          PUFFER_CPU: 1
 
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
+        env:
+          PUFFER_CPU: 1
 
       - name: Run C ini parsing tests
         run: |
@@ -54,7 +57,15 @@ jobs:
       - name: Run python ini parsing tests
         run: python tests/test_drive_config.py
 
-      - name: Run map-type smoke test (carla / nuplan / womd)
+      - name: Run drive/ocean pytest suite
         run: |
           pip install pytest
-          python -m pytest tests/test_drive_map_types.py -v
+          python -m pytest -v \
+            tests/test_drive_map_types.py \
+            tests/test_drive_scenario_length.py \
+            tests/test_eval_manager.py \
+            tests/test_validation_replay_html.py \
+            pufferlib/ocean/benchmark/test_geometry.py \
+            pufferlib/ocean/benchmark/test_map_metrics.py \
+            pufferlib/ocean/benchmark/test_road_edges.py \
+            pufferlib/ocean/benchmark/test_ttc.py
