@@ -873,7 +873,7 @@ def unpack_obs(
     if obs_flat.ndim == 1:
         obs_flat = obs_flat[None, :]
 
-    ego_dim = binding.EGO_FEATURES_JERK if dynamics_model == "jerk" else binding.EGO_FEATURES_CLASSIC
+    ego_dim = binding.EGO_FEATURES
 
     # Partner obs
     partner_feature_size = binding.PARTNER_FEATURES
@@ -991,10 +991,7 @@ def plot_observation(
     )
     target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
 
-    if dynamics_model == "jerk":
-        ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit = ego_state
-    else:
-        ego_speed, ego_width, ego_length, lcenter, lalign, speed_limit = ego_state
+    ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit, _ = ego_state
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -1045,8 +1042,7 @@ def plot_observation(
     # Add dynamics info text for JERK model
     ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
-    if dynamics_model == "jerk":
-        ego_info += f"\nSteering: {steering_angle:.3f}\na_long: {a_long:.2f}\na_lat: {a_lat:.2f}"
+    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {a_long:.2f}\naccel_lat: {a_lat:.2f}"
 
     ax.text(
         0.02,
