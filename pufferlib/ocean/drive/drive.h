@@ -4176,6 +4176,7 @@ static void compute_rewards(Drive *env, int i) {
         agent->metrics_array[AT_FAULT_COLLISION_IDX] = 0.0f;
     }
 }
+
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
     obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
@@ -4615,7 +4616,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         // Limit the steering rate similar to the jerk model
         float delta_steer = clip(steering - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
-        steering = clip(agent->steering_angle + delta_steer, -0.667f, 0.667f);
+        steering = clip(agent->steering_angle + delta_steer, -STEERING_LIMIT, STEERING_LIMIT);
         agent->steering_angle = steering;
 
         // Current state
