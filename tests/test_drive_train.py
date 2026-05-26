@@ -57,7 +57,12 @@ def test_drive_training():
         args["policy"].update(
             {
                 "input_size": 64,
-                "hidden_size": 64,  # Smaller than your 256
+                # This lineage's Drive policy splits the hidden width across a
+                # backbone and the actor/critic heads (no single hidden_size);
+                # shrink all three for a fast CPU smoke.
+                "backbone_hidden_size": 64,
+                "actor_hidden_size": 64,
+                "critic_hidden_size": 64,
             }
         )
 
