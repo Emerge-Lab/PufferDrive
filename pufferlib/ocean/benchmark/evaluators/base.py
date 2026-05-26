@@ -723,15 +723,7 @@ class Evaluator:
                     if pool_hist:
                         for k, hists in pool_hist.items():
                             compact_replay[k] = hists[e]
-                    viz.generate_interactive_replay(
-                        scenarios[e],
-                        compact_replay,
-                        None,
-                        None,
-                        None,
-                        filename=str(path),
-                        head_north=True,
-                    )
+                    viz.generate_interactive_replay(scenarios[e], compact_replay, filename=str(path))
                     html_paths.append(path)
                     scenarios_done += 1
                     progress.update(1)
