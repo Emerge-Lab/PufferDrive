@@ -1,8 +1,25 @@
 #include "drive.h"
+
+#include <Python.h>
+
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
+
+// Per-process map cache slot count. Live entries + NULL holes left by freed
+// entries; with map_cache_insert reusing NULL slots before growing, the count
+// is bounded by the number of distinct maps loaded in this process.
+static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
+    return PyLong_FromLong((long) g_map_cache_count);
+}
+
+#define MY_METHODS                                                                                                     \
+    {"map_cache_size",                                                                                                 \
+     map_cache_size_py,                                                                                                \
+     METH_NOARGS,                                                                                                      \
+     "Number of slots in the per-process map cache (live + NULL). Bounded by num unique maps."}
+
 #include "../env_binding.h"
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
