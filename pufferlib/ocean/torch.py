@@ -49,14 +49,14 @@ class DriveBackbone(nn.Module):
         self.input_size = input_size
 
         # Observation dimensions from environment config
-        self.obs_slots_partners = env.obs_slots_partners
+        self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
         # Road features size (lanes + boundaries)
         self.obs_slots_lane_kept = env.obs_slots_lane_kept
         self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
         self.road_features_count = env.road_features
         # Traffic control size
-        self.obs_slots_traffic_controls = env.obs_slots_traffic_controls
+        self.obs_slots_traffic_controls_n = env.obs_slots_traffic_controls_n
         self.traffic_control_features_count = env.traffic_control_features
         self.traffic_control_continuous_features = env.traffic_control_features - 2
         self.traffic_control_features_after_onehot = (
@@ -88,10 +88,10 @@ class DriveBackbone(nn.Module):
                 dropout=dropout,
             )
             num_feature_sets += 1
-        if self.obs_slots_partners > 0:
+        if self.obs_slots_partners_n > 0:
             self.partner_encoder = self._create_encoder(self.partner_features_count, input_size, encoder_gigaflow)
             num_feature_sets += 1
-        if self.obs_slots_traffic_controls > 0:
+        if self.obs_slots_traffic_controls_n > 0:
             self.traffic_control_encoder = self._create_encoder(
                 self.traffic_control_features_after_onehot,
                 input_size,
@@ -116,10 +116,10 @@ class DriveBackbone(nn.Module):
 
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
-        partner_dim = self.obs_slots_partners * self.partner_features_count
+        partner_dim = self.obs_slots_partners_n * self.partner_features_count
         lane_dim = self.obs_slots_lane_kept * self.road_features_count
         boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
-        traffic_control_dim = self.obs_slots_traffic_controls * self.traffic_control_features_count
+        traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
@@ -154,15 +154,15 @@ class DriveBackbone(nn.Module):
             feature_list.append(boundary_features)
 
         # Encode Partners
-        if self.obs_slots_partners > 0:
-            partner_objects = partner_observations.view(-1, self.obs_slots_partners, self.partner_features_count)
+        if self.obs_slots_partners_n > 0:
+            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
             partner_features = self.partner_encoder(partner_objects).max(dim=1).values
             feature_list.append(partner_features)
 
         # Encode Traffic Controls
-        if self.obs_slots_traffic_controls > 0:
+        if self.obs_slots_traffic_controls_n > 0:
             traffic_control_objects = traffic_control_observations.view(
-                -1, self.obs_slots_traffic_controls, self.traffic_control_features_count
+                -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
@@ -192,10 +192,10 @@ class DriveBackbone(nn.Module):
         return self.backbone(concat_features)
 
     def pool_slot_counts(self, observations, ego_dim):
-        partner_dim = self.obs_slots_partners * self.partner_features_count
+        partner_dim = self.obs_slots_partners_n * self.partner_features_count
         lane_dim = self.obs_slots_lane_kept * self.road_features_count
         boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
-        traffic_control_dim = self.obs_slots_traffic_controls * self.traffic_control_features_count
+        traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim + self.conditioning_dim
         partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
@@ -223,16 +223,16 @@ class DriveBackbone(nn.Module):
             counts["pool_boundary"] = boundary_counts.scatter_add(
                 1, boundary_winners, torch.ones_like(boundary_winners)
             )
-        if self.obs_slots_partners > 0:
-            partner_objects = partner_observations.view(-1, self.obs_slots_partners, self.partner_features_count)
+        if self.obs_slots_partners_n > 0:
+            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
             partner_winners = self.partner_encoder(partner_objects).max(dim=1).indices
             partner_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_partners, device=observations.device, dtype=torch.int64
+                observations.shape[0], self.obs_slots_partners_n, device=observations.device, dtype=torch.int64
             )
             counts["pool_partner"] = partner_counts.scatter_add(1, partner_winners, torch.ones_like(partner_winners))
-        if self.obs_slots_traffic_controls > 0:
+        if self.obs_slots_traffic_controls_n > 0:
             traffic_control_objects = traffic_control_observations.view(
-                -1, self.obs_slots_traffic_controls, self.traffic_control_features_count
+                -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
@@ -251,7 +251,7 @@ class DriveBackbone(nn.Module):
             )
             traffic_control_winners = self.traffic_control_encoder(traffic_control_objects).max(dim=1).indices
             traffic_control_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_traffic_controls, device=observations.device, dtype=torch.int64
+                observations.shape[0], self.obs_slots_traffic_controls_n, device=observations.device, dtype=torch.int64
             )
             counts["pool_traffic"] = traffic_control_counts.scatter_add(
                 1, traffic_control_winners, torch.ones_like(traffic_control_winners)

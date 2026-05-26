@@ -371,10 +371,10 @@ struct Drive {
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
-    int obs_slots_boundary;
-    int obs_slots_lane;
-    int obs_slots_partners;
-    int obs_slots_traffic_controls;
+    int obs_slots_boundary_n;
+    int obs_slots_lane_n;
+    int obs_slots_partners_n;
+    int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
@@ -3374,8 +3374,8 @@ void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
     load_map_binary(env->map_name, env);
-    env->road_dropout_enabled
-        = (env->obs_slots_lane_kept < env->obs_slots_lane) || (env->obs_slots_boundary_kept < env->obs_slots_boundary);
+    env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
+        || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     init_grid_map(env);
     int vision_half_range = (int) ceilf(
         fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
@@ -3495,9 +3495,9 @@ static int compute_observation_size(Drive *env) {
     int target_features = (env->target_type == TARGET_STATIC) ? STATIC_TARGET_FEATURES
         : (env->target_type == TARGET_DYNAMIC)                ? DYNAMIC_TARGET_FEATURES
                                                               : 0;
-    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners
+    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
         + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
-        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls + env->reward_conditioning * NUM_REWARD_COEFS
+        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + env->reward_conditioning * NUM_REWARD_COEFS
         + env->num_target_waypoints * target_features;
 }
 
@@ -3962,7 +3962,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls && check_red_light_violation(env, agent_idx)) {
+    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
         if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
@@ -4254,8 +4254,8 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
     if (ego->is_blind_partner && random_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
-        int partner_obs_stride = env->obs_slots_partners * PARTNER_FEATURES;
-        fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners, PARTNER_FEATURES);
+        int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
+        fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners_n, PARTNER_FEATURES);
         *partner_count = 0;
         return obs_idx + partner_obs_stride;
     }
@@ -4296,7 +4296,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     }
 
     int partners_written = 0;
-    int partners_to_write = (nearby_count < env->obs_slots_partners) ? nearby_count : env->obs_slots_partners;
+    int partners_to_write = (nearby_count < env->obs_slots_partners_n) ? nearby_count : env->obs_slots_partners_n;
     for (int k = 0; k < partners_to_write; k++) {
         int nearest_idx = k;
         for (int j = k + 1; j < nearby_count; j++) {
@@ -4329,8 +4329,8 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     }
 
     *partner_count = partners_written;
-    fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners - partners_written, PARTNER_FEATURES);
-    return obs_idx + (env->obs_slots_partners - partners_written) * PARTNER_FEATURES;
+    fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners_n - partners_written, PARTNER_FEATURES);
+    return obs_idx + (env->obs_slots_partners_n - partners_written) * PARTNER_FEATURES;
 }
 
 static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {
@@ -4346,15 +4346,15 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
     obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
 
-    float lanes_buffer[env->obs_slots_lane * ROAD_FEATURES];
-    float boundaries_buffer[env->obs_slots_boundary * ROAD_FEATURES];
+    float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
+    float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
     float *lane_obs_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
     float *boundary_obs_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
     int lanes_found = 0;
     int boundaries_found = 0;
 
     for (int k = 0; k < neighbor_count; k++) {
-        if (lanes_found >= env->obs_slots_lane && boundaries_found >= env->obs_slots_boundary) {
+        if (lanes_found >= env->obs_slots_lane_n && boundaries_found >= env->obs_slots_boundary_n) {
             break;
         }
         int entity_idx = neighbor_entities[k].entity_idx;
@@ -4405,7 +4405,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
 
         float *segment_dest = is_lane ? lane_obs_dest : boundary_obs_dest;
         int *segment_count = is_lane ? &lanes_found : &boundaries_found;
-        int segment_cap = is_lane ? env->obs_slots_lane : env->obs_slots_boundary;
+        int segment_cap = is_lane ? env->obs_slots_lane_n : env->obs_slots_boundary_n;
         if (*segment_count >= segment_cap) {
             continue;
         }
@@ -4482,7 +4482,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     }
 
     int controls_to_observe
-        = (visible_count < env->obs_slots_traffic_controls) ? visible_count : env->obs_slots_traffic_controls;
+        = (visible_count < env->obs_slots_traffic_controls_n) ? visible_count : env->obs_slots_traffic_controls_n;
     for (int k = 0; k < controls_to_observe; k++) {
         int nearest_idx = k;
         for (int j = k + 1; j < visible_count; j++) {
@@ -4498,7 +4498,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     }
 
     int controls_written = 0;
-    for (int j = 0; j < controls_to_observe && controls_written < env->obs_slots_traffic_controls; j++) {
+    for (int j = 0; j < controls_to_observe && controls_written < env->obs_slots_traffic_controls_n; j++) {
         TrafficControlElement *tc = &env->traffic_elements[visible_controls[j].idx];
         float rel_x1, rel_y1, rel_x2, rel_y2;
         project_point_to_ego_frame(ego, tc->stop_line[0], tc->stop_line[1], &rel_x1, &rel_y1);
@@ -4522,8 +4522,8 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
     }
 
     *traffic_control_count = controls_written;
-    fill_padded_traffic_control_rows(&obs[obs_idx], env->obs_slots_traffic_controls - controls_written);
-    return obs_idx + (env->obs_slots_traffic_controls - controls_written) * TRAFFIC_CONTROL_FEATURES;
+    fill_padded_traffic_control_rows(&obs[obs_idx], env->obs_slots_traffic_controls_n - controls_written);
+    return obs_idx + (env->obs_slots_traffic_controls_n - controls_written) * TRAFFIC_CONTROL_FEATURES;
 }
 
 static void compute_observations(Drive *env) {

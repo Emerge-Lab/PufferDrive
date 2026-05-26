@@ -81,10 +81,10 @@ class Drive(pufferlib.PufferEnv):
         reward_randomization=False,
         compute_eval_metrics=True,
         split_network=False,
-        obs_slots_lane=32,
-        obs_slots_boundary=32,
-        obs_slots_partners=16,
-        obs_slots_traffic_controls=4,
+        obs_slots_lane_n=32,
+        obs_slots_boundary_n=32,
+        obs_slots_partners_n=16,
+        obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
         obs_norm_goal_offset_m=100.0,
@@ -172,11 +172,11 @@ class Drive(pufferlib.PufferEnv):
         self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
-        self.obs_slots_lane = obs_slots_lane
-        self.obs_slots_boundary = obs_slots_boundary
-        self.obs_slots_partners = obs_slots_partners
+        self.obs_slots_lane_n = obs_slots_lane_n
+        self.obs_slots_boundary_n = obs_slots_boundary_n
+        self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
-        self.obs_slots_traffic_controls = obs_slots_traffic_controls
+        self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
@@ -191,11 +191,11 @@ class Drive(pufferlib.PufferEnv):
         self.obs_dropout_lane = float(obs_dropout_lane)
         self.obs_dropout_boundary = float(obs_dropout_boundary)
         self.obs_slots_lane_kept = compute_effective_road_obs_count(
-            self.obs_slots_lane,
+            self.obs_slots_lane_n,
             self.obs_dropout_lane,
         )
         self.obs_slots_boundary_kept = compute_effective_road_obs_count(
-            self.obs_slots_boundary,
+            self.obs_slots_boundary_n,
             self.obs_dropout_boundary,
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
@@ -219,10 +219,10 @@ class Drive(pufferlib.PufferEnv):
             self.ego_features
             + self.num_reward_coefs
             + self.target_dim
-            + self.obs_slots_partners * self.partner_features
+            + self.obs_slots_partners_n * self.partner_features
             + self.obs_slots_lane_kept * self.road_features
             + self.obs_slots_boundary_kept * self.road_features
-            + self.obs_slots_traffic_controls * self.traffic_control_features
+            + self.obs_slots_traffic_controls_n * self.traffic_control_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
@@ -383,10 +383,10 @@ class Drive(pufferlib.PufferEnv):
             "max_waypoint_spacing": self.max_waypoint_spacing,
             "num_target_waypoints": self.num_target_waypoints,
             "target_type": self.target_type,
-            "obs_slots_lane": self.obs_slots_lane,
-            "obs_slots_boundary": self.obs_slots_boundary,
-            "obs_slots_partners": self.obs_slots_partners,
-            "obs_slots_traffic_controls": self.obs_slots_traffic_controls,
+            "obs_slots_lane_n": self.obs_slots_lane_n,
+            "obs_slots_boundary_n": self.obs_slots_boundary_n,
+            "obs_slots_partners_n": self.obs_slots_partners_n,
+            "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,

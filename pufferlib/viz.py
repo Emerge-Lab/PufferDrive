@@ -520,7 +520,7 @@ def unpack_obs(
     max_partners: int = 16,
     max_lane_segments: int = 16,
     max_boundary_segments: int = 16,
-    obs_slots_traffic_controls: int = 16,
+    obs_slots_traffic_controls_n: int = 16,
     obs_dropout_lane: float = 0.0,
     obs_dropout_boundary: float = 0.0,
     agent_idx: int = 0,
@@ -582,11 +582,11 @@ def unpack_obs(
 
     # Extract traffic controls
     traffic_start = boundary_end
-    traffic_end = traffic_start + obs_slots_traffic_controls * traffic_control_feature_size
-    if obs_slots_traffic_controls > 0:
+    traffic_end = traffic_start + obs_slots_traffic_controls_n * traffic_control_feature_size
+    if obs_slots_traffic_controls_n > 0:
         traffic_controls_obs = obs_flat[:, traffic_start:traffic_end]
         traffic_controls_obs = traffic_controls_obs.reshape(
-            -1, obs_slots_traffic_controls, traffic_control_feature_size
+            -1, obs_slots_traffic_controls_n, traffic_control_feature_size
         )
     else:
         traffic_controls_obs = np.zeros((obs_flat.shape[0], 0, traffic_control_feature_size))
@@ -609,7 +609,7 @@ def plot_observation(
     max_partners=16,
     max_lane_segments=32,
     max_boundary_segments=32,
-    obs_slots_traffic_controls=4,
+    obs_slots_traffic_controls_n=4,
     obs_dropout_lane=0.0,
     obs_dropout_boundary=0.0,
     agent_idx=0,
@@ -636,7 +636,7 @@ def plot_observation(
         max_partners=max_partners,
         max_lane_segments=max_lane_segments,
         max_boundary_segments=max_boundary_segments,
-        obs_slots_traffic_controls=obs_slots_traffic_controls,
+        obs_slots_traffic_controls_n=obs_slots_traffic_controls_n,
         obs_dropout_lane=obs_dropout_lane,
         obs_dropout_boundary=obs_dropout_boundary,
         agent_idx=agent_idx,
@@ -901,9 +901,9 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
 
     env_cfg = replay["env"]
     scales = _obs_scales(env_cfg)
-    lane_count = compute_effective_road_obs_count(env_cfg["obs_slots_lane"], env_cfg.get("obs_dropout_lane", 0.0))
+    lane_count = compute_effective_road_obs_count(env_cfg["obs_slots_lane_n"], env_cfg.get("obs_dropout_lane", 0.0))
     boundary_count = compute_effective_road_obs_count(
-        env_cfg["obs_slots_boundary"], env_cfg.get("obs_dropout_boundary", 0.0)
+        env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
 
     chunks = {
@@ -947,10 +947,10 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
-        "max_partners": int(env_cfg["obs_slots_partners"]),
+        "max_partners": int(env_cfg["obs_slots_partners_n"]),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
-        "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls"]),
+        "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
         "target_features": 3 if env_cfg.get("target_type", "static") == "static" else 5,
         "scales": scales,
         "road_polyline_count": len(road_lengths),

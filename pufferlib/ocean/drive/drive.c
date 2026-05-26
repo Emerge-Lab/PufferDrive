@@ -121,10 +121,10 @@ void demo() {
         .reward_conditioning = conf.reward_conditioning,
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
-        .obs_slots_lane = conf.obs_slots_lane,
-        .obs_slots_boundary = conf.obs_slots_boundary,
-        .obs_slots_partners = conf.obs_slots_partners,
-        .obs_slots_traffic_controls = conf.obs_slots_traffic_controls,
+        .obs_slots_lane_n = conf.obs_slots_lane_n,
+        .obs_slots_boundary_n = conf.obs_slots_boundary_n,
+        .obs_slots_partners_n = conf.obs_slots_partners_n,
+        .obs_slots_traffic_controls_n = conf.obs_slots_traffic_controls_n,
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
         .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
@@ -132,8 +132,8 @@ void demo() {
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
         .phantom_braking_duration = conf.phantom_braking_duration,
     };
-    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane, conf.obs_dropout_lane);
-    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary, conf.obs_dropout_boundary);
+    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
+    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
     allocate(&env);
     c_reset(&env);
@@ -244,10 +244,10 @@ void performance_test() {
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
         .num_max_agents = conf.max_agents_per_env,
-        .obs_slots_lane = conf.obs_slots_lane,
-        .obs_slots_boundary = conf.obs_slots_boundary,
-        .obs_slots_partners = conf.obs_slots_partners,
-        .obs_slots_traffic_controls = conf.obs_slots_traffic_controls,
+        .obs_slots_lane_n = conf.obs_slots_lane_n,
+        .obs_slots_boundary_n = conf.obs_slots_boundary_n,
+        .obs_slots_partners_n = conf.obs_slots_partners_n,
+        .obs_slots_traffic_controls_n = conf.obs_slots_traffic_controls_n,
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
         .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
@@ -256,8 +256,8 @@ void performance_test() {
         .phantom_braking_duration = conf.phantom_braking_duration,
 
     };
-    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane, conf.obs_dropout_lane);
-    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary, conf.obs_dropout_boundary);
+    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
+    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
     struct timespec ts_total_start, ts_total_end;
     struct timespec ts_init_start, ts_init_end;

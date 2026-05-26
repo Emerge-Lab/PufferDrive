@@ -27,15 +27,15 @@ env:
   obs_dropout_lane: 0.5
   map_dir: /gcs/valeo-cp2879-driving-policy/datasets/v1.1/carla_maps_left/
   max_agents_per_env: 150
-  obs_slots_boundary: 80
+  obs_slots_boundary_n: 80
   obs_norm_goal_offset_m: 200.0
-  obs_slots_lane: 80
-  obs_slots_partners: 16
+  obs_slots_lane_n: 80
+  obs_slots_partners_n: 16
   obs_norm_xy_offset_m: 200.0
   obs_norm_road_seg_length_m: 10.0
   obs_norm_road_seg_width_m: 5.0
   obs_range_traffic_control_m: 100.0
-  obs_slots_traffic_controls: 4
+  obs_slots_traffic_controls_n: 4
   obs_norm_veh_length_m: 15.0
   obs_norm_veh_width_m: 10.0
   max_waypoint_spacing: 60.0
