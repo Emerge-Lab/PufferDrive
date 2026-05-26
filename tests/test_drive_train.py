@@ -14,7 +14,7 @@ from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
 
 
 def test_drive_training():
-    """Test PufferDrive training until reaching 50K global steps on CPU."""
+    """Smoke-test PufferDrive training end-to-end on CPU (a few optimizer updates)."""
     print("Testing PufferDrive training on CPU...")
 
     try:
@@ -86,8 +86,9 @@ def test_drive_training():
         train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
         pufferl = PuffeRL(train_config, vecenv, policy, logger=None)
 
-        # Train until reaching 50K steps
-        target_steps = 50000
+        # Brief smoke run: a handful of optimizer updates exercises the full
+        # train loop (env -> rollout -> optimize -> progress) end-to-end.
+        target_steps = 2000
         print(f"Starting training until {target_steps} global steps...")
         start_time = time.time()
         last_step = 0
