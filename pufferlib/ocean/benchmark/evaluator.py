@@ -32,7 +32,7 @@ class WOSACEvaluator:
     def __init__(self, config: Dict):
         self.config = config
         self.num_steps = 91  # Hardcoded for WOSAC (9.1s at 10Hz)
-        self.init_steps = config.get("eval", {}).get("wosac_init_steps", 0)
+        self.init_steps = config.get("env", {}).get("init_step", 0)
         self.sim_steps = self.num_steps - self.init_steps
         self.num_rollouts = config.get("eval", {}).get("wosac_num_rollouts", 32)
         self.device = config.get("train", {}).get("device", "cuda")
@@ -652,7 +652,7 @@ class HumanReplayEvaluator:
         num_agents = puffer_env.observation_space.shape[0]
         device = args["train"]["device"]
         scenario_length = args["env"]["scenario_length"]
-        init_steps = self.config["env"]["init_steps"]
+        init_steps = self.config["env"]["init_step"]
         num_maps = args["env"]["num_maps"]
         # +1 step margin because the env's done flag fires on the step after the
         # scenario_length'th sim step.
