@@ -3538,6 +3538,7 @@ def _prepare_mine_failures_args(env_name, tmp_args):
     args["append_mining_run"] = bool(tmp_args.get("append_mining_run", 0))
     args["target_policy_path"] = tmp_args.get("target_policy_path")
     args["mine_policy_homogeneous_target_actor"] = bool(tmp_args.get("mine_policy_homogeneous_target_actor", 0))
+    args["mine_traffic_policy_target_actor"] = bool(tmp_args.get("mine_traffic_policy_target_actor", 0))
     args["mine_eval_mode"] = mine_eval_mode
     args["mine_env_config"] = mine_env_config
     args["mine_run_name"] = mine_run_name
