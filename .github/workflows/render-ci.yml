@@ -20,30 +20,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check disk space (before cleanup)
-        run: df -h
-
       - name: Free up disk space
         run: |
-          echo "Before cleanup:"
-          df -h
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
           sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
-          echo "After cleanup:"
-          df -h
 
-      - name: Install system dependencies for headless rendering
+      - name: Install system dependencies for headless EGL rendering
         run: |
           sudo apt update
-          sudo apt install -y ffmpeg xvfb build-essential
+          sudo apt install -y ffmpeg build-essential libegl1 libgles2 libgl1-mesa-dri libglvnd0
 
       - name: Upgrade pip
         run: python -m pip install -U pip
 
       - name: Install pufferlib
-        run: |
-          pip install -e . --no-cache-dir
+        run: pip install -e . --no-cache-dir
         env:
           TMPDIR: ${{ runner.temp }}/build
           PIP_NO_CACHE_DIR: 1
@@ -54,9 +46,8 @@ jobs:
         env:
           PUFFER_CPU: 1
 
-      - name: Check disk space (after install)
-        run: df -h
-
-      - name: Run render test
-        run: python tests/test_drive_render.py
+      - name: Run egl render smoke test
+        run: |
+          pip install pytest
+          python -m pytest tests/test_drive_render.py -v
         timeout-minutes: 15
