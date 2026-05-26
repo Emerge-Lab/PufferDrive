@@ -1,7 +1,8 @@
-"""Integration test for the validation_replay HTML render pipeline.
+"""Integration test for the HTML render backends (triage_html, obs_html).
 
-The single thing we care about: calling the evaluator with render_backend=html
-produces non-empty HTML files at the expected output path.
+The single thing we care about: calling the evaluator with each HTML render
+backend produces non-empty HTML files at the expected output path. Both are
+CPU-only (no EGL/ffmpeg), so they run everywhere.
 
 Uses a stub policy (zero actions) so no trained checkpoint is needed.
 """
@@ -12,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,8 +70,9 @@ class _ZeroPolicy:
         return iter([])
 
 
-def test_validation_replay_produces_html(tmp_path):
-    """Calling the evaluator with render_backend=html must produce non-empty HTML files."""
+@pytest.mark.parametrize("backend", ["triage_html", "obs_html"])
+def test_html_render_backend_produces_html(tmp_path, backend):
+    """Each HTML render backend must produce non-empty HTML files."""
     assert os.path.isdir(WOMD_MAP_DIR), f"Test fixture missing: {WOMD_MAP_DIR}"
 
     from pufferlib.ocean.benchmark.evaluators import MultiScenarioEvaluator
@@ -78,7 +81,7 @@ def test_validation_replay_produces_html(tmp_path):
     config = {
         "type": "multi_scenario",
         "render": True,
-        "render_backend": "html",
+        "render_backend": backend,
         "env": {
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
@@ -89,6 +92,17 @@ def test_validation_replay_produces_html(tmp_path):
             "max_agents_per_env": 1,
             "scenario_length": SCENARIO_LENGTH,
             "resample_frequency": 0,
+            # Observation shape, needed by the obs_html viewer to unpack the NN
+            # input; the env is built with these same values so the two agree.
+            "action_type": "discrete",
+            "dynamics_model": "jerk",
+            "target_type": "static",
+            "reward_conditioning": False,
+            "num_target_waypoints": 3,
+            "max_partner_observations": 16,
+            "max_lane_segment_observations": 80,
+            "max_boundary_segment_observations": 80,
+            "max_traffic_control_observations": 4,
         },
         "eval": {
             "num_scenarios": NUM_SCENARIOS,
@@ -117,7 +131,7 @@ def test_validation_replay_produces_html(tmp_path):
         policy = _ZeroPolicy(vecenv.single_action_space)
         args = dict(train_config)
         args["env_name"] = "puffer_drive"
-        args["render_backend"] = "html"
+        args["render_backend"] = backend
 
         with _watchdog(120, "evaluator rollout + render"):
             ev.rollout(vecenv, policy, args)
@@ -126,8 +140,12 @@ def test_validation_replay_produces_html(tmp_path):
 
     html_files = list(Path(tmp_path).rglob("*.html"))
     assert html_files, (
-        f"No HTML files produced under {tmp_path}. render_backend=html should write one HTML per rendered scenario."
+        f"No HTML files produced under {tmp_path}. render_backend={backend} should write one HTML per rendered scenario."
     )
-    for html_path in html_files:
-        size = html_path.stat().st_size
-        assert size > 50_000, f"{html_path.name} is only {size} bytes — likely a blank replay"
+    # Each backend writes one substantial scene HTML per scenario (plus, for
+    # obs_html, a small index.html). Require the largest to be non-trivial so a
+    # blank/empty render fails.
+    largest = max(p.stat().st_size for p in html_files)
+    assert largest > 50_000, (
+        f"Largest HTML under {tmp_path} is only {largest} bytes — render_backend={backend} likely produced a blank replay."
+    )

@@ -509,7 +509,7 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
         lambda logits, deterministic=True: (torch.zeros(4, dtype=torch.long), None, None),
     )
 
-    args = {"train": {"device": "cpu", "use_rnn": True}}
+    args = {"train": {"device": "cpu", "use_rnn": True}, "env": {}}
     _Ev("done_test", {}, args)._run_rollout_loop(_Vec(), _Policy(), args)
 
     # Done agents (0, 1, 2) zeroed; alive agent (3) untouched.

@@ -1,5 +1,6 @@
 #!/bin/bash
 # Configure, build and run the tests
+set -euo pipefail
 BUILD_TYPE=Release
 cmake -S tests/ini_parser -B tests/ini_parser/build -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
 cmake --build tests/ini_parser/build

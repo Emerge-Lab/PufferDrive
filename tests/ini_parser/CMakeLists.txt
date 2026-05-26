@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(ini_tester)
 
-add_library(inih ${CMAKE_CURRENT_LIST_DIR}/../../inih-r62/ini.c)
-target_include_directories(inih PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../../inih-r62)
+add_library(inih ${CMAKE_CURRENT_LIST_DIR}/../../extern/inih-r62/ini.c)
+target_include_directories(inih PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../../extern/inih-r62)
 
 enable_testing()
 add_executable(ini_tester ini_tester.c)
