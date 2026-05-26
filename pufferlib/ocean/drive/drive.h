@@ -371,10 +371,10 @@ struct Drive {
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
-    int obs_slots_boundary;
-    int obs_slots_lane;
-    int obs_slots_partners;
-    int obs_slots_traffic_controls;
+    int obs_slots_boundary_n;
+    int obs_slots_lane_n;
+    int obs_slots_partners_n;
+    int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
@@ -3357,8 +3357,8 @@ void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
     load_map_binary(env->map_name, env);
-    env->road_dropout_enabled
-        = (env->obs_slots_lane_kept < env->obs_slots_lane) || (env->obs_slots_boundary_kept < env->obs_slots_boundary);
+    env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
+        || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     init_grid_map(env);
     int vision_half_range = (int) ceilf(
         fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
@@ -3481,9 +3481,9 @@ static int compute_observation_size(Drive *env) {
         num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
 
-    int max_obs = ego_dim + PARTNER_FEATURES * env->obs_slots_partners
+    int max_obs = ego_dim + PARTNER_FEATURES * env->obs_slots_partners_n
         + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
-        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls;
+        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n;
     if (env->reward_conditioning) {
         max_obs += NUM_REWARD_COEFS;
     }
@@ -3957,7 +3957,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
     }
 
     // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls && check_red_light_violation(env, agent_idx)) {
+    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
         if (env->traffic_light_behavior == STOP_AGENT && !agent->stopped) {
             agent->stopped = 1;
@@ -4273,8 +4273,8 @@ static void compute_observations(Drive *env) {
 
         // ===== Partner observations =====
         if (ego_entity->is_blind_partner && random_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
-            int total_partner_floats = env->obs_slots_partners * PARTNER_FEATURES;
-            fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners, PARTNER_FEATURES);
+            int total_partner_floats = env->obs_slots_partners_n * PARTNER_FEATURES;
+            fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners_n, PARTNER_FEATURES);
             obs_idx += total_partner_floats;
         } else {
             // Collect candidate agents within max observation distance, then sort and select closest ones.
@@ -4317,7 +4317,7 @@ static void compute_observations(Drive *env) {
             int cars_seen = 0;
             if (candidate_count > 0) {
                 int num_agents_to_observe
-                    = (candidate_count < env->obs_slots_partners) ? candidate_count : env->obs_slots_partners;
+                    = (candidate_count < env->obs_slots_partners_n) ? candidate_count : env->obs_slots_partners_n;
 
                 // Partial selection sort: find the k-th smallest for each k
                 for (int k = 0; k < num_agents_to_observe; k++) {
@@ -4371,8 +4371,8 @@ static void compute_observations(Drive *env) {
                     cars_seen++;
                 }
             }
-            int remaining_partner_obs = (env->obs_slots_partners - cars_seen) * PARTNER_FEATURES;
-            fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners - cars_seen, PARTNER_FEATURES);
+            int remaining_partner_obs = (env->obs_slots_partners_n - cars_seen) * PARTNER_FEATURES;
+            fill_padded_observation_rows(&obs[obs_idx], env->obs_slots_partners_n - cars_seen, PARTNER_FEATURES);
             obs_idx += remaining_partner_obs;
         }
 
@@ -4390,15 +4390,15 @@ static void compute_observations(Drive *env) {
         obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
 
         // Slow path collects into buffer so we can sub-sample; fast path writes straight to obs[].
-        float lanes_buffer[env->obs_slots_lane * ROAD_FEATURES];
-        float boundaries_buffer[env->obs_slots_boundary * ROAD_FEATURES];
+        float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
+        float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
         float *lanes_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
         float *boundaries_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
         int lanes_collected = 0;
         int boundaries_collected = 0;
 
         for (int k = 0; k < list_size; k++) {
-            if (lanes_collected >= env->obs_slots_lane && boundaries_collected >= env->obs_slots_boundary) {
+            if (lanes_collected >= env->obs_slots_lane_n && boundaries_collected >= env->obs_slots_boundary_n) {
                 break;
             }
             int entity_idx = entity_list[k].entity_idx;
@@ -4472,11 +4472,11 @@ static void compute_observations(Drive *env) {
             if (is_lane) {
                 target = lanes_dest;
                 counter = &lanes_collected;
-                cap = env->obs_slots_lane;
+                cap = env->obs_slots_lane_n;
             } else {
                 target = boundaries_dest;
                 counter = &boundaries_collected;
-                cap = env->obs_slots_boundary;
+                cap = env->obs_slots_boundary_n;
             }
             if (*counter >= cap) {
                 continue;
@@ -4562,9 +4562,9 @@ static void compute_observations(Drive *env) {
         }
 
         // Partial selection sort: find K closest (O(N*K))
-        int num_controls_to_observe = (num_visible_controls < env->obs_slots_traffic_controls)
+        int num_controls_to_observe = (num_visible_controls < env->obs_slots_traffic_controls_n)
             ? num_visible_controls
-            : env->obs_slots_traffic_controls;
+            : env->obs_slots_traffic_controls_n;
         for (int k = 0; k < num_controls_to_observe; k++) {
             int min_idx = k;
             for (int j = k + 1; j < num_visible_controls; j++) {
@@ -4581,7 +4581,7 @@ static void compute_observations(Drive *env) {
 
         // Add observations for closest traffic controls
         int controls_added = 0;
-        for (int j = 0; j < num_controls_to_observe && controls_added < env->obs_slots_traffic_controls; j++) {
+        for (int j = 0; j < num_controls_to_observe && controls_added < env->obs_slots_traffic_controls_n; j++) {
             TrafficControlElement *traffic = &env->traffic_elements[traffic_controls[j].idx];
             // Stop line start point
             float dx1 = traffic->stop_line[0] - ego_entity->sim_x;
@@ -4623,7 +4623,7 @@ static void compute_observations(Drive *env) {
             controls_added++;
         }
 
-        int remaining_traffic_controls = env->obs_slots_traffic_controls - controls_added;
+        int remaining_traffic_controls = env->obs_slots_traffic_controls_n - controls_added;
         fill_padded_traffic_control_rows(&obs[obs_idx], remaining_traffic_controls);
         obs_idx += remaining_traffic_controls * TRAFFIC_CONTROL_FEATURES;
     }

@@ -46,12 +46,12 @@ typedef struct {
     int reward_randomization;
     int compute_eval_metrics;
     int max_agents_per_env;
-    int obs_slots_lane;
-    int obs_slots_boundary;
+    int obs_slots_lane_n;
+    int obs_slots_boundary_n;
     float obs_dropout_lane;
     float obs_dropout_boundary;
-    int obs_slots_partners;
-    int obs_slots_traffic_controls;
+    int obs_slots_partners_n;
+    int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     float obs_norm_goal_offset_m;
     float obs_norm_xy_offset_m;
@@ -188,18 +188,18 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else {
             env_config->compute_eval_metrics = 0;
         }
-    } else if (MATCH("env", "obs_slots_boundary")) {
-        env_config->obs_slots_boundary = atoi(value);
-    } else if (MATCH("env", "obs_slots_lane")) {
-        env_config->obs_slots_lane = atoi(value);
+    } else if (MATCH("env", "obs_slots_boundary_n")) {
+        env_config->obs_slots_boundary_n = atoi(value);
+    } else if (MATCH("env", "obs_slots_lane_n")) {
+        env_config->obs_slots_lane_n = atoi(value);
     } else if (MATCH("env", "obs_dropout_lane")) {
         env_config->obs_dropout_lane = atof(value);
     } else if (MATCH("env", "obs_dropout_boundary")) {
         env_config->obs_dropout_boundary = atof(value);
-    } else if (MATCH("env", "obs_slots_partners")) {
-        env_config->obs_slots_partners = atoi(value);
-    } else if (MATCH("env", "obs_slots_traffic_controls")) {
-        env_config->obs_slots_traffic_controls = atoi(value);
+    } else if (MATCH("env", "obs_slots_partners_n")) {
+        env_config->obs_slots_partners_n = atoi(value);
+    } else if (MATCH("env", "obs_slots_traffic_controls_n")) {
+        env_config->obs_slots_traffic_controls_n = atoi(value);
     } else if (MATCH("env", "traffic_control_scope")) {
         env_config->traffic_control_scope = atoi(value);
     } else if (MATCH("env", "obs_norm_goal_offset_m")) {

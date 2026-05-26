@@ -856,7 +856,7 @@ def unpack_obs(
     max_partners: int = 16,
     max_lane_segments: int = 16,
     max_boundary_segments: int = 16,
-    obs_slots_traffic_controls: int = 16,
+    obs_slots_traffic_controls_n: int = 16,
     obs_dropout_lane: float = 0.0,
     obs_dropout_boundary: float = 0.0,
     agent_idx: int = 0,
@@ -919,11 +919,11 @@ def unpack_obs(
 
     # Extract traffic controls
     traffic_start = boundary_end
-    traffic_end = traffic_start + obs_slots_traffic_controls * traffic_control_feature_size
-    if obs_slots_traffic_controls > 0:
+    traffic_end = traffic_start + obs_slots_traffic_controls_n * traffic_control_feature_size
+    if obs_slots_traffic_controls_n > 0:
         traffic_controls_obs = obs_flat[:, traffic_start:traffic_end]
         traffic_controls_obs = traffic_controls_obs.reshape(
-            -1, obs_slots_traffic_controls, traffic_control_feature_size
+            -1, obs_slots_traffic_controls_n, traffic_control_feature_size
         )
     else:
         traffic_controls_obs = np.zeros((obs_flat.shape[0], 0, traffic_control_feature_size))
@@ -947,7 +947,7 @@ def plot_observation(
     max_partners=16,
     max_lane_segments=32,
     max_boundary_segments=32,
-    obs_slots_traffic_controls=4,
+    obs_slots_traffic_controls_n=4,
     obs_dropout_lane=0.0,
     obs_dropout_boundary=0.0,
     agent_idx=0,
@@ -976,7 +976,7 @@ def plot_observation(
         max_partners,
         max_lane_segments,
         max_boundary_segments,
-        obs_slots_traffic_controls,
+        obs_slots_traffic_controls_n,
         obs_dropout_lane,
         obs_dropout_boundary,
         agent_idx,
@@ -1282,10 +1282,10 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         target_type=args["env"]["target_type"],
         reward_conditioning=args["env"]["reward_conditioning"],
         num_target_waypoints=args["env"]["num_target_waypoints"],
-        max_partners=args["env"]["obs_slots_partners"],
-        max_lane_segments=args["env"]["obs_slots_lane"],
-        max_boundary_segments=args["env"]["obs_slots_boundary"],
-        obs_slots_traffic_controls=args["env"]["obs_slots_traffic_controls"],
+        max_partners=args["env"]["obs_slots_partners_n"],
+        max_lane_segments=args["env"]["obs_slots_lane_n"],
+        max_boundary_segments=args["env"]["obs_slots_boundary_n"],
+        obs_slots_traffic_controls_n=args["env"]["obs_slots_traffic_controls_n"],
         obs_dropout_lane=args["env"].get("obs_dropout_lane", 0.0),
         obs_dropout_boundary=args["env"].get("obs_dropout_boundary", 0.0),
         agent_idx=obs_index,

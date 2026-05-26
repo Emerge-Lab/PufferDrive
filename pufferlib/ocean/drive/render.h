@@ -767,7 +767,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // First draw other agent observations
     int obs_idx = ego_dim + num_reward_coefs + target_features; // Start after ego, conditioning, and target obs
-    for (int j = 0; j < env->obs_slots_partners; j++) {
+    for (int j = 0; j < env->obs_slots_partners_n; j++) {
         bool is_empty = true;
         for (int k = 0; k < PARTNER_FEATURES; k++) {
             if (agent_obs[obs_idx + k] != 0.0f) {

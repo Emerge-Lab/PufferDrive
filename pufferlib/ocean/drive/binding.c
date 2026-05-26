@@ -1807,10 +1807,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
     env->target_type = (int) unpack(kwargs, "target_type");
-    env->obs_slots_boundary = (int) unpack(kwargs, "obs_slots_boundary");
-    env->obs_slots_lane = (int) unpack(kwargs, "obs_slots_lane");
-    env->obs_slots_partners = (int) unpack(kwargs, "obs_slots_partners");
-    env->obs_slots_traffic_controls = (int) unpack(kwargs, "obs_slots_traffic_controls");
+    env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
+    env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
+    env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
