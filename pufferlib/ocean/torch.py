@@ -35,9 +35,6 @@ class DriveBackbone(nn.Module):
                 pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
             )
 
-    def _encode_and_pool(self, objects, encoder):
-        return encoder(objects).max(dim=1).values
-
     def __init__(
         self,
         env,
@@ -52,14 +49,14 @@ class DriveBackbone(nn.Module):
         self.input_size = input_size
 
         # Observation dimensions from environment config
-        self.max_partner_observations = env.max_partner_observations
+        self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
         # Road features size (lanes + boundaries)
-        self.obs_lane_segment_count = env.obs_lane_segment_count
-        self.obs_boundary_segment_count = env.obs_boundary_segment_count
+        self.obs_slots_lane_kept = env.obs_slots_lane_kept
+        self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
         self.road_features_count = env.road_features
         # Traffic control size
-        self.max_traffic_control_observations = env.max_traffic_control_observations
+        self.obs_slots_traffic_controls_n = env.obs_slots_traffic_controls_n
         self.traffic_control_features_count = env.traffic_control_features
         self.traffic_control_continuous_features = env.traffic_control_features - 2
         self.traffic_control_features_after_onehot = (
@@ -75,7 +72,7 @@ class DriveBackbone(nn.Module):
         # 1. observations Encoders
         # Each encoder projects raw features into a common input_size embedding space
         self.ego_encoder = self._create_encoder(ego_dim, input_size, encoder_gigaflow)
-        if self.obs_lane_segment_count > 0:
+        if self.obs_slots_lane_kept > 0:
             self.lane_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -83,7 +80,7 @@ class DriveBackbone(nn.Module):
                 dropout=dropout,
             )
             num_feature_sets += 1
-        if self.obs_boundary_segment_count > 0:
+        if self.obs_slots_boundary_kept > 0:
             self.boundary_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -91,10 +88,10 @@ class DriveBackbone(nn.Module):
                 dropout=dropout,
             )
             num_feature_sets += 1
-        if self.max_partner_observations > 0:
+        if self.obs_slots_partners_n > 0:
             self.partner_encoder = self._create_encoder(self.partner_features_count, input_size, encoder_gigaflow)
             num_feature_sets += 1
-        if self.max_traffic_control_observations > 0:
+        if self.obs_slots_traffic_controls_n > 0:
             self.traffic_control_encoder = self._create_encoder(
                 self.traffic_control_features_after_onehot,
                 input_size,
@@ -119,10 +116,10 @@ class DriveBackbone(nn.Module):
 
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
-        partner_dim = self.max_partner_observations * self.partner_features_count
-        lane_dim = self.obs_lane_segment_count * self.road_features_count
-        boundary_dim = self.obs_boundary_segment_count * self.road_features_count
-        traffic_control_dim = self.max_traffic_control_observations * self.traffic_control_features_count
+        partner_dim = self.obs_slots_partners_n * self.partner_features_count
+        lane_dim = self.obs_slots_lane_kept * self.road_features_count
+        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
@@ -147,25 +144,25 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.obs_lane_segment_count > 0:
-            lane_objects = lane_observations.view(-1, self.obs_lane_segment_count, self.road_features_count)
-            lane_features = self._encode_and_pool(lane_objects, self.lane_encoder)
+        if self.obs_slots_lane_kept > 0:
+            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+            lane_features = self.lane_encoder(lane_objects).max(dim=1).values
             feature_list.append(lane_features)
-        if self.obs_boundary_segment_count > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_boundary_segment_count, self.road_features_count)
-            boundary_features = self._encode_and_pool(boundary_objects, self.boundary_encoder)
+        if self.obs_slots_boundary_kept > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+            boundary_features = self.boundary_encoder(boundary_objects).max(dim=1).values
             feature_list.append(boundary_features)
 
         # Encode Partners
-        if self.max_partner_observations > 0:
-            partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
-            partner_features = self._encode_and_pool(partner_objects, self.partner_encoder)
+        if self.obs_slots_partners_n > 0:
+            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
+            partner_features = self.partner_encoder(partner_objects).max(dim=1).values
             feature_list.append(partner_features)
 
         # Encode Traffic Controls
-        if self.max_traffic_control_observations > 0:
+        if self.obs_slots_traffic_controls_n > 0:
             traffic_control_objects = traffic_control_observations.view(
-                -1, self.max_traffic_control_observations, self.traffic_control_features_count
+                -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
@@ -182,7 +179,7 @@ class DriveBackbone(nn.Module):
                 [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
                 dim=2,
             )
-            traffic_control_features = self._encode_and_pool(traffic_control_objects, self.traffic_control_encoder)
+            traffic_control_features = self.traffic_control_encoder(traffic_control_objects).max(dim=1).values
             feature_list.append(traffic_control_features)
 
         # Add optional features if enabled

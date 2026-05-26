@@ -155,11 +155,11 @@ def test_clean_macro_loses_to_explicit_override():
     sections = {
         "foo": {
             "type": "multi_scenario",
-            "env.lane_segment_dropout": 0.5,  # explicit > macro default of 0.0
+            "env.obs_dropout_lane": 0.5,  # explicit > macro default of 0.0
         }
     }
     cfg = _build_section_config("foo", sections["foo"], sections)
-    assert cfg["env"]["lane_segment_dropout"] == 0.5
+    assert cfg["env"]["obs_dropout_lane"] == 0.5
 
 
 def test_manager_from_config_skips_template_sections():
@@ -622,7 +622,7 @@ def test_eval_args_compose_train_section_and_clean_macro():
     explicit beats clean macro, baseline survives when not overridden."""
     train_config = {
         "env": {
-            "lane_segment_dropout": 0.5,  # training perturbation
+            "obs_dropout_lane": 0.5,  # training perturbation
             "scenario_length": 91,
             "num_agents": 1024,  # only present in train baseline
         },
@@ -632,7 +632,7 @@ def test_eval_args_compose_train_section_and_clean_macro():
                 "type": "multi_scenario",
                 "interval": 25,
                 "env.scenario_length": 201,  # section overrides baseline
-                # clean=true (default) → lane_segment_dropout zeroed by macro
+                # clean=true (default) → obs_dropout_lane zeroed by macro
                 # num_agents not specified → falls through to train baseline
             },
         },
@@ -642,7 +642,7 @@ def test_eval_args_compose_train_section_and_clean_macro():
     args = mgr._build_eval_args(ev, env_name="puffer_drive", global_step=0)
 
     assert args["env"]["scenario_length"] == 201, "section override wins"
-    assert args["env"]["lane_segment_dropout"] == 0.0, "clean macro applied"
+    assert args["env"]["obs_dropout_lane"] == 0.0, "clean macro applied"
     assert args["env"]["num_agents"] == 1024, "train baseline preserved"
 
 

@@ -741,8 +741,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     // draw goal (first target waypoint, in ego frame)
     if (env->num_target_waypoints > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
-        float goal_x = agent_obs[goal_obs_idx] * env->max_goal_position;
-        float goal_y = agent_obs[goal_obs_idx + 1] * env->max_goal_position;
+        float goal_x = agent_obs[goal_obs_idx] * env->obs_norm_goal_offset_m;
+        float goal_y = agent_obs[goal_obs_idx + 1] * env->obs_norm_goal_offset_m;
         if (mode == 0) {
             DrawSphere((Vector3) {goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
             DrawCircle3D(
@@ -767,7 +767,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // First draw other agent observations
     int obs_idx = ego_dim + num_reward_coefs + target_features; // Start after ego, conditioning, and target obs
-    for (int j = 0; j < env->max_partner_observations; j++) {
+    for (int j = 0; j < env->obs_slots_partners_n; j++) {
         bool is_empty = true;
         for (int k = 0; k < PARTNER_FEATURES; k++) {
             if (agent_obs[obs_idx + k] != 0.0f) {
@@ -780,9 +780,9 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             continue;
         }
         // Draw position of other agents
-        float x = agent_obs[obs_idx] * env->max_position;
-        float y = agent_obs[obs_idx + 1] * env->max_position;
-        float z = agent_obs[obs_idx + 2] * env->max_position;
+        float x = agent_obs[obs_idx] * env->obs_norm_xy_offset_m;
+        float y = agent_obs[obs_idx + 1] * env->obs_norm_xy_offset_m;
+        float z = agent_obs[obs_idx + 2] * env->obs_norm_xy_offset_m;
         if (lasers && mode == 0) {
             DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x, y, z + 1}, ORANGE);
         }
@@ -794,8 +794,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             DrawLine3D((Vector3) {px, py, pz + 1}, (Vector3) {partner_x, partner_y, partner_z + 1}, ORANGE);
         }
 
-        float half_len = 0.5f * agent_obs[obs_idx + 3] * env->max_veh_len;
-        float half_width = 0.5f * agent_obs[obs_idx + 4] * env->max_veh_width;
+        float half_len = 0.5f * agent_obs[obs_idx + 3] * env->obs_norm_veh_length_m;
+        float half_width = 0.5f * agent_obs[obs_idx + 4] * env->obs_norm_veh_width_m;
         float theta_x = agent_obs[obs_idx + 5];
         float theta_y = agent_obs[obs_idx + 6];
         float partner_angle = atan2f(theta_y, theta_x);
@@ -905,7 +905,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;
-    for (int k = 0; k < env->max_lane_segment_observations; k++) {
+    for (int k = 0; k < env->obs_slots_lane_kept; k++) {
         int entity_idx = lane_obs_start + k * ROAD_FEATURES;
         bool is_empty = true;
         for (int j = 0; j < ROAD_FEATURES; j++) {
@@ -919,13 +919,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
         Color lineColor = PUFF_CYAN;
         // For road segments, draw line between start and end points
-        float x_middle = agent_obs[entity_idx] * env->max_position;
-        float y_middle = agent_obs[entity_idx + 1] * env->max_position;
-        float z_middle = agent_obs[entity_idx + 2] * env->max_position;
+        float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
+        float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
+        float z_middle = agent_obs[entity_idx + 2] * env->obs_norm_xy_offset_m;
         float rel_angle_x = (agent_obs[entity_idx + 5]);
         float rel_angle_y = (agent_obs[entity_idx + 6]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->max_road_segment_length;
+        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         // Calculate endpoint using the relative angle directly
         // Calculate endpoint directly
         float x_start = x_middle - segment_length * cosf(rel_angle);
@@ -960,8 +960,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
     }
     // Draw boundary/edge segment observations in red (immediately after lane obs)
-    int boundary_obs_start = lane_obs_start + env->max_lane_segment_observations * ROAD_FEATURES;
-    for (int k = 0; k < env->max_boundary_segment_observations; k++) {
+    int boundary_obs_start = lane_obs_start + env->obs_slots_lane_kept * ROAD_FEATURES;
+    for (int k = 0; k < env->obs_slots_boundary_kept; k++) {
         int entity_idx = boundary_obs_start + k * ROAD_FEATURES;
         bool is_empty = true;
         for (int j = 0; j < ROAD_FEATURES; j++) {
@@ -973,13 +973,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         if (is_empty) {
             continue;
         }
-        float x_middle = agent_obs[entity_idx] * env->max_position;
-        float y_middle = agent_obs[entity_idx + 1] * env->max_position;
-        float z_middle = agent_obs[entity_idx + 2] * env->max_position;
+        float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
+        float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
+        float z_middle = agent_obs[entity_idx + 2] * env->obs_norm_xy_offset_m;
         float rel_angle_x = agent_obs[entity_idx + 5];
         float rel_angle_y = agent_obs[entity_idx + 6];
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->max_road_segment_length;
+        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         float x_start = x_middle - segment_length * cosf(rel_angle);
         float y_start = y_middle - segment_length * sinf(rel_angle);
         float x_end = x_middle + segment_length * cosf(rel_angle);
@@ -1590,7 +1590,7 @@ void c_render(Drive *env, int view_mode) {
         render_camera.up = (Vector3) {0.0f, -1.0f, 0.0f};
         render_camera.projection = CAMERA_ORTHOGRAPHIC;
         float _bev_obs_window
-            = fmaxf(fmaxf(env->road_obs_front_dist, env->road_obs_behind_dist), env->road_obs_side_dist);
+            = fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m);
         int _bev_vrange = (int) ceilf(_bev_obs_window / GRID_CELL_SIZE) + 1;
         render_camera.fovy = (float) _bev_vrange * GRID_CELL_SIZE * 2.0f;
     } else {

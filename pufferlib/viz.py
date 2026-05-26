@@ -156,28 +156,28 @@ def _scale_ratio(numerator, denominator, default=1.0):
 
 def _obs_scales(
     env_cfg=None,
-    max_goal_position=100.0,
-    max_position=100.0,
-    max_veh_width=10.0,
-    max_veh_len=15.0,
-    max_road_segment_length=5.0,
-    max_road_segment_width=5.0,
+    obs_norm_goal_offset_m=100.0,
+    obs_norm_xy_offset_m=100.0,
+    obs_norm_veh_width_m=10.0,
+    obs_norm_veh_length_m=15.0,
+    obs_norm_road_seg_length_m=5.0,
+    obs_norm_road_seg_width_m=5.0,
 ):
     env_cfg = env_cfg or {}
-    max_goal_position = float(env_cfg.get("max_goal_position", max_goal_position))
-    max_position = float(env_cfg.get("max_position", max_position))
-    max_veh_width = float(env_cfg.get("max_veh_width", max_veh_width))
-    max_veh_len = float(env_cfg.get("max_veh_len", max_veh_len))
-    max_road_segment_length = float(env_cfg.get("max_road_segment_length", max_road_segment_length))
-    max_road_segment_width = float(env_cfg.get("max_road_segment_width", max_road_segment_width))
+    obs_norm_goal_offset_m = float(env_cfg.get("obs_norm_goal_offset_m", obs_norm_goal_offset_m))
+    obs_norm_xy_offset_m = float(env_cfg.get("obs_norm_xy_offset_m", obs_norm_xy_offset_m))
+    obs_norm_veh_width_m = float(env_cfg.get("obs_norm_veh_width_m", obs_norm_veh_width_m))
+    obs_norm_veh_length_m = float(env_cfg.get("obs_norm_veh_length_m", obs_norm_veh_length_m))
+    obs_norm_road_seg_length_m = float(env_cfg.get("obs_norm_road_seg_length_m", obs_norm_road_seg_length_m))
+    obs_norm_road_seg_width_m = float(env_cfg.get("obs_norm_road_seg_width_m", obs_norm_road_seg_width_m))
     return {
-        "max_goal_position": max_goal_position,
-        "max_position": max_position,
-        "veh_width_to_position": _scale_ratio(max_veh_width, max_position),
-        "veh_len_to_position": _scale_ratio(max_veh_len, max_position),
-        "goal_to_position": _scale_ratio(max_goal_position, max_position),
-        "road_length_to_position": _scale_ratio(max_road_segment_length, max_position),
-        "road_width_to_position": _scale_ratio(max_road_segment_width, max_position),
+        "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
+        "obs_norm_xy_offset_m": obs_norm_xy_offset_m,
+        "veh_width_to_position": _scale_ratio(obs_norm_veh_width_m, obs_norm_xy_offset_m),
+        "veh_len_to_position": _scale_ratio(obs_norm_veh_length_m, obs_norm_xy_offset_m),
+        "goal_to_position": _scale_ratio(obs_norm_goal_offset_m, obs_norm_xy_offset_m),
+        "road_length_to_position": _scale_ratio(obs_norm_road_seg_length_m, obs_norm_xy_offset_m),
+        "road_width_to_position": _scale_ratio(obs_norm_road_seg_width_m, obs_norm_xy_offset_m),
     }
 
 
@@ -856,9 +856,9 @@ def unpack_obs(
     max_partners: int = 16,
     max_lane_segments: int = 16,
     max_boundary_segments: int = 16,
-    max_traffic_control_observations: int = 16,
-    lane_segment_dropout: float = 0.0,
-    boundary_segment_dropout: float = 0.0,
+    obs_slots_traffic_controls_n: int = 16,
+    obs_dropout_lane: float = 0.0,
+    obs_dropout_boundary: float = 0.0,
     agent_idx: int = 0,
 ):
     """
@@ -881,8 +881,8 @@ def unpack_obs(
     road_feature_size = binding.ROAD_FEATURES
     # Traffic control obs
     traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
-    lane_segment_count = compute_effective_road_obs_count(max_lane_segments, lane_segment_dropout)
-    boundary_segment_count = compute_effective_road_obs_count(max_boundary_segments, boundary_segment_dropout)
+    lane_segment_count = compute_effective_road_obs_count(max_lane_segments, obs_dropout_lane)
+    boundary_segment_count = compute_effective_road_obs_count(max_boundary_segments, obs_dropout_boundary)
 
     # Target obs
     target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
@@ -919,11 +919,11 @@ def unpack_obs(
 
     # Extract traffic controls
     traffic_start = boundary_end
-    traffic_end = traffic_start + max_traffic_control_observations * traffic_control_feature_size
-    if max_traffic_control_observations > 0:
+    traffic_end = traffic_start + obs_slots_traffic_controls_n * traffic_control_feature_size
+    if obs_slots_traffic_controls_n > 0:
         traffic_controls_obs = obs_flat[:, traffic_start:traffic_end]
         traffic_controls_obs = traffic_controls_obs.reshape(
-            -1, max_traffic_control_observations, traffic_control_feature_size
+            -1, obs_slots_traffic_controls_n, traffic_control_feature_size
         )
     else:
         traffic_controls_obs = np.zeros((obs_flat.shape[0], 0, traffic_control_feature_size))
@@ -947,16 +947,16 @@ def plot_observation(
     max_partners=16,
     max_lane_segments=32,
     max_boundary_segments=32,
-    max_traffic_control_observations=4,
-    lane_segment_dropout=0.0,
-    boundary_segment_dropout=0.0,
+    obs_slots_traffic_controls_n=4,
+    obs_dropout_lane=0.0,
+    obs_dropout_boundary=0.0,
     agent_idx=0,
-    max_goal_position=100.0,
-    max_position=100.0,
-    max_veh_width=10.0,
-    max_veh_len=15.0,
-    max_road_segment_length=5.0,
-    max_road_segment_width=5.0,
+    obs_norm_goal_offset_m=100.0,
+    obs_norm_xy_offset_m=100.0,
+    obs_norm_veh_width_m=10.0,
+    obs_norm_veh_length_m=15.0,
+    obs_norm_road_seg_length_m=5.0,
+    obs_norm_road_seg_width_m=5.0,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -976,18 +976,18 @@ def plot_observation(
         max_partners,
         max_lane_segments,
         max_boundary_segments,
-        max_traffic_control_observations,
-        lane_segment_dropout,
-        boundary_segment_dropout,
+        obs_slots_traffic_controls_n,
+        obs_dropout_lane,
+        obs_dropout_boundary,
         agent_idx,
     )
     scales = _obs_scales(
-        max_goal_position=max_goal_position,
-        max_position=max_position,
-        max_veh_width=max_veh_width,
-        max_veh_len=max_veh_len,
-        max_road_segment_length=max_road_segment_length,
-        max_road_segment_width=max_road_segment_width,
+        obs_norm_goal_offset_m=obs_norm_goal_offset_m,
+        obs_norm_xy_offset_m=obs_norm_xy_offset_m,
+        obs_norm_veh_width_m=obs_norm_veh_width_m,
+        obs_norm_veh_length_m=obs_norm_veh_length_m,
+        obs_norm_road_seg_length_m=obs_norm_road_seg_length_m,
+        obs_norm_road_seg_width_m=obs_norm_road_seg_width_m,
     )
     target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
 
@@ -1282,12 +1282,12 @@ def extract_obs_frame(obs, scenario, args, timestep, obs_index=0, agent_idx=0, h
         target_type=args["env"]["target_type"],
         reward_conditioning=args["env"]["reward_conditioning"],
         num_target_waypoints=args["env"]["num_target_waypoints"],
-        max_partners=args["env"]["max_partner_observations"],
-        max_lane_segments=args["env"]["max_lane_segment_observations"],
-        max_boundary_segments=args["env"]["max_boundary_segment_observations"],
-        max_traffic_control_observations=args["env"]["max_traffic_control_observations"],
-        lane_segment_dropout=args["env"].get("lane_segment_dropout", 0.0),
-        boundary_segment_dropout=args["env"].get("boundary_segment_dropout", 0.0),
+        max_partners=args["env"]["obs_slots_partners_n"],
+        max_lane_segments=args["env"]["obs_slots_lane_n"],
+        max_boundary_segments=args["env"]["obs_slots_boundary_n"],
+        obs_slots_traffic_controls_n=args["env"]["obs_slots_traffic_controls_n"],
+        obs_dropout_lane=args["env"].get("obs_dropout_lane", 0.0),
+        obs_dropout_boundary=args["env"].get("obs_dropout_boundary", 0.0),
         agent_idx=obs_index,
     )
     scales = _obs_scales(args.get("env"))

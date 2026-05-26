@@ -12,8 +12,8 @@ controlled_exp:
       - 0.01
 env:
   action_type: discrete
-  agent_obs_max_dist: 200.0
-  boundary_segment_dropout: 0.4
+  obs_range_partner_m: 200.0
+  obs_dropout_boundary: 0.4
   collision_behavior: 1
   compute_eval_metrics: false
   control_mode: control_vehicles
@@ -23,21 +23,21 @@ env:
   goal_speed: 3.0
   inactive_agent_threshold: 0.4
   init_mode: create_all_valid
-  init_steps: 0
-  lane_segment_dropout: 0.5
+  init_step: 0
+  obs_dropout_lane: 0.5
   map_dir: /gcs/valeo-cp2879-driving-policy/datasets/v1.1/carla_maps_left/
   max_agents_per_env: 150
-  max_boundary_segment_observations: 80
-  max_goal_position: 200.0
-  max_lane_segment_observations: 80
-  max_partner_observations: 16
-  max_position: 200.0
-  max_road_segment_length: 10.0
-  max_road_segment_width: 5.0
-  max_traffic_control_distance: 100.0
-  max_traffic_control_observations: 4
-  max_veh_len: 15.0
-  max_veh_width: 10.0
+  obs_slots_boundary_n: 80
+  obs_norm_goal_offset_m: 200.0
+  obs_slots_lane_n: 80
+  obs_slots_partners_n: 16
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  obs_range_traffic_control_m: 100.0
+  obs_slots_traffic_controls_n: 4
+  obs_norm_veh_length_m: 15.0
+  obs_norm_veh_width_m: 10.0
   max_waypoint_spacing: 60.0
   min_agents_per_env: 1
   min_waypoint_spacing: 20.0
@@ -58,18 +58,18 @@ env:
   reward_goal: 1.0
   reward_lane_align: 0.025
   reward_lane_center: 0.005
-  reward_offroad_collision: 1.5
+  reward_offroad: 1.5
   reward_overspeed: 0.05
   reward_randomization: true
   reward_reverse: 0.005
   reward_stop_line: 1.0
   reward_timestep: 2.5e-05
-  reward_vehicle_collision: 1.5
+  reward_collision: 1.5
   reward_vel_align: 1.0
   reward_velocity: 0.0025
-  road_obs_behind_dist: 40.0
-  road_obs_front_dist: 200.0
-  road_obs_side_dist: 50.0
+  obs_range_road_behind_m: 40.0
+  obs_range_road_front_m: 200.0
+  obs_range_road_side_m: 50.0
   scenario_length: 3840
   simulation_mode: gigaflow
   spawn_initial_speed: 0.0
