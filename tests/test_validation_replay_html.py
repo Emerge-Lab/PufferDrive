@@ -1,6 +1,6 @@
 """Integration test for the validation_replay HTML render pipeline.
 
-The single thing we care about: calling the evaluator with render_backend=html
+The single thing we care about: calling the evaluator with render_backend=triage_html
 produces non-empty HTML files at the expected output path.
 
 Uses a stub policy (zero actions) so no trained checkpoint is needed.
@@ -69,7 +69,7 @@ class _ZeroPolicy:
 
 
 def test_validation_replay_produces_html(tmp_path):
-    """Calling the evaluator with render_backend=html must produce non-empty HTML files."""
+    """Calling the evaluator with render_backend=triage_html must produce non-empty HTML files."""
     assert os.path.isdir(WOMD_MAP_DIR), f"Test fixture missing: {WOMD_MAP_DIR}"
 
     from pufferlib.ocean.benchmark.evaluators import MultiScenarioEvaluator
@@ -78,7 +78,7 @@ def test_validation_replay_produces_html(tmp_path):
     config = {
         "type": "multi_scenario",
         "render": True,
-        "render_backend": "html",
+        "render_backend": "triage_html",
         "env": {
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
@@ -117,7 +117,7 @@ def test_validation_replay_produces_html(tmp_path):
         policy = _ZeroPolicy(vecenv.single_action_space)
         args = dict(train_config)
         args["env_name"] = "puffer_drive"
-        args["render_backend"] = "html"
+        args["render_backend"] = "triage_html"
 
         with _watchdog(120, "evaluator rollout + render"):
             ev.rollout(vecenv, policy, args)
@@ -126,7 +126,7 @@ def test_validation_replay_produces_html(tmp_path):
 
     html_files = list(Path(tmp_path).rglob("*.html"))
     assert html_files, (
-        f"No HTML files produced under {tmp_path}. render_backend=html should write one HTML per rendered scenario."
+        f"No HTML files produced under {tmp_path}. render_backend=triage_html should write one HTML per rendered scenario."
     )
     for html_path in html_files:
         size = html_path.stat().st_size

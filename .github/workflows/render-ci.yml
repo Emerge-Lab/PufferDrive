@@ -2,9 +2,9 @@ name: render-ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
   push:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
 
 jobs:
   test-render:
@@ -43,13 +43,16 @@ jobs:
 
       - name: Install pufferlib
         run: |
-          pip install -e .[cpu] --no-cache-dir
+          pip install -e . --no-cache-dir
         env:
           TMPDIR: ${{ runner.temp }}/build
           PIP_NO_CACHE_DIR: 1
+          PUFFER_CPU: 1
 
       - name: Compile C extensions
         run: python setup.py build_ext --inplace --force
+        env:
+          PUFFER_CPU: 1
 
       - name: Check disk space (after install)
         run: df -h
