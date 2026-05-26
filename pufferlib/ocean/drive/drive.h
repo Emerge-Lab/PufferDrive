@@ -112,11 +112,6 @@
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
 
-// Traffic control scope constants
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
-#define TRAFFIC_CONTROL_SCOPE_ALL 2
-
 // TARGET_TYPE modes (controls what target info is in observations)
 #define TARGET_STATIC 0
 #define TARGET_DYNAMIC 1
