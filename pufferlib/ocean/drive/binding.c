@@ -456,8 +456,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         if (!agents_list) {
             return NULL;
         }
+        int next_active_log_idx = 0;
         for (int i = 0; i < env->num_total_agents; i++) {
             Agent *a = &env->agents[i];
+            int active_log_idx = -1;
+            if (env->active_agent_indices && next_active_log_idx < env->active_agent_count
+                && env->active_agent_indices[next_active_log_idx] == i) {
+                active_log_idx = next_active_log_idx;
+                next_active_log_idx++;
+            }
 
             PyObject *agent = PyDict_New();
             if (!agent) {
@@ -743,6 +750,76 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             if (PyDict_SetItemString(agent, "sim_speed", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->steering_angle);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "sim_steering", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_lat", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_lat", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1036,6 +1113,58 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             Py_DECREF(metrics);
+
+            if (env->compute_eval_metrics && env->logs && active_log_idx >= 0 && active_log_idx < env->logs_capacity) {
+                Log *log = &env->logs[active_log_idx];
+
+                pf = PyFloat_FromDouble((double) log->puffer_score);
+                if (!pf) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_score", pf) < 0) {
+                    Py_DECREF(pf);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(pf);
+
+                PyObject *puffer_metrics = PyDict_New();
+                if (!puffer_metrics) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (assign_to_dict(puffer_metrics, "score", log->puffer_score)
+                    || assign_to_dict(puffer_metrics, "no_at_fault", log->no_at_fault)
+                    || assign_to_dict(puffer_metrics, "no_offroad", log->no_offroad)
+                    || assign_to_dict(puffer_metrics, "no_red_light", log->no_red_light)
+                    || assign_to_dict(puffer_metrics, "making_progress", log->making_progress)
+                    || assign_to_dict(puffer_metrics, "direction_score", log->driving_direction_score)
+                    || assign_to_dict(puffer_metrics, "ttc_puffer_rate", log->ttc_puffer_rate)
+                    || assign_to_dict(puffer_metrics, "progress_ratio", log->progress_ratio)
+                    || assign_to_dict(puffer_metrics, "speed_limit_compliance", log->speed_limit_compliance)
+                    || assign_to_dict(puffer_metrics, "comfort_score", log->comfort_score)
+                    || assign_to_dict(puffer_metrics, "multi_lane_score", log->multi_lane_score)
+                    || assign_to_dict(puffer_metrics, "wrong_way_distance", log->wrong_way_distance)
+                    || assign_to_dict(puffer_metrics, "speed_violation_sum", log->speed_violation_sum)
+                    || assign_to_dict(puffer_metrics, "multiplier", log->multiplier)
+                    || assign_to_dict(puffer_metrics, "weighted_average", log->weighted_average)) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_metrics", puffer_metrics) < 0) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(puffer_metrics);
+            }
 
             /* Export route information */
             tmp = PyLong_FromLong(a->route_length);
@@ -1758,7 +1887,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int simulation_mode = unpack(kwargs, "simulation_mode");
-    int init_steps = unpack(kwargs, "init_steps");
+    int init_step = unpack(kwargs, "init_step");
     int seed = unpack(kwargs, "seed");
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
@@ -1894,7 +2023,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->simulation_mode = simulation_mode;
-        env->init_steps = init_steps;
+        env->init_step = init_step;
         env->num_max_agents = max_agents_per_env;
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
@@ -1968,8 +2097,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
-    env->reward_vehicle_collision = (float) unpack(kwargs, "reward_vehicle_collision");
-    env->reward_offroad_collision = (float) unpack(kwargs, "reward_offroad_collision");
+    env->reward_collision = (float) unpack(kwargs, "reward_collision");
+    env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
     env->reward_comfort = (float) unpack(kwargs, "reward_comfort");
     env->reward_lane_align = (float) unpack(kwargs, "reward_lane_align");
     env->reward_vel_align = (float) unpack(kwargs, "reward_vel_align");
@@ -1998,10 +2127,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (env->target_type == TARGET_DIJKSTRA) {
         env->num_target_waypoints = DIJKSTRA_TARGET_SLOTS;
     }
-    env->max_boundary_segment_observations = (int) unpack(kwargs, "max_boundary_segment_observations");
-    env->max_lane_segment_observations = (int) unpack(kwargs, "max_lane_segment_observations");
-    env->max_partner_observations = (int) unpack(kwargs, "max_partner_observations");
-    env->max_traffic_control_observations = (int) unpack(kwargs, "max_traffic_control_observations");
+    env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
+    env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
+    env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
@@ -2013,9 +2142,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->map_name = map_file;
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
-    int init_steps = (int) unpack(kwargs, "init_steps");
-    env->init_steps = init_steps;
-    env->timestep = init_steps;
+    int init_step = (int) unpack(kwargs, "init_step");
+    env->init_step = init_step;
+    env->timestep = init_step;
     env->init_mode = (int) unpack(kwargs, "init_mode");
     env->control_mode = (int) unpack(kwargs, "control_mode");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
@@ -2023,19 +2152,19 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
-    env->max_goal_position = (float) unpack(kwargs, "max_goal_position");
-    env->max_position = (float) unpack(kwargs, "max_position");
-    env->max_veh_len = (float) unpack(kwargs, "max_veh_len");
-    env->max_veh_width = (float) unpack(kwargs, "max_veh_width");
-    env->max_road_segment_length = (float) unpack(kwargs, "max_road_segment_length");
-    env->max_road_segment_width = (float) unpack(kwargs, "max_road_segment_width");
-    env->max_traffic_control_distance = (float) unpack(kwargs, "max_traffic_control_distance");
-    env->agent_obs_max_dist = (float) unpack(kwargs, "agent_obs_max_dist");
-    env->road_obs_front_dist = (float) unpack(kwargs, "road_obs_front_dist");
-    env->road_obs_behind_dist = (float) unpack(kwargs, "road_obs_behind_dist");
-    env->road_obs_side_dist = (float) unpack(kwargs, "road_obs_side_dist");
-    env->obs_lane_segment_count = (int) unpack(kwargs, "obs_lane_segment_count");
-    env->obs_boundary_segment_count = (int) unpack(kwargs, "obs_boundary_segment_count");
+    env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
+    env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
+    env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
+    env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
+    env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
+    env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
+    env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
+    env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
+    env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
+    env->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
+    env->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
+    env->obs_slots_lane_kept = (int) unpack(kwargs, "obs_slots_lane_kept");
+    env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");

@@ -71,6 +71,8 @@ python scripts/submit_cluster.py \
 
 `scripts/cluster_configs/nyu_greene.yaml` defines `account`, `gpus`, `cpus`, `mem`, `time` — edit `account` to your allocation before first submit. `--container` makes `submit_cluster.py` wrap the job command in `singularity exec --nv --overlay $OVERLAY_PATH:ro $IMAGE_PATH ...`.
 
+**For a full guide on how to use this see [`docs/cluster_training.md`](docs/cluster_training.md).**
+
 ## Data
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
@@ -170,7 +172,7 @@ Open `renders/index.html` in a browser to triage. The index page filters by "fai
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `reward_goal` | `1.0` | Goal reaching (set 0 without reward conditioning) |
-| `reward_vehicle_collision` | `1.0` | Collision penalty |
+| `reward_collision` | `1.0` | Collision penalty |
 | `reward_comfort` | `0.05` | Smooth driving |
 | `reward_lane_align` | `0.025` | Lane heading alignment |
 | `reward_vel_align` | `1.0` | Speed matching road limit |

@@ -50,7 +50,7 @@ templates.
 | `eval.render_num_scenarios` | how many scenarios to render (caps render cost) |
 | `eval.render_max_steps` | steps per rendered clip |
 
-The `clean` macro zeros `lane_segment_dropout`, `boundary_segment_dropout`,
+The `clean` macro zeros `obs_dropout_lane`, `obs_dropout_boundary`,
 `partner_blindness_prob`, `phantom_braking_prob`,
 `phantom_braking_trigger_prob` and sets `traffic_light_behavior=1`. A value set
 explicitly in the section wins over the macro (e.g. `env.traffic_light_behavior

@@ -236,7 +236,7 @@ int eval_gif(
     int log_trajectories,
     int frame_skip,
     float goal_radius,
-    int init_steps,
+    int init_step,
     int max_controlled_agents,
     const char *view_mode,
     const char *output_topdown,
@@ -281,16 +281,16 @@ int eval_gif(
 
     Drive env = {
         .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_collision = conf.reward_collision,
+        .reward_offroad = conf.reward_offroad,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
         .goal_speed = conf.goal_speed,
         .map_name = (char *) map_name,
-        .init_steps = init_steps,
-        .max_controlled_agents = max_controlled_agents,
+        .init_step = init_step,
+        .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
@@ -479,7 +479,7 @@ int main(int argc, char *argv[]) {
     int log_trajectories = 1;
     int frame_skip = 1;
     float goal_radius = 2.0f;
-    int init_steps = 0;
+    int init_step = 0;
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     int max_controlled_agents = -1;
@@ -559,12 +559,12 @@ int main(int argc, char *argv[]) {
                 output_agent = argv[i + 1];
                 i++;
             }
-        } else if (strcmp(argv[i], "--init-steps") == 0) {
+        } else if (strcmp(argv[i], "--init-step") == 0) {
             if (i + 1 < argc) {
-                init_steps = atoi(argv[i + 1]);
+                init_step = atoi(argv[i + 1]);
                 i++;
-                if (init_steps < 0) {
-                    init_steps = 0;
+                if (init_step < 0) {
+                    init_step = 0;
                 }
             }
         } else if (strcmp(argv[i], "--init-mode") == 0) {
@@ -609,7 +609,7 @@ int main(int argc, char *argv[]) {
         log_trajectories,
         frame_skip,
         goal_radius,
-        init_steps,
+        init_step,
         max_controlled_agents,
         view_mode,
         output_topdown,

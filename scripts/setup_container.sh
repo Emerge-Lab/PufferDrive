@@ -4,12 +4,16 @@
 # with older glibc versions.
 #
 # Architecture:
-#   - The overlay is used ONLY for the miniforge3 base Python interpreter.
-#   - All Python packages (torch, pufferlib, etc.) live in a venv on /scratch
-#     (regular ext4) instead of the overlay (fuse2fs single-threaded ~10 MB/s).
-#     This makes installs/rebuilds ~50x faster than the all-in-overlay approach.
-#   - At runtime the venv's bin/python symlinks back to /ext3/miniforge3, which
-#     is why we still mount the overlay (read-only) when activating the venv.
+#   - miniforge3 lives on /scratch (NOT in the overlay) so its python is a
+#     real file accessible from any node, in or out of singularity. The venv
+#     symlinks `bin/python` into the /scratch miniforge3, which makes
+#     `source venv/activate` work on the login node directly without
+#     needing to enter the container.
+#   - All Python packages (torch, pufferlib, etc.) live in the venv on /scratch
+#     too — fuse2fs is not on the write path for any install step.
+#   - The singularity image still supplies CUDA + cuDNN at job runtime. The
+#     overlay is preserved for the rare case where you need to install
+#     system-level tools, but it's not used for the standard python flow.
 #
 # Usage:
 #   1. Create an overlay (one time): ./setup_container.sh create-overlay
@@ -28,8 +32,15 @@ CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Venv lives on /scratch (regular ext4) — bypasses fuse2fs entirely for installs.
 VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
-# Python from the overlay's miniforge3 (mounted read-only at runtime).
-CONTAINER_PYTHON="${CONTAINER_PYTHON:-/ext3/miniforge3/bin/python3}"
+# miniforge3 lives on /scratch too so the venv's python symlink resolves
+# from any node without needing the singularity overlay to be mounted.
+MINIFORGE3_DIR="${MINIFORGE3_DIR:-/scratch/$USER/miniforge3}"
+# Pin to a miniforge3 release that ships Python 3.12. 25.x switched to 3.13,
+# but torch's cu121 wheels are cp39..cp312 only (no cp313), so 3.13 breaks
+# the install. Bump this once torch publishes cp313 wheels for our index.
+MINIFORGE3_INSTALLER_URL="${MINIFORGE3_INSTALLER_URL:-https://github.com/conda-forge/miniforge/releases/download/24.11.3-2/Miniforge3-24.11.3-2-Linux-x86_64.sh}"
+MINIFORGE3_PYTHON_VERSION="${MINIFORGE3_PYTHON_VERSION:-3.12}"
+CONTAINER_PYTHON="${CONTAINER_PYTHON:-$MINIFORGE3_DIR/bin/python3}"
 
 create_overlay() {
     echo "=== Creating overlay filesystem ==="
@@ -46,7 +57,6 @@ create_overlay() {
     TEMPLATE_NAME=$(basename "$OVERLAY_TEMPLATE")
     cd "$CONTAINER_DIR"
     gunzip "$TEMPLATE_NAME"
-    mv "${TEMPLATE_NAME%.gz}" overlay.ext3
 
     echo "Overlay created at $OVERLAY_PATH"
     echo ""
@@ -74,6 +84,34 @@ if [ -n "$NCCL_DIR" ] && [ -d "$NCCL_DIR" ]; then
     export LD_LIBRARY_PATH="$NCCL_DIR:${LD_LIBRARY_PATH:-}"
 fi
 EOF
+}
+
+# Install miniforge3 to /scratch if it isn't there yet. The conda-forge
+# installer is a self-contained shell script — no root, no singularity
+# required. Doing this on /scratch (rather than inside the overlay)
+# means $MINIFORGE3_DIR/bin/python3 is a real file accessible from any
+# node, so the venv's bin/python symlink resolves outside singularity too.
+ensure_miniforge3() {
+    if [ -x "$MINIFORGE3_DIR/bin/python3" ]; then
+        # Verify the existing miniforge3 has the python version we expect —
+        # otherwise an earlier install that grabbed "latest" (Python 3.13)
+        # would stay around, and uv venv would happily reuse it.
+        local existing
+        existing="$("$MINIFORGE3_DIR/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+        if [ "$existing" = "$MINIFORGE3_PYTHON_VERSION" ]; then
+            return 0
+        fi
+        echo "=== miniforge3 at $MINIFORGE3_DIR has python $existing (want $MINIFORGE3_PYTHON_VERSION); reinstalling ==="
+        rm -rf "$MINIFORGE3_DIR"
+    fi
+    echo "=== Installing miniforge3 to $MINIFORGE3_DIR ==="
+    mkdir -p "$(dirname "$MINIFORGE3_DIR")"
+    local installer
+    installer="$(mktemp -t miniforge3-installer.XXXXXX.sh)"
+    curl -fsSL "$MINIFORGE3_INSTALLER_URL" -o "$installer"
+    bash "$installer" -b -p "$MINIFORGE3_DIR"
+    rm -f "$installer"
+    echo "miniforge3 installed at $MINIFORGE3_DIR"
 }
 
 # Find or bootstrap a uv binary. Prefer one already on PATH or in
@@ -106,6 +144,23 @@ ensure_uv() {
 # of the box and works against any cpython.
 ensure_venv() {
     ensure_uv
+    # If the venv exists but its python doesn't resolve into the current
+    # $MINIFORGE3_DIR (e.g. it points at /ext3/miniforge3 from before we
+    # moved miniforge3 onto /scratch), rebuild. readlink -f resolves the
+    # whole symlink chain, so this catches the case where the link is
+    # valid inside the container (overlay mounted) but stale relative to
+    # where the new venv should point.
+    if [ -f "$VENV_PATH/bin/activate" ]; then
+        local resolved
+        resolved="$(readlink -f "$VENV_PATH/bin/python" 2>/dev/null || true)"
+        case "$resolved" in
+            "$MINIFORGE3_DIR"/*) ;;
+            *)
+                echo "=== Rebuilding stale venv at $VENV_PATH (python points to '$resolved', not under $MINIFORGE3_DIR) ==="
+                rm -rf "$VENV_PATH"
+                ;;
+        esac
+    fi
     if [ ! -f "$VENV_PATH/bin/activate" ]; then
         echo "=== Creating venv at $VENV_PATH ==="
         mkdir -p "$(dirname "$VENV_PATH")"
@@ -168,23 +223,12 @@ rebuild_extension() {
 
 run_in_container() {
     local cmd="$1"
-    # Overlay mounted read-only — venv's bin/python symlinks back into
-    # /ext3/miniforge3 for the interpreter, but every package read/write
-    # happens on /scratch ext4 (the venv on $VENV_PATH).
+    # Overlay mounted read-only — every read/write the install or rebuild
+    # cares about happens on /scratch ext4 (miniforge3 + venv). The overlay
+    # is kept on the mount line for backward compatibility, but nothing
+    # in the python flow writes to it.
     singularity exec --nv \
         --overlay "$OVERLAY_PATH:ro" \
-        "$IMAGE_PATH" \
-        bash -c "cd $PROJECT_ROOT && $cmd"
-}
-
-run_in_container_writable() {
-    local cmd="$1"
-    # --fakeroot still required because uv bootstrap writes to /ext3/miniforge3
-    # (the system pip puts uv there before we activate the venv). Once uv
-    # is bootstrapped, all subsequent installs go to the venv on /scratch
-    # (regular ext4, no fuse2fs in the write path).
-    singularity exec --nv --fakeroot \
-        --overlay "$OVERLAY_PATH" \
         "$IMAGE_PATH" \
         bash -c "cd $PROJECT_ROOT && $cmd"
 }
@@ -197,7 +241,11 @@ case "${1:-}" in
         if [ -f /.singularity.d/Singularity ]; then
             install_deps
         else
-            run_in_container_writable "$0 install"
+            # miniforge3 installs on /scratch via plain shell — no singularity
+            # needed for that step. The rest (uv + pip + build_ext) runs in
+            # the container so nvcc and the right glibc are on PATH.
+            ensure_miniforge3
+            run_in_container "$0 install"
         fi
         ;;
     rebuild)
@@ -218,12 +266,13 @@ case "${1:-}" in
         echo "  rebuild         Rebuild C extension only (submit as GPU job)"
         echo ""
         echo "Environment variables:"
+        echo "  MINIFORGE3_DIR  Where the base python lives (default: /scratch/\$USER/miniforge3)"
         echo "  VENV_PATH       Where the venv lives (default: /scratch/\$USER/venvs/pufferdrive)"
-        echo "  OVERLAY_PATH    Singularity overlay (only needs miniforge3 base python)"
+        echo "  OVERLAY_PATH    Singularity overlay (kept for system-tool installs; not used by the python flow)"
         echo ""
         echo "Example workflow:"
         echo "  1. $0 create-overlay"
         echo "  2. sbatch --gres=gpu:1 --time=60 --wrap \"$0 install\""
-        echo "  3. python scripts/submit_cluster.py --container ..."
+        echo "  3. source \$VENV_PATH/bin/activate && python scripts/submit_cluster.py --container ..."
         ;;
 esac
