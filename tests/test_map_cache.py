@@ -1,11 +1,8 @@
 """Tests for the per-process map cache (use_map_cache env knob).
 
-The cache lets multiple envs sharing a map borrow one read-only copy of the
-static geometry (road_elements, grid_map, neighbor_offsets, lane_graph) instead
-of each loading its own. These tests cover the three properties most likely to
-regress: (1) hit-path correctness, (2) refcount discipline across close orders,
-and (3) the slot-reuse invariant that keeps cache size bounded under repeated
-alloc/free cycles.
+Covers: cache-on vs cache-off observation parity, refcount discipline across
+close orderings, slot-reuse keeping cache size bounded, and per-entry owner_pid
+correctness in a forked child.
 """
 
 import os
@@ -109,6 +106,51 @@ def test_multi_env_close_orderings_do_not_crash(close_order):
         e.step(np.zeros_like(e.actions))
     for idx in close_order:
         envs[idx].close()
+
+
+def test_forked_child_can_build_and_free_its_own_entry():
+    """In a forked child with the parent's cache pre-populated: building an env
+    with use_map_cache=1 raises the child's live count by 1, and closing it drops
+    the live count back to 0 (i.e., the child frees its own entry). The parent's
+    cache size is unchanged by the child."""
+    if os.name != "posix":
+        pytest.skip("fork start method is POSIX-only")
+    import multiprocessing as mp
+
+    # Pre-populate the parent's cache so the child inherits a non-empty cache.
+    warm = _make_drive(use_map_cache=1)
+    warm.reset(seed=0)
+    warm.close()
+    parent_size_before_fork = drive_binding.map_cache_size()
+
+    ctx = mp.get_context("fork")
+    q = ctx.Queue()
+
+    def child_target(out_q):
+        try:
+            env = _make_drive(use_map_cache=1)
+            env.reset(seed=0)
+            env.step(np.zeros_like(env.actions))
+            live_after_build = drive_binding.map_cache_live_count()
+            env.close()
+            live_after_close = drive_binding.map_cache_live_count()
+            out_q.put(("ok", live_after_build, live_after_close))
+        except BaseException as e:
+            out_q.put(("err", repr(e), None))
+
+    p = ctx.Process(target=child_target, args=(q,))
+    p.start()
+    p.join(timeout=60)
+    assert p.exitcode == 0, f"Child process exited with {p.exitcode}"
+    payload = q.get(timeout=5)
+    assert payload[0] == "ok", f"Child raised: {payload[1]}"
+    _, live_after_build, live_after_close = payload
+    assert live_after_build == 1, f"Expected 1 live cache entry after build in child; got {live_after_build}."
+    assert live_after_close == 0, f"Expected 0 live cache entries after close in child; got {live_after_close}."
+
+    assert drive_binding.map_cache_size() == parent_size_before_fork, (
+        f"Parent's cache size changed across fork ({parent_size_before_fork} -> {drive_binding.map_cache_size()})."
+    )
 
 
 def test_cache_size_bounded_by_unique_maps():

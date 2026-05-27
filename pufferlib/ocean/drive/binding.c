@@ -7,18 +7,28 @@
 #define MY_PUT
 #define MY_GET
 
-// Per-process map cache slot count. Live entries + NULL holes left by freed
-// entries; with map_cache_insert reusing NULL slots before growing, the count
-// is bounded by the number of distinct maps loaded in this process.
+// Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
 static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
     return PyLong_FromLong((long) g_map_cache_count);
 }
 
-#define MY_METHODS                                                                                                     \
-    {"map_cache_size",                                                                                                 \
-     map_cache_size_py,                                                                                                \
-     METH_NOARGS,                                                                                                      \
-     "Number of slots in the per-process map cache (live + NULL). Bounded by num unique maps."}
+// Count of slots currently holding a SharedMapData (non-NULL slots only).
+static PyObject *map_cache_live_count_py(PyObject *self __attribute__((unused)),
+                                         PyObject *args __attribute__((unused))) {
+    long live = 0;
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] != NULL) {
+            live++;
+        }
+    }
+    return PyLong_FromLong(live);
+}
+
+// clang-format off
+#define MY_METHODS \
+    {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+// clang-format on
 
 #include "../env_binding.h"
 

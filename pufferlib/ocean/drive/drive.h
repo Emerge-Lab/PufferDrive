@@ -279,12 +279,14 @@ struct GridMap {
     int num_drivable_grid_cell;
 };
 
-// Static, read-only map geometry shared across environments that load the same
-// map file when use_map_cache is set. Holds only data that is never mutated after
-// load: road geometry, the spatial grid (cells + neighbor cache), and the lane
-// graph. Per-env mutable data (agents, traffic-light states) is never shared.
-// Reference-counted; freed when the last borrowing env in the owning process
-// closes. See init() / c_close().
+// Static, read-only map geometry shared across envs loading the same map file
+// when use_map_cache is set: road geometry, spatial grid (cells + neighbor
+// cache), and lane graph. Per-env mutable data (agents, traffic-light states)
+// is never shared.
+//
+// Reference-counted. owner_pid is set at create_shared_map_data; c_close frees
+// the entry only when owner_pid == getpid(), so a process that inherits an
+// entry via fork-COW does not free it.
 struct SharedMapData {
     char *map_name;
     RoadMapElement *road_elements;
@@ -293,15 +295,13 @@ struct SharedMapData {
     int *neighbor_offsets;
     struct LaneGraph lane_graph;
     int ref_count;
+    pid_t owner_pid;
 };
 
-// Per-process map cache. Built lazily in init(). g_map_cache_pid stamps the
-// process that built it: a forked worker inherits these pointers via copy-on-write
-// and must never free them (it would corrupt the parent's heap), so the free path
-// in c_close is guarded by getpid() == g_map_cache_pid.
+// Per-process map cache. Built lazily in init(); freeing is gated by per-entry
+// owner_pid in c_close.
 static struct SharedMapData **g_map_cache = NULL;
 static int g_map_cache_count = 0;
-static pid_t g_map_cache_pid = 0;
 
 struct Drive {
     Client *client;
@@ -3389,13 +3389,7 @@ static struct SharedMapData *map_cache_lookup(const char *map_name) {
 }
 
 static void map_cache_insert(struct SharedMapData *entry) {
-    if (g_map_cache_pid == 0) {
-        g_map_cache_pid = getpid();
-    }
-    // Reuse a slot vacated by free_shared_map_data before growing the array, so a
-    // resample cycle (vec_close frees every entry, then the rebuild re-inserts)
-    // keeps g_map_cache_count bounded by the number of distinct maps instead of
-    // appending past NULL holes on every cycle.
+    // Reuse a NULL slot left by free_shared_map_data before growing the array.
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] == NULL) {
             g_map_cache[i] = entry;
@@ -3485,6 +3479,7 @@ void init(Drive *env) {
             entry->neighbor_offsets = env->neighbor_offsets;
             entry->lane_graph = env->lane_graph;
             entry->ref_count = 1;
+            entry->owner_pid = getpid();
             map_cache_insert(entry);
             env->shared_map = entry;
         }
@@ -3572,12 +3567,10 @@ void c_close(Drive *env) {
     free(env->logs);
 
     if (env->shared_map != NULL) {
-        // Geometry is borrowed from the cache: release our reference. Free the
-        // shared entry only when it is the last reference AND we are the process
-        // that built it (a forked worker must not free the parent's copy-on-write
-        // pages — it would corrupt the parent's heap).
+        // Geometry is borrowed from the cache. Release our reference; free the
+        // entry only on the last reference, and only in the process that built it.
         env->shared_map->ref_count--;
-        if (env->shared_map->ref_count <= 0 && g_map_cache_pid == getpid()) {
+        if (env->shared_map->ref_count <= 0 && env->shared_map->owner_pid == getpid()) {
             free_shared_map_data(env->shared_map);
         }
         env->shared_map = NULL;
