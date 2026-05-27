@@ -279,6 +279,30 @@ struct GridMap {
     int num_drivable_grid_cell;
 };
 
+// Static, read-only map geometry shared across envs loading the same map file
+// when use_map_cache is set: road geometry, spatial grid (cells + neighbor
+// cache), and lane graph. Per-env mutable data (agents, traffic-light states)
+// is never shared.
+//
+// Reference-counted. owner_pid is set at create_shared_map_data; c_close frees
+// the entry only when owner_pid == getpid(), so a process that inherits an
+// entry via fork-COW does not free it.
+struct SharedMapData {
+    char *map_name;
+    RoadMapElement *road_elements;
+    int num_road_elements;
+    GridMap *grid_map;
+    int *neighbor_offsets;
+    struct LaneGraph lane_graph;
+    int ref_count;
+    pid_t owner_pid;
+};
+
+// Per-process map cache. Built lazily in init(); freeing is gated by per-entry
+// owner_pid in c_close.
+static struct SharedMapData **g_map_cache = NULL;
+static int g_map_cache_count = 0;
+
 struct Drive {
     Client *client;
     // Render mode: RENDER_WINDOW (0) for interactive viewer, RENDER_HEADLESS (1)
@@ -346,9 +370,11 @@ struct Drive {
     int logs_capacity;
     int target_type;
     char *ini_file;
-    int collision_behavior;     // 0 = none, 1=stop, 2 = remove
-    int offroad_behavior;       // 0 = none, 1=stop, 2 = remove
-    int traffic_light_behavior; // 0 = none, 1=stop, 2 = remove
+    int collision_behavior;           // 0 = none, 1=stop, 2 = remove
+    int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
+    int traffic_light_behavior;       // 0 = none, 1=stop, 2 = remove
+    int use_map_cache;                // 0 = each env owns its map copy, 1 = share static geometry across envs
+    struct SharedMapData *shared_map; // non-NULL when this env borrows cached geometry
     // Metadata fields
     char scenario_id[128];
     char dataset_name[32];
@@ -3370,19 +3396,113 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
+static struct SharedMapData *map_cache_lookup(const char *map_name) {
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, map_name) == 0) {
+            return g_map_cache[i];
+        }
+    }
+    return NULL;
+}
+
+static void map_cache_insert(struct SharedMapData *entry) {
+    // Reuse a NULL slot left by free_shared_map_data before growing the array.
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] == NULL) {
+            g_map_cache[i] = entry;
+            return;
+        }
+    }
+    g_map_cache
+        = (struct SharedMapData **) realloc(g_map_cache, (g_map_cache_count + 1) * sizeof(struct SharedMapData *));
+    g_map_cache[g_map_cache_count++] = entry;
+}
+
+// Free a shared geometry entry and everything it owns, and clear its cache slot.
+// Mirrors the owned-geometry branch of c_close. Only call in the building process.
+static void free_shared_map_data(struct SharedMapData *shared) {
+    if (shared == NULL) {
+        return;
+    }
+    for (int i = 0; i < shared->num_road_elements; i++) {
+        free_road_element(&shared->road_elements[i]);
+    }
+    free(shared->road_elements);
+    int grid_cell_count = shared->grid_map->grid_cols * shared->grid_map->grid_rows;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        free(shared->grid_map->cells[grid_index]);
+    }
+    free(shared->grid_map->cells);
+    free(shared->grid_map->cell_entities_count);
+    free(shared->grid_map->grid_index_drivable);
+    for (int i = 0; i < grid_cell_count; i++) {
+        free(shared->grid_map->neighbor_cache_entities[i]);
+    }
+    free(shared->grid_map->neighbor_cache_entities);
+    free(shared->grid_map->neighbor_cache_count);
+    free(shared->grid_map);
+    free(shared->neighbor_offsets);
+    free_lane_graph(&shared->lane_graph);
+    free(shared->map_name);
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] == shared) {
+            g_map_cache[i] = NULL;
+            break;
+        }
+    }
+    free(shared);
+}
+
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
-    load_map_binary(env->map_name, env);
+    env->shared_map = NULL;
+
+    struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env->map_name) : NULL;
+    if (shared != NULL) {
+        // Cache hit: load only the per-env data (agents, traffic-control elements),
+        // then discard the freshly-loaded geometry and borrow the shared copy.
+        load_map_binary(env->map_name, env);
+        for (int i = 0; i < env->num_road_elements; i++) {
+            free_road_element(&env->road_elements[i]);
+        }
+        free(env->road_elements);
+        free_lane_graph(&env->lane_graph);
+        env->road_elements = shared->road_elements;
+        env->num_road_elements = shared->num_road_elements;
+        env->grid_map = shared->grid_map;
+        env->neighbor_offsets = shared->neighbor_offsets;
+        env->lane_graph = shared->lane_graph;
+        env->shared_map = shared;
+        shared->ref_count++;
+    } else {
+        // Cache miss (or caching off): load and build the geometry as usual.
+        load_map_binary(env->map_name, env);
+        init_grid_map(env);
+        int vision_half_range = (int) ceilf(
+            fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
+            / GRID_CELL_SIZE);
+        env->grid_map->vision_range = 2 * vision_half_range + 1;
+        init_neighbor_offsets(env);
+        cache_neighbor_offsets(env);
+        if (env->use_map_cache) {
+            // Transfer the just-built geometry into a shared, ref-counted entry that
+            // this env borrows (ref_count starts at 1).
+            struct SharedMapData *entry = (struct SharedMapData *) calloc(1, sizeof(struct SharedMapData));
+            entry->map_name = strdup(env->map_name);
+            entry->road_elements = env->road_elements;
+            entry->num_road_elements = env->num_road_elements;
+            entry->grid_map = env->grid_map;
+            entry->neighbor_offsets = env->neighbor_offsets;
+            entry->lane_graph = env->lane_graph;
+            entry->ref_count = 1;
+            entry->owner_pid = getpid();
+            map_cache_insert(entry);
+            env->shared_map = entry;
+        }
+    }
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
-    init_grid_map(env);
-    int vision_half_range = (int) ceilf(
-        fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
-        / GRID_CELL_SIZE);
-    env->grid_map->vision_range = 2 * vision_half_range + 1;
-    init_neighbor_offsets(env);
-    cache_neighbor_offsets(env);
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
@@ -3455,38 +3575,49 @@ void c_close(Drive *env) {
     for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
-    for (int i = 0; i < env->num_road_elements; i++) {
-        free_road_element(&env->road_elements[i]);
-    }
     for (int i = 0; i < env->num_traffic_elements; i++) {
         free_traffic_element(&env->traffic_elements[i]);
     }
     free(env->agents);
-    free(env->road_elements);
     free(env->traffic_elements);
     free(env->active_agent_indices);
     free(env->logs);
-    // GridMap cleanup
-    int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(env->grid_map->cells[grid_index]);
-    }
-    free(env->grid_map->cells);
-    free(env->grid_map->cell_entities_count);
-    free(env->grid_map->grid_index_drivable);
-    free(env->neighbor_offsets);
 
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(env->grid_map->neighbor_cache_entities[i]);
+    if (env->shared_map != NULL) {
+        // Geometry is borrowed from the cache. Release our reference; free the
+        // entry only on the last reference, and only in the process that built it.
+        env->shared_map->ref_count--;
+        if (env->shared_map->ref_count <= 0 && env->shared_map->owner_pid == getpid()) {
+            free_shared_map_data(env->shared_map);
+        }
+        env->shared_map = NULL;
+    } else {
+        // Geometry is owned by this env: free it.
+        for (int i = 0; i < env->num_road_elements; i++) {
+            free_road_element(&env->road_elements[i]);
+        }
+        free(env->road_elements);
+        int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
+        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+            free(env->grid_map->cells[grid_index]);
+        }
+        free(env->grid_map->cells);
+        free(env->grid_map->cell_entities_count);
+        free(env->grid_map->grid_index_drivable);
+        free(env->neighbor_offsets);
+        for (int i = 0; i < grid_cell_count; i++) {
+            free(env->grid_map->neighbor_cache_entities[i]);
+        }
+        free(env->grid_map->neighbor_cache_entities);
+        free(env->grid_map->neighbor_cache_count);
+        free(env->grid_map);
+        free_lane_graph(&env->lane_graph);
     }
-    free(env->grid_map->neighbor_cache_entities);
-    free(env->grid_map->neighbor_cache_count);
-    free(env->grid_map);
+
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
-    free_lane_graph(&env->lane_graph);
     free(env->map_name);
     free(env->ini_file);
 }

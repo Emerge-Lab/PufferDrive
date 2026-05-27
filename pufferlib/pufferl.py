@@ -366,7 +366,7 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            self.global_step += int(mask.sum())
+            self.global_step += env_id.stop - env_id.start
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
