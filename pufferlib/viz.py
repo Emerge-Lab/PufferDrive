@@ -937,16 +937,30 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         if replay.get(pool_name) is not None:
             chunks[pool_name] = replay[pool_name].astype(np.int16, copy=False)
 
+    target_type = scenario.get("target_type", env_cfg.get("target_type", "static"))
+    if target_type == binding.TARGET_STATIC:
+        target_type = "static"
+    elif target_type == binding.TARGET_DYNAMIC:
+        target_type = "dynamic"
+    elif target_type == binding.TARGET_DIJKSTRA:
+        target_type = "dijkstra"
+    target_features = binding.DYNAMIC_TARGET_FEATURES if target_type == "dynamic" else binding.STATIC_TARGET_FEATURES
+
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
-        "target_type": scenario.get("target_type", env_cfg.get("target_type", "static")),
+        "target_type": target_type,
         "active_indices": scenario.get("active_agent_indices", []),
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["obs"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]),
+        "ego_features": int(binding.EGO_FEATURES),
+        "num_reward_coefs": int(binding.NUM_REWARD_COEFS),
+        "partner_features": int(binding.PARTNER_FEATURES),
+        "road_features": int(binding.ROAD_FEATURES),
+        "traffic_control_features": int(binding.TRAFFIC_CONTROL_FEATURES),
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
@@ -955,7 +969,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
-        "target_features": 3 if env_cfg.get("target_type", "static") == "static" else 5,
+        "target_features": int(target_features),
         "scales": scales,
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
@@ -1181,9 +1195,9 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         function selectedGoals(frame, agent) {
             if (!agent || agent.slot < 0) return [];
             const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs;
-            let p = base + 10;
-            if (H.reward_conditioning) p += 17;
-            const scale = H.target_type === "static" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m;
+            let p = base + H.ego_features;
+            if (H.reward_conditioning) p += H.num_reward_coefs;
+            const scale = H.target_type !== "dynamic" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m;
             const out = [];
             for (let i=0;i<H.num_target_waypoints;i++) {
                 const o = p + i * H.target_features;
@@ -1198,19 +1212,19 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         function decodeObs(frame, slot) {
             if (slot < 0 || slot >= H.active_count) return null;
             const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
-            let p = base, ego = obs.subarray(p, p+10); p += 10;
-            if (H.reward_conditioning) p += 17;
+            let p = base, ego = obs.subarray(p, p+H.ego_features); p += H.ego_features;
+            if (H.reward_conditioning) p += H.num_reward_coefs;
             const targetStart = p; p += H.num_target_waypoints * H.target_features;
-            const partnersStart = p; p += H.max_partners * 8;
-            const lanesStart = p; p += H.lane_count * 7;
-            const boundsStart = p; p += H.boundary_count * 7;
+            const partnersStart = p; p += H.max_partners * H.partner_features;
+            const lanesStart = p; p += H.lane_count * H.road_features;
+            const boundsStart = p; p += H.boundary_count * H.road_features;
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*H.road_features; if(zero(o,H.road_features)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
+            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type !== "dynamic" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*H.traffic_control_features; if(zero(o,H.traffic_control_features)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
             return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
