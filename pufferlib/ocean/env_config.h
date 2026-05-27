@@ -30,6 +30,7 @@ typedef struct {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int use_map_cache;
     float dt;
     int target_type;
     int scenario_length;
@@ -100,6 +101,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->offroad_behavior = atoi(value);
     } else if (MATCH("env", "traffic_light_behavior")) {
         env_config->traffic_light_behavior = atoi(value);
+    } else if (MATCH("env", "use_map_cache")) {
+        env_config->use_map_cache = atoi(value);
     } else if (MATCH("env", "target_type")) {
         if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
             env_config->target_type = 0; // TARGET_STATIC
