@@ -63,6 +63,7 @@
 #define CONTROL_AGENTS 1
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
+#define CONTROL_NONE 4 // All agents follow log trajectories; policy output is ignored
 
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
@@ -3220,7 +3221,7 @@ void set_active_agents(Drive *env) {
     }
 
     // In REPLAY mode, determine which agents to control
-    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
+    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_NONE);
     // In log-replay mode, no cap on actors
     int max_agents = is_log_replay ? env->num_total_agents : env->num_max_agents;
 
@@ -3309,7 +3310,7 @@ void move_expert(Drive *env, float *actions, int agent_idx) {
         return;
     }
 
-    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
+    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY || env->control_mode == CONTROL_NONE);
 
     Agent *agent = &env->agents[agent_idx];
     int t = env->timestep;
@@ -5078,13 +5079,16 @@ void c_step(Drive *env) {
         int expert_idx = env->expert_static_agent_indices[i];
         move_expert(env, env->actions, expert_idx);
     }
-    // Move active agents with policy actions
+    // Move active agents with policy actions (or expert log if CONTROL_NONE)
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
-        move_dynamics(env, i, agent_idx);
-        // move_expert(env, env->actions, agent_idx);
+        if (env->control_mode == CONTROL_NONE) {
+            move_expert(env, env->actions, agent_idx);
+        } else {
+            move_dynamics(env, i, agent_idx);
+        }
     }
 
     // -> 2. Compute metrics and rewards

@@ -258,10 +258,11 @@ class Drive(pufferlib.PufferEnv):
             self.control_mode = 2
         elif self.control_mode_str == "control_sdc_only":
             self.control_mode = 3
+        elif self.control_mode_str == "control_none":
+            self.control_mode = 4
         else:
             raise ValueError(
-                "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
-                f"'control_sdc_only'. Got: {self.control_mode_str}"
+                f"control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', 'control_none', or 'control_sdc_only'. Got: {self.control_mode_str}"
             )
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0

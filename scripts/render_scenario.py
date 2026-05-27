@@ -25,6 +25,9 @@ Views:
     bev          - ego-following ortho camera with wireframe boxes (view_mode=1)
     topdown_sim  - fixed ortho camera over full map with 3D car models (view_mode=2)
     bev_all      - ego-following top-down showing all agents (view_mode=3)
+
+Other Options:
+    control_mode    - Use control_none to visualize all expert logs including ego, else defaults to control_sdc_only for replay and control_vehicles for gigaflow
 """
 
 import argparse
