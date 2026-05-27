@@ -173,11 +173,7 @@ class Drive(pufferlib.PufferEnv):
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
 
-        # Observation space calculation based on target_type
-        self.ego_features = {
-            "classic": binding.EGO_FEATURES_CLASSIC,
-            "jerk": binding.EGO_FEATURES_JERK,
-        }.get(dynamics_model)
+        self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
         self.obs_slots_lane_n = obs_slots_lane_n

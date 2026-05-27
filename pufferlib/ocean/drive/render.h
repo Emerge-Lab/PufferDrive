@@ -723,7 +723,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         return;
     }
 
-    int ego_dim = (env->dynamics_model == JERK) ? EGO_FEATURES_JERK : EGO_FEATURES_CLASSIC;
+    int ego_dim = EGO_FEATURES;
     int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
     int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
                                                               : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
