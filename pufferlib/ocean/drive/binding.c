@@ -13,8 +13,9 @@ static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObj
 }
 
 // Count of slots currently holding a SharedMapData (non-NULL slots only).
-static PyObject *map_cache_live_count_py(PyObject *self __attribute__((unused)),
-                                         PyObject *args __attribute__((unused))) {
+static PyObject *map_cache_live_count_py(
+    PyObject *self __attribute__((unused)),
+    PyObject *args __attribute__((unused))) {
     long live = 0;
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] != NULL) {

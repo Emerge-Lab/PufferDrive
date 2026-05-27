@@ -18,27 +18,21 @@ CARLA_MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "bina
 
 
 def _make_drive(use_map_cache: int, num_agents: int = 32, num_maps: int = 1, **kwargs):
-    """Construct a Drive env on the bundled carla map dir, or skip if absent.
+    """Construct a Drive env on the bundled carla map dir.
 
     num_agents defaults to 32 to satisfy the default min_agents_per_env=32; the
-    cache lifecycle is the same regardless of agent count, so we don't need any
-    smaller setup here.
+    cache lifecycle is the same regardless of agent count.
     """
-    if not os.path.isdir(CARLA_MAP_DIR):
-        pytest.skip(f"Drive map binaries not present at {CARLA_MAP_DIR}")
-    try:
-        return Drive(
-            num_agents=num_agents,
-            num_maps=num_maps,
-            use_map_cache=use_map_cache,
-            map_dir=CARLA_MAP_DIR,
-            scenario_length=64,
-            resample_frequency=0,
-            report_interval=1,
-            **kwargs,
-        )
-    except FileNotFoundError:
-        pytest.skip("Drive map binaries are not available in this checkout")
+    return Drive(
+        num_agents=num_agents,
+        num_maps=num_maps,
+        use_map_cache=use_map_cache,
+        map_dir=CARLA_MAP_DIR,
+        scenario_length=64,
+        resample_frequency=0,
+        report_interval=1,
+        **kwargs,
+    )
 
 
 def _step_and_record(env, action_stream):
