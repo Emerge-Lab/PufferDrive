@@ -4587,7 +4587,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         env->obs_slots_boundary_kept - boundaries_found,
         ROAD_FEATURES);
     return obs_idx;
-        }
+}
 
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
     typedef struct {
@@ -5048,9 +5048,6 @@ void c_reset(Drive *env) {
             agent->goal_position_z = agent->goal_positions_z[0];
         } else {
             build_path(env, agent_idx);
-            if (env->enable_lane_change_goals) {
-                build_path_w_jump(env, agent_idx);
-            }
             compute_goals(env, agent_idx);
         }
         initialize_agent_progression(env, agent_idx);
