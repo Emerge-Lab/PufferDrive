@@ -53,18 +53,13 @@ def _make_env(lane_kept, boundary_kept, lane_n=LANE_N, boundary_n=BOUNDARY_N):
 
 def _lane_start(env):
     return (
-        binding.EGO_FEATURES
-        + env.num_reward_coefs
-        + env.target_dim
-        + env.obs_slots_partners_n * env.partner_features
+        binding.EGO_FEATURES + env.num_reward_coefs + env.target_dim + env.obs_slots_partners_n * env.partner_features
     )
 
 
 def _tc_start(env):
     return (
-        _lane_start(env)
-        + env.obs_slots_lane_kept * env.road_features
-        + env.obs_slots_boundary_kept * env.road_features
+        _lane_start(env) + env.obs_slots_lane_kept * env.road_features + env.obs_slots_boundary_kept * env.road_features
     )
 
 
@@ -87,7 +82,7 @@ def _make_obs(env, batch=2, seed=None):
     base = _tc_start(env)
     for slot in range(env.obs_slots_traffic_controls_n):
         slot_base = base + slot * env.traffic_control_features
-        obs[:, slot_base + tc_continuous] = 0.0      # type  = NONE (0)
+        obs[:, slot_base + tc_continuous] = 0.0  # type  = NONE (0)
         obs[:, slot_base + tc_continuous + 1] = 0.0  # state = UNKNOWN (0)
 
     return obs
