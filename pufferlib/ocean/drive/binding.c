@@ -1,8 +1,36 @@
 #include "drive.h"
+
+#include <Python.h>
+
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
+
+// Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
+static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
+    return PyLong_FromLong((long) g_map_cache_count);
+}
+
+// Count of slots currently holding a SharedMapData (non-NULL slots only).
+static PyObject *map_cache_live_count_py(
+    PyObject *self __attribute__((unused)),
+    PyObject *args __attribute__((unused))) {
+    long live = 0;
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] != NULL) {
+            live++;
+        }
+    }
+    return PyLong_FromLong(live);
+}
+
+// clang-format off
+#define MY_METHODS \
+    {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+// clang-format on
+
 #include "../env_binding.h"
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
@@ -1796,6 +1824,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
+    env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
     env->next_episode_index = 0;
     env->completed_episodes_count = 0;
