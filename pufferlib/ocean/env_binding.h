@@ -1395,6 +1395,11 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
     PyModule_AddIntConstant(m, "DYNAMIC_TARGET_FEATURES", DYNAMIC_TARGET_FEATURES);
     PyModule_AddIntConstant(m, "MAX_TARGET_WAYPOINTS", MAX_TARGET_WAYPOINTS);
+    PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
+    PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
+    PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
+    PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
+    PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
     PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);

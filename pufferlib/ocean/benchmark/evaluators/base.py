@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 from tqdm import tqdm
+from pufferlib.ocean.drive import binding
 
 
 @dataclass
@@ -593,17 +594,30 @@ class Evaluator:
                 max_agent_cap = max(agent_caps)
                 max_traffic_cap = max(max(traffic_caps), 1) if traffic_caps else 1
                 obs_dim = int(ob.shape[-1])
-                agent_f32 = np.zeros((n_in_batch, max_agent_cap, 12), dtype=np.float32)
-                agent_i32 = np.zeros((n_in_batch, max_agent_cap, 8), dtype=np.int32)
-                metrics_f32 = np.zeros((n_in_batch, max_agent_cap, 18), dtype=np.float32)
-                puffer_f32 = np.zeros((n_in_batch, max_agent_cap, 15), dtype=np.float32)
-                traffic_i16 = np.zeros((n_in_batch, max_traffic_cap, 3), dtype=np.int16)
-                agent_f32_hist = [np.zeros((max_steps, agent_caps[e], 12), dtype=np.float32) for e in range(n_in_batch)]
-                agent_i32_hist = [np.zeros((max_steps, agent_caps[e], 8), dtype=np.int32) for e in range(n_in_batch)]
-                metrics_hist = [np.zeros((max_steps, agent_caps[e], 18), dtype=np.float32) for e in range(n_in_batch)]
-                puffer_hist = [np.zeros((max_steps, agent_caps[e], 15), dtype=np.float32) for e in range(n_in_batch)]
+                agent_f32 = np.zeros((n_in_batch, max_agent_cap, binding.AGENT_F32_FIELDS), dtype=np.float32)
+                agent_i32 = np.zeros((n_in_batch, max_agent_cap, binding.AGENT_I32_FIELDS), dtype=np.int32)
+                metrics_f32 = np.zeros((n_in_batch, max_agent_cap, binding.METRICS_F32_FIELDS), dtype=np.float32)
+                puffer_f32 = np.zeros((n_in_batch, max_agent_cap, binding.SCORE_F32_FIELDS), dtype=np.float32)
+                traffic_i16 = np.zeros((n_in_batch, max_traffic_cap, binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
+                agent_f32_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.AGENT_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
+                agent_i32_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.AGENT_I32_FIELDS), dtype=np.int32)
+                    for e in range(n_in_batch)
+                ]
+                metrics_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.METRICS_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
+                puffer_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.SCORE_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
                 traffic_hist = [
-                    np.zeros((max_steps, max(traffic_caps[e], 1), 3), dtype=np.int16) for e in range(n_in_batch)
+                    np.zeros((max_steps, max(traffic_caps[e], 1), binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
+                    for e in range(n_in_batch)
                 ]
                 obs_hist = [
                     np.zeros((max_steps, active_counts[e], obs_dim), dtype=np.float32) for e in range(n_in_batch)
