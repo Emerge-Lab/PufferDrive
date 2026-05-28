@@ -51,7 +51,10 @@ class DriveBackbone(nn.Module):
         # Observation dimensions from environment config
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
-        # Road features size (lanes + boundaries)
+        # Road features size (lanes + boundaries).
+        # _n = total capacity; _kept = effective slots after training dropout.
+        self.obs_slots_lane_n = env.obs_slots_lane_n
+        self.obs_slots_boundary_n = env.obs_slots_boundary_n
         self.obs_slots_lane_kept = env.obs_slots_lane_kept
         self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
         self.road_features_count = env.road_features
@@ -119,12 +122,24 @@ class DriveBackbone(nn.Module):
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
-        # Infer actual lane/boundary counts from the observation size so this
-        # works when the eval env uses a different obs_dropout than training.
-        # Both always share the same N, so the road budget splits evenly.
+        # Infer actual lane/boundary slot counts from the observation size so
+        # this works when the eval env uses a different obs_dropout than training
+        # (eval typically sets dropout=0, which changes the obs buffer size).
+        #
+        # Strategy:
+        #   1. Exact match with training config → use the stored kept counts
+        #      (handles asymmetric dropout, e.g. dropout_lane=0.5 / boundary=0.4).
+        #   2. Otherwise split proportionally by the maximum N values, which is
+        #      exact when dropout=0 and is the best estimate for other levels.
         road_total = observations.shape[1] - ego_dim - self.conditioning_dim - partner_dim - traffic_control_dim
-        actual_lane_kept = road_total // 2 // self.road_features_count
-        actual_boundary_kept = road_total // 2 // self.road_features_count
+        road_slots = road_total // self.road_features_count
+        if road_slots == self.obs_slots_lane_kept + self.obs_slots_boundary_kept:
+            actual_lane_kept = self.obs_slots_lane_kept
+            actual_boundary_kept = self.obs_slots_boundary_kept
+        else:
+            total_n = self.obs_slots_lane_n + self.obs_slots_boundary_n
+            actual_lane_kept = road_slots * self.obs_slots_lane_n // total_n
+            actual_boundary_kept = road_slots - actual_lane_kept
         lane_dim = actual_lane_kept * self.road_features_count
         boundary_dim = actual_boundary_kept * self.road_features_count
 
