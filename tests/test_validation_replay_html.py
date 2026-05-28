@@ -56,9 +56,10 @@ class _ZeroPolicy:
     def forward_eval(self, obs, state):
         batch = obs.shape[0]
         logits = torch.zeros(batch, self._n)
+        value = torch.zeros(batch, 1)
         if self._continuous:
-            return torch.distributions.Normal(logits, torch.ones_like(logits)), state
-        return logits, state
+            return torch.distributions.Normal(logits, torch.ones_like(logits)), value
+        return logits, value
 
     def eval(self):
         return self
