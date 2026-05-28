@@ -117,9 +117,16 @@ class DriveBackbone(nn.Module):
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
+
+        # Infer actual lane/boundary counts from the observation size so this
+        # works when the eval env uses a different obs_dropout than training.
+        # Both always share the same N, so the road budget splits evenly.
+        road_total = observations.shape[1] - ego_dim - self.conditioning_dim - partner_dim - traffic_control_dim
+        actual_lane_kept = road_total // 2 // self.road_features_count
+        actual_boundary_kept = road_total // 2 // self.road_features_count
+        lane_dim = actual_lane_kept * self.road_features_count
+        boundary_dim = actual_boundary_kept * self.road_features_count
 
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
@@ -144,12 +151,12 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+        if actual_lane_kept > 0:
+            lane_objects = lane_observations.view(-1, actual_lane_kept, self.road_features_count)
             lane_features = self.lane_encoder(lane_objects).max(dim=1).values
             feature_list.append(lane_features)
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+        if actual_boundary_kept > 0:
+            boundary_objects = boundary_observations.view(-1, actual_boundary_kept, self.road_features_count)
             boundary_features = self.boundary_encoder(boundary_objects).max(dim=1).values
             feature_list.append(boundary_features)
 
