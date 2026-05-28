@@ -238,7 +238,7 @@ class Drive(pufferlib.PufferEnv):
         self.map_dir = map_dir
         # map_dir may point either at a directory containing .bin files or at
         # a single .bin file (to pin training/eval to one specific map).
-        if os.path.isfile(map_dir) and map_dir.endswith(".bin"):
+        if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
             self.map_files = [map_dir]
         else:
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
