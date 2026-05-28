@@ -3,11 +3,6 @@
 into pufferl CLI flags that argparse accepts without unrecognized-argument
 errors, and the parsed config carries the yaml's values into the right places.
 
-This guards against the launcher PR's previous regression where the yaml
-referenced flags (`env.starting_map`, `eval.validation_replay.enabled`) that
-were not registered in drive.ini, so every job died at argparse before
-reaching training.
-
 Run: python -m unittest tests/test_single_agent_yaml.py
 """
 
@@ -78,9 +73,8 @@ class TestSingleAgentYaml(unittest.TestCase):
         self.assertEqual(args["eval"]["behaviors_full_dir"]["enabled"], 0)
 
     def test_map_dir_points_at_existing_file_or_dir(self):
-        """map_dir in the yaml should resolve to a real path under the repo
-        so Drive() can find the .bin(s). This catches regressions where the
-        yaml drifts off the actual map filename."""
+        """env.map_dir in the yaml must resolve to a real path under the repo
+        so Drive() can find the .bin(s)."""
         cfg = yaml.safe_load(YAML_PATH.read_text())
         map_dir = cfg.get("env.map_dir")
         self.assertIsNotNone(map_dir, "yaml is missing env.map_dir")
