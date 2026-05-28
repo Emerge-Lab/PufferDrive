@@ -61,8 +61,7 @@ class TestSingleAgentYaml(unittest.TestCase):
                 args = load_config("puffer_drive")
             except SystemExit as exc:
                 self.fail(
-                    f"load_config exited ({exc.code}) on the launcher yaml — "
-                    f"argparse stderr:\n{stderr_buf.getvalue()}"
+                    f"load_config exited ({exc.code}) on the launcher yaml — argparse stderr:\n{stderr_buf.getvalue()}"
                 )
 
         self.assertIsInstance(args, dict)
