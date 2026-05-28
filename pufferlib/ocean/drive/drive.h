@@ -405,7 +405,6 @@ struct Drive {
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
     int road_dropout_enabled;
-    int enable_lane_change_goals; // inject one lane-change into path at spawn (GIGAFLOW only)
     // Robustness features
     float partner_blindness_prob;
     float partner_blindness_trigger_prob;
@@ -1410,61 +1409,6 @@ static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, 
     float dx = lane->x[last_idx] - origin_x;
     float dy = lane->y[last_idx] - origin_y;
     return dx * dx + dy * dy;
-}
-
-static float find_closest_segment_on_lane(RoadMapElement *lane, float agent_x, float agent_y, int *out_segment_idx) {
-    int num_segments = lane->segment_length - 1;
-    if (num_segments < 1) {
-        *out_segment_idx = 0;
-        return 1e9f;
-    }
-
-    float min_dist_sq = 1e18f;
-    int closest_idx = 0;
-    float closest_cross = 0.0f;
-
-    for (int seg_idx = 0; seg_idx < num_segments; seg_idx++) {
-        float seg_start_x = lane->x[seg_idx];
-        float seg_start_y = lane->y[seg_idx];
-        float seg_end_x = lane->x[seg_idx + 1];
-        float seg_end_y = lane->y[seg_idx + 1];
-
-        float seg_dx = seg_end_x - seg_start_x;
-        float seg_dy = seg_end_y - seg_start_y;
-        float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-
-        float to_agent_x = agent_x - seg_start_x;
-        float to_agent_y = agent_y - seg_start_y;
-
-        // cross > 0 means agent is left of lane direction
-        float cross = seg_dx * to_agent_y - seg_dy * to_agent_x;
-
-        float dist_sq;
-        if (seg_length_sq > 1e-6f) {
-            float t = (to_agent_x * seg_dx + to_agent_y * seg_dy) / seg_length_sq;
-            if (t <= 0.0f) {
-                dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-            } else if (t >= 1.0f) {
-                float dx = agent_x - seg_end_x;
-                float dy = agent_y - seg_end_y;
-                dist_sq = dx * dx + dy * dy;
-            } else {
-                dist_sq = (cross * cross) / seg_length_sq;
-            }
-        } else {
-            dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-        }
-
-        if (dist_sq < min_dist_sq) {
-            min_dist_sq = dist_sq;
-            closest_idx = seg_idx;
-            closest_cross = cross;
-        }
-    }
-
-    *out_segment_idx = closest_idx;
-    float abs_dist = sqrtf(min_dist_sq);
-    return (closest_cross >= 0.0f) ? -abs_dist : abs_dist;
 }
 
 static float compute_progression(Agent *agent) {
@@ -4643,7 +4587,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         env->obs_slots_boundary_kept - boundaries_found,
         ROAD_FEATURES);
     return obs_idx;
-}
+        }
 
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
     typedef struct {
@@ -5104,6 +5048,9 @@ void c_reset(Drive *env) {
             agent->goal_position_z = agent->goal_positions_z[0];
         } else {
             build_path(env, agent_idx);
+            if (env->enable_lane_change_goals) {
+                build_path_w_jump(env, agent_idx);
+            }
             compute_goals(env, agent_idx);
         }
         initialize_agent_progression(env, agent_idx);
