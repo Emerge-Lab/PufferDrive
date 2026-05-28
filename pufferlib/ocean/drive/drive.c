@@ -145,7 +145,7 @@ void demo() {
     while (!WindowShouldClose()) {
         // Handle camera controls
         int (*actions)[2] = (int (*)[2]) env.actions;
-        forward(net, env.observations, env.actions);
+        forward(net, env.observations, (int *) env.actions);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;

@@ -191,6 +191,73 @@ class DriveBackbone(nn.Module):
         concat_features = torch.cat(feature_list, dim=1)
         return self.backbone(concat_features)
 
+    def pool_slot_counts(self, observations, ego_dim):
+        partner_dim = self.obs_slots_partners_n * self.partner_features_count
+        lane_dim = self.obs_slots_lane_kept * self.road_features_count
+        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
+
+        slide_idx = ego_dim + self.conditioning_dim
+        partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
+        slide_idx += partner_dim
+        lane_observations = observations[:, slide_idx : slide_idx + lane_dim]
+        slide_idx += lane_dim
+        boundary_observations = observations[:, slide_idx : slide_idx + boundary_dim]
+        slide_idx += boundary_dim
+        traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
+
+        counts = {}
+        if self.obs_slots_lane_kept > 0:
+            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+            lane_winners = self.lane_encoder(lane_objects).max(dim=1).indices
+            lane_counts = torch.zeros(
+                observations.shape[0], self.obs_slots_lane_kept, device=observations.device, dtype=torch.int64
+            )
+            counts["pool_lane"] = lane_counts.scatter_add(1, lane_winners, torch.ones_like(lane_winners))
+        if self.obs_slots_boundary_kept > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+            boundary_winners = self.boundary_encoder(boundary_objects).max(dim=1).indices
+            boundary_counts = torch.zeros(
+                observations.shape[0], self.obs_slots_boundary_kept, device=observations.device, dtype=torch.int64
+            )
+            counts["pool_boundary"] = boundary_counts.scatter_add(
+                1, boundary_winners, torch.ones_like(boundary_winners)
+            )
+        if self.obs_slots_partners_n > 0:
+            partner_objects = partner_observations.view(-1, self.obs_slots_partners_n, self.partner_features_count)
+            partner_winners = self.partner_encoder(partner_objects).max(dim=1).indices
+            partner_counts = torch.zeros(
+                observations.shape[0], self.obs_slots_partners_n, device=observations.device, dtype=torch.int64
+            )
+            counts["pool_partner"] = partner_counts.scatter_add(1, partner_winners, torch.ones_like(partner_winners))
+        if self.obs_slots_traffic_controls_n > 0:
+            traffic_control_objects = traffic_control_observations.view(
+                -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
+            )
+            traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
+            traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
+            traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
+            traffic_control_type_onehot = F.one_hot(
+                traffic_control_type.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
+            ).to(traffic_control_continuous.dtype)
+            traffic_control_state_onehot = F.one_hot(
+                traffic_control_state.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
+            ).to(traffic_control_continuous.dtype)
+            traffic_control_objects = torch.cat(
+                [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
+                dim=2,
+            )
+            traffic_control_winners = self.traffic_control_encoder(traffic_control_objects).max(dim=1).indices
+            traffic_control_counts = torch.zeros(
+                observations.shape[0], self.obs_slots_traffic_controls_n, device=observations.device, dtype=torch.int64
+            )
+            counts["pool_traffic"] = traffic_control_counts.scatter_add(
+                1, traffic_control_winners, torch.ones_like(traffic_control_winners)
+            )
+        return counts
+
 
 class Drive(nn.Module):
     def __init__(
@@ -294,6 +361,9 @@ class Drive(nn.Module):
 
     def forward_eval(self, x, state=None):
         return self.forward(x, state)
+
+    def pool_slot_counts(self, observations, state=None):
+        return self.actor_backbone.pool_slot_counts(observations, self.ego_dim)
 
     # Required for PufferLib recurrent wrappers
     def encode_observations(self, observations, state=None):

@@ -290,7 +290,7 @@ int eval_gif(
         .goal_speed = conf.goal_speed,
         .map_name = (char *) map_name,
         .init_step = init_step,
-        .max_controlled_agents = max_controlled_agents,
+        .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
