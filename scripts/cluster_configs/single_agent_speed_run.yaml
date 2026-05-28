@@ -35,8 +35,10 @@ env.obs_slots_traffic_controls_n: 0
 # Training
 train.total_timesteps: 1_000_000_000
 
-# Disable the nuPlan-based evaluators (keep validation_gigaflow, which is CARLA).
+# Disable nuPlan-based evaluators and the validation_gigaflow render spike
+# (eight parallel 1080p ffmpeg encodes have aborted long runs at eval epochs).
 eval.validation_replay.enabled: 0
+eval.validation_gigaflow.enabled: 0
 eval.behaviors_full_dir.enabled: 0
 eval.behaviors_hard_stop.enabled: 0
 eval.behaviors_highway_straight.enabled: 0
