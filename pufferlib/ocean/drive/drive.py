@@ -828,6 +828,16 @@ class Drive(pufferlib.PufferEnv):
         except Exception:
             return binding.env_get(self.c_envs)
 
+    def get_obs_html_frame(self, agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16):
+        binding.vec_get_obs_html_frame(
+            self.c_envs,
+            agent_f32,
+            agent_i32,
+            metrics_f32,
+            puffer_f32,
+            traffic_i16,
+        )
+
 
 def calculate_area(p1, p2, p3):
     # Calculate the area of the triangle using the determinant method

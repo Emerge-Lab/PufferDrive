@@ -96,6 +96,13 @@
 #define MAX_NUM_WP_PATH 200
 #define MAX_TARGET_WAYPOINTS 20
 
+// obs_html_frame array field counts
+#define AGENT_F32_FIELDS 12 // sim_x/y/z, heading, length, width, speed, steering, a_long, a_lat, jerk_long, jerk_lat
+#define AGENT_I32_FIELDS 8  // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
+#define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
+#define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position
     float x;           // Global x-coordinate
