@@ -224,8 +224,8 @@ class Drive(pufferlib.PufferEnv):
             + self.num_reward_coefs
             + self.target_dim
             + self.obs_slots_partners_n * self.partner_features
-            + self.obs_slots_lane_n * self.road_features
-            + self.obs_slots_boundary_n * self.road_features
+            + self.obs_slots_lane_kept * self.road_features
+            + self.obs_slots_boundary_kept * self.road_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
         )
 
@@ -491,8 +491,6 @@ class Drive(pufferlib.PufferEnv):
                     )
                 if self.current_num_eval_scenarios == 0:
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
-                for i in range(self.num_envs):
-                    binding.vec_close_client(self.c_envs, i)
                 binding.vec_close(self.c_envs)
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
@@ -822,8 +820,6 @@ class Drive(pufferlib.PufferEnv):
         self._compact_replay_buffers[env_idx] = self._create_compact_replay_buffer(env_idx, scenario)
 
     def close(self):
-        for i in range(self.num_envs):
-            binding.vec_close_client(self.c_envs, i)
         binding.vec_close(self.c_envs)
 
     def get_state(self):

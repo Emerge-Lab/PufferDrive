@@ -51,9 +51,9 @@ class DriveBackbone(nn.Module):
         # Observation dimensions from environment config
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
-        # Road features size (lanes + boundaries) — use max counts so the obs
-        # buffer layout is the same regardless of dropout (unused slots are
-        # zero-padded by the C env, matching what clean eval produces).
+        # Road features size (lanes + boundaries)
+        self.obs_slots_lane_kept = env.obs_slots_lane_kept
+        self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
         self.obs_slots_lane_n = env.obs_slots_lane_n
         self.obs_slots_boundary_n = env.obs_slots_boundary_n
         self.road_features_count = env.road_features
@@ -74,7 +74,7 @@ class DriveBackbone(nn.Module):
         # 1. observations Encoders
         # Each encoder projects raw features into a common input_size embedding space
         self.ego_encoder = self._create_encoder(ego_dim, input_size, encoder_gigaflow)
-        if self.obs_slots_lane_n > 0:
+        if self.obs_slots_lane_kept > 0:
             self.lane_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -82,7 +82,7 @@ class DriveBackbone(nn.Module):
                 dropout=dropout,
             )
             num_feature_sets += 1
-        if self.obs_slots_boundary_n > 0:
+        if self.obs_slots_boundary_kept > 0:
             self.boundary_encoder = self._create_encoder(
                 self.road_features_count,
                 input_size,
@@ -118,9 +118,17 @@ class DriveBackbone(nn.Module):
 
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
+
+        if self.training:
+            obs_slots_lane_kept = self.obs_slots_lane_kept
+            obs_slots_boundary_kept = self.obs_slots_boundary_kept
+        else: 
+            obs_slots_lane_kept = self.obs_slots_lane_n
+            obs_slots_boundary_kept = self.obs_slots_boundary_n
+
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_n * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_n * self.road_features_count
+        lane_dim = obs_slots_lane_kept * self.road_features_count
+        boundary_dim = obs_slots_boundary_kept * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim
@@ -146,12 +154,12 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.obs_slots_lane_n > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_n, self.road_features_count)
+        if obs_slots_lane_kept > 0:
+            lane_objects = lane_observations.view(-1, obs_slots_lane_kept, self.road_features_count)
             lane_features = self.lane_encoder(lane_objects).max(dim=1).values
             feature_list.append(lane_features)
-        if self.obs_slots_boundary_n > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_n, self.road_features_count)
+        if obs_slots_boundary_kept > 0:
+            boundary_objects = boundary_observations.view(-1, obs_slots_boundary_kept, self.road_features_count)
             boundary_features = self.boundary_encoder(boundary_objects).max(dim=1).values
             feature_list.append(boundary_features)
 
@@ -194,9 +202,15 @@ class DriveBackbone(nn.Module):
         return self.backbone(concat_features)
 
     def pool_slot_counts(self, observations, ego_dim):
+        if self.training:
+            obs_slots_lane_kept = self.obs_slots_lane_kept
+            obs_slots_boundary_kept = self.obs_slots_boundary_kept
+        else:
+            obs_slots_lane_kept = self.obs_slots_lane_n
+            obs_slots_boundary_kept = self.obs_slots_boundary_n
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        lane_dim = obs_slots_lane_kept * self.road_features_count
+        boundary_dim = obs_slots_boundary_kept * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim + self.conditioning_dim
@@ -209,18 +223,18 @@ class DriveBackbone(nn.Module):
         traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
 
         counts = {}
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+        if obs_slots_lane_kept > 0:
+            lane_objects = lane_observations.view(-1, obs_slots_lane_kept, self.road_features_count)
             lane_winners = self.lane_encoder(lane_objects).max(dim=1).indices
             lane_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_lane_kept, device=observations.device, dtype=torch.int64
+                observations.shape[0], obs_slots_lane_kept, device=observations.device, dtype=torch.int64
             )
             counts["pool_lane"] = lane_counts.scatter_add(1, lane_winners, torch.ones_like(lane_winners))
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+        if obs_slots_boundary_kept > 0:
+            boundary_objects = boundary_observations.view(-1, obs_slots_boundary_kept, self.road_features_count)
             boundary_winners = self.boundary_encoder(boundary_objects).max(dim=1).indices
             boundary_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_boundary_kept, device=observations.device, dtype=torch.int64
+                observations.shape[0], obs_slots_boundary_kept, device=observations.device, dtype=torch.int64
             )
             counts["pool_boundary"] = boundary_counts.scatter_add(
                 1, boundary_winners, torch.ones_like(boundary_winners)
