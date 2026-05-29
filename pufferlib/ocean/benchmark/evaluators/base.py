@@ -511,7 +511,11 @@ class Evaluator:
                     # basename: map_name is the full bin path, and an absolute
                     # value would make `out_dir / stem` escape out_dir.
                     map_name = os.path.basename(str(info.get("map_name") or "map")).split(".")[0]
-                    stem = f"{map_name}_{scenario_id}{step_suffix}"
+                    # scenario_id repeats across rollouts on the same map in
+                    # gigaflow mode (the C side fills it with the map's short
+                    # name), so append a monotonic counter to make every
+                    # rendered episode land in its own file.
+                    stem = f"{map_name}_{scenario_id}_{scenarios_done:04d}{step_suffix}"
                     tmp_path = out_dir / f"{stem}.pkl.zlib"
                     html_path = out_dir / f"{stem}.html"
                     tmp_path.write_bytes(bundle_bytes)
