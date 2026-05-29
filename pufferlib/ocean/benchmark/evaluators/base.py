@@ -582,7 +582,7 @@ class Evaluator:
             file_metrics = {}
             for i in range(min(len(html_paths), len(df_first))):
                 row = df_first.iloc[i]
-                name = os.path.basename(str(html_paths[i]))
+                name = Path(html_paths[i]).name
                 file_metrics[name] = {c: float(row[c]) for c in metric_cols if not pd.isna(row[c])}
             return file_metrics or None
         except Exception as exc:
