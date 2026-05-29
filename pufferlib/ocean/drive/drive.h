@@ -4458,7 +4458,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
-        obs[obs_idx++] = other->sim_speed / MAX_SPEED;
+        obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
         partners_written++;
     }
 
