@@ -3689,6 +3689,10 @@ void init(Drive *env) {
 }
 
 void c_close(Drive *env) {
+    if (env->client) {
+        close_client(env->client);
+        env->client = NULL;
+    }
     for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
@@ -3743,9 +3747,30 @@ static int compute_observation_size(Drive *env) {
         : (env->target_type == TARGET_DYNAMIC)                ? DYNAMIC_TARGET_FEATURES
                                                               : 0;
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
-        + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
-        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
-        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_target_waypoints * target_features;
+        + ROAD_FEATURES * (env->obs_slots_lane_n + env->obs_slots_boundary_n)
+        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + env->reward_conditioning * NUM_REWARD_COEFS
+        + env->num_target_waypoints * target_features;
+}
+
+// Fill `rows` x `features` observation slots with the padding sentinel.
+static inline void fill_padded_observation_rows(float *obs, int rows, int features) {
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < features; c++) {
+            obs[r * features + c] = PADDED_OBSERVATION_VALUE;
+        }
+    }
+}
+
+// Pad `rows` traffic-control slots with the sentinel; type/state columns set to NONE/UNKNOWN.
+static inline void fill_padded_traffic_control_rows(float *obs, int rows) {
+    for (int r = 0; r < rows; r++) {
+        int base = r * TRAFFIC_CONTROL_FEATURES;
+        for (int c = 0; c < TRAFFIC_CONTROL_FEATURES - 2; c++) {
+            obs[base + c] = PADDED_OBSERVATION_VALUE;
+        }
+        obs[base + TRAFFIC_CONTROL_FEATURES - 2] = TRAFFIC_CONTROL_TYPE_NONE;
+        obs[base + TRAFFIC_CONTROL_FEATURES - 1] = TRAFFIC_CONTROL_STATE_UNKNOWN;
+    }
 }
 
 void allocate(Drive *env) {
@@ -4535,8 +4560,8 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     }
 
     int lane_obs_idx = obs_idx;
-    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
-    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
+    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_n * ROAD_FEATURES;
+    obs_idx = boundary_obs_idx + env->obs_slots_boundary_n * ROAD_FEATURES;
 
     float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
     float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
@@ -4622,13 +4647,13 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * ROAD_FEATURES * sizeof(float));
         memset(
             &obs[lane_obs_idx + lanes_to_copy * ROAD_FEATURES],
-            0,
-            (env->obs_slots_lane_kept - lanes_to_copy) * ROAD_FEATURES * sizeof(float));
+            env->obs_slots_lane_n - lanes_to_copy,
+            ROAD_FEATURES);
         memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * ROAD_FEATURES * sizeof(float));
         memset(
             &obs[boundary_obs_idx + boundaries_to_copy * ROAD_FEATURES],
-            0,
-            (env->obs_slots_boundary_kept - boundaries_to_copy) * ROAD_FEATURES * sizeof(float));
+            env->obs_slots_boundary_n - boundaries_to_copy,
+            ROAD_FEATURES);
         return obs_idx;
     }
 
@@ -4636,12 +4661,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     *boundary_count = boundaries_found;
     memset(
         &obs[lane_obs_idx + lanes_found * ROAD_FEATURES],
-        0,
-        (env->obs_slots_lane_kept - lanes_found) * ROAD_FEATURES * sizeof(float));
-    memset(
+        env->obs_slots_lane_n - lanes_found,
+        ROAD_FEATURES);
+    fill_padded_observation_rows(
         &obs[boundary_obs_idx + boundaries_found * ROAD_FEATURES],
-        0,
-        (env->obs_slots_boundary_kept - boundaries_found) * ROAD_FEATURES * sizeof(float));
+        env->obs_slots_boundary_n - boundaries_found,
+        ROAD_FEATURES);
     return obs_idx;
 }
 

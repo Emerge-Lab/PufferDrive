@@ -74,9 +74,11 @@ class DriveBackbone(nn.Module):
         # Observation dimensions from environment config
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
-        # Road features size (lanes + boundaries)
-        self.obs_slots_lane_kept = env.obs_slots_lane_kept
-        self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
+        # Road features size (lanes + boundaries) — use max counts so the obs
+        # buffer layout is the same regardless of dropout (unused slots are
+        # zero-padded by the C env, matching what clean eval produces).
+        self.obs_slots_lane_n = env.obs_slots_lane_n
+        self.obs_slots_boundary_n = env.obs_slots_boundary_n
         self.road_features_count = env.road_features
         # Traffic control size
         self.obs_slots_traffic_controls_n = env.obs_slots_traffic_controls_n
@@ -93,15 +95,24 @@ class DriveBackbone(nn.Module):
         self.context_dim = env.num_reward_coefs + env.target_dim
 
         # 1. observations Encoders
-        # Each encoder projects raw features into its own embedding space
-        self.ego_encoder = self._create_encoder(ego_dim, ego_input_size)
-        encoders_out = ego_input_size
-        if self.obs_slots_lane_kept > 0:
-            self.lane_encoder = self._create_encoder(self.road_features_count, lane_input_size)
-            encoders_out += lane_input_size
-        if self.obs_slots_boundary_kept > 0:
-            self.boundary_encoder = self._create_encoder(self.road_features_count, boundary_input_size)
-            encoders_out += boundary_input_size
+        # Each encoder projects raw features into a common input_size embedding space
+        self.ego_encoder = self._create_encoder(ego_dim, input_size, encoder_gigaflow)
+        if self.obs_slots_lane_n > 0:
+            self.lane_encoder = self._create_encoder(
+                self.road_features_count,
+                input_size,
+                encoder_gigaflow,
+                dropout=dropout,
+            )
+            num_feature_sets += 1
+        if self.obs_slots_boundary_n > 0:
+            self.boundary_encoder = self._create_encoder(
+                self.road_features_count,
+                input_size,
+                encoder_gigaflow,
+                dropout=dropout,
+            )
+            num_feature_sets += 1
         if self.obs_slots_partners_n > 0:
             self.partner_encoder = self._create_encoder(self.partner_features_count, partner_input_size)
             encoders_out += partner_input_size
@@ -132,8 +143,8 @@ class DriveBackbone(nn.Module):
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        lane_dim = self.obs_slots_lane_n * self.road_features_count
+        boundary_dim = self.obs_slots_boundary_n * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim
@@ -173,18 +184,13 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
-            lane_features = self._encode_and_pool(lane_objects, lane_counts, self.lane_encoder, self.lane_input_size)
+        if self.obs_slots_lane_n > 0:
+            lane_objects = lane_observations.view(-1, self.obs_slots_lane_n, self.road_features_count)
+            lane_features = self.lane_encoder(lane_objects).max(dim=1).values
             feature_list.append(lane_features)
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
-            boundary_features = self._encode_and_pool(
-                boundary_objects,
-                boundary_counts,
-                self.boundary_encoder,
-                self.boundary_input_size,
-            )
+        if self.obs_slots_boundary_n > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_n, self.road_features_count)
+            boundary_features = self.boundary_encoder(boundary_objects).max(dim=1).values
             feature_list.append(boundary_features)
 
         # Encode Partners
