@@ -5,8 +5,6 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-import torch
-
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.torch import Drive as DrivePolicy
@@ -66,10 +64,23 @@ DEFAULT_ENV_KWARGS = {
     "map_dir": MAP_DIR,
     "collision_behavior": 1,
     "offroad_behavior": 1,
-    "obs_slots_lane_n": 32,
-    "obs_slots_boundary_n": 32,
+    "obs_slots_lane_n": 80,
+    "obs_slots_boundary_n": 80,
     "obs_slots_partners_n": 16,
-    "obs_slots_traffic_controls_n": 10,
+    "obs_slots_traffic_controls_n": 4,
+    "obs_dropout_lane": 0.0,
+    "obs_dropout_boundary": 0.0,
+    "obs_norm_goal_offset_m": 120.0,
+    "obs_norm_xy_offset_m": 120.0,
+    "obs_norm_veh_length_m": 15.0,
+    "obs_norm_veh_width_m": 10.0,
+    "obs_norm_road_seg_length_m": 10.0,
+    "obs_norm_road_seg_width_m": 5.0,
+    "obs_range_road_front_m": 120.0,
+    "obs_range_road_behind_m": 20.0,
+    "obs_range_road_side_m": 30.0,
+    "obs_range_partner_m": 100.0,
+    "obs_range_traffic_control_m": 100.0,
     "seed": 42,
 }
 
@@ -96,27 +107,6 @@ def make_drive_env(**overrides):
     env = Drive(**kwargs)
     obs, info = env.reset(seed=kwargs["seed"])
     return env, obs, info
-
-
-def notebook_dims(env):
-    return {
-        "EGO_DIM": env.ego_features,
-        "NUM_COEFS": binding.NUM_REWARD_COEFS,
-        "PARTNER_F": env.partner_features,
-        "ROAD_F": env.road_features,
-        "TRAFFIC_CONTROL_F": env.traffic_control_features,
-        "NUM_TRAFFIC_CONTROL_TYPES": binding.NUM_TRAFFIC_CONTROL_TYPES,
-        "MAX_PARTNERS": env.obs_slots_partners_n,
-        "MAX_LANES": env.obs_slots_lane_kept,
-        "MAX_BOUNDS": env.obs_slots_boundary_kept,
-        "MAX_TRAFFIC": env.obs_slots_traffic_controls_n,
-        "MAX_TARGET": env.num_target_waypoints,
-        "TARGET_F": env.target_features,
-        "TARGET_DIM": env.target_dim,
-        "N_ACTIONS": int(env.single_action_space.nvec[0]) if hasattr(env.single_action_space, "nvec") else 1,
-        "N": env.num_agents,
-        "ACT_SHAPE": action_shape(env),
-    }
 
 
 def action_shape(env):
@@ -154,12 +144,4 @@ def load_notebook_config(checkpoint_path=None, env_name="puffer_drive"):
             if section in ycfg and isinstance(ycfg[section], dict):
                 config[section].update(ycfg[section])
 
-    config["train"]["use_rnn"] = config.get("rnn_name") is not None
     return config
-
-
-def make_rnn_state(policy, n, device):
-    return {
-        "lstm_h": torch.zeros(n, policy.hidden_size, device=device),
-        "lstm_c": torch.zeros(n, policy.hidden_size, device=device),
-    }
