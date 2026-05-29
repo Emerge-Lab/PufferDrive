@@ -35,10 +35,18 @@ env.obs_slots_traffic_controls_n: 0
 # Training
 train.total_timesteps: 1_000_000_000
 
-# Disable nuPlan-based evaluators and the validation_gigaflow render spike
-# (eight parallel 1080p ffmpeg encodes have aborted long runs at eval epochs).
+# Disable nuPlan-based evaluators. validation_gigaflow stays on but is
+# reconfigured to triage_html (CPU-only scene playback + per-episode metrics
+# including dnf_rate), pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops a gallery of rollouts you can browse
+# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
 eval.validation_replay.enabled: 0
-eval.validation_gigaflow.enabled: 0
+eval.validation_gigaflow.render_backend: triage_html
+eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+eval.validation_gigaflow.env.num_maps: 1
+eval.validation_gigaflow.env.num_agents: 64
+eval.validation_gigaflow.env.min_agents_per_env: 1
+eval.validation_gigaflow.env.max_agents_per_env: 1
 eval.behaviors_full_dir.enabled: 0
 eval.behaviors_hard_stop.enabled: 0
 eval.behaviors_highway_straight.enabled: 0
