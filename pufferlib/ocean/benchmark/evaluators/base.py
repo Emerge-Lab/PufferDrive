@@ -533,6 +533,9 @@ class Evaluator:
             vec.close()
             progress.close()
 
+        if html_paths:
+            viz.build_gallery_index(str(out_dir))
+
         return html_paths
 
     def _render_pass_obs(self, vecenv, policy, args) -> list:
