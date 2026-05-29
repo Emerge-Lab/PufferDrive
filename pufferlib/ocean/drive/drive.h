@@ -3572,6 +3572,10 @@ void init(Drive *env) {
 }
 
 void c_close(Drive *env) {
+    if (env->client) {
+        close_client(env->client);
+        env->client = NULL;
+    }
     for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
@@ -3627,7 +3631,7 @@ static int compute_observation_size(Drive *env) {
         : (env->target_type == TARGET_DYNAMIC)                ? DYNAMIC_TARGET_FEATURES
                                                               : 0;
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
-        + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
+        + ROAD_FEATURES * (env->obs_slots_lane_n + env->obs_slots_boundary_n)
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + env->reward_conditioning * NUM_REWARD_COEFS
         + env->num_target_waypoints * target_features;
 }
@@ -4475,8 +4479,8 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     }
 
     int lane_obs_idx = obs_idx;
-    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
-    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
+    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_n * ROAD_FEATURES;
+    obs_idx = boundary_obs_idx + env->obs_slots_boundary_n * ROAD_FEATURES;
 
     float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
     float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
@@ -4562,12 +4566,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * ROAD_FEATURES * sizeof(float));
         fill_padded_observation_rows(
             &obs[lane_obs_idx + lanes_to_copy * ROAD_FEATURES],
-            env->obs_slots_lane_kept - lanes_to_copy,
+            env->obs_slots_lane_n - lanes_to_copy,
             ROAD_FEATURES);
         memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * ROAD_FEATURES * sizeof(float));
         fill_padded_observation_rows(
             &obs[boundary_obs_idx + boundaries_to_copy * ROAD_FEATURES],
-            env->obs_slots_boundary_kept - boundaries_to_copy,
+            env->obs_slots_boundary_n - boundaries_to_copy,
             ROAD_FEATURES);
         return obs_idx;
     }
@@ -4576,11 +4580,11 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     *boundary_count = boundaries_found;
     fill_padded_observation_rows(
         &obs[lane_obs_idx + lanes_found * ROAD_FEATURES],
-        env->obs_slots_lane_kept - lanes_found,
+        env->obs_slots_lane_n - lanes_found,
         ROAD_FEATURES);
     fill_padded_observation_rows(
         &obs[boundary_obs_idx + boundaries_found * ROAD_FEATURES],
-        env->obs_slots_boundary_kept - boundaries_found,
+        env->obs_slots_boundary_n - boundaries_found,
         ROAD_FEATURES);
     return obs_idx;
 }
