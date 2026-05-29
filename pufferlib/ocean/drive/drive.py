@@ -236,7 +236,12 @@ class Drive(pufferlib.PufferEnv):
         self.control_mode_str = control_mode
         self.simulation_mode_str = simulation_mode
         self.map_dir = map_dir
-        self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+        # map_dir may point either at a directory containing .bin files or at
+        # a single .bin file (to pin training/eval to one specific map).
+        if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
+            self.map_files = [map_dir]
+        else:
+            self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
         if self.simulation_mode_str == "gigaflow":
             self.simulation_mode = 0
