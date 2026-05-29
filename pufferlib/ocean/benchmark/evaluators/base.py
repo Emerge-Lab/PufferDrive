@@ -534,9 +534,60 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            viz.build_gallery_index(str(out_dir))
+            file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
+            viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
 
         return html_paths
+
+    def _collect_file_metrics_from_csv(self, args, step_suffix, html_paths):
+        """Pair the rendered gallery files with per-episode metrics so the
+        index can offer a sort UI. The metric pass writes a CSV before this
+        render runs (see _maybe_emit_eval_reports); both passes share env
+        config and seed, so the N-th rendered file corresponds to the N-th
+        first-episode row in the CSV sorted by env_slot. Heuristic but cheap
+        — on any failure we just return None and the gallery falls back to
+        filename-order browsing.
+        """
+        try:
+            from pathlib import Path
+            import pandas as pd
+
+            csv_path = (
+                Path(args.get("eval_results_dir") or args.get("render_results_dir") or ".")
+                / "episode_metrics"
+                / f"{self.name}{step_suffix}.csv"
+            )
+            if not csv_path.exists():
+                return None
+            df = pd.read_csv(csv_path)
+            if "episode_index" not in df.columns or "env_slot" not in df.columns:
+                return None
+            df_first = df[df["episode_index"] == 0].sort_values("env_slot").reset_index(drop=True)
+            metric_cols = [
+                c
+                for c in (
+                    "score",
+                    "dnf_rate",
+                    "episode_return",
+                    "num_goals_reached",
+                    "collision_rate",
+                    "offroad_rate",
+                    "red_light_violation_rate",
+                    "total_infractions",
+                    "total_distance_travelled",
+                    "episode_length",
+                )
+                if c in df_first.columns
+            ]
+            file_metrics = {}
+            for i in range(min(len(html_paths), len(df_first))):
+                row = df_first.iloc[i]
+                name = os.path.basename(str(html_paths[i]))
+                file_metrics[name] = {c: float(row[c]) for c in metric_cols if not pd.isna(row[c])}
+            return file_metrics or None
+        except Exception as exc:
+            print(f"[eval.{self.name}] gallery sort: could not pair metrics ({exc})")
+            return None
 
     def _render_pass_obs(self, vecenv, policy, args) -> list:
         """`obs_html` backend. CPU-only interactive viewer for inspecting policy
@@ -755,7 +806,8 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            viz.build_gallery_index(str(out_dir))
+            file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
+            viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:
