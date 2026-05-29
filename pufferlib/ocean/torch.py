@@ -123,6 +123,7 @@ class DriveBackbone(nn.Module):
             obs_slots_lane_kept = self.obs_slots_lane_kept
             obs_slots_boundary_kept = self.obs_slots_boundary_kept
         else: 
+            # During evaluation, enforce zero dropout (also in pufferlib/ocean/benchmark/manager.py)
             obs_slots_lane_kept = self.obs_slots_lane_n
             obs_slots_boundary_kept = self.obs_slots_boundary_n
 
