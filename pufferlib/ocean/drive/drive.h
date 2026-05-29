@@ -196,6 +196,18 @@ struct CompletedEpisodeSummary {
     float total_infractions;
     float n;
     int episode_index;
+    float reward_collision;
+    float reward_offroad;
+    float reward_red_light;
+    float reward_goal;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_timestep;
+    float reward_reverse;
+    float reward_overspeed;
+    float reward_ade;
     // Scenario identity captured at completion (before c_reset resamples the
     // env slot), so per-episode consumers can attribute each row to its map.
     char map_name[256];
@@ -253,6 +265,18 @@ struct Log {
     float ttc_puffer_rate;
     float multiplier;
     float weighted_average;
+    float reward_collision;
+    float reward_offroad;
+    float reward_red_light;
+    float reward_goal;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_timestep;
+    float reward_reverse;
+    float reward_overspeed;
+    float reward_ade;
 };
 
 struct GridMapEntity {
@@ -2585,6 +2609,19 @@ static void add_log(Drive *env) {
         env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
+        env->log.reward_collision += env->logs[i].reward_collision;
+        env->log.reward_offroad += env->logs[i].reward_offroad;
+        env->log.reward_red_light += env->logs[i].reward_red_light;
+        env->log.reward_goal += env->logs[i].reward_goal;
+        env->log.reward_lane_align += env->logs[i].reward_lane_align;
+        env->log.reward_lane_center += env->logs[i].reward_lane_center;
+        env->log.reward_comfort += env->logs[i].reward_comfort;
+        env->log.reward_velocity += env->logs[i].reward_velocity;
+        env->log.reward_timestep += env->logs[i].reward_timestep;
+        env->log.reward_reverse += env->logs[i].reward_reverse;
+        env->log.reward_overspeed += env->logs[i].reward_overspeed;
+        env->log.reward_ade += env->logs[i].reward_ade;
         // Comfort and velocity metrics (normalized per timestep)
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2644,6 +2681,18 @@ static void add_log(Drive *env) {
         s->score = 0.0f;
         s->total_distance_travelled = 0.0f;
         s->total_infractions = 0.0f;
+        s->reward_collision = 0.0f;
+        s->reward_offroad = 0.0f;
+        s->reward_red_light = 0.0f;
+        s->reward_goal = 0.0f;
+        s->reward_lane_align = 0.0f;
+        s->reward_lane_center = 0.0f;
+        s->reward_comfort = 0.0f;
+        s->reward_velocity = 0.0f;
+        s->reward_timestep = 0.0f;
+        s->reward_reverse = 0.0f;
+        s->reward_overspeed = 0.0f;
+        s->reward_ade = 0.0f;
         s->n = (float) env->active_agent_count;
         s->episode_index = env->next_episode_index++;
         s->map_name[0] = '\0';
@@ -2673,6 +2722,18 @@ static void add_log(Drive *env) {
             if (collided || offroad || red_light) {
                 s->total_infractions += 1.0f;
             }
+            s->reward_collision += env->logs[i].reward_collision;
+            s->reward_offroad += env->logs[i].reward_offroad;
+            s->reward_red_light += env->logs[i].reward_red_light;
+            s->reward_goal += env->logs[i].reward_goal;
+            s->reward_lane_align += env->logs[i].reward_lane_align;
+            s->reward_lane_center += env->logs[i].reward_lane_center;
+            s->reward_comfort += env->logs[i].reward_comfort;
+            s->reward_velocity += env->logs[i].reward_velocity;
+            s->reward_timestep += env->logs[i].reward_timestep;
+            s->reward_reverse += env->logs[i].reward_reverse;
+            s->reward_overspeed += env->logs[i].reward_overspeed;
+            s->reward_ade += env->logs[i].reward_ade;
         }
     }
 }
@@ -4133,6 +4194,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += reward_collision;
         env->logs[i].episode_return += reward_collision;
+        env->logs[i].reward_collision += reward_collision;
         env->logs[i].collision_rate = 1.0f;
     }
 
@@ -4143,6 +4205,7 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] += reward_offroad;
         env->logs[i].offroad_rate = 1.0f;
         env->logs[i].episode_return += reward_offroad;
+        env->logs[i].reward_offroad += reward_offroad;
     }
 
     // Red light violation reward (GIGAFLOW)
@@ -4152,6 +4215,7 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
         env->logs[i].episode_return += reward_red_light;
+        env->logs[i].reward_red_light += reward_red_light;
     }
 
     // Goal reward
@@ -4164,8 +4228,10 @@ static void compute_rewards(Drive *env, int i) {
             }
         }
 
-        env->rewards[i] += env->reward_goal * weight;
-        env->logs[i].episode_return += env->reward_goal * weight;
+        float reward_goal = env->reward_goal * weight;
+        env->rewards[i] += reward_goal;
+        env->logs[i].episode_return += reward_goal;
+        env->logs[i].reward_goal += reward_goal;
         env->logs[i].num_waypoints_reached += 1;
     }
 
@@ -4184,6 +4250,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += lane_align_reward;
     env->logs[i].episode_return += lane_align_reward;
+    env->logs[i].reward_lane_align += lane_align_reward;
 
     // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05 / exp(|x_f - bias| - 0.5))
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
@@ -4196,6 +4263,7 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += lane_center_reward;
     env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
     env->logs[i].episode_return += lane_center_reward;
+    env->logs[i].reward_lane_center += lane_center_reward;
 
     // Comfort reward (GIGAFLOW)
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
@@ -4204,6 +4272,7 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += comfort_penalty;
     env->logs[i].comfort_violation_count += comfort_violations;
     env->logs[i].episode_return += comfort_penalty;
+    env->logs[i].reward_comfort += comfort_penalty;
 
     // Velocity reward (GIGAFLOW)
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
@@ -4211,6 +4280,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += velocity_reward;
     env->logs[i].episode_return += velocity_reward;
+    env->logs[i].reward_velocity += velocity_reward;
     env->logs[i].velocity_progress_sum += velocity_progress;
 
     // Timestep reward (GIGAFLOW)
@@ -4221,6 +4291,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += timestep_penalty;
         env->logs[i].episode_return += timestep_penalty;
+        env->logs[i].reward_timestep += timestep_penalty;
     }
 
     // Reverse reward (GIGAFLOW)
@@ -4229,6 +4300,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += reverse_penalty;
         env->logs[i].episode_return += reverse_penalty;
+        env->logs[i].reward_reverse += reverse_penalty;
     }
 
     // Over speed reward (GIGAFLOW++)
@@ -4243,6 +4315,7 @@ static void compute_rewards(Drive *env, int i) {
         agent->seconds_stopped = 0.0f;
     }
     env->logs[i].episode_return += speed_reward;
+    env->logs[i].reward_overspeed += speed_reward;
 
     // ADE reward (CUSTOM)
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
@@ -4251,6 +4324,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += ade_reward;
         env->logs[i].episode_return += ade_reward;
+        env->logs[i].reward_ade += ade_reward;
     }
     env->logs[i].avg_displacement_error = current_ade;
 
