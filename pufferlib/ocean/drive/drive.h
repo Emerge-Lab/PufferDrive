@@ -192,6 +192,7 @@ struct CompletedEpisodeSummary {
     float red_light_violation_rate;
     float num_goals_reached;
     float score;
+    float dnf_rate;
     float total_distance_travelled;
     float total_infractions;
     float n;
@@ -2642,6 +2643,7 @@ static void add_log(Drive *env) {
         s->red_light_violation_rate = 0.0f;
         s->num_goals_reached = 0.0f;
         s->score = 0.0f;
+        s->dnf_rate = 0.0f;
         s->total_distance_travelled = 0.0f;
         s->total_infractions = 0.0f;
         s->n = (float) env->active_agent_count;
@@ -2660,6 +2662,7 @@ static void add_log(Drive *env) {
             int offroad = env->logs[i].offroad_rate;
             int red_light = env->logs[i].red_light_violation_rate;
             int num_goals = env->logs[i].num_goals_reached;
+            int num_waypoints = env->logs[i].num_waypoints_reached;
             s->episode_length += env->logs[i].episode_length;
             s->episode_return += env->logs[i].episode_return;
             s->collision_rate += collided;
@@ -2668,6 +2671,12 @@ static void add_log(Drive *env) {
             s->num_goals_reached += num_goals;
             if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped) {
                 s->score += 1.0f;
+            }
+            // Mirror the aggregate Log DNF predicate (see drive.h:2577):
+            // the agent stayed clean of infractions but never reached even
+            // one waypoint — i.e. wandered without making progress.
+            if (!offroad && !collided && !red_light && num_waypoints < 1) {
+                s->dnf_rate += 1.0f;
             }
             s->total_distance_travelled += agent_i->distance_since_spawn;
             if (collided || offroad || red_light) {

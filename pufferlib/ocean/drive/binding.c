@@ -2012,6 +2012,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
     assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
     assign_to_dict(dict, "score", summary->score);
+    assign_to_dict(dict, "dnf_rate", summary->dnf_rate);
     assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
     assign_to_dict(dict, "total_infractions", summary->total_infractions);
 
