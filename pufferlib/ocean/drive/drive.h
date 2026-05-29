@@ -3688,6 +3688,8 @@ void init(Drive *env) {
     }
 }
 
+void close_client(struct Client *client);
+
 void c_close(Drive *env) {
     if (env->client) {
         close_client(env->client);
