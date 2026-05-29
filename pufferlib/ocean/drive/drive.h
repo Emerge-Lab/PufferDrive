@@ -139,11 +139,13 @@
 #define CLASSIC 0
 #define JERK 1
 
+static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
+static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define STEERING_LIMIT 0.667f
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
-
 // Classic action space (for CLASSIC dynamics model)
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
@@ -4313,8 +4315,8 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
     obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
-    obs[obs_idx++] = (ego->a_long < 0) ? ego->a_long / (-JERK_LONG[0]) : ego->a_long / JERK_LONG[3];
-    obs[obs_idx++] = ego->a_lat / JERK_LAT[2];
+    obs[obs_idx++] = ego->a_long / fabsf(ACCEL_LONG_LIMIT[0]);
+    obs[obs_idx++] = ego->a_lat / ACCEL_LAT_LIMIT[1];
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION));
     obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
@@ -4844,7 +4846,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (agent->a_long * a_long_new < 0) {
             a_long_new = 0.0f;
         } else {
-            a_long_new = clip(a_long_new, -5.0f, 2.5f * c_acc);
+            a_long_new = clip(a_long_new, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1] * c_acc);
         }
 
         // Calculate new lateral acceleration from jerk (Eq. 2 in paper)
@@ -4854,7 +4856,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;
         } else {
-            a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
+            a_lat_new = clip(a_lat_new, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
         }
 
         float heading_x = agent->cos_heading;
