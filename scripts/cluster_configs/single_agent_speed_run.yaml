@@ -41,7 +41,7 @@ train.total_timesteps: 1_000_000_000
 # training uses, so each eval cycle drops a gallery of rollouts you can browse
 # for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
 eval.validation_replay.enabled: 0
-eval.validation_gigaflow.render_backend: triage_html
+eval.validation_gigaflow.render_backend: obs_html
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1
 eval.validation_gigaflow.env.num_agents: 64
