@@ -76,6 +76,12 @@ def main():
         action="store_true",
         help="Render one video per .bin file in map-dir (default: render one)",
     )
+    parser.add_argument(
+        "--render-backend",
+        default="egl",
+        choices=["egl", "triage_html", "obs_html"],
+        help="Render backend: egl (mp4 via ffmpeg), triage_html (2D HTML viewer), obs_html (obs debug HTML)",
+    )
     cli = parser.parse_args()
 
     # Suppress argparse pollution from pufferl's load_config after our own parse
@@ -179,7 +185,7 @@ def main():
         "type": eval_type,
         "render": True,
         "render_views": [cli.view],
-        "render_backend": "egl",
+        "render_backend": cli.render_backend,
         "mode": "inline",
         "enabled": True,
         "interval": 0,
@@ -198,9 +204,9 @@ def main():
     mode_desc = cli.simulation_mode
     if cli.simulation_mode == "replay":
         mode_desc += f" (control_mode={control_mode})"
-    print(f"Rendering {map_label} | mode={mode_desc} | {steps} steps | view={cli.view}")
+    print(f"Rendering {map_label} | mode={mode_desc} | {steps} steps | view={cli.view} | backend={cli.render_backend}")
     print(f"Checkpoint: {cli.checkpoint}")
-    print(f"Output: {cli.output_dir}/mp4/render_cli/")
+    print(f"Output: {cli.output_dir}/")
 
     puffer_eval(env_name=env_name, args=args, evaluator_name="render_cli")
 
