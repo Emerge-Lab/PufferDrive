@@ -1360,16 +1360,13 @@ def build_gallery_index(folder_path=".", file_metrics=None):
                 bits.append(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}")
         return "  ·  ".join(bits)
 
-    options_html = "\n".join(
-        f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files
-    )
+    options_html = "\n".join(f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files)
 
     sort_ui = ""
     sort_js = ""
     if has_metrics and available_keys:
         sort_options = "\n".join(
-            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>'
-            for k, _ in available_keys
+            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>' for k, _ in available_keys
         )
         sort_ui = (
             '<span style="color:#888;font-size:12px;font-weight:bold">SORT</span>'
@@ -1380,37 +1377,41 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             "</select>"
         )
         sort_js = (
-            "const FILE_METRICS = __METRICS_JSON__;"
-            "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
-            "const sortKeySel = document.getElementById('sortKey');"
-            "const sortDirSel = document.getElementById('sortDir');"
-            "function onSortKeyChange() {"
-            "  const k = sortKeySel.value;"
-            "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
-            "  resortFiles();"
-            "}"
-            "function resortFiles() {"
-            "  const key = sortKeySel.value;"
-            "  const dir = sortDirSel.value;"
-            "  const opts = Array.from(select.options);"
-            "  opts.sort(function (a, b) {"
-            "    const fA = a.getAttribute('data-name');"
-            "    const fB = b.getAttribute('data-name');"
-            "    const mA = (FILE_METRICS[fA] || {})[key];"
-            "    const mB = (FILE_METRICS[fB] || {})[key];"
-            "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
-            "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
-            "    if (nA === nB) return fA.localeCompare(fB);"
-            "    return dir === 'asc' ? nA - nB : nB - nA;"
-            "  });"
-            "  const current = select.value;"
-            "  while (select.firstChild) select.removeChild(select.firstChild);"
-            "  opts.forEach(function (o) { select.appendChild(o); });"
-            "  select.value = current;"
-            "  updateButtons();"
-            "}"
-            "resortFiles();"
-        ).replace("__METRICS_JSON__", metrics_json).replace("__DEFAULTS_JSON__", defaults_json)
+            (
+                "const FILE_METRICS = __METRICS_JSON__;"
+                "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
+                "const sortKeySel = document.getElementById('sortKey');"
+                "const sortDirSel = document.getElementById('sortDir');"
+                "function onSortKeyChange() {"
+                "  const k = sortKeySel.value;"
+                "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
+                "  resortFiles();"
+                "}"
+                "function resortFiles() {"
+                "  const key = sortKeySel.value;"
+                "  const dir = sortDirSel.value;"
+                "  const opts = Array.from(select.options);"
+                "  opts.sort(function (a, b) {"
+                "    const fA = a.getAttribute('data-name');"
+                "    const fB = b.getAttribute('data-name');"
+                "    const mA = (FILE_METRICS[fA] || {})[key];"
+                "    const mB = (FILE_METRICS[fB] || {})[key];"
+                "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
+                "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
+                "    if (nA === nB) return fA.localeCompare(fB);"
+                "    return dir === 'asc' ? nA - nB : nB - nA;"
+                "  });"
+                "  const current = select.value;"
+                "  while (select.firstChild) select.removeChild(select.firstChild);"
+                "  opts.forEach(function (o) { select.appendChild(o); });"
+                "  select.value = current;"
+                "  updateButtons();"
+                "}"
+                "resortFiles();"
+            )
+            .replace("__METRICS_JSON__", metrics_json)
+            .replace("__DEFAULTS_JSON__", defaults_json)
+        )
 
     html_content = """
     <!DOCTYPE html>
@@ -1480,8 +1481,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
     """
 
     final_html = (
-        html_content
-        .replace("__OPTIONS__", options_html)
+        html_content.replace("__OPTIONS__", options_html)
         .replace("__FIRST__", files[0])
         .replace("__SORT_UI__", sort_ui)
         .replace("__SORT_JS__", sort_js)
