@@ -17,7 +17,7 @@ The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. To 
 them after an intentional pipeline change:
 
     source .venv/bin/activate
-    SMOKE_UPDATE_GOLDEN=1 python -m pytest tests/test_drive_smoke.py -s
+    SMOKE_UPDATE_GOLDEN=1 python -m pytest tests/smoke_tests/test_drive_train.py -s
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
 (CPU multiprocessing float ops are not bit-identical across machines, so we use
