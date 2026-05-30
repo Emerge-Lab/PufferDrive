@@ -12,8 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PUFFER_CPU: 1
-      TMPDIR: ${{ runner.temp }}/build
-      PIP_NO_CACHE_DIR: 1
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,6 +28,9 @@ jobs:
           sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
 
       - name: Install pufferlib
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
           python -m pip install -U pip pytest
@@ -44,8 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PUFFER_CPU: 1
-      TMPDIR: ${{ runner.temp }}/build
-      PIP_NO_CACHE_DIR: 1
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,6 +61,9 @@ jobs:
           sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
 
       - name: Install pufferlib
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
           python -m pip install -U pip pytest

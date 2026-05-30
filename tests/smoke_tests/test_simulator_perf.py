@@ -7,6 +7,9 @@ from pufferlib.ocean.drive.drive import Drive
 
 # CONFIGURATION
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MAP_DIR = str(REPO_ROOT / "pufferlib" / "resources" / "drive" / "binaries" / "carla")
+
 
 def test_simulator_raw():
     timeout = 5  # seconds (short for CI)
@@ -14,7 +17,7 @@ def test_simulator_raw():
     num_agents = 32
 
     # ---- Run simulation ----
-    env = Drive(num_agents=num_agents, num_maps=1, scenario_length=91, map_dir="resources/drive/binaries")
+    env = Drive(num_agents=num_agents, num_maps=1, scenario_length=91, map_dir=MAP_DIR)
     obs, _ = env.reset()
     tick = 0
 

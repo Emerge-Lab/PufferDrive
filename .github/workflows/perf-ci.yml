@@ -2,7 +2,9 @@ name: Smoke Performance Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'emerge/**' ]
+  push:
+    branches: [ main, 'emerge/**' ]
 
 jobs:
   test-performance:
