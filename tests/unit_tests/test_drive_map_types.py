@@ -20,7 +20,7 @@ import pytest
 
 from pufferlib.ocean.drive.drive import Drive
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN_ROOT = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries")
 
 CASES = [

@@ -1,0 +1,38 @@
+{
+  "env": {
+    "avg_distance_per_infraction": 13.085307936234909,
+    "avg_speed_per_agent": 1.3251146164807406,
+    "collision_rate": 0.020454545454545454,
+    "comfort_violation_count": 0.6948697003451261,
+    "dnf_rate": 0.5590909090909091,
+    "episode_length": 43.054545454545455,
+    "episode_return": -2.1813900362361562,
+    "lane_center_rate": 0.747083085233515,
+    "n": 16.0,
+    "num_goals_reached": 0.0,
+    "offroad_rate": 0.39204545454545453,
+    "red_light_violation_rate": 0.028409090909090908,
+    "score": 0.0,
+    "velocity_progress_sum": 8.959323167800903e-05
+  },
+  "losses": {
+    "approx_kl": 0.0,
+    "clipfrac": 0.0,
+    "ema_max": 3.660347499884665,
+    "entropy": 2.474346160888672,
+    "explained_variance": 0.14453959465026855,
+    "filter_threshold": 0.03660347499884665,
+    "filtered_fraction": 0.06705701937822395,
+    "kept_fraction": 0.932942980621776,
+    "masked_fraction": 0.1243896484375,
+    "old_approx_kl": 7.125480760983294e-11,
+    "policy_loss": 6.2704228476206936e-09,
+    "value_loss": 0.4378232955932617
+  },
+  "meta": {
+    "bptt_horizon": 64,
+    "epochs": 5,
+    "seed": 42,
+    "total_agents": 128
+  }
+}

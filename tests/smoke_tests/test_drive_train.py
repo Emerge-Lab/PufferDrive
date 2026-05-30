@@ -13,7 +13,7 @@ the metrics non-trivial values.
 
 Golden values
 -------------
-The expected metrics live in tests/data/drive_smoke_golden.json. To (re)generate
+The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. To (re)generate
 them after an intentional pipeline change:
 
     source .venv/bin/activate

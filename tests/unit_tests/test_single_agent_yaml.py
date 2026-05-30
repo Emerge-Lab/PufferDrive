@@ -7,7 +7,6 @@ Run: python -m unittest tests/test_single_agent_yaml.py
 """
 
 import io
-import os
 import sys
 import unittest
 from contextlib import redirect_stderr
@@ -16,7 +15,7 @@ from unittest.mock import patch
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from pufferlib.pufferl import load_config  # noqa: E402
