@@ -2015,6 +2015,20 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
     assign_to_dict(dict, "total_infractions", summary->total_infractions);
 
+    // Per-component reward breakdown for the per-episode CSV.
+    assign_to_dict(dict, "reward_components/collision", summary->reward_collision);
+    assign_to_dict(dict, "reward_components/offroad", summary->reward_offroad);
+    assign_to_dict(dict, "reward_components/red_light", summary->reward_red_light);
+    assign_to_dict(dict, "reward_components/goal", summary->reward_goal);
+    assign_to_dict(dict, "reward_components/lane_align", summary->reward_lane_align);
+    assign_to_dict(dict, "reward_components/lane_center", summary->reward_lane_center);
+    assign_to_dict(dict, "reward_components/comfort", summary->reward_comfort);
+    assign_to_dict(dict, "reward_components/velocity", summary->reward_velocity);
+    assign_to_dict(dict, "reward_components/timestep", summary->reward_timestep);
+    assign_to_dict(dict, "reward_components/reverse", summary->reward_reverse);
+    assign_to_dict(dict, "reward_components/overspeed", summary->reward_overspeed);
+    assign_to_dict(dict, "reward_components/ade", summary->reward_ade);
+
     PyObject *mn = PyUnicode_FromString(summary->map_name);
     if (!mn) {
         return -1;
@@ -2057,6 +2071,19 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
+
+    assign_to_dict(dict, "reward_components/collision", log->reward_collision);
+    assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
+    assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/goal", log->reward_goal);
+    assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
+    assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);
+    assign_to_dict(dict, "reward_components/comfort", log->reward_comfort);
+    assign_to_dict(dict, "reward_components/velocity", log->reward_velocity);
+    assign_to_dict(dict, "reward_components/timestep", log->reward_timestep);
+    assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
+    assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
+    assign_to_dict(dict, "reward_components/ade", log->reward_ade);
 
     if (env->compute_eval_metrics) {
         // Puffer score components
