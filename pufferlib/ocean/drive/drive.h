@@ -221,6 +221,13 @@ typedef struct GridMapEntity GridMapEntity;
 typedef struct GridMap GridMap;
 typedef struct MapCacheEntry MapCacheEntry;
 
+// Every field must be float. env_binding.h's vec_log iterates this struct as
+// a raw float[] (sizeof(Log)/sizeof(float) entries), so a non-float field
+// would be silently type-punned. When adding a field, also bump
+// LOG_NUM_FLOAT_FIELDS below; the _Static_assert catches size mismatches
+// from a forgotten bump or from a wider-than-float field (double/pointer).
+#define LOG_NUM_FLOAT_FIELDS 54
+
 struct Log {
     float n;
     float episode_return;
@@ -280,6 +287,11 @@ struct Log {
     float reward_overspeed;
     float reward_ade;
 };
+_Static_assert(
+    sizeof(struct Log) == LOG_NUM_FLOAT_FIELDS * sizeof(float),
+    "struct Log size mismatch: a field was added without bumping "
+    "LOG_NUM_FLOAT_FIELDS, or a non-float field slipped in (would corrupt "
+    "vec_log's raw-float iteration).");
 
 struct GridMapEntity {
     int entity_idx;   // Index into the road_elements array
