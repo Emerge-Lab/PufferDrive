@@ -377,6 +377,13 @@ class PuffeRL:
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
 
+            # Obs distribution stats (max/min/mean across the batch and obs
+            # dims, appended per env step). Surfaces clipping / unbounded
+            # features / normalization regressions in wandb.
+            self.stats["obs/max"].append(o_device.max().item())
+            self.stats["obs/min"].append(o_device.min().item())
+            self.stats["obs/mean"].append(o_device.mean().item())
+
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
