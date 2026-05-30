@@ -1,8 +1,10 @@
 name: Installation Test
 
 on:
-  push:
   pull_request:
+    branches: [ main, 'emerge/**' ]
+  push:
+    branches: [ main, 'emerge/**' ]
 
 jobs:
   test:
