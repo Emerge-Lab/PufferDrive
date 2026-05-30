@@ -85,6 +85,10 @@ class Evaluator:
         try:
             metrics = self._run_rollout_loop(vecenv, policy, args)
             t_metric = time.time()
+            # Write the per-episode CSV (when enabled) before _render_pass so
+            # _collect_file_metrics_from_csv reads this run's metrics, not the
+            # previous run's leftovers.
+            self._maybe_export_episodes(args, metrics)
             frames = self._render_pass(vecenv, policy, args) if self.render else []
             t_render = time.time()
         finally:
@@ -93,10 +97,6 @@ class Evaluator:
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)
-        # Opt-in per-episode CSV + coverage check (writes files, folds
-        # coverage_* scalars into metrics). No-op unless the evaluator set
-        # eval.export_episode_csv / eval.verify_coverage.
-        self._maybe_export_episodes(args, metrics)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:
