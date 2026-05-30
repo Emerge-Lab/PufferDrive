@@ -92,6 +92,12 @@ def _materialize_agent_frames(replay_bundle):
             if "goal_x" in agent_arrays:
                 entry["goal_x"] = float(agent_arrays["goal_x"][frame_idx, slot_idx])
                 entry["goal_y"] = float(agent_arrays["goal_y"][frame_idx, slot_idx])
+            if "speed" in agent_arrays:
+                entry["speed"] = float(agent_arrays["speed"][frame_idx, slot_idx])
+            if "a_long" in agent_arrays:
+                entry["a_long"] = float(agent_arrays["a_long"][frame_idx, slot_idx])
+            if "a_lat" in agent_arrays:
+                entry["a_lat"] = float(agent_arrays["a_lat"][frame_idx, slot_idx])
             frame.append(entry)
         frames.append(frame)
     return frames
@@ -713,6 +719,45 @@ HTML_TEMPLATE = """<!doctype html>
       });
     }
 
+    function drawEgoHUD(frame) {
+      const ego = frame.find(a => a.active);
+      if (!ego || ego.speed == null) return;
+      const pad = 12, lineH = 22, rows = 3;
+      const boxW = 180, boxH = pad * 2 + rows * lineH;
+      const x = canvas.clientWidth - boxW - 12;
+      const y = 12;
+      ctx.save();
+      ctx.fillStyle = 'rgba(10,18,30,0.72)';
+      ctx.strokeStyle = 'rgba(80,160,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x, y, boxW, boxH, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.textBaseline = 'middle';
+      const kmh = (ego.speed * 3.6).toFixed(1);
+      const al = (ego.a_long != null ? ego.a_long : 0).toFixed(2);
+      const at = (ego.a_lat  != null ? ego.a_lat  : 0).toFixed(2);
+      const alColor = ego.a_long > 0 ? '#4ade80' : ego.a_long < -0.5 ? '#f87171' : '#94a3b8';
+      const atColor = Math.abs(ego.a_lat) > 0.5 ? '#fbbf24' : '#94a3b8';
+      const lines = [
+        { label: 'Speed',  value: `${kmh} km/h`, color: '#e2e8f0' },
+        { label: 'A long', value: `${al} m/s²`,  color: alColor },
+        { label: 'A lat',  value: `${at} m/s²`,  color: atColor },
+      ];
+      lines.forEach((row, i) => {
+        const cy = y + pad + i * lineH + lineH / 2;
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'left';
+        ctx.fillText(row.label, x + pad, cy);
+        ctx.fillStyle = row.color;
+        ctx.textAlign = 'right';
+        ctx.fillText(row.value, x + boxW - pad, cy);
+      });
+      ctx.restore();
+    }
+
     function draw() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
@@ -720,6 +765,7 @@ HTML_TEMPLATE = """<!doctype html>
       drawTraffic(trafficFrames[frameIndex] || []);
       const frame = frames[frameIndex] || [];
       for (const agent of frame) drawAgent(agent);
+      drawEgoHUD(frame);
       frameLabel.innerText = `${frameIndex + 1} / ${Math.max(frames.length, 1)}`;
       slider.value = frameIndex;
     }
