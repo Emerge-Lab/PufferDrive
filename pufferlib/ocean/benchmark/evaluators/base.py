@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 from tqdm import tqdm
+from pufferlib import viz
 from pufferlib.ocean.drive import binding
 
 
@@ -534,8 +535,6 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            from pufferlib import viz
-
             file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
             viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
 
@@ -604,7 +603,6 @@ class Evaluator:
         import torch
 
         import pufferlib
-        from pufferlib import viz
 
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
