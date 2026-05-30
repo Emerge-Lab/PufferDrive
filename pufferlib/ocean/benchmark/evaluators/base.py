@@ -4,7 +4,31 @@ import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 from tqdm import tqdm
+from pufferlib import viz
 from pufferlib.ocean.drive import binding
+
+_GALLERY_METRIC_KEYS = (
+    "score",
+    "dnf_rate",
+    "episode_return",
+    "num_goals_reached",
+    "collision_rate",
+    "offroad_rate",
+    "red_light_violation_rate",
+    "total_infractions",
+    "total_distance_travelled",
+    "episode_length",
+)
+
+
+def _episode_metrics_from_info(info):
+    """Pull the gallery-sort metrics out of a `completed_episode` summary dict."""
+    out = {}
+    for key in _GALLERY_METRIC_KEYS:
+        value = info.get(key)
+        if isinstance(value, (int, float)):
+            out[key] = float(value)
+    return out
 
 
 @dataclass
@@ -84,6 +108,7 @@ class Evaluator:
         try:
             metrics = self._run_rollout_loop(vecenv, policy, args)
             t_metric = time.time()
+            self._maybe_export_episodes(args, metrics)
             frames = self._render_pass(vecenv, policy, args) if self.render else []
             t_render = time.time()
         finally:
@@ -92,10 +117,6 @@ class Evaluator:
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)
-        # Opt-in per-episode CSV + coverage check (writes files, folds
-        # coverage_* scalars into metrics). No-op unless the evaluator set
-        # eval.export_episode_csv / eval.verify_coverage.
-        self._maybe_export_episodes(args, metrics)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:
@@ -451,6 +472,10 @@ class Evaluator:
 
         out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "gif" / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Per-rendered-file metrics, accumulated inline from each scenario's
+        # completed_episode summary so the gallery sort uses this render's
+        # own rollouts (the metric-pass CSV is from a different vec env).
+        render_file_metrics = {}
 
         epoch = int(args.get("epoch") or 0)
         global_step = int(args.get("global_step") or 0)
@@ -511,13 +536,18 @@ class Evaluator:
                     # basename: map_name is the full bin path, and an absolute
                     # value would make `out_dir / stem` escape out_dir.
                     map_name = os.path.basename(str(info.get("map_name") or "map")).split(".")[0]
-                    stem = f"{map_name}_{scenario_id}{step_suffix}"
+                    # scenario_id repeats across rollouts on the same map in
+                    # gigaflow mode (the C side fills it with the map's short
+                    # name), so append a monotonic counter to make every
+                    # rendered episode land in its own file.
+                    stem = f"{map_name}_{scenario_id}_{scenarios_done:04d}{step_suffix}"
                     tmp_path = out_dir / f"{stem}.pkl.zlib"
                     html_path = out_dir / f"{stem}.html"
                     tmp_path.write_bytes(bundle_bytes)
                     mining_viz.render_compact_replay_html(str(tmp_path), str(html_path))
                     tmp_path.unlink(missing_ok=True)
                     html_paths.append(html_path)
+                    render_file_metrics[html_path.name] = _episode_metrics_from_info(info)
                     scenarios_done += 1
                     progress.update(1)
                     if scenarios_done >= num_scenarios:
@@ -528,6 +558,9 @@ class Evaluator:
         finally:
             vec.close()
             progress.close()
+
+        if html_paths:
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
 
         return html_paths
 
@@ -544,7 +577,6 @@ class Evaluator:
         import torch
 
         import pufferlib
-        from pufferlib import viz
 
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
@@ -566,9 +598,13 @@ class Evaluator:
 
         render_env_kwargs = self._render_env_overrides(args)
         render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
+        # Per-episode summaries are needed so the gallery sort dropdown can
+        # show this render's actual metrics.
+        render_env_kwargs["emit_completed_episodes"] = True
 
         device = args["train"]["device"]
         html_paths = []
+        render_file_metrics = {}
         scenarios_done = 0
         progress = tqdm(total=num_scenarios * (max_steps + 1), desc=f"{self.name} obs_html", unit="step")
         pool_method = getattr(policy, "pool_slot_counts", None)
@@ -631,6 +667,7 @@ class Evaluator:
                 policy_std_hist = [[] for _ in range(n_in_batch)]
                 policy_log_prob_hist = [[] for _ in range(n_in_batch)]
                 pool_hist = None
+                batch_summary = None
                 for t in range(max_steps):
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
@@ -707,7 +744,10 @@ class Evaluator:
                                 np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
                             )
                         start_obs_index = end_obs_index
-                    ob, _, _, _, _ = vec.step(clipped_action)
+                    ob, _, _, _, step_infos = vec.step(clipped_action)
+                    for d in self._flatten_infos(step_infos):
+                        if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
+                            batch_summary = d
                     progress.update(to_render)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
@@ -739,6 +779,8 @@ class Evaluator:
                             compact_replay[k] = hists[e]
                     viz.generate_interactive_replay(scenarios[e], compact_replay, filename=str(path))
                     html_paths.append(path)
+                    if batch_summary is not None:
+                        render_file_metrics[path.name] = _episode_metrics_from_info(batch_summary)
                     scenarios_done += 1
                     progress.update(1)
                     if scenarios_done >= num_scenarios:
@@ -748,7 +790,7 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            viz.build_gallery_index(str(out_dir))
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:

@@ -1223,7 +1223,10 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
             if(showAll){ obsCtx.strokeStyle="#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
             if(showAll){ obsCtx.strokeStyle="#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } } }
+            if(showPool){
+                for(const r of frame.lanes){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+                for(const r of frame.bounds){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(200,0,0,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+            }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
             for(const t of frame.traffic_controls){ if(showPool && t.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(t.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 3.2 : 2.4)*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showAll){ obsCtx.strokeStyle = t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ if(!showAll && !(showPool && p.pool > 0)) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle="rgba(136,136,136,.8)"; obsCtx.strokeStyle="#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(showPool && p.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(p.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 2.4 : 2.0)*px; obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
@@ -1302,22 +1305,120 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         f.write(final_html)
 
 
-def build_gallery_index(folder_path="."):
-    files = [f for f in os.listdir(folder_path) if f != "index.html" and re.fullmatch(r"(.+)_([0-9]+)\.html", f)]
+def build_gallery_index(folder_path=".", file_metrics=None):
+    """Build an index.html navigator for per-episode replay HTMLs in folder_path.
+
+    If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
+    the index also exposes a sort dropdown so the user can flip between sort
+    keys (default: `score` ascending — failures bubble to the top). When
+    `file_metrics` is None or empty, behaves as before (filename-order
+    dropdown, no sort UI).
+    """
+    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
     if not files:
         print("No matching .html files found in this directory.")
         return
 
-    def sort_key(filename):
-        match = re.fullmatch(r"(.+)_([0-9]+)\.html", filename)
-        env_map_name = match.group(1)
-        global_episode_id = int(match.group(2))
-        return (global_episode_id, env_map_name)
+    # Lexicographic sort over the full filename. With the triage_html stem
+    # `{map}_{scenario_id}_{scenarios_done:04d}_epoch{e}_step{s}.html`, the
+    # zero-padded scenarios_done dominates ordering within a map.
+    files.sort()
 
-    files.sort(key=sort_key)
+    metrics_map = file_metrics or {}
+    has_metrics = bool(metrics_map)
 
-    # 3. Build the HTML template
+    # (key, default_direction). Anything in this list with at least one
+    # non-null value across files gets a dropdown entry. Default direction
+    # is what makes triage-useful values bubble to the top.
+    SORT_KEYS = [
+        ("score", "asc"),
+        ("dnf_rate", "desc"),
+        ("episode_return", "asc"),
+        ("num_goals_reached", "asc"),
+        ("collision_rate", "desc"),
+        ("offroad_rate", "desc"),
+        ("red_light_violation_rate", "desc"),
+        ("total_infractions", "desc"),
+        ("total_distance_travelled", "asc"),
+        ("episode_length", "asc"),
+    ]
+
+    available_keys = []
+    if has_metrics:
+        present = set()
+        for v in metrics_map.values():
+            present.update(v.keys())
+        for k, d in SORT_KEYS:
+            if k in present:
+                available_keys.append((k, d))
+
+    metrics_json = json.dumps(metrics_map, separators=(",", ":"))
+    defaults_json = json.dumps({k: d for k, d in available_keys}, separators=(",", ":"))
+
+    def make_label(f):
+        if not has_metrics or f not in metrics_map:
+            return f.replace(".html", "").replace("_", " ")
+        bits = [f.replace(".html", "")]
+        for k in ("score", "dnf_rate", "num_goals_reached", "episode_return"):
+            if k in metrics_map[f]:
+                v = metrics_map[f][k]
+                bits.append(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}")
+        return "  ·  ".join(bits)
+
+    options_html = "\n".join(f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files)
+
+    sort_ui = ""
+    sort_js = ""
+    if has_metrics and available_keys:
+        sort_options = "\n".join(
+            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>' for k, _ in available_keys
+        )
+        sort_ui = (
+            '<span style="color:#888;font-size:12px;font-weight:bold">SORT</span>'
+            f'<select id="sortKey" onchange="onSortKeyChange()">{sort_options}</select>'
+            '<select id="sortDir" onchange="resortFiles()">'
+            '<option value="asc" selected>asc</option>'
+            '<option value="desc">desc</option>'
+            "</select>"
+        )
+        sort_js = (
+            (
+                "const FILE_METRICS = __METRICS_JSON__;"
+                "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
+                "const sortKeySel = document.getElementById('sortKey');"
+                "const sortDirSel = document.getElementById('sortDir');"
+                "function onSortKeyChange() {"
+                "  const k = sortKeySel.value;"
+                "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
+                "  resortFiles();"
+                "}"
+                "function resortFiles() {"
+                "  const key = sortKeySel.value;"
+                "  const dir = sortDirSel.value;"
+                "  const opts = Array.from(select.options);"
+                "  opts.sort(function (a, b) {"
+                "    const fA = a.getAttribute('data-name');"
+                "    const fB = b.getAttribute('data-name');"
+                "    const mA = (FILE_METRICS[fA] || {})[key];"
+                "    const mB = (FILE_METRICS[fB] || {})[key];"
+                "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
+                "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
+                "    if (nA === nB) return fA.localeCompare(fB);"
+                "    return dir === 'asc' ? nA - nB : nB - nA;"
+                "  });"
+                "  const current = select.value;"
+                "  while (select.firstChild) select.removeChild(select.firstChild);"
+                "  opts.forEach(function (o) { select.appendChild(o); });"
+                "  select.value = current;"
+                "  updateButtons();"
+                "}"
+                "resortFiles();"
+            )
+            .replace("__METRICS_JSON__", metrics_json)
+            .replace("__DEFAULTS_JSON__", defaults_json)
+        )
+
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -1326,20 +1427,22 @@ def build_gallery_index(folder_path="."):
         <title>PufferDrive Replay Gallery</title>
         <style>
             body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
-            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 15px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); flex-wrap: wrap; }
             #viewer { flex-grow: 1; border: none; width: 100%; height: 100%; }
-            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 14px; outline: none;}
+            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 13px; outline: none;}
             select:focus { border-color: #007bff; }
             button { padding: 8px 16px; border-radius: 8px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: 800; font-size: 13px; text-transform: uppercase; transition: 0.2s;}
             button:hover:not(:disabled) { background: #0056b3; transform: scale(1.05); }
             button:disabled { background: #444; color: #888; cursor: not-allowed; }
             .title { font-weight: 900; font-size: 18px; margin-right: auto; letter-spacing: 1px; color: #fff;}
+            #fileSelect { flex: 1 1 280px; min-width: 240px; }
         </style>
     </head>
     <body>
         <div id="topbar">
             <div class="title">PUFFERDRIVE GALLERY</div>
             <button id="prevBtn" onclick="navigate(-1)">&#9664; Prev</button>
+            __SORT_UI__
             <select id="fileSelect" onchange="loadSelected()">
                 __OPTIONS__
             </select>
@@ -1375,18 +1478,20 @@ def build_gallery_index(folder_path="."):
                 viewer.onload = () => viewer.contentWindow.focus();
             }
 
+            __SORT_JS__
+
             updateButtons();
         </script>
     </body>
     </html>
     """
 
-    # 4. Inject the options into the dropdown
-    options_html = "\n".join(
-        [f'<option value="{f}">{f.replace(".html", "").replace("_", " ")}</option>' for f in files]
+    final_html = (
+        html_content.replace("__OPTIONS__", options_html)
+        .replace("__FIRST__", files[0])
+        .replace("__SORT_UI__", sort_ui)
+        .replace("__SORT_JS__", sort_js)
     )
-
-    final_html = html_content.replace("__OPTIONS__", options_html).replace("__FIRST__", files[0])
 
     # 5. Save the file
     index_path = os.path.join(folder_path, "index.html")
