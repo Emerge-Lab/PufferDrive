@@ -96,13 +96,12 @@ def _build_config():
         args["vec"],
         {
             "backend": "Multiprocessing",
-            "num_workers": 4,
+            "num_workers": 2,
             # Async multiprocessing needs num_envs > batch_size (it keeps half the
-            # envs in-flight); num_envs == batch_size deadlocks. 8 envs / 4 workers
-            # = 2 envs/worker, batch of 4. Buffer rows are keyed by env_id, so the
+            # envs in-flight); num_envs == batch_size deadlocks. 8 envs / 2 workers
+            # = 4 envs/worker, batch of 4. Buffer rows are keyed by env_id, so the
             # recv order does not change the final batch contents -> deterministic.
             "num_envs": 8,
-            "batch_size": 4,
             "seed": SEED,
             "zero_copy": True,
         },
@@ -142,7 +141,7 @@ def _build_config():
 
 
 def _finalize_train_config(args, total_agents):
-    batch = total_agents * BPTT_HORIZON
+    minibatch_size = total_agents * BPTT_HORIZON // 8
     _set_existing(
         args["train"],
         {
@@ -154,9 +153,8 @@ def _finalize_train_config(args, total_agents):
             "learning_rate": 0.001,
             "update_epochs": 1,
             "bptt_horizon": BPTT_HORIZON,
-            "batch_size": batch,
-            "minibatch_size": batch,
-            "max_minibatch_size": batch,
+            "minibatch_size": minibatch_size,
+            "max_minibatch_size": minibatch_size,
             "total_timesteps": 10_000_000,  # large -> never "done" during 5 epochs
             "checkpoint_interval": 10_000_000,
             "render": False,
