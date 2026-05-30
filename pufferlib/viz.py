@@ -1305,17 +1305,16 @@ def build_gallery_index(folder_path=".", file_metrics=None):
     `file_metrics` is None or empty, behaves as before (filename-order
     dropdown, no sort UI).
     """
-    files = [f for f in os.listdir(folder_path) if f != "index.html" and re.fullmatch(r"(.+)_(\d+)\.html", f)]
+    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
     if not files:
         print("No matching .html files found in this directory.")
         return
 
-    def filename_sort_key(filename):
-        match = re.fullmatch(r"(.+)_(\d+)\.html", filename)
-        return (int(match.group(2)), match.group(1))
-
-    files.sort(key=filename_sort_key)
+    # Lexicographic sort over the full filename. With the triage_html stem
+    # `{map}_{scenario_id}_{scenarios_done:04d}_epoch{e}_step{s}.html`, the
+    # zero-padded scenarios_done dominates ordering within a map.
+    files.sort()
 
     metrics_map = file_metrics or {}
     has_metrics = bool(metrics_map)
