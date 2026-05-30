@@ -1,4 +1,4 @@
-name: install
+name: Installation Test
 
 on:
   push:
@@ -6,13 +6,13 @@ on:
 
 jobs:
   test:
-    name: install ${{ matrix.py }} - ${{ matrix.os }}
+    name: ${{ matrix.py }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        py: ["3.12", "3.11", "3.10"]
+        py: ["3.13", "3.12", "3.11"]
 
     steps:
       - name: Checkout code
