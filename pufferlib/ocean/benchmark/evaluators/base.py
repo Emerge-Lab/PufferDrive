@@ -534,6 +534,8 @@ class Evaluator:
             progress.close()
 
         if html_paths:
+            from pufferlib import viz
+
             file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
             viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
 
