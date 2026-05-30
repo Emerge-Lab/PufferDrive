@@ -7,6 +7,29 @@ from tqdm import tqdm
 from pufferlib import viz
 from pufferlib.ocean.drive import binding
 
+_GALLERY_METRIC_KEYS = (
+    "score",
+    "dnf_rate",
+    "episode_return",
+    "num_goals_reached",
+    "collision_rate",
+    "offroad_rate",
+    "red_light_violation_rate",
+    "total_infractions",
+    "total_distance_travelled",
+    "episode_length",
+)
+
+
+def _episode_metrics_from_info(info):
+    """Pull the gallery-sort metrics out of a `completed_episode` summary dict."""
+    out = {}
+    for key in _GALLERY_METRIC_KEYS:
+        value = info.get(key)
+        if isinstance(value, (int, float)):
+            out[key] = float(value)
+    return out
+
 
 @dataclass
 class EvalResult:
@@ -85,9 +108,6 @@ class Evaluator:
         try:
             metrics = self._run_rollout_loop(vecenv, policy, args)
             t_metric = time.time()
-            # Write the per-episode CSV (when enabled) before _render_pass so
-            # _collect_file_metrics_from_csv reads this run's metrics, not the
-            # previous run's leftovers.
             self._maybe_export_episodes(args, metrics)
             frames = self._render_pass(vecenv, policy, args) if self.render else []
             t_render = time.time()
@@ -452,6 +472,10 @@ class Evaluator:
 
         out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "gif" / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Per-rendered-file metrics, accumulated inline from each scenario's
+        # completed_episode summary so the gallery sort uses this render's
+        # own rollouts (the metric-pass CSV is from a different vec env).
+        render_file_metrics = {}
 
         epoch = int(args.get("epoch") or 0)
         global_step = int(args.get("global_step") or 0)
@@ -523,6 +547,7 @@ class Evaluator:
                     mining_viz.render_compact_replay_html(str(tmp_path), str(html_path))
                     tmp_path.unlink(missing_ok=True)
                     html_paths.append(html_path)
+                    render_file_metrics[html_path.name] = _episode_metrics_from_info(info)
                     scenarios_done += 1
                     progress.update(1)
                     if scenarios_done >= num_scenarios:
@@ -535,65 +560,9 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
-            viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
 
         return html_paths
-
-    def _collect_file_metrics_from_csv(self, args, step_suffix, html_paths):
-        """Pair the rendered gallery files with per-episode metrics so the
-        index can offer a sort UI. The metric pass writes a CSV before this
-        render runs (see _maybe_emit_eval_reports); both passes share env
-        config and seed, so the N-th rendered file corresponds to the N-th
-        first-episode row in the CSV sorted by env_slot. Heuristic but cheap
-        — on any failure we just return None and the gallery falls back to
-        filename-order browsing.
-        """
-        try:
-            from pathlib import Path
-            import pandas as pd
-
-            csv_path = (
-                Path(args.get("eval_results_dir") or args.get("render_results_dir") or ".")
-                / "episode_metrics"
-                / f"{self.name}{step_suffix}.csv"
-            )
-            if not csv_path.exists():
-                return None
-            df = pd.read_csv(csv_path)
-            if "episode_index" not in df.columns or "env_slot" not in df.columns:
-                return None
-            # Renders are written in (episode_index, env_slot) order: each
-            # scenario_length tick batches one episode per env, then the next
-            # episode_index of every env, etc. Sort the CSV the same way so
-            # positional pairing covers every rendered file, not just the
-            # first batch.
-            df_sorted = df.sort_values(["episode_index", "env_slot"]).reset_index(drop=True)
-            metric_cols = [
-                c
-                for c in (
-                    "score",
-                    "dnf_rate",
-                    "episode_return",
-                    "num_goals_reached",
-                    "collision_rate",
-                    "offroad_rate",
-                    "red_light_violation_rate",
-                    "total_infractions",
-                    "total_distance_travelled",
-                    "episode_length",
-                )
-                if c in df_sorted.columns
-            ]
-            file_metrics = {}
-            for i in range(min(len(html_paths), len(df_sorted))):
-                row = df_sorted.iloc[i]
-                name = Path(html_paths[i]).name
-                file_metrics[name] = {c: float(row[c]) for c in metric_cols if not pd.isna(row[c])}
-            return file_metrics or None
-        except Exception as exc:
-            print(f"[eval.{self.name}] gallery sort: could not pair metrics ({exc})")
-            return None
 
     def _render_pass_obs(self, vecenv, policy, args) -> list:
         """`obs_html` backend. CPU-only interactive viewer for inspecting policy
@@ -629,9 +598,13 @@ class Evaluator:
 
         render_env_kwargs = self._render_env_overrides(args)
         render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
+        # Per-episode summaries are needed so the gallery sort dropdown can
+        # show this render's actual metrics.
+        render_env_kwargs["emit_completed_episodes"] = True
 
         device = args["train"]["device"]
         html_paths = []
+        render_file_metrics = {}
         scenarios_done = 0
         progress = tqdm(total=num_scenarios * (max_steps + 1), desc=f"{self.name} obs_html", unit="step")
         pool_method = getattr(policy, "pool_slot_counts", None)
@@ -694,6 +667,7 @@ class Evaluator:
                 policy_std_hist = [[] for _ in range(n_in_batch)]
                 policy_log_prob_hist = [[] for _ in range(n_in_batch)]
                 pool_hist = None
+                batch_summary = None
                 for t in range(max_steps):
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
@@ -770,7 +744,10 @@ class Evaluator:
                                 np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
                             )
                         start_obs_index = end_obs_index
-                    ob, _, _, _, _ = vec.step(clipped_action)
+                    ob, _, _, _, step_infos = vec.step(clipped_action)
+                    for d in self._flatten_infos(step_infos):
+                        if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
+                            batch_summary = d
                     progress.update(to_render)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
@@ -802,6 +779,8 @@ class Evaluator:
                             compact_replay[k] = hists[e]
                     viz.generate_interactive_replay(scenarios[e], compact_replay, filename=str(path))
                     html_paths.append(path)
+                    if batch_summary is not None:
+                        render_file_metrics[path.name] = _episode_metrics_from_info(batch_summary)
                     scenarios_done += 1
                     progress.update(1)
                     if scenarios_done >= num_scenarios:
@@ -811,8 +790,7 @@ class Evaluator:
             progress.close()
 
         if html_paths:
-            file_metrics = self._collect_file_metrics_from_csv(args, step_suffix, html_paths)
-            viz.build_gallery_index(str(out_dir), file_metrics=file_metrics)
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:
