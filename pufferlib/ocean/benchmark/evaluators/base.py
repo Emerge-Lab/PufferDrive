@@ -563,7 +563,12 @@ class Evaluator:
             df = pd.read_csv(csv_path)
             if "episode_index" not in df.columns or "env_slot" not in df.columns:
                 return None
-            df_first = df[df["episode_index"] == 0].sort_values("env_slot").reset_index(drop=True)
+            # Renders are written in (episode_index, env_slot) order: each
+            # scenario_length tick batches one episode per env, then the next
+            # episode_index of every env, etc. Sort the CSV the same way so
+            # positional pairing covers every rendered file, not just the
+            # first batch.
+            df_sorted = df.sort_values(["episode_index", "env_slot"]).reset_index(drop=True)
             metric_cols = [
                 c
                 for c in (
@@ -578,11 +583,11 @@ class Evaluator:
                     "total_distance_travelled",
                     "episode_length",
                 )
-                if c in df_first.columns
+                if c in df_sorted.columns
             ]
             file_metrics = {}
-            for i in range(min(len(html_paths), len(df_first))):
-                row = df_first.iloc[i]
+            for i in range(min(len(html_paths), len(df_sorted))):
+                row = df_sorted.iloc[i]
                 name = Path(html_paths[i]).name
                 file_metrics[name] = {c: float(row[c]) for c in metric_cols if not pd.isna(row[c])}
             return file_metrics or None
