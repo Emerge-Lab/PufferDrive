@@ -1953,6 +1953,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
     env->target_type = (int) unpack(kwargs, "target_type");
+    env->goal_on_lane = (int) unpack(kwargs, "goal_on_lane");
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
