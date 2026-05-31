@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <math.h>
 #include <signal.h>
 #include <stddef.h>
@@ -124,6 +125,9 @@
 #define PADDED_OBSERVATION_VALUE -0.001f
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
+// GIGAFLOW W_lane: per coarse-sample feature count.
+// rel_x, rel_y, cos(dh), sin(dh), dist_abs_norm, dist_rel_norm (min-anchored).
+#define COARSE_FEATURES 6
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
@@ -321,6 +325,11 @@ struct SharedMapData {
     GridMap *grid_map;
     int *neighbor_offsets;
     struct LaneGraph lane_graph;
+    // GIGAFLOW W_lane: coarse samples spaced along all drivable lanes, plus the
+    // reverse map road_idx → lane_graph_idx so per-step distance lookups are O(1).
+    struct CoarseSample *coarse_samples;
+    int n_coarse_samples;
+    int *road_to_lane_graph; // size = num_road_elements; -1 for non-drivable elements
     int ref_count;
     pid_t owner_pid;
 };
@@ -360,6 +369,10 @@ struct Drive {
     int num_traffic_elements;
     int num_objects;
     struct LaneGraph lane_graph;
+    // GIGAFLOW W_lane (shared with SharedMapData when use_map_cache=1)
+    struct CoarseSample *coarse_samples;
+    int n_coarse_samples;
+    int *road_to_lane_graph;
     int static_agent_count;
     int *static_agent_indices;
     int expert_static_agent_count;
@@ -428,6 +441,10 @@ struct Drive {
     int obs_slots_lane_n;
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
+    int obs_slots_coarse_n;   // GIGAFLOW W_lane: top-K coarse-view lane samples per agent
+    float coarse_sample_spacing_m;
+    float obs_range_coarse_m; // Euclidean radius for top-K filter
+    float obs_norm_coarse_dist_m;
     int traffic_control_scope;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
@@ -1550,6 +1567,186 @@ static void update_agent_z(Drive *env, Agent *agent) {
     agent->sim_z = sum_z / check_count;
 }
 
+// ----------------------------------------
+// GIGAFLOW W_lane (coarse map view) helpers
+// ----------------------------------------
+
+// Per-vertex arclength from each drivable lane's start. Built once at map load,
+// freed via free_road_element. Used to convert (lane, segment, segment-t)
+// triples to lane-local arclength for both ego projection and goal projection.
+static void build_lane_arclengths(Drive *env) {
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *r = &env->road_elements[i];
+        r->cumulative_s = NULL;
+        if (!is_drivable_road_lane(r->type) || r->segment_length < 2) {
+            continue;
+        }
+        r->cumulative_s = (float *) malloc(r->segment_length * sizeof(float));
+        r->cumulative_s[0] = 0.0f;
+        for (int k = 1; k < r->segment_length; k++) {
+            float dx = r->x[k] - r->x[k - 1];
+            float dy = r->y[k] - r->y[k - 1];
+            r->cumulative_s[k] = r->cumulative_s[k - 1] + sqrtf(dx * dx + dy * dy);
+        }
+    }
+}
+
+// road_to_lane_graph[road_idx] = j s.t. lane_graph.lane_ids[j] == road_idx, else -1.
+// Lets per-step distance lookups index the lane_graph distances matrix in O(1).
+static void build_road_to_lane_graph(Drive *env) {
+    env->road_to_lane_graph = (int *) malloc(env->num_road_elements * sizeof(int));
+    for (int i = 0; i < env->num_road_elements; i++) {
+        env->road_to_lane_graph[i] = -1;
+    }
+    for (int j = 0; j < env->lane_graph.n_lanes; j++) {
+        int road_id = env->lane_graph.lane_ids[j];
+        if (road_id >= 0 && road_id < env->num_road_elements) {
+            env->road_to_lane_graph[road_id] = j;
+        }
+    }
+}
+
+// Walk each drivable lane that participates in the lane graph, dropping a
+// CoarseSample every coarse_sample_spacing_m meters along the centerline.
+// Lanes shorter than the spacing still get one sample at s=0 (lane start).
+static void build_coarse_samples(Drive *env) {
+    float spacing = env->coarse_sample_spacing_m;
+    if (spacing <= 0.0f) {
+        spacing = 40.0f;
+    }
+
+    int total = 0;
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *r = &env->road_elements[i];
+        if (r->cumulative_s == NULL || env->road_to_lane_graph[i] < 0) {
+            continue;
+        }
+        float lane_len = r->cumulative_s[r->segment_length - 1];
+        if (lane_len <= 0.0f) {
+            continue;
+        }
+        total += (int) floorf(lane_len / spacing) + 1;
+    }
+
+    env->n_coarse_samples = total;
+    env->coarse_samples
+        = (total > 0) ? (struct CoarseSample *) malloc(total * sizeof(struct CoarseSample)) : NULL;
+
+    int out = 0;
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *r = &env->road_elements[i];
+        if (r->cumulative_s == NULL || env->road_to_lane_graph[i] < 0) {
+            continue;
+        }
+        float lane_len = r->cumulative_s[r->segment_length - 1];
+        if (lane_len <= 0.0f) {
+            continue;
+        }
+        int n_samples = (int) floorf(lane_len / spacing) + 1;
+        int lg = env->road_to_lane_graph[i];
+        for (int k = 0; k < n_samples; k++) {
+            float s = (float) k * spacing;
+            if (s > lane_len) {
+                s = lane_len;
+            }
+            int seg = 0;
+            while (seg < r->segment_length - 2 && r->cumulative_s[seg + 1] < s) {
+                seg++;
+            }
+            float seg_s0 = r->cumulative_s[seg];
+            float seg_s1 = r->cumulative_s[seg + 1];
+            float t = (seg_s1 > seg_s0) ? (s - seg_s0) / (seg_s1 - seg_s0) : 0.0f;
+            struct CoarseSample *cs = &env->coarse_samples[out++];
+            cs->x = r->x[seg] + t * (r->x[seg + 1] - r->x[seg]);
+            cs->y = r->y[seg] + t * (r->y[seg + 1] - r->y[seg]);
+            cs->z = r->z[seg] + t * (r->z[seg + 1] - r->z[seg]);
+            cs->heading = r->headings[seg];
+            cs->road_idx = i;
+            cs->lane_graph_idx = lg;
+            cs->along_s = s;
+        }
+    }
+}
+
+// Scan all drivable lanes for the one whose centerline projection is closest
+// to (x, y); return its road_idx and along-lane arclength. Used to project a
+// goal point onto the lane graph. Brute force over road_elements; called only
+// at goal-set/advance time.
+static void find_nearest_drivable_lane(Drive *env, float x, float y, int *out_road_idx, float *out_along_s) {
+    int best_road = -1;
+    float best_along_s = 0.0f;
+    float best_d2 = FLT_MAX;
+    for (int i = 0; i < env->num_road_elements; i++) {
+        RoadMapElement *r = &env->road_elements[i];
+        if (r->cumulative_s == NULL || env->road_to_lane_graph[i] < 0) {
+            continue;
+        }
+        for (int seg = 0; seg < r->segment_length - 1; seg++) {
+            float dx = r->x[seg + 1] - r->x[seg];
+            float dy = r->y[seg + 1] - r->y[seg];
+            float len2 = dx * dx + dy * dy;
+            float t = (len2 > 0.0f) ? ((x - r->x[seg]) * dx + (y - r->y[seg]) * dy) / len2 : 0.0f;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+            float px = r->x[seg] + t * dx;
+            float py = r->y[seg] + t * dy;
+            float d2 = (px - x) * (px - x) + (py - y) * (py - y);
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_road = i;
+                float seg_s0 = r->cumulative_s[seg];
+                float seg_s1 = r->cumulative_s[seg + 1];
+                best_along_s = seg_s0 + t * (seg_s1 - seg_s0);
+            }
+        }
+    }
+    *out_road_idx = best_road;
+    *out_along_s = best_along_s;
+}
+
+// Refresh the agent's goal-lane projection from the current goal alias
+// (goal_position_x/y/z). Call wherever the alias is reassigned — at episode
+// start, when compute_goals resets, and when c_step advances the goal index.
+static void set_agent_goal_projection(Drive *env, Agent *agent) {
+    agent->goal_lane_graph_idx = -1;
+    agent->goal_along_s = 0.0f;
+    if (env->road_to_lane_graph == NULL) {
+        return;
+    }
+    int road_idx = -1;
+    float along_s = 0.0f;
+    find_nearest_drivable_lane(env, agent->goal_position_x, agent->goal_position_y, &road_idx, &along_s);
+    if (road_idx >= 0) {
+        agent->goal_lane_graph_idx = env->road_to_lane_graph[road_idx];
+        agent->goal_along_s = along_s;
+    }
+}
+
+// Geodesic distance between two on-lane points using lane_graph's all-pairs
+// Dijkstra. Convention: distances[i*n + j] = shortest path from END of lane i
+// to START of lane j. Same-lane returns signed forward distance (clipped to 0).
+// Unreachable pairs (distances[] sentinel = FLT_MAX or similar) are clipped to
+// COARSE_DIST_MAX so the obs stays finite — the policy treats large values as
+// "no path forward through this sample".
+#define COARSE_DIST_MAX 2000.0f
+static float coarse_lane_dist(Drive *env, int lg_a, float s_a, int lg_b, float s_b) {
+    if (lg_a < 0 || lg_b < 0 || env->lane_graph.distances == NULL) {
+        return COARSE_DIST_MAX;
+    }
+    if (lg_a == lg_b) {
+        float d = s_b - s_a;
+        return (d > 0.0f) ? d : 0.0f;
+    }
+    int n = env->lane_graph.n_lanes;
+    float lane_a_len = env->lane_graph.lane_lengths[lg_a];
+    float graph_dist = env->lane_graph.distances[lg_a * n + lg_b];
+    if (!isfinite(graph_dist) || graph_dist >= COARSE_DIST_MAX) {
+        return COARSE_DIST_MAX;
+    }
+    float total = (lane_a_len - s_a) + graph_dist + s_b;
+    return (total < COARSE_DIST_MAX) ? total : COARSE_DIST_MAX;
+}
+
 // ========================================
 // Route/Path/Goal Functions
 // ========================================
@@ -2002,6 +2199,7 @@ static void compute_goals(Drive *env, int agent_idx) {
         agent->goal_position_x = agent->goal_positions_x[0];
         agent->goal_position_y = agent->goal_positions_y[0];
         agent->goal_position_z = agent->goal_positions_z[0];
+        set_agent_goal_projection(env, agent);
         return;
     }
 
@@ -3515,6 +3713,8 @@ static void free_shared_map_data(struct SharedMapData *shared) {
     free(shared->grid_map);
     free(shared->neighbor_offsets);
     free_lane_graph(&shared->lane_graph);
+    free(shared->coarse_samples);
+    free(shared->road_to_lane_graph);
     free(shared->map_name);
     for (int i = 0; i < g_map_cache_count; i++) {
         if (g_map_cache[i] == shared) {
@@ -3545,6 +3745,9 @@ void init(Drive *env) {
         env->grid_map = shared->grid_map;
         env->neighbor_offsets = shared->neighbor_offsets;
         env->lane_graph = shared->lane_graph;
+        env->coarse_samples = shared->coarse_samples;
+        env->n_coarse_samples = shared->n_coarse_samples;
+        env->road_to_lane_graph = shared->road_to_lane_graph;
         env->shared_map = shared;
         shared->ref_count++;
     } else {
@@ -3557,6 +3760,10 @@ void init(Drive *env) {
         env->grid_map->vision_range = 2 * vision_half_range + 1;
         init_neighbor_offsets(env);
         cache_neighbor_offsets(env);
+        // GIGAFLOW W_lane derived data (depends on road_elements + lane_graph being loaded).
+        build_lane_arclengths(env);
+        build_road_to_lane_graph(env);
+        build_coarse_samples(env);
         if (env->use_map_cache) {
             // Transfer the just-built geometry into a shared, ref-counted entry that
             // this env borrows (ref_count starts at 1).
@@ -3567,6 +3774,9 @@ void init(Drive *env) {
             entry->grid_map = env->grid_map;
             entry->neighbor_offsets = env->neighbor_offsets;
             entry->lane_graph = env->lane_graph;
+            entry->coarse_samples = env->coarse_samples;
+            entry->n_coarse_samples = env->n_coarse_samples;
+            entry->road_to_lane_graph = env->road_to_lane_graph;
             entry->ref_count = 1;
             entry->owner_pid = getpid();
             map_cache_insert(entry);
@@ -3638,6 +3848,7 @@ void init(Drive *env) {
                 agent->goal_position_x = agent->goal_positions_x[0];
                 agent->goal_position_y = agent->goal_positions_y[0];
                 agent->goal_position_z = agent->goal_positions_z[0];
+                set_agent_goal_projection(env, agent);
             }
         }
     }
@@ -3684,6 +3895,8 @@ void c_close(Drive *env) {
         free(env->grid_map->neighbor_cache_count);
         free(env->grid_map);
         free_lane_graph(&env->lane_graph);
+        free(env->coarse_samples);
+        free(env->road_to_lane_graph);
     }
 
     free(env->static_agent_indices);
@@ -3700,6 +3913,7 @@ static int compute_observation_size(Drive *env) {
                                                               : 0;
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
         + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
+        + COARSE_FEATURES * env->obs_slots_coarse_n
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + env->reward_conditioning * NUM_REWARD_COEFS
         + env->num_target_waypoints * target_features;
 }
@@ -4671,6 +4885,147 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     return obs_idx;
 }
 
+// GIGAFLOW W_lane: per-agent top-K nearest coarse lane samples within
+// obs_range_coarse_m. Each slot carries 6 floats: ego-frame position (2),
+// ego-relative heading (2), absolute and min-anchored relative Dijkstra
+// distance to the agent's current goal (2). Empty slots pad with the standard
+// observation sentinel. Read ego->goal_lane_graph_idx / goal_along_s set at
+// the goal-update sites.
+static int write_coarse_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *coarse_count) {
+    int K = env->obs_slots_coarse_n;
+    if (K <= 0) {
+        *coarse_count = 0;
+        return obs_idx;
+    }
+
+    float range_m = (env->obs_range_coarse_m > 0.0f) ? env->obs_range_coarse_m : 200.0f;
+    float range2 = range_m * range_m;
+    float dist_norm = (env->obs_norm_coarse_dist_m > 0.0f) ? env->obs_norm_coarse_dist_m : range_m;
+    float xy_norm = (env->obs_norm_xy_offset_m > 0.0f) ? env->obs_norm_xy_offset_m : 120.0f;
+
+    int sel_idx[K];
+    float sel_d2[K];
+    int n_sel = 0;
+    for (int s = 0; s < env->n_coarse_samples; s++) {
+        struct CoarseSample *cs = &env->coarse_samples[s];
+        float dx = cs->x - ego->sim_x;
+        float dy = cs->y - ego->sim_y;
+        float d2 = dx * dx + dy * dy;
+        if (d2 > range2) {
+            continue;
+        }
+        if (n_sel < K) {
+            int pos = n_sel;
+            while (pos > 0 && sel_d2[pos - 1] > d2) {
+                sel_d2[pos] = sel_d2[pos - 1];
+                sel_idx[pos] = sel_idx[pos - 1];
+                pos--;
+            }
+            sel_d2[pos] = d2;
+            sel_idx[pos] = s;
+            n_sel++;
+        } else if (d2 < sel_d2[K - 1]) {
+            int pos = K - 1;
+            while (pos > 0 && sel_d2[pos - 1] > d2) {
+                sel_d2[pos] = sel_d2[pos - 1];
+                sel_idx[pos] = sel_idx[pos - 1];
+                pos--;
+            }
+            sel_d2[pos] = d2;
+            sel_idx[pos] = s;
+        }
+    }
+
+    *coarse_count = n_sel;
+
+    // The lane graph is directed: opposite-direction lanes have inf distance
+    // to the goal lane through the graph alone. When a selected sample is
+    // unreachable, fall back to the nearest spatially-reachable coarse sample
+    // and use (euclidean(S, S') + graph_dist(S' -> goal)) — the spatial leg
+    // represents the implicit U-turn / lane-change cost.
+    int n_lanes = env->lane_graph.n_lanes;
+    int goal_lg = ego->goal_lane_graph_idx;
+    char reachable[env->n_coarse_samples];
+    for (int s = 0; s < env->n_coarse_samples; s++) {
+        int slg = env->coarse_samples[s].lane_graph_idx;
+        if (slg < 0 || goal_lg < 0) {
+            reachable[s] = 0;
+            continue;
+        }
+        if (slg == goal_lg) {
+            reachable[s] = 1;
+            continue;
+        }
+        float gd = env->lane_graph.distances[slg * n_lanes + goal_lg];
+        reachable[s] = (isfinite(gd) && gd < COARSE_DIST_MAX) ? 1 : 0;
+    }
+
+    float abs_dist[K];
+    float min_abs = FLT_MAX;
+    for (int k = 0; k < n_sel; k++) {
+        struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
+        if (reachable[sel_idx[k]]) {
+            abs_dist[k]
+                = coarse_lane_dist(env, cs->lane_graph_idx, cs->along_s, ego->goal_lane_graph_idx, ego->goal_along_s);
+        } else {
+            float best_d2 = FLT_MAX;
+            int best_idx = -1;
+            for (int s = 0; s < env->n_coarse_samples; s++) {
+                if (!reachable[s]) {
+                    continue;
+                }
+                float dx = env->coarse_samples[s].x - cs->x;
+                float dy = env->coarse_samples[s].y - cs->y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best_idx = s;
+                }
+            }
+            if (best_idx >= 0) {
+                struct CoarseSample *cr = &env->coarse_samples[best_idx];
+                float spatial_leg = sqrtf(best_d2);
+                float graph_leg = coarse_lane_dist(
+                    env, cr->lane_graph_idx, cr->along_s, ego->goal_lane_graph_idx, ego->goal_along_s);
+                abs_dist[k] = spatial_leg + graph_leg;
+                if (abs_dist[k] > COARSE_DIST_MAX) {
+                    abs_dist[k] = COARSE_DIST_MAX;
+                }
+            } else {
+                abs_dist[k] = COARSE_DIST_MAX;
+            }
+        }
+        if (abs_dist[k] < min_abs) {
+            min_abs = abs_dist[k];
+        }
+    }
+    if (n_sel == 0) {
+        min_abs = 0.0f;
+    }
+
+    for (int k = 0; k < K; k++) {
+        int base = obs_idx + k * COARSE_FEATURES;
+        if (k >= n_sel) {
+            for (int c = 0; c < COARSE_FEATURES; c++) {
+                obs[base + c] = PADDED_OBSERVATION_VALUE;
+            }
+            continue;
+        }
+        struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
+        float rel_x, rel_y;
+        project_point_to_ego_frame(ego, cs->x, cs->y, &rel_x, &rel_y);
+        float dh = compute_heading_diff(cs->heading, ego->sim_heading);
+        obs[base + 0] = rel_x / xy_norm;
+        obs[base + 1] = rel_y / xy_norm;
+        obs[base + 2] = cosf(dh);
+        obs[base + 3] = sinf(dh);
+        obs[base + 4] = abs_dist[k] / dist_norm;
+        obs[base + 5] = (abs_dist[k] - min_abs) / dist_norm;
+    }
+
+    return obs_idx + K * COARSE_FEATURES;
+}
+
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
     typedef struct {
         int idx;
@@ -4755,6 +5110,7 @@ static void compute_observations(Drive *env) {
         int partner_count = 0;
         int lane_count = 0;
         int boundary_count = 0;
+        int coarse_count = 0;
         int traffic_control_count = 0;
         int obs_idx = 0;
 
@@ -4762,6 +5118,7 @@ static void compute_observations(Drive *env) {
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
         obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
         obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
+        obs_idx = write_coarse_obs(env, ego, obs, obs_idx, &coarse_count);
         obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
         assert(obs_idx == obs_per_agent);
     }
@@ -5128,6 +5485,7 @@ void c_reset(Drive *env) {
             agent->goal_position_x = agent->goal_positions_x[0];
             agent->goal_position_y = agent->goal_positions_y[0];
             agent->goal_position_z = agent->goal_positions_z[0];
+            set_agent_goal_projection(env, agent);
         } else {
             build_path(env, agent_idx);
             compute_goals(env, agent_idx);
@@ -5242,6 +5600,7 @@ void c_step(Drive *env) {
                 agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
                 agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
+                set_agent_goal_projection(env, agent);
             }
         }
     }
