@@ -2185,7 +2185,7 @@ def load_config(env_name, config_dir=None):
 
     existing_flags = {a.option_strings[0] for a in parser._actions if a.option_strings}
     for section in p.sections():
-        if not section.startswith("eval.") or section == "eval.validation_defaults":
+        if not section.startswith("eval."):
             continue
         for parent_section in _resolve_inherits_chain(section):
             for key in p[parent_section]:
