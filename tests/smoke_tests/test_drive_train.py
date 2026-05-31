@@ -13,15 +13,19 @@ the metrics non-trivial values.
 
 Golden values
 -------------
-The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. To (re)generate
-them after an intentional pipeline change:
+The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. The
+golden is bit-reproducible only inside the pinned image (tests/smoke_tests/
+Dockerfile), which freezes the compiler, the torch/numpy wheels and the kernel
+ISA. A golden generated outside that image will NOT match CI. To regenerate it
+after an intentional pipeline change:
 
-    source .venv/bin/activate
-    SMOKE_UPDATE_GOLDEN=1 python -m pytest tests/smoke_tests/test_drive_train.py -s
+    docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+    docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
+        -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
+        pufferdrive-smoke
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
-(CPU multiprocessing float ops are not bit-identical across machines, so we use
-np.isclose; tighten/loosen via SMOKE_RTOL / SMOKE_ATOL).
+(np.isclose; tighten/loosen via SMOKE_RTOL / SMOKE_ATOL).
 """
 
 import json
@@ -30,9 +34,19 @@ import random
 import signal
 import sys
 
-# Stabilize CPU threading for reproducibility (set before importing torch/numpy).
+# Stabilize CPU math for cross-machine reproducibility (must be set before
+# torch/numpy load their BLAS). Single-threaded + a fixed, CPU-agnostic kernel
+# so floating-point rounding does not depend on the host CPU's SIMD features.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # numpy's BLAS (OpenBLAS)
+os.environ.setdefault("OPENBLAS_CORETYPE", "Haswell")  # pin one OpenBLAS kernel
+os.environ.setdefault("MKL_CBWR", "COMPATIBLE")  # torch's BLAS (MKL): reproducible across CPUs
+# torch is built with oneDNN (MKL-DNN), which JIT-dispatches AVX2/AVX-512 kernels
+# by host CPU and is NOT covered by MKL_CBWR. Cap it to a fixed ISA floor so an
+# AVX-512 host and an AVX2 host run the identical kernel.
+os.environ.setdefault("ONEDNN_MAX_CPU_ISA", "AVX2")
+os.environ.setdefault("DNNL_MAX_CPU_ISA", "AVX2")  # older oneDNN env-var name
 
 import numpy as np
 import torch

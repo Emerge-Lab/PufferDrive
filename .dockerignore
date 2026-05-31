@@ -1,0 +1,9 @@
+.git
+.venv
+extern
+**/__pycache__
+**/*.so
+build
+*.egg-info
+experiments
+wandb

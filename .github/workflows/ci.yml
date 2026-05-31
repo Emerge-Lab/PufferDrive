@@ -43,6 +43,20 @@ jobs:
   smoke-tests:
     name: Smoke Train Test
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build smoke image
+        run: docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+
+      - name: Smoke golden test
+        run: docker run --rm pufferdrive-smoke
+        timeout-minutes: 20
+
+  smoke-replay:
+    name: Smoke Replay HTML
+    runs-on: ubuntu-latest
     env:
       PUFFER_CPU: 1
     steps:
@@ -70,8 +84,8 @@ jobs:
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 
-      - name: Smoke tests
-        run: python -m pytest -v tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_validation_replay_html.py
+      - name: Replay HTML test
+        run: python -m pytest -v tests/smoke_tests/test_validation_replay_html.py
         timeout-minutes: 20
 
   perf-tests:

@@ -16,18 +16,18 @@
     "velocity_progress_sum": 0.014324739342555404
   },
   "losses": {
-    "approx_kl": 0.013492612051777542,
-    "clipfrac": 0.2143002918788365,
-    "ema_max": 1.7817282425239682,
-    "entropy": 2.274603400911604,
-    "explained_variance": 0.24883872270584106,
-    "filter_threshold": 0.017817282425239684,
-    "filtered_fraction": 0.10968945755031323,
-    "kept_fraction": 0.8903105424496868,
+    "approx_kl": 0.014625564699859492,
+    "clipfrac": 0.2436284933771406,
+    "ema_max": 1.7817819057963789,
+    "entropy": 2.272610834666661,
+    "explained_variance": 0.25006312131881714,
+    "filter_threshold": 0.01781781905796379,
+    "filtered_fraction": 0.10822337731574039,
+    "kept_fraction": 0.8917766226842596,
     "masked_fraction": 0.0841064453125,
-    "old_approx_kl": 0.01812012367216604,
-    "policy_loss": -0.009687122290155717,
-    "value_loss": 0.050360029829399924
+    "old_approx_kl": 0.017458365631422827,
+    "policy_loss": -0.005728121214945402,
+    "value_loss": 0.050472061548914225
   },
   "meta": {
     "bptt_horizon": 64,
