@@ -26,13 +26,21 @@ PARTITION="${PARTITION:-h200_tandon}"
 TIME="${TIME:-720}"
 SEEDS="${SEEDS:-0:1:2}"
 PREFIX="${PREFIX:-$(date +%Y-%m-%d)_single_agent}"
+DATE_STAMP="$(date +%Y-%m-%d)"
 
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
-python scripts/submit_cluster.py \
-    --save_dir "/scratch/$USER/runs" \
-    --prefix "$PREFIX" \
-    --compute_config "$COMPUTE_CONFIG" \
-    --program_config "$PROGRAM_CONFIG" \
-    --container --heartbeat \
-    --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
-    --args "train.seed=$SEEDS"
+
+# One submission per seed so we can pass a per-seed run_name (wandb display
+# name like 2026-05-31_seed0). submit_cluster.py would expand the colon sweep
+# into N jobs internally, but it wouldn't vary --args run_name across them.
+IFS=':' read -ra SEED_LIST <<< "$SEEDS"
+for SEED in "${SEED_LIST[@]}"; do
+    python scripts/submit_cluster.py \
+        --save_dir "/scratch/$USER/runs" \
+        --prefix "$PREFIX" \
+        --compute_config "$COMPUTE_CONFIG" \
+        --program_config "$PROGRAM_CONFIG" \
+        --container --heartbeat \
+        --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
+        --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}"
+done
