@@ -42,4 +42,4 @@ RUN python -m pip install -U pip pytest \
     && pip install -e . --no-build-isolation --no-cache-dir \
     && python setup.py build_ext --inplace --force
 
-CMD ["python", "-m", "pytest", "-v", "tests/smoke_tests/test_drive_train.py"]
+CMD ["python", "-m", "pytest", "-v", "tests/smoke_tests/test_drive_train.py", "tests/smoke_tests/test_drive_rollout.py"]

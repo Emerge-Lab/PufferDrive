@@ -109,15 +109,13 @@ def _build_config():
     _set_existing(
         args["vec"],
         {
-            "backend": "Multiprocessing",
-            "num_workers": 2,
-            # Async multiprocessing needs num_envs > batch_size (it keeps half the
-            # envs in-flight); num_envs == batch_size deadlocks. 8 envs / 2 workers
-            # = 4 envs/worker, batch of 4. Buffer rows are keyed by env_id, so the
-            # recv order does not change the final batch contents -> deterministic.
+            # Serial (synchronous) on purpose: async Multiprocessing interleaves
+            # env recv by host scheduling/core-count, which reorders the batch and
+            # flips sampled actions -> metrics diverge across machines. Serial is
+            # deterministic everywhere, which is what the golden needs.
+            "backend": "Serial",
             "num_envs": 8,
             "seed": SEED,
-            "zero_copy": True,
         },
     )
 

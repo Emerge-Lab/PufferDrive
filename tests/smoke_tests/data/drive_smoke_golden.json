@@ -1,38 +1,38 @@
 {
   "env": {
-    "avg_distance_per_infraction": 12.624157287456372,
-    "avg_speed_per_agent": 1.2629009286562602,
-    "collision_rate": 0.015046296296296295,
-    "comfort_violation_count": 0.5595145587016035,
-    "dnf_rate": 0.5613425925925926,
-    "episode_length": 43.148148148148145,
-    "episode_return": -1.9017045961485968,
-    "lane_center_rate": 0.7673724017761372,
+    "avg_distance_per_infraction": 11.944980736436515,
+    "avg_speed_per_agent": 1.265814429727094,
+    "collision_rate": 0.017241379310344827,
+    "comfort_violation_count": 0.5783876386182062,
+    "dnf_rate": 0.5474137931034483,
+    "episode_length": 42.13793103448276,
+    "episode_return": -1.9157278044470425,
+    "lane_center_rate": 0.7655837207004942,
     "n": 16.0,
     "num_goals_reached": 0.0,
-    "offroad_rate": 0.3900462962962963,
-    "red_light_violation_rate": 0.03356481481481482,
+    "offroad_rate": 0.41163793103448276,
+    "red_light_violation_rate": 0.023706896551724137,
     "score": 0.0,
-    "velocity_progress_sum": 0.014324739342555404
+    "velocity_progress_sum": 0.008890107113482624
   },
   "losses": {
-    "approx_kl": 0.014625564699859492,
-    "clipfrac": 0.2436284933771406,
-    "ema_max": 1.7817819057963789,
-    "entropy": 2.272610834666661,
-    "explained_variance": 0.25006312131881714,
-    "filter_threshold": 0.01781781905796379,
-    "filtered_fraction": 0.10822337731574039,
-    "kept_fraction": 0.8917766226842596,
-    "masked_fraction": 0.0841064453125,
-    "old_approx_kl": 0.017458365631422827,
-    "policy_loss": -0.005728121214945402,
-    "value_loss": 0.050472061548914225
+    "approx_kl": 0.009112847370228596,
+    "clipfrac": 0.13719946571758815,
+    "ema_max": 1.8819012264721096,
+    "entropy": 2.316147940499442,
+    "explained_variance": 0.20703983306884766,
+    "filter_threshold": 0.018819012264721095,
+    "filtered_fraction": 0.09999999999999998,
+    "kept_fraction": 0.9,
+    "masked_fraction": 0.09912109375,
+    "old_approx_kl": 0.006211644670526896,
+    "policy_loss": -0.00719258575034993,
+    "value_loss": 0.07937572577169963
   },
   "meta": {
     "bptt_horizon": 64,
     "epochs": 5,
     "seed": 42,
-    "total_agents": 128
+    "total_agents": 64
   }
 }
