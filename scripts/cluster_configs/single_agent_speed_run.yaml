@@ -37,10 +37,9 @@ train.total_timesteps: 1_000_000_000
 
 eval.validation_replay.enabled: 0
 # validation_gigaflow is the live single-agent eval. The egl backend writes
-# agent-following mp4s (bev + chase) every ~50M env steps so we can scrub
-# behavior changes during training.
+# agent-following mp4s (bev + sim_state inherited from drive.ini) every
+# ~50M env steps so we can scrub behavior changes during training.
 eval.validation_gigaflow.render_backend: egl
-eval.validation_gigaflow.render_views: ["bev", "sim_state"]
 eval.validation_gigaflow.interval: 20
 eval.validation_gigaflow.eval.render_num_scenarios: 4
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
