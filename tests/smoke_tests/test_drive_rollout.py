@@ -9,13 +9,16 @@ golden comparison robust across machines without the chaos of a learning loop.
 
 Golden values
 -------------
-Expected metrics live in tests/smoke_tests/data/drive_rollout_golden.json. To
-regenerate after an intentional simulator change:
+Expected metrics live in tests/smoke_tests/data/drive_rollout_golden.json. The
+golden is generated inside the pinned image, which runs under QEMU emulating a
+fixed CPU so the result is identical on every host. To regenerate after an
+intentional simulator change (the image ENTRYPOINT already wraps qemu + python -m
+pytest, so pass only test args):
 
     docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
     docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
         -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-        pufferdrive-smoke python -m pytest -s tests/smoke_tests/test_drive_rollout.py
+        pufferdrive-smoke tests/smoke_tests/test_drive_rollout.py
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
 (np.isclose; tune via SMOKE_RTOL / SMOKE_ATOL).

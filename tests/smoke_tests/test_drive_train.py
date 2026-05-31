@@ -3,9 +3,10 @@
 Deterministic CPU smoke test for the PufferDrive training pipeline.
 
 Runs the real pipeline (load_config -> load_env -> load_policy -> PuffeRL) for
-exactly 5 epochs on CPU with 4 workers, then compares the captured training
+2 epochs on CPU (synchronous Serial backend), then compares the captured training
 metrics (PPO losses) and environment metrics (collision/offroad/goal/return)
-against a committed golden file.
+against a committed golden file. Kept deliberately small because CI runs it under
+QEMU (emulated fixed CPU) where torch is ~30x slower.
 
 The run is intentionally light but sized (short scenarios + enough agents) so
 that collisions, offroad events and episode completions actually occur, giving
@@ -15,14 +16,16 @@ Golden values
 -------------
 The expected metrics live in tests/smoke_tests/data/drive_smoke_golden.json. The
 golden is bit-reproducible only inside the pinned image (tests/smoke_tests/
-Dockerfile), which freezes the compiler, the torch/numpy wheels and the kernel
-ISA. A golden generated outside that image will NOT match CI. To regenerate it
-after an intentional pipeline change:
+Dockerfile), which freezes the compiler + torch/numpy wheels AND runs under QEMU
+emulating a fixed CPU (-cpu Haswell) so glibc libm dispatch and torch kernels are
+identical on every host. A golden generated outside that image will NOT match CI.
+To regenerate it after an intentional pipeline change (the image ENTRYPOINT
+already wraps qemu + python -m pytest, so pass only test args):
 
     docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
     docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
         -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-        pufferdrive-smoke
+        pufferdrive-smoke tests/smoke_tests/test_drive_train.py
 
 Then commit the updated json. Subsequent runs assert against it within tolerance
 (np.isclose; tighten/loosen via SMOKE_RTOL / SMOKE_ATOL).
@@ -56,9 +59,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
 
 SEED = 42
-EPOCHS = 5
+EPOCHS = 2  # small: CI emulates the CPU under QEMU where torch is ~30x slower
 BPTT_HORIZON = 64  # env steps per evaluate(); == scenario length so episodes complete each epoch
-WATCHDOG_SECONDS = 600
+WATCHDOG_SECONDS = 1500  # generous: QEMU-emulated torch is slow; still catches true hangs
 
 GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_smoke_golden.json")
 RTOL = float(os.environ.get("SMOKE_RTOL", "1e-2"))
@@ -114,7 +117,7 @@ def _build_config():
             # flips sampled actions -> metrics diverge across machines. Serial is
             # deterministic everywhere, which is what the golden needs.
             "backend": "Serial",
-            "num_envs": 8,
+            "num_envs": 4,  # fewer envs -> less per-epoch compute under QEMU
             "seed": SEED,
         },
     )
@@ -122,7 +125,7 @@ def _build_config():
     _set_existing(
         args["env"],
         {
-            "num_agents": 16,  # per-env -> 8 envs * 16 = 128 total agents
+            "num_agents": 16,  # per-env active count
             "min_agents_per_env": 16,  # fixed active count -> deterministic, packed
             "max_agents_per_env": 16,
             "action_type": "discrete",
@@ -137,13 +140,13 @@ def _build_config():
     _set_existing(
         args["policy"],
         {
-            "input_size": 64,
-            "backbone_hidden_size": 64,
-            "actor_hidden_size": 64,
-            "critic_hidden_size": 64,
+            "input_size": 32,
+            "backbone_hidden_size": 32,
+            "actor_hidden_size": 32,
+            "critic_hidden_size": 32,
         },
     )
-    _set_existing(args["rnn"], {"input_size": 64, "hidden_size": 64})
+    _set_existing(args["rnn"], {"input_size": 32, "hidden_size": 32})
 
     args["wandb"] = False
     args["neptune"] = False

@@ -52,7 +52,7 @@ jobs:
 
       - name: Smoke golden test
         run: docker run --rm pufferdrive-smoke
-        timeout-minutes: 20
+        timeout-minutes: 30
 
   smoke-replay:
     name: Smoke Replay HTML

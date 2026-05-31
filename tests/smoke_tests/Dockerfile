@@ -27,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DNNL_MAX_CPU_ISA=AVX2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake \
+        build-essential cmake qemu-user-static \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -42,4 +42,10 @@ RUN python -m pip install -U pip pytest \
     && pip install -e . --no-build-isolation --no-cache-dir \
     && python setup.py build_ext --inplace --force
 
-CMD ["python", "-m", "pytest", "-v", "tests/smoke_tests/test_drive_train.py", "tests/smoke_tests/test_drive_rollout.py"]
+# Run everything through QEMU emulating a fixed CPU (Haswell / AVX2). The guest
+# always sees the same CPUID regardless of the host, so glibc libm IFUNC dispatch
+# and torch's CPU kernel selection are identical on every machine -> the golden is
+# bit-reproducible across CI runners and dev boxes. ENTRYPOINT fixes the emulator;
+# CMD is the default test list (override it to pass other pytest args).
+ENTRYPOINT ["qemu-x86_64-static", "-cpu", "Haswell", "/usr/local/bin/python", "-m", "pytest", "-v"]
+CMD ["tests/smoke_tests/test_drive_train.py", "tests/smoke_tests/test_drive_rollout.py"]
