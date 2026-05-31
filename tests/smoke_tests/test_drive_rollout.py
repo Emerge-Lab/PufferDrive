@@ -41,11 +41,14 @@ EPOCHS = 5
 BPTT_HORIZON = 64  # env steps per epoch; == scenario length so episodes complete
 
 GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_rollout_golden.json")
-# 8%: rates/counts are bit-stable across hosts, but episode_return is a float sum
-# that carries ~5% host residue (qemu-user runs FP on the host CPU and glibc libm
-# dispatches on host AT_HWCAP). 8% absorbs it while still catching real regressions.
-RTOL = float(os.environ.get("SMOKE_RTOL", "8e-2"))
+# Two-tier tolerance: rates/counts are bit-stable across hosts (<1%), but
+# episode_return is a float sum that carries ~5% host residue (qemu-user runs FP
+# on the host CPU and glibc libm dispatches on host AT_HWCAP). Check the stable
+# metrics tightly and only episode_return loosely.
+RTOL = float(os.environ.get("SMOKE_RTOL", "2e-2"))
+LOOSE_RTOL = float(os.environ.get("SMOKE_LOOSE_RTOL", "8e-2"))
 ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
+LOOSE_KEYS = frozenset({"episode_return"})
 
 SANITY_KEYS = ("collision_rate", "offroad_rate")
 
@@ -123,9 +126,10 @@ def _capture_env_means(vecenv, rng):
 def _compare(actual, expected):
     mismatches = []
     for key, exp in expected.items():
+        rtol = LOOSE_RTOL if key in LOOSE_KEYS else RTOL
         if key not in actual:
             mismatches.append(f"  env/{key}: MISSING (expected {exp})")
-        elif not bool(np.isclose(actual[key], exp, rtol=RTOL, atol=ATOL)):
+        elif not bool(np.isclose(actual[key], exp, rtol=rtol, atol=ATOL)):
             mismatches.append(f"  env/{key}: {actual[key]!r} != expected {exp!r}")
     return mismatches
 

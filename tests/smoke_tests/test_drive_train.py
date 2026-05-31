@@ -64,13 +64,16 @@ BPTT_HORIZON = 64  # env steps per evaluate(); == scenario length so episodes co
 WATCHDOG_SECONDS = 1500  # generous: QEMU-emulated torch is slow; still catches true hangs
 
 GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_smoke_golden.json")
-# 8%: QEMU (-cpu Haswell) removes the chaotic cross-host divergence and pins
-# kernel dispatch, but qemu-user still runs FP on the host CPU and glibc libm
-# picks its variant from the host's AT_HWCAP -> accumulation metrics (loss sums,
-# episode_return) carry ~5% host residue. Rates/counts are exact; 8% absorbs the
-# residue while still catching real regressions.
-RTOL = float(os.environ.get("SMOKE_RTOL", "8e-2"))
+# Two-tier tolerance. Under QEMU (-cpu Haswell) almost every metric is bit-stable
+# across hosts (<1% drift); only float-accumulation metrics (loss sums, EMAs,
+# episode_return) carry ~5% host residue, because qemu-user runs FP on the host
+# CPU and glibc libm dispatches on the host's AT_HWCAP. So check the stable
+# metrics tightly and only those few loosely.
+RTOL = float(os.environ.get("SMOKE_RTOL", "2e-2"))
+LOOSE_RTOL = float(os.environ.get("SMOKE_LOOSE_RTOL", "8e-2"))
 ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
+# Metrics that are sums/EMAs of many floats -> host-FP-sensitive; checked loosely.
+LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return"})
 
 # Env metrics we expect a random policy to exercise within the run.
 SANITY_KEYS = ("collision_rate", "offroad_rate")
@@ -212,18 +215,19 @@ def _is_number(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
-def _nan_eq(a, b):
+def _nan_eq(a, b, rtol):
     if np.isnan(a) and np.isnan(b):
         return True
-    return bool(np.isclose(a, b, rtol=RTOL, atol=ATOL))
+    return bool(np.isclose(a, b, rtol=rtol, atol=ATOL))
 
 
 def _compare(label, actual, expected):
     mismatches = []
     for key, exp in expected.items():
+        rtol = LOOSE_RTOL if key in LOOSE_KEYS else RTOL
         if key not in actual:
             mismatches.append(f"  {label}/{key}: MISSING (expected {exp})")
-        elif not _nan_eq(actual[key], exp):
+        elif not _nan_eq(actual[key], exp, rtol):
             mismatches.append(f"  {label}/{key}: {actual[key]!r} != expected {exp!r}")
     return mismatches
 
