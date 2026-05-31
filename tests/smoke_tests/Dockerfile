@@ -36,7 +36,7 @@ COPY . .
 # Pin torch/numpy first so the editable install (which imports torch at build
 # time) and build_ext both see the exact CPU wheels; --no-build-isolation keeps
 # the build from pulling a different default torch.
-RUN python -m pip install -U pip \
+RUN python -m pip install -U pip pytest \
     && pip install --index-url https://download.pytorch.org/whl/cpu \
         torch==2.11.0+cpu numpy==2.4.4 \
     && pip install -e . --no-build-isolation --no-cache-dir \
