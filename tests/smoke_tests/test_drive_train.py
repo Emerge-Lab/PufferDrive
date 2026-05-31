@@ -64,7 +64,12 @@ BPTT_HORIZON = 64  # env steps per evaluate(); == scenario length so episodes co
 WATCHDOG_SECONDS = 1500  # generous: QEMU-emulated torch is slow; still catches true hangs
 
 GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_smoke_golden.json")
-RTOL = float(os.environ.get("SMOKE_RTOL", "1e-2"))
+# 8%: QEMU (-cpu Haswell) removes the chaotic cross-host divergence and pins
+# kernel dispatch, but qemu-user still runs FP on the host CPU and glibc libm
+# picks its variant from the host's AT_HWCAP -> accumulation metrics (loss sums,
+# episode_return) carry ~5% host residue. Rates/counts are exact; 8% absorbs the
+# residue while still catching real regressions.
+RTOL = float(os.environ.get("SMOKE_RTOL", "8e-2"))
 ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
 
 # Env metrics we expect a random policy to exercise within the run.
