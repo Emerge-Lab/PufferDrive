@@ -1957,7 +1957,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
-    env->obs_slots_coarse_n = (int) unpack(kwargs, "obs_slots_coarse_n");
     env->coarse_sample_spacing_m = (float) unpack(kwargs, "coarse_sample_spacing_m");
     env->obs_range_coarse_m = (float) unpack(kwargs, "obs_range_coarse_m");
     env->obs_norm_coarse_dist_m = (float) unpack(kwargs, "obs_norm_coarse_dist_m");

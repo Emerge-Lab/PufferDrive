@@ -505,8 +505,8 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
 def _img_from_fig(fig: matplotlib.figure.Figure, close: bool = True) -> np.ndarray:
     fig.subplots_adjust(left=0.01, bottom=0.02, right=1.00, top=0.96)
     fig.canvas.draw()
-    data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-    img = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    img = rgba[:, :, :3].copy()
     if close:
         plt.close(fig)
     return img
@@ -745,32 +745,48 @@ def plot_observation(
 
     # Road elements
     rl2p = scales["road_length_to_position"]
-    rw2p = scales["road_width_to_position"]
+
+    # Lane slots now carry GIGAFLOW W_lane coarse-view samples (40m-spaced
+    # global lane samples). Layout: rel_x, rel_y, rel_z, dist_abs, dist_rel,
+    # cos_dh, sin_dh. Padding slots are filled with PADDED_OBSERVATION_VALUE
+    # (-0.001) at every index.
     count_lane = 0
-    for i in range(lane_obs.shape[0]):
-        if np.all(lane_obs[i] == 0):
-            continue
-        count_lane += 1
-        rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
-        length, width = lane_obs[i][3] * rl2p, lane_obs[i][4] * rw2p
-        dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
-        color = "lightgrey"
-        ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
-        ax.plot(
-            [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
-            [rel_y + dir_sin * length / 2, rel_y - dir_sin * length / 2],
-            color=color,
-            linewidth=1,
-            zorder=1,
-        )
+    rel_dists = lane_obs[:, 4]
+    valid_lane = ~np.all(np.isclose(lane_obs, -0.001), axis=1)
+    if valid_lane.any():
+        vmax = float(rel_dists[valid_lane].max()) if rel_dists[valid_lane].size else 1.0
+        if vmax <= 0:
+            vmax = 1.0
+        cmap = plt.get_cmap("RdYlGn_r")
+        tick = 0.025  # heading tick half-length in normalized obs coords
+        for i in range(lane_obs.shape[0]):
+            if not valid_lane[i]:
+                continue
+            count_lane += 1
+            rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
+            dist_abs = lane_obs[i][3]
+            dist_rel = lane_obs[i][4]
+            cos_dh, sin_dh = lane_obs[i][5], lane_obs[i][6]
+            color = cmap(min(1.0, dist_rel / vmax))
+            ax.scatter(rel_x, rel_y, color=color, s=28, zorder=2, edgecolors="black", linewidths=0.4)
+            ax.plot(
+                [rel_x, rel_x + cos_dh * tick],
+                [rel_y, rel_y + sin_dh * tick],
+                color=color,
+                linewidth=1.2,
+                zorder=2,
+            )
+            if np.isclose(dist_rel, 0.0, atol=1e-4):
+                # Min-anchored zero — the routing-best sample in this K-set.
+                ax.scatter(rel_x, rel_y, facecolors="none", edgecolors="lime", s=120, linewidths=2.0, zorder=3)
 
     count_boundary = 0
     for i in range(boundary_obs.shape[0]):
-        if np.all(boundary_obs[i] == 0):
+        if np.all(np.isclose(boundary_obs[i], -0.001)) or np.all(boundary_obs[i] == 0):
             continue
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
-        length, width = boundary_obs[i][3] * rl2p, boundary_obs[i][4] * rw2p
+        length = boundary_obs[i][3] * rl2p
         dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -785,7 +801,8 @@ def plot_observation(
     ax.text(
         0.12,
         0.95,
-        f"Lanes: {count_lane}\nBoundaries: {count_boundary}",
+        f"Coarse samples: {count_lane}\nBoundaries: {count_boundary}\n"
+        "(green = routing-best in K)",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",

@@ -125,9 +125,6 @@
 #define PADDED_OBSERVATION_VALUE -0.001f
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
-// GIGAFLOW W_lane: per coarse-sample feature count.
-// rel_x, rel_y, cos(dh), sin(dh), dist_abs_norm, dist_rel_norm (min-anchored).
-#define COARSE_FEATURES 6
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
@@ -438,12 +435,11 @@ struct Drive {
     int reward_randomization;
     int compute_eval_metrics;
     int obs_slots_boundary_n;
-    int obs_slots_lane_n;
+    int obs_slots_lane_n;     // Coarse-view sample count (lane channel carries GIGAFLOW W_lane samples)
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
-    int obs_slots_coarse_n;   // GIGAFLOW W_lane: top-K coarse-view lane samples per agent
     float coarse_sample_spacing_m;
-    float obs_range_coarse_m; // Euclidean radius for top-K filter
+    float obs_range_coarse_m; // Euclidean radius for top-K coarse-sample selection
     float obs_norm_coarse_dist_m;
     int traffic_control_scope;
     int obs_slots_lane_kept;
@@ -3913,7 +3909,6 @@ static int compute_observation_size(Drive *env) {
                                                               : 0;
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
         + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
-        + COARSE_FEATURES * env->obs_slots_coarse_n
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + env->reward_conditioning * NUM_REWARD_COEFS
         + env->num_target_waypoints * target_features;
 }
@@ -4765,7 +4760,154 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     return obs_idx + (env->obs_slots_partners_n - partners_written) * PARTNER_FEATURES;
 }
 
+// Lane slots now carry GIGAFLOW W_lane coarse-view samples (top-K nearest
+// global lane samples within obs_range_coarse_m). Boundary slots still carry
+// close-range ROAD_EDGE polylines from the grid map. The coarse slot reuses
+// the original 7-wide ROAD_FEATURES layout but reinterprets indices 3-4 as
+// goal distances (was seg_half_len, lane_width):
+//   [0] rel_x in ego frame / obs_norm_xy_offset_m
+//   [1] rel_y in ego frame / obs_norm_xy_offset_m
+//   [2] rel_z / Z_BUFFER
+//   [3] dist(sample -> goal) / obs_norm_coarse_dist_m         (absolute)
+//   [4] (dist(sample -> goal) - min_k dist) / obs_norm_coarse_dist_m  (min-anchored relative)
+//   [5] cos(sample_heading - ego_heading)
+//   [6] sin(sample_heading - ego_heading)
+// Unreachable sample->goal pairs in the directed lane graph are replaced by
+// (euclidean to nearest reachable sample) + (its graph distance to goal).
 static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {
+    int lane_obs_idx = obs_idx;
+    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
+    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
+
+    // === Lane slots: coarse-view samples ===
+    int K = env->obs_slots_lane_kept;
+    if (K > 0) {
+        float range_m = (env->obs_range_coarse_m > 0.0f) ? env->obs_range_coarse_m : 200.0f;
+        float range2 = range_m * range_m;
+        float dist_norm = (env->obs_norm_coarse_dist_m > 0.0f) ? env->obs_norm_coarse_dist_m : range_m;
+        float xy_norm = (env->obs_norm_xy_offset_m > 0.0f) ? env->obs_norm_xy_offset_m : 120.0f;
+
+        int sel_idx[K];
+        float sel_d2[K];
+        int n_sel = 0;
+        for (int s = 0; s < env->n_coarse_samples; s++) {
+            struct CoarseSample *cs = &env->coarse_samples[s];
+            float dx = cs->x - ego->sim_x;
+            float dy = cs->y - ego->sim_y;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > range2) {
+                continue;
+            }
+            if (n_sel < K) {
+                int pos = n_sel;
+                while (pos > 0 && sel_d2[pos - 1] > d2) {
+                    sel_d2[pos] = sel_d2[pos - 1];
+                    sel_idx[pos] = sel_idx[pos - 1];
+                    pos--;
+                }
+                sel_d2[pos] = d2;
+                sel_idx[pos] = s;
+                n_sel++;
+            } else if (d2 < sel_d2[K - 1]) {
+                int pos = K - 1;
+                while (pos > 0 && sel_d2[pos - 1] > d2) {
+                    sel_d2[pos] = sel_d2[pos - 1];
+                    sel_idx[pos] = sel_idx[pos - 1];
+                    pos--;
+                }
+                sel_d2[pos] = d2;
+                sel_idx[pos] = s;
+            }
+        }
+
+        // Per-sample reachability to goal lane via the directed lane graph.
+        int n_lanes = env->lane_graph.n_lanes;
+        int goal_lg = ego->goal_lane_graph_idx;
+        char reachable[env->n_coarse_samples];
+        for (int s = 0; s < env->n_coarse_samples; s++) {
+            int slg = env->coarse_samples[s].lane_graph_idx;
+            if (slg < 0 || goal_lg < 0) {
+                reachable[s] = 0;
+                continue;
+            }
+            if (slg == goal_lg) {
+                reachable[s] = 1;
+                continue;
+            }
+            float gd = env->lane_graph.distances[slg * n_lanes + goal_lg];
+            reachable[s] = (isfinite(gd) && gd < COARSE_DIST_MAX) ? 1 : 0;
+        }
+
+        float abs_dist[K];
+        float min_abs = FLT_MAX;
+        for (int k = 0; k < n_sel; k++) {
+            struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
+            if (reachable[sel_idx[k]]) {
+                abs_dist[k]
+                    = coarse_lane_dist(env, cs->lane_graph_idx, cs->along_s, goal_lg, ego->goal_along_s);
+            } else {
+                float best_d2 = FLT_MAX;
+                int best_idx = -1;
+                for (int s = 0; s < env->n_coarse_samples; s++) {
+                    if (!reachable[s]) {
+                        continue;
+                    }
+                    float dx = env->coarse_samples[s].x - cs->x;
+                    float dy = env->coarse_samples[s].y - cs->y;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < best_d2) {
+                        best_d2 = d2;
+                        best_idx = s;
+                    }
+                }
+                if (best_idx >= 0) {
+                    struct CoarseSample *cr = &env->coarse_samples[best_idx];
+                    float spatial_leg = sqrtf(best_d2);
+                    float graph_leg
+                        = coarse_lane_dist(env, cr->lane_graph_idx, cr->along_s, goal_lg, ego->goal_along_s);
+                    abs_dist[k] = spatial_leg + graph_leg;
+                    if (abs_dist[k] > COARSE_DIST_MAX) {
+                        abs_dist[k] = COARSE_DIST_MAX;
+                    }
+                } else {
+                    abs_dist[k] = COARSE_DIST_MAX;
+                }
+            }
+            if (abs_dist[k] < min_abs) {
+                min_abs = abs_dist[k];
+            }
+        }
+        if (n_sel == 0) {
+            min_abs = 0.0f;
+        }
+
+        for (int k = 0; k < K; k++) {
+            int base = lane_obs_idx + k * ROAD_FEATURES;
+            if (k >= n_sel) {
+                for (int c = 0; c < ROAD_FEATURES; c++) {
+                    obs[base + c] = PADDED_OBSERVATION_VALUE;
+                }
+                continue;
+            }
+            struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
+            float rel_x, rel_y;
+            project_point_to_ego_frame(ego, cs->x, cs->y, &rel_x, &rel_y);
+            float rel_z = cs->z - ego->sim_z;
+            float dh = compute_heading_diff(cs->heading, ego->sim_heading);
+            obs[base + 0] = rel_x / xy_norm;
+            obs[base + 1] = rel_y / xy_norm;
+            obs[base + 2] = rel_z / Z_BUFFER;
+            obs[base + 3] = abs_dist[k] / dist_norm;
+            obs[base + 4] = (abs_dist[k] - min_abs) / dist_norm;
+            obs[base + 5] = cosf(dh);
+            obs[base + 6] = sinf(dh);
+        }
+        *lane_count = n_sel;
+    } else {
+        *lane_count = 0;
+    }
+
+    // === Boundary slots: close-range ROAD_EDGE polylines via grid map ===
     int grid_idx = get_grid_index(env, ego->sim_x, ego->sim_y);
     int neighbor_count = 0;
     const GridMapEntity *neighbor_entities = NULL;
@@ -4774,27 +4916,18 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
     }
 
-    int lane_obs_idx = obs_idx;
-    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
-    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
-
-    float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
     float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
-    float *lane_obs_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
     float *boundary_obs_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
-    int lanes_found = 0;
     int boundaries_found = 0;
 
     for (int k = 0; k < neighbor_count; k++) {
-        if (lanes_found >= env->obs_slots_lane_n && boundaries_found >= env->obs_slots_boundary_n) {
+        if (boundaries_found >= env->obs_slots_boundary_n) {
             break;
         }
         int entity_idx = neighbor_entities[k].entity_idx;
         int geometry_idx = neighbor_entities[k].geometry_idx;
         RoadMapElement *road_element = &env->road_elements[entity_idx];
-        int is_lane = is_road_lane(road_element->type);
-        int is_edge = is_road_edge(road_element->type);
-        if (!is_lane && !is_edge) {
+        if (!is_road_edge(road_element->type)) {
             continue;
         }
 
@@ -4824,7 +4957,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float seg_dir_y = (seg_half_len > 0) ? seg_dy / seg_half_len : seg_dy;
         float rel_seg_dir_x, rel_seg_dir_y;
         project_vector_to_ego_frame(ego, seg_dir_x, seg_dir_y, &rel_seg_dir_x, &rel_seg_dir_y);
-        if (is_edge && seg_half_len > 0) {
+        if (seg_half_len > 0) {
             float angle = atan2f(rel_seg_dir_y, rel_seg_dir_x);
             if (angle > (float) M_PI / 2.0f) {
                 angle -= (float) M_PI;
@@ -4835,35 +4968,22 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             rel_seg_dir_y = sinf(angle);
         }
 
-        float *segment_dest = is_lane ? lane_obs_dest : boundary_obs_dest;
-        int *segment_count = is_lane ? &lanes_found : &boundaries_found;
-        int segment_cap = is_lane ? env->obs_slots_lane_n : env->obs_slots_boundary_n;
-        if (*segment_count >= segment_cap) {
-            continue;
-        }
-        int feature_base = (*segment_count)++ * ROAD_FEATURES;
-        segment_dest[feature_base] = rel_x / env->obs_norm_xy_offset_m;
-        segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
-        segment_dest[feature_base + 2] = rel_z / Z_BUFFER;
-        segment_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
-        segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
-        segment_dest[feature_base + 5] = rel_seg_dir_x;
-        segment_dest[feature_base + 6] = rel_seg_dir_y;
+        int feature_base = boundaries_found * ROAD_FEATURES;
+        boundaries_found++;
+        boundary_obs_dest[feature_base] = rel_x / env->obs_norm_xy_offset_m;
+        boundary_obs_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
+        boundary_obs_dest[feature_base + 2] = rel_z / Z_BUFFER;
+        boundary_obs_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
+        boundary_obs_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
+        boundary_obs_dest[feature_base + 5] = rel_seg_dir_x;
+        boundary_obs_dest[feature_base + 6] = rel_seg_dir_y;
     }
 
     if (env->road_dropout_enabled) {
-        int lanes_to_copy = (lanes_found < env->obs_slots_lane_kept) ? lanes_found : env->obs_slots_lane_kept;
         int boundaries_to_copy
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
-        *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(lanes_buffer, lanes_found, lanes_to_copy);
         subsample_road_observation_rows(boundaries_buffer, boundaries_found, boundaries_to_copy);
-        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * ROAD_FEATURES * sizeof(float));
-        fill_padded_observation_rows(
-            &obs[lane_obs_idx + lanes_to_copy * ROAD_FEATURES],
-            env->obs_slots_lane_kept - lanes_to_copy,
-            ROAD_FEATURES);
         memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * ROAD_FEATURES * sizeof(float));
         fill_padded_observation_rows(
             &obs[boundary_obs_idx + boundaries_to_copy * ROAD_FEATURES],
@@ -4872,158 +4992,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         return obs_idx;
     }
 
-    *lane_count = lanes_found;
     *boundary_count = boundaries_found;
-    fill_padded_observation_rows(
-        &obs[lane_obs_idx + lanes_found * ROAD_FEATURES],
-        env->obs_slots_lane_kept - lanes_found,
-        ROAD_FEATURES);
     fill_padded_observation_rows(
         &obs[boundary_obs_idx + boundaries_found * ROAD_FEATURES],
         env->obs_slots_boundary_kept - boundaries_found,
         ROAD_FEATURES);
     return obs_idx;
-}
-
-// GIGAFLOW W_lane: per-agent top-K nearest coarse lane samples within
-// obs_range_coarse_m. Each slot carries 6 floats: ego-frame position (2),
-// ego-relative heading (2), absolute and min-anchored relative Dijkstra
-// distance to the agent's current goal (2). Empty slots pad with the standard
-// observation sentinel. Read ego->goal_lane_graph_idx / goal_along_s set at
-// the goal-update sites.
-static int write_coarse_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *coarse_count) {
-    int K = env->obs_slots_coarse_n;
-    if (K <= 0) {
-        *coarse_count = 0;
-        return obs_idx;
-    }
-
-    float range_m = (env->obs_range_coarse_m > 0.0f) ? env->obs_range_coarse_m : 200.0f;
-    float range2 = range_m * range_m;
-    float dist_norm = (env->obs_norm_coarse_dist_m > 0.0f) ? env->obs_norm_coarse_dist_m : range_m;
-    float xy_norm = (env->obs_norm_xy_offset_m > 0.0f) ? env->obs_norm_xy_offset_m : 120.0f;
-
-    int sel_idx[K];
-    float sel_d2[K];
-    int n_sel = 0;
-    for (int s = 0; s < env->n_coarse_samples; s++) {
-        struct CoarseSample *cs = &env->coarse_samples[s];
-        float dx = cs->x - ego->sim_x;
-        float dy = cs->y - ego->sim_y;
-        float d2 = dx * dx + dy * dy;
-        if (d2 > range2) {
-            continue;
-        }
-        if (n_sel < K) {
-            int pos = n_sel;
-            while (pos > 0 && sel_d2[pos - 1] > d2) {
-                sel_d2[pos] = sel_d2[pos - 1];
-                sel_idx[pos] = sel_idx[pos - 1];
-                pos--;
-            }
-            sel_d2[pos] = d2;
-            sel_idx[pos] = s;
-            n_sel++;
-        } else if (d2 < sel_d2[K - 1]) {
-            int pos = K - 1;
-            while (pos > 0 && sel_d2[pos - 1] > d2) {
-                sel_d2[pos] = sel_d2[pos - 1];
-                sel_idx[pos] = sel_idx[pos - 1];
-                pos--;
-            }
-            sel_d2[pos] = d2;
-            sel_idx[pos] = s;
-        }
-    }
-
-    *coarse_count = n_sel;
-
-    // The lane graph is directed: opposite-direction lanes have inf distance
-    // to the goal lane through the graph alone. When a selected sample is
-    // unreachable, fall back to the nearest spatially-reachable coarse sample
-    // and use (euclidean(S, S') + graph_dist(S' -> goal)) — the spatial leg
-    // represents the implicit U-turn / lane-change cost.
-    int n_lanes = env->lane_graph.n_lanes;
-    int goal_lg = ego->goal_lane_graph_idx;
-    char reachable[env->n_coarse_samples];
-    for (int s = 0; s < env->n_coarse_samples; s++) {
-        int slg = env->coarse_samples[s].lane_graph_idx;
-        if (slg < 0 || goal_lg < 0) {
-            reachable[s] = 0;
-            continue;
-        }
-        if (slg == goal_lg) {
-            reachable[s] = 1;
-            continue;
-        }
-        float gd = env->lane_graph.distances[slg * n_lanes + goal_lg];
-        reachable[s] = (isfinite(gd) && gd < COARSE_DIST_MAX) ? 1 : 0;
-    }
-
-    float abs_dist[K];
-    float min_abs = FLT_MAX;
-    for (int k = 0; k < n_sel; k++) {
-        struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
-        if (reachable[sel_idx[k]]) {
-            abs_dist[k]
-                = coarse_lane_dist(env, cs->lane_graph_idx, cs->along_s, ego->goal_lane_graph_idx, ego->goal_along_s);
-        } else {
-            float best_d2 = FLT_MAX;
-            int best_idx = -1;
-            for (int s = 0; s < env->n_coarse_samples; s++) {
-                if (!reachable[s]) {
-                    continue;
-                }
-                float dx = env->coarse_samples[s].x - cs->x;
-                float dy = env->coarse_samples[s].y - cs->y;
-                float d2 = dx * dx + dy * dy;
-                if (d2 < best_d2) {
-                    best_d2 = d2;
-                    best_idx = s;
-                }
-            }
-            if (best_idx >= 0) {
-                struct CoarseSample *cr = &env->coarse_samples[best_idx];
-                float spatial_leg = sqrtf(best_d2);
-                float graph_leg = coarse_lane_dist(
-                    env, cr->lane_graph_idx, cr->along_s, ego->goal_lane_graph_idx, ego->goal_along_s);
-                abs_dist[k] = spatial_leg + graph_leg;
-                if (abs_dist[k] > COARSE_DIST_MAX) {
-                    abs_dist[k] = COARSE_DIST_MAX;
-                }
-            } else {
-                abs_dist[k] = COARSE_DIST_MAX;
-            }
-        }
-        if (abs_dist[k] < min_abs) {
-            min_abs = abs_dist[k];
-        }
-    }
-    if (n_sel == 0) {
-        min_abs = 0.0f;
-    }
-
-    for (int k = 0; k < K; k++) {
-        int base = obs_idx + k * COARSE_FEATURES;
-        if (k >= n_sel) {
-            for (int c = 0; c < COARSE_FEATURES; c++) {
-                obs[base + c] = PADDED_OBSERVATION_VALUE;
-            }
-            continue;
-        }
-        struct CoarseSample *cs = &env->coarse_samples[sel_idx[k]];
-        float rel_x, rel_y;
-        project_point_to_ego_frame(ego, cs->x, cs->y, &rel_x, &rel_y);
-        float dh = compute_heading_diff(cs->heading, ego->sim_heading);
-        obs[base + 0] = rel_x / xy_norm;
-        obs[base + 1] = rel_y / xy_norm;
-        obs[base + 2] = cosf(dh);
-        obs[base + 3] = sinf(dh);
-        obs[base + 4] = abs_dist[k] / dist_norm;
-        obs[base + 5] = (abs_dist[k] - min_abs) / dist_norm;
-    }
-
-    return obs_idx + K * COARSE_FEATURES;
 }
 
 static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *traffic_control_count) {
@@ -5110,7 +5084,6 @@ static void compute_observations(Drive *env) {
         int partner_count = 0;
         int lane_count = 0;
         int boundary_count = 0;
-        int coarse_count = 0;
         int traffic_control_count = 0;
         int obs_idx = 0;
 
@@ -5118,7 +5091,6 @@ static void compute_observations(Drive *env) {
         obs_idx = write_reward_target_obs(env, ego, obs, obs_idx);
         obs_idx = write_partner_obs(env, ego, i, obs, obs_idx, &partner_count);
         obs_idx = write_road_obs(env, ego, obs, obs_idx, &lane_count, &boundary_count);
-        obs_idx = write_coarse_obs(env, ego, obs, obs_idx, &coarse_count);
         obs_idx = write_traffic_control_obs(env, ego, obs, obs_idx, &traffic_control_count);
         assert(obs_idx == obs_per_agent);
     }
