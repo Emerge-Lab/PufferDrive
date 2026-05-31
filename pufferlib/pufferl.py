@@ -2161,6 +2161,42 @@ def load_config(env_name, config_dir=None):
             fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
             parser.add_argument(fmt.replace("_", "-"), default=puffer_type(p[section][key]), type=puffer_type)
 
+    # Also emit override flags for keys inherited via `inherits = "..."` in
+    # [eval.<name>] sections. Without this, an eval section can only override
+    # keys that physically appear inside its own section, which forces hacky
+    # placeholder lines or pushes the override onto the parent (affecting any
+    # sibling that also inherits from the same parent). Suppressed-by-default
+    # so the existing inherits-merge keeps using the parent value unless the
+    # CLI flag is actually passed.
+    def _resolve_inherits_chain(section_name):
+        chain, cur, seen = [], section_name, set()
+        while cur not in seen:
+            seen.add(cur)
+            parent = p[cur].get("inherits") if cur in p else None
+            if not parent:
+                break
+            parent = parent.strip().strip('"').strip("'")
+            parent_section = f"eval.{parent}"
+            if parent_section not in p:
+                break
+            chain.append(parent_section)
+            cur = parent_section
+        return chain
+
+    existing_flags = {a.option_strings[0] for a in parser._actions if a.option_strings}
+    for section in p.sections():
+        if not section.startswith("eval."):
+            continue
+        for parent_section in _resolve_inherits_chain(section):
+            for key in p[parent_section]:
+                if key == "inherits" or key in p[section]:
+                    continue
+                fmt = f"--{section}.{key}".replace("_", "-")
+                if fmt in existing_flags:
+                    continue
+                parser.add_argument(fmt, default=argparse.SUPPRESS, type=puffer_type)
+                existing_flags.add(fmt)
+
     parser.add_argument(
         "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"
     )

@@ -87,6 +87,9 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_boundary_n=32,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
+        coarse_sample_spacing_m=40.0,
+        obs_range_coarse_m=200.0,
+        obs_norm_coarse_dist_m=200.0,
         traffic_control_scope=0,
         starting_map=0,
         obs_norm_goal_offset_m=100.0,
@@ -183,6 +186,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
+        self.coarse_sample_spacing_m = float(coarse_sample_spacing_m)
+        self.obs_range_coarse_m = float(obs_range_coarse_m)
+        self.obs_norm_coarse_dist_m = float(obs_norm_coarse_dist_m)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
@@ -400,6 +406,9 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
+            "coarse_sample_spacing_m": self.coarse_sample_spacing_m,
+            "obs_range_coarse_m": self.obs_range_coarse_m,
+            "obs_norm_coarse_dist_m": self.obs_norm_coarse_dist_m,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,

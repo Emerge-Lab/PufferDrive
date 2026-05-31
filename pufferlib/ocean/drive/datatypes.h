@@ -249,6 +249,12 @@ struct Agent {
     float goal_position_z; // alias = goal_positions_z[current_goal_idx]
     int current_goal_idx;  // index of next goal to reach (0..N-1)
 
+    // GIGAFLOW W_lane: goal projection (lane in the graph + along-lane arclength).
+    // Refreshed at every goal-set/advance site so per-step coarse-view emission
+    // can look up Dijkstra distance from each sample to the current goal in O(1).
+    int goal_lane_graph_idx; // -1 if no current goal lane found
+    float goal_along_s;
+
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
 
@@ -291,6 +297,22 @@ struct RoadMapElement {
     int num_exits;
     int *exit_lanes;
     float speed_limit;
+
+    // For drivable lanes only: per-vertex arclength from lane start (length = segment_length).
+    // NULL for non-drivable elements. Built post-load in build_lane_arclengths.
+    float *cumulative_s;
+};
+
+// Sampled point along a drivable lane centerline; used by the coarse map view
+// (GIGAFLOW W_lane). Sampled every coarse_sample_spacing_m meters at map load.
+struct CoarseSample {
+    float x;
+    float y;
+    float z;
+    float heading;       // tangent at the sample
+    int road_idx;        // index into Drive.road_elements (which lane this sits on)
+    int lane_graph_idx;  // index into lane_graph (Dijkstra row); == road_to_lane_graph[road_idx]
+    float along_s;       // arclength from lane start to this sample
 };
 
 struct TrafficControlElement {
@@ -339,6 +361,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->headings);
     free(element->entry_lanes);
     free(element->exit_lanes);
+    free(element->cumulative_s);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {
