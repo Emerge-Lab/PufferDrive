@@ -1,0 +1,67 @@
+# Single-agent "speed run" training program config (for submit_cluster.py).
+# One controlled agent per environment on a single CARLA map (Town10), with many
+# parallel environments sharing one cached copy of the map geometry. Traffic
+# lights are fully disabled (no observation, no metric, no reward penalty). Keys
+# here override pufferlib/config/ocean/drive.ini; submit_cluster.py converts
+# underscores in each key to dashes for the CLI.
+#
+# Launch (3 seeds via the colon sweep):
+#   source /scratch/$USER/venvs/pufferdrive/bin/activate
+#   python scripts/submit_cluster.py \
+#       --save_dir /scratch/$USER/runs --prefix $(date +%Y-%m-%d)_single_agent \
+#       --compute_config scripts/cluster_configs/nyu_greene.yaml \
+#       --program_config scripts/cluster_configs/single_agent_speed_run.yaml \
+#       --container --heartbeat --account <acct> --partition <gpu-partition> --time 720 \
+#       --args train.seed=0:1:2
+
+# Environment: single agent per env, Town10HD only (map_dir points directly
+# at one .bin), shared map cache.
+env.simulation_mode: gigaflow
+env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+env.num_maps: 1
+env.min_agents_per_env: 1
+env.max_agents_per_env: 1
+env.num_agents: 1024
+env.use_map_cache: 1
+
+# Single goal waypoint ahead of the agent (route mode uses the default
+# min/max waypoint spacing of 20m/60m to place it).
+env.num_target_waypoints: 1
+
+# Traffic lights fully off: not observed, not scored, no reward penalty.
+env.traffic_light_behavior: 0
+env.obs_slots_traffic_controls_n: 0
+
+# Training
+train.total_timesteps: 1_000_000_000
+
+# Disable nuPlan-based evaluators. validation_gigaflow stays on but is
+# reconfigured to triage_html (CPU-only scene playback + per-episode metrics
+# including dnf_rate), pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops a gallery of rollouts you can browse
+# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
+eval.validation_replay.enabled: 0
+eval.validation_gigaflow.render_backend: obs_html
+eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+eval.validation_gigaflow.env.num_maps: 1
+eval.validation_gigaflow.env.num_agents: 64
+eval.validation_gigaflow.env.min_agents_per_env: 1
+eval.validation_gigaflow.env.max_agents_per_env: 1
+eval.behaviors_full_dir.enabled: 0
+eval.behaviors_hard_stop.enabled: 0
+eval.behaviors_highway_straight.enabled: 0
+eval.behaviors_lane_change.enabled: 0
+eval.behaviors_merge.enabled: 0
+eval.behaviors_parked_cars.enabled: 0
+eval.behaviors_roundabout.enabled: 0
+eval.behaviors_stopped_traffic.enabled: 0
+eval.behaviors_traffic_light_green.enabled: 0
+eval.behaviors_traffic_light_stop.enabled: 0
+eval.behaviors_unprotected_left.enabled: 0
+eval.behaviors_unprotected_right.enabled: 0
+
+# W&B. Group has no space: submit_cluster.py joins the inner command into a
+# bash -c string without quoting arg values, so a space would split the arg.
+wandb: True
+wandb_project: puffer_drive
+wandb_group: Nightly_Test

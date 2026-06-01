@@ -1,10 +1,11 @@
+#include "pufferlib/ocean/drive/error.h"
+
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-#include <unistd.h>
 #include <sys/wait.h>
-#include "pufferlib/ocean/drive/error.h"
+#include <unistd.h>
 
 // Test helper to run functions that call exit() in child processes
 int test_exit_function(void (*test_func)(void)) {
@@ -83,8 +84,11 @@ void test_raise_error_direct(void) {
 
 void test_raise_error_with_message_direct(void) {
     printf("Testing raise_error_with_message directly...\n");
-    raise_error_with_message(ERROR_INITIALIZATION_FAILED, "failed to initialize component '%s' with value %d",
-                             "neural_network", 42);
+    raise_error_with_message(
+        ERROR_INITIALIZATION_FAILED,
+        "failed to initialize component '%s' with value %d",
+        "neural_network",
+        42);
 }
 
 // Test the error_type_to_string function (doesn't exit)
@@ -114,17 +118,18 @@ int main(void) {
     struct {
         const char *name;
         void (*func)(void);
-    } tests[] = {{"RAISE_FILE_ERROR", test_file_error},
-                 {"RAISE_BOUNDS_ERROR", test_bounds_error},
-                 {"RAISE_BOUNDS_ERROR_WITH_BOUNDS", test_bounds_error_with_bounds},
-                 {"RAISE_NULL_ERROR", test_null_error},
-                 {"RAISE_NULL_ERROR_WITH_NAME", test_null_error_with_name},
-                 {"RAISE_MEMORY_ERROR", test_memory_error},
-                 {"RAISE_MEMORY_ERROR_WITH_SIZE", test_memory_error_with_size},
-                 {"RAISE_INVALID_ARG_ERROR", test_invalid_arg_error},
-                 {"RAISE_INVALID_ARG_ERROR_WITH_ARG", test_invalid_arg_error_with_arg},
-                 {"raise_error (direct)", test_raise_error_direct},
-                 {"raise_error_with_message (direct)", test_raise_error_with_message_direct}};
+    } tests[]
+        = {{"RAISE_FILE_ERROR", test_file_error},
+           {"RAISE_BOUNDS_ERROR", test_bounds_error},
+           {"RAISE_BOUNDS_ERROR_WITH_BOUNDS", test_bounds_error_with_bounds},
+           {"RAISE_NULL_ERROR", test_null_error},
+           {"RAISE_NULL_ERROR_WITH_NAME", test_null_error_with_name},
+           {"RAISE_MEMORY_ERROR", test_memory_error},
+           {"RAISE_MEMORY_ERROR_WITH_SIZE", test_memory_error_with_size},
+           {"RAISE_INVALID_ARG_ERROR", test_invalid_arg_error},
+           {"RAISE_INVALID_ARG_ERROR_WITH_ARG", test_invalid_arg_error_with_arg},
+           {"raise_error (direct)", test_raise_error_direct},
+           {"raise_error_with_message (direct)", test_raise_error_with_message_direct}};
 
     int num_tests = sizeof(tests) / sizeof(tests[0]);
     int passed = 0;

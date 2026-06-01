@@ -1,8 +1,36 @@
 #include "drive.h"
+
+#include <Python.h>
+
 #define Env Drive
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
+
+// Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
+static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
+    return PyLong_FromLong((long) g_map_cache_count);
+}
+
+// Count of slots currently holding a SharedMapData (non-NULL slots only).
+static PyObject *map_cache_live_count_py(
+    PyObject *self __attribute__((unused)),
+    PyObject *args __attribute__((unused))) {
+    long live = 0;
+    for (int i = 0; i < g_map_cache_count; i++) {
+        if (g_map_cache[i] != NULL) {
+            live++;
+        }
+    }
+    return PyLong_FromLong(live);
+}
+
+// clang-format off
+#define MY_METHODS \
+    {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+// clang-format on
+
 #include "../env_binding.h"
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
@@ -11,7 +39,7 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "Observations must be a NumPy array");
         return 1;
     }
-    PyArrayObject *observations = (PyArrayObject *)obs;
+    PyArrayObject *observations = (PyArrayObject *) obs;
     if (!PyArray_ISCONTIGUOUS(observations)) {
         PyErr_SetString(PyExc_ValueError, "Observations must be contiguous");
         return 1;
@@ -23,7 +51,7 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "Actions must be a NumPy array");
         return 1;
     }
-    PyArrayObject *actions = (PyArrayObject *)act;
+    PyArrayObject *actions = (PyArrayObject *) act;
     if (!PyArray_ISCONTIGUOUS(actions)) {
         PyErr_SetString(PyExc_ValueError, "Actions must be contiguous");
         return 1;
@@ -39,7 +67,7 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "Rewards must be a NumPy array");
         return 1;
     }
-    PyArrayObject *rewards = (PyArrayObject *)rew;
+    PyArrayObject *rewards = (PyArrayObject *) rew;
     if (!PyArray_ISCONTIGUOUS(rewards)) {
         PyErr_SetString(PyExc_ValueError, "Rewards must be contiguous");
         return 1;
@@ -55,7 +83,7 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "Terminals must be a NumPy array");
         return 1;
     }
-    PyArrayObject *terminals = (PyArrayObject *)term;
+    PyArrayObject *terminals = (PyArrayObject *) term;
     if (!PyArray_ISCONTIGUOUS(terminals)) {
         PyErr_SetString(PyExc_ValueError, "Terminals must be contiguous");
         return 1;
@@ -90,8 +118,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
 
     v = PyLong_FromLong(env->active_agent_count);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "active_agent_count", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -99,8 +128,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     Py_DECREF(v);
 
     v = PyLong_FromLong(env->num_total_agents);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "num_total_agents", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -108,8 +138,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     Py_DECREF(v);
 
     v = PyLong_FromLong(env->num_road_elements);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "num_road_elements", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -117,8 +148,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     Py_DECREF(v);
 
     v = PyLong_FromLong(env->num_traffic_elements);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "num_traffic_elements", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -128,50 +160,57 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     /* Map name / string fields */
     if (env->map_name) {
         PyObject *s = PyUnicode_FromString(env->map_name);
-        if (!s)
+        if (!s) {
             return NULL;
+        }
         if (PyDict_SetItemString(dict, "map_name", s) < 0) {
             Py_DECREF(s);
             return NULL;
         }
         Py_DECREF(s);
     } else {
-        if (PyDict_SetItemString(dict, "map_name", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "map_name", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Metadata fields */
     if (env->scenario_id[0] != '\0') {
         PyObject *s = PyUnicode_FromString(env->scenario_id);
-        if (!s)
+        if (!s) {
             return NULL;
+        }
         if (PyDict_SetItemString(dict, "scenario_id", s) < 0) {
             Py_DECREF(s);
             return NULL;
         }
         Py_DECREF(s);
     } else {
-        if (PyDict_SetItemString(dict, "scenario_id", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "scenario_id", Py_None) < 0) {
             return NULL;
+        }
     }
 
     if (env->dataset_name[0] != '\0') {
         PyObject *s = PyUnicode_FromString(env->dataset_name);
-        if (!s)
+        if (!s) {
             return NULL;
+        }
         if (PyDict_SetItemString(dict, "dataset_name", s) < 0) {
             Py_DECREF(s);
             return NULL;
         }
         Py_DECREF(s);
     } else {
-        if (PyDict_SetItemString(dict, "dataset_name", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "dataset_name", Py_None) < 0) {
             return NULL;
+        }
     }
 
     v = PyLong_FromLong(env->log_length);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "length", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -179,8 +218,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     Py_DECREF(v);
 
     v = PyLong_FromLong(env->dynamics_model);
-    if (!v)
+    if (!v) {
         return NULL;
+    }
     if (PyDict_SetItemString(dict, "dynamics_model", v) < 0) {
         Py_DECREF(v);
         return NULL;
@@ -190,8 +230,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     /* objects_of_interest array */
     if (env->objects_of_interest && env->num_objects_of_interest > 0) {
         PyObject *lst = PyList_New(env->num_objects_of_interest);
-        if (!lst)
+        if (!lst) {
             return NULL;
+        }
         for (int i = 0; i < env->num_objects_of_interest; i++) {
             PyObject *it = PyLong_FromLong(env->objects_of_interest[i]);
             if (!it) {
@@ -206,15 +247,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(lst);
     } else {
-        if (PyDict_SetItemString(dict, "objects_of_interest", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "objects_of_interest", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* tracks_to_predict array */
     if (env->tracks_to_predict && env->num_tracks_to_predict > 0) {
         PyObject *lst = PyList_New(env->num_tracks_to_predict);
-        if (!lst)
+        if (!lst) {
             return NULL;
+        }
         for (int i = 0; i < env->num_tracks_to_predict; i++) {
             PyObject *it = PyLong_FromLong(env->tracks_to_predict[i]);
             if (!it) {
@@ -229,15 +272,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(lst);
     } else {
-        if (PyDict_SetItemString(dict, "tracks_to_predict", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "tracks_to_predict", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Lists (active agent indices) */
     if (env->active_agent_indices && env->active_agent_count > 0) {
         PyObject *lst = PyList_New(env->active_agent_count);
-        if (!lst)
+        if (!lst) {
             return NULL;
+        }
         for (int i = 0; i < env->active_agent_count; i++) {
             PyObject *it = PyLong_FromLong(env->active_agent_indices[i]);
             if (!it) {
@@ -253,15 +298,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(lst);
     } else {
-        if (PyDict_SetItemString(dict, "active_agent_indices", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "active_agent_indices", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Optionally expose static car indices if present */
     if (env->static_agent_indices && env->static_agent_count > 0) {
         PyObject *lst = PyList_New(env->static_agent_count);
-        if (!lst)
+        if (!lst) {
             return NULL;
+        }
         for (int i = 0; i < env->static_agent_count; i++) {
             PyObject *it = PyLong_FromLong(env->static_agent_indices[i]);
             if (!it) {
@@ -276,17 +323,26 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(lst);
     } else {
-        if (PyDict_SetItemString(dict, "static_agent_indices", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "static_agent_indices", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Expose agents array as a list of dicts */
     if (env->agents && env->num_total_agents > 0) {
         PyObject *agents_list = PyList_New(env->num_total_agents);
-        if (!agents_list)
+        if (!agents_list) {
             return NULL;
+        }
+        int next_active_log_idx = 0;
         for (int i = 0; i < env->num_total_agents; i++) {
             Agent *a = &env->agents[i];
+            int active_log_idx = -1;
+            if (env->active_agent_indices && next_active_log_idx < env->active_agent_count
+                && env->active_agent_indices[next_active_log_idx] == i) {
+                active_log_idx = next_active_log_idx;
+                next_active_log_idx++;
+            }
 
             PyObject *agent = PyDict_New();
             if (!agent) {
@@ -333,7 +389,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_trajectory_x[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_trajectory_x[j]);
                     if (!fv) {
                         Py_DECREF(lx);
                         Py_DECREF(agent);
@@ -355,7 +411,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_trajectory_y[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_trajectory_y[j]);
                     if (!fv) {
                         Py_DECREF(ly);
                         Py_DECREF(agent);
@@ -377,7 +433,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_trajectory_z[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_trajectory_z[j]);
                     if (!fv) {
                         Py_DECREF(lz);
                         Py_DECREF(agent);
@@ -399,7 +455,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_heading[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_heading[j]);
                     if (!fv) {
                         Py_DECREF(lh);
                         Py_DECREF(agent);
@@ -421,7 +477,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_velocity_x[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_velocity_x[j]);
                     if (!fv) {
                         Py_DECREF(lvx);
                         Py_DECREF(agent);
@@ -443,7 +499,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < traj_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)a->log_velocity_y[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) a->log_velocity_y[j]);
                     if (!fv) {
                         Py_DECREF(lvy);
                         Py_DECREF(agent);
@@ -481,7 +537,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
 
             /* Simulation state (current) */
-            PyObject *pf = PyFloat_FromDouble((double)a->sim_x);
+            PyObject *pf = PyFloat_FromDouble((double) a->sim_x);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -495,7 +551,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_y);
+            pf = PyFloat_FromDouble((double) a->sim_y);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -509,7 +565,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_z);
+            pf = PyFloat_FromDouble((double) a->sim_z);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -523,7 +579,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_heading);
+            pf = PyFloat_FromDouble((double) a->sim_heading);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -537,7 +593,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_vx);
+            pf = PyFloat_FromDouble((double) a->sim_vx);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -551,7 +607,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_vy);
+            pf = PyFloat_FromDouble((double) a->sim_vy);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -565,7 +621,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_speed);
+            pf = PyFloat_FromDouble((double) a->sim_speed);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -579,7 +635,77 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_length);
+            pf = PyFloat_FromDouble((double) a->steering_angle);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "sim_steering", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->a_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "accel_lat", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_long);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_long", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->jerk_lat);
+            if (!pf) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "jerk_lat", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
+            pf = PyFloat_FromDouble((double) a->sim_length);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -593,7 +719,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_width);
+            pf = PyFloat_FromDouble((double) a->sim_width);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -607,7 +733,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->sim_height);
+            pf = PyFloat_FromDouble((double) a->sim_height);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -621,7 +747,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->wheelbase);
+            pf = PyFloat_FromDouble((double) a->wheelbase);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -664,7 +790,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             Py_DECREF(tmp);
 
             /* Goal position */
-            pf = PyFloat_FromDouble((double)a->goal_position_x);
+            pf = PyFloat_FromDouble((double) a->goal_position_x);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -678,7 +804,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->goal_position_y);
+            pf = PyFloat_FromDouble((double) a->goal_position_y);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -692,7 +818,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)a->goal_position_z);
+            pf = PyFloat_FromDouble((double) a->goal_position_z);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -806,7 +932,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            pf = PyFloat_FromDouble((double)a->cumulative_displacement);
+            pf = PyFloat_FromDouble((double) a->cumulative_displacement);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -843,7 +969,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             for (int j = 0; j < NUM_METRICS; j++) {
-                PyObject *metric_val = PyFloat_FromDouble((double)a->metrics_array[j]);
+                PyObject *metric_val = PyFloat_FromDouble((double) a->metrics_array[j]);
                 if (!metric_val) {
                     Py_DECREF(metrics);
                     Py_DECREF(agent);
@@ -859,6 +985,58 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             Py_DECREF(metrics);
+
+            if (env->compute_eval_metrics && env->logs && active_log_idx >= 0 && active_log_idx < env->logs_capacity) {
+                Log *log = &env->logs[active_log_idx];
+
+                pf = PyFloat_FromDouble((double) log->puffer_score);
+                if (!pf) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_score", pf) < 0) {
+                    Py_DECREF(pf);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(pf);
+
+                PyObject *puffer_metrics = PyDict_New();
+                if (!puffer_metrics) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (assign_to_dict(puffer_metrics, "score", log->puffer_score)
+                    || assign_to_dict(puffer_metrics, "no_at_fault", log->no_at_fault)
+                    || assign_to_dict(puffer_metrics, "no_offroad", log->no_offroad)
+                    || assign_to_dict(puffer_metrics, "no_red_light", log->no_red_light)
+                    || assign_to_dict(puffer_metrics, "making_progress", log->making_progress)
+                    || assign_to_dict(puffer_metrics, "direction_score", log->driving_direction_score)
+                    || assign_to_dict(puffer_metrics, "ttc_puffer_rate", log->ttc_puffer_rate)
+                    || assign_to_dict(puffer_metrics, "progress_ratio", log->progress_ratio)
+                    || assign_to_dict(puffer_metrics, "speed_limit_compliance", log->speed_limit_compliance)
+                    || assign_to_dict(puffer_metrics, "comfort_score", log->comfort_score)
+                    || assign_to_dict(puffer_metrics, "multi_lane_score", log->multi_lane_score)
+                    || assign_to_dict(puffer_metrics, "wrong_way_distance", log->wrong_way_distance)
+                    || assign_to_dict(puffer_metrics, "speed_violation_sum", log->speed_violation_sum)
+                    || assign_to_dict(puffer_metrics, "multiplier", log->multiplier)
+                    || assign_to_dict(puffer_metrics, "weighted_average", log->weighted_average)) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                if (PyDict_SetItemString(agent, "puffer_metrics", puffer_metrics) < 0) {
+                    Py_DECREF(puffer_metrics);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(puffer_metrics);
+            }
 
             /* Export route information */
             tmp = PyLong_FromLong(a->route_length);
@@ -901,12 +1079,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(route_list);
-            } else {
-                if (PyDict_SetItemString(agent, "route", Py_None) < 0) {
-                    Py_DECREF(agent);
-                    Py_DECREF(agents_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(agent, "route", Py_None) < 0) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
             }
 
             PyList_SetItem(agents_list, i, agent);
@@ -918,15 +1094,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(agents_list);
     } else {
-        if (PyDict_SetItemString(dict, "agents", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "agents", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* SDC Paths */
     if (env->agents && env->active_agent_count > 0) {
         PyObject *sdc_list = PyList_New(env->active_agent_count);
-        if (!sdc_list)
+        if (!sdc_list) {
             return NULL;
+        }
 
         for (int i = 0; i < env->active_agent_count; i++) {
             Agent *a = &env->agents[env->active_agent_indices[i]];
@@ -970,7 +1148,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     }
 
 #define SET_WAYPOINT_FLOAT(key, val)                                                                                   \
-    tmp_val = PyFloat_FromDouble((double)val);                                                                         \
+    tmp_val = PyFloat_FromDouble((double) val);                                                                        \
     if (!tmp_val) {                                                                                                    \
         Py_DECREF(wp_dict);                                                                                            \
         Py_DECREF(wp_list);                                                                                            \
@@ -1035,15 +1213,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(sdc_list);
     } else {
-        if (PyDict_SetItemString(dict, "sdc_paths", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "sdc_paths", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Expose road_elements array as a list of dicts */
     if (env->road_elements && env->num_road_elements > 0) {
         PyObject *road_list = PyList_New(env->num_road_elements);
-        if (!road_list)
+        if (!road_list) {
             return NULL;
+        }
         for (int i = 0; i < env->num_road_elements; i++) {
             RoadMapElement *r = &env->road_elements[i];
             PyObject *road = PyDict_New();
@@ -1105,7 +1285,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < seg_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)r->x[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) r->x[j]);
                     if (!fv) {
                         Py_DECREF(lx);
                         Py_DECREF(road);
@@ -1121,12 +1301,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(lx);
-            } else {
-                if (PyDict_SetItemString(road, "x", Py_None) < 0) {
-                    Py_DECREF(road);
-                    Py_DECREF(road_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(road, "x", Py_None) < 0) {
+                Py_DECREF(road);
+                Py_DECREF(road_list);
+                return NULL;
             }
             if (r->y && seg_len > 0) {
                 PyObject *ly = PyList_New(seg_len);
@@ -1136,7 +1314,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < seg_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)r->y[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) r->y[j]);
                     if (!fv) {
                         Py_DECREF(ly);
                         Py_DECREF(road);
@@ -1152,12 +1330,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(ly);
-            } else {
-                if (PyDict_SetItemString(road, "y", Py_None) < 0) {
-                    Py_DECREF(road);
-                    Py_DECREF(road_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(road, "y", Py_None) < 0) {
+                Py_DECREF(road);
+                Py_DECREF(road_list);
+                return NULL;
             }
             if (r->z && seg_len > 0) {
                 PyObject *lz = PyList_New(seg_len);
@@ -1167,7 +1343,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 for (int j = 0; j < seg_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double)r->z[j]);
+                    PyObject *fv = PyFloat_FromDouble((double) r->z[j]);
                     if (!fv) {
                         Py_DECREF(lz);
                         Py_DECREF(road);
@@ -1183,12 +1359,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(lz);
-            } else {
-                if (PyDict_SetItemString(road, "z", Py_None) < 0) {
-                    Py_DECREF(road);
-                    Py_DECREF(road_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(road, "z", Py_None) < 0) {
+                Py_DECREF(road);
+                Py_DECREF(road_list);
+                return NULL;
             }
 
             /* Lane-specific fields */
@@ -1238,7 +1412,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            PyObject *pf = PyFloat_FromDouble((double)r->speed_limit);
+            PyObject *pf = PyFloat_FromDouble((double) r->speed_limit);
             if (!pf) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
@@ -1260,15 +1434,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(road_list);
     } else {
-        if (PyDict_SetItemString(dict, "road_elements", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "road_elements", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Expose traffic_elements array as a list of dicts */
     if (env->traffic_elements && env->num_traffic_elements > 0) {
         PyObject *traffic_list = PyList_New(env->num_traffic_elements);
-        if (!traffic_list)
+        if (!traffic_list) {
             return NULL;
+        }
         for (int i = 0; i < env->num_traffic_elements; i++) {
             TrafficControlElement *t = &env->traffic_elements[i];
             PyObject *traffic = PyDict_New();
@@ -1346,12 +1522,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(ls);
-            } else {
-                if (PyDict_SetItemString(traffic, "states", Py_None) < 0) {
-                    Py_DECREF(traffic);
-                    Py_DECREF(traffic_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(traffic, "states", Py_None) < 0) {
+                Py_DECREF(traffic);
+                Py_DECREF(traffic_list);
+                return NULL;
             }
 
             /* Stop line endpoints */
@@ -1362,7 +1536,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             for (int k = 0; k < 6; k++) {
-                PyList_SetItem(sl, k, PyFloat_FromDouble((double)t->stop_line[k]));
+                PyList_SetItem(sl, k, PyFloat_FromDouble((double) t->stop_line[k]));
             }
             if (PyDict_SetItemString(traffic, "stop_line", sl) < 0) {
                 Py_DECREF(sl);
@@ -1375,7 +1549,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             /* Position (stop_line midpoint for backward compat) */
             float mid_x = (t->stop_line[0] + t->stop_line[3]) * 0.5f;
             float mid_y = (t->stop_line[1] + t->stop_line[4]) * 0.5f;
-            PyObject *pf = PyFloat_FromDouble((double)mid_x);
+            PyObject *pf = PyFloat_FromDouble((double) mid_x);
             if (!pf) {
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
@@ -1389,7 +1563,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double)mid_y);
+            pf = PyFloat_FromDouble((double) mid_y);
             if (!pf) {
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
@@ -1428,12 +1602,10 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     return NULL;
                 }
                 Py_DECREF(ll);
-            } else {
-                if (PyDict_SetItemString(traffic, "controlled_lanes", Py_None) < 0) {
-                    Py_DECREF(traffic);
-                    Py_DECREF(traffic_list);
-                    return NULL;
-                }
+            } else if (PyDict_SetItemString(traffic, "controlled_lanes", Py_None) < 0) {
+                Py_DECREF(traffic);
+                Py_DECREF(traffic_list);
+                return NULL;
             }
 
             PyList_SetItem(traffic_list, i, traffic);
@@ -1444,20 +1616,22 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(traffic_list);
     } else {
-        if (PyDict_SetItemString(dict, "traffic_elements", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "traffic_elements", Py_None) < 0) {
             return NULL;
+        }
     }
 
     /* Map corners (bounding box) from GridMap */
     if (env->grid_map) {
         PyObject *corners_list = PyList_New(4);
-        if (!corners_list)
+        if (!corners_list) {
             return NULL;
+        }
 
-        PyObject *brx = PyFloat_FromDouble((double)env->grid_map->bottom_right_x);
-        PyObject *bry = PyFloat_FromDouble((double)env->grid_map->bottom_right_y);
-        PyObject *tlx = PyFloat_FromDouble((double)env->grid_map->top_left_x);
-        PyObject *tly = PyFloat_FromDouble((double)env->grid_map->top_left_y);
+        PyObject *brx = PyFloat_FromDouble((double) env->grid_map->bottom_right_x);
+        PyObject *bry = PyFloat_FromDouble((double) env->grid_map->bottom_right_y);
+        PyObject *tlx = PyFloat_FromDouble((double) env->grid_map->top_left_x);
+        PyObject *tly = PyFloat_FromDouble((double) env->grid_map->top_left_y);
 
         if (!tlx || !tly || !brx || !bry) {
             Py_XDECREF(tlx);
@@ -1479,17 +1653,19 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(corners_list);
     } else {
-        if (PyDict_SetItemString(dict, "map_corners", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "map_corners", Py_None) < 0) {
             return NULL;
+        }
     }
     if (env->observations && env->active_agent_count > 0) {
         /* Agent observations */
         int max_obs = compute_observation_size(env);
         PyObject *obs_data = PyList_New(env->active_agent_count);
-        if (!obs_data)
+        if (!obs_data) {
             return NULL;
+        }
 
-        float (*observations)[max_obs] = (float (*)[max_obs])env->observations;
+        float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
 
         for (int i = 0; i < env->active_agent_count; i++) {
             PyObject *agent_obs = PyList_New(max_obs);
@@ -1499,7 +1675,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
 
             for (int j = 0; j < max_obs; j++) {
-                PyObject *obs_val = PyFloat_FromDouble((double)observations[i][j]);
+                PyObject *obs_val = PyFloat_FromDouble((double) observations[i][j]);
                 if (!obs_val) {
                     Py_DECREF(agent_obs);
                     Py_DECREF(obs_data);
@@ -1517,8 +1693,9 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
         Py_DECREF(obs_data);
     } else {
-        if (PyDict_SetItemString(dict, "agent_observations", Py_None) < 0)
+        if (PyDict_SetItemString(dict, "agent_observations", Py_None) < 0) {
             return NULL;
+        }
     }
 
     return dict;
@@ -1538,11 +1715,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int simulation_mode = unpack(kwargs, "simulation_mode");
-    int init_steps = unpack(kwargs, "init_steps");
+    int init_step = unpack(kwargs, "init_step");
     int seed = unpack(kwargs, "seed");
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
-    float goal_radius = (float)unpack(kwargs, "goal_radius");
+    float goal_radius = (float) unpack(kwargs, "goal_radius");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
@@ -1601,8 +1778,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 int absolute_max_allowed = remaining - min_agents_per_env;
 
                 // 2. We cannot take more than max_agents_per_env right now.
-                int current_upper_bound =
-                    (absolute_max_allowed < max_agents_per_env) ? absolute_max_allowed : max_agents_per_env;
+                int current_upper_bound
+                    = (absolute_max_allowed < max_agents_per_env) ? absolute_max_allowed : max_agents_per_env;
 
                 // 3. We must take at least min_agents_per_env right now.
                 int current_lower_bound = min_agents_per_env;
@@ -1661,7 +1838,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     // Added condition: s_map_counter < end_map_index
     while (total_agent_count < num_agents && env_count < max_envs && (!eval_mode || s_map_counter < end_map_index)) {
-
         if (eval_mode) {
             map_id = s_map_counter % num_maps;
             s_map_counter += 1; // This increments towards end_map_index
@@ -1675,7 +1851,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->init_mode = init_mode;
         env->control_mode = control_mode;
         env->simulation_mode = simulation_mode;
-        env->init_steps = init_steps;
+        env->init_step = init_step;
         env->num_max_agents = max_agents_per_env;
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
@@ -1685,12 +1861,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
             maps_checked++;
-            for (int j = 0; j < env->num_total_agents; j++)
+            for (int j = 0; j < env->num_total_agents; j++) {
                 free_agent(&env->agents[j]);
-            for (int j = 0; j < env->num_road_elements; j++)
+            }
+            for (int j = 0; j < env->num_road_elements; j++) {
                 free_road_element(&env->road_elements[j]);
-            for (int j = 0; j < env->num_traffic_elements; j++)
+            }
+            for (int j = 0; j < env->num_traffic_elements; j++) {
                 free_traffic_element(&env->traffic_elements[j]);
+            }
             free(env->agents);
             free(env->road_elements);
             free(env->traffic_elements);
@@ -1707,12 +1886,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
         total_agent_count += env->active_agent_count;
         env_count++;
-        for (int j = 0; j < env->num_total_agents; j++)
+        for (int j = 0; j < env->num_total_agents; j++) {
             free_agent(&env->agents[j]);
-        for (int j = 0; j < env->num_road_elements; j++)
+        }
+        for (int j = 0; j < env->num_road_elements; j++) {
             free_road_element(&env->road_elements[j]);
-        for (int j = 0; j < env->num_traffic_elements; j++)
+        }
+        for (int j = 0; j < env->num_traffic_elements; j++) {
             free_traffic_element(&env->traffic_elements[j]);
+        }
         free(env->agents);
         free(env->road_elements);
         free(env->traffic_elements);
@@ -1739,78 +1921,134 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
-    env->render_mode = (int)unpack(kwargs, "render_mode");
-    env->action_type = (int)unpack(kwargs, "action_type");
-    env->dynamics_model = (int)unpack(kwargs, "dynamics_model");
-    env->reward_goal = (float)unpack(kwargs, "reward_goal");
-    env->reward_vehicle_collision = (float)unpack(kwargs, "reward_vehicle_collision");
-    env->reward_offroad_collision = (float)unpack(kwargs, "reward_offroad_collision");
-    env->reward_comfort = (float)unpack(kwargs, "reward_comfort");
-    env->reward_lane_align = (float)unpack(kwargs, "reward_lane_align");
-    env->reward_vel_align = (float)unpack(kwargs, "reward_vel_align");
-    env->reward_lane_center = (float)unpack(kwargs, "reward_lane_center");
-    env->reward_center_bias = (float)unpack(kwargs, "reward_center_bias");
-    env->reward_velocity = (float)unpack(kwargs, "reward_velocity");
-    env->reward_reverse = (float)unpack(kwargs, "reward_reverse");
-    env->reward_stop_line = (float)unpack(kwargs, "reward_stop_line");
-    env->reward_timestep = (float)unpack(kwargs, "reward_timestep");
-    env->reward_overspeed = (float)unpack(kwargs, "reward_overspeed");
-    env->reward_ade = (float)unpack(kwargs, "reward_ade");
-    env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
-    env->offroad_behavior = (int)unpack(kwargs, "offroad_behavior");
-    env->traffic_light_behavior = (int)unpack(kwargs, "traffic_light_behavior");
-    env->goal_radius = (float)unpack(kwargs, "goal_radius");
-    env->min_waypoint_spacing = (float)unpack(kwargs, "min_waypoint_spacing");
-    env->max_waypoint_spacing = (float)unpack(kwargs, "max_waypoint_spacing");
-    env->num_target_waypoints = (int)unpack(kwargs, "num_target_waypoints");
+    env->render_mode = (int) unpack(kwargs, "render_mode");
+    env->action_type = (int) unpack(kwargs, "action_type");
+    env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
+    env->reward_goal = (float) unpack(kwargs, "reward_goal");
+    env->reward_collision = (float) unpack(kwargs, "reward_collision");
+    env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
+    env->reward_comfort = (float) unpack(kwargs, "reward_comfort");
+    env->reward_lane_align = (float) unpack(kwargs, "reward_lane_align");
+    env->reward_vel_align = (float) unpack(kwargs, "reward_vel_align");
+    env->reward_lane_center = (float) unpack(kwargs, "reward_lane_center");
+    env->reward_center_bias = (float) unpack(kwargs, "reward_center_bias");
+    env->reward_velocity = (float) unpack(kwargs, "reward_velocity");
+    env->reward_reverse = (float) unpack(kwargs, "reward_reverse");
+    env->reward_stop_line = (float) unpack(kwargs, "reward_stop_line");
+    env->reward_timestep = (float) unpack(kwargs, "reward_timestep");
+    env->reward_overspeed = (float) unpack(kwargs, "reward_overspeed");
+    env->reward_ade = (float) unpack(kwargs, "reward_ade");
+    env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
+    env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
+    env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
+    env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
+    env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
+    env->next_episode_index = 0;
+    env->completed_episodes_count = 0;
+    env->goal_radius = (float) unpack(kwargs, "goal_radius");
+    env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
+    env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
+    env->num_target_waypoints = (int) unpack(kwargs, "num_target_waypoints");
     if (env->num_target_waypoints > MAX_TARGET_WAYPOINTS) {
         env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
-    env->target_type = (int)unpack(kwargs, "target_type");
-    env->max_boundary_segment_observations = (int)unpack(kwargs, "max_boundary_segment_observations");
-    env->max_lane_segment_observations = (int)unpack(kwargs, "max_lane_segment_observations");
-    env->max_partner_observations = (int)unpack(kwargs, "max_partner_observations");
-    env->max_traffic_control_observations = (int)unpack(kwargs, "max_traffic_control_observations");
-    env->traffic_control_scope = (int)unpack(kwargs, "traffic_control_scope");
-    env->dt = (float)unpack(kwargs, "dt");
-    env->spawn_initial_speed = (float)unpack(kwargs, "spawn_initial_speed");
-    env->goal_speed = (float)unpack(kwargs, "goal_speed");
-    env->scenario_length = (int)unpack(kwargs, "scenario_length");
-    env->termination_mode = (int)unpack(kwargs, "termination_mode");
-    env->inactive_agent_threshold = (float)unpack(kwargs, "inactive_agent_threshold");
+    env->target_type = (int) unpack(kwargs, "target_type");
+    env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
+    env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
+    env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
+    env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
+    env->dt = (float) unpack(kwargs, "dt");
+    env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->goal_speed = (float) unpack(kwargs, "goal_speed");
+    env->scenario_length = (int) unpack(kwargs, "scenario_length");
+    env->termination_mode = (int) unpack(kwargs, "termination_mode");
+    env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
-    env->num_controllable_agents = (int)unpack(kwargs, "max_agents");
-    env->num_max_agents = (int)unpack(kwargs, "max_agents_per_env");
-    int init_steps = (int)unpack(kwargs, "init_steps");
-    env->init_steps = init_steps;
-    env->timestep = init_steps;
-    env->init_mode = (int)unpack(kwargs, "init_mode");
-    env->control_mode = (int)unpack(kwargs, "control_mode");
-    env->simulation_mode = (int)unpack(kwargs, "simulation_mode");
-    env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
-    env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
-    env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");
-    env->eval_mode = (int)unpack(kwargs, "eval_mode");
-    env->max_goal_position = (float)unpack(kwargs, "max_goal_position");
-    env->max_position = (float)unpack(kwargs, "max_position");
-    env->max_veh_len = (float)unpack(kwargs, "max_veh_len");
-    env->max_veh_width = (float)unpack(kwargs, "max_veh_width");
-    env->max_road_segment_length = (float)unpack(kwargs, "max_road_segment_length");
-    env->max_road_segment_width = (float)unpack(kwargs, "max_road_segment_width");
-    env->max_traffic_control_distance = (float)unpack(kwargs, "max_traffic_control_distance");
-    env->agent_obs_max_dist = (float)unpack(kwargs, "agent_obs_max_dist");
-    env->road_obs_front_dist = (float)unpack(kwargs, "road_obs_front_dist");
-    env->road_obs_behind_dist = (float)unpack(kwargs, "road_obs_behind_dist");
-    env->road_obs_side_dist = (float)unpack(kwargs, "road_obs_side_dist");
-    env->obs_lane_segment_count = (int)unpack(kwargs, "obs_lane_segment_count");
-    env->obs_boundary_segment_count = (int)unpack(kwargs, "obs_boundary_segment_count");
-    env->partner_blindness_prob = (float)unpack(kwargs, "partner_blindness_prob");
-    env->phantom_braking_prob = (float)unpack(kwargs, "phantom_braking_prob");
-    env->phantom_braking_trigger_prob = (float)unpack(kwargs, "phantom_braking_trigger_prob");
-    env->phantom_braking_duration = (int)unpack(kwargs, "phantom_braking_duration");
+    env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
+    env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
+    int init_step = (int) unpack(kwargs, "init_step");
+    env->init_step = init_step;
+    env->timestep = init_step;
+    env->init_mode = (int) unpack(kwargs, "init_mode");
+    env->control_mode = (int) unpack(kwargs, "control_mode");
+    env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
+    env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
+    env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
+    env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
+    env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
+    env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
+    env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
+    env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
+    env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
+    env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
+    env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
+    env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
+    env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
+    env->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
+    env->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
+    env->obs_slots_lane_kept = (int) unpack(kwargs, "obs_slots_lane_kept");
+    env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
+    env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
+    env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
+    env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
+    env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
+    env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
 
     init(env);
+    return 0;
+}
+
+static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
+    (void) env;
+    assign_to_dict(dict, "episode_index", (float) summary->episode_index);
+    assign_to_dict(dict, "n", summary->n);
+    assign_to_dict(dict, "episode_length", summary->episode_length);
+    assign_to_dict(dict, "episode_return", summary->episode_return);
+    assign_to_dict(dict, "collision_rate", summary->collision_rate);
+    assign_to_dict(dict, "offroad_rate", summary->offroad_rate);
+    assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
+    assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
+    assign_to_dict(dict, "score", summary->score);
+    assign_to_dict(dict, "dnf_rate", summary->dnf_rate);
+    assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
+    assign_to_dict(dict, "total_infractions", summary->total_infractions);
+
+    // Per-component reward breakdown for the per-episode CSV.
+    assign_to_dict(dict, "reward_components/collision", summary->reward_collision);
+    assign_to_dict(dict, "reward_components/offroad", summary->reward_offroad);
+    assign_to_dict(dict, "reward_components/red_light", summary->reward_red_light);
+    assign_to_dict(dict, "reward_components/goal", summary->reward_goal);
+    assign_to_dict(dict, "reward_components/lane_align", summary->reward_lane_align);
+    assign_to_dict(dict, "reward_components/lane_center", summary->reward_lane_center);
+    assign_to_dict(dict, "reward_components/comfort", summary->reward_comfort);
+    assign_to_dict(dict, "reward_components/velocity", summary->reward_velocity);
+    assign_to_dict(dict, "reward_components/timestep", summary->reward_timestep);
+    assign_to_dict(dict, "reward_components/reverse", summary->reward_reverse);
+    assign_to_dict(dict, "reward_components/overspeed", summary->reward_overspeed);
+    assign_to_dict(dict, "reward_components/ade", summary->reward_ade);
+
+    PyObject *mn = PyUnicode_FromString(summary->map_name);
+    if (!mn) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "map_name", mn) < 0) {
+        Py_DECREF(mn);
+        return -1;
+    }
+    Py_DECREF(mn);
+
+    PyObject *sid = PyUnicode_FromString(summary->scenario_id);
+    if (!sid) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "scenario_id", sid) < 0) {
+        Py_DECREF(sid);
+        return -1;
+    }
+    Py_DECREF(sid);
     return 0;
 }
 
@@ -1835,11 +2073,23 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
 
+    assign_to_dict(dict, "reward_components/collision", log->reward_collision);
+    assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
+    assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/goal", log->reward_goal);
+    assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
+    assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);
+    assign_to_dict(dict, "reward_components/comfort", log->reward_comfort);
+    assign_to_dict(dict, "reward_components/velocity", log->reward_velocity);
+    assign_to_dict(dict, "reward_components/timestep", log->reward_timestep);
+    assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
+    assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
+    assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+
     if (env->compute_eval_metrics) {
         // Puffer score components
         assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
         assign_to_dict(dict, "puffer_score", log->puffer_score);
-        assign_to_dict(dict, "ttc_within_bound_rate", log->ttc_within_bound_rate);
         assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
         assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);
         assign_to_dict(dict, "making_progress_rate", log->making_progress_rate);

@@ -1,12 +1,14 @@
 #!/bin/bash
 
 BASE_DIR="experiments"
-COMMAND_PREFIX="puffer eval_multi_scenarios puffer_drive"
+# Unified eval pipeline: --eval_simulation picks validation_<sim>; the simple
+# flags below override that evaluator's [eval.*] section for this run.
+COMMAND_PREFIX="puffer eval puffer_drive"
 
 # Defaults
 NUM_SCENARIOS=50
 RENDER=0
-RENDER_OBS=0
+RENDER_BACKEND=""   # empty -> use the evaluator's section default (egl|triage_html|obs_html)
 EVAL_SIMULATION="replay"
 
 # Parse command-line arguments
@@ -24,8 +26,8 @@ while [[ $# -gt 0 ]]; do
             RENDER="$2"
             shift 2
             ;;
-        --render_obs)
-            RENDER_OBS="$2"
+        --render-backend|--render_backend)
+            RENDER_BACKEND="$2"
             shift 2
             ;;
         *)
@@ -35,7 +37,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-COMMAND_SUFFIX="--num_scenarios ${NUM_SCENARIOS} --render ${RENDER} --render_obs ${RENDER_OBS} --eval_simulation ${EVAL_SIMULATION}"
+COMMAND_SUFFIX="--num_scenarios ${NUM_SCENARIOS} --render ${RENDER} --eval_simulation ${EVAL_SIMULATION}"
+if [ -n "${RENDER_BACKEND}" ]; then
+    COMMAND_SUFFIX="${COMMAND_SUFFIX} --render-backend ${RENDER_BACKEND}"
+fi
 
 if [ ! -d "$BASE_DIR" ]; then
     echo "Error: Directory '$BASE_DIR' not found."

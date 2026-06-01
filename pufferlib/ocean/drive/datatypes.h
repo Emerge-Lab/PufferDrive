@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 // -- REWARD CONDITIONING COEFFICIENTS
 #define REWARD_COEF_GOAL_RADIUS 0
 #define REWARD_COEF_GOAL_SPEED 1
@@ -64,6 +66,10 @@
 #define TRAFFIC_CONTROL_STATE_OFF 4
 #define NUM_TRAFFIC_CONTROL_STATES 5
 
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
+#define TRAFFIC_CONTROL_SCOPE_ALL 2
+
 // Metrics array indices
 #define NUM_METRICS 18
 #define COLLISION_IDX 0
@@ -90,6 +96,13 @@
 #define MAX_NUM_WP_PATH 200
 #define MAX_TARGET_WAYPOINTS 20
 
+// obs_html_frame array field counts
+#define AGENT_F32_FIELDS 12 // sim_x/y/z, heading, length, width, speed, steering, a_long, a_lat, jerk_long, jerk_lat
+#define AGENT_I32_FIELDS 8  // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
+#define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
+#define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position
     float x;           // Global x-coordinate
@@ -99,7 +112,7 @@ struct Waypoint {
     float cos_heading; // Cached cosf(heading) - set in build_path
     float sin_heading; // Cached sinf(heading) - set in build_path
     float kappa;       // Curvature at this point
-    int lane_idx;      // Index of the lane this waypoint belongs to (for GT path) or closest to (for expert path)
+    int lane_idx;      // Index of the lane this waypoint
 };
 struct Path {
     struct Waypoint waypoints[MAX_NUM_WP_PATH];
@@ -113,19 +126,33 @@ struct ttc_result {
     float closing_speed;
 };
 
-static inline int is_road_lane(int type) { return (type >= 0 && type <= 9); }
+static inline int is_road_lane(int type) {
+    return (type >= 0 && type <= 9);
+}
 
-static inline int is_drivable_road_lane(int type) { return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET); }
+static inline int is_drivable_road_lane(int type) {
+    return (type == LANE_FREEWAY || type == LANE_SURFACE_STREET);
+}
 
-static inline int is_road_line(int type) { return (type >= 10 && type <= 19); }
+static inline int is_road_line(int type) {
+    return (type >= 10 && type <= 19);
+}
 
-static inline int is_road_edge(int type) { return (type >= 20 && type <= 29); }
+static inline int is_road_edge(int type) {
+    return (type >= 20 && type <= 29);
+}
 
-static inline int is_misc_road(int type) { return type >= MISC_UNKNOWN; }
+static inline int is_misc_road(int type) {
+    return type >= MISC_UNKNOWN;
+}
 
-static inline int is_road(int type) { return is_road_lane(type) || is_road_line(type) || is_road_edge(type); }
+static inline int is_road(int type) {
+    return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
+}
 
-static inline int is_controllable_agent(int type) { return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST); }
+static inline int is_controllable_agent(int type) {
+    return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
+}
 
 static inline int normalize_road_type(int type) {
     if (is_road_lane(type)) {

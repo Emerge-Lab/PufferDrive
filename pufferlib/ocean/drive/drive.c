@@ -1,8 +1,10 @@
 #include "drive.h"
-#include "drivenet.h"
-#include <string.h>
-#include <dirent.h>
+
 #include "../env_config.h"
+#include "drivenet.h"
+
+#include <dirent.h>
+#include <string.h>
 
 // Use this test if the network changes to ensure that the forward pass
 // matches the torch implementation to the 3rd or ideally 4th decimal place
@@ -35,10 +37,11 @@ void test_drivenet() {
 }
 
 static inline int compute_effective_road_obs_count(int max_count, float dropout) {
-    if (max_count <= 0)
+    if (max_count <= 0) {
         return 0;
+    }
     float clipped_dropout = clip(dropout, 0.0f, 1.0f);
-    return (int)(max_count * (1.0f - clipped_dropout));
+    return (int) (max_count * (1.0f - clipped_dropout));
 }
 
 void demo() {
@@ -84,8 +87,8 @@ void demo() {
         .num_max_agents = conf.max_agents_per_env,
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_collision = conf.reward_collision,
+        .reward_offroad = conf.reward_offroad,
         .reward_stop_line = conf.reward_stop_line,
         .reward_goal = conf.reward_goal,
         .reward_ade = conf.reward_ade,
@@ -108,7 +111,7 @@ void demo() {
         .target_type = conf.target_type,
         .scenario_length = conf.scenario_length,
         .termination_mode = conf.termination_mode,
-        .init_steps = conf.init_steps,
+        .init_step = conf.init_step,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .simulation_mode = conf.simulation_mode,
@@ -118,20 +121,19 @@ void demo() {
         .reward_conditioning = conf.reward_conditioning,
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
-        .max_lane_segment_observations = conf.max_lane_segment_observations,
-        .max_boundary_segment_observations = conf.max_boundary_segment_observations,
-        .max_partner_observations = conf.max_partner_observations,
-        .max_traffic_control_observations = conf.max_traffic_control_observations,
+        .obs_slots_lane_n = conf.obs_slots_lane_n,
+        .obs_slots_boundary_n = conf.obs_slots_boundary_n,
+        .obs_slots_partners_n = conf.obs_slots_partners_n,
+        .obs_slots_traffic_controls_n = conf.obs_slots_traffic_controls_n,
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
+        .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
         .phantom_braking_prob = conf.phantom_braking_prob,
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
         .phantom_braking_duration = conf.phantom_braking_duration,
     };
-    env.obs_lane_segment_count =
-        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
-    env.obs_boundary_segment_count =
-        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
+    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
     allocate(&env);
     c_reset(&env);
@@ -142,8 +144,8 @@ void demo() {
     int steer_delta = 4;
     while (!WindowShouldClose()) {
         // Handle camera controls
-        int (*actions)[2] = (int (*)[2])env.actions;
-        forward(net, env.observations, env.actions);
+        int (*actions)[2] = (int (*)[2]) env.actions;
+        forward(net, env.observations, (int *) env.actions);
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             actions[env.human_agent_idx][0] = 3;
             actions[env.human_agent_idx][1] = 6;
@@ -207,8 +209,8 @@ void performance_test() {
         // From conf
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_collision = conf.reward_collision,
+        .reward_offroad = conf.reward_offroad,
         .reward_stop_line = conf.reward_stop_line,
         .reward_goal = conf.reward_goal,
         .reward_ade = conf.reward_ade,
@@ -231,7 +233,7 @@ void performance_test() {
         .target_type = conf.target_type,
         .scenario_length = conf.scenario_length,
         .termination_mode = conf.termination_mode,
-        .init_steps = conf.init_steps,
+        .init_step = conf.init_step,
         .init_mode = conf.init_mode,
         .control_mode = conf.control_mode,
         .simulation_mode = conf.simulation_mode,
@@ -242,21 +244,20 @@ void performance_test() {
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
         .num_max_agents = conf.max_agents_per_env,
-        .max_lane_segment_observations = conf.max_lane_segment_observations,
-        .max_boundary_segment_observations = conf.max_boundary_segment_observations,
-        .max_partner_observations = conf.max_partner_observations,
-        .max_traffic_control_observations = conf.max_traffic_control_observations,
+        .obs_slots_lane_n = conf.obs_slots_lane_n,
+        .obs_slots_boundary_n = conf.obs_slots_boundary_n,
+        .obs_slots_partners_n = conf.obs_slots_partners_n,
+        .obs_slots_traffic_controls_n = conf.obs_slots_traffic_controls_n,
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
+        .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
         .phantom_braking_prob = conf.phantom_braking_prob,
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
         .phantom_braking_duration = conf.phantom_braking_duration,
 
     };
-    env.obs_lane_segment_count =
-        compute_effective_road_obs_count(env.max_lane_segment_observations, conf.lane_segment_dropout);
-    env.obs_boundary_segment_count =
-        compute_effective_road_obs_count(env.max_boundary_segment_observations, conf.boundary_segment_dropout);
+    env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
+    env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
     struct timespec ts_total_start, ts_total_end;
     struct timespec ts_init_start, ts_init_end;
@@ -280,7 +281,7 @@ void performance_test() {
     clock_gettime(CLOCK_MONOTONIC, &ts_step_start);
     while (time(NULL) - start < test_time) {
         // Set random discrete actions for all agents
-        int (*actions)[2] = (int (*)[2])env.actions;
+        int (*actions)[2] = (int (*)[2]) env.actions;
         for (int j = 0; j < env.active_agent_count; j++) {
             actions[j][0] = rand() % 7;
             actions[j][1] = rand() % 13;

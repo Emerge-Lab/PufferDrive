@@ -2,16 +2,16 @@
 #define ENV_CONFIG_H
 
 #include <../../inih-r62/ini.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Config struct for parsing INI files - contains all environment configuration
 typedef struct {
     int action_type;
     int dynamics_model;
-    float reward_vehicle_collision;
-    float reward_offroad_collision;
+    float reward_collision;
+    float reward_offroad;
     float reward_stop_line;
     float reward_goal;
     float reward_ade;
@@ -30,11 +30,12 @@ typedef struct {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int use_map_cache;
     float dt;
     int target_type;
     int scenario_length;
     int termination_mode;
-    int init_steps;
+    int init_step;
     int init_mode;
     int control_mode;
     int simulation_mode;
@@ -46,14 +47,26 @@ typedef struct {
     int reward_randomization;
     int compute_eval_metrics;
     int max_agents_per_env;
-    int max_lane_segment_observations;
-    int max_boundary_segment_observations;
-    float lane_segment_dropout;
-    float boundary_segment_dropout;
-    int max_partner_observations;
-    int max_traffic_control_observations;
+    int obs_slots_lane_n;
+    int obs_slots_boundary_n;
+    float obs_dropout_lane;
+    float obs_dropout_boundary;
+    int obs_slots_partners_n;
+    int obs_slots_traffic_controls_n;
     int traffic_control_scope;
+    float obs_norm_goal_offset_m;
+    float obs_norm_xy_offset_m;
+    float obs_norm_veh_length_m;
+    float obs_norm_veh_width_m;
+    float obs_norm_road_seg_length_m;
+    float obs_norm_road_seg_width_m;
+    float obs_range_traffic_control_m;
+    float obs_range_partner_m;
+    float obs_range_road_front_m;
+    float obs_range_road_behind_m;
+    float obs_range_road_side_m;
     float partner_blindness_prob;
+    float partner_blindness_trigger_prob;
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
@@ -61,7 +74,7 @@ typedef struct {
 
 // INI file parser handler - parses all environment configuration from drive.ini
 static int handler(void *config, const char *section, const char *name, const char *value) {
-    env_init_config *env_config = (env_init_config *)config;
+    env_init_config *env_config = (env_init_config *) config;
 #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
 
     if (MATCH("env", "action_type")) {
@@ -88,6 +101,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->offroad_behavior = atoi(value);
     } else if (MATCH("env", "traffic_light_behavior")) {
         env_config->traffic_light_behavior = atoi(value);
+    } else if (MATCH("env", "use_map_cache")) {
+        env_config->use_map_cache = atoi(value);
     } else if (MATCH("env", "target_type")) {
         if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
             env_config->target_type = 0; // TARGET_STATIC
@@ -97,10 +112,10 @@ static int handler(void *config, const char *section, const char *name, const ch
             printf("Warning: Unknown target_type value '%s', defaulting to static\n", value);
             env_config->target_type = 0;
         }
-    } else if (MATCH("env", "reward_vehicle_collision")) {
-        env_config->reward_vehicle_collision = atof(value);
-    } else if (MATCH("env", "reward_offroad_collision")) {
-        env_config->reward_offroad_collision = atof(value);
+    } else if (MATCH("env", "reward_collision")) {
+        env_config->reward_collision = atof(value);
+    } else if (MATCH("env", "reward_offroad")) {
+        env_config->reward_offroad = atof(value);
     } else if (MATCH("env", "reward_stop_line")) {
         env_config->reward_stop_line = atof(value);
     } else if (MATCH("env", "reward_goal")) {
@@ -137,8 +152,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->scenario_length = atoi(value);
     } else if (MATCH("env", "termination_mode")) {
         env_config->termination_mode = atoi(value);
-    } else if (MATCH("env", "init_steps")) {
-        env_config->init_steps = atoi(value);
+    } else if (MATCH("env", "init_step")) {
+        env_config->init_step = atoi(value);
     } else if (MATCH("env", "max_agents_per_env")) {
         env_config->max_agents_per_env = atoi(value);
     } else if (MATCH("env", "init_mode")) {
@@ -176,22 +191,46 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else {
             env_config->compute_eval_metrics = 0;
         }
-    } else if (MATCH("env", "max_boundary_segment_observations")) {
-        env_config->max_boundary_segment_observations = atoi(value);
-    } else if (MATCH("env", "max_lane_segment_observations")) {
-        env_config->max_lane_segment_observations = atoi(value);
-    } else if (MATCH("env", "lane_segment_dropout")) {
-        env_config->lane_segment_dropout = atof(value);
-    } else if (MATCH("env", "boundary_segment_dropout")) {
-        env_config->boundary_segment_dropout = atof(value);
-    } else if (MATCH("env", "max_partner_observations")) {
-        env_config->max_partner_observations = atoi(value);
-    } else if (MATCH("env", "max_traffic_control_observations")) {
-        env_config->max_traffic_control_observations = atoi(value);
+    } else if (MATCH("env", "obs_slots_boundary_n")) {
+        env_config->obs_slots_boundary_n = atoi(value);
+    } else if (MATCH("env", "obs_slots_lane_n")) {
+        env_config->obs_slots_lane_n = atoi(value);
+    } else if (MATCH("env", "obs_dropout_lane")) {
+        env_config->obs_dropout_lane = atof(value);
+    } else if (MATCH("env", "obs_dropout_boundary")) {
+        env_config->obs_dropout_boundary = atof(value);
+    } else if (MATCH("env", "obs_slots_partners_n")) {
+        env_config->obs_slots_partners_n = atoi(value);
+    } else if (MATCH("env", "obs_slots_traffic_controls_n")) {
+        env_config->obs_slots_traffic_controls_n = atoi(value);
     } else if (MATCH("env", "traffic_control_scope")) {
         env_config->traffic_control_scope = atoi(value);
+    } else if (MATCH("env", "obs_norm_goal_offset_m")) {
+        env_config->obs_norm_goal_offset_m = atof(value);
+    } else if (MATCH("env", "obs_norm_xy_offset_m")) {
+        env_config->obs_norm_xy_offset_m = atof(value);
+    } else if (MATCH("env", "obs_norm_veh_length_m")) {
+        env_config->obs_norm_veh_length_m = atof(value);
+    } else if (MATCH("env", "obs_norm_veh_width_m")) {
+        env_config->obs_norm_veh_width_m = atof(value);
+    } else if (MATCH("env", "obs_norm_road_seg_length_m")) {
+        env_config->obs_norm_road_seg_length_m = atof(value);
+    } else if (MATCH("env", "obs_norm_road_seg_width_m")) {
+        env_config->obs_norm_road_seg_width_m = atof(value);
+    } else if (MATCH("env", "obs_range_traffic_control_m")) {
+        env_config->obs_range_traffic_control_m = atof(value);
+    } else if (MATCH("env", "obs_range_partner_m")) {
+        env_config->obs_range_partner_m = atof(value);
+    } else if (MATCH("env", "obs_range_road_front_m")) {
+        env_config->obs_range_road_front_m = atof(value);
+    } else if (MATCH("env", "obs_range_road_behind_m")) {
+        env_config->obs_range_road_behind_m = atof(value);
+    } else if (MATCH("env", "obs_range_road_side_m")) {
+        env_config->obs_range_road_side_m = atof(value);
     } else if (MATCH("env", "partner_blindness_prob")) {
         env_config->partner_blindness_prob = atof(value);
+    } else if (MATCH("env", "partner_blindness_trigger_prob")) {
+        env_config->partner_blindness_trigger_prob = atof(value);
     } else if (MATCH("env", "phantom_braking_prob")) {
         env_config->phantom_braking_prob = atof(value);
     } else if (MATCH("env", "phantom_braking_trigger_prob")) {

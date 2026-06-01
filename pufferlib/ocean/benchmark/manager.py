@@ -36,8 +36,8 @@ from pufferlib.ocean.benchmark.evaluators import EVALUATOR_REGISTRY, EvalResult,
 # clean_eval macro — env knobs to zero/enforce. Per-section explicit values
 # win over the macro (see _build_section_config).
 CLEAN_EVAL_OVERRIDES = {
-    "lane_segment_dropout": 0.0,
-    "boundary_segment_dropout": 0.0,
+    "obs_dropout_lane": 0.0,
+    "obs_dropout_boundary": 0.0,
     "partner_blindness_prob": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
@@ -238,6 +238,15 @@ class EvalManager:
         if ev_eval:
             args.setdefault("eval", {})
             args["eval"].update(ev_eval)
+            # The per-episode CSV + coverage report consume `completed_episode`
+            # summaries, which the env only emits when this is on. Enabling it
+            # is additive — it doesn't change the my_log metric stream.
+            if ev_eval.get("export_episode_csv") or ev_eval.get("verify_coverage"):
+                args["env"]["emit_completed_episodes"] = True
+        # Forward top-level render config so _render_pass can read it.
+        for key in ("render_backend", "render_results_dir", "eval_results_dir"):
+            if key in ev.config:
+                args[key] = ev.config[key]
         return args
 
     def _log(self, ev: Evaluator, result: EvalResult, logger, global_step):

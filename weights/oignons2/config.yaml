@@ -1,0 +1,205 @@
+agent_index: null
+controlled_exp:
+  train:
+    ent_coef:
+      values:
+      - 0.01
+      - 0.005
+    learning_rate:
+      values:
+      - 0.001
+      - 0.003
+      - 0.01
+env:
+  action_type: discrete
+  obs_range_partner_m: 200.0
+  obs_dropout_boundary: 0.4
+  collision_behavior: 1
+  compute_eval_metrics: false
+  control_mode: control_vehicles
+  dt: 0.1
+  dynamics_model: jerk
+  goal_radius: 2.0
+  goal_speed: 3.0
+  inactive_agent_threshold: 0.4
+  init_mode: create_all_valid
+  init_step: 0
+  obs_dropout_lane: 0.5
+  map_dir: /gcs/valeo-cp2879-driving-policy/datasets/v1.1/carla_maps_left/
+  max_agents_per_env: 150
+  obs_slots_boundary_n: 80
+  obs_norm_goal_offset_m: 200.0
+  obs_slots_lane_n: 80
+  obs_slots_partners_n: 16
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  obs_range_traffic_control_m: 100.0
+  obs_slots_traffic_controls_n: 4
+  obs_norm_veh_length_m: 15.0
+  obs_norm_veh_width_m: 10.0
+  max_waypoint_spacing: 60.0
+  min_agents_per_env: 1
+  min_waypoint_spacing: 20.0
+  num_agents: 1600
+  num_maps: 16
+  num_target_waypoints: 3
+  offroad_behavior: 1
+  partner_blindness_prob: 0.03
+  partner_blindness_trigger_prob: 0.05
+  phantom_braking_duration: 10
+  phantom_braking_prob: 0.02
+  phantom_braking_trigger_prob: 0.02
+  resample_frequency: 38400
+  reward_ade: 0.0
+  reward_center_bias: 0.0
+  reward_comfort: 0.05
+  reward_conditioning: true
+  reward_goal: 1.0
+  reward_lane_align: 0.025
+  reward_lane_center: 0.005
+  reward_offroad: 1.5
+  reward_overspeed: 0.05
+  reward_randomization: true
+  reward_reverse: 0.005
+  reward_stop_line: 1.0
+  reward_timestep: 2.5e-05
+  reward_collision: 1.5
+  reward_vel_align: 1.0
+  reward_velocity: 0.0025
+  obs_range_road_behind_m: 40.0
+  obs_range_road_front_m: 200.0
+  obs_range_road_side_m: 50.0
+  scenario_length: 3840
+  simulation_mode: gigaflow
+  spawn_initial_speed: 0.0
+  target_type: dijkstra
+  termination_mode: 1
+  traffic_control_scope: 0
+  traffic_light_behavior: 1
+env_name: puffer_drive
+eval:
+  backend: PufferEnv
+  eval_interval: 25
+  human_replay_control_mode: '"control_sdc_only" ; Control only the self-driving car'
+  human_replay_eval: false
+  human_replay_num_agents: 64 ; This equals the number of scenarios, since we control
+    one agent in each
+  map_dir: pufferlib/resources/drive/binaries/eval
+  multi_scenario_eval: false
+  multi_scenario_num_scenarios: 250
+  multi_scenario_simulation_mode: replay
+  num_agents: 512
+  wosac_aggregate_results: True ; Only return aggregate results across all scenes
+  wosac_control_mode: '"control_wosac"  ; Control the tracks to predict'
+  wosac_goal_radius: 2.0 ; Can shrink goal radius for WOSAC evaluation
+  wosac_init_mode: '"create_all_valid"  ; Initialize from the tracks to predict'
+  wosac_init_steps: 10 ; When to start the simulation
+  wosac_num_agents: 256  ; Total number of WOSAC agents to evaluate
+  wosac_num_rollouts: 32  ; Number of policy rollouts per scene
+  wosac_realism_eval: false
+  wosac_sanity_check: false
+eval_simulation: null
+fps: 15
+gif_path: eval.gif
+git:
+  commit_hash: null
+load_id: null
+load_model_path: null
+local_rank: 0
+max_runs: 200
+max_suggestion_cost: 3600
+neptune: false
+neptune_name: pufferai
+neptune_project: ablations
+num_carla_maps: 8
+num_scenarios: 3
+package: ocean
+policy:
+  actor_hidden_size: 1024
+  actor_num_layers: 0
+  backbone_hidden_size: 1024
+  backbone_num_layers: 3
+  critic_hidden_size: 1024
+  critic_num_layers: 0
+  dropout: 0.0
+  encoder_gigaflow: true
+  input_size: 256
+  split_network: true
+policy_name: Drive
+render: 0
+render_mode: auto
+render_obs: 0
+rnn:
+  hidden_size: 512
+  input_size: 512
+rnn_name: null
+save_frames: 0
+sweep:
+  downsample: 10
+  goal: maximize
+  method: Protein
+  metric: score
+tag: null
+tb: true
+train:
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-08
+  adv_filter_ewma_beta: 0.25
+  adv_filter_threshold_scale: 0.01
+  adv_sampling_prio_alpha: 0.8499999999999999
+  adv_sampling_prio_beta0: 0.8499999999999999
+  amp: true
+  anneal_lr: true
+  batch_size: auto
+  bptt_horizon: 128
+  checkpoint_interval: 500
+  clip_coef: 0.2
+  compile: true
+  compile_fullgraph: false
+  compile_mode: default
+  cpu_offload: false
+  data_dir: /pufferdrive/training_output/
+  device: cuda
+  ent_coef: 0.01
+  gae_lambda: 0.95
+  gamma: 0.999
+  learning_rate: 0.0005
+  max_grad_norm: 0.5
+  max_minibatch_size: 153600
+  minibatch_size: 153600
+  name: pufferai
+  normalize_rewards: false
+  obs_only: true
+  optimizer: adamw
+  ppo_granularity: auto
+  precision: bfloat16
+  project: ablations
+  render: false
+  render_interval: 1000
+  render_map: none
+  resume_state_path: null
+  seed: 4
+  show_grid: false
+  show_human_logs: true
+  show_lasers: false
+  torch_deterministic: false
+  total_timesteps: 125000000000
+  update_epochs: 3
+  use_rnn: false
+  vf_clip_coef: null
+  vf_coef: 0.5
+  vtrace_c_clip: 1
+  vtrace_rho_clip: 1
+vec:
+  backend: Multiprocessing
+  batch_size: auto
+  num_envs: 48
+  num_workers: auto
+  seed: 42
+  zero_copy: true
+video_path: videos
+wandb: false
+wandb_group: debug
+wandb_project: pufferlib

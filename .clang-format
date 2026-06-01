@@ -1,13 +1,78 @@
-# Defines the code style for C/C++/CUDA section
 ---
 Language: Cpp
 BasedOnStyle: LLVM
+
+# --- Foundation ---
 IndentWidth: 4
+ContinuationIndentWidth: 4
 TabWidth: 4
 UseTab: Never
 ColumnLimit: 120
-SortIncludes: false
+
+# --- File Hygiene ---
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# --- Safety-Critical Bracing (Mandatory) ---
+# This ensures every 'if', 'else', 'for', and 'while' has {}
+InsertBraces: true
+RemoveBracesLLVM: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortBlocksOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortEnumsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+# --- Function Declaration & Return Types ---
+# This keeps 'static void function_name' on one line
+BreakAfterReturnType: None
+PenaltyReturnTypeOnItsOwnLine: 1000
+
+# --- Wrapping Logic (The "Black" Philosophy) ---
+# Forces parameters to break onto new lines cleanly for Git diffs
+AlignAfterOpenBracket: AlwaysBreak
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# --- Math & Operator Readability ---
+# Ideal for complex physics/simulation formulas
+BreakBeforeBinaryOperators: All
+BreakBeforeTernaryOperators: true
+AlignOperands: DontAlign
+
+# --- Alignment (Clean Diffs / No Noise) ---
+# Prevents unrelated lines from changing when you rename a variable
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+# --- Braces & Spacing ---
+BreakBeforeBraces: Attach
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: true
+SpacesInContainerLiterals: false
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+
+# --- Maintenance & Documentation ---
+# Automatically wraps long comments to fit the 120 column limit
+ReflowComments: true
+SpacesInLineCommentPrefix:
+  Minimum: 1
+  Maximum: 1
+SortIncludes: true
+IncludeBlocks: Regroup
+QualifierAlignment: Leave
+
+# --- Modern Compatibility ---
+Standard: Latest
 ---
-Language: Json
 # Don't format .json files
+Language: Json
 DisableFormat: true

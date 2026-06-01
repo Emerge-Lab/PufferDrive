@@ -1,19 +1,20 @@
-#include <time.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <math.h>
-#include <raylib.h>
-#include "rlgl.h"
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include "error.h"
+#include "../env_config.h"
 #include "drive.h"
 #include "drivenet.h"
+#include "error.h"
 #include "libgen.h"
-#include "../env_config.h"
+#include "rlgl.h"
+
+#include <math.h>
+#include <raylib.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 #define TRAJECTORY_LENGTH_DEFAULT 91
 
 typedef struct {
@@ -44,9 +45,32 @@ bool OpenVideo(VideoRecorder *recorder, const char *output_filename, int width, 
         for (int fd = 3; fd < 256; fd++) {
             close(fd);
         }
-        execlp("ffmpeg", "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", size_str, "-r", "30", "-i", "-",
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "23", "-loglevel", "error",
-               output_filename, NULL);
+        execlp(
+            "ffmpeg",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            size_str,
+            "-r",
+            "30",
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-loglevel",
+            "error",
+            output_filename,
+            NULL);
         TraceLog(LOG_ERROR, "Failed to launch ffmpeg");
         return false;
     }
@@ -66,24 +90,33 @@ void CloseVideo(VideoRecorder *recorder) {
     waitpid(recorder->pid, NULL, 0);
 }
 
-void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int lasers, int trajectories,
-                       int frame_count, float *path, int log_trajectories, int show_grid, int img_width,
-                       int img_height) {
-
+void renderTopDownView(
+    Drive *env,
+    Client *client,
+    int map_height,
+    int obs,
+    int lasers,
+    int trajectories,
+    int frame_count,
+    float *path,
+    int log_trajectories,
+    int show_grid,
+    int img_width,
+    int img_height) {
     BeginDrawing();
 
     // Top-down orthographic camera
     Camera3D camera = {0};
-    camera.position = (Vector3){0.0f, 0.0f, 500.0f}; // above the scene
-    camera.target = (Vector3){0.0f, 0.0f, 0.0f};     // look at origin
-    camera.up = (Vector3){0.0f, -1.0f, 0.0f};
+    camera.position = (Vector3) {0.0f, 0.0f, 500.0f}; // above the scene
+    camera.target = (Vector3) {0.0f, 0.0f, 0.0f};     // look at origin
+    camera.up = (Vector3) {0.0f, -1.0f, 0.0f};
     camera.fovy = map_height;
     camera.projection = CAMERA_ORTHOGRAPHIC;
 
     client->width = img_width;
     client->height = img_height;
 
-    Color road = (Color){35, 35, 37, 255};
+    Color road = (Color) {35, 35, 37, 255};
     ClearBackground(road);
     BeginMode3D(camera);
     rlEnableDepthTest();
@@ -120,7 +153,7 @@ void renderTopDownView(Drive *env, Client *client, int map_height, int obs, int 
     // Draw agent trajs
     if (trajectories) {
         for (int i = 0; i < frame_count; i++) {
-            DrawSphere((Vector3){path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
+            DrawSphere((Vector3) {path[i * 2], path[i * 2 + 1], 0.8f}, 0.5f, YELLOW);
         }
     }
 
@@ -139,15 +172,17 @@ void renderAgentView(Drive *env, Client *client, int map_height, int obs_only, i
 
     Camera3D camera = {0};
     // Position camera behind and above the agent
-    camera.position = (Vector3){agent->sim_x - (25.0f * cosf(agent->sim_heading)),
-                                agent->sim_y - (25.0f * sinf(agent->sim_heading)), 15.0f};
-    camera.target = (Vector3){agent->sim_x + 40.0f * cosf(agent->sim_heading),
-                              agent->sim_y + 40.0f * sinf(agent->sim_heading), 1.0f};
-    camera.up = (Vector3){0.0f, 0.0f, 1.0f};
+    camera.position = (Vector3) {agent->sim_x - (25.0f * cosf(agent->sim_heading)),
+                                 agent->sim_y - (25.0f * sinf(agent->sim_heading)),
+                                 15.0f};
+    camera.target = (Vector3) {agent->sim_x + 40.0f * cosf(agent->sim_heading),
+                               agent->sim_y + 40.0f * sinf(agent->sim_heading),
+                               1.0f};
+    camera.up = (Vector3) {0.0f, 0.0f, 1.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
-    Color road = (Color){35, 35, 37, 255};
+    Color road = (Color) {35, 35, 37, 255};
 
     ClearBackground(road);
     BeginMode3D(camera);
@@ -172,23 +207,45 @@ static int make_gif_from_frames(const char *pattern, int fps, const char *palett
     // 1) Generate palette (no quotes needed for simple filter)
     //    NOTE: if your frames start at 000, you don't need -start_number.
     snprintf(cmd, sizeof(cmd), "ffmpeg -y -framerate %d -i %s -vf palettegen %s", fps, pattern, palette_path);
-    if (run_cmd(cmd) != 0)
+    if (run_cmd(cmd) != 0) {
         return -1;
+    }
 
     // 2) Use palette to encode the GIF
-    snprintf(cmd, sizeof(cmd), "ffmpeg -y -framerate %d -i %s -i %s -lavfi paletteuse -loop 0 %s", fps, pattern,
-             palette_path, out_gif);
-    if (run_cmd(cmd) != 0)
+    snprintf(
+        cmd,
+        sizeof(cmd),
+        "ffmpeg -y -framerate %d -i %s -i %s -lavfi paletteuse -loop 0 %s",
+        fps,
+        pattern,
+        palette_path,
+        out_gif);
+    if (run_cmd(cmd) != 0) {
         return -1;
+    }
 
     return 0;
 }
 
-int eval_gif(const char *map_name, const char *policy_name, int show_grid, int obs_only, int lasers,
-             int log_trajectories, int frame_skip, float goal_radius, int init_steps, int max_controlled_agents,
-             const char *view_mode, const char *output_topdown, const char *output_agent, int num_maps,
-             int scenario_length_override, int init_mode, int control_mode, int goal_behavior) {
-
+int eval_gif(
+    const char *map_name,
+    const char *policy_name,
+    int show_grid,
+    int obs_only,
+    int lasers,
+    int log_trajectories,
+    int frame_skip,
+    float goal_radius,
+    int init_step,
+    int max_controlled_agents,
+    const char *view_mode,
+    const char *output_topdown,
+    const char *output_agent,
+    int num_maps,
+    int scenario_length_override,
+    int init_mode,
+    int control_mode,
+    int goal_behavior) {
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
@@ -224,16 +281,16 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     Drive env = {
         .dynamics_model = conf.dynamics_model,
-        .reward_vehicle_collision = conf.reward_vehicle_collision,
-        .reward_offroad_collision = conf.reward_offroad_collision,
+        .reward_collision = conf.reward_collision,
+        .reward_offroad = conf.reward_offroad,
         .reward_ade = conf.reward_ade,
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
         .goal_speed = conf.goal_speed,
-        .map_name = (char *)map_name,
-        .init_steps = init_steps,
-        .max_controlled_agents = max_controlled_agents,
+        .map_name = (char *) map_name,
+        .init_step = init_step,
+        .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
@@ -243,7 +300,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     };
 
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override
-                          : (conf.scenario_length > 0)   ? conf.scenario_length
+        : (conf.scenario_length > 0)                     ? conf.scenario_length
                                                          : TRAJECTORY_LENGTH_DEFAULT;
     allocate(&env);
 
@@ -253,7 +310,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     c_reset(&env);
 
     // Make client for rendering
-    Client *client = (Client *)calloc(1, sizeof(Client));
+    Client *client = (Client *) calloc(1, sizeof(Client));
     env.client = client;
 
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
@@ -266,8 +323,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     float scale = 6.0f; // Can be used to increase the video quality
 
     // Calculate video width and height; round to nearest even number
-    int img_width = (int)roundf(map_width * scale / 2.0f) * 2;
-    int img_height = (int)roundf(map_height * scale / 2.0f) * 2;
+    int img_width = (int) roundf(map_width * scale / 2.0f) * 2;
+    int img_height = (int) roundf(map_height * scale / 2.0f) * 2;
 
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
@@ -301,7 +358,7 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         *strrchr(policy_base, '.') = '\0';
 
         char map[256];
-        strcpy(map, basename((char *)map_name));
+        strcpy(map, basename((char *) map_name));
         *strrchr(map, '.') = '\0';
 
         // Create video directory if it doesn't exist
@@ -334,8 +391,9 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
 
     if (render_agent) {
         if (!OpenVideo(&agent_recorder, filename_agent, img_width, img_height)) {
-            if (render_topdown)
+            if (render_topdown) {
                 CloseVideo(&topdown_recorder);
+            }
             CloseWindow();
             return -1;
         }
@@ -345,13 +403,24 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
         printf("Recording topdown view...\n");
         for (int i = 0; i < frame_count; i++) {
             if (i % frame_skip == 0) {
-                renderTopDownView(&env, client, map_height, 0, 0, 0, frame_count, NULL, log_trajectories, show_grid,
-                                  img_width, img_height);
+                renderTopDownView(
+                    &env,
+                    client,
+                    map_height,
+                    0,
+                    0,
+                    0,
+                    frame_count,
+                    NULL,
+                    log_trajectories,
+                    show_grid,
+                    img_width,
+                    img_height);
                 WriteFrame(&topdown_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int (*)[2])env.actions;
-            forward(net, env.observations, (int *)env.actions);
+            int (*actions)[2] = (int (*)[2]) env.actions;
+            forward(net, env.observations, (int *) env.actions);
             c_step(&env);
         }
     }
@@ -370,8 +439,8 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
                 WriteFrame(&agent_recorder, img_width, img_height);
                 rendered_frames++;
             }
-            int (*actions)[2] = (int (*)[2])env.actions;
-            forward(net, env.observations, (int *)env.actions);
+            int (*actions)[2] = (int (*)[2]) env.actions;
+            forward(net, env.observations, (int *) env.actions);
             c_step(&env);
         }
     }
@@ -380,8 +449,12 @@ int eval_gif(const char *map_name, const char *policy_name, int show_grid, int o
     double elapsedTime = endTime - startTime;
     double writeFPS = (elapsedTime > 0) ? rendered_frames / elapsedTime : 0;
 
-    printf("Wrote %d frames in %.2f seconds (%.2f FPS) to %s \n", rendered_frames, elapsedTime, writeFPS,
-           filename_topdown);
+    printf(
+        "Wrote %d frames in %.2f seconds (%.2f FPS) to %s \n",
+        rendered_frames,
+        elapsedTime,
+        writeFPS,
+        filename_topdown);
 
     if (render_topdown) {
         CloseVideo(&topdown_recorder);
@@ -406,7 +479,7 @@ int main(int argc, char *argv[]) {
     int log_trajectories = 1;
     int frame_skip = 1;
     float goal_radius = 2.0f;
-    int init_steps = 0;
+    int init_step = 0;
     const char *map_name = NULL;
     const char *policy_name = "resources/drive/puffer_drive_weights.bin";
     int max_controlled_agents = -1;
@@ -467,8 +540,8 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 view_mode = argv[i + 1];
                 i++;
-                if (strcmp(view_mode, "both") != 0 && strcmp(view_mode, "topdown") != 0 &&
-                    strcmp(view_mode, "agent") != 0) {
+                if (strcmp(view_mode, "both") != 0 && strcmp(view_mode, "topdown") != 0
+                    && strcmp(view_mode, "agent") != 0) {
                     fprintf(stderr, "Error: --view must be 'both', 'topdown', or 'agent'\n");
                     return 1;
                 }
@@ -486,12 +559,12 @@ int main(int argc, char *argv[]) {
                 output_agent = argv[i + 1];
                 i++;
             }
-        } else if (strcmp(argv[i], "--init-steps") == 0) {
+        } else if (strcmp(argv[i], "--init-step") == 0) {
             if (i + 1 < argc) {
-                init_steps = atoi(argv[i + 1]);
+                init_step = atoi(argv[i + 1]);
                 i++;
-                if (init_steps < 0) {
-                    init_steps = 0;
+                if (init_step < 0) {
+                    init_step = 0;
                 }
             }
         } else if (strcmp(argv[i], "--init-mode") == 0) {
@@ -527,8 +600,24 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    eval_gif(map_name, policy_name, show_grid, obs_only, lasers, log_trajectories, frame_skip, goal_radius, init_steps,
-             max_controlled_agents, view_mode, output_topdown, output_agent, num_maps, scenario_length_cli, init_mode,
-             control_mode, goal_behavior);
+    eval_gif(
+        map_name,
+        policy_name,
+        show_grid,
+        obs_only,
+        lasers,
+        log_trajectories,
+        frame_skip,
+        goal_radius,
+        init_step,
+        max_controlled_agents,
+        view_mode,
+        output_topdown,
+        output_agent,
+        num_maps,
+        scenario_length_cli,
+        init_mode,
+        control_mode,
+        goal_behavior);
     return 0;
 }
