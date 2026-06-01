@@ -112,7 +112,7 @@
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
 
-// TARGET_TYPE modes (controls what target info is in observations)
+// TARGET_TYPE modes (controls what target info is in observations).
 #define TARGET_STATIC 0
 #define TARGET_DYNAMIC 1
 
@@ -396,6 +396,7 @@ struct Drive {
     int num_target_waypoints;
     int logs_capacity;
     int target_type;
+    int goal_on_lane;
     char *ini_file;
     int collision_behavior;           // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
@@ -1927,8 +1928,142 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
+// Pick a random drivable point on the map whose Euclidean distance from
+// (ref_x, ref_y) lies in [min_dist, max_dist]. Returns 1 on success.
+static int pick_random_drivable_position(
+    Drive *env,
+    float ref_x,
+    float ref_y,
+    float min_dist,
+    float max_dist,
+    float *out_x,
+    float *out_y,
+    float *out_z) {
+    GridMap *gm = env->grid_map;
+    float cell = GRID_CELL_SIZE;
+    float half_diag = 0.5f * cell * (float) M_SQRT2;
+    float min_d2 = min_dist * min_dist;
+    float max_d2 = max_dist * max_dist;
+    float cell_filter = max_dist + half_diag;
+    float cell_filter2 = cell_filter * cell_filter;
+
+    int ref_cx = (int) ((ref_x - gm->top_left_x) / cell);
+    int ref_cy = (int) ((ref_y - gm->bottom_right_y) / cell);
+    int half_extent = (int) ceilf(cell_filter / cell);
+
+    int x_lo = ref_cx - half_extent;
+    int y_lo = ref_cy - half_extent;
+    int x_hi = ref_cx + half_extent;
+    int y_hi = ref_cy + half_extent;
+    if (x_lo < 0) {
+        x_lo = 0;
+    }
+    if (y_lo < 0) {
+        y_lo = 0;
+    }
+    if (x_hi >= gm->grid_cols) {
+        x_hi = gm->grid_cols - 1;
+    }
+    if (y_hi >= gm->grid_rows) {
+        y_hi = gm->grid_rows - 1;
+    }
+
+    int n_cand = 0;
+    float pick_x = 0.0f, pick_y = 0.0f, pick_z = 0.0f;
+    for (int gy = y_lo; gy <= y_hi; gy++) {
+        float cy = gm->bottom_right_y + (gy + 0.5f) * cell;
+        for (int gx = x_lo; gx <= x_hi; gx++) {
+            float cx = gm->top_left_x + (gx + 0.5f) * cell;
+            float dcx = cx - ref_x;
+            float dcy = cy - ref_y;
+            if (dcx * dcx + dcy * dcy > cell_filter2) {
+                continue;
+            }
+            int gi = gy * gm->grid_cols + gx;
+            for (int i = 0; i < gm->cell_entities_count[gi]; i++) {
+                GridMapEntity e = gm->cells[gi][i];
+                RoadMapElement *lane = &env->road_elements[e.entity_idx];
+                if (!is_drivable_road_lane(lane->type)) {
+                    continue;
+                }
+                // The grid stores polyline SEGMENTS (start vertex = geometry_idx).
+                // Sample a uniform point along the segment so candidate positions
+                // are continuous along the road rather than quantized to vertices.
+                int k = e.geometry_idx;
+                if (k + 1 >= lane->segment_length) {
+                    continue;
+                }
+                float t = (float) rand() / (float) RAND_MAX;
+                float ex = lane->x[k] + t * (lane->x[k + 1] - lane->x[k]);
+                float ey = lane->y[k] + t * (lane->y[k + 1] - lane->y[k]);
+                float ez = lane->z[k] + t * (lane->z[k + 1] - lane->z[k]);
+                float edx = ex - ref_x;
+                float edy = ey - ref_y;
+                float ed2 = edx * edx + edy * edy;
+                if (ed2 < min_d2 || ed2 > max_d2) {
+                    continue;
+                }
+                n_cand++;
+                if (rand() % n_cand == 0) {
+                    pick_x = ex;
+                    pick_y = ey;
+                    pick_z = ez;
+                }
+            }
+        }
+    }
+
+    if (n_cand == 0) {
+        return 0;
+    }
+    *out_x = pick_x;
+    *out_y = pick_y;
+    *out_z = pick_z;
+    return 1;
+}
+
 static void compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
+
+    // goal_on_lane=False: place each goal at a random drivable point whose
+    // Euclidean distance from the previous anchor (agent for goal 0, previous
+    // goal for subsequent ones) lies in [min_waypoint_spacing,
+    // max_waypoint_spacing].
+    if (!env->goal_on_lane) {
+        int num_target_waypoints = env->num_target_waypoints;
+        if (num_target_waypoints <= 0 || num_target_waypoints > MAX_TARGET_WAYPOINTS) {
+            num_target_waypoints = MAX_TARGET_WAYPOINTS;
+        }
+        float ref_x = agent->sim_x;
+        float ref_y = agent->sim_y;
+        for (int i = 0; i < num_target_waypoints; i++) {
+            float gx, gy, gz;
+            if (!pick_random_drivable_position(
+                    env,
+                    ref_x,
+                    ref_y,
+                    env->min_waypoint_spacing,
+                    env->max_waypoint_spacing,
+                    &gx,
+                    &gy,
+                    &gz)) {
+                printf("[GIGAFLOW WARNING] -> pick_random_drivable_position failed for agent %d\n", agent_idx);
+                agent->removed = 1;
+                return;
+            }
+            agent->goal_positions_x[i] = gx;
+            agent->goal_positions_y[i] = gy;
+            agent->goal_positions_z[i] = gz;
+            ref_x = gx;
+            ref_y = gy;
+        }
+        agent->current_goal_idx = 0;
+        agent->goal_position_x = agent->goal_positions_x[0];
+        agent->goal_position_y = agent->goal_positions_y[0];
+        agent->goal_position_z = agent->goal_positions_z[0];
+        return;
+    }
+
     struct Path *path = agent->path;
 
     // Validate path exists
