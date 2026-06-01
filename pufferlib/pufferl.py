@@ -1265,6 +1265,7 @@ class WandbLogger:
 
         wandb.init(
             id=load_id or wandb.util.generate_id(),
+            name=args.get("run_name") or None,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
@@ -2117,6 +2118,12 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--wandb-project", type=str, default="pufferlib")
     parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Wandb run display name. Unset → wandb auto-generates one.",
+    )
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
     parser.add_argument("--neptune-project", type=str, default="ablations")
