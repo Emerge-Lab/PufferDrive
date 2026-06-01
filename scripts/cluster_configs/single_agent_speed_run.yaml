@@ -24,13 +24,10 @@ env.max_agents_per_env: 1
 env.num_agents: 1024
 env.use_map_cache: 1
 
-# Three goals placed in a chain: goal 0 at [min,max] Euclidean from the agent,
-# goal 1 at [min,max] from goal 0, goal 2 at [min,max] from goal 1. With all
-# three in the obs, the value function has lookahead — reaching goal 0 just
-# advances the active-goal alias rather than teleporting the obs to a brand
-# new random target. 6m floor avoids placing goal 0 on top of the agent; 500m
-# saturates at the Town10HD map diameter (~260m) so goals can land anywhere
-# on the network.
+# Single goal placed at a random drivable point on the map whose Euclidean
+# distance from the agent lies in [min_waypoint_spacing, max_waypoint_spacing].
+# 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
+# Town10HD map diameter (~260m) so goals can land anywhere on the network.
 env.num_target_waypoints: 1
 env.goal_on_lane: False
 env.min_waypoint_spacing: 6.0
