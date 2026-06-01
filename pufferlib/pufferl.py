@@ -377,6 +377,13 @@ class PuffeRL:
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
 
+            # Obs distribution stats (max/min/mean across the batch and obs
+            # dims, appended per env step). Surfaces clipping / unbounded
+            # features / normalization regressions in wandb.
+            self.stats["obs/max"].append(o_device.max().item())
+            self.stats["obs/min"].append(o_device.min().item())
+            self.stats["obs/mean"].append(o_device.mean().item())
+
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
                 state = dict(
@@ -1258,6 +1265,7 @@ class WandbLogger:
 
         wandb.init(
             id=load_id or wandb.util.generate_id(),
+            name=args.get("run_name") or None,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
@@ -2110,6 +2118,12 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--wandb-project", type=str, default="pufferlib")
     parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Wandb run display name. Unset → wandb auto-generates one.",
+    )
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
     parser.add_argument("--neptune-project", type=str, default="ablations")

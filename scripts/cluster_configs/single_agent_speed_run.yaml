@@ -24,9 +24,14 @@ env.max_agents_per_env: 1
 env.num_agents: 1024
 env.use_map_cache: 1
 
-# Single goal waypoint ahead of the agent (route mode uses the default
-# min/max waypoint spacing of 20m/60m to place it).
+# Single goal placed at a random drivable point on the map whose Euclidean
+# distance from the agent lies in [min_waypoint_spacing, max_waypoint_spacing].
+# 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
+# Town10HD map diameter (~260m) so goals can land anywhere on the network.
 env.num_target_waypoints: 1
+env.goal_on_lane: False
+env.min_waypoint_spacing: 6.0
+env.max_waypoint_spacing: 500.0
 
 # Traffic lights fully off: not observed, not scored, no reward penalty.
 env.traffic_light_behavior: 0
@@ -35,10 +40,18 @@ env.obs_slots_traffic_controls_n: 0
 # Training
 train.total_timesteps: 1_000_000_000
 
-# Disable nuPlan-based evaluators and the validation_gigaflow render spike
-# (eight parallel 1080p ffmpeg encodes have aborted long runs at eval epochs).
+# Disable nuPlan-based evaluators. validation_gigaflow stays on but is
+# reconfigured to triage_html (CPU-only scene playback + per-episode metrics
+# including dnf_rate), pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops a gallery of rollouts you can browse
+# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
 eval.validation_replay.enabled: 0
-eval.validation_gigaflow.enabled: 0
+eval.validation_gigaflow.render_backend: obs_html
+eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+eval.validation_gigaflow.env.num_maps: 1
+eval.validation_gigaflow.env.num_agents: 64
+eval.validation_gigaflow.env.min_agents_per_env: 1
+eval.validation_gigaflow.env.max_agents_per_env: 1
 eval.behaviors_full_dir.enabled: 0
 eval.behaviors_hard_stop.enabled: 0
 eval.behaviors_highway_straight.enabled: 0
@@ -55,5 +68,5 @@ eval.behaviors_unprotected_right.enabled: 0
 # W&B. Group has no space: submit_cluster.py joins the inner command into a
 # bash -c string without quoting arg values, so a space would split the arg.
 wandb: True
-wandb_project: puffer_drive
+wandb_project: single_agent_nightly_test
 wandb_group: Nightly_Test

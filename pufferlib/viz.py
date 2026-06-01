@@ -517,9 +517,9 @@ def unpack_obs(
     target_type: str = "static",
     reward_conditioning: bool = False,
     num_target_waypoints: int = 5,
-    max_partners: int = 16,
-    max_lane_segments: int = 16,
-    max_boundary_segments: int = 16,
+    obs_slots_partners_n: int = 16,
+    obs_slots_lane_n: int = 16,
+    obs_slots_boundary_n: int = 16,
     obs_slots_traffic_controls_n: int = 16,
     obs_dropout_lane: float = 0.0,
     obs_dropout_boundary: float = 0.0,
@@ -536,6 +536,9 @@ def unpack_obs(
     if obs_flat.ndim == 1:
         obs_flat = obs_flat[None, :]
 
+    if isinstance(target_type, int):
+        target_type = "static" if target_type == binding.TARGET_STATIC else "dynamic"
+
     ego_dim = binding.EGO_FEATURES
 
     # Partner obs
@@ -544,8 +547,8 @@ def unpack_obs(
     road_feature_size = binding.ROAD_FEATURES
     # Traffic control obs
     traffic_control_feature_size = binding.TRAFFIC_CONTROL_FEATURES
-    lane_segment_count = compute_effective_road_obs_count(max_lane_segments, obs_dropout_lane)
-    boundary_segment_count = compute_effective_road_obs_count(max_boundary_segments, obs_dropout_boundary)
+    lane_segment_count = compute_effective_road_obs_count(obs_slots_lane_n, obs_dropout_lane)
+    boundary_segment_count = compute_effective_road_obs_count(obs_slots_boundary_n, obs_dropout_boundary)
 
     # Target obs
     target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
@@ -564,9 +567,9 @@ def unpack_obs(
 
     # Extract partners
     partners_start = target_end
-    partners_end = partners_start + max_partners * partner_feature_size
+    partners_end = partners_start + obs_slots_partners_n * partner_feature_size
     partners_obs = obs_flat[:, partners_start:partners_end]
-    partners_obs = partners_obs.reshape(-1, max_partners, partner_feature_size)
+    partners_obs = partners_obs.reshape(-1, obs_slots_partners_n, partner_feature_size)
 
     # Extract lane elements
     lane_start = partners_end
@@ -606,9 +609,9 @@ def plot_observation(
     target_type="static",
     reward_conditioning=False,
     num_target_waypoints=10,
-    max_partners=16,
-    max_lane_segments=32,
-    max_boundary_segments=32,
+    obs_slots_partners_n=16,
+    obs_slots_lane_n=32,
+    obs_slots_boundary_n=32,
     obs_slots_traffic_controls_n=4,
     obs_dropout_lane=0.0,
     obs_dropout_boundary=0.0,
@@ -626,6 +629,9 @@ def plot_observation(
         obs: flattened observation tensor
         target_type: 0 for goal only, 1 for waypoints only, 2 for both
     """
+    if isinstance(target_type, int):
+        target_type = "static" if target_type == binding.TARGET_STATIC else "dynamic"
+
     fig, ax = plt.subplots(figsize=(20, 20))
 
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
@@ -633,9 +639,9 @@ def plot_observation(
         target_type=target_type,
         reward_conditioning=reward_conditioning,
         num_target_waypoints=num_target_waypoints,
-        max_partners=max_partners,
-        max_lane_segments=max_lane_segments,
-        max_boundary_segments=max_boundary_segments,
+        obs_slots_partners_n=obs_slots_partners_n,
+        obs_slots_lane_n=obs_slots_lane_n,
+        obs_slots_boundary_n=obs_slots_boundary_n,
         obs_slots_traffic_controls_n=obs_slots_traffic_controls_n,
         obs_dropout_lane=obs_dropout_lane,
         obs_dropout_boundary=obs_dropout_boundary,
@@ -947,7 +953,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
-        "max_partners": int(env_cfg["obs_slots_partners_n"]),
+        "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
@@ -1197,14 +1203,14 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             let p = base, ego = obs.subarray(p, p+10); p += 10;
             if (H.reward_conditioning) p += 17;
             const targetStart = p; p += H.num_target_waypoints * H.target_features;
-            const partnersStart = p; p += H.max_partners * 8;
+            const partnersStart = p; p += H.obs_slots_partners_n * 8;
             const lanesStart = p; p += H.lane_count * 7;
             const boundsStart = p; p += H.boundary_count * 7;
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
             const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.max_partners;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*8; if(zero(o,8)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
             return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
@@ -1217,7 +1223,10 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
             if(showAll){ obsCtx.strokeStyle="#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
             if(showAll){ obsCtx.strokeStyle="#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } } }
+            if(showPool){
+                for(const r of frame.lanes){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+                for(const r of frame.bounds){ if(r[6] > 0){ obsCtx.strokeStyle=`rgba(200,0,0,${poolAlpha(r[6])})`; obsCtx.lineWidth=(obsMode === 1 ? 2.2 : 2.0)*px; obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
+            }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
             for(const t of frame.traffic_controls){ if(showPool && t.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(t.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 3.2 : 2.4)*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showAll){ obsCtx.strokeStyle = t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700"); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ if(!showAll && !(showPool && p.pool > 0)) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle="rgba(136,136,136,.8)"; obsCtx.strokeStyle="#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(showPool && p.pool > 0){ obsCtx.strokeStyle=`rgba(0,125,145,${poolAlpha(p.pool)})`; obsCtx.lineWidth=(obsMode === 1 ? 2.4 : 2.0)*px; obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
@@ -1296,22 +1305,120 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         f.write(final_html)
 
 
-def build_gallery_index(folder_path="."):
-    files = [f for f in os.listdir(folder_path) if f != "index.html" and re.fullmatch(r"(.+)_([0-9]+)\.html", f)]
+def build_gallery_index(folder_path=".", file_metrics=None):
+    """Build an index.html navigator for per-episode replay HTMLs in folder_path.
+
+    If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
+    the index also exposes a sort dropdown so the user can flip between sort
+    keys (default: `score` ascending — failures bubble to the top). When
+    `file_metrics` is None or empty, behaves as before (filename-order
+    dropdown, no sort UI).
+    """
+    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
     if not files:
         print("No matching .html files found in this directory.")
         return
 
-    def sort_key(filename):
-        match = re.fullmatch(r"(.+)_([0-9]+)\.html", filename)
-        env_map_name = match.group(1)
-        global_episode_id = int(match.group(2))
-        return (global_episode_id, env_map_name)
+    # Lexicographic sort over the full filename. With the triage_html stem
+    # `{map}_{scenario_id}_{scenarios_done:04d}_epoch{e}_step{s}.html`, the
+    # zero-padded scenarios_done dominates ordering within a map.
+    files.sort()
 
-    files.sort(key=sort_key)
+    metrics_map = file_metrics or {}
+    has_metrics = bool(metrics_map)
 
-    # 3. Build the HTML template
+    # (key, default_direction). Anything in this list with at least one
+    # non-null value across files gets a dropdown entry. Default direction
+    # is what makes triage-useful values bubble to the top.
+    SORT_KEYS = [
+        ("score", "asc"),
+        ("dnf_rate", "desc"),
+        ("episode_return", "asc"),
+        ("num_goals_reached", "asc"),
+        ("collision_rate", "desc"),
+        ("offroad_rate", "desc"),
+        ("red_light_violation_rate", "desc"),
+        ("total_infractions", "desc"),
+        ("total_distance_travelled", "asc"),
+        ("episode_length", "asc"),
+    ]
+
+    available_keys = []
+    if has_metrics:
+        present = set()
+        for v in metrics_map.values():
+            present.update(v.keys())
+        for k, d in SORT_KEYS:
+            if k in present:
+                available_keys.append((k, d))
+
+    metrics_json = json.dumps(metrics_map, separators=(",", ":"))
+    defaults_json = json.dumps({k: d for k, d in available_keys}, separators=(",", ":"))
+
+    def make_label(f):
+        if not has_metrics or f not in metrics_map:
+            return f.replace(".html", "").replace("_", " ")
+        bits = [f.replace(".html", "")]
+        for k in ("score", "dnf_rate", "num_goals_reached", "episode_return"):
+            if k in metrics_map[f]:
+                v = metrics_map[f][k]
+                bits.append(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}")
+        return "  ·  ".join(bits)
+
+    options_html = "\n".join(f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files)
+
+    sort_ui = ""
+    sort_js = ""
+    if has_metrics and available_keys:
+        sort_options = "\n".join(
+            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>' for k, _ in available_keys
+        )
+        sort_ui = (
+            '<span style="color:#888;font-size:12px;font-weight:bold">SORT</span>'
+            f'<select id="sortKey" onchange="onSortKeyChange()">{sort_options}</select>'
+            '<select id="sortDir" onchange="resortFiles()">'
+            '<option value="asc" selected>asc</option>'
+            '<option value="desc">desc</option>'
+            "</select>"
+        )
+        sort_js = (
+            (
+                "const FILE_METRICS = __METRICS_JSON__;"
+                "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
+                "const sortKeySel = document.getElementById('sortKey');"
+                "const sortDirSel = document.getElementById('sortDir');"
+                "function onSortKeyChange() {"
+                "  const k = sortKeySel.value;"
+                "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
+                "  resortFiles();"
+                "}"
+                "function resortFiles() {"
+                "  const key = sortKeySel.value;"
+                "  const dir = sortDirSel.value;"
+                "  const opts = Array.from(select.options);"
+                "  opts.sort(function (a, b) {"
+                "    const fA = a.getAttribute('data-name');"
+                "    const fB = b.getAttribute('data-name');"
+                "    const mA = (FILE_METRICS[fA] || {})[key];"
+                "    const mB = (FILE_METRICS[fB] || {})[key];"
+                "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
+                "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
+                "    if (nA === nB) return fA.localeCompare(fB);"
+                "    return dir === 'asc' ? nA - nB : nB - nA;"
+                "  });"
+                "  const current = select.value;"
+                "  while (select.firstChild) select.removeChild(select.firstChild);"
+                "  opts.forEach(function (o) { select.appendChild(o); });"
+                "  select.value = current;"
+                "  updateButtons();"
+                "}"
+                "resortFiles();"
+            )
+            .replace("__METRICS_JSON__", metrics_json)
+            .replace("__DEFAULTS_JSON__", defaults_json)
+        )
+
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -1320,20 +1427,22 @@ def build_gallery_index(folder_path="."):
         <title>PufferDrive Replay Gallery</title>
         <style>
             body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
-            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 15px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); flex-wrap: wrap; }
             #viewer { flex-grow: 1; border: none; width: 100%; height: 100%; }
-            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 14px; outline: none;}
+            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 13px; outline: none;}
             select:focus { border-color: #007bff; }
             button { padding: 8px 16px; border-radius: 8px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: 800; font-size: 13px; text-transform: uppercase; transition: 0.2s;}
             button:hover:not(:disabled) { background: #0056b3; transform: scale(1.05); }
             button:disabled { background: #444; color: #888; cursor: not-allowed; }
             .title { font-weight: 900; font-size: 18px; margin-right: auto; letter-spacing: 1px; color: #fff;}
+            #fileSelect { flex: 1 1 280px; min-width: 240px; }
         </style>
     </head>
     <body>
         <div id="topbar">
             <div class="title">PUFFERDRIVE GALLERY</div>
             <button id="prevBtn" onclick="navigate(-1)">&#9664; Prev</button>
+            __SORT_UI__
             <select id="fileSelect" onchange="loadSelected()">
                 __OPTIONS__
             </select>
@@ -1369,18 +1478,20 @@ def build_gallery_index(folder_path="."):
                 viewer.onload = () => viewer.contentWindow.focus();
             }
 
+            __SORT_JS__
+
             updateButtons();
         </script>
     </body>
     </html>
     """
 
-    # 4. Inject the options into the dropdown
-    options_html = "\n".join(
-        [f'<option value="{f}">{f.replace(".html", "").replace("_", " ")}</option>' for f in files]
+    final_html = (
+        html_content.replace("__OPTIONS__", options_html)
+        .replace("__FIRST__", files[0])
+        .replace("__SORT_UI__", sort_ui)
+        .replace("__SORT_JS__", sort_js)
     )
-
-    final_html = html_content.replace("__OPTIONS__", options_html).replace("__FIRST__", files[0])
 
     # 5. Save the file
     index_path = os.path.join(folder_path, "index.html")

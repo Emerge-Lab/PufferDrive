@@ -112,7 +112,7 @@
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
 
-// TARGET_TYPE modes (controls what target info is in observations)
+// TARGET_TYPE modes (controls what target info is in observations).
 #define TARGET_STATIC 0
 #define TARGET_DYNAMIC 1
 
@@ -139,11 +139,13 @@
 #define CLASSIC 0
 #define JERK 1
 
+static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
+static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define STEERING_LIMIT 0.667f
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
-
 // Classic action space (for CLASSIC dynamics model)
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
@@ -192,10 +194,23 @@ struct CompletedEpisodeSummary {
     float red_light_violation_rate;
     float num_goals_reached;
     float score;
+    float dnf_rate;
     float total_distance_travelled;
     float total_infractions;
     float n;
     int episode_index;
+    float reward_collision;
+    float reward_offroad;
+    float reward_red_light;
+    float reward_goal;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_timestep;
+    float reward_reverse;
+    float reward_overspeed;
+    float reward_ade;
     // Scenario identity captured at completion (before c_reset resamples the
     // env slot), so per-episode consumers can attribute each row to its map.
     char map_name[256];
@@ -253,6 +268,18 @@ struct Log {
     float ttc_puffer_rate;
     float multiplier;
     float weighted_average;
+    float reward_collision;
+    float reward_offroad;
+    float reward_red_light;
+    float reward_goal;
+    float reward_lane_align;
+    float reward_lane_center;
+    float reward_comfort;
+    float reward_velocity;
+    float reward_timestep;
+    float reward_reverse;
+    float reward_overspeed;
+    float reward_ade;
 };
 
 struct GridMapEntity {
@@ -369,6 +396,7 @@ struct Drive {
     int num_target_waypoints;
     int logs_capacity;
     int target_type;
+    int goal_on_lane;
     char *ini_file;
     int collision_behavior;           // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
@@ -1900,8 +1928,142 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
     return 1; // Success
 }
 
+// Pick a random drivable point on the map whose Euclidean distance from
+// (ref_x, ref_y) lies in [min_dist, max_dist]. Returns 1 on success.
+static int pick_random_drivable_position(
+    Drive *env,
+    float ref_x,
+    float ref_y,
+    float min_dist,
+    float max_dist,
+    float *out_x,
+    float *out_y,
+    float *out_z) {
+    GridMap *gm = env->grid_map;
+    float cell = GRID_CELL_SIZE;
+    float half_diag = 0.5f * cell * (float) M_SQRT2;
+    float min_d2 = min_dist * min_dist;
+    float max_d2 = max_dist * max_dist;
+    float cell_filter = max_dist + half_diag;
+    float cell_filter2 = cell_filter * cell_filter;
+
+    int ref_cx = (int) ((ref_x - gm->top_left_x) / cell);
+    int ref_cy = (int) ((ref_y - gm->bottom_right_y) / cell);
+    int half_extent = (int) ceilf(cell_filter / cell);
+
+    int x_lo = ref_cx - half_extent;
+    int y_lo = ref_cy - half_extent;
+    int x_hi = ref_cx + half_extent;
+    int y_hi = ref_cy + half_extent;
+    if (x_lo < 0) {
+        x_lo = 0;
+    }
+    if (y_lo < 0) {
+        y_lo = 0;
+    }
+    if (x_hi >= gm->grid_cols) {
+        x_hi = gm->grid_cols - 1;
+    }
+    if (y_hi >= gm->grid_rows) {
+        y_hi = gm->grid_rows - 1;
+    }
+
+    int n_cand = 0;
+    float pick_x = 0.0f, pick_y = 0.0f, pick_z = 0.0f;
+    for (int gy = y_lo; gy <= y_hi; gy++) {
+        float cy = gm->bottom_right_y + (gy + 0.5f) * cell;
+        for (int gx = x_lo; gx <= x_hi; gx++) {
+            float cx = gm->top_left_x + (gx + 0.5f) * cell;
+            float dcx = cx - ref_x;
+            float dcy = cy - ref_y;
+            if (dcx * dcx + dcy * dcy > cell_filter2) {
+                continue;
+            }
+            int gi = gy * gm->grid_cols + gx;
+            for (int i = 0; i < gm->cell_entities_count[gi]; i++) {
+                GridMapEntity e = gm->cells[gi][i];
+                RoadMapElement *lane = &env->road_elements[e.entity_idx];
+                if (!is_drivable_road_lane(lane->type)) {
+                    continue;
+                }
+                // The grid stores polyline SEGMENTS (start vertex = geometry_idx).
+                // Sample a uniform point along the segment so candidate positions
+                // are continuous along the road rather than quantized to vertices.
+                int k = e.geometry_idx;
+                if (k + 1 >= lane->segment_length) {
+                    continue;
+                }
+                float t = (float) rand() / (float) RAND_MAX;
+                float ex = lane->x[k] + t * (lane->x[k + 1] - lane->x[k]);
+                float ey = lane->y[k] + t * (lane->y[k + 1] - lane->y[k]);
+                float ez = lane->z[k] + t * (lane->z[k + 1] - lane->z[k]);
+                float edx = ex - ref_x;
+                float edy = ey - ref_y;
+                float ed2 = edx * edx + edy * edy;
+                if (ed2 < min_d2 || ed2 > max_d2) {
+                    continue;
+                }
+                n_cand++;
+                if (rand() % n_cand == 0) {
+                    pick_x = ex;
+                    pick_y = ey;
+                    pick_z = ez;
+                }
+            }
+        }
+    }
+
+    if (n_cand == 0) {
+        return 0;
+    }
+    *out_x = pick_x;
+    *out_y = pick_y;
+    *out_z = pick_z;
+    return 1;
+}
+
 static void compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
+
+    // goal_on_lane=False: place each goal at a random drivable point whose
+    // Euclidean distance from the previous anchor (agent for goal 0, previous
+    // goal for subsequent ones) lies in [min_waypoint_spacing,
+    // max_waypoint_spacing].
+    if (!env->goal_on_lane) {
+        int num_target_waypoints = env->num_target_waypoints;
+        if (num_target_waypoints <= 0 || num_target_waypoints > MAX_TARGET_WAYPOINTS) {
+            num_target_waypoints = MAX_TARGET_WAYPOINTS;
+        }
+        float ref_x = agent->sim_x;
+        float ref_y = agent->sim_y;
+        for (int i = 0; i < num_target_waypoints; i++) {
+            float gx, gy, gz;
+            if (!pick_random_drivable_position(
+                    env,
+                    ref_x,
+                    ref_y,
+                    env->min_waypoint_spacing,
+                    env->max_waypoint_spacing,
+                    &gx,
+                    &gy,
+                    &gz)) {
+                printf("[GIGAFLOW WARNING] -> pick_random_drivable_position failed for agent %d\n", agent_idx);
+                agent->removed = 1;
+                return;
+            }
+            agent->goal_positions_x[i] = gx;
+            agent->goal_positions_y[i] = gy;
+            agent->goal_positions_z[i] = gz;
+            ref_x = gx;
+            ref_y = gy;
+        }
+        agent->current_goal_idx = 0;
+        agent->goal_position_x = agent->goal_positions_x[0];
+        agent->goal_position_y = agent->goal_positions_y[0];
+        agent->goal_position_z = agent->goal_positions_z[0];
+        return;
+    }
+
     struct Path *path = agent->path;
 
     // Validate path exists
@@ -2585,6 +2747,19 @@ static void add_log(Drive *env) {
         env->log.avg_displacement_error += displacement_error;
         env->log.episode_length += env->logs[i].episode_length;
         env->log.episode_return += env->logs[i].episode_return;
+        // Per-component reward sums (mirrors compute_rewards' env->rewards[i]+= sites).
+        env->log.reward_collision += env->logs[i].reward_collision;
+        env->log.reward_offroad += env->logs[i].reward_offroad;
+        env->log.reward_red_light += env->logs[i].reward_red_light;
+        env->log.reward_goal += env->logs[i].reward_goal;
+        env->log.reward_lane_align += env->logs[i].reward_lane_align;
+        env->log.reward_lane_center += env->logs[i].reward_lane_center;
+        env->log.reward_comfort += env->logs[i].reward_comfort;
+        env->log.reward_velocity += env->logs[i].reward_velocity;
+        env->log.reward_timestep += env->logs[i].reward_timestep;
+        env->log.reward_reverse += env->logs[i].reward_reverse;
+        env->log.reward_overspeed += env->logs[i].reward_overspeed;
+        env->log.reward_ade += env->logs[i].reward_ade;
         // Comfort and velocity metrics (normalized per timestep)
         env->log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         env->log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2642,8 +2817,21 @@ static void add_log(Drive *env) {
         s->red_light_violation_rate = 0.0f;
         s->num_goals_reached = 0.0f;
         s->score = 0.0f;
+        s->dnf_rate = 0.0f;
         s->total_distance_travelled = 0.0f;
         s->total_infractions = 0.0f;
+        s->reward_collision = 0.0f;
+        s->reward_offroad = 0.0f;
+        s->reward_red_light = 0.0f;
+        s->reward_goal = 0.0f;
+        s->reward_lane_align = 0.0f;
+        s->reward_lane_center = 0.0f;
+        s->reward_comfort = 0.0f;
+        s->reward_velocity = 0.0f;
+        s->reward_timestep = 0.0f;
+        s->reward_reverse = 0.0f;
+        s->reward_overspeed = 0.0f;
+        s->reward_ade = 0.0f;
         s->n = (float) env->active_agent_count;
         s->episode_index = env->next_episode_index++;
         s->map_name[0] = '\0';
@@ -2660,6 +2848,7 @@ static void add_log(Drive *env) {
             int offroad = env->logs[i].offroad_rate;
             int red_light = env->logs[i].red_light_violation_rate;
             int num_goals = env->logs[i].num_goals_reached;
+            int num_waypoints = env->logs[i].num_waypoints_reached;
             s->episode_length += env->logs[i].episode_length;
             s->episode_return += env->logs[i].episode_return;
             s->collision_rate += collided;
@@ -2669,10 +2858,28 @@ static void add_log(Drive *env) {
             if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped) {
                 s->score += 1.0f;
             }
+            // Mirror the aggregate Log DNF predicate (see drive.h:2577):
+            // the agent stayed clean of infractions but never reached even
+            // one waypoint — i.e. wandered without making progress.
+            if (!offroad && !collided && !red_light && num_waypoints < 1) {
+                s->dnf_rate += 1.0f;
+            }
             s->total_distance_travelled += agent_i->distance_since_spawn;
             if (collided || offroad || red_light) {
                 s->total_infractions += 1.0f;
             }
+            s->reward_collision += env->logs[i].reward_collision;
+            s->reward_offroad += env->logs[i].reward_offroad;
+            s->reward_red_light += env->logs[i].reward_red_light;
+            s->reward_goal += env->logs[i].reward_goal;
+            s->reward_lane_align += env->logs[i].reward_lane_align;
+            s->reward_lane_center += env->logs[i].reward_lane_center;
+            s->reward_comfort += env->logs[i].reward_comfort;
+            s->reward_velocity += env->logs[i].reward_velocity;
+            s->reward_timestep += env->logs[i].reward_timestep;
+            s->reward_reverse += env->logs[i].reward_reverse;
+            s->reward_overspeed += env->logs[i].reward_overspeed;
+            s->reward_ade += env->logs[i].reward_ade;
         }
     }
 }
@@ -4133,6 +4340,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += reward_collision;
         env->logs[i].episode_return += reward_collision;
+        env->logs[i].reward_collision += reward_collision;
         env->logs[i].collision_rate = 1.0f;
     }
 
@@ -4143,6 +4351,7 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] += reward_offroad;
         env->logs[i].offroad_rate = 1.0f;
         env->logs[i].episode_return += reward_offroad;
+        env->logs[i].reward_offroad += reward_offroad;
     }
 
     // Red light violation reward (GIGAFLOW)
@@ -4152,6 +4361,7 @@ static void compute_rewards(Drive *env, int i) {
         env->rewards[i] += reward_red_light;
         env->logs[i].red_light_violation_rate = 1.0f;
         env->logs[i].episode_return += reward_red_light;
+        env->logs[i].reward_red_light += reward_red_light;
     }
 
     // Goal reward
@@ -4164,8 +4374,10 @@ static void compute_rewards(Drive *env, int i) {
             }
         }
 
-        env->rewards[i] += env->reward_goal * weight;
-        env->logs[i].episode_return += env->reward_goal * weight;
+        float reward_goal = env->reward_goal * weight;
+        env->rewards[i] += reward_goal;
+        env->logs[i].episode_return += reward_goal;
+        env->logs[i].reward_goal += reward_goal;
         env->logs[i].num_waypoints_reached += 1;
     }
 
@@ -4176,7 +4388,8 @@ static void compute_rewards(Drive *env, int i) {
 
     // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
     float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
-    float vel_aligned_penalty = agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed, 0.0f);
+    float vel_aligned_penalty
+        = agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed_signed, 0.0f);
     float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
 
     float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt
@@ -4184,6 +4397,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += lane_align_reward;
     env->logs[i].episode_return += lane_align_reward;
+    env->logs[i].reward_lane_align += lane_align_reward;
 
     // Rl-center (GIGAFLOW): -α * dt * (|x_f - bias| - 0.05 / exp(|x_f - bias| - 0.5))
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
@@ -4196,6 +4410,7 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += lane_center_reward;
     env->logs[i].lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
     env->logs[i].episode_return += lane_center_reward;
+    env->logs[i].reward_lane_center += lane_center_reward;
 
     // Comfort reward (GIGAFLOW)
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
@@ -4204,6 +4419,7 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += comfort_penalty;
     env->logs[i].comfort_violation_count += comfort_violations;
     env->logs[i].episode_return += comfort_penalty;
+    env->logs[i].reward_comfort += comfort_penalty;
 
     // Velocity reward (GIGAFLOW)
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
@@ -4211,6 +4427,7 @@ static void compute_rewards(Drive *env, int i) {
 
     env->rewards[i] += velocity_reward;
     env->logs[i].episode_return += velocity_reward;
+    env->logs[i].reward_velocity += velocity_reward;
     env->logs[i].velocity_progress_sum += velocity_progress;
 
     // Timestep reward (GIGAFLOW)
@@ -4221,6 +4438,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += timestep_penalty;
         env->logs[i].episode_return += timestep_penalty;
+        env->logs[i].reward_timestep += timestep_penalty;
     }
 
     // Reverse reward (GIGAFLOW)
@@ -4229,6 +4447,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += reverse_penalty;
         env->logs[i].episode_return += reverse_penalty;
+        env->logs[i].reward_reverse += reverse_penalty;
     }
 
     // Over speed reward (GIGAFLOW++)
@@ -4243,6 +4462,7 @@ static void compute_rewards(Drive *env, int i) {
         agent->seconds_stopped = 0.0f;
     }
     env->logs[i].episode_return += speed_reward;
+    env->logs[i].reward_overspeed += speed_reward;
 
     // ADE reward (CUSTOM)
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
@@ -4251,6 +4471,7 @@ static void compute_rewards(Drive *env, int i) {
 
         env->rewards[i] += ade_reward;
         env->logs[i].episode_return += ade_reward;
+        env->logs[i].reward_ade += ade_reward;
     }
     env->logs[i].avg_displacement_error = current_ade;
 
@@ -4313,8 +4534,8 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
     obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
-    obs[obs_idx++] = (ego->a_long < 0) ? ego->a_long / (-JERK_LONG[0]) : ego->a_long / JERK_LONG[3];
-    obs[obs_idx++] = ego->a_lat / JERK_LAT[2];
+    obs[obs_idx++] = ego->a_long / fabsf(ACCEL_LONG_LIMIT[0]);
+    obs[obs_idx++] = ego->a_lat / ACCEL_LAT_LIMIT[1];
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION));
     obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
@@ -4456,7 +4677,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
-        obs[obs_idx++] = other->sim_speed / MAX_SPEED;
+        obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
         partners_written++;
     }
 
@@ -4844,7 +5065,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (agent->a_long * a_long_new < 0) {
             a_long_new = 0.0f;
         } else {
-            a_long_new = clip(a_long_new, -5.0f, 2.5f * c_acc);
+            a_long_new = clip(a_long_new, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1] * c_acc);
         }
 
         // Calculate new lateral acceleration from jerk (Eq. 2 in paper)
@@ -4854,7 +5075,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (agent->a_lat * a_lat_new < 0) {
             a_lat_new = 0.0f;
         } else {
-            a_lat_new = clip(a_lat_new, -4.0f, 4.0f);
+            a_lat_new = clip(a_lat_new, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
         }
 
         float heading_x = agent->cos_heading;

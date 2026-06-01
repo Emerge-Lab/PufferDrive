@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import torch
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN_ROOT = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries")
 WOMD_MAP_DIR = os.path.join(BIN_ROOT, "obstacles")
 

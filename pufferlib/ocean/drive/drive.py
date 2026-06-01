@@ -78,6 +78,7 @@ class Drive(pufferlib.PufferEnv):
         control_mode="control_vehicles",
         map_dir=None,
         target_type="static",
+        goal_on_lane=True,
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
@@ -144,6 +145,7 @@ class Drive(pufferlib.PufferEnv):
             self.target_type = binding.TARGET_DYNAMIC
         else:
             raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
+        self.goal_on_lane = int(bool(goal_on_lane))
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -393,6 +395,7 @@ class Drive(pufferlib.PufferEnv):
             "max_waypoint_spacing": self.max_waypoint_spacing,
             "num_target_waypoints": self.num_target_waypoints,
             "target_type": self.target_type,
+            "goal_on_lane": self.goal_on_lane,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_slots_partners_n": self.obs_slots_partners_n,
