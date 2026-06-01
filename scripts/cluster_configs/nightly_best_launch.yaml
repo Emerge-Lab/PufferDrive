@@ -22,7 +22,12 @@ env.resample_frequency: 38400
 env.termination_mode: 1
 env.inactive_agent_threshold: 0.4
 env.dynamics_model: jerk
-env.target_type: dijkstra
+# oignons2 used target_type=dijkstra; this branch only supports static/dynamic,
+# so we fall back to static (the drive.ini default). Goal placement still
+# follows the route via goal_on_lane=True (drive.ini default) — with
+# num_target_waypoints=3 and [20, 60m] spacing, the agent still sees a chain
+# of three sequential route-aligned goals.
+env.target_type: static
 env.spawn_initial_speed: 0.0
 env.dt: 0.1
 env.traffic_light_behavior: 1
