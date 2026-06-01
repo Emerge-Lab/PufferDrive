@@ -1200,12 +1200,23 @@ int load_map_binary(const char *filename, Drive *drive) {
                 fclose(file);
                 return -1;
             }
+            if (fread(&road->length, sizeof(float), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+            road->cum_lengths = (float *) malloc(slen * sizeof(float));
+            if ((size_t) slen > 0 && fread(road->cum_lengths, sizeof(float), slen, file) != (size_t) slen) {
+                fclose(file);
+                return -1;
+            }
         } else {
             road->num_entries = 0;
             road->num_exits = 0;
             road->entry_lanes = NULL;
             road->exit_lanes = NULL;
             road->speed_limit = 0.0f;
+            road->length = 0.0f;
+            road->cum_lengths = NULL;
         }
     }
 
@@ -1286,16 +1297,10 @@ int load_map_binary(const char *filename, Drive *drive) {
     }
     drive->lane_graph.n_lanes = n_lanes_graph;
     drive->lane_graph.lane_ids = NULL;
-    drive->lane_graph.lane_lengths = NULL;
     drive->lane_graph.distances = NULL;
     if (n_lanes_graph > 0) {
         drive->lane_graph.lane_ids = (int *) malloc(n_lanes_graph * sizeof(int));
         if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t) n_lanes_graph) {
-            fclose(file);
-            return -1;
-        }
-        drive->lane_graph.lane_lengths = (float *) malloc(n_lanes_graph * sizeof(float));
-        if (fread(drive->lane_graph.lane_lengths, sizeof(float), n_lanes_graph, file) != (size_t) n_lanes_graph) {
             fclose(file);
             return -1;
         }
@@ -1366,13 +1371,7 @@ int load_map_binary(const char *filename, Drive *drive) {
 
 // Compute the length of a lane
 static float compute_lane_length(RoadMapElement *lane) {
-    float length = 0.0f;
-    for (int i = 1; i < lane->segment_length; i++) {
-        float dx = lane->x[i] - lane->x[i - 1];
-        float dy = lane->y[i] - lane->y[i - 1];
-        length += sqrtf(dx * dx + dy * dy);
-    }
-    return length;
+    return lane->length;
 }
 
 // Compute the remaining distance on a lane from a given position to the end of the lane
@@ -1409,23 +1408,9 @@ static float compute_remaining_lane_distance(RoadMapElement *lane, float pos_x, 
         }
     }
 
-    // Compute remaining distance from closest point to end of lane
-    float remaining = 0.0f;
-
-    // Partial distance in current segment (from t to end of segment)
-    float dx = lane->x[closest_seg + 1] - lane->x[closest_seg];
-    float dy = lane->y[closest_seg + 1] - lane->y[closest_seg];
-    float seg_len = sqrtf(dx * dx + dy * dy);
-    remaining += (1.0f - closest_t) * seg_len;
-
-    // Full distance of remaining segments
-    for (int i = closest_seg + 1; i < lane->segment_length - 1; i++) {
-        dx = lane->x[i + 1] - lane->x[i];
-        dy = lane->y[i + 1] - lane->y[i];
-        remaining += sqrtf(dx * dx + dy * dy);
-    }
-
-    return remaining;
+    float progress = lane->cum_lengths[closest_seg]
+        + closest_t * (lane->cum_lengths[closest_seg + 1] - lane->cum_lengths[closest_seg]);
+    return fmaxf(0.0f, lane->length - progress);
 }
 
 static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, float origin_y) {
