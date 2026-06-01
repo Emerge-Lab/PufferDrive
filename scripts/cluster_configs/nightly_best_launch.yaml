@@ -13,11 +13,11 @@
 env.simulation_mode: gigaflow
 env.map_dir: pufferlib/resources/drive/binaries/carla
 env.num_maps: 8
-env.num_agents: 1600
+env.num_agents: 720000
 env.min_agents_per_env: 1
 env.max_agents_per_env: 150
 env.use_map_cache: 1
-env.scenario_length: 3840
+env.scenario_length: 1200
 # 0 disables periodic scenario resampling — every sub-env keeps the same map
 # for the full run instead of swapping every 38400 steps.
 env.resample_frequency: 0
@@ -26,7 +26,7 @@ env.inactive_agent_threshold: 0.4
 env.dynamics_model: jerk
 env.target_type: static
 env.spawn_initial_speed: 0.0
-env.dt: 0.1
+env.dt: 0.3
 env.traffic_light_behavior: 1
 env.collision_behavior: 1
 env.offroad_behavior: 1
