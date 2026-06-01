@@ -18,15 +18,12 @@ env.min_agents_per_env: 1
 env.max_agents_per_env: 150
 env.use_map_cache: 1
 env.scenario_length: 3840
-env.resample_frequency: 38400
+# 0 disables periodic scenario resampling — every sub-env keeps the same map
+# for the full run instead of swapping every 38400 steps.
+env.resample_frequency: 0
 env.termination_mode: 1
 env.inactive_agent_threshold: 0.4
 env.dynamics_model: jerk
-# oignons2 used target_type=dijkstra; this branch only supports static/dynamic,
-# so we fall back to static (the drive.ini default). Goal placement still
-# follows the route via goal_on_lane=True (drive.ini default) — with
-# num_target_waypoints=3 and [20, 60m] spacing, the agent still sees a chain
-# of three sequential route-aligned goals.
 env.target_type: static
 env.spawn_initial_speed: 0.0
 env.dt: 0.1
@@ -95,8 +92,8 @@ policy.split_network: true
 policy.encoder_gigaflow: true
 policy.dropout: 0.0
 
-# Training — 125B steps, large minibatch, compiled bfloat16
-train.total_timesteps: 125_000_000_000
+# Training — 10B steps, large minibatch, compiled bfloat16
+train.total_timesteps: 10_000_000_000
 train.learning_rate: 0.0005
 train.minibatch_size: 153600
 train.max_minibatch_size: 153600
