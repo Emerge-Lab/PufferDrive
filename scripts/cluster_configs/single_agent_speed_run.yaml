@@ -31,7 +31,7 @@ env.use_map_cache: 1
 # new random target. 6m floor avoids placing goal 0 on top of the agent; 500m
 # saturates at the Town10HD map diameter (~260m) so goals can land anywhere
 # on the network.
-env.num_target_waypoints: 3
+env.num_target_waypoints: 1
 env.goal_on_lane: False
 env.min_waypoint_spacing: 6.0
 env.max_waypoint_spacing: 500.0
