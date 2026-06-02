@@ -10,6 +10,11 @@
 # with NUM_AGENTS; the 720000 default targets H200-class VRAM. Pass a smaller
 # NUM_AGENTS (e.g. 2048) on smaller cards, or add --train.cpu-offload True.
 #
+# Eval rendering is disabled (validation_gigaflow.render=False): the headless EGL
+# render path is compile-gated on <EGL/egl.h> (drive.h DRIVE_HAS_EGL) and isn't
+# built here, so rendering would fall back to Xvfb/software. The gigaflow eval
+# still runs and logs metrics; only the video frames are skipped.
+#
 # Run from the repo root: ./scripts/run_nightly_best_local.sh [GPU_INDEX] [NUM_AGENTS]
 set -euo pipefail
 
@@ -100,7 +105,7 @@ CUDA_VISIBLE_DEVICES="$GPU" puffer train puffer_drive \
   --train.seed 0 \
   --eval.validation-defaults.interval 250 \
   --eval.validation-replay.enabled 0 \
-  --eval.validation-gigaflow.render-backend egl \
+  --eval.validation-gigaflow.render False \
   --eval.behaviors-full-dir.enabled 0 \
   --eval.behaviors-hard-stop.enabled 0 \
   --eval.behaviors-highway-straight.enabled 0 \
