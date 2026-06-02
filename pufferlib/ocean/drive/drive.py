@@ -210,7 +210,7 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
-        self.obs_count_features = binding.OBS_COUNT_FEATURES
+        self.obs_slot_num_types = binding.OBS_SLOT_NUM_TYPES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         # Target features based on target_type
@@ -228,7 +228,7 @@ class Drive(pufferlib.PufferEnv):
             + self.obs_slots_lane_kept * self.road_features
             + self.obs_slots_boundary_kept * self.road_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
-            + self.obs_count_features
+            + self.obs_slot_num_types
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
