@@ -142,9 +142,11 @@ ARGS=(
   --tag "$RUN_TAG"
 )
 
+# Args after NUM_GPUS/NUM_AGENTS pass straight through to override any config key
+# (argparse takes the last value), e.g. `... 4 2048 --env.obs-slots-boundary-n 30`.
 if [ "$NUM_GPUS" -gt 1 ]; then
   exec torchrun --standalone --nnodes=1 --nproc-per-node="$NUM_GPUS" \
-    -m pufferlib.pufferl train "${ARGS[@]}"
+    -m pufferlib.pufferl train "${ARGS[@]}" "${@:3}"
 else
-  exec env CUDA_VISIBLE_DEVICES=0 puffer train "${ARGS[@]}"
+  exec env CUDA_VISIBLE_DEVICES=0 puffer train "${ARGS[@]}" "${@:3}"
 fi
