@@ -80,6 +80,9 @@ extra_compile_args = [
 extra_link_args = ["-fwrapv"]
 cxx_args = [
     "-fdiagnostics-color=always",
+    # See note above: no FMA contraction -> reproducible float rounding for the
+    # advantage/V-trace kernel across CPUs.
+    "-ffp-contract=off",
 ]
 nvcc_args = []
 
@@ -123,6 +126,11 @@ if system == "Linux":
         "-Wno-alloc-size-larger-than",
         "-Wno-implicit-function-declaration",
         "-fmax-errors=3",
+        # Disable FMA contraction so float rounding does not depend on whether
+        # the host CPU/compiler fuses multiply-add. Required for the smoke
+        # golden to be bit-reproducible across machines (baseline ISA only;
+        # we never pass -march=native).
+        "-ffp-contract=off",
         # _GNU_SOURCE must be defined before any system header is included so
         # glibc exposes GNU extensions like F_SETPIPE_SZ, writev, etc. that
         # the headless render pipeline in drive.h depends on.

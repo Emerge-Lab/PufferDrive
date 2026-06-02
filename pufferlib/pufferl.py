@@ -366,7 +366,7 @@ class PuffeRL:
             profile("eval_misc", epoch)
             env_id = slice(env_id[0], env_id[-1] + 1)
 
-            self.global_step += int(mask.sum())
+            self.global_step += env_id.stop - env_id.start
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
@@ -376,6 +376,13 @@ class PuffeRL:
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+
+            # Obs distribution stats (max/min/mean across the batch and obs
+            # dims, appended per env step). Surfaces clipping / unbounded
+            # features / normalization regressions in wandb.
+            self.stats["obs/max"].append(o_device.max().item())
+            self.stats["obs/min"].append(o_device.min().item())
+            self.stats["obs/mean"].append(o_device.mean().item())
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
@@ -1258,6 +1265,7 @@ class WandbLogger:
 
         wandb.init(
             id=load_id or wandb.util.generate_id(),
+            name=args.get("run_name") or None,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
@@ -1377,12 +1385,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "trajectory_prediction_length",
             "num_trajectory_scaling_factors",
             "trajectory_scaling_factors",
-            "max_boundary_segment_observations",
-            "max_lane_segment_observations",
-            "boundary_segment_dropout",
-            "lane_segment_dropout",
-            "max_partner_observations",
-            "max_traffic_control_observations",
+            "obs_slots_boundary_n",
+            "obs_slots_lane_n",
+            "obs_dropout_boundary",
+            "obs_dropout_lane",
+            "obs_slots_partners_n",
+            "obs_slots_traffic_controls_n",
             "traffic_control_scope",
         }
         if os.path.exists(config_yaml_path):
@@ -1564,10 +1572,12 @@ _ARCH_ENV_KEYS = (
     "num_trajectory_scaling_factors",
     "trajectory_scaling_factors",
     # observation token counts + scope
-    "max_partner_observations",
-    "max_lane_segment_observations",
-    "max_boundary_segment_observations",
-    "max_traffic_control_observations",
+    "obs_slots_partners_n",
+    "obs_slots_lane_n",
+    "obs_slots_boundary_n",
+    "obs_slots_traffic_controls_n",
+    "obs_dropout_lane",
+    "obs_dropout_boundary",
     "traffic_control_scope",
     "reward_conditioning",
     # target / goal representation
@@ -1577,17 +1587,17 @@ _ARCH_ENV_KEYS = (
     "max_waypoint_spacing",
     # observation normalization scales + spatial extent — the policy was
     # trained against these, so wrong values feed it mis-scaled / clipped obs.
-    "max_position",
-    "max_goal_position",
-    "max_veh_len",
-    "max_veh_width",
-    "max_road_segment_length",
-    "max_road_segment_width",
-    "max_traffic_control_distance",
-    "agent_obs_max_dist",
-    "road_obs_front_dist",
-    "road_obs_behind_dist",
-    "road_obs_side_dist",
+    "obs_norm_xy_offset_m",
+    "obs_norm_goal_offset_m",
+    "obs_norm_veh_length_m",
+    "obs_norm_veh_width_m",
+    "obs_norm_road_seg_length_m",
+    "obs_norm_road_seg_width_m",
+    "obs_range_traffic_control_m",
+    "obs_range_partner_m",
+    "obs_range_road_front_m",
+    "obs_range_road_behind_m",
+    "obs_range_road_side_m",
 )
 
 
@@ -2108,6 +2118,12 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
     parser.add_argument("--wandb-project", type=str, default="pufferlib")
     parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Wandb run display name. Unset → wandb auto-generates one.",
+    )
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
     parser.add_argument("--neptune-name", type=str, default="pufferai")
     parser.add_argument("--neptune-project", type=str, default="ablations")

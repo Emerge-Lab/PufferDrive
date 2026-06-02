@@ -1,0 +1,24 @@
+{
+  "env": {
+    "avg_distance_per_infraction": 14.461176982292763,
+    "avg_speed_per_agent": 1.3542014910624578,
+    "collision_rate": 0.009615384615384616,
+    "comfort_violation_count": 0.7257332022373493,
+    "dnf_rate": 0.5625,
+    "episode_length": 46.42307692307692,
+    "episode_return": -2.3540108112188487,
+    "lane_center_rate": 0.7063253728243021,
+    "n": 16.0,
+    "num_goals_reached": 0.0,
+    "offroad_rate": 0.3894230769230769,
+    "red_light_violation_rate": 0.038461538461538464,
+    "score": 0.0,
+    "velocity_progress_sum": 0.00018323936428015048
+  },
+  "meta": {
+    "bptt_horizon": 64,
+    "epochs": 5,
+    "seed": 42,
+    "total_agents": 64
+  }
+}

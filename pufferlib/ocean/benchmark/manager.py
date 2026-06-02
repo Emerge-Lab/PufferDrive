@@ -36,8 +36,8 @@ from pufferlib.ocean.benchmark.evaluators import EVALUATOR_REGISTRY, EvalResult,
 # clean_eval macro — env knobs to zero/enforce. Per-section explicit values
 # win over the macro (see _build_section_config).
 CLEAN_EVAL_OVERRIDES = {
-    "lane_segment_dropout": 0.0,
-    "boundary_segment_dropout": 0.0,
+    "obs_dropout_lane": 0.0,
+    "obs_dropout_boundary": 0.0,
     "partner_blindness_prob": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,

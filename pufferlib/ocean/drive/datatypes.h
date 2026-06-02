@@ -66,6 +66,10 @@
 #define TRAFFIC_CONTROL_STATE_OFF 4
 #define NUM_TRAFFIC_CONTROL_STATES 5
 
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
+#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
+#define TRAFFIC_CONTROL_SCOPE_ALL 2
+
 // Metrics array indices
 #define NUM_METRICS 18
 #define COLLISION_IDX 0
@@ -91,6 +95,13 @@
 // Path
 #define MAX_NUM_WP_PATH 200
 #define MAX_TARGET_WAYPOINTS 20
+
+// obs_html_frame array field counts
+#define AGENT_F32_FIELDS 12 // sim_x/y/z, heading, length, width, speed, steering, a_long, a_lat, jerk_long, jerk_lat
+#define AGENT_I32_FIELDS 8  // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
+#define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
+#define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
 
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position
@@ -281,6 +292,8 @@ struct RoadMapElement {
     int num_exits;
     int *exit_lanes;
     float speed_limit;
+    float length;
+    float *cum_lengths;
 };
 
 struct TrafficControlElement {
@@ -303,7 +316,6 @@ typedef struct {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *lane_lengths;
     float *distances; // n_lanes * n_lanes row-major
 };
 
@@ -329,6 +341,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->headings);
     free(element->entry_lanes);
     free(element->exit_lanes);
+    free(element->cum_lengths);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {
@@ -338,6 +351,5 @@ void free_traffic_element(struct TrafficControlElement *element) {
 
 void free_lane_graph(struct LaneGraph *graph) {
     free(graph->lane_ids);
-    free(graph->lane_lengths);
     free(graph->distances);
 }
