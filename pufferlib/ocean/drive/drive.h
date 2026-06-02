@@ -119,7 +119,7 @@
 // Observation feature counts
 #define EGO_FEATURES 10
 #define ROAD_FEATURES 7
-#define PARTNER_FEATURES 8
+#define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define PADDED_OBSERVATION_VALUE -0.001f
 #define STATIC_TARGET_FEATURES 3
@@ -4663,6 +4663,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
         obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
+        obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;
     }
 
