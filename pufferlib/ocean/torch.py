@@ -30,7 +30,7 @@ class DriveBackbone(nn.Module):
         return nn.Sequential(*layers)
 
     def _encode_and_pool(self, objects, valid_counts, encoder, out_size):
-        if not self.mask_padded_observations:
+        if not self.mask_padded_features:
             return encoder(objects).max(dim=1).values
 
         valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
@@ -58,7 +58,7 @@ class DriveBackbone(nn.Module):
         encoder_layer_norm,
         backbone_activation,
         backbone_layer_norm,
-        mask_padded_observations,
+        mask_padded_features,
     ):
         super().__init__()
         self.encoder_act_cls = ACTIVATIONS[encoder_activation]
@@ -88,7 +88,7 @@ class DriveBackbone(nn.Module):
             + binding.NUM_TRAFFIC_CONTROL_STATES
         )
         self.obs_count_features = binding.OBS_COUNT_FEATURES
-        self.mask_padded_observations = mask_padded_observations
+        self.mask_padded_features = mask_padded_features
         # Conditioning size (reward coefficients + target info)
         self.conditioning_dim = env.num_reward_coefs + env.target_dim
 
@@ -324,7 +324,7 @@ class Drive(nn.Module):
         backbone_activation: str,
         backbone_layer_norm: bool,
         shared_network: bool,
-        mask_padded_observations: bool = True,
+        mask_padded_features: bool,
     ):
         super().__init__()
 
@@ -348,7 +348,7 @@ class Drive(nn.Module):
             "encoder_layer_norm": encoder_layer_norm,
             "backbone_activation": backbone_activation,
             "backbone_layer_norm": backbone_layer_norm,
-            "mask_padded_observations": mask_padded_observations,
+            "mask_padded_features": mask_padded_features,
         }
 
         # Instantiate backbones
