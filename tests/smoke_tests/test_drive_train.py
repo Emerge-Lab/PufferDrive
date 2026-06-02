@@ -148,7 +148,12 @@ def _build_config():
     _set_existing(
         args["policy"],
         {
-            "input_size": 32,
+            "ego_input_size": 32,
+            "partner_input_size": 32,
+            "lane_input_size": 32,
+            "boundary_input_size": 32,
+            "traffic_control_input_size": 32,
+            "conditioning_input_size": 32,
             "backbone_hidden_size": 32,
             "actor_hidden_size": 32,
             "critic_hidden_size": 32,
