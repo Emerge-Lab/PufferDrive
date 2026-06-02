@@ -153,7 +153,7 @@ def _build_config():
             "lane_input_size": 32,
             "boundary_input_size": 32,
             "traffic_control_input_size": 32,
-            "conditioning_input_size": 32,
+            "target_input_size": 32,
             "backbone_hidden_size": 32,
             "actor_hidden_size": 32,
             "critic_hidden_size": 32,
