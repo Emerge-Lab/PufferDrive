@@ -81,7 +81,7 @@ class Drive(pufferlib.PufferEnv):
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
-        split_network=False,
+        shared_network=True,
         obs_slots_lane_n=32,
         obs_slots_boundary_n=32,
         obs_slots_partners_n=16,
@@ -113,7 +113,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.compute_eval_metrics = compute_eval_metrics
-        self.split_network = split_network
+        self.shared_network = shared_network
         self.render_mode = render_mode
         self.num_maps = num_maps
         self.report_interval = report_interval
@@ -210,6 +210,7 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
+        self.obs_count_features = binding.OBS_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         # Target features based on target_type
@@ -227,6 +228,7 @@ class Drive(pufferlib.PufferEnv):
             + self.obs_slots_lane_kept * self.road_features
             + self.obs_slots_boundary_kept * self.road_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
+            + self.obs_count_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
