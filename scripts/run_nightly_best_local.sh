@@ -31,6 +31,13 @@ NUM_GPUS="${1:-1}"
 NUM_AGENTS="${2:-720000}"
 RUN_TAG="${RUN_TAG:-$(date +%Y-%m-%d)_local_${NUM_GPUS}gpu}"
 
+# pufferl divides train.total_timesteps by world size under DDP (LOCAL_RANK set),
+# so each rank targets total/NUM_GPUS. Scale the total by NUM_GPUS to hold the
+# PER-RANK budget at 10B regardless of GPU count (4 GPUs -> 40B total -> 10B/rank;
+# 1 GPU -> 10B, no division). Aggregate env-steps = 10B * NUM_GPUS.
+PER_RANK_TIMESTEPS=10000000000
+TOTAL_TIMESTEPS=$(( PER_RANK_TIMESTEPS * NUM_GPUS ))
+
 ARGS=(
   puffer_drive
   --env.simulation-mode gigaflow
@@ -102,7 +109,7 @@ ARGS=(
   --policy.split-network True
   --policy.encoder-gigaflow True
   --policy.dropout 0.0
-  --train.total-timesteps 10000000000
+  --train.total-timesteps "$TOTAL_TIMESTEPS"
   --train.learning-rate 0.0005
   --train.minibatch-size 153600
   --train.max-minibatch-size 153600
