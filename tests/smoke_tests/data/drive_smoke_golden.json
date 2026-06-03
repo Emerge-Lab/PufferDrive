@@ -11,7 +11,7 @@
     "n": 16.0,
     "num_goals_reached": 0.0,
     "obs/max": 4.0,
-    "obs/mean": 0.1437929724343121,
+    "obs/mean": 0.143798382836394,
     "obs/min": -1.2310400689020753,
     "offroad_rate": 0.3541666666666667,
     "red_light_violation_rate": 0.03125,
@@ -31,18 +31,18 @@
     "velocity_progress_sum": 0.0
   },
   "losses": {
-    "approx_kl": 0.0002972185694878655,
+    "approx_kl": 0.00031589248516995994,
     "clipfrac": 0.0,
-    "ema_max": 1.1163861453533173,
-    "entropy": 2.4830924102238248,
-    "explained_variance": 0.17078828811645508,
-    "filter_threshold": 0.011163861453533173,
-    "filtered_fraction": 0.03168426903835464,
-    "kept_fraction": 0.9683157309616454,
+    "ema_max": 1.1163338720798492,
+    "entropy": 2.483056511197771,
+    "explained_variance": 0.16990125179290771,
+    "filter_threshold": 0.011163338720798492,
+    "filtered_fraction": 0.03224013340744858,
+    "kept_fraction": 0.9677598665925514,
     "masked_fraction": 0.12158203125,
-    "old_approx_kl": -0.0002372383771996413,
-    "policy_loss": -0.001218727507096316,
-    "value_loss": 0.06775662462626185
+    "old_approx_kl": 0.0005578249381090115,
+    "policy_loss": -0.001066769240424037,
+    "value_loss": 0.06768968754581042
   },
   "meta": {
     "bptt_horizon": 64,
