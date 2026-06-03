@@ -59,11 +59,18 @@ def read_bin(path: Path) -> dict:
             (route_gt_len,) = _read("<i", f)
             goal = _read("<fff", f)
             (mark_as_expert,) = _read("<i", f)
-            agents.append({
-                "id": agent_id, "type": agent_type, "T": T, "cols": cols,
-                "route": route, "route_gt_len": route_gt_len,
-                "goal": goal, "mark_as_expert": mark_as_expert,
-            })
+            agents.append(
+                {
+                    "id": agent_id,
+                    "type": agent_type,
+                    "T": T,
+                    "cols": cols,
+                    "route": route,
+                    "route_gt_len": route_gt_len,
+                    "goal": goal,
+                    "mark_as_expert": mark_as_expert,
+                }
+            )
 
         roads = []
         for i in range(num_roads):
@@ -71,8 +78,12 @@ def read_bin(path: Path) -> dict:
             assert road_id == i, f"road id {road_id} != idx {i}"
             (S,) = _read("<i", f)
             road = {
-                "id": road_id, "type": road_type, "S": S,
-                "x": _read_f_array(f, S), "y": _read_f_array(f, S), "z": _read_f_array(f, S),
+                "id": road_id,
+                "type": road_type,
+                "S": S,
+                "x": _read_f_array(f, S),
+                "y": _read_f_array(f, S),
+                "z": _read_f_array(f, S),
                 "headings": _read_f_array(f, S),
             }
             if _is_lane(road_type):
@@ -95,10 +106,16 @@ def read_bin(path: Path) -> dict:
             states = _read_i_array(f, state_len)
             (ncl,) = _read("<i", f)
             ctrl_lanes = _read_i_array(f, ncl)
-            traffic.append({
-                "id": traffic_id, "type": traffic_type, "stop_line": stop_line, "heading": heading,
-                "states": states, "controlled_lanes": ctrl_lanes,
-            })
+            traffic.append(
+                {
+                    "id": traffic_id,
+                    "type": traffic_type,
+                    "stop_line": stop_line,
+                    "heading": heading,
+                    "states": states,
+                    "controlled_lanes": ctrl_lanes,
+                }
+            )
 
         objects = []
         for i in range(num_objects):
@@ -124,11 +141,17 @@ def read_bin(path: Path) -> dict:
         assert not trailing, f"{len(trailing)} unparsed trailing bytes in {path}"
 
     return {
-        "agents": agents, "roads": roads, "traffic": traffic, "objects": objects,
+        "agents": agents,
+        "roads": roads,
+        "traffic": traffic,
+        "objects": objects,
         "lane_graph": {"n": n_lanes_g, "lane_ids": lane_ids, "distances": distances},
-        "scenario_id": scenario_id, "dataset_name": dataset_name,
-        "log_length": log_length, "log_dt": log_dt,
-        "objects_of_interest": objects_of_interest, "tracks_to_predict": tracks_to_predict,
+        "scenario_id": scenario_id,
+        "dataset_name": dataset_name,
+        "log_length": log_length,
+        "log_dt": log_dt,
+        "objects_of_interest": objects_of_interest,
+        "tracks_to_predict": tracks_to_predict,
     }
 
 
@@ -158,9 +181,9 @@ def mirror(data: dict) -> dict:
             continue
         arr = list(struct.unpack(f"<{9 * T}f{T}i", o["raw"]))
         for k in range(T):
-            arr[T + k] = -arr[T + k]            # y
-            arr[3 * T + k] = -arr[3 * T + k]    # heading
-            arr[5 * T + k] = -arr[5 * T + k]    # vy
+            arr[T + k] = -arr[T + k]  # y
+            arr[3 * T + k] = -arr[3 * T + k]  # heading
+            arr[5 * T + k] = -arr[5 * T + k]  # vy
         o["raw"] = struct.pack(f"<{9 * T}f{T}i", *arr)
     return data
 
@@ -243,14 +266,14 @@ def write_bin(data: dict, path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input", required=True, help="Directory of *.bin files or a single .bin path")
     parser.add_argument("--output", required=True, help="Output directory or output .bin path")
     parser.add_argument(
-        "--verify-roundtrip", action="store_true",
-        help="Read the input, write it back unmodified, and assert bytes match. Skips mirroring.")
+        "--verify-roundtrip",
+        action="store_true",
+        help="Read the input, write it back unmodified, and assert bytes match. Skips mirroring.",
+    )
     args = parser.parse_args()
 
     src = Path(args.input)
