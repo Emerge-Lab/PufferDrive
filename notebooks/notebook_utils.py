@@ -10,6 +10,13 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.torch import Drive as DrivePolicy
 from pufferlib.pufferl import load_config
 
+# pufferl escalates RuntimeWarning->error process-wide (NaN/Inf guard for training).
+# Notebooks do exploratory numpy/plotting that legitimately warns (empty-slice means,
+# etc.); undo the escalation so benign warnings don't abort a notebook.
+import warnings
+
+warnings.filterwarnings("default", category=RuntimeWarning)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MAP_DIR = str(ROOT / "pufferlib/resources/drive/binaries/carla")
