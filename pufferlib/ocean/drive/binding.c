@@ -2006,6 +2006,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
     env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
+    env->ego_size_inflation = (float) unpack(kwargs, "ego_size_inflation");
     env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");

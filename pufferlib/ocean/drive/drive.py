@@ -96,6 +96,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_xy_offset_m=100.0,
         obs_norm_veh_length_m=15.0,
         obs_norm_veh_width_m=10.0,
+        ego_size_inflation=0.0,
         obs_norm_road_seg_length_m=5.0,
         obs_norm_road_seg_width_m=5.0,
         obs_range_traffic_control_m=100.0,
@@ -190,6 +191,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
         self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
+        self.ego_size_inflation = float(ego_size_inflation)
         self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
@@ -462,6 +464,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
             "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
+            "ego_size_inflation": self.ego_size_inflation,
             "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,

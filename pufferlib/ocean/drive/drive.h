@@ -455,6 +455,10 @@ struct Drive {
     float obs_norm_xy_offset_m;
     float obs_norm_veh_length_m;
     float obs_norm_veh_width_m;
+    // Fraction by which the SDC's own perceived length/width are inflated in its
+    // ego observation (control_sdc_only only). 0 = off; 0.05 = perceive +5%.
+    // Observation-only: actual sim dimensions (dynamics, collision) are unchanged.
+    float ego_size_inflation;
     float obs_norm_road_seg_length_m;
     float obs_norm_road_seg_width_m;
     float obs_range_traffic_control_m;
@@ -4587,9 +4591,18 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
+    // Optionally inflate the SDC's perceived size in its own observation only
+    // (control_sdc_only). Sim dimensions used for dynamics/collision are untouched.
+    float perceived_width = ego->sim_width;
+    float perceived_length = ego->sim_length;
+    if (env->ego_size_inflation > 0.0f && env->control_mode == CONTROL_SDC_ONLY) {
+        perceived_width *= (1.0f + env->ego_size_inflation);
+        perceived_length *= (1.0f + env->ego_size_inflation);
+    }
+
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
-    obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
-    obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
+    obs[obs_idx++] = perceived_width / env->obs_norm_veh_width_m;
+    obs[obs_idx++] = perceived_length / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
     obs[obs_idx++] = ego->a_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->a_lat / ACCEL_LAT_LIMIT[1];
