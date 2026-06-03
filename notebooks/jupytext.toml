@@ -1,0 +1,4 @@
+# Pair every notebook with a py:percent script.
+# Edit either file; `jupytext --sync` (or Jupyter w/ jupytext) keeps them in sync.
+# The .py is the version-controlled source; .ipynb is gitignored.
+formats = "ipynb,py:percent"

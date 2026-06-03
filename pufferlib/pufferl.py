@@ -43,7 +43,6 @@ import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.viz
 
-import mediapy
 
 try:
     from pufferlib import _C

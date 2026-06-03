@@ -64,6 +64,12 @@
 #define CONTROL_WOSAC 2
 #define CONTROL_SDC_ONLY 3
 
+// Controller modes
+#define CONTROLLER_STATIC 0
+#define CONTROLLER_POLICY 1
+#define CONTROLLER_REPLAY 2
+#define CONTROLLER_IDM 3
+
 // Simulation modes
 #define SIMULATION_GIGAFLOW 0
 #define SIMULATION_REPLAY 1
@@ -86,6 +92,7 @@
 #define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
+#define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
 // TTC default value when no vehicle ahead
 #define DEFAULT_TTC 5.0f
@@ -419,6 +426,9 @@ struct Drive {
     int *tracks_to_predict;
     int init_mode;
     int control_mode;
+    int sdc_controller;
+    int non_sdc_controller;
+    int non_vehicle_controller;
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
@@ -445,6 +455,10 @@ struct Drive {
     float obs_norm_xy_offset_m;
     float obs_norm_veh_length_m;
     float obs_norm_veh_width_m;
+    // Fraction by which the SDC's own perceived length/width are inflated in its
+    // ego observation (control_sdc_only only). 0 = off; 0.05 = perceive +5%.
+    // Observation-only: actual sim dimensions (dynamics, collision) are unchanged.
+    float ego_size_inflation;
     float obs_norm_road_seg_length_m;
     float obs_norm_road_seg_width_m;
     float obs_range_traffic_control_m;
@@ -2192,7 +2206,7 @@ static bool check_line_intersection(float p1[2], float p2[2], float q1[2], float
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-static void compute_agent_corners(Agent *agent, float corners[4][2]) {
+static void compute_agent_corners(const Agent *agent, float corners[4][2]) {
     static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
     float half_length = agent->sim_length / 2.0f;
     float half_width = agent->sim_width / 2.0f;
@@ -2467,28 +2481,68 @@ static int collision_check(Drive *env, int agent_idx) {
 
 // Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    Agent *other = &env->agents[other_idx];
+    const Agent *agent = &env->agents[agent_idx];
+    const Agent *other = &env->agents[other_idx];
 
-    // Rule 1: Collision with stopped vehicle = always at-fault.
-    if (other->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
+    if (agent->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD) {
+        return false;
+    }
+
+    if (other->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD) {
         return true;
     }
-    // Rule 2: If ego is stopped = never at-fault.
-    if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
-        return false;
+
+    float rear_x = agent->sim_x - 0.5f * agent->sim_length * agent->cos_heading;
+    float rear_y = agent->sim_y - 0.5f * agent->sim_length * agent->sin_heading;
+    float dx = other->sim_x - rear_x;
+    float dy = other->sim_y - rear_y;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist >= 1e-6f) {
+        float rear_cos = (agent->cos_heading * dx + agent->sin_heading * dy) / dist;
+        if (rear_cos < BEHIND_COS_THRESHOLD) {
+            return false;
+        }
     }
 
-    // Rule 3: Rear-bumper collision = not at-fault.
-    // Check if the other car hit our rear using the heading-aligned relative position.
-    float dx = other->sim_x - agent->sim_x;
-    float dy = other->sim_y - agent->sim_y;
-    float dot = dx * agent->cos_heading + dy * agent->sin_heading;
-    if (dot < 0) {
-        return false;
+    float agent_corners[4][2];
+    compute_agent_corners(agent, agent_corners);
+
+    float other_half_length = 0.5f * other->sim_length;
+    float other_half_width = 0.5f * other->sim_width;
+    bool front_bumper_intersects = false;
+    for (int i = 0; i < 2; i++) {
+        float corner_dx = agent_corners[i][0] - other->sim_x;
+        float corner_dy = agent_corners[i][1] - other->sim_y;
+        float local_long = corner_dx * other->cos_heading + corner_dy * other->sin_heading;
+        float local_lat = -corner_dx * other->sin_heading + corner_dy * other->cos_heading;
+        if (fabsf(local_long) <= other_half_length && fabsf(local_lat) <= other_half_width) {
+            front_bumper_intersects = true;
+            break;
+        }
     }
 
-    return true;
+    if (!front_bumper_intersects) {
+        float other_corners[4][2];
+        compute_agent_corners(other, other_corners);
+        for (int i = 0; i < 4; i++) {
+            int next = (i + 1) % 4;
+            if (check_line_intersection(agent_corners[0], agent_corners[1], other_corners[i], other_corners[next])) {
+                front_bumper_intersects = true;
+                break;
+            }
+        }
+    }
+
+    if (front_bumper_intersects) {
+        return true;
+    }
+
+    if (agent->current_lane_idx == -1) {
+        return true;
+    }
+
+    float edge_dist = fabsf(agent->metrics_array[LANE_DIST_IDX]) + 0.5f * agent->sim_width;
+    return edge_dist > MULTI_LANE_THRESHOLD;
 }
 
 static inline void ttc_update_min_result(Agent *ego, int other_idx, float closing_speed, float ttc) {
@@ -3366,6 +3420,28 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     return agent->route_length != 0;
 }
 
+static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default) {
+    if (replay_by_default) {
+        return CONTROLLER_REPLAY;
+    }
+
+    Agent *agent = &env->agents[agent_idx];
+    int requested_controller = CONTROLLER_STATIC;
+    if (agent_idx == EGO_IDX) {
+        requested_controller = env->sdc_controller;
+    } else if (agent->type == VEHICLE) {
+        requested_controller = env->non_sdc_controller;
+    } else {
+        requested_controller = env->non_vehicle_controller;
+    }
+
+    if (requested_controller == CONTROLLER_POLICY && !is_active) {
+        return CONTROLLER_STATIC;
+    }
+
+    return requested_controller;
+}
+
 void set_active_agents(Drive *env) {
     // Initialize
     env->active_agent_count = 0;        // Policy-controlled agents
@@ -3400,6 +3476,8 @@ void set_active_agents(Drive *env) {
 
         for (int i = 0; i < successfully_created; i++) {
             env->active_agent_indices[i] = active_agent_indices[i];
+            env->agents[active_agent_indices[i]].controller
+                = resolve_agent_controller(env, active_agent_indices[i], 1, 0);
         }
         free(active_agent_indices);
 
@@ -3452,12 +3530,15 @@ void set_active_agents(Drive *env) {
             active_agent_indices[env->active_agent_count] = i;
             env->active_agent_count++;
             env->agents[i].active_agent = 1;
+            env->agents[i].controller = resolve_agent_controller(env, i, 1, 0);
         } else if (is_log_replay || env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
-            // In log-replay mode, all non-controlled agents become expert_static
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            if (is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents) {
+            int replay_by_default
+                = is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents;
+            env->agents[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
+            if (env->agents[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
                 env->expert_static_agent_count++;
                 env->agents[i].mark_as_expert = 1;
@@ -4510,9 +4591,18 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
+    // Optionally inflate the SDC's perceived size in its own observation only
+    // (control_sdc_only). Sim dimensions used for dynamics/collision are untouched.
+    float perceived_width = ego->sim_width;
+    float perceived_length = ego->sim_length;
+    if (env->ego_size_inflation > 0.0f && env->control_mode == CONTROL_SDC_ONLY) {
+        perceived_width *= (1.0f + env->ego_size_inflation);
+        perceived_length *= (1.0f + env->ego_size_inflation);
+    }
+
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
-    obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
-    obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
+    obs[obs_idx++] = perceived_width / env->obs_norm_veh_width_m;
+    obs[obs_idx++] = perceived_length / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
     obs[obs_idx++] = ego->a_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->a_lat / ACCEL_LAT_LIMIT[1];
@@ -5144,6 +5234,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+#include "idm.h"
+
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->is_blind_partner
         = (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
@@ -5276,16 +5368,27 @@ void c_step(Drive *env) {
     // -> 1. Apply actions and move agents
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
-        int expert_idx = env->expert_static_agent_indices[i];
-        move_expert(env, env->actions, expert_idx);
+        int background_idx = env->expert_static_agent_indices[i];
+        Agent *agent = &env->agents[background_idx];
+        if (agent->controller == CONTROLLER_IDM) {
+            move_idm(env, background_idx);
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+            move_expert(env, env->actions, background_idx);
+        }
     }
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
-        move_dynamics(env, i, agent_idx);
-        // move_expert(env, env->actions, agent_idx);
+        Agent *agent = &env->agents[agent_idx];
+        if (agent->controller == CONTROLLER_POLICY) {
+            move_dynamics(env, i, agent_idx);
+        } else if (agent->controller == CONTROLLER_IDM) {
+            move_idm(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+            move_expert(env, env->actions, agent_idx);
+        }
     }
 
     // Update stopped-duration for every agent (active + replayed/static), not

@@ -76,6 +76,9 @@ class Drive(pufferlib.PufferEnv):
         num_eval_scenarios=16,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
+        sdc_controller="policy",
+        non_sdc_controller="policy",
+        non_vehicle_controller="auto",
         map_dir=None,
         target_type="static",
         goal_on_lane=True,
@@ -93,6 +96,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_xy_offset_m=100.0,
         obs_norm_veh_length_m=15.0,
         obs_norm_veh_width_m=10.0,
+        ego_size_inflation=0.0,
         obs_norm_road_seg_length_m=5.0,
         obs_norm_road_seg_width_m=5.0,
         obs_range_traffic_control_m=100.0,
@@ -187,6 +191,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
         self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
+        self.ego_size_inflation = float(ego_size_inflation)
         self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
@@ -236,6 +241,9 @@ class Drive(pufferlib.PufferEnv):
         self.init_step = init_step
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
+        self.sdc_controller_str = sdc_controller
+        self.non_sdc_controller_str = non_sdc_controller
+        self.non_vehicle_controller_str = non_vehicle_controller
         self.simulation_mode_str = simulation_mode
         self.map_dir = map_dir
         # map_dir may point either at a directory containing .bin files or at
@@ -265,6 +273,34 @@ class Drive(pufferlib.PufferEnv):
                 "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
                 f"'control_sdc_only'. Got: {self.control_mode_str}"
             )
+
+        controller_values = {
+            "static": binding.CONTROLLER_STATIC,
+            "policy": binding.CONTROLLER_POLICY,
+            "replay": binding.CONTROLLER_REPLAY,
+            "idm": binding.CONTROLLER_IDM,
+        }
+        controller_options = "'static', 'policy', 'replay', or 'idm'"
+        if self.sdc_controller_str not in controller_values:
+            raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
+        if self.non_sdc_controller_str not in controller_values:
+            raise ValueError(
+                f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
+            )
+        if self.non_vehicle_controller_str == "auto":
+            if self.non_sdc_controller_str == "idm":
+                self.non_vehicle_controller_str = "replay"
+            else:
+                self.non_vehicle_controller_str = self.non_sdc_controller_str
+        elif self.non_vehicle_controller_str not in controller_values:
+            raise ValueError(
+                f"non_vehicle_controller must be 'auto' or one of {controller_options}. "
+                f"Got: {self.non_vehicle_controller_str}"
+            )
+        self.sdc_controller = controller_values[self.sdc_controller_str]
+        self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
+        self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
+
         if self.init_mode_str == "create_all_valid":
             self.init_mode = 0
         elif self.init_mode_str == "create_only_controlled":
@@ -322,6 +358,9 @@ class Drive(pufferlib.PufferEnv):
             eval_mode=self.eval_mode,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
+            sdc_controller=self.sdc_controller,
+            non_sdc_controller=self.non_sdc_controller,
+            non_vehicle_controller=self.non_vehicle_controller,
             simulation_mode=self.simulation_mode,
             init_step=self.init_step,
             seed=self.random_seed,
@@ -413,6 +452,9 @@ class Drive(pufferlib.PufferEnv):
             "init_step": self.init_step,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
+            "sdc_controller": self.sdc_controller,
+            "non_sdc_controller": self.non_sdc_controller,
+            "non_vehicle_controller": self.non_vehicle_controller,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
@@ -422,6 +464,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
             "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
+            "ego_size_inflation": self.ego_size_inflation,
             "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
@@ -502,6 +545,9 @@ class Drive(pufferlib.PufferEnv):
                     eval_mode=self.eval_mode,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
+                    sdc_controller=self.sdc_controller,
+                    non_sdc_controller=self.non_sdc_controller,
+                    non_vehicle_controller=self.non_vehicle_controller,
                     simulation_mode=self.simulation_mode,
                     init_step=self.init_step,
                     map_files=self.map_files,
