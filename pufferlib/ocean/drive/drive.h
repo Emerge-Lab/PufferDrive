@@ -5291,7 +5291,6 @@ void c_step(Drive *env) {
     // Update stopped-duration for every agent (active + replayed/static), not
     // just policy-controlled ones, so the partner seconds_stopped observation is
     // populated even in control_sdc_only mode where only the ego is active.
-    // Mirrors the active-then-static index resolution used to gather partners.
     for (int j = 0; j < env->num_agents; j++) {
         int agent_idx = (j < env->active_agent_count)
                             ? env->active_agent_indices[j]
