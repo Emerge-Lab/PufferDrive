@@ -167,7 +167,17 @@ for i, name in enumerate(COEF_NAMES):
 # ## Partner observations
 
 # %%
-partner_labels = ["rel_x", "rel_y", "rel_z", "length", "width", "heading_cos", "heading_sin", "speed"]
+partner_labels = [
+    "rel_x",
+    "rel_y",
+    "rel_z",
+    "length",
+    "width",
+    "heading_cos",
+    "heading_sin",
+    "speed",
+    "seconds_stopped",
+]
 active_mask = ~np.all(partners == 0, axis=1)
 n_active = active_mask.sum()
 print(f"Active partners: {n_active}/{env.obs_slots_partners_n}")
