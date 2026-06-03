@@ -1403,6 +1403,10 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
     PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);
+    PyModule_AddIntConstant(m, "CONTROLLER_STATIC", CONTROLLER_STATIC);
+    PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
+    PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
+    PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 
