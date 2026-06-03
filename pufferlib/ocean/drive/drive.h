@@ -5339,9 +5339,9 @@ void c_step(Drive *env) {
     env->timestep++;
 
     // -> 1. Apply actions and move agents
-    // Move background agents according to their per-agent controller.
-    for (int i = 0; i < env->static_agent_count; i++) {
-        int background_idx = env->static_agent_indices[i];
+    // Move static experts
+    for (int i = 0; i < env->expert_static_agent_count; i++) {
+        int background_idx = env->expert_static_agent_indices[i];
         move_agent_with_controller(env, -1, background_idx);
     }
     // Move active agents with policy actions
