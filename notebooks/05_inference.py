@@ -27,7 +27,7 @@ from pufferlib.ocean.torch import Drive as DrivePolicy
 from pufferlib.pytorch import sample_logits
 from notebooks.notebook_utils import COEF_NAMES, EGO_LABELS, MAP_DIR, load_notebook_config, zero_actions
 
-CHECKPOINT_PATH = "../weights/tomate/models/model_puffer_drive_013100.pt"
+CHECKPOINT_PATH = ""
 ENV_NAME = "puffer_drive"
 
 config = load_notebook_config(CHECKPOINT_PATH, ENV_NAME)
@@ -631,12 +631,12 @@ if bnd_mask.any():
 for i in range(partners.shape[0]):
     if np.allclose(partners[i], 0):
         continue
-    rx, ry, rz, w, l, hc, hs, spd = partners[i]
+    rx, ry, rz, w, l, hc, hs, vx, vy = partners[i]
     heading = np.arctan2(hs, hc)
     rect = Rectangle((-l / 2, -w / 2), l, w, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9)
     rect.set_transform(plt.matplotlib.transforms.Affine2D().rotate(heading).translate(rx, ry) + ax.transData)
     ax.add_patch(rect)
-    ax.annotate(f"{spd:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
+    ax.annotate(f"{vx:.2f}, {vy:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
 part_mask = np.any(partners != 0, axis=1)
 if part_mask.any():
     ax.scatter(
