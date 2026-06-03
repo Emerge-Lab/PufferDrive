@@ -11,8 +11,8 @@
 
 # Environment — multi-agent gigaflow over all 8 local CARLA towns
 env.simulation_mode: gigaflow
-env.map_dir: pufferlib/resources/drive/binaries/carla
-env.num_maps: 8
+env.map_dir: pufferlib/resources/drive/binaries/carla_combined
+env.num_maps: 16
 env.num_agents: 720000
 env.min_agents_per_env: 1
 env.max_agents_per_env: 150
@@ -40,7 +40,7 @@ env.goal_speed: 3.0
 
 # Observation shaping (matches oignons2)
 env.obs_slots_lane_n: 80
-env.obs_slots_boundary_n: 80
+env.obs_slots_boundary_n: 40
 env.obs_slots_partners_n: 16
 env.obs_slots_traffic_controls_n: 4
 env.obs_range_partner_m: 200.0
@@ -110,6 +110,10 @@ train.optimizer: adamw
 # categories not used in this nightly). Interval 250 keeps eval cost ~5% of
 # wall-clock instead of ~85%.
 eval.validation_defaults.interval: 250
+# validation_defaults hardcodes env.obs_slots_boundary_n=80 (drive.ini), inherited
+# by the inline validation_gigaflow eval. Policy trains at 40, so override the eval
+# env too or the obs width mismatches the net -> device assert at the first eval.
+eval.validation_defaults.env.obs_slots_boundary_n: 40
 eval.validation_replay.enabled: 0
 eval.validation_gigaflow.render_backend: egl
 eval.behaviors_full_dir.enabled: 0

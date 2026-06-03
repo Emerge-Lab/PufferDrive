@@ -24,7 +24,7 @@ class DriveBackbone(nn.Module):
             return nn.Sequential(
                 pufferlib.pytorch.layer_init(nn.Linear(in_features, input_size)),
                 nn.LayerNorm(input_size),
-                nn.Tanh(),
+                nn.ReLU(),
                 nn.Dropout(dropout),
                 pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
             )

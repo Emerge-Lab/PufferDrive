@@ -41,8 +41,8 @@ TOTAL_TIMESTEPS=$(( PER_RANK_TIMESTEPS * NUM_GPUS ))
 ARGS=(
   puffer_drive
   --env.simulation-mode gigaflow
-  --env.map-dir pufferlib/resources/drive/binaries/carla
-  --env.num-maps 8
+  --env.map-dir pufferlib/resources/drive/binaries/carla_combined
+  --env.num-maps 16
   --env.num-agents "$NUM_AGENTS"
   --env.min-agents-per-env 1
   --env.max-agents-per-env 150
@@ -64,7 +64,7 @@ ARGS=(
   --env.goal-radius 2.0
   --env.goal-speed 3.0
   --env.obs-slots-lane-n 80
-  --env.obs-slots-boundary-n 80
+  --env.obs-slots-boundary-n 40
   --env.obs-slots-partners-n 16
   --env.obs-slots-traffic-controls-n 4
   --env.obs-range-partner-m 200.0
@@ -122,6 +122,11 @@ ARGS=(
   --train.optimizer adamw
   --train.seed 0
   --eval.validation-defaults.interval 250
+  # [eval.validation_defaults] hardcodes env.obs_slots_boundary_n=80 (drive.ini),
+  # inherited by the inline validation_gigaflow eval. The policy trains at 40, so
+  # without this override the inline eval builds an 80-wide boundary obs and the
+  # obs width mismatches the net -> device-side assert at the first eval (epoch 250).
+  --eval.validation-defaults.env.obs-slots-boundary-n 40
   --eval.validation-replay.enabled 0
   --eval.validation-gigaflow.render False
   --eval.behaviors-full-dir.enabled 0
