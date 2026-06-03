@@ -247,7 +247,8 @@ struct Agent {
     float goal_position_x; // alias = goal_positions_x[current_goal_idx]
     float goal_position_y; // alias = goal_positions_y[current_goal_idx]
     float goal_position_z; // alias = goal_positions_z[current_goal_idx]
-    int current_goal_idx;  // index of next goal to reach (0..N-1)
+    int current_goal_idx;  // index of next goal to reach (0..num_goals-1)
+    int num_goals;         // active goals this batch (0..num_target_waypoints); slots [num_goals, num_target_waypoints) are zero-padded in the obs
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
