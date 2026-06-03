@@ -46,6 +46,10 @@ jobs:
           # The container writes the golden as root via the bind mount; reclaim
           # it so git can stage/commit cleanly.
           sudo chown "$(id -u):$(id -g)" tests/smoke_tests/data/drive_smoke_golden.json
+          # json.dump writes no trailing newline; add one so the committed file
+          # satisfies pre-commit's end-of-file-fixer.
+          [ -n "$(tail -c1 tests/smoke_tests/data/drive_smoke_golden.json)" ] \
+            && printf '\n' >> tests/smoke_tests/data/drive_smoke_golden.json
           if git diff --quiet -- tests/smoke_tests/data/drive_smoke_golden.json; then
             echo "Golden unchanged; nothing to commit."
             exit 0
