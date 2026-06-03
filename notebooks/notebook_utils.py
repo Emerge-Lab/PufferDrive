@@ -109,6 +109,7 @@ DEFAULT_POLICY_KWARGS = {
     "backbone_activation": "gelu",
     "backbone_layer_norm": False,
     "shared_network": True,
+    "mask_padded_features": False,
 }
 
 

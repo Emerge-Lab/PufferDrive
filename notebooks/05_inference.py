@@ -801,7 +801,7 @@ print(
     f"({100 * len(visible_partners) / (all_partners.shape[0] * obs_slots_partners_n):.1f}%)"
 )
 
-fig, axes = plt.subplots(2, 5, figsize=(21, 8))
+fig, axes = plt.subplots(3, 4, figsize=(21, 11))
 axes = axes.flatten()
 
 for i, label in enumerate(partner_labels):
@@ -820,6 +820,9 @@ pos_ax.set_ylabel("rel_y")
 pos_ax.set_title("Partner positions (ego frame)")
 pos_ax.set_aspect("equal")
 pos_ax.grid(True, alpha=0.3)
+
+for ax in axes[len(partner_labels) + 1 :]:
+    ax.axis("off")
 
 fig.suptitle("Partner features: all visible, full rollout", fontsize=13)
 plt.tight_layout()
