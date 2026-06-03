@@ -2,13 +2,6 @@ name: Update Smoke Golden
 
 # Regenerate tests/smoke_tests/data/drive_smoke_golden.json inside the pinned
 # QEMU/Haswell image (the only place it is bit-reproducible) and commit it back.
-#
-# The default branch (2.0) does not carry this file, so workflow_dispatch is not
-# selectable for it. The working trigger is a push whose HEAD commit message
-# contains the marker [update-golden]; that gates the job so ordinary pushes do
-# not regenerate the golden. (workflow_dispatch is kept for the day this lands on
-# the default branch.)
-#
 #   git commit --allow-empty -m "regen smoke golden [update-golden]" && git push
 
 on:
