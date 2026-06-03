@@ -4663,6 +4663,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
         obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
+        // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;
     }
