@@ -86,6 +86,7 @@
 #define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define RED_LIGHT_HEADING_THRESHOLD (M_PI / 4.0f)
+#define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
 // TTC default value when no vehicle ahead
 #define DEFAULT_TTC 5.0f
@@ -2192,7 +2193,7 @@ static bool check_line_intersection(float p1[2], float p2[2], float q1[2], float
     return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
 }
 
-static void compute_agent_corners(Agent *agent, float corners[4][2]) {
+static void compute_agent_corners(const Agent *agent, float corners[4][2]) {
     static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
     float half_length = agent->sim_length / 2.0f;
     float half_width = agent->sim_width / 2.0f;
@@ -2467,28 +2468,68 @@ static int collision_check(Drive *env, int agent_idx) {
 
 // Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    Agent *other = &env->agents[other_idx];
+    const Agent *agent = &env->agents[agent_idx];
+    const Agent *other = &env->agents[other_idx];
 
-    // Rule 1: Collision with stopped vehicle = always at-fault.
-    if (other->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
+    if (agent->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD) {
+        return false;
+    }
+
+    if (other->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD) {
         return true;
     }
-    // Rule 2: If ego is stopped = never at-fault.
-    if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
-        return false;
+
+    float rear_x = agent->sim_x - 0.5f * agent->sim_length * agent->cos_heading;
+    float rear_y = agent->sim_y - 0.5f * agent->sim_length * agent->sin_heading;
+    float dx = other->sim_x - rear_x;
+    float dy = other->sim_y - rear_y;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist >= 1e-6f) {
+        float rear_cos = (agent->cos_heading * dx + agent->sin_heading * dy) / dist;
+        if (rear_cos < BEHIND_COS_THRESHOLD) {
+            return false;
+        }
     }
 
-    // Rule 3: Rear-bumper collision = not at-fault.
-    // Check if the other car hit our rear using the heading-aligned relative position.
-    float dx = other->sim_x - agent->sim_x;
-    float dy = other->sim_y - agent->sim_y;
-    float dot = dx * agent->cos_heading + dy * agent->sin_heading;
-    if (dot < 0) {
-        return false;
+    float agent_corners[4][2];
+    compute_agent_corners(agent, agent_corners);
+
+    float other_half_length = 0.5f * other->sim_length;
+    float other_half_width = 0.5f * other->sim_width;
+    bool front_bumper_intersects = false;
+    for (int i = 0; i < 2; i++) {
+        float corner_dx = agent_corners[i][0] - other->sim_x;
+        float corner_dy = agent_corners[i][1] - other->sim_y;
+        float local_long = corner_dx * other->cos_heading + corner_dy * other->sin_heading;
+        float local_lat = -corner_dx * other->sin_heading + corner_dy * other->cos_heading;
+        if (fabsf(local_long) <= other_half_length && fabsf(local_lat) <= other_half_width) {
+            front_bumper_intersects = true;
+            break;
+        }
     }
 
-    return true;
+    if (!front_bumper_intersects) {
+        float other_corners[4][2];
+        compute_agent_corners(other, other_corners);
+        for (int i = 0; i < 4; i++) {
+            int next = (i + 1) % 4;
+            if (check_line_intersection(agent_corners[0], agent_corners[1], other_corners[i], other_corners[next])) {
+                front_bumper_intersects = true;
+                break;
+            }
+        }
+    }
+
+    if (front_bumper_intersects) {
+        return true;
+    }
+
+    if (agent->current_lane_idx == -1) {
+        return true;
+    }
+
+    float edge_dist = fabsf(agent->metrics_array[LANE_DIST_IDX]) + 0.5f * agent->sim_width;
+    return edge_dist > MULTI_LANE_THRESHOLD;
 }
 
 static inline void ttc_update_min_result(Agent *ego, int other_idx, float closing_speed, float ttc) {
