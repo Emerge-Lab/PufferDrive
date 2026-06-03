@@ -1,0 +1,64 @@
+name: Update Smoke Golden
+
+# Regenerate tests/smoke_tests/data/drive_smoke_golden.json inside the pinned
+# QEMU/Haswell image (the only place it is bit-reproducible) and commit it back.
+#
+# The default branch (2.0) does not carry this file, so workflow_dispatch is not
+# selectable for it. The working trigger is a push whose HEAD commit message
+# contains the marker [update-golden]; that gates the job so ordinary pushes do
+# not regenerate the golden. (workflow_dispatch is kept for the day this lands on
+# the default branch.)
+#
+#   git commit --allow-empty -m "regen smoke golden [update-golden]" && git push
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'emerge/**'
+      - 'ev/**'
+
+permissions:
+  contents: write
+
+jobs:
+  update-golden:
+    name: Regenerate smoke golden
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[update-golden]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Build smoke image
+        run: docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
+
+      - name: Regenerate golden
+        run: |
+          docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
+            -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
+            pufferdrive-smoke tests/smoke_tests/test_drive_train.py
+        timeout-minutes: 30
+
+      - name: Upload golden artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive_smoke_golden
+          path: tests/smoke_tests/data/drive_smoke_golden.json
+
+      - name: Commit regenerated golden
+        run: |
+          # The container writes the golden as root via the bind mount; reclaim
+          # it so git can stage/commit cleanly.
+          sudo chown "$(id -u):$(id -g)" tests/smoke_tests/data/drive_smoke_golden.json
+          if git diff --quiet -- tests/smoke_tests/data/drive_smoke_golden.json; then
+            echo "Golden unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/smoke_tests/data/drive_smoke_golden.json
+          git commit -m "Regenerate smoke golden for partner seconds_stopped feature"
+          git push origin "HEAD:${{ github.ref_name }}"
