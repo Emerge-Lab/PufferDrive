@@ -119,7 +119,7 @@
 // Observation feature counts
 #define EGO_FEATURES 10
 #define ROAD_FEATURES 7
-#define PARTNER_FEATURES 8
+#define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define PADDED_OBSERVATION_VALUE -0.001f
 #define STATIC_TARGET_FEATURES 3
@@ -4441,11 +4441,6 @@ static void compute_rewards(Drive *env, int i) {
     env->rewards[i] += speed_reward;
     env->logs[i].avg_speed_per_agent += agent->sim_speed;
     agent->distance_since_spawn += agent->sim_speed * env->dt;
-    if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
-        agent->seconds_stopped += env->dt;
-    } else {
-        agent->seconds_stopped = 0.0f;
-    }
     env->logs[i].episode_return += speed_reward;
     env->logs[i].reward_overspeed += speed_reward;
 
@@ -4663,6 +4658,8 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
         obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
+        // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
+        obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;
     }
 
@@ -5289,6 +5286,20 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         move_dynamics(env, i, agent_idx);
         // move_expert(env, env->actions, agent_idx);
+    }
+
+    // Update stopped-duration for every agent (active + replayed/static), not
+    // just policy-controlled ones, so the partner seconds_stopped observation is
+    // populated even in control_sdc_only mode where only the ego is active.
+    for (int j = 0; j < env->num_agents; j++) {
+        int agent_idx = (j < env->active_agent_count) ? env->active_agent_indices[j]
+                                                      : env->static_agent_indices[j - env->active_agent_count];
+        Agent *agent = &env->agents[agent_idx];
+        if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
+            agent->seconds_stopped += env->dt;
+        } else {
+            agent->seconds_stopped = 0.0f;
+        }
     }
 
     // -> 2. Compute metrics and rewards
