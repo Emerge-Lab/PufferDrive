@@ -5292,9 +5292,8 @@ void c_step(Drive *env) {
     // just policy-controlled ones, so the partner seconds_stopped observation is
     // populated even in control_sdc_only mode where only the ego is active.
     for (int j = 0; j < env->num_agents; j++) {
-        int agent_idx = (j < env->active_agent_count)
-                            ? env->active_agent_indices[j]
-                            : env->static_agent_indices[j - env->active_agent_count];
+        int agent_idx = (j < env->active_agent_count) ? env->active_agent_indices[j]
+                                                      : env->static_agent_indices[j - env->active_agent_count];
         Agent *agent = &env->agents[agent_idx];
         if (agent->sim_speed < AGENT_STOPPED_SPEED_THRESHOLD) {
             agent->seconds_stopped += env->dt;
