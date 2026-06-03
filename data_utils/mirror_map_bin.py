@@ -14,12 +14,12 @@ Usage:
     # Mirror a whole directory of bins:
     python data_utils/mirror_map_bin.py \\
         --input  pufferlib/resources/drive/binaries/carla \\
-        --output pufferlib/resources/drive/binaries/carla_lht
+        --output pufferlib/resources/drive/binaries/carla_lhs
 
     # Mirror a single file:
     python data_utils/mirror_map_bin.py \\
         --input  pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin \\
-        --output pufferlib/resources/drive/binaries/carla_lht/opendrive__Town01.bin
+        --output pufferlib/resources/drive/binaries/carla_lhs/opendrive__Town01.bin
 """
 
 import argparse
