@@ -3,6 +3,32 @@
 import time
 from dataclasses import dataclass, field
 from typing import ClassVar
+from tqdm import tqdm
+from pufferlib import viz
+from pufferlib.ocean.drive import binding
+
+_GALLERY_METRIC_KEYS = (
+    "score",
+    "dnf_rate",
+    "episode_return",
+    "num_goals_reached",
+    "collision_rate",
+    "offroad_rate",
+    "red_light_violation_rate",
+    "total_infractions",
+    "total_distance_travelled",
+    "episode_length",
+)
+
+
+def _episode_metrics_from_info(info):
+    """Pull the gallery-sort metrics out of a `completed_episode` summary dict."""
+    out = {}
+    for key in _GALLERY_METRIC_KEYS:
+        value = info.get(key)
+        if isinstance(value, (int, float)):
+            out[key] = float(value)
+    return out
 
 
 @dataclass
@@ -82,6 +108,7 @@ class Evaluator:
         try:
             metrics = self._run_rollout_loop(vecenv, policy, args)
             t_metric = time.time()
+            self._maybe_export_episodes(args, metrics)
             frames = self._render_pass(vecenv, policy, args) if self.render else []
             t_render = time.time()
         finally:
@@ -90,10 +117,6 @@ class Evaluator:
         metrics["metric_seconds"] = float(t_metric - t0)
         metrics["render_seconds"] = float(t_render - t_metric)
         metrics["eval_seconds"] = float(t_render - t0)
-        # Opt-in per-episode CSV + coverage check (writes files, folds
-        # coverage_* scalars into metrics). No-op unless the evaluator set
-        # eval.export_episode_csv / eval.verify_coverage.
-        self._maybe_export_episodes(args, metrics)
         return EvalResult(metrics=metrics, frames=frames)
 
     def _run_rollout_loop(self, vecenv, policy, args) -> dict:
@@ -449,6 +472,10 @@ class Evaluator:
 
         out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "gif" / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Per-rendered-file metrics, accumulated inline from each scenario's
+        # completed_episode summary so the gallery sort uses this render's
+        # own rollouts (the metric-pass CSV is from a different vec env).
+        render_file_metrics = {}
 
         epoch = int(args.get("epoch") or 0)
         global_step = int(args.get("global_step") or 0)
@@ -466,6 +493,7 @@ class Evaluator:
         device = args["train"]["device"]
         html_paths = []
         scenarios_done = 0
+        progress = tqdm(total=num_scenarios, desc=f"{self.name} triage_html", unit="html")
 
         vec = pufferlib.vector.make(
             make_env,
@@ -508,14 +536,20 @@ class Evaluator:
                     # basename: map_name is the full bin path, and an absolute
                     # value would make `out_dir / stem` escape out_dir.
                     map_name = os.path.basename(str(info.get("map_name") or "map")).split(".")[0]
-                    stem = f"{map_name}_{scenario_id}{step_suffix}"
+                    # scenario_id repeats across rollouts on the same map in
+                    # gigaflow mode (the C side fills it with the map's short
+                    # name), so append a monotonic counter to make every
+                    # rendered episode land in its own file.
+                    stem = f"{map_name}_{scenario_id}_{scenarios_done:04d}{step_suffix}"
                     tmp_path = out_dir / f"{stem}.pkl.zlib"
                     html_path = out_dir / f"{stem}.html"
                     tmp_path.write_bytes(bundle_bytes)
                     mining_viz.render_compact_replay_html(str(tmp_path), str(html_path))
                     tmp_path.unlink(missing_ok=True)
                     html_paths.append(html_path)
+                    render_file_metrics[html_path.name] = _episode_metrics_from_info(info)
                     scenarios_done += 1
+                    progress.update(1)
                     if scenarios_done >= num_scenarios:
                         break
 
@@ -523,6 +557,10 @@ class Evaluator:
                     break
         finally:
             vec.close()
+            progress.close()
+
+        if html_paths:
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
 
         return html_paths
 
@@ -539,7 +577,6 @@ class Evaluator:
         import torch
 
         import pufferlib
-        from pufferlib import viz
 
         eval_cfg = self.config.get("eval", {})
         for required in ("render_num_scenarios", "render_max_steps"):
@@ -561,11 +598,18 @@ class Evaluator:
 
         render_env_kwargs = self._render_env_overrides(args)
         render_env_kwargs.pop("render_mode", None)  # obs viz reads state, no EGL
+        # Per-episode summaries are needed so the gallery sort dropdown can
+        # show this render's actual metrics.
+        render_env_kwargs["emit_completed_episodes"] = True
 
         device = args["train"]["device"]
-        use_traj = "trajectory" in str(args["env"].get("action_type", ""))
         html_paths = []
+        render_file_metrics = {}
         scenarios_done = 0
+        progress = tqdm(total=num_scenarios * (max_steps + 1), desc=f"{self.name} obs_html", unit="step")
+        pool_method = getattr(policy, "pool_slot_counts", None)
+        if pool_method is None and getattr(policy, "policy", None) is not None:
+            pool_method = getattr(policy.policy, "pool_slot_counts", None)
 
         vec = pufferlib.vector.make(
             make_env, env_args=[], env_kwargs=render_env_kwargs, backend="PufferEnv", num_envs=1
@@ -580,59 +624,173 @@ class Evaluator:
                 if state:
                     state["lstm_h"].zero_()
                     state["lstm_c"].zero_()
-                agent_hist = [[] for _ in range(n_in_batch)]
-                traffic_hist = [[] for _ in range(n_in_batch)]
-                traj_hist = [[] for _ in range(n_in_batch)]
-                obs_hist = [[] for _ in range(n_in_batch)]
+                agent_caps = [int(sc["num_total_agents"]) for sc in scenarios]
+                traffic_caps = [int(sc["num_traffic_elements"]) for sc in scenarios]
+                active_counts = [int(sc["active_agent_count"]) for sc in scenarios]
+                max_agent_cap = max(agent_caps)
+                max_traffic_cap = max(max(traffic_caps), 1) if traffic_caps else 1
+                obs_dim = int(ob.shape[-1])
+                agent_f32 = np.zeros((n_in_batch, max_agent_cap, binding.AGENT_F32_FIELDS), dtype=np.float32)
+                agent_i32 = np.zeros((n_in_batch, max_agent_cap, binding.AGENT_I32_FIELDS), dtype=np.int32)
+                metrics_f32 = np.zeros((n_in_batch, max_agent_cap, binding.METRICS_F32_FIELDS), dtype=np.float32)
+                puffer_f32 = np.zeros((n_in_batch, max_agent_cap, binding.SCORE_F32_FIELDS), dtype=np.float32)
+                traffic_i16 = np.zeros((n_in_batch, max_traffic_cap, binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
+                agent_f32_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.AGENT_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
+                agent_i32_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.AGENT_I32_FIELDS), dtype=np.int32)
+                    for e in range(n_in_batch)
+                ]
+                metrics_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.METRICS_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
+                puffer_hist = [
+                    np.zeros((max_steps, agent_caps[e], binding.SCORE_F32_FIELDS), dtype=np.float32)
+                    for e in range(n_in_batch)
+                ]
+                traffic_hist = [
+                    np.zeros((max_steps, max(traffic_caps[e], 1), binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
+                    for e in range(n_in_batch)
+                ]
+                obs_hist = [
+                    np.zeros((max_steps, active_counts[e], obs_dim), dtype=np.float32) for e in range(n_in_batch)
+                ]
+                raw_action_hist = [[] for _ in range(n_in_batch)]
+                clipped_action_hist = [[] for _ in range(n_in_batch)]
+                value_hist = [[] for _ in range(n_in_batch)]
+                entropy_hist = [[] for _ in range(n_in_batch)]
+                policy_prob_hist = [[] for _ in range(n_in_batch)]
+                policy_mean_hist = [[] for _ in range(n_in_batch)]
+                policy_std_hist = [[] for _ in range(n_in_batch)]
+                policy_log_prob_hist = [[] for _ in range(n_in_batch)]
+                pool_hist = None
+                batch_summary = None
                 for t in range(max_steps):
-                    cur = vec.get_state()
-                    start_obs_index = 0
-                    for e in range(n_in_batch):
-                        sc = cur[e]
-                        agent_hist[e].append(viz.fill_agents_state(sc, use_trajectory=use_traj))
-                        traffic_hist[e].append(viz.fill_traffics_state(sc, t))
-                        if use_traj:
-                            traj_hist[e].append(viz.fill_trajectories(sc, t))
-                        if e > 0:
-                            start_obs_index += cur[e - 1]["active_agent_count"]
-                        step_obs = {}
-                        for a in range(sc["active_agent_count"]):
-                            aid = int(sc["active_agent_indices"][a])
-                            step_obs[aid] = viz.extract_obs_frame(
-                                ob, sc, args, timestep=t, obs_index=start_obs_index + a, agent_idx=a, head_north=True
-                            )
-                        obs_hist[e].append(step_obs)
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
-                        logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                        action = action.cpu().numpy().reshape(vec.action_space.shape)
+                        logits, value = policy.forward_eval(ob_t, state)
+                        pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
+                        action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
+                    if pool_hist is None and pool_outputs:
+                        pool_hist = {
+                            k: [
+                                np.zeros((max_steps, active_counts[e], values.shape[1]), dtype=np.int16)
+                                for e in range(n_in_batch)
+                            ]
+                            for k, values in pool_outputs.items()
+                        }
+                    clipped_action = raw_action
                     if isinstance(logits, torch.distributions.Normal):
-                        action = np.clip(action, vec.action_space.low, vec.action_space.high)
-                    ob, _, _, _, _ = vec.step(action)
+                        clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
+                        policy_outputs = {
+                            "mean": logits.loc.cpu().numpy().reshape(vec.action_space.shape),
+                            "std": logits.scale.cpu().numpy().reshape(vec.action_space.shape),
+                            "log_prob": logprob.cpu().numpy().reshape(-1),
+                        }
+                    elif isinstance(logits, torch.Tensor):
+                        policy_outputs = torch.softmax(logits, dim=-1).cpu().numpy()
+                    else:
+                        policy_outputs = torch.softmax(logits[0], dim=-1).cpu().numpy()
+                    value_np = value.cpu().numpy().reshape(-1)
+                    entropy_np = entropy.cpu().numpy().reshape(-1)
+
+                    vec.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16)
+                    start_obs_index = 0
+                    for e in range(n_in_batch):
+                        active_count = active_counts[e]
+                        end_obs_index = start_obs_index + active_count
+                        agent_cap = agent_caps[e]
+                        traffic_cap = max(traffic_caps[e], 1)
+                        agent_f32_hist[e][t] = agent_f32[e, :agent_cap]
+                        agent_i32_hist[e][t] = agent_i32[e, :agent_cap]
+                        metrics_hist[e][t] = metrics_f32[e, :agent_cap]
+                        puffer_hist[e][t] = puffer_f32[e, :agent_cap]
+                        traffic_hist[e][t] = traffic_i16[e, :traffic_cap]
+                        obs_hist[e][t] = ob[start_obs_index:end_obs_index]
+                        raw_action_hist[e].append(
+                            np.asarray(raw_action[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                        )
+                        clipped_action_hist[e].append(
+                            np.asarray(clipped_action[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                        )
+                        value_hist[e].append(value_np[start_obs_index:end_obs_index].copy())
+                        entropy_hist[e].append(entropy_np[start_obs_index:end_obs_index].copy())
+                        if pool_hist and pool_outputs:
+                            for k, values in pool_outputs.items():
+                                pool_hist[k][e][t] = values[start_obs_index:end_obs_index]
+                        if isinstance(policy_outputs, dict):
+                            policy_mean_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["mean"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                            policy_std_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["std"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                            policy_log_prob_hist[e].append(
+                                np.asarray(
+                                    policy_outputs["log_prob"][start_obs_index:end_obs_index], dtype=np.float32
+                                ).copy()
+                            )
+                        else:
+                            policy_prob_hist[e].append(
+                                np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
+                            )
+                        start_obs_index = end_obs_index
+                    ob, _, _, _, step_infos = vec.step(clipped_action)
+                    for d in self._flatten_infos(step_infos):
+                        if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
+                            batch_summary = d
+                    progress.update(to_render)
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
                     # Numeric index last so build_gallery_index's `*_<N>.html`
                     # pattern matches.
                     path = out_dir / f"{map_name}{step_suffix}_{scenarios_done:03d}.html"
-                    viz.generate_interactive_replay(
-                        scenarios[e],
-                        agent_hist[e],
-                        traffic_hist[e],
-                        traj_hist[e],
-                        obs_hist[e],
-                        str(path),
-                        head_north=True,
-                    )
+                    compact_replay = {
+                        "schema": "obs_html_compact_v1",
+                        "env": dict(args["env"]),
+                        "agent_f32": agent_f32_hist[e],
+                        "agent_i32": agent_i32_hist[e],
+                        "metrics_f32": metrics_hist[e],
+                        "puffer_f32": puffer_hist[e],
+                        "traffic_i16": traffic_hist[e],
+                        "obs": obs_hist[e],
+                        "raw_action": np.stack(raw_action_hist[e], axis=0),
+                        "clipped_action": np.stack(clipped_action_hist[e], axis=0),
+                        "value": np.stack(value_hist[e], axis=0),
+                        "entropy": np.stack(entropy_hist[e], axis=0),
+                        "policy_probs": np.stack(policy_prob_hist[e], axis=0) if policy_prob_hist[e] else None,
+                        "policy_mean": np.stack(policy_mean_hist[e], axis=0) if policy_mean_hist[e] else None,
+                        "policy_std": np.stack(policy_std_hist[e], axis=0) if policy_std_hist[e] else None,
+                        "policy_log_prob": (
+                            np.stack(policy_log_prob_hist[e], axis=0) if policy_log_prob_hist[e] else None
+                        ),
+                    }
+                    if pool_hist:
+                        for k, hists in pool_hist.items():
+                            compact_replay[k] = hists[e]
+                    viz.generate_interactive_replay(scenarios[e], compact_replay, filename=str(path))
                     html_paths.append(path)
+                    if batch_summary is not None:
+                        render_file_metrics[path.name] = _episode_metrics_from_info(batch_summary)
                     scenarios_done += 1
+                    progress.update(1)
                     if scenarios_done >= num_scenarios:
                         break
         finally:
             vec.close()
+            progress.close()
 
         if html_paths:
-            viz.build_gallery_index(str(out_dir))
+            viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:
