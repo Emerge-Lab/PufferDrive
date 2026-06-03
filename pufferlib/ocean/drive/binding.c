@@ -875,6 +875,20 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
+            tmp = PyLong_FromLong(a->controller);
+            if (!tmp) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "controller", tmp) < 0) {
+                Py_DECREF(tmp);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(tmp);
+
             tmp = PyLong_FromLong(a->mark_as_expert);
             if (!tmp) {
                 Py_DECREF(agent);
@@ -1714,6 +1728,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
+    int sdc_controller = unpack(kwargs, "sdc_controller");
+    int non_sdc_controller = unpack(kwargs, "non_sdc_controller");
+    int non_vehicle_controller = unpack(kwargs, "non_vehicle_controller");
     int simulation_mode = unpack(kwargs, "simulation_mode");
     int init_step = unpack(kwargs, "init_step");
     int seed = unpack(kwargs, "seed");
@@ -1850,6 +1867,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         Drive *env = calloc(1, sizeof(Drive));
         env->init_mode = init_mode;
         env->control_mode = control_mode;
+        env->sdc_controller = sdc_controller;
+        env->non_sdc_controller = non_sdc_controller;
+        env->non_vehicle_controller = non_vehicle_controller;
         env->simulation_mode = simulation_mode;
         env->init_step = init_step;
         env->num_max_agents = max_agents_per_env;
@@ -1974,6 +1994,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->timestep = init_step;
     env->init_mode = (int) unpack(kwargs, "init_mode");
     env->control_mode = (int) unpack(kwargs, "control_mode");
+    env->sdc_controller = (int) unpack(kwargs, "sdc_controller");
+    env->non_sdc_controller = (int) unpack(kwargs, "non_sdc_controller");
+    env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
