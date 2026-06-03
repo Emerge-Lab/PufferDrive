@@ -276,6 +276,7 @@ if not NO_TRAIN:
         "wandb",
         "tensorboard",
         "jupytext",
+        "torchinfo",
     ]
 
 setup(
