@@ -271,12 +271,11 @@ if not NO_TRAIN:
         "matplotlib==3.8.4",
         "imageio",
         "pyro-ppl",
-        "mediapy",
         "heavyball",
         "neptune",
         "wandb",
         "tensorboard",
-        "google-cloud-aiplatform",
+        "jupytext",
     ]
 
 setup(
