@@ -5182,30 +5182,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 #include "idm.h"
 
-static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-
-    if (agent->controller == CONTROLLER_STATIC) {
-        return;
-    }
-
-    if (agent->controller == CONTROLLER_IDM) {
-        move_idm(env, agent_idx);
-        return;
-    }
-
-    if (agent->controller == CONTROLLER_REPLAY) {
-        if (env->simulation_mode == SIMULATION_REPLAY) {
-            move_expert(env, env->actions, agent_idx);
-        }
-        return;
-    }
-
-    if (agent->controller == CONTROLLER_POLICY && action_idx >= 0) {
-        move_dynamics(env, action_idx, agent_idx);
-    }
-}
-
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->is_blind_partner
         = (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
@@ -5339,14 +5315,26 @@ void c_step(Drive *env) {
     // Move static experts
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int background_idx = env->expert_static_agent_indices[i];
-        move_agent_with_controller(env, -1, background_idx);
+        Agent *agent = &env->agents[background_idx];
+        if (agent->controller == CONTROLLER_IDM) {
+            move_idm(env, background_idx);
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+            move_expert(env, env->actions, background_idx);
+        }
     }
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
         env->logs[i].score = 0.0f;
         env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
-        move_agent_with_controller(env, i, agent_idx);
+        Agent *agent = &env->agents[agent_idx];
+        if (agent->controller == CONTROLLER_POLICY) {
+            move_dynamics(env, i, agent_idx);
+        } else if (agent->controller == CONTROLLER_IDM) {
+            move_idm(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+            move_expert(env, env->actions, agent_idx);
+        }
     }
 
     // Update stopped-duration for every agent (active + replayed/static), not
