@@ -2034,6 +2034,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "episode_length", summary->episode_length);
     assign_to_dict(dict, "episode_return", summary->episode_return);
     assign_to_dict(dict, "collision_rate", summary->collision_rate);
+    assign_to_dict(dict, "at_fault_collision_rate", summary->at_fault_collision_rate);
     assign_to_dict(dict, "offroad_rate", summary->offroad_rate);
     assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
     assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
@@ -2111,10 +2112,11 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+    // Always logged (computed regardless of compute_eval_metrics).
+    assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
 
     if (env->compute_eval_metrics) {
         // Puffer score components
-        assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
         assign_to_dict(dict, "puffer_score", log->puffer_score);
         assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
         assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);

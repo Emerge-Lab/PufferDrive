@@ -197,6 +197,7 @@ struct CompletedEpisodeSummary {
     float episode_length;
     float episode_return;
     float collision_rate;
+    float at_fault_collision_rate;
     float offroad_rate;
     float red_light_violation_rate;
     float num_goals_reached;
@@ -2808,6 +2809,8 @@ static void add_log(Drive *env) {
         // Lane metrics (normalized per timestep for average per episode)
         env->log.lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
         env->log.lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        // Always aggregated so at-fault collisions log regardless of compute_eval_metrics.
+        env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
             env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
@@ -2815,7 +2818,6 @@ static void add_log(Drive *env) {
                 env->logs[i].episode_length,
                 env->dt);
             calculate_puffer_score(&env->logs[i], env->logs[i].episode_length, env->dt);
-            env->log.at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
             env->log.ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
             env->log.wrong_way_distance += env->logs[i].wrong_way_distance;
             env->log.speed_violation_sum += env->logs[i].speed_violation_sum;
@@ -2855,6 +2857,7 @@ static void add_log(Drive *env) {
         s->episode_length = 0.0f;
         s->episode_return = 0.0f;
         s->collision_rate = 0.0f;
+        s->at_fault_collision_rate = 0.0f;
         s->offroad_rate = 0.0f;
         s->red_light_violation_rate = 0.0f;
         s->num_goals_reached = 0.0f;
@@ -2894,6 +2897,7 @@ static void add_log(Drive *env) {
             s->episode_length += env->logs[i].episode_length;
             s->episode_return += env->logs[i].episode_return;
             s->collision_rate += collided;
+            s->at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
             s->offroad_rate += offroad;
             s->red_light_violation_rate += red_light;
             s->num_goals_reached += num_goals;
@@ -4354,8 +4358,9 @@ static void compute_metrics(Drive *env, int agent_idx) {
 
     if (car_collided_with_index != -1) {
         agent->metrics_array[COLLISION_IDX] = 1.0f;
-        // Track at-fault collisions for evaluation metrics.
-        if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+        // At-fault collision is always tracked (cheap, collision-only geometry)
+        // so it can be logged regardless of compute_eval_metrics.
+        if (is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
             agent->at_fault_collision = 1;
             agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
         }
@@ -4539,11 +4544,12 @@ static void compute_rewards(Drive *env, int i) {
     }
     env->logs[i].avg_displacement_error = current_ade;
 
-    if (env->compute_eval_metrics) {
-        if (agent->at_fault_collision > 0) {
-            env->logs[i].at_fault_collision_rate = 1.0f;
-        }
+    // Always recorded so at-fault collisions log regardless of compute_eval_metrics.
+    if (agent->at_fault_collision > 0) {
+        env->logs[i].at_fault_collision_rate = 1.0f;
+    }
 
+    if (env->compute_eval_metrics) {
         env->logs[i].wrong_way_distance = agent->wrong_way_distance;
         env->logs[i].speed_violation_sum = agent->speed_violation_sum;
         env->logs[i].multi_lane_time = agent->multi_lane_time;
