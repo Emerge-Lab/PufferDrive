@@ -431,6 +431,9 @@ struct Drive {
     int non_vehicle_controller;
     int simulation_mode;
     int termination_mode;
+    // Replay-only: when set, reaching the final goal ends the episode (full
+    // scenario reset). No effect in gigaflow (goals regenerate there).
+    int terminate_on_goal;
     float inactive_agent_threshold;
     int reward_conditioning;
     int reward_randomization;
@@ -5457,6 +5460,7 @@ void c_step(Drive *env) {
     compute_observations(env);
 
     // -> 5. Update goals for agents that reached their goal
+    int goal_terminate = 0;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
@@ -5468,6 +5472,12 @@ void c_step(Drive *env) {
                     // Replay mode: leave current_goal_idx saturated so the
                     // reached-goal condition won't fire again. Re-generating
                     // route-based goals on WOMD maps fails (removed=1).
+                    if (env->terminate_on_goal) {
+                        // End the episode on success: mark this agent terminal
+                        // and reset the whole scenario below.
+                        env->terminals[i] = 1;
+                        goal_terminate = 1;
+                    }
                 } else {
                     compute_goals(env, agent_idx);
                 }
@@ -5478,6 +5488,20 @@ void c_step(Drive *env) {
                 agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
             }
         }
+    }
+
+    // Replay goal-termination: an active agent reached its final goal, so end
+    // the episode now (after num_goals_reached was counted above). Agents that
+    // didn't reach their goal are truncated; the achiever(s) are already terminal.
+    if (goal_terminate) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            if (!env->terminals[i]) {
+                env->truncations[i] = 1;
+            }
+        }
+        add_log(env);
+        c_reset(env);
+        return;
     }
 }
 
