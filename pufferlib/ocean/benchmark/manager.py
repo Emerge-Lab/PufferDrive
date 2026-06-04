@@ -243,6 +243,10 @@ class EvalManager:
             # is additive — it doesn't change the my_log metric stream.
             if ev_eval.get("export_episode_csv") or ev_eval.get("verify_coverage"):
                 args["env"]["emit_completed_episodes"] = True
+        # terminate_on_goal yields variable-length episodes; the metric
+        # aggregation switches to per-episode summaries, which need this on.
+        if args["env"].get("terminate_on_goal"):
+            args["env"]["emit_completed_episodes"] = True
         # Forward top-level render config so _render_pass can read it.
         for key in ("render_backend", "render_results_dir", "eval_results_dir"):
             if key in ev.config:

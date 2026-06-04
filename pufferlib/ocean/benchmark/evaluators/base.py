@@ -186,7 +186,7 @@ class Evaluator:
                     break
             steps += 1
 
-        return self._aggregate_infos(infos_collected)
+        return self._finalize_metrics(args, infos_collected)
 
     # -- Loop hooks (subclass-overridable) ------------------------------
 
@@ -208,6 +208,34 @@ class Evaluator:
     def _should_stop(self, args, infos_collected, steps) -> bool:
         """Loop termination. Subclasses must override."""
         raise NotImplementedError
+
+    def _finalize_metrics(self, args, infos_collected) -> dict:
+        """Turn the rollout's collected data into the metrics dict. Default
+        uses the vec_log weighted-mean stream. Overridden where episodes are
+        variable-length (e.g. terminate_on_goal) and vec_log can't capture
+        asynchronous terminations — those aggregate per-episode summaries."""
+        return self._aggregate_infos(infos_collected)
+
+    # Identity / bookkeeping fields on a completed_episode summary that are not
+    # metrics and must be excluded from per-episode averaging.
+    _EPISODE_ID_FIELDS = frozenset(
+        {"episode_index", "env_slot", "n", "map_name", "scenario_id", "summary_type"}
+    )
+
+    def _aggregate_episode_rows(self, rows: list) -> dict:
+        """Unweighted mean of numeric metric fields across per-episode summaries
+        (one SDC per episode, so each row counts once)."""
+        if not rows:
+            return {"num_log_cycles": 0, "num_agents_evaluated": 0.0}
+        out = {}
+        keys = set().union(*(r.keys() for r in rows)) - self._EPISODE_ID_FIELDS
+        for k in keys:
+            vals = [float(r[k]) for r in rows if isinstance(r.get(k), (int, float))]
+            if vals:
+                out[k] = sum(vals) / len(vals)
+        out["num_log_cycles"] = float(len(rows))
+        out["num_agents_evaluated"] = float(len(rows))
+        return out
 
     def _flatten_infos(self, infos) -> list:
         """Pufferlib backends return either a list-of-list (multi-worker) or
