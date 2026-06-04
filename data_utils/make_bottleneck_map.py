@@ -78,7 +78,7 @@ def _orient_x(x):
 
 
 # ── trajectory / episode ──────────────────────────────────────────────────────
-T_STEPS = 200                                   # trajectory length == scenario length
+T_STEPS = 600                                   # trajectory length == scenario length
 DT_SECONDS = 0.1
 NUM_TARGET_WAYPOINTS = 3                         # must match the policy's arch key
 # True -> agents start at rest. set_start_position seeds an active agent's sim
