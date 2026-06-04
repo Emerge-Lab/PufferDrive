@@ -81,6 +81,11 @@ def _orient_x(x):
 T_STEPS = 200                                   # trajectory length == scenario length
 DT_SECONDS = 0.1
 NUM_TARGET_WAYPOINTS = 3                         # must match the policy's arch key
+# True -> agents start at rest. set_start_position seeds an active agent's sim
+# velocity from its logged velocity at the init step, so zeroing the spawn-step
+# velocity makes the cars begin stopped (heading/goals unchanged; the policy
+# accelerates them from a standstill).
+SPAWN_STOPPED = True
 
 # road-type constants (datatypes.h)
 LANE_FREEWAY = 1
@@ -201,6 +206,9 @@ def build_bottleneck_bin() -> bytes:
             xs, ys = _piecewise_trajectory(control_pts, control_idx, T_STEPS)
             xs = _orient_x(xs)                                   # flip to R->L if set
             headings, vxs, vys = _trajectory_kinematics(xs, ys, DT_SECONDS)
+            if SPAWN_STOPPED:
+                vxs[0] = 0.0                                     # start at rest
+                vys[0] = 0.0
             length_m = float(size_rng.uniform(*CAR_LENGTH_RANGE_M))
             width_m = float(size_rng.uniform(*CAR_WIDTH_RANGE_M))
             controllable.append((agent_id, xs, ys, headings, vxs, vys, length_m, width_m))
