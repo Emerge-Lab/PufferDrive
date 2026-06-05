@@ -1422,7 +1422,7 @@ for name in set_encs:
     winners[name] = masked.max(dim=1).indices  # (B, embedding dim): winning slot per dim
     pooled[name] = torch.where(vm.unsqueeze(1), masked.max(dim=1).values, torch.zeros_like(masked.max(dim=1).values))
 
-for name in ("ego", "conditioning"):
+for name in ("ego", "context"):
     if name in enc_names:
         pooled[name] = captured[name]
 
