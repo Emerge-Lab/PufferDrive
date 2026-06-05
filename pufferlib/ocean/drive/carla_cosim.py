@@ -72,6 +72,8 @@ CARLA_ARCH = dict(
     obs_norm_veh_length_m=15.0,
     obs_norm_veh_width_m=10.0,
     reward_conditioning=True,
+    goal_speed=20.0,  # reward conditioning: arrive at goals at up to 20 m/s (default 3.0 crawls)
+    goal_radius=6.0,  # reach goals within 6 m (matches the GOAL_RADIUS_M cursor threshold)
     target_type="static",
     dynamics_model="jerk",
     dt=0.1,  # co-sim runs lockstep with CARLA at 0.1s (sub_ticks=1)
@@ -197,23 +199,53 @@ def densify_route(route_wps, step=2.0):
     return np.asarray(pts)
 
 
+def _route_goal_xy(cmap, cx, cy, route_yaw_deg):
+    """CARLA-frame (x, y, z) for a route goal: snap to the nearest DRIVING lane
+    whose travel direction matches the route (within 90 deg) so a goal never lands
+    in the oncoming lane. `cmap.get_waypoint` returns the nearest lane regardless of
+    direction, so at the center of a two-way road it can pick the oncoming one; we
+    then search lateral neighbors for a matching-direction lane. If none is reachable
+    (e.g. across a solid center line), keep the raw route point — it is at least in
+    the correct travel direction even if not perfectly lane-centered."""
+    def matches(w):
+        return abs(((route_yaw_deg - w.transform.rotation.yaw) + 180.0) % 360.0 - 180.0) <= 90.0
+
+    wp = cmap.get_waypoint(carla.Location(x=float(cx), y=float(cy)))
+    if wp is None:
+        return (cx, cy, 0.0)
+    if matches(wp):
+        loc = wp.transform.location
+        return (loc.x, loc.y, loc.z)
+    for go_left in (True, False):
+        w = wp
+        for _ in range(4):
+            w = w.get_left_lane() if go_left else w.get_right_lane()
+            if w is None or w.road_id != wp.road_id:
+                break
+            if str(w.lane_type) == "Driving" and matches(w):
+                loc = w.transform.location
+                return (loc.x, loc.y, loc.z)
+    return (cx, cy, 0.0)
+
+
 def build_route_goals(dense_route, transform, cmap, spacing=20.0):
     """Fixed sequence of lane-centered goals along the WHOLE route, one every
-    `spacing` m, each snapped to the CARLA lane center, in the bin frame. Returns
-    an (N, 3) array (x, y, z). The ego marches through these via a cursor that
-    only advances on arrival (see GOAL_RADIUS_M) — goals do not float with the ego."""
-    def lane_goal(cx, cy):
-        wp = cmap.get_waypoint(carla.Location(x=float(cx), y=float(cy)))  # snap to lane center
-        lc = wp.transform.location if wp is not None else carla.Location(x=float(cx), y=float(cy), z=0.0)
-        return (*transform.loc_to_bin(lc.x, lc.y), lc.z)
+    `spacing` m, each snapped to a DIRECTION-MATCHED driving lane, in the bin frame.
+    Returns an (N, 3) array (x, y, z). The ego marches through these via a cursor
+    that only advances on arrival (GOAL_RADIUS_M) — goals do not float with the ego."""
+    def goal_at(i):
+        d = dense_route[i] - dense_route[i - 1]
+        route_yaw = np.degrees(np.arctan2(d[1], d[0]))  # route travel direction (CARLA frame)
+        gx, gy, gz = _route_goal_xy(cmap, dense_route[i][0], dense_route[i][1], route_yaw)
+        return (*transform.loc_to_bin(gx, gy), gz)
 
     goals, next_at, cum = [], spacing, 0.0
     for i in range(1, len(dense_route)):
         cum += float(np.hypot(*(dense_route[i] - dense_route[i - 1])))
         if cum >= next_at:
-            goals.append(lane_goal(*dense_route[i]))
+            goals.append(goal_at(i))
             next_at += spacing
-    goals.append(lane_goal(*dense_route[-1]))  # always finish on the route's end
+    goals.append(goal_at(len(dense_route) - 1))  # always finish on the route's end
     return np.array(goals, np.float32)
 
 
@@ -257,11 +289,16 @@ class BEVRenderer:
 
         data = mbin.read_bin(Path(town_bin))
         self.roads = [(np.asarray(r["x"]), np.asarray(r["y"]), r["type"]) for r in data["roads"]]
+        # traffic-control stop lines (2 endpoints in xy), drawn colored by live state
+        self.traffic = [np.asarray(t["stop_line"], dtype=float).reshape(2, 3)[:, :2] for t in data["traffic"]]
         self.out_path = out_path
         self.span = span
         self.frames = []
 
-    def capture(self, agents, ego_idx=0, goals=None):
+    # UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4 (datatypes.h)
+    _LIGHT_COLOR = {1: "red", 2: "orange", 3: "limegreen", 4: "0.5", 0: "0.7"}
+
+    def capture(self, agents, ego_idx=0, goals=None, light_states=None):
         import matplotlib
 
         matplotlib.use("Agg")
@@ -285,6 +322,16 @@ class BEVRenderer:
             ax.add_patch(rect)
         if goals is not None:
             ax.scatter(goals[0], goals[1], c="gold", marker="*", s=70, zorder=4, edgecolors="k", linewidths=0.4)
+        if light_states is not None:
+            for j, sl in enumerate(self.traffic):
+                if j >= len(light_states):
+                    break
+                mx, my = sl[:, 0].mean(), sl[:, 1].mean()
+                if abs(mx - ex) > self.span or abs(my - ey) > self.span:
+                    continue
+                c = self._LIGHT_COLOR.get(int(light_states[j]), "0.7")
+                ax.plot(sl[:, 0], sl[:, 1], color=c, lw=3, zorder=2)  # stop line, colored by state
+                ax.scatter([mx], [my], c=c, s=45, marker="s", zorder=4, edgecolors="k", linewidths=0.4)
         ax.set_xlim(ex - self.span, ex + self.span)
         ax.set_ylim(ey - self.span, ey + self.span)
         ax.set_aspect("equal")
@@ -454,7 +501,7 @@ def main():
         obs = np.asarray(env.recompute_observations())
 
         if bev is not None:
-            bev.capture(env.get_global_agent_state(), ego_idx=0, goals=(gx, gy))
+            bev.capture(env.get_global_agent_state(), ego_idx=0, goals=(gx, gy), light_states=states)
 
         if step % 10 == 0:
             el = ego.get_location()
