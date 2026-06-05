@@ -223,12 +223,12 @@ class Drive(pufferlib.PufferEnv):
             self.target_features = binding.STATIC_TARGET_FEATURES
         else:
             self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.goal_dim = self.num_target_waypoints * self.target_features
+        self.target_dim = self.num_target_waypoints * self.target_features
 
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
-            + self.goal_dim
+            + self.target_dim
             + self.obs_slots_partners_n * self.partner_features
             + self.obs_slots_lane_kept * self.road_features
             + self.obs_slots_boundary_kept * self.road_features

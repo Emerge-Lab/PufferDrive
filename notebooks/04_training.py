@@ -109,11 +109,11 @@ print(
     f"ego_obs: shape={ego_obs.shape}, NaN={torch.isnan(ego_obs).sum().item()}, range=[{ego_obs.min():.3f}, {ego_obs.max():.3f}]"
 )
 
-cond_dim = backbone.target_dim
-if cond_dim > 0:
-    cond_obs = x[:, slide_idx : slide_idx + cond_dim]
-    slide_idx += cond_dim
-    print(f"cond_obs: shape={cond_obs.shape}, NaN={torch.isnan(cond_obs).sum().item()}")
+context_dim = backbone.context_dim
+if context_dim > 0:
+    context_obs = x[:, slide_idx : slide_idx + context_dim]
+    slide_idx += context_dim
+    print(f"context_obs: shape={context_obs.shape}, NaN={torch.isnan(context_obs).sum().item()}")
 
 partner_dim = env.obs_slots_partners_n * env.partner_features
 lane_dim = env.obs_slots_lane_kept * env.road_features
@@ -141,11 +141,11 @@ for name, enc in [("ego", ego_enc), ("partner", partner_enc), ("lane", lane_enc)
         f"{name:>10s}_enc: NaN={torch.isnan(enc).sum().item()}, dead={((enc.abs().sum(dim=0) == 0).sum().item())}, range=[{enc.min():.3f}, {enc.max():.3f}]"
     )
 
-if cond_dim > 0:
+if context_dim > 0:
     with torch.no_grad():
-        cond_enc = backbone.target_encoder(cond_obs)
+        context_enc = backbone.context_encoder(context_obs)
     print(
-        f"{'cond':>10s}_enc: NaN={torch.isnan(cond_enc).sum().item()}, dead={((cond_enc.abs().sum(dim=0) == 0).sum().item())}, range=[{cond_enc.min():.3f}, {cond_enc.max():.3f}]"
+        f"{'context':>10s}_enc: NaN={torch.isnan(context_enc).sum().item()}, dead={((context_enc.abs().sum(dim=0) == 0).sum().item())}, range=[{context_enc.min():.3f}, {context_enc.max():.3f}]"
     )
 
 # %% [markdown]

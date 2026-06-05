@@ -97,7 +97,7 @@ DEFAULT_POLICY_KWARGS = {
     "lane_input_size": 64,
     "boundary_input_size": 64,
     "traffic_control_input_size": 64,
-    "target_input_size": 64,
+    "context_input_size": 64,
     "backbone_hidden_size": 128,
     "backbone_num_layers": 1,
     "actor_hidden_size": 128,

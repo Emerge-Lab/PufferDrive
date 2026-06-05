@@ -1349,8 +1349,8 @@ if bb.obs_slots_traffic_controls_n > 0:
             True,
         )
     )
-if bb.target_dim > 0:
-    enc_inventory.append(("conditioning", bb.target_encoder, bb.target_dim, 1, False))
+if bb.context_dim > 0:
+    enc_inventory.append(("context", bb.context_encoder, bb.context_dim, 1, False))
 
 enc_names = [n for n, *_ in enc_inventory]
 set_encs = [n for n, _, _, _, is_set in enc_inventory if is_set]
@@ -1389,7 +1389,7 @@ partner_dim = bb.obs_slots_partners_n * bb.partner_features_count
 lane_dim = bb.obs_slots_lane_kept * bb.road_features_count
 boundary_dim = bb.obs_slots_boundary_kept * bb.road_features_count
 traffic_dim = bb.obs_slots_traffic_controls_n * bb.traffic_control_features_count
-_s = ego_dim + bb.target_dim
+_s = ego_dim + bb.context_dim
 sl = {}
 sl["partner"] = (_s, _s + partner_dim, bb.obs_slots_partners_n, bb.partner_features_count)
 _s += partner_dim

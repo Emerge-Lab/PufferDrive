@@ -51,7 +51,7 @@ policy = DrivePolicy(
     lane_input_size=INPUT_SIZE,
     boundary_input_size=INPUT_SIZE,
     traffic_control_input_size=INPUT_SIZE,
-    target_input_size=INPUT_SIZE,
+    context_input_size=INPUT_SIZE,
     backbone_hidden_size=BACKBONE_HIDDEN_SIZE,
     backbone_num_layers=BACKBONE_NUM_LAYERS,
     actor_hidden_size=ACTOR_HIDDEN_SIZE,
@@ -87,12 +87,12 @@ summary(policy, input_data=obs_tensor, depth=4, col_names=["input_size", "output
 
 # %%
 backbone = policy.actor_backbone
-cond_dim = backbone.target_dim
+context_dim = backbone.context_dim
 
 # Collect encoder info
 encoders = [
     ("ego", env.ego_features, 1, "direct", INPUT_SIZE),
-    ("conditioning", cond_dim, 1, "direct", INPUT_SIZE) if cond_dim > 0 else None,
+    ("context", context_dim, 1, "direct", INPUT_SIZE) if context_dim > 0 else None,
     ("partner", env.partner_features, env.obs_slots_partners_n, "max-pool", INPUT_SIZE),
     ("lane", env.road_features, env.obs_slots_lane_kept, "max-pool", INPUT_SIZE),
     ("boundary", env.road_features, env.obs_slots_boundary_kept, "max-pool", INPUT_SIZE),
@@ -216,8 +216,8 @@ components = {
     "partner_encoder": backbone.partner_encoder,
     "traffic_ctrl_encoder": backbone.traffic_control_encoder,
 }
-if backbone.target_dim > 0:
-    components["target_encoder"] = backbone.target_encoder
+if backbone.context_dim > 0:
+    components["context_encoder"] = backbone.context_encoder
 components["backbone_mlp"] = backbone.backbone
 components["actor_head"] = policy.actor_head
 components["critic_head"] = policy.critic_head
@@ -254,7 +254,7 @@ x = obs_tensor
 backbone = policy.actor_backbone
 
 slide_idx = env.ego_features
-cond_dim = backbone.target_dim
+context_dim = backbone.context_dim
 partner_dim = env.obs_slots_partners_n * env.partner_features
 lane_dim = env.obs_slots_lane_kept * env.road_features
 boundary_dim = env.obs_slots_boundary_kept * env.road_features
@@ -264,10 +264,10 @@ traffic_dim = env.obs_slots_traffic_controls_n * env.traffic_control_features
 ego_obs = x[:, :slide_idx]
 slices = [("ego", 0, slide_idx, ego_obs.shape)]
 
-if cond_dim > 0:
-    cond_obs = x[:, slide_idx : slide_idx + cond_dim]
-    slices.append(("conditioning", slide_idx, slide_idx + cond_dim, cond_obs.shape))
-    slide_idx += cond_dim
+if context_dim > 0:
+    context_obs = x[:, slide_idx : slide_idx + context_dim]
+    slices.append(("context", slide_idx, slide_idx + context_dim, context_obs.shape))
+    slide_idx += context_dim
 
 partner_obs = x[:, slide_idx : slide_idx + partner_dim]
 slices.append(("partners", slide_idx, slide_idx + partner_dim, partner_obs.shape))
@@ -296,9 +296,9 @@ with torch.no_grad():
     ego_enc = backbone.ego_encoder(ego_obs)
     print(f"  ego_encoder:     {ego_obs.shape} -> {ego_enc.shape}")
 
-    if cond_dim > 0:
-        cond_enc = backbone.target_encoder(cond_obs)
-        print(f"  cond_encoder:    {cond_obs.shape} -> {cond_enc.shape}")
+    if context_dim > 0:
+        context_enc = backbone.context_encoder(context_obs)
+        print(f"  context_encoder:    {context_obs.shape} -> {context_enc.shape}")
 
     p_reshaped = partner_obs.view(-1, env.obs_slots_partners_n, env.partner_features)
     p_enc, _ = backbone.partner_encoder(p_reshaped).max(dim=1)
@@ -326,8 +326,8 @@ with torch.no_grad():
 
     # Concat + backbone
     features = [ego_enc, l_enc, b_enc, p_enc, t_enc]
-    if cond_dim > 0:
-        features.append(cond_enc)
+    if context_dim > 0:
+        features.append(context_enc)
     concat = torch.cat(features, dim=1)
     hidden = backbone.backbone(concat)
     print(f"\n  concat: {concat.shape}")
@@ -382,9 +382,9 @@ with torch.no_grad():
     slide = env.ego_features
     activations["ego"] = backbone.ego_encoder(obs_tensor[:, : env.ego_features])
 
-    if cond_dim > 0:
-        activations["conditioning"] = backbone.target_encoder(obs_tensor[:, slide : slide + cond_dim])
-        slide += cond_dim
+    if context_dim > 0:
+        activations["context"] = backbone.context_encoder(obs_tensor[:, slide : slide + context_dim])
+        slide += context_dim
 
     p_obs = obs_tensor[:, slide : slide + partner_dim].view(-1, env.obs_slots_partners_n, env.partner_features)
     activations["partner"], _ = backbone.partner_encoder(p_obs).max(dim=1)
@@ -507,7 +507,7 @@ POLICY_DEFAULTS = {
     "lane_input_size": 64,
     "boundary_input_size": 64,
     "traffic_control_input_size": 64,
-    "target_input_size": 64,
+    "context_input_size": 64,
     "backbone_num_layers": 1,
     "actor_hidden_size": 128,
     "actor_num_layers": 0,
@@ -533,7 +533,7 @@ for cfg in configs:
             "lane_input_size": encoder_size,
             "boundary_input_size": encoder_size,
             "traffic_control_input_size": encoder_size,
-            "target_input_size": encoder_size,
+            "context_input_size": encoder_size,
         }
     )
     p = DrivePolicy(env, **full_cfg).to(device)
@@ -600,9 +600,9 @@ stacked = np.concatenate(all_obs, axis=0)
 
 slide = env.ego_features
 segments = [("ego", 0, env.ego_features, 1, env.ego_features)]
-if cond_dim > 0:
-    segments.append(("conditioning", slide, slide + cond_dim, 1, cond_dim))
-    slide += cond_dim
+if context_dim > 0:
+    segments.append(("context", slide, slide + context_dim, 1, context_dim))
+    slide += context_dim
 segments.append(("partners", slide, slide + partner_dim, env.obs_slots_partners_n, env.partner_features))
 slide += partner_dim
 segments.append(("lanes", slide, slide + lane_dim, env.obs_slots_lane_kept, env.road_features))
@@ -661,10 +661,10 @@ axes[0].set_title("Input Feature Sensitivity (|d hidden / d obs|)")
 seg_boundaries = [0, env.ego_features]
 seg_labels = ["ego"]
 s = env.ego_features
-if cond_dim > 0:
-    s += cond_dim
+if context_dim > 0:
+    s += context_dim
     seg_boundaries.append(s)
-    seg_labels.append("cond")
+    seg_labels.append("context")
 for name, dim in [
     ("partners", partner_dim),
     ("lanes", lane_dim),

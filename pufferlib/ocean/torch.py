@@ -50,7 +50,7 @@ class DriveBackbone(nn.Module):
         lane_input_size,
         boundary_input_size,
         traffic_control_input_size,
-        target_input_size,
+        context_input_size,
         backbone_hidden_size,
         backbone_num_layers,
         ego_dim,
@@ -69,7 +69,7 @@ class DriveBackbone(nn.Module):
         self.lane_input_size = lane_input_size
         self.boundary_input_size = boundary_input_size
         self.traffic_control_input_size = traffic_control_input_size
-        self.target_input_size = target_input_size
+        self.context_input_size = context_input_size
 
         # Observation dimensions from environment config
         self.obs_slots_partners_n = env.obs_slots_partners_n
@@ -89,8 +89,8 @@ class DriveBackbone(nn.Module):
         )
         self.obs_slot_num_types = binding.OBS_SLOT_NUM_TYPES
         self.mask_padded_features = mask_padded_features
-        # Conditioning size (reward coefficients + target info)
-        self.target_dim = env.num_reward_coefs + env.goal_dim
+        # Context size (reward coefficients + target info)
+        self.context_dim = env.num_reward_coefs + env.target_dim
 
         # 1. observations Encoders
         # Each encoder projects raw features into its own embedding space
@@ -110,9 +110,9 @@ class DriveBackbone(nn.Module):
                 self.traffic_control_features_after_onehot, traffic_control_input_size
             )
             encoders_out += traffic_control_input_size
-        if self.target_dim > 0:
-            self.target_encoder = self._create_encoder(self.target_dim, target_input_size)
-            encoders_out += target_input_size
+        if self.context_dim > 0:
+            self.context_encoder = self._create_encoder(self.context_dim, context_input_size)
+            encoders_out += context_input_size
 
         # 2. Main Backbone MLP
         backbone_act_cls = ACTIVATIONS[backbone_activation]
@@ -139,8 +139,8 @@ class DriveBackbone(nn.Module):
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
 
-        target_observations = observations[:, slide_idx : slide_idx + self.target_dim]
-        slide_idx += self.target_dim
+        context_observations = observations[:, slide_idx : slide_idx + self.context_dim]
+        slide_idx += self.context_dim
 
         partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
         slide_idx += partner_dim
@@ -227,9 +227,9 @@ class DriveBackbone(nn.Module):
             feature_list.append(traffic_control_features)
 
         # Add optional features if enabled
-        if self.target_dim > 0:
-            target_features = self.target_encoder(target_observations)
-            feature_list.append(target_features)
+        if self.context_dim > 0:
+            context_features = self.context_encoder(context_observations)
+            feature_list.append(context_features)
 
         # Concatenate all features and pass through main backbone
         concat_features = torch.cat(feature_list, dim=1)
@@ -241,7 +241,7 @@ class DriveBackbone(nn.Module):
         boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
-        slide_idx = ego_dim + self.target_dim
+        slide_idx = ego_dim + self.context_dim
         partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
         slide_idx += partner_dim
         lane_observations = observations[:, slide_idx : slide_idx + lane_dim]
@@ -312,7 +312,7 @@ class Drive(nn.Module):
         lane_input_size: int,
         boundary_input_size: int,
         traffic_control_input_size: int,
-        target_input_size: int,
+        context_input_size: int,
         backbone_hidden_size: int,
         backbone_num_layers: int,
         actor_hidden_size: int,
@@ -340,7 +340,7 @@ class Drive(nn.Module):
             "lane_input_size": lane_input_size,
             "boundary_input_size": boundary_input_size,
             "traffic_control_input_size": traffic_control_input_size,
-            "target_input_size": target_input_size,
+            "context_input_size": context_input_size,
             "backbone_hidden_size": backbone_hidden_size,
             "backbone_num_layers": backbone_num_layers,
             "ego_dim": self.ego_dim,
