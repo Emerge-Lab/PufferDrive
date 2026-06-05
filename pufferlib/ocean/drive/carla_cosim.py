@@ -37,6 +37,10 @@ from pufferlib.ocean.drive import carla_scenarios
 
 DEFAULT_ROUTES = "/workspace/CaRL/PlanT/data/longest6.xml"
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
+GOAL_RADIUS_M = 6.0  # advance the route-goal cursor only when the ego arrives within this
+DEFAULT_VEHICLE_LENGTH_M = 4.5  # fallback size for a parked/dead actor slot (out of obs range anyway)
+DEFAULT_VEHICLE_WIDTH_M = 2.0
+EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
 
 def load_checkpoint_config(checkpoint):
     """The checkpoint's sibling config.yaml — the single source of truth for the
@@ -106,7 +110,7 @@ def build_carla(client, town, route_wps, num_background, dt_sub):
     # (we teleport it from PufferDrive each tick).
     start = carla.Location(x=route_wps[0, 0], y=route_wps[0, 1], z=route_wps[0, 2])
     ego_sp = min(spawn_points, key=lambda sp: sp.location.distance(start))
-    ego = world.spawn_actor(car_bps[0], ego_sp)
+    ego = world.spawn_actor(bplib.find(EGO_BLUEPRINT), ego_sp)
     ego.set_simulate_physics(False)
 
     # Background: spawn at the spawn points NEAREST the ego (TM autopilot) so the
@@ -166,23 +170,59 @@ def read_background(bg_actors, transform):
             np.array(z, np.float32), np.array(h, np.float32), np.array(vx, np.float32), np.array(vy, np.float32))
 
 
-def ego_goals(route_wps, ego_xy_carla, transform):
-    """3 route waypoints ahead of the ego (bin frame), ~[15,35,60] m spacing."""
-    d = np.hypot(route_wps[:, 0] - ego_xy_carla[0], route_wps[:, 1] - ego_xy_carla[1])
-    i0 = int(d.argmin())
-    targets = []
-    for want in (15.0, 35.0, 60.0):
-        j = i0
-        acc = 0.0
-        while j + 1 < len(route_wps) and acc < want:
-            acc += np.hypot(*(route_wps[j + 1, :2] - route_wps[j, :2]))
-            j += 1
-        targets.append(route_wps[min(j, len(route_wps) - 1)])
-    gx, gy, gz = [], [], []
-    for w in targets:
-        bx, by = transform.loc_to_bin(w[0], w[1])
-        gx.append(bx); gy.append(by); gz.append(w[2])
-    return np.array(gx, np.float32), np.array(gy, np.float32), np.array(gz, np.float32)
+def read_actor_sizes(actors):
+    """Bounding-box (length, width) in meters for each CARLA actor, so the ego
+    observes a truck as a truck. CARLA extent is half-size along the actor's
+    local axes (x=forward, y=lateral)."""
+    idx, length, width = [], [], []
+    for j, a in enumerate(actors):
+        idx.append(1 + j)
+        if a is not None and a.is_alive:
+            ext = a.bounding_box.extent
+            length.append(2.0 * ext.x); width.append(2.0 * ext.y)
+        else:
+            length.append(DEFAULT_VEHICLE_LENGTH_M); width.append(DEFAULT_VEHICLE_WIDTH_M)
+    return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
+
+
+def densify_route(route_wps, step=2.0):
+    """Interpolate the sparse longest6v2 route waypoints to ~step-m spacing."""
+    pts = [route_wps[0, :2].astype(float)]
+    for i in range(len(route_wps) - 1):
+        a, b = route_wps[i, :2].astype(float), route_wps[i + 1, :2].astype(float)
+        seg = float(np.hypot(*(b - a)))
+        n = max(1, int(seg / step))
+        for k in range(1, n + 1):
+            pts.append(a + (b - a) * (k / n))
+    return np.asarray(pts)
+
+
+def build_route_goals(dense_route, transform, cmap, spacing=20.0):
+    """Fixed sequence of lane-centered goals along the WHOLE route, one every
+    `spacing` m, each snapped to the CARLA lane center, in the bin frame. Returns
+    an (N, 3) array (x, y, z). The ego marches through these via a cursor that
+    only advances on arrival (see GOAL_RADIUS_M) — goals do not float with the ego."""
+    def lane_goal(cx, cy):
+        wp = cmap.get_waypoint(carla.Location(x=float(cx), y=float(cy)))  # snap to lane center
+        lc = wp.transform.location if wp is not None else carla.Location(x=float(cx), y=float(cy), z=0.0)
+        return (*transform.loc_to_bin(lc.x, lc.y), lc.z)
+
+    goals, next_at, cum = [], spacing, 0.0
+    for i in range(1, len(dense_route)):
+        cum += float(np.hypot(*(dense_route[i] - dense_route[i - 1])))
+        if cum >= next_at:
+            goals.append(lane_goal(*dense_route[i]))
+            next_at += spacing
+    goals.append(lane_goal(*dense_route[-1]))  # always finish on the route's end
+    return np.array(goals, np.float32)
+
+
+def select_goals(route_goals, cursor, num=3):
+    """The next `num` goals from the cursor (clamped at the route's end), as
+    (gx, gy, gz) arrays for set_agent_goals."""
+    idx = [min(cursor + k, len(route_goals) - 1) for k in range(num)]
+    sel = route_goals[idx]
+    return sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy()
 
 
 def attach_chase_camera(world, ego, w=960, h=540):
@@ -272,24 +312,35 @@ def main():
     ap.add_argument("--carla-port", type=int, default=2000)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--sub-ticks", type=int, default=None)  # default: round(dt / 0.1)
+    ap.add_argument("--dt", type=float, default=None, help="ego dynamics dt (default CARLA_ARCH=0.1; policy trained at 0.3)")
     ap.add_argument("--render", default=None, help="output mp4 path for a top-down BEV render")
+    ap.add_argument("--bev-span", type=float, default=70.0, help="BEV half-window in meters")
     ap.add_argument("--carla-view", default=None,
                     help="output mp4 path for a CARLA chase-camera view (needs CARLA -RenderOffScreen)")
+    ap.add_argument("--town-bin", default=None,
+                    help="override the town .bin (e.g. a shoulder-retyped variant); default: repo carla bin")
     args = ap.parse_args()
 
     town, route_wps = parse_route(args.routes, args.route_id)
-    town_bin = cb.bin_path_for_town(town)
+    town_bin = args.town_bin or cb.bin_path_for_town(town)
     print(f"[cosim] route {args.route_id} town={town} waypoints={len(route_wps)} bin={town_bin}")
 
     cfg = load_checkpoint_config(args.checkpoint)  # for the policy arch (below)
-    dt = CARLA_ARCH["dt"]
+    dt = args.dt if args.dt is not None else CARLA_ARCH["dt"]
     sub_ticks = args.sub_ticks or max(1, round(dt / 0.1))  # CARLA at 0.1s, PufferDrive at dt
 
     # PufferDrive env (gigaflow spawns an agent pool; agent 0 = ego, rest = background).
     env = Drive(
         map_dir=town_bin, num_maps=1, num_agents=args.num_agents,
         simulation_mode="gigaflow", control_mode="control_vehicles",
-        scenario_length=1_000_000, resample_frequency=0, **CARLA_ARCH,
+        scenario_length=1_000_000, resample_frequency=0,
+        # The co-sim sets the ego's goals from the route and overwrites all
+        # background agents each tick, so gigaflow's reset-time goals are
+        # throwaway. goal_on_lane=False places them at random drivable points
+        # (no lane-graph routing), which keeps reset fast even when a patched
+        # bin has had non-driving lanes retyped out of the routable network.
+        goal_on_lane=False,
+        **{**CARLA_ARCH, "dt": dt},
     )
     obs, _ = env.reset()
     obs = np.asarray(obs)
@@ -315,7 +366,12 @@ def main():
     client = carla.Client(args.carla_host, args.carla_port)
     client.set_timeout(60.0)
     world, tm, ego, bg, lights = build_carla(client, town, route_wps, args.num_background, 0.1)
-    transform = cb.CarlaTransform(town, offset=cb.compute_town_offset(world.get_map(), town_bin))
+    cmap = world.get_map()
+    transform = cb.CarlaTransform(town, offset=cb.town_offset(cmap, town_bin))
+    _bin_lanes = cb._bin_lane_points(town_bin)  # bin lane points (== global frame) for diagnostics
+    dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
+    route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
+    goal_cursor = 0  # index of the current (not-yet-reached) route goal
     light_map, num_traffic = map_lights_to_bin(lights, transform, town_bin, len(lights))
     print(f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}")
 
@@ -325,10 +381,13 @@ def main():
         carla_scenarios.parse_scenarios(args.routes, args.route_id), world, tm, car_bps, walker_bps)
     print(f"[cosim] {len(scenario_mgr.scenarios)} scenarios loaded (ControlLoss skipped)")
 
-    # --- init sync: ego pose + goals; background; park surplus agents ---
+    # --- init sync: ego pose + size + goals; background; park surplus agents ---
     ego_state = transform.actor_state_to_bin(ego)
     env.set_agent_states(np.array([0], np.int32), *[np.array([v], np.float32) for v in ego_state])
-    gx, gy, gz = ego_goals(route_wps, (ego.get_transform().location.x, ego.get_transform().location.y), transform)
+    ego_ext = ego.bounding_box.extent  # match the ego to its CARLA blueprint box (static)
+    env.set_agent_sizes(np.array([0], np.int32),
+                        np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32))
+    gx, gy, gz = select_goals(route_goals, goal_cursor)
     env.set_agent_goals(0, gx, gy, gz)
     bg_idx, *_ = (read_background(bg, transform))
     surplus = np.arange(1 + len(bg), n_active, dtype=np.int32)
@@ -337,7 +396,7 @@ def main():
         env.set_agent_states(surplus, z6, z6, z6, np.zeros_like(z6), np.zeros_like(z6), np.zeros_like(z6))
     obs = np.asarray(env.recompute_observations())
 
-    bev = BEVRenderer(town_bin, args.render) if args.render else None
+    bev = BEVRenderer(town_bin, args.render, span=args.bev_span) if args.render else None
     cam, cam_q = attach_chase_camera(world, ego) if args.carla_view else (None, None)
     carla_frames = []
 
@@ -372,6 +431,7 @@ def main():
         # overwrite background + scenario actors + lights from CARLA
         actors = [a for a in bg if a.is_alive] + scenario_mgr.alive_actors()
         env.set_agent_states(*read_background(actors, transform))
+        env.set_agent_sizes(*read_actor_sizes(actors))  # true CARLA bounding-box sizes
         n_used = 1 + len(actors)  # ego + actors; park the rest (count varies)
         if n_used < n_active:
             sp = np.arange(n_used, n_active, dtype=np.int32)
@@ -384,8 +444,12 @@ def main():
             if 0 <= j < num_traffic:
                 states[j] = cb.carla_light_to_puffer(lt.get_state())
         env.set_traffic_light_states(states)
-        # advance ego goals along the route
-        gx, gy, gz = ego_goals(route_wps, (ex, ey), transform)
+        # advance the goal cursor only once the ego actually reaches the current goal
+        ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
+        while (goal_cursor < len(route_goals) - 1
+               and np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby) < GOAL_RADIUS_M):
+            goal_cursor += 1
+        gx, gy, gz = select_goals(route_goals, goal_cursor)
         env.set_agent_goals(0, gx, gy, gz)
         obs = np.asarray(env.recompute_observations())
 
@@ -398,7 +462,11 @@ def main():
             ls = f"{nl.get_state()}@{nl.get_location().distance(el):.0f}m" if nl else "n/a"
             gd = float(np.hypot(gx[0] - float(ego_bin["x"][0]), gy[0] - float(ego_bin["y"][0])))
             near = sum(1 for a in bg if a.is_alive and a.get_location().distance(el) < 40.0)
-            print(f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f}) hdg={eyaw:.0f}  goal0={gd:.0f}m  light={ls}  bg={len(bg)} near40={near} scn_active={scenario_mgr.active_count()}")
+            wp = cmap.get_waypoint(ego.get_location())  # nearest drivable lane center
+            lat = ego.get_location().distance(wp.transform.location) if wp else -1.0
+            onroad = cmap.get_waypoint(ego.get_location(), project_to_road=False) is not None
+            bin_off = float(np.min(np.hypot(_bin_lanes[:, 0] - ebx, _bin_lanes[:, 1] - eby))) if len(_bin_lanes) else -1.0
+            print(f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f})  carla_off={lat:.1f}m onroad={onroad}  bin_off={bin_off:.1f}m  goal0={gd:.0f}m[{goal_cursor}/{len(route_goals)}] light={ls}  scn={scenario_mgr.active_count()}")
 
     # cleanup
     if bev is not None:
