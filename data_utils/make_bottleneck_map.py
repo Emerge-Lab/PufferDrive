@@ -37,20 +37,36 @@ import numpy as np
 
 # ── road / scene geometry ─────────────────────────────────────────────────────
 ROAD_LENGTH_M = 200.0
-LANE_WIDTH_M = 3.5
+# Extra road behind the spawn end so the rearmost cars aren't sitting on the map
+# boundary — the corridor keeps going behind where they start. Only the
+# lane/edge/divider geometry extends; spawns, bottleneck and goals are unchanged.
+ROAD_EXTENSION_M = 40.0
+BASE_LANE_WIDTH_M = 3.5
 NUM_LANES = 4
-# Lane centers, lane 0 (bottom) .. lane 3 (top). Centered on y=0.
-LANE_CENTERS_Y = [(-1.5 + i) * LANE_WIDTH_M for i in range(NUM_LANES)]  # -5.25,-1.75,1.75,5.25
 FREE_LANE_IDX = NUM_LANES - 1                  # top lane stays open
+FREE_LANE_WIDTH_MULT = 1.5                      # the open lane is 1.5x wider
+# Per-lane widths; only the free (top) lane is widened.
+LANE_WIDTHS_M = [BASE_LANE_WIDTH_M * (FREE_LANE_WIDTH_MULT if i == FREE_LANE_IDX else 1.0)
+                 for i in range(NUM_LANES)]
+# Anchor the bottom edge so the blocked lanes (0..2) keep their positions; the
+# free lane's extra width extends the road upward only. Boundaries run bottom
+# edge -> ... -> top edge; lane centers are the midpoints.
+ROAD_BOTTOM_Y = -(NUM_LANES / 2.0) * BASE_LANE_WIDTH_M       # -7.0
+LANE_BOUNDARIES_Y = [ROAD_BOTTOM_Y]
+for _w in LANE_WIDTHS_M:
+    LANE_BOUNDARIES_Y.append(LANE_BOUNDARIES_Y[-1] + _w)
+ROAD_TOP_Y = LANE_BOUNDARIES_Y[-1]                            # 8.75 with the 1.5x lane
+LANE_CENTERS_Y = [(LANE_BOUNDARIES_Y[i] + LANE_BOUNDARIES_Y[i + 1]) / 2.0 for i in range(NUM_LANES)]
 FREE_LANE_Y = LANE_CENTERS_Y[FREE_LANE_IDX]
-ROAD_HALF_WIDTH_M = NUM_LANES * LANE_WIDTH_M / 2.0  # 7.0 -> edges at +/-7
 
 BOTTLENECK_X = ROAD_LENGTH_M - 120.0           # 80 m: 120 m from the end
 
 # ── controllable agents ───────────────────────────────────────────────────────
-CARS_PER_LANE = 5
-NUM_CONTROLLED = CARS_PER_LANE * NUM_LANES      # 20
-SPAWN_BACK_X = [2.0 + 10.0 * k for k in range(CARS_PER_LANE)]  # queue: 2,12,22,32,42
+# 4 rows (one per lane) of 4 cars each = 16 queued cars.
+CARS_PER_LANE = 4
+SPAWN_LANE_INDICES = list(range(NUM_LANES))     # all 4 lanes -> 4 rows
+NUM_CONTROLLED = CARS_PER_LANE * len(SPAWN_LANE_INDICES)  # 16
+SPAWN_BACK_X = [2.0 + 10.0 * k for k in range(CARS_PER_LANE)]  # queue: 2,12,22,32
 # Each controllable car gets a size drawn (deterministically) from these ranges,
 # spanning compact cars up to small trucks. Max width stays under the lane width
 # (3.5 m) and the merge clearance to the static blockers.
@@ -188,7 +204,7 @@ def build_bottleneck_bin() -> bytes:
     size_rng = np.random.default_rng(CAR_SIZE_SEED)
 
     agent_id = 0
-    for lane_idx in range(NUM_LANES):
+    for lane_idx in SPAWN_LANE_INDICES:
         lane_y = LANE_CENTERS_Y[lane_idx]
         for spawn_x in SPAWN_BACK_X:
             # Reference path: stay in the spawn lane (heading +x at spawn), then
@@ -247,23 +263,27 @@ def build_bottleneck_bin() -> bytes:
                     STATIC_SIZE_M, STATIC_SIZE_M, mark_as_expert=1)
 
     # ── roads ──
-    n_lane_pts = int(ROAD_LENGTH_M / LANE_SAMPLE_SPACING_M) + 1
-    road_xs = _orient_x(np.linspace(0.0, ROAD_LENGTH_M, n_lane_pts).astype(np.float32))
+    # Road geometry runs the full length plus the spawn-side extension. In the
+    # LTR build frame the spawn end is the low-x end (cars start near x=0 and
+    # drive +x), so extend the low end behind them; the orient flip then places
+    # the extra road just behind where the cars start.
+    road_x_min = -ROAD_EXTENSION_M
+    n_lane_pts = int((ROAD_LENGTH_M - road_x_min) / LANE_SAMPLE_SPACING_M) + 1
+    road_xs = _orient_x(np.linspace(road_x_min, ROAD_LENGTH_M, n_lane_pts).astype(np.float32))
     road_id = 0
     # lanes
     for lane_idx in range(NUM_LANES):
         ys = np.full(n_lane_pts, LANE_CENTERS_Y[lane_idx], dtype=np.float32)
         _pack_polyline(buf, road_id, LANE_FREEWAY, road_xs, ys, is_lane=True)
         road_id += 1
-    # outer edges
-    for edge_y in (-ROAD_HALF_WIDTH_M, ROAD_HALF_WIDTH_M):
+    # outer edges (asymmetric once the free lane is widened)
+    for edge_y in (ROAD_BOTTOM_Y, ROAD_TOP_Y):
         ys = np.full(n_lane_pts, edge_y, dtype=np.float32)
         _pack_polyline(buf, road_id, ROAD_EDGE_BOUNDARY, road_xs, ys, is_lane=False)
         road_id += 1
-    # lane dividers
-    for d in range(NUM_LANES - 1):
-        divider_y = LANE_CENTERS_Y[d] + LANE_WIDTH_M / 2.0
-        ys = np.full(n_lane_pts, divider_y, dtype=np.float32)
+    # lane dividers = the internal lane boundaries
+    for d in range(1, NUM_LANES):
+        ys = np.full(n_lane_pts, LANE_BOUNDARIES_Y[d], dtype=np.float32)
         _pack_polyline(buf, road_id, ROAD_LINE_BROKEN_SINGLE_WHITE, road_xs, ys, is_lane=False)
         road_id += 1
 
