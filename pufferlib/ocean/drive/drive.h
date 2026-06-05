@@ -85,7 +85,7 @@
 #define MAX_CHECKED_LANES 32
 #define COLLISION_QUICK_CHECK_DIST 15.0f // Quick distance check before OBB SAT
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
-#define MAX_STOPPED_SECONDS 60.0f
+#define MAX_STOPPED_SECONDS 5.0f
 #define TRAFFIC_LIGHT_DISTANCE_THRESHOLD 10.0f
 #define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
 #define DTC_OPPOSITE_HEADING_COS_THRESHOLD -0.90f // Exclude near-perfect opposite directions
@@ -3992,6 +3992,80 @@ void c_get_global_agent_state(
         length_out[i] = agent->sim_length;
         width_out[i] = agent->sim_width;
     }
+}
+
+// ── Co-simulation external-state setters ─────────────────────────────────────
+// Overwrite a subset of agents' simulation state from an external source (e.g.
+// CARLA). Symmetric with c_get_global_agent_state (get adds world_mean, set
+// subtracts it) and follows move_expert's assignment block (recache trig,
+// update_agent_speed). Agents are addressed by GLOBAL index so background /
+// static agents can be overwritten, not just policy-active ones.
+void c_set_agent_states(
+    Drive *env,
+    int count,
+    const int *idx,
+    const float *x,
+    const float *y,
+    const float *z,
+    const float *heading,
+    const float *vx,
+    const float *vy) {
+    for (int k = 0; k < count; k++) {
+        int agent_idx = idx[k];
+        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+            continue;
+        }
+        Agent *agent = &env->agents[agent_idx];
+        agent->sim_x = x[k] - env->world_mean_x;
+        agent->sim_y = y[k] - env->world_mean_y;
+        agent->sim_z = z[k];
+        agent->sim_heading = heading[k];
+        agent->cos_heading = cosf(agent->sim_heading);
+        agent->sin_heading = sinf(agent->sim_heading);
+        agent->sim_vx = vx[k];
+        agent->sim_vy = vy[k];
+        agent->yaw_rate = 0.0f;
+        update_agent_speed(agent);
+        agent->sim_valid = 1;
+    }
+}
+
+// Override traffic-light states at the current timestep from an external source.
+// states[i] is the per-traffic-element state (UNKNOWN/RED/YELLOW/GREEN/OFF).
+void c_set_traffic_light_states(Drive *env, const int *states) {
+    int ts = env->timestep;
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic = &env->traffic_elements[i];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        if (traffic->states == NULL || ts < 0 || ts >= traffic->state_length) {
+            continue;
+        }
+        traffic->states[ts] = states[i];
+    }
+}
+
+// Set an agent's goal waypoints (e.g. the ego's route). gx/gy/gz are num_wp
+// world-coord waypoints (world_mean subtracted to match the sim frame).
+void c_set_agent_goals(
+    Drive *env, int agent_idx, int num_wp, const float *gx, const float *gy, const float *gz) {
+    if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+        return;
+    }
+    Agent *agent = &env->agents[agent_idx];
+    if (num_wp > MAX_TARGET_WAYPOINTS) {
+        num_wp = MAX_TARGET_WAYPOINTS;
+    }
+    for (int w = 0; w < num_wp; w++) {
+        agent->goal_positions_x[w] = gx[w] - env->world_mean_x;
+        agent->goal_positions_y[w] = gy[w] - env->world_mean_y;
+        agent->goal_positions_z[w] = gz[w];
+    }
+    agent->current_goal_idx = 0;
+    agent->goal_position_x = agent->goal_positions_x[0];
+    agent->goal_position_y = agent->goal_positions_y[0];
+    agent->goal_position_z = agent->goal_positions_z[0];
 }
 
 void c_get_global_ground_truth_trajectories(

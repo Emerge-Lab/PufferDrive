@@ -617,6 +617,43 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def set_agent_states(self, idx, x, y, z, heading, vx, vy):
+        """Co-sim: overwrite the sim state of agents at global indices `idx`
+        (e.g. CARLA background) with world-frame pose/velocity. The C side
+        subtracts world_mean, recaches heading trig and recomputes speed."""
+        binding.vec_set_agent_states(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(x, dtype=np.float32),
+            np.ascontiguousarray(y, dtype=np.float32),
+            np.ascontiguousarray(z, dtype=np.float32),
+            np.ascontiguousarray(heading, dtype=np.float32),
+            np.ascontiguousarray(vx, dtype=np.float32),
+            np.ascontiguousarray(vy, dtype=np.float32),
+        )
+
+    def recompute_observations(self):
+        """Co-sim: recompute observations from current state without stepping
+        dynamics or advancing the timestep (call after set_agent_states)."""
+        binding.vec_recompute_observations(self.c_envs)
+        return self.observations
+
+    def set_traffic_light_states(self, states):
+        """Co-sim: override each traffic-light element's state at the current
+        timestep (states length == num_traffic_elements)."""
+        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+
+    def set_agent_goals(self, agent_idx, gx, gy, gz):
+        """Co-sim: set an agent's goal waypoints (e.g. the ego's route) in world
+        coords (C subtracts world_mean)."""
+        binding.vec_set_agent_goals(
+            self.c_envs,
+            int(agent_idx),
+            np.ascontiguousarray(gx, dtype=np.float32),
+            np.ascontiguousarray(gy, dtype=np.float32),
+            np.ascontiguousarray(gz, dtype=np.float32),
+        )
+
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
 
