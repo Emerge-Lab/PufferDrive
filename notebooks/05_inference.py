@@ -259,7 +259,7 @@ plt.show()
 # - **Ego**: speed, width, length, [jerk: steering, a_long, a_lat], lane_center_dist, lane_angle, speed_limit
 # - **Conditioning** (if enabled): 17 reward coefs (goal_radius, goal_speed, collision, offroad, comfort, lane_align, vel_align, lane_center, center_bias, velocity, reverse, stop_line, timestep, overspeed, throttle, steer, acc) + target waypoints
 # - **Target**: static=rel_x,rel_y,rel_z per waypoint; dynamic=rel_x,rel_y,rel_z,heading_cos,heading_sin per waypoint
-# - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, rel_vx, rel_vy, seconds_stopped
+# - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, sim_speed_signed, seconds_stopped
 # - **Lanes** (MAX_LANES x 7): rel_x, rel_y, rel_z, seg_length, seg_width, dir_cos, dir_sin
 # - **Boundaries** (MAX_BOUNDS x 7): same as lanes
 # - **Traffic controls** (MAX_TRAFFIC x 7): rel_x1, rel_y1, rel_x2, rel_y2, rel_z, type, state
@@ -351,8 +351,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "rel_vx",
-    "rel_vy",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 for p in range(min(int(n_visible), 5)):
@@ -632,12 +631,14 @@ if bnd_mask.any():
 for i in range(partners.shape[0]):
     if np.allclose(partners[i], 0):
         continue
-    rx, ry, rz, w, l, hc, hs, vx, vy, _ = partners[i]
+    rx, ry, rz, length, width, hc, hs, speed, _ = partners[i]
     heading = np.arctan2(hs, hc)
-    rect = Rectangle((-l / 2, -w / 2), l, w, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9)
+    rect = Rectangle(
+        (-length / 2, -width / 2), length, width, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9
+    )
     rect.set_transform(plt.matplotlib.transforms.Affine2D().rotate(heading).translate(rx, ry) + ax.transData)
     ax.add_patch(rect)
-    ax.annotate(f"{vx:.2f}, {vy:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
+    ax.annotate(f"{speed:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
 part_mask = np.any(partners != 0, axis=1)
 if part_mask.any():
     ax.scatter(
@@ -774,8 +775,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "rel_vx",
-    "rel_vy",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 obs_slots_partners_n = env.obs_slots_partners_n
@@ -791,10 +791,10 @@ _p_end = _p_start + obs_slots_partners_n * pf
 
 all_partners = buf_stoch["obs"][:, :, _p_start:_p_end].reshape(
     -1, obs_slots_partners_n, pf
-)  # (H*N, obs_slots_partners_n, 10)
+)  # (H*N, obs_slots_partners_n, pf)
 # Mask: partner is visible if any feature != 0
 visible_mask = np.any(all_partners != 0, axis=2)  # (H*N, 16)
-visible_partners = all_partners[visible_mask]  # (K, 10) — all visible partner observations
+visible_partners = all_partners[visible_mask]  # (K, pf) — all visible partner observations
 
 print(
     f"Total partner obs: {all_partners.shape[0] * obs_slots_partners_n}, visible: {len(visible_partners)} "

@@ -176,8 +176,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "rel_vx",
-    "rel_vy",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 active_mask = ~np.all(partners == 0, axis=1)

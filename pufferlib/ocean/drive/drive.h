@@ -126,7 +126,7 @@
 // Observation feature counts
 #define EGO_FEATURES 10
 #define ROAD_FEATURES 7
-#define PARTNER_FEATURES 10
+#define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
@@ -4702,10 +4702,9 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
 
     for (int j = 0; j < partners_to_write; j++) {
         Agent *other = &env->agents[nearby_agents[j].index];
-        float rel_x, rel_y, rel_heading_x, rel_heading_y, rel_vx, rel_vy;
+        float rel_x, rel_y, rel_heading_x, rel_heading_y;
         project_vector_to_ego_frame(ego, nearby_agents[j].dx, nearby_agents[j].dy, &rel_x, &rel_y);
         project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
-        project_vector_to_ego_frame(ego, other->sim_vx - ego->sim_vx, other->sim_vy - ego->sim_vy, &rel_vx, &rel_vy);
         obs[obs_idx++] = rel_x / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_y / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = nearby_agents[j].dz / Z_BUFFER;
@@ -4713,8 +4712,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
-        obs[obs_idx++] = rel_vx / (2.0f * MAX_SPEED);
-        obs[obs_idx++] = rel_vy / (2.0f * MAX_SPEED);
+        obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;
