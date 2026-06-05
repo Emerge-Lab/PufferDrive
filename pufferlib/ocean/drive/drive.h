@@ -5129,7 +5129,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         if (signed_v * v_new < 0) {
             v_new = 0.0f;
         } else {
-            v_new = clip(v_new, -2.0f, 20.0f);
+            v_new = clip(v_new, -2.0f, MAX_SPEED);
         }
 
         // If phantom braking is active, prevent speed from going negative
