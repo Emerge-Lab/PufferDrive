@@ -1472,7 +1472,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
-            tstate = torch.load(trainer_state_path, map_location=train_config["device"])
+            tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
@@ -2082,7 +2082,7 @@ def load_policy(args, vecenv, env_name=""):
         else:
             raise pufferlib.APIUsageError("No run id provided for eval")
 
-        state_dict = torch.load(path, map_location=device)
+        state_dict = torch.load(path, map_location=device, weights_only=False)
         policy.load_state_dict(clean_policy_state_dict(state_dict))
 
     load_path = args["load_model_path"]
@@ -2090,7 +2090,10 @@ def load_policy(args, vecenv, env_name=""):
         load_path = max(glob.glob(f"experiments/{env_name}*.pt"), key=os.path.getctime)
 
     if load_path is not None:
-        state_dict = torch.load(load_path, map_location=device)
+        # weights_only=False: our own checkpoints pickle a few numpy scalars
+        # (metadata) alongside the tensors, which torch's weights_only default
+        # (>=2.6) refuses to unpickle. Trusted source, so allow full load.
+        state_dict = torch.load(load_path, map_location=device, weights_only=False)
         policy.load_state_dict(clean_policy_state_dict(state_dict))
         # state_path = os.path.join(*load_path.split('/')[:-1], 'state.pt')
         # optim_state = torch.load(state_path)['optimizer_state_dict']

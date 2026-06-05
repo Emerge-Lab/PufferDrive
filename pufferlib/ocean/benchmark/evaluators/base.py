@@ -146,11 +146,15 @@ class Evaluator:
         stall_limit = 3 * scenario_length if scenario_length else 0
         last_progress = 0
         stall_steps = 0
+        # Action selection: deterministic (argmax) by default so a rollout is
+        # reproducible. Set eval.deterministic = false to sample stochastically
+        # from the policy, e.g. to get a distribution over repeated rollouts.
+        eval_deterministic = bool(self.config.get("eval", {}).get("deterministic", True))
         while not self._should_stop(args, infos_collected, steps):
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
-                action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=eval_deterministic)
                 action = action.cpu().numpy().reshape(vecenv.action_space.shape)
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
