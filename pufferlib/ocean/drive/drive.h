@@ -130,7 +130,7 @@
 #define TRAFFIC_CONTROL_FEATURES 7
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
-#define OBS_SLOT_NUM_TYPES 4
+#define OBS_VALID_COUNT_FEATURES 4
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
@@ -3897,7 +3897,7 @@ static int compute_observation_size(Drive *env) {
                                                               : 0;
     return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
         + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
-        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_SLOT_NUM_TYPES
+        + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_target_waypoints * target_features;
 }
 

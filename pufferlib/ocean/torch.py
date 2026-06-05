@@ -87,7 +87,7 @@ class DriveBackbone(nn.Module):
             + binding.NUM_TRAFFIC_CONTROL_TYPES
             + binding.NUM_TRAFFIC_CONTROL_STATES
         )
-        self.obs_slot_num_types = binding.OBS_SLOT_NUM_TYPES
+        self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.mask_padded_features = mask_padded_features
         # Context size (reward coefficients + target info)
         self.context_dim = env.num_reward_coefs + env.target_dim
@@ -153,7 +153,7 @@ class DriveBackbone(nn.Module):
 
         traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
         count_observations = observations[
-            :, slide_idx + traffic_control_dim : slide_idx + traffic_control_dim + self.obs_slot_num_types
+            :, slide_idx + traffic_control_dim : slide_idx + traffic_control_dim + self.obs_valid_count_features
         ]
         lane_counts, boundary_counts, partner_counts, traffic_control_counts = [
             count_observations[:, i].long().clamp_(0, capacity)

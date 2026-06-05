@@ -138,7 +138,7 @@ traffic_manual = o[idx : idx + env.obs_slots_traffic_controls_n * env.traffic_co
 idx += env.obs_slots_traffic_controls_n * env.traffic_control_features
 assert np.allclose(traffic_manual, traffic), "traffic mismatch"
 
-idx += 4  # appended slot-count features at end of obs
+idx += env.obs_valid_count_features
 assert idx == obs.shape[1], f"obs size mismatch: used {idx}, total {obs.shape[1]}"
 print(f"All slices match. Total features used: {idx}")
 
