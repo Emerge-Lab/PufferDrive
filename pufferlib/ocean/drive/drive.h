@@ -4030,6 +4030,21 @@ void c_set_agent_states(
     }
 }
 
+// Overwrite agent bounding-box dimensions (co-sim: a CARLA background actor's
+// real length/width, so the ego observes and collides against true sizes rather
+// than the gigaflow-spawned default). length/width are in meters.
+void c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length, const float *width) {
+    for (int k = 0; k < count; k++) {
+        int agent_idx = idx[k];
+        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+            continue;
+        }
+        Agent *agent = &env->agents[agent_idx];
+        agent->sim_length = length[k];
+        agent->sim_width = width[k];
+    }
+}
+
 // Override traffic-light states at the current timestep from an external source.
 // states[i] is the per-traffic-element state (UNKNOWN/RED/YELLOW/GREEN/OFF).
 void c_set_traffic_light_states(Drive *env, const int *states) {

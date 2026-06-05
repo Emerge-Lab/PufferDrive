@@ -632,6 +632,17 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(vy, dtype=np.float32),
         )
 
+    def set_agent_sizes(self, idx, length, width):
+        """Co-sim: overwrite the bounding-box length/width (meters) of agents at
+        global indices `idx`, so the ego observes/collides against a CARLA
+        actor's true size instead of the gigaflow-spawned default."""
+        binding.vec_set_agent_sizes(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(length, dtype=np.float32),
+            np.ascontiguousarray(width, dtype=np.float32),
+        )
+
     def recompute_observations(self):
         """Co-sim: recompute observations from current state without stepping
         dynamics or advancing the timestep (call after set_agent_states)."""

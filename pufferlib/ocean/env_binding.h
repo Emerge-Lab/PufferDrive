@@ -1111,6 +1111,30 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_agent_sizes(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_sizes requires 4 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *length_arr = PyTuple_GetItem(args, 2);
+    PyObject *width_arr = PyTuple_GetItem(args, 3);
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(length_arr) || !PyArray_Check(width_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All arrays must be NumPy arrays");
+        return NULL;
+    }
+    int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    float *length = (float *) PyArray_DATA((PyArrayObject *) length_arr);
+    float *width = (float *) PyArray_DATA((PyArrayObject *) width_arr);
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    c_set_agent_sizes((Drive *) vec->envs[0], count, idx, length, width);
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1439,6 +1463,7 @@ static PyMethodDef methods[]
        {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
        {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
        {"vec_set_agent_states", vec_set_agent_states, METH_VARARGS, "Overwrite agent states from an external source (co-sim)"},
+       {"vec_set_agent_sizes", vec_set_agent_sizes, METH_VARARGS, "Overwrite agent bounding-box sizes from an external source (co-sim)"},
        {"vec_recompute_observations", vec_recompute_observations, METH_VARARGS, "Recompute observations without stepping (co-sim)"},
        {"vec_set_traffic_light_states", vec_set_traffic_light_states, METH_VARARGS, "Override traffic light states (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
