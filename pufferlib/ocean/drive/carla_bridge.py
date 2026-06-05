@@ -69,6 +69,19 @@ def compute_town_offset(carla_map, bin_path: str, sample_m: float = 2.0, iters: 
     return float(t[0]), float(t[1])
 
 
+def town_offset(carla_map, bin_path: str):
+    """Exact CARLA<->bin (tx, ty) from the bin's stored centroid when present
+    (bin = original - centroid, and CARLA = original y-flipped, so the offset is
+    just -centroid_xy). Falls back to ICP alignment for legacy bins that don't
+    carry a centroid. The stored-centroid path is exact and deterministic; ICP is
+    biased because it aligns the bin's full lane set to CARLA's driving-only
+    waypoints, so prefer the stored value."""
+    centroid = _mbin.read_bin(Path(bin_path)).get("centroid")
+    if centroid is not None:
+        return (-float(centroid[0]), -float(centroid[1]))
+    return compute_town_offset(carla_map, bin_path)
+
+
 class CarlaTransform:
     """Bidirectional CARLA <-> PufferDrive-bin-frame transform for one town."""
 

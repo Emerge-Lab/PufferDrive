@@ -137,8 +137,16 @@ def read_bin(path: Path) -> dict:
         (n_ttp,) = _read("<i", f)
         tracks_to_predict = _read_i_array(f, n_ttp)
 
+        # Optional trailing field: (x, y, z) source-frame centroid that was
+        # subtracted to center the map. Lets a consumer recover the original
+        # georeference (e.g. the CARLA<->bin offset) exactly, no alignment needed.
         trailing = f.read()
-        assert not trailing, f"{len(trailing)} unparsed trailing bytes in {path}"
+        if len(trailing) == 12:
+            centroid = struct.unpack("<3f", trailing)
+        elif len(trailing) == 0:
+            centroid = None
+        else:
+            raise AssertionError(f"{len(trailing)} unexpected trailing bytes in {path}")
 
     return {
         "agents": agents,
@@ -152,6 +160,7 @@ def read_bin(path: Path) -> dict:
         "log_dt": log_dt,
         "objects_of_interest": objects_of_interest,
         "tracks_to_predict": tracks_to_predict,
+        "centroid": centroid,
     }
 
 
@@ -185,6 +194,9 @@ def mirror(data: dict) -> dict:
             arr[3 * T + k] = -arr[3 * T + k]  # heading
             arr[5 * T + k] = -arr[5 * T + k]  # vy
         o["raw"] = struct.pack(f"<{9 * T}f{T}i", *arr)
+    if data.get("centroid") is not None:
+        cx, cy, cz = data["centroid"]
+        data["centroid"] = (cx, -cy, cz)
     return data
 
 
@@ -263,6 +275,9 @@ def write_bin(data: dict, path: Path):
         f.write(struct.pack("<i", len(data["tracks_to_predict"])))
         if data["tracks_to_predict"]:
             f.write(struct.pack(f"<{len(data['tracks_to_predict'])}i", *data["tracks_to_predict"]))
+        centroid = data.get("centroid")
+        if centroid is not None:
+            f.write(struct.pack("<3f", *centroid))
 
 
 def main():
