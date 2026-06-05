@@ -33,6 +33,7 @@ import carla
 
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import carla_bridge as cb
+from pufferlib.ocean.drive import carla_scenarios
 
 DEFAULT_ROUTES = "/workspace/CaRL/PlanT/data/longest6.xml"
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
@@ -108,19 +109,19 @@ def build_carla(client, town, route_wps, num_background, dt_sub):
     ego = world.spawn_actor(car_bps[0], ego_sp)
     ego.set_simulate_physics(False)
 
-    # Background: random spawn points (excluding the ego's), TM autopilot.
+    # Background: spawn at the spawn points NEAREST the ego (TM autopilot) so the
+    # traffic clusters around the ego — visible in the camera and within the ego's
+    # observation range, rather than scattered across the whole town.
     bg = []
-    used = {ego_sp}
-    for sp in spawn_points:
+    for sp in sorted(spawn_points, key=lambda s: s.location.distance(ego_sp.location)):
         if len(bg) >= num_background:
             break
-        if sp in used or sp.location.distance(ego_sp.location) < 8.0:
+        if sp.location.distance(ego_sp.location) < 8.0:
             continue
         actor = world.try_spawn_actor(car_bps[len(bg) % len(car_bps)], sp)
         if actor is not None:
             actor.set_autopilot(True, tm.get_port())
             bg.append(actor)
-            used.add(sp)
 
     world.tick()
     lights = list(world.get_actors().filter("traffic.traffic_light"))
@@ -184,6 +185,81 @@ def ego_goals(route_wps, ego_xy_carla, transform):
     return np.array(gx, np.float32), np.array(gy, np.float32), np.array(gz, np.float32)
 
 
+def attach_chase_camera(world, ego, w=960, h=540):
+    """RGB chase camera attached to the ego (behind + above, looking forward).
+    Returns (camera_actor, image_queue). Requires CARLA running WITH rendering
+    (-RenderOffScreen), not -nullrhi."""
+    import queue
+
+    bp = world.get_blueprint_library().find("sensor.camera.rgb")
+    bp.set_attribute("image_size_x", str(w))
+    bp.set_attribute("image_size_y", str(h))
+    bp.set_attribute("fov", "90")
+    cam = world.spawn_actor(
+        bp, carla.Transform(carla.Location(x=-6.5, z=3.2), carla.Rotation(pitch=-12.0)), attach_to=ego
+    )
+    q = queue.Queue()
+    cam.listen(q.put)
+    return cam, q
+
+
+def carla_image_to_rgb(img):
+    arr = np.frombuffer(img.raw_data, dtype=np.uint8).reshape(img.height, img.width, 4)
+    return arr[:, :, [2, 1, 0]].copy()  # BGRA -> RGB
+
+
+class BEVRenderer:
+    """Top-down render of the PufferDrive scene (ego red, CARLA-synced background
+    blue, ego goals gold), centered on the ego. Frames -> mp4."""
+
+    def __init__(self, town_bin, out_path, span=70.0):
+        import data_utils.mirror_map_bin as mbin
+
+        data = mbin.read_bin(Path(town_bin))
+        self.roads = [(np.asarray(r["x"]), np.asarray(r["y"]), r["type"]) for r in data["roads"]]
+        self.out_path = out_path
+        self.span = span
+        self.frames = []
+
+    def capture(self, agents, ego_idx=0, goals=None):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.transforms as mtransforms
+        from matplotlib.patches import Rectangle
+
+        ex, ey = float(agents["x"][ego_idx]), float(agents["y"][ego_idx])
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=80)
+        for rx, ry, rt in self.roads:
+            col = "0.6" if 0 <= rt <= 9 else ("0.25" if 20 <= rt <= 29 else "0.8")
+            ax.plot(rx, ry, color=col, lw=0.6, zorder=1)
+        for i in range(len(agents["x"])):
+            x, y = float(agents["x"][i]), float(agents["y"][i])
+            if abs(x - ex) > self.span or abs(y - ey) > self.span:
+                continue  # surplus agents parked far away
+            h, L, W = float(agents["heading"][i]), float(agents["length"][i]), float(agents["width"][i])
+            rect = Rectangle((-L / 2, -W / 2), L, W, color="red" if i == ego_idx else "tab:blue",
+                             alpha=0.95, zorder=3)
+            rect.set_transform(mtransforms.Affine2D().rotate(h).translate(x, y) + ax.transData)
+            ax.add_patch(rect)
+        if goals is not None:
+            ax.scatter(goals[0], goals[1], c="gold", marker="*", s=70, zorder=4, edgecolors="k", linewidths=0.4)
+        ax.set_xlim(ex - self.span, ex + self.span)
+        ax.set_ylim(ey - self.span, ey + self.span)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        fig.canvas.draw()
+        self.frames.append(np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy())
+        plt.close(fig)
+
+    def save(self, fps=10):
+        import imageio
+
+        imageio.mimwrite(self.out_path, self.frames, fps=fps, codec="libx264")
+        print(f"[cosim] wrote {self.out_path} ({len(self.frames)} frames)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--routes", default=DEFAULT_ROUTES)
@@ -196,6 +272,9 @@ def main():
     ap.add_argument("--carla-port", type=int, default=2000)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--sub-ticks", type=int, default=None)  # default: round(dt / 0.1)
+    ap.add_argument("--render", default=None, help="output mp4 path for a top-down BEV render")
+    ap.add_argument("--carla-view", default=None,
+                    help="output mp4 path for a CARLA chase-camera view (needs CARLA -RenderOffScreen)")
     args = ap.parse_args()
 
     town, route_wps = parse_route(args.routes, args.route_id)
@@ -240,6 +319,12 @@ def main():
     light_map, num_traffic = map_lights_to_bin(lights, transform, town_bin, len(lights))
     print(f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}")
 
+    car_bps = [b for b in world.get_blueprint_library().filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4]
+    walker_bps = list(world.get_blueprint_library().filter("walker.pedestrian.*"))
+    scenario_mgr = carla_scenarios.ScenarioManager(
+        carla_scenarios.parse_scenarios(args.routes, args.route_id), world, tm, car_bps, walker_bps)
+    print(f"[cosim] {len(scenario_mgr.scenarios)} scenarios loaded (ControlLoss skipped)")
+
     # --- init sync: ego pose + goals; background; park surplus agents ---
     ego_state = transform.actor_state_to_bin(ego)
     env.set_agent_states(np.array([0], np.int32), *[np.array([v], np.float32) for v in ego_state])
@@ -252,8 +337,11 @@ def main():
         env.set_agent_states(surplus, z6, z6, z6, np.zeros_like(z6), np.zeros_like(z6), np.zeros_like(z6))
     obs = np.asarray(env.recompute_observations())
 
+    bev = BEVRenderer(town_bin, args.render) if args.render else None
+    cam, cam_q = attach_chase_camera(world, ego) if args.carla_view else (None, None)
+    carla_frames = []
+
     # --- co-sim loop ---
-    import data_utils.mirror_map_bin as mbin  # noqa: F401 (kept warm)
     for step in range(args.steps):
         if policy is not None:
             import torch
@@ -273,11 +361,23 @@ def main():
         eyaw = transform.bin_heading_to_yaw(float(ego_bin["heading"][0]))
         ego.set_transform(carla.Transform(carla.Location(x=ex, y=ey, z=0.3),
                                            carla.Rotation(yaw=eyaw)))
+        scenario_mgr.tick(ego.get_location())  # trigger/spawn hazards near the ego
+        cam_img = None
         for _ in range(sub_ticks):
             world.tick()
-        # overwrite background + lights from CARLA
-        bg_state = read_background(bg, transform)
-        env.set_agent_states(*bg_state)
+            if cam_q is not None:
+                cam_img = cam_q.get(timeout=20.0)
+        if cam_img is not None:
+            carla_frames.append(carla_image_to_rgb(cam_img))
+        # overwrite background + scenario actors + lights from CARLA
+        actors = [a for a in bg if a.is_alive] + scenario_mgr.alive_actors()
+        env.set_agent_states(*read_background(actors, transform))
+        n_used = 1 + len(actors)  # ego + actors; park the rest (count varies)
+        if n_used < n_active:
+            sp = np.arange(n_used, n_active, dtype=np.int32)
+            zf = np.full(len(sp), FAR_AWAY, np.float32)
+            zz = np.zeros_like(zf)
+            env.set_agent_states(sp, zf, zf, zf, zz, zz, zz)
         states = np.zeros(num_traffic, np.int32)
         for li, lt in enumerate(lights):
             j = light_map[li]
@@ -289,11 +389,29 @@ def main():
         env.set_agent_goals(0, gx, gy, gz)
         obs = np.asarray(env.recompute_observations())
 
+        if bev is not None:
+            bev.capture(env.get_global_agent_state(), ego_idx=0, goals=(gx, gy))
+
         if step % 10 == 0:
-            spd = float(np.hypot(ego.get_velocity().x, ego.get_velocity().y)) if False else float(ego_bin.get("heading")[0])
-            print(f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f}) heading={eyaw:.0f}deg  bg={len(bg)}")
+            el = ego.get_location()
+            nl = min(lights, key=lambda lt: lt.get_location().distance(el)) if lights else None
+            ls = f"{nl.get_state()}@{nl.get_location().distance(el):.0f}m" if nl else "n/a"
+            gd = float(np.hypot(gx[0] - float(ego_bin["x"][0]), gy[0] - float(ego_bin["y"][0])))
+            near = sum(1 for a in bg if a.is_alive and a.get_location().distance(el) < 40.0)
+            print(f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f}) hdg={eyaw:.0f}  goal0={gd:.0f}m  light={ls}  bg={len(bg)} near40={near} scn_active={scenario_mgr.active_count()}")
 
     # cleanup
+    if bev is not None:
+        bev.save()
+    if carla_frames:
+        import imageio
+
+        imageio.mimwrite(args.carla_view, carla_frames, fps=10, codec="libx264")
+        print(f"[cosim] wrote {args.carla_view} ({len(carla_frames)} frames)")
+    if cam is not None and cam.is_alive:
+        cam.stop()
+        cam.destroy()
+    scenario_mgr.cleanup()
     s = world.get_settings(); s.synchronous_mode = False; world.apply_settings(s)
     tm.set_synchronous_mode(False)
     client.apply_batch([carla.command.DestroyActor(a) for a in [ego, *bg] if a is not None and a.is_alive])
