@@ -5417,7 +5417,7 @@ void c_step(Drive *env) {
 
     // -> 3. Check for episode truncation
     int early_reset = 0;
-    if (env->simulation_mode == SIMULATION_GIGAFLOW && env->termination_mode == 1) {
+    if (env->termination_mode == 1) {
         int count_inactive = 0;
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
