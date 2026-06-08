@@ -88,6 +88,8 @@ class Drive(pufferlib.PufferEnv):
         split_network=False,
         obs_slots_lane_n=32,
         obs_slots_boundary_n=32,
+        obs_lane_stride=1,
+        obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
@@ -181,8 +183,16 @@ class Drive(pufferlib.PufferEnv):
         self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
+        obs_lane_stride = int(obs_lane_stride)
+        obs_boundary_stride = int(obs_boundary_stride)
+        if obs_lane_stride < 1:
+            raise ValueError(f"obs_lane_stride must be >= 1. Got: {obs_lane_stride}")
+        if obs_boundary_stride < 1:
+            raise ValueError(f"obs_boundary_stride must be >= 1. Got: {obs_boundary_stride}")
         self.obs_slots_lane_n = obs_slots_lane_n
         self.obs_slots_boundary_n = obs_slots_boundary_n
+        self.obs_lane_stride = obs_lane_stride
+        self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
@@ -435,6 +445,8 @@ class Drive(pufferlib.PufferEnv):
             "goal_on_lane": self.goal_on_lane,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
+            "obs_lane_stride": self.obs_lane_stride,
+            "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,

@@ -290,8 +290,9 @@ struct Log {
 };
 
 struct GridMapEntity {
-    int entity_idx;   // Index into the road_elements array
-    int geometry_idx; // Index into element's geometry array
+    int entity_idx;    // Index into the road_elements array
+    int geometry_idx;  // Index into element's geometry array
+    int valid_for_obs; // Whether this entity should be included in observations
 };
 
 struct GridMap {
@@ -328,6 +329,8 @@ struct SharedMapData {
     GridMap *grid_map;
     int *neighbor_offsets;
     struct LaneGraph lane_graph;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     int ref_count;
     pid_t owner_pid;
 };
@@ -440,6 +443,8 @@ struct Drive {
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
     int traffic_control_scope;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
     int road_dropout_enabled;
@@ -706,6 +711,12 @@ static void add_entity_to_grid(
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
+    env->grid_map->cells[grid_index][count].valid_for_obs = 1;
+    if (is_road_lane(env->road_elements[entity_idx].type)) {
+        env->grid_map->cells[grid_index][count].valid_for_obs = geometry_idx % env->obs_lane_stride == 0;
+    } else if (is_road_edge(env->road_elements[entity_idx].type)) {
+        env->grid_map->cells[grid_index][count].valid_for_obs = geometry_idx % env->obs_boundary_stride == 0;
+    }
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
@@ -968,6 +979,7 @@ static int get_neighbors_entities(
         for (int j = 0; j < count && entity_list_count < max_size; j++) {
             entity_list[entity_list_count].entity_idx = env->grid_map->cells[neighbor_idx][j].entity_idx;
             entity_list[entity_list_count].geometry_idx = env->grid_map->cells[neighbor_idx][j].geometry_idx;
+            entity_list[entity_list_count].valid_for_obs = env->grid_map->cells[neighbor_idx][j].valid_for_obs;
             entity_list_count += 1;
         }
     }
@@ -3665,9 +3677,11 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
-static struct SharedMapData *map_cache_lookup(const char *map_name) {
+static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
-        if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, map_name) == 0) {
+        if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
+            && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
             return g_map_cache[i];
         }
     }
@@ -3727,7 +3741,7 @@ void init(Drive *env) {
     env->timestep = 0;
     env->shared_map = NULL;
 
-    struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env->map_name) : NULL;
+    struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
         // Cache hit: load only the per-env data (agents, traffic-control elements),
         // then discard the freshly-loaded geometry and borrow the shared copy.
@@ -3764,6 +3778,8 @@ void init(Drive *env) {
             entry->grid_map = env->grid_map;
             entry->neighbor_offsets = env->neighbor_offsets;
             entry->lane_graph = env->lane_graph;
+            entry->obs_lane_stride = env->obs_lane_stride;
+            entry->obs_boundary_stride = env->obs_boundary_stride;
             entry->ref_count = 1;
             entry->owner_pid = getpid();
             map_cache_insert(entry);
@@ -4768,6 +4784,9 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     for (int k = 0; k < neighbor_count; k++) {
         if (lanes_found >= env->obs_slots_lane_n && boundaries_found >= env->obs_slots_boundary_n) {
             break;
+        }
+        if (!neighbor_entities[k].valid_for_obs) {
+            continue;
         }
         int entity_idx = neighbor_entities[k].entity_idx;
         int geometry_idx = neighbor_entities[k].geometry_idx;
