@@ -1583,6 +1583,8 @@ _ARCH_ENV_KEYS = (
     "obs_slots_partners_n",
     "obs_slots_lane_n",
     "obs_slots_boundary_n",
+    "obs_lane_stride",
+    "obs_boundary_stride",
     "obs_slots_traffic_controls_n",
     "obs_dropout_lane",
     "obs_dropout_boundary",

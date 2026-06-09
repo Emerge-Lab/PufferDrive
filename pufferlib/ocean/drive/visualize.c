@@ -294,6 +294,8 @@ int eval_gif(
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
+        .obs_lane_stride = conf.obs_lane_stride,
+        .obs_boundary_stride = conf.obs_boundary_stride,
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,

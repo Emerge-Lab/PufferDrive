@@ -73,6 +73,8 @@ DEFAULT_ENV_KWARGS = {
     "offroad_behavior": 1,
     "obs_slots_lane_n": 80,
     "obs_slots_boundary_n": 80,
+    "obs_lane_stride": 1,
+    "obs_boundary_stride": 1,
     "obs_slots_partners_n": 16,
     "obs_slots_traffic_controls_n": 4,
     "obs_dropout_lane": 0.0,
