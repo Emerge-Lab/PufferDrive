@@ -217,3 +217,6 @@ docs/_build/
 # Claude config
 .claude/
 CLAUDE.local.md
+
+/episode_metrics
+/mp4/validation_gigaflow/resources
