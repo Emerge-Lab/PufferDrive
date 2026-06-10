@@ -1,0 +1,25 @@
+# nuPlan replay training: ego SDC learns against log-replayed traffic.
+# Same puffer_drive env as the default recipe, swapped to the replay_nuplan
+# simulator profile, with validation switched off (empty eval list).
+#
+#   puffer train puffer_drive --config pufferlib/config/ocean/drive/recipes/replay_nuplan.yaml
+
+package: ocean
+env_name: puffer_drive
+
+vecenv: default
+train: default
+model: gigaflow
+simulator: replay_nuplan     # replay mode, nuPlan maps, termination_mode 1, 200 steps
+
+eval: []                     # no validation suites
+
+# Patch a few values on top of the chosen components. Replay batches are
+# smaller than gigaflow, so a smaller minibatch and higher entropy bonus help,
+# as in the old replay_sdc config.
+overrides:
+  train:
+    seed: 555
+    ent_coef: 0.19
+    minibatch_size: 8192
+    checkpoint_interval: 1000

@@ -1,0 +1,43 @@
+# PPO / training-loop settings (internal section: [train]).
+train:
+  total_timesteps: 10000000000
+  checkpoint_interval: 50
+  anneal_lr: true
+  # batch_size = num_workers * num_agents * bptt_horizon
+  batch_size: auto
+  minibatch_size: 65536
+  max_minibatch_size: 65536
+  bptt_horizon: 128
+  learning_rate: 0.0005
+  gae_lambda: 0.95
+  gamma: 0.999
+  ent_coef: 0.01
+  clip_coef: 0.2
+  max_grad_norm: 0.5
+  vf_clip_coef: null
+  vf_coef: 0.5
+  update_epochs: 2
+  normalize_rewards: true
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-8
+  vtrace_c_clip: 1
+  vtrace_rho_clip: 1
+  ppo_granularity: auto
+  adv_sampling_prio_alpha: 0.8499999999999999
+  adv_sampling_prio_beta0: 0.8499999999999999
+  adv_filter_ewma_beta: 0.25
+  adv_filter_threshold_scale: 0.01
+  # Rendering options
+  render: false
+  render_interval: 1000
+  # If True, show exactly what the agent sees in agent observation
+  obs_only: true
+  # Show grid lines
+  show_grid: false
+  # Draws lines from ego agent observed ORUs and road elements to show detection range
+  show_lasers: false
+  # Display human xy logs in the background
+  show_human_logs: true
+  # Options: List[str to path], str to path, none
+  render_map: none

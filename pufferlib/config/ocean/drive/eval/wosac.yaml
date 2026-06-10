@@ -1,0 +1,18 @@
+# Optional WOSAC realism eval. Off by default; runs as a subprocess.
+wosac:
+  type: wosac
+  enabled: false
+  interval: 500
+  mode: subprocess
+  clean: true
+  render: false
+  env:
+    control_mode: control_wosac
+    init_mode: create_all_valid
+    init_step: 10
+    goal_radius: 2.0
+  eval:
+    wosac_num_rollouts: 32
+    wosac_num_agents: 256
+    wosac_sanity_check: false
+    wosac_aggregate_results: true

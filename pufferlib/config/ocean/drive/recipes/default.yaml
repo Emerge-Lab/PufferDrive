@@ -1,0 +1,35 @@
+# Default PufferDrive training recipe. Selects one component per group plus a
+# list of eval suites. Swap a group on the CLI, e.g.
+#   puffer train puffer_drive --config <this file>
+# or point --config at a sibling recipe to define a different experiment.
+
+package: ocean
+env_name: puffer_drive
+
+vecenv: default              # -> ../vecenv/default.yaml          ([vec])
+train: default               # -> ../train/default.yaml           ([train])
+simulator: gigaflow_carla    # -> ../simulator/gigaflow_carla.yaml ([env])
+model: gigaflow              # -> ../model/gigaflow.yaml          ([base]/[policy]/[rnn])
+
+eval:                        # each -> ../eval/<name>.yaml
+  - validation
+  - behaviors
+  - wosac
+
+# --- Inline sections (merged verbatim, not from component files) ---
+
+# Failure-mining workflow: `puffer mine_failures puffer_drive ...`
+mine:
+  output_dir: ""
+  num_episodes: 100
+  score_threshold: -inf
+  render: true
+
+# Controlled experiments: `puffer controlled_exp puffer_drive` runs the cross
+# product of these value lists.
+controlled_exp:
+  train:
+    learning_rate:
+      values: [0.001, 0.003, 0.01]
+    ent_coef:
+      values: [0.01, 0.005]

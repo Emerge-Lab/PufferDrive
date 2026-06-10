@@ -1,0 +1,26 @@
+# Policy/network definition (internal sections: [base] net ids, [policy], [rnn]).
+base:
+  policy_name: Drive
+  # Options: Recurrent, None
+  rnn_name: null
+
+policy:
+  # Encoder layer
+  input_size: 64
+  encoder_gigaflow: true
+  dropout: 0.0
+  # Shared backbone layer
+  backbone_hidden_size: 512
+  backbone_num_layers: 4
+  # Actor head layer
+  actor_hidden_size: 512
+  actor_num_layers: 0
+  # Critic head layer
+  critic_hidden_size: 512
+  critic_num_layers: 0
+  # Dual or shared actor-critic backbone
+  split_network: false
+
+rnn:
+  input_size: 512
+  hidden_size: 512

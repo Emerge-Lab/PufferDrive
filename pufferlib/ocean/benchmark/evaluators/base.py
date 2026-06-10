@@ -59,17 +59,14 @@ class Evaluator:
         # the base layer that `config` overrides on top of.
         self.train_config = train_config
 
-        # Common scalars pulled out for ergonomics.
-        raw_enabled = config.get("enabled", True)
-        if isinstance(raw_enabled, str):
-            self.enabled: bool = raw_enabled.strip().lower() not in ("false", "0", "no")
-        else:
-            self.enabled: bool = bool(raw_enabled)
-        self.interval: int = int(config.get("interval", 0))
+        # Common scalars pulled out for ergonomics. The config layer coerces
+        # values to native types (bool/int/list), so no re-parsing here.
+        self.enabled: bool = config.get("enabled", True)
+        self.interval: int = config.get("interval", 0)
         self.mode: str = config.get("mode", "inline")
-        self.render: bool = bool(config.get("render", False))
-        self.render_views: list = list(config.get("render_views", ["sim_state"]))
-        self.clean: bool = bool(config.get("clean", True))
+        self.render: bool = config.get("render", False)
+        self.render_views: list = config.get("render_views", ["sim_state"])
+        self.clean: bool = config.get("clean", True)
 
     # -- Config hooks ---------------------------------------------------
 

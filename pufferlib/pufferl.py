@@ -37,6 +37,7 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
+import pufferlib.config_compose as config_compose
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -2143,6 +2144,9 @@ def load_config(env_name, config_dir=None):
     parser.add_argument(
         "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to a composition recipe .yaml (overrides env auto-discovery)"
+    )
     args = parser.parse_known_args()[0]
 
     if config_dir is None:
@@ -2151,32 +2155,30 @@ def load_config(env_name, config_dir=None):
         print("Using custom config dir:", config_dir)
         puffer_dir = config_dir
 
-    # Load defaults and config
-    puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
+    # Dynamic help menu from config: coerce ini/CLI string values to Python
+    # (shared with the recipe loader so every source yields native types).
+    puffer_type = config_compose.coerce_value
+
     puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
-    if env_name == "default":
-        p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-        p.read(puffer_default_config)
+
+    # Resolve the config source. Precedence:
+    #   1. --config <recipe.yaml> (explicit composition recipe)
+    #   2. an env-matched recipe under config/**/recipes/
+    #   3. the legacy per-env .ini (envs that haven't migrated)
+    # All three converge on a flat {dotted_key: value} dict that drives the
+    # argparse registration below — so the returned config shape is identical.
+    recipe_path = args.config if config_compose.is_recipe(args.config) else None
+    if recipe_path is None and env_name != "default":
+        recipe_path = config_compose.find_recipe(env_name, puffer_dir)
+
+    if recipe_path is not None:
+        composed = config_compose.compose_recipe(recipe_path, puffer_default_config)
+        flat_defaults = config_compose.flatten_config(composed)
     else:
-        for path in glob.glob(puffer_config_dir, recursive=True):
-            p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-            p.read([puffer_default_config, path])
-            if env_name in p["base"]["env_name"].split():
-                break
-        else:
-            raise pufferlib.APIUsageError("No config for env_name {}".format(env_name))
+        flat_defaults = config_compose.flatten_ini(env_name, puffer_dir, puffer_default_config)
 
-    # Dynamic help menu from config
-    def puffer_type(value):
-        try:
-            return ast.literal_eval(value)
-        except:
-            return value
-
-    for section in p.sections():
-        for key in p[section]:
-            fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
-            parser.add_argument(fmt.replace("_", "-"), default=puffer_type(p[section][key]), type=puffer_type)
+    for dotted_key, value in flat_defaults.items():
+        parser.add_argument(f"--{dotted_key}".replace("_", "-"), default=value, type=puffer_type)
 
     parser.add_argument(
         "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"

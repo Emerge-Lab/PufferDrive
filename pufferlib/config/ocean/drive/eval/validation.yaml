@@ -1,0 +1,97 @@
+# Multi-scenario validation suite. `validation_defaults` is a template (no
+# `type`); the replay/gigaflow/triage sections inherit it and add their
+# sim-specific map set + agent layout. Each lands under [eval.<name>].
+
+validation_defaults:
+  enabled: true
+  interval: 250
+  mode: inline
+  clean: true
+  env:
+    eval_mode: 1
+    collision_behavior: 1
+    offroad_behavior: 1
+    # Explicit 0 wins over the clean macro's red-light enforcement.
+    traffic_light_behavior: 0
+    reward_randomization: false
+    termination_mode: 0
+    num_agents: 1024
+    target_type: static
+    goal_speed: 3.0
+    reward_collision: 3.0
+    reward_offroad: 3.0
+    reward_stop_line: 1.0
+    reward_goal: 1.0
+    reward_overspeed: 0.05
+    reward_comfort: 0.05
+    reward_velocity: 0.0025
+    reward_lane_align: 0.025
+    reward_lane_center: 0.0038
+    reward_timestep: 0.000025
+    reward_reverse: 0.005
+    reward_ade: 0.0
+    obs_dropout_lane: 0.0
+    obs_dropout_boundary: 0.0
+    obs_slots_lane_n: 80
+    obs_slots_boundary_n: 80
+  eval:
+    num_scenarios: 250
+    export_episode_csv: true
+    verify_coverage: true
+
+validation_replay:
+  inherits: validation_defaults
+  type: multi_scenario
+  enabled: true
+  render: true
+  render_backend: triage_html
+  env:
+    simulation_mode: replay
+    control_mode: control_sdc_only
+    map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+    num_maps: 250
+    max_agents_per_env: 64
+    scenario_length: 200
+    resample_frequency: 200
+  eval:
+    render_num_scenarios: 5
+    render_max_steps: 200
+
+validation_gigaflow:
+  inherits: validation_defaults
+  type: multi_scenario
+  enabled: true
+  render: true
+  render_backend: egl
+  render_views: ["sim_state", "bev"]
+  env:
+    simulation_mode: gigaflow
+    map_dir: pufferlib/resources/drive/binaries/carla
+    num_maps: 8
+    num_agents: 1024
+    min_agents_per_env: 40
+    max_agents_per_env: 40
+    scenario_length: 500
+    resample_frequency: 500
+  eval:
+    render_num_scenarios: 8
+    render_max_steps: 300
+
+dnf_triage:
+  inherits: validation_defaults
+  type: multi_scenario
+  enabled: false
+  render: true
+  render_backend: triage_html
+  env:
+    simulation_mode: gigaflow
+    map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+    num_maps: 1
+    min_agents_per_env: 1
+    max_agents_per_env: 1
+    scenario_length: 500
+    resample_frequency: 500
+  eval:
+    num_scenarios: 32
+    render_num_scenarios: 16
+    render_max_steps: 300

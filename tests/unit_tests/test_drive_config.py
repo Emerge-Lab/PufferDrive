@@ -31,8 +31,8 @@ class TestDriveConfig(unittest.TestCase):
         """
         try:
             # The ENV_NAME 'puffer_drive' should load config from:
-            # 1. pufferlib/config/default.ini
-            # 2. pufferlib/config/ocean/drive.ini (and override defaults)
+            # 1. pufferlib/config/default.ini (base layer)
+            # 2. pufferlib/config/ocean/drive/recipes/default.yaml (composed components)
             args = load_config("puffer_drive")
 
             # load_config should return a populated config dict without raising.
@@ -75,7 +75,7 @@ class TestDriveConfig(unittest.TestCase):
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_cli_override(self):
         """Test that command-line arguments override INI file values."""
-        # learning_rate is 0.001 in drive.ini, but we override it to 0.5 here
+        # learning_rate is set by the recipe's train component, but we override it to 0.5 here
         args = load_config("puffer_drive")
         self.assertEqual(args["train"]["learning_rate"], 0.5)
 
