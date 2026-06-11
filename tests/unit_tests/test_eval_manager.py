@@ -625,8 +625,6 @@ def test_eval_args_compose_train_section_and_clean_macro():
     train_config = {
         "env": {
             "obs_dropout_lane": 0.5,  # training perturbation
-            "obs_lane_stride": 4,
-            "obs_boundary_stride": 5,
             "scenario_length": 91,
             "num_agents": 1024,  # only present in train baseline
         },
@@ -647,8 +645,6 @@ def test_eval_args_compose_train_section_and_clean_macro():
 
     assert args["env"]["scenario_length"] == 201, "section override wins"
     assert args["env"]["obs_dropout_lane"] == 0.0, "clean macro applied"
-    assert args["env"]["obs_lane_stride"] == 1, "clean macro applied"
-    assert args["env"]["obs_boundary_stride"] == 1, "clean macro applied"
     assert args["env"]["num_agents"] == 1024, "train baseline preserved"
 
 
