@@ -118,6 +118,8 @@
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
+// Heading deviation since last kept point that forces a keep when obs stride > 1 (~30 degrees).
+#define OBS_STRIDE_HEADING_THRESHOLD 0.5236f
 
 // TARGET_TYPE modes (controls what target info is in observations).
 #define TARGET_STATIC 0
@@ -693,6 +695,7 @@ static void add_entity_to_grid(
     int grid_index,
     int entity_idx,
     int geometry_idx,
+    int valid_for_obs,
     int *cell_entities_insert_index) {
     if (grid_index == -1) {
         return;
@@ -711,12 +714,7 @@ static void add_entity_to_grid(
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
-    env->grid_map->cells[grid_index][count].valid_for_obs = 1;
-    if (is_road_lane(env->road_elements[entity_idx].type)) {
-        env->grid_map->cells[grid_index][count].valid_for_obs = geometry_idx % env->obs_lane_stride == 0;
-    } else if (is_road_edge(env->road_elements[entity_idx].type)) {
-        env->grid_map->cells[grid_index][count].valid_for_obs = geometry_idx % env->obs_boundary_stride == 0;
-    }
+    env->grid_map->cells[grid_index][count].valid_for_obs = valid_for_obs;
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
@@ -813,14 +811,32 @@ static void init_grid_map(Drive *env) {
 
     // Populate grid cells and count unique drivable grid cells
     for (int i = 0; i < env->num_road_elements; i++) {
-        for (int j = 0; j < env->road_elements[i].segment_length - 1; j++) {
-            float x_center = (env->road_elements[i].x[j] + env->road_elements[i].x[j + 1]) / 2;
-            float y_center = (env->road_elements[i].y[j] + env->road_elements[i].y[j + 1]) / 2;
+        RoadMapElement *element = &env->road_elements[i];
+        int obs_stride = 1;
+        if (is_road_lane(element->type)) {
+            obs_stride = env->obs_lane_stride;
+        } else if (is_road_edge(element->type)) {
+            obs_stride = env->obs_boundary_stride;
+        }
+        int last_kept_idx = 0;
+        for (int j = 0; j < element->segment_length - 1; j++) {
+            // Keep a point every obs_stride points, plus wherever heading deviates enough
+            // since the last kept point (densifies curves/intersections)
+            int valid_for_obs = 1;
+            if (obs_stride > 1 && j > 0) {
+                float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
+                valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
+            }
+            if (valid_for_obs) {
+                last_kept_idx = j;
+            }
+            float x_center = (element->x[j] + element->x[j + 1]) / 2;
+            float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
                 continue; // Skip out-of-bounds entities
             }
-            add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
+            add_entity_to_grid(env, grid_index, i, j, valid_for_obs, cell_entities_insert_index);
             // Count unique drivable grid cells
             if (is_drivable_road_lane(env->road_elements[i].type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
