@@ -6,7 +6,7 @@
     "comfort_violation_count": 0.7257332022373493,
     "dnf_rate": 0.5625,
     "episode_length": 46.42307692307692,
-    "episode_return": -2.4921847994510946,
+    "episode_return": -2.4922777001674357,
     "lane_center_rate": 0.7063253728243021,
     "n": 16.0,
     "num_goals_reached": 0.0,
@@ -23,7 +23,7 @@
     "reward_components/red_light": -0.038461538461538464,
     "reward_components/reverse": -0.01809134094331127,
     "reward_components/timestep": -0.0001000300175152146,
-    "reward_components/velocity": 9.528447229128618e-05,
+    "reward_components/velocity": 2.3821118632510593e-06,
     "score": 0.0,
     "velocity_progress_sum": 0.00018323936428015048
   },
