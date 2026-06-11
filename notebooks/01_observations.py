@@ -144,6 +144,7 @@ traffic_manual = o[idx : idx + env.obs_slots_traffic_controls_n * env.traffic_co
 idx += env.obs_slots_traffic_controls_n * env.traffic_control_features
 assert np.allclose(traffic_manual, traffic), "traffic mismatch"
 
+idx += env.obs_valid_count_features
 assert idx == obs.shape[1], f"obs size mismatch: used {idx}, total {obs.shape[1]}"
 print(f"All slices match. Total features used: {idx}")
 
@@ -181,7 +182,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "speed",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 active_mask = ~np.all(partners == 0, axis=1)

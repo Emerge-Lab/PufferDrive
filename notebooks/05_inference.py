@@ -265,7 +265,7 @@ plt.show()
 # - **Ego**: speed, width, length, [jerk: steering, a_long, a_lat], lane_center_dist, lane_angle, speed_limit
 # - **Conditioning** (if enabled): 17 reward coefs (goal_radius, goal_speed, collision, offroad, comfort, lane_align, vel_align, lane_center, center_bias, velocity, reverse, stop_line, timestep, overspeed, throttle, steer, acc) + target waypoints
 # - **Target**: static=rel_x,rel_y,rel_z per waypoint; dynamic=rel_x,rel_y,rel_z,heading_cos,heading_sin per waypoint
-# - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, speed, seconds_stopped
+# - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, sim_speed_signed, seconds_stopped
 # - **Lanes** (MAX_LANES x 7): rel_x, rel_y, rel_z, seg_length, seg_width, dir_cos, dir_sin
 # - **Boundaries** (MAX_BOUNDS x 7): same as lanes
 # - **Traffic controls** (MAX_TRAFFIC x 7): rel_x1, rel_y1, rel_x2, rel_y2, rel_z, type, state
@@ -359,11 +359,11 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "speed",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 for p in range(min(int(n_visible), 5)):
-    vals = ", ".join(f"{partner_labels[j]}={partners[p, j]:.3f}" for j in range(len(partner_labels)))
+    vals = ", ".join(f"{partner_labels[j]}={partners[p, j]:.3f}" for j in range(env.partner_features))
     print(f"  [{p}] {vals}")
 if n_visible > 5:
     print(f"  ... ({n_visible - 5} more)")
@@ -645,12 +645,14 @@ if bnd_mask.any():
 for i in range(partners.shape[0]):
     if np.allclose(partners[i], 0):
         continue
-    rx, ry, rz, w, l, hc, hs, vx, vy = partners[i]
+    rx, ry, rz, length, width, hc, hs, speed, _ = partners[i]
     heading = np.arctan2(hs, hc)
-    rect = Rectangle((-l / 2, -w / 2), l, w, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9)
+    rect = Rectangle(
+        (-length / 2, -width / 2), length, width, facecolor="orange", edgecolor="black", alpha=0.6, zorder=9
+    )
     rect.set_transform(plt.matplotlib.transforms.Affine2D().rotate(heading).translate(rx, ry) + ax.transData)
     ax.add_patch(rect)
-    ax.annotate(f"{vx:.2f}, {vy:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
+    ax.annotate(f"{speed:.2f}", (rx, ry), fontsize=7, ha="center", color="darkred", zorder=12)
 part_mask = np.any(partners != 0, axis=1)
 if part_mask.any():
     ax.scatter(
@@ -787,7 +789,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "speed",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 obs_slots_partners_n = env.obs_slots_partners_n
@@ -813,7 +815,7 @@ print(
     f"({100 * len(visible_partners) / (all_partners.shape[0] * obs_slots_partners_n):.1f}%)"
 )
 
-fig, axes = plt.subplots(3, 3, figsize=(21, 10))
+fig, axes = plt.subplots(3, 4, figsize=(21, 11))
 axes = axes.flatten()
 
 for i, label in enumerate(partner_labels):
@@ -825,12 +827,16 @@ for i, label in enumerate(partner_labels):
     axes[i].tick_params(labelsize=7)
 
 # rel_x vs rel_y scatter in last panel
-axes[8].scatter(visible_partners[:, 0], visible_partners[:, 1], s=1, alpha=0.15, color="darkorange")
-axes[8].set_xlabel("rel_x")
-axes[8].set_ylabel("rel_y")
-axes[8].set_title("Partner positions (ego frame)")
-axes[8].set_aspect("equal")
-axes[8].grid(True, alpha=0.3)
+pos_ax = axes[len(partner_labels)]
+pos_ax.scatter(visible_partners[:, 0], visible_partners[:, 1], s=1, alpha=0.15, color="darkorange")
+pos_ax.set_xlabel("rel_x")
+pos_ax.set_ylabel("rel_y")
+pos_ax.set_title("Partner positions (ego frame)")
+pos_ax.set_aspect("equal")
+pos_ax.grid(True, alpha=0.3)
+
+for ax in axes[len(partner_labels) + 1 :]:
+    ax.axis("off")
 
 fig.suptitle("Partner features: all visible, full rollout", fontsize=13)
 plt.tight_layout()
@@ -1317,7 +1323,7 @@ if config["env"].get("scenario_length"):
 # %% [markdown]
 # ## Encoder analysis — what the policy encodes
 #
-# Each obs layer has its own encoder projecting raw features → `input_size` embedding:
+# Each obs layer has its own encoder projecting raw features → embedding width:
 # - **ego** and **conditioning** (reward coefs + target): single vector, no pooling.
 # - **partners / lanes / boundaries / traffic**: per-slot encoder, padded slots masked to `-inf`, then **max-pooled** across slots → one embedding. Fully-padded layers are zeroed.
 #
@@ -1357,8 +1363,8 @@ if bb.obs_slots_traffic_controls_n > 0:
             True,
         )
     )
-if bb.conditioning_dim > 0:
-    enc_inventory.append(("conditioning", bb.conditioning_encoder, bb.conditioning_dim, 1, False))
+if bb.context_dim > 0:
+    enc_inventory.append(("context", bb.context_encoder, bb.context_dim, 1, False))
 
 enc_names = [n for n, *_ in enc_inventory]
 set_encs = [n for n, _, _, _, is_set in enc_inventory if is_set]
@@ -1368,10 +1374,10 @@ print("-" * 66)
 for name, mod, rin, nslots, is_set in enc_inventory:
     nparam = sum(p.numel() for p in mod.parameters())
     print(
-        f"{name:>13s} | {rin:>6d} | {bb.input_size:>7d} | {nslots:>5d} | {('max' if is_set else '-'):>6s} | {nparam:>9,d}"
+        f"{name:>13s} | {rin:>6d} | {mod[-1].out_features:>7d} | {nslots:>5d} | {('max' if is_set else '-'):>6s} | {nparam:>9,d}"
     )
 print(
-    f"\nBackbone input = {len(enc_inventory)} x {bb.input_size} = {len(enc_inventory) * bb.input_size} -> backbone -> {bb.out_dim}"
+    f"\nBackbone input = {sum(mod[-1].out_features for _, mod, _, _, _ in enc_inventory)} -> backbone -> {bb.out_dim}"
 )
 
 # Capture pre-pool encoder outputs via forward hooks
@@ -1397,7 +1403,7 @@ partner_dim = bb.obs_slots_partners_n * bb.partner_features_count
 lane_dim = bb.obs_slots_lane_kept * bb.road_features_count
 boundary_dim = bb.obs_slots_boundary_kept * bb.road_features_count
 traffic_dim = bb.obs_slots_traffic_controls_n * bb.traffic_control_features_count
-_s = ego_dim + bb.conditioning_dim
+_s = ego_dim + bb.context_dim
 sl = {}
 sl["partner"] = (_s, _s + partner_dim, bb.obs_slots_partners_n, bb.partner_features_count)
 _s += partner_dim
@@ -1427,10 +1433,10 @@ for name in set_encs:
     masked = captured[name].masked_fill(pad[name].unsqueeze(2), -torch.inf)
     vm = (~pad[name]).any(dim=1)
     valid_sample[name] = vm
-    winners[name] = masked.max(dim=1).indices  # (B, input_size): winning slot per dim
+    winners[name] = masked.max(dim=1).indices  # (B, embedding dim): winning slot per dim
     pooled[name] = torch.where(vm.unsqueeze(1), masked.max(dim=1).values, torch.zeros_like(masked.max(dim=1).values))
 
-for name in ("ego", "conditioning"):
+for name in ("ego", "context"):
     if name in enc_names:
         pooled[name] = captured[name]
 
