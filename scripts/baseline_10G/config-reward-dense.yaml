@@ -1,0 +1,400 @@
+agent_index: null
+controlled_exp:
+  train:
+    ent_coef:
+      values:
+      - 0.01
+      - 0.005
+    learning_rate:
+      values:
+      - 0.001
+      - 0.003
+      - 0.01
+env:
+  action_type: discrete
+  collision_behavior: 1
+  compute_eval_metrics: false
+  control_mode: control_vehicles
+  dt: 0.1
+  dynamics_model: jerk
+  goal_on_lane: true
+  goal_radius: 2.0
+  goal_speed: 1000.0
+  inactive_agent_threshold: 0.4
+  init_mode: create_all_valid
+  init_step: 0
+  map_dir: "pufferlib/resources/drive/binaries/carla"
+  max_agents_per_env: 80
+  max_waypoint_spacing: 40.0
+  min_agents_per_env: 1
+  min_waypoint_spacing: 20.0
+  non_sdc_controller: policy
+  non_vehicle_controller: auto
+  num_agents: 2048
+  num_maps: 8
+  num_target_waypoints: 3
+  obs_dropout_boundary: 0.0
+  obs_dropout_lane: 0.0
+  obs_norm_goal_offset_m: 120.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  obs_norm_veh_length_m: 10.0
+  obs_norm_veh_width_m: 5.0
+  obs_norm_xy_offset_m: 120.0
+  obs_range_partner_m: 120.0
+  obs_range_road_behind_m: 30.0
+  obs_range_road_front_m: 120.0
+  obs_range_road_side_m: 40.0
+  obs_range_traffic_control_m: 120.0
+  obs_slots_boundary_n: 30
+  obs_slots_lane_n: 50
+  obs_slots_partners_n: 12
+  obs_slots_traffic_controls_n: 4
+  offroad_behavior: 1
+  partner_blindness_prob: 0.0
+  partner_blindness_trigger_prob: 0.0
+  phantom_braking_duration: 10
+  phantom_braking_prob: 0.0
+  phantom_braking_trigger_prob: 0.0
+  resample_frequency: 102400
+  reward_ade: 0.0
+  reward_center_bias: 0.0
+  reward_collision: 1.5
+  reward_comfort: 0.5
+  reward_conditioning: false
+  reward_goal: 0.2
+  reward_lane_align: 0.5
+  reward_lane_center: 0.05
+  reward_offroad: 1.5
+  reward_overspeed: 0.1
+  reward_randomization: false
+  reward_reverse: 0.005
+  reward_stop_line: 1.0
+  reward_timestep: 0.0
+  reward_vel_align: 1.0
+  reward_velocity: 0.1
+  scenario_length: 1024
+  sdc_controller: policy
+  simulation_mode: gigaflow
+  spawn_initial_speed: 0.0
+  target_type: static
+  termination_mode: 1
+  traffic_light_behavior: 1
+  use_map_cache: 1
+env_name: puffer_drive
+eval:
+  behaviors_defaults:
+    clean: 'true'
+    enabled: 'false'
+    env:
+      control_mode: control_sdc_only
+      init_mode: create_all_valid
+      obs_slots_partners_n: 32
+      scenario_length: 201
+      simulation_mode: replay
+    eval:
+      num_scenarios: 50
+      render_max_steps: 200
+      render_num_scenarios: 2
+    interval: 250
+    mode: inline
+    render: 'true'
+    render_views:
+    - sim_state
+    - bev
+  behaviors_full_dir:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_hard_stop:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/hard_stop
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_highway_straight:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/highway_straight
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_lane_change:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/lane_change
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_merge:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/merge
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_parked_cars:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/parked_cars
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_roundabout:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/roundabout
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_stopped_traffic:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/stopped_traffic
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_traffic_light_green:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/traffic_light_green
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_traffic_light_stop:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/traffic_light_stop
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_unprotected_left:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/unprotected_left
+    inherits: behaviors_defaults
+    type: behavior_class
+  behaviors_unprotected_right:
+    enabled: 'true'
+    env:
+      map_dir: /scratch/ev2237/data/nuplan/categories_v021/unprotected_right
+    inherits: behaviors_defaults
+    type: behavior_class
+  dnf_triage:
+    enabled: 'false'
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
+      max_agents_per_env: 1
+      min_agents_per_env: 1
+      num_maps: 1
+      resample_frequency: 500
+      scenario_length: 500
+      simulation_mode: gigaflow
+    eval:
+      num_scenarios: 32
+      render_max_steps: 300
+      render_num_scenarios: 16
+    inherits: validation_defaults
+    render: 'true'
+    render_backend: triage_html
+    type: multi_scenario
+  validation_defaults:
+    clean: 'true'
+    enabled: 'true'
+    env:
+      collision_behavior: 1
+      eval_mode: 1
+      goal_speed: 3.0
+      num_agents: 1024
+      obs_dropout_boundary: 0.0
+      obs_dropout_lane: 0.0
+      obs_slots_boundary_n: 80
+      obs_slots_lane_n: 80
+      offroad_behavior: 1
+      reward_ade: 0.0
+      reward_collision: 3.0
+      reward_comfort: 0.05
+      reward_goal: 1.0
+      reward_lane_align: 0.025
+      reward_lane_center: 0.0038
+      reward_offroad: 3.0
+      reward_overspeed: 0.05
+      reward_randomization: false
+      reward_reverse: 0.005
+      reward_stop_line: 1.0
+      reward_timestep: 2.5e-05
+      reward_velocity: 0.0025
+      target_type: static
+      termination_mode: 0
+      traffic_light_behavior: 0
+    eval:
+      export_episode_csv: 'true'
+      num_scenarios: 250
+      verify_coverage: 'true'
+    interval: 250
+    mode: inline
+  validation_gigaflow:
+    enabled: 'true'
+    env:
+      map_dir: pufferlib/resources/drive/binaries/carla
+      max_agents_per_env: 40
+      min_agents_per_env: 40
+      num_agents: 1024
+      num_maps: 8
+      resample_frequency: 500
+      scenario_length: 500
+      simulation_mode: gigaflow
+    eval:
+      render_max_steps: 300
+      render_num_scenarios: 8
+    inherits: validation_defaults
+    render: 'true'
+    render_backend: egl
+    render_views:
+    - sim_state
+    - bev
+    type: multi_scenario
+  validation_replay:
+    enabled: 'true'
+    env:
+      control_mode: control_sdc_only
+      map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+      max_agents_per_env: 64
+      num_maps: 250
+      resample_frequency: 200
+      scenario_length: 200
+      simulation_mode: replay
+    eval:
+      render_max_steps: 200
+      render_num_scenarios: 5
+    inherits: validation_defaults
+    render: 'true'
+    render_backend: triage_html
+    type: multi_scenario
+  wosac:
+    clean: 'true'
+    enabled: 'false'
+    env:
+      control_mode: control_wosac
+      goal_radius: 2.0
+      init_mode: create_all_valid
+      init_step: 10
+    eval:
+      wosac_aggregate_results: 'true'
+      wosac_num_agents: 256
+      wosac_num_rollouts: 32
+      wosac_sanity_check: 'false'
+    interval: 500
+    mode: subprocess
+    render: 'false'
+    type: wosac
+eval_simulation: null
+fps: 15
+gif_path: eval.gif
+git:
+  commit_hash: 9d3fcc5c09db50b9674a374b8c3404b6349c4cb5
+load_id: null
+load_model_path: null
+local_rank: 0
+max_runs: 200
+max_suggestion_cost: 3600
+mine:
+  num_episodes: 100
+  output_dir: ''
+  render: 'true'
+  score_threshold: -inf
+neptune: false
+neptune_name: pufferai
+neptune_project: ablations
+no_model_upload: {}
+num_scenarios: 3
+package: ocean
+policy:
+  actor_hidden_size: 512
+  actor_num_layers: 0
+  backbone_activation: gelu
+  backbone_hidden_size: 512
+  backbone_layer_norm: false
+  backbone_num_layers: 2
+  boundary_input_size: 128
+  context_input_size: 128
+  critic_hidden_size: 512
+  critic_num_layers: 0
+  ego_input_size: 128
+  encoder_activation: relu
+  encoder_layer_norm: true
+  lane_input_size: 128
+  mask_padded_features: false
+  partner_input_size: 128
+  shared_network: true
+  traffic_control_input_size: 128
+policy_name: Drive
+render: 0
+render_mode: auto
+rnn:
+  hidden_size: 512
+  input_size: 512
+rnn_name: null
+run_name: rew-dense-seed4
+save_frames: 0
+sweep:
+  downsample: 10
+  goal: maximize
+  method: Protein
+  metric: score
+tag: null
+tb: false
+train:
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1.0e-08
+  adv_filter_ewma_beta: 0.25
+  adv_filter_threshold_scale: 0.01
+  adv_sampling_prio_alpha: 0.8499999999999999
+  adv_sampling_prio_beta0: 0.8499999999999999
+  amp: true
+  anneal_lr: true
+  batch_size: auto
+  bptt_horizon: 128
+  checkpoint_interval: 50
+  clip_coef: 0.2
+  compile: true
+  compile_fullgraph: false
+  compile_mode: default
+  cpu_offload: false
+  data_dir: /pufferdrive/training_output/
+  device: cuda
+  ent_coef: 0.01
+  gae_lambda: 0.95
+  gamma: 0.999
+  learning_rate: 0.0005
+  max_grad_norm: 0.5
+  max_minibatch_size: 98304
+  minibatch_size: 98304
+  name: pufferai
+  normalize_rewards: true
+  obs_only: true
+  optimizer: adamw
+  precision: bfloat16
+  project: ablations
+  render: false
+  render_interval: 1000
+  render_map: none
+  resume_state_path: null
+  seed: 4
+  show_grid: false
+  show_human_logs: true
+  show_lasers: false
+  torch_deterministic: false
+  total_timesteps: 10000000000
+  update_epochs: 2
+  use_rnn: false
+  vf_clip_coef: null
+  vf_coef: 0.5
+  vtrace_c_clip: 1
+  vtrace_rho_clip: 1
+vec:
+  backend: Multiprocessing
+  batch_size: auto
+  num_envs: 24
+  num_workers: auto
+  seed: 42
+  zero_copy: true
+video_path: videos
+wandb: true
+wandb_group: pr-smoke-runs
+wandb_project: pr-smoke-runs
