@@ -87,7 +87,7 @@
 // Evaluation metrics
 #define AT_FAULT_COLLISION_IDX 12
 #define TTC_IDX 13
-#define TTC_TFL_IDX 14
+#define DISTANCE_TO_COLLISION_IDX 14
 #define PROGRESS_RATIO_IDX 15
 #define MULTI_LANE_TIME_IDX 16
 #define MULTI_LANE_SCORE_IDX 17
@@ -102,29 +102,6 @@
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-
-struct Waypoint {
-    float s;           // Arc length (cumulative distance from the start) - init position
-    float x;           // Global x-coordinate
-    float y;           // Global y-coordinate
-    float z;           // Global z-coordinate
-    float heading;     // Global heading (tangent angle) in radians
-    float cos_heading; // Cached cosf(heading) - set in build_path
-    float sin_heading; // Cached sinf(heading) - set in build_path
-    float kappa;       // Curvature at this point
-    int lane_idx;      // Index of the lane this waypoint
-};
-struct Path {
-    struct Waypoint waypoints[MAX_NUM_WP_PATH];
-    int num_waypoints;
-};
-
-struct ttc_result {
-    float min_ttc;
-    int other_idx;
-    float distance_to_collision;
-    float closing_speed;
-};
 
 static inline int is_road_lane(int type) {
     return (type >= 0 && type <= 9);
@@ -154,29 +131,33 @@ static inline int is_controllable_agent(int type) {
     return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
 }
 
-static inline int normalize_road_type(int type) {
-    if (is_road_lane(type)) {
-        return 0;
-    } else if (is_road_line(type)) {
-        return 1;
-    } else if (is_road_edge(type)) {
-        return 2;
+static inline int traffic_control_in_scope(int type, int scope) {
+    if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_ALL) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN
+            || type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN;
     } else {
-        return -1;
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
     }
 }
 
-static inline int unnormalize_road_type(int norm_type) {
-    if (norm_type == 0) {
-        return LANE_SURFACE_STREET;
-    } else if (norm_type == 1) {
-        return ROAD_LINE_BROKEN_SINGLE_WHITE;
-    } else if (norm_type == 2) {
-        return ROAD_EDGE_BOUNDARY;
-    } else {
-        return -1; // Invalid
-    }
-}
+struct Waypoint {
+    float s;           // Arc length (cumulative distance from the start) - init position
+    float x;           // Global x-coordinate
+    float y;           // Global y-coordinate
+    float z;           // Global z-coordinate
+    float heading;     // Global heading (tangent angle) in radians
+    float cos_heading; // Cached cosf(heading) - set in build_path
+    float sin_heading; // Cached sinf(heading) - set in build_path
+    int lane_idx;      // Index of the lane this waypoint
+};
+struct Path {
+    struct Waypoint waypoints[MAX_NUM_WP_PATH];
+    int num_waypoints;
+};
 
 struct Agent {
     int type;
@@ -224,7 +205,7 @@ struct Agent {
     // Metrics and status tracking (size must match NUM_METRICS in drive.h)
     float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
-                                      // progression, at_fault_collision, ttc, ttc_tfl, progress_ratio,
+                                      // progression, at_fault_collision, ttc, distance_to_collision, progress_ratio,
                                       // multi_lane_time, multi_lane_score]
     int current_lane_idx;
     int previous_lane_idx;
@@ -264,14 +245,6 @@ struct Agent {
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
-    // Puffer score tracking (per-episode accumulators)
-    struct ttc_result cached_ttc;    // Filled once per step before reward computation
-    float wrong_way_distance;        // Accumulated wrong-way distance
-    float speed_violation_sum;       // For nuPlan speed compliance formula
-    int ttc_violations;              // Count of TTC < 0.95s violations
-    int ttc_samples;                 // Total TTC samples for rate
-    int at_fault_collision;          // 1 if at-fault collision occurred this episode
-    float multi_lane_time;           // Accumulated time (s) on multiple lanes
     int phantom_braking_counter;     // >0 means currently phantom braking
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
@@ -306,12 +279,6 @@ struct TrafficControlElement {
     int num_controlled_lanes;
     int *controlled_lanes;
 };
-
-typedef struct {
-    float z_dis;
-    float euclidean_dis;
-    float z;
-} DepthPoint;
 
 struct LaneGraph {
     int n_lanes;
