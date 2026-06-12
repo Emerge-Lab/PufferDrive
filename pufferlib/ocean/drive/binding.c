@@ -1184,7 +1184,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     SET_WAYPOINT_FLOAT("x", wp->x);
                     SET_WAYPOINT_FLOAT("y", wp->y);
                     SET_WAYPOINT_FLOAT("heading", wp->heading);
-                    SET_WAYPOINT_FLOAT("kappa", wp->kappa);
 
                     tmp_val = PyLong_FromLong(wp->lane_idx);
                     if (!tmp_val) {

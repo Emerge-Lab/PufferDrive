@@ -78,7 +78,7 @@ METRIC_LABELS = [
     "progression",
     "at_fault_collision",
     "ttc",
-    "ttc_tfl",
+    "distance_to_collision",
     "progress_ratio",
     "multi_lane_time",
     "multi_lane_score",
