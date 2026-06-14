@@ -190,3 +190,13 @@ pufferlib/resources/drive/output*.gif
 emsdk/
 docs/book/*
 !docs/book/assets/
+
+# Local PufferDrive RL experiments
+/native_3d_renders/
+/training_visualizations/
+/visualizations/
+/outputs/
+/pufferdrive_headless_demo.mp4
+/tfrecord-*.json
+/waymo_viewer_server.*.log
+/pufferlib/resources/drive/waymo_*_json/

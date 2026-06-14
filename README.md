@@ -66,6 +66,12 @@ Start a training run
 puffer train puffer_drive
 ```
 
+### Minimal PPO on Windows/WSL
+
+For an inspectable continuous-action PPO implementation, Waymo JSON map
+preparation, and native third-person checkpoint rendering, see
+[Minimal PPO training](docs/src/minimal-ppo.md).
+
 ## Dataset
 
 <details>

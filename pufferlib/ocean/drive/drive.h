@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -2998,6 +2999,22 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     }
 }
 
+static int write_full_frame(int fd, const unsigned char *data, size_t size) {
+    size_t total_written = 0;
+    while (total_written < size) {
+        ssize_t written = write(fd, data + total_written, size - total_written);
+        if (written > 0) {
+            total_written += (size_t)written;
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
 void c_render(Drive *env, int view_mode, int draw_traces) {
 
     // Create client on first render call
@@ -3095,7 +3112,10 @@ void c_render(Drive *env, int view_mode, int draw_traces) {
 
         unsigned char *screen_data = rlReadScreenPixels((int)client->width, (int)client->height);
         if (screen_data) {
-            write(client->recorder_pipefd[1], screen_data, (int)client->width * (int)client->height * 4);
+            size_t frame_size = (size_t)client->width * (size_t)client->height * 4;
+            if (write_full_frame(client->recorder_pipefd[1], screen_data, frame_size) != 0) {
+                fprintf(stderr, "Failed to write complete render frame to ffmpeg: %s\n", strerror(errno));
+            }
             RL_FREE(screen_data);
         }
     } else { // Pop-up window
