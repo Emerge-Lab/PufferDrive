@@ -127,6 +127,10 @@ static inline int is_road(int type) {
     return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
 }
 
+static inline int is_road_grid_candidate(int type) {
+    return is_road_lane(type) || is_road_edge(type);
+}
+
 static inline int is_controllable_agent(int type) {
     return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
 }
