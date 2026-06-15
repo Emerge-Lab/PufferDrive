@@ -78,7 +78,7 @@ METRIC_LABELS = [
     "progression",
     "at_fault_collision",
     "ttc",
-    "ttc_tfl",
+    "distance_to_collision",
     "progress_ratio",
     "multi_lane_time",
     "multi_lane_score",
@@ -659,7 +659,7 @@ def plot_observation(
     )
     target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
 
-    ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit, _ = ego_state
+    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, _ = ego_state
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -710,7 +710,7 @@ def plot_observation(
     # Add dynamics info text for JERK model
     ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
-    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {a_long:.2f}\naccel_lat: {a_lat:.2f}"
+    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {accel_long:.2f}\naccel_lat: {accel_lat:.2f}"
 
     ax.text(
         0.02,

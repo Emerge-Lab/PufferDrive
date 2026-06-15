@@ -75,7 +75,7 @@ void build_road_cache(Drive *env, Client *client) {
     int tri_count = 0, line_count = 0;
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *road = &env->road_elements[i];
-        int segs = road->segment_length - 1;
+        int segs = road->segment_size - 1;
         if (segs <= 0) {
             continue;
         }
@@ -139,7 +139,7 @@ void build_road_cache(Drive *env, Client *client) {
 
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *road = &env->road_elements[i];
-        for (int j = 0; j < road->segment_length - 1; j++) {
+        for (int j = 0; j < road->segment_size - 1; j++) {
             float sx = road->x[j], sy = road->y[j], sz = road->z[j];
             float ex = road->x[j + 1], ey = road->y[j + 1], ez = road->z[j + 1];
 
@@ -378,7 +378,7 @@ Client *make_client(Drive *env) {
     // Fallback: use first road element midpoint if no valid agent found
     if (scene_cx == 0.0f && scene_cy == 0.0f && env->num_road_elements > 0) {
         RoadMapElement *r0 = &env->road_elements[0];
-        if (r0->segment_length > 0) {
+        if (r0->segment_size > 0) {
             scene_cx = r0->x[0];
             scene_cy = r0->y[0];
             scene_cz = r0->z[0];
@@ -925,13 +925,13 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float rel_angle_x = (agent_obs[entity_idx + 5]);
         float rel_angle_y = (agent_obs[entity_idx + 6]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
+        float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         // Calculate endpoint using the relative angle directly
         // Calculate endpoint directly
-        float x_start = x_middle - segment_length * cosf(rel_angle);
-        float y_start = y_middle - segment_length * sinf(rel_angle);
-        float x_end = x_middle + segment_length * cosf(rel_angle);
-        float y_end = y_middle + segment_length * sinf(rel_angle);
+        float x_start = x_middle - segment_size * cosf(rel_angle);
+        float y_start = y_middle - segment_size * sinf(rel_angle);
+        float x_end = x_middle + segment_size * cosf(rel_angle);
+        float y_end = y_middle + segment_size * sinf(rel_angle);
 
         if (lasers && mode == 0) {
             DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x_middle, y_middle, z_middle + 1}, lineColor);
@@ -979,11 +979,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float rel_angle_x = agent_obs[entity_idx + 5];
         float rel_angle_y = agent_obs[entity_idx + 6];
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
-        float x_start = x_middle - segment_length * cosf(rel_angle);
-        float y_start = y_middle - segment_length * sinf(rel_angle);
-        float x_end = x_middle + segment_length * cosf(rel_angle);
-        float y_end = y_middle + segment_length * sinf(rel_angle);
+        float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
+        float x_start = x_middle - segment_size * cosf(rel_angle);
+        float y_start = y_middle - segment_size * sinf(rel_angle);
+        float x_end = x_middle + segment_size * cosf(rel_angle);
+        float y_end = y_middle + segment_size * sinf(rel_angle);
 
         if (mode == 1) {
             float x_start_world = px + (x_start * heading_self_x - y_start * heading_self_y);
@@ -1084,7 +1084,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
         }
-        if (traffic->states == NULL || traffic->state_length <= 0) {
+        if (traffic->states == NULL || traffic->state_size <= 0) {
             continue;
         }
 
@@ -1092,8 +1092,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (state_idx < 0) {
             state_idx = 0;
         }
-        if (state_idx >= traffic->state_length) {
-            state_idx = traffic->state_length - 1;
+        if (state_idx >= traffic->state_size) {
+            state_idx = traffic->state_size - 1;
         }
         int tl_state = traffic->states[state_idx];
 
@@ -1373,7 +1373,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             rlSetLineWidth(1.5f);
             for (int i = 0; i < env->num_road_elements; i++) {
                 RoadMapElement *element = &env->road_elements[i];
-                for (int j = 0; j < element->segment_length - 1; j++) {
+                for (int j = 0; j < element->segment_size - 1; j++) {
                     float sx = element->x[j], sy = element->y[j], sz = element->z[j];
                     float ex = element->x[j + 1], ey = element->y[j + 1], ez = element->z[j + 1];
                     if (is_road_lane(element->type)) {
@@ -1477,7 +1477,7 @@ void saveTopDownImage(
     if (log_trajectories) {
         for (int i = 0; i < env->num_total_agents; i++) {
             Agent *agent = &env->agents[i];
-            for (int j = 0; j < agent->trajectory_length; j++) {
+            for (int j = 0; j < agent->trajectory_size; j++) {
                 float x = agent->log_trajectory_x[j];
                 float y = agent->log_trajectory_y[j];
                 float valid = agent->log_valid[j];

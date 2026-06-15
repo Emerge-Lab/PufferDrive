@@ -84,8 +84,8 @@ labels = [
     "width",
     "length",
     "steering",
-    "a_long",
-    "a_lat",
+    "accel_long",
+    "accel_lat",
     "lane_center_dist_01",
     "lane_heading_cos",
     "speed_limit",
@@ -335,13 +335,13 @@ axes[0, 0].set_xlabel("step")
 axes[0, 1].plot(ego_history[:, 3])
 axes[0, 1].set_title("steering")
 axes[0, 1].set_xlabel("step")
-# a_long
+# accel_long
 axes[1, 0].plot(ego_history[:, 4])
-axes[1, 0].set_title("a_long")
+axes[1, 0].set_title("accel_long")
 axes[1, 0].set_xlabel("step")
-# a_lat
+# accel_lat
 axes[1, 1].plot(ego_history[:, 5])
-axes[1, 1].set_title("a_lat")
+axes[1, 1].set_title("accel_lat")
 axes[1, 1].set_xlabel("step")
 plt.suptitle("Agent 0 ego features over 20 steps (no-op action)")
 plt.tight_layout()
@@ -352,7 +352,7 @@ plt.show()
 
 # %%
 # Current obs across all agents
-# Ego features (jerk): speed(0), width(1), length(2), steering(3), a_long(4), a_lat(5), lane_center(6), lane_heading(7), speed_limit(8)
+# Ego features (jerk): speed(0), width(1), length(2), steering(3), accel_long(4), accel_lat(5), lane_center(6), lane_heading(7), speed_limit(8)
 speeds = obs[:, 0]  # speed is at index 0
 
 # Target waypoints start after ego + reward coefs

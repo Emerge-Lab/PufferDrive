@@ -128,7 +128,7 @@ void renderTopDownView(
             Vector3 prev_point = {0};
             bool has_prev = false;
 
-            for (int j = 0; j < env->agents[idx].trajectory_length; j++) {
+            for (int j = 0; j < env->agents[idx].trajectory_size; j++) {
                 float x = env->agents[idx].log_trajectory_x[j];
                 float y = env->agents[idx].log_trajectory_y[j];
                 float valid = env->agents[idx].log_valid[j];
