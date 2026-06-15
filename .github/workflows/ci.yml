@@ -66,7 +66,7 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
-          python -m pip install -U pip pytest jupytext nbclient ipykernel ipywidgets
+          python -m pip install -U pip pytest jupytext nbclient ipykernel
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 

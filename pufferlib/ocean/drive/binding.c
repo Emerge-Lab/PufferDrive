@@ -369,15 +369,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             PyDict_SetItemString(agent, "type", tmp);
             Py_DECREF(tmp);
 
-            /* Validate trajectory_length before using it */
-            int traj_len = (a->trajectory_length > 0 && a->trajectory_length < 10000) ? a->trajectory_length : 0;
+            /* Validate trajectory_size before using it */
+            int traj_len = (a->trajectory_size > 0 && a->trajectory_size < 10000) ? a->trajectory_size : 0;
             tmp = PyLong_FromLong(traj_len);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            PyDict_SetItemString(agent, "trajectory_length", tmp);
+            PyDict_SetItemString(agent, "trajectory_size", tmp);
             Py_DECREF(tmp);
 
             /* Log trajectory arrays - validate each pointer individually before access */
@@ -649,7 +649,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->a_long);
+            pf = PyFloat_FromDouble((double) a->accel_long);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -663,7 +663,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->a_lat);
+            pf = PyFloat_FromDouble((double) a->accel_lat);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1184,7 +1184,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     SET_WAYPOINT_FLOAT("x", wp->x);
                     SET_WAYPOINT_FLOAT("y", wp->y);
                     SET_WAYPOINT_FLOAT("heading", wp->heading);
-                    SET_WAYPOINT_FLOAT("kappa", wp->kappa);
 
                     tmp_val = PyLong_FromLong(wp->lane_idx);
                     if (!tmp_val) {
@@ -1274,15 +1273,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            /* Validate segment_length before using it */
-            int seg_len = (r->segment_length > 0 && r->segment_length < 100000) ? r->segment_length : 0;
+            /* Validate segment_size before using it */
+            int seg_len = (r->segment_size > 0 && r->segment_size < 100000) ? r->segment_size : 0;
             tmp = PyLong_FromLong(seg_len);
             if (!tmp) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(road, "segment_length", tmp) < 0) {
+            if (PyDict_SetItemString(road, "segment_size", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(road);
                 Py_DECREF(road_list);
@@ -1495,15 +1494,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            /* Validate state_length before using it */
-            int state_len = (t->state_length > 0 && t->state_length < 10000) ? t->state_length : 0;
+            /* Validate state_size before using it */
+            int state_len = (t->state_size > 0 && t->state_size < 10000) ? t->state_size : 0;
             tmp = PyLong_FromLong(state_len);
             if (!tmp) {
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(traffic, "state_length", tmp) < 0) {
+            if (PyDict_SetItemString(traffic, "state_size", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);

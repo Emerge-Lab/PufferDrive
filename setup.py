@@ -277,6 +277,7 @@ if not NO_TRAIN:
         "tensorboard",
         "jupytext",
         "torchinfo",
+        "ipywidgets",
     ]
 
 setup(
