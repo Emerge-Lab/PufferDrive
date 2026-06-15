@@ -892,8 +892,8 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 5] = a->sim_width;
             agent_f32[f32_base + 6] = a->sim_speed;
             agent_f32[f32_base + 7] = a->steering_angle;
-            agent_f32[f32_base + 8] = a->a_long;
-            agent_f32[f32_base + 9] = a->a_lat;
+            agent_f32[f32_base + 8] = a->accel_long;
+            agent_f32[f32_base + 9] = a->accel_lat;
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
 
@@ -946,7 +946,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             int base = (e * traffic_cap + i) * traffic_fields;
             traffic_i16[base + 0] = 1;
             traffic_i16[base + 1] = (short) t->type;
-            if (t->states && drive->timestep >= 0 && drive->timestep < t->state_length) {
+            if (t->states && drive->timestep >= 0 && drive->timestep < t->state_size) {
                 traffic_i16[base + 2] = (short) t->states[drive->timestep];
             }
         }

@@ -97,8 +97,9 @@
 #define MAX_TARGET_WAYPOINTS 20
 
 // obs_html_frame array field counts
-#define AGENT_F32_FIELDS 12 // sim_x/y/z, heading, length, width, speed, steering, a_long, a_lat, jerk_long, jerk_lat
-#define AGENT_I32_FIELDS 8  // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define AGENT_F32_FIELDS                                                                                               \
+    12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
+#define AGENT_I32_FIELDS 8             // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
@@ -160,10 +161,11 @@ struct Path {
 };
 
 struct Agent {
+    int id;
     int type;
 
     // Log trajectory
-    int trajectory_length;
+    int trajectory_size;
     float *log_trajectory_x;
     float *log_trajectory_y;
     float *log_trajectory_z;
@@ -235,8 +237,8 @@ struct Agent {
     int removed; // 0/1 -> remove from sim if set
 
     // Jerk dynamics
-    float a_long;
-    float a_lat;
+    float accel_long;
+    float accel_lat;
     float jerk_long;
     float jerk_lat;
     float steering_angle;
@@ -253,7 +255,7 @@ struct Agent {
 struct RoadMapElement {
     int type;
 
-    int segment_length;
+    int segment_size;
     float *x;
     float *y;
     float *z;
@@ -272,7 +274,7 @@ struct RoadMapElement {
 struct TrafficControlElement {
     int type;
 
-    int state_length;
+    int state_size;
     int *states;
     float stop_line[6]; // Two 3D endpoints: [x1,y1,z1, x2,y2,z2]
     float heading;
