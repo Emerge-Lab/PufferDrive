@@ -764,7 +764,7 @@ static void init_grid_map(Drive *env) {
             obs_stride = env->obs_boundary_stride;
         }
         int last_kept_idx = 0;
-        for (int j = 0; j < element->segment_length - 1; j++) {
+        for (int j = 0; j < element->segment_size - 1; j++) {
             // Keep a point every obs_stride points, plus wherever heading deviates enough
             // since the last kept point (densifies curves/intersections)
             int valid_for_obs = 1;
