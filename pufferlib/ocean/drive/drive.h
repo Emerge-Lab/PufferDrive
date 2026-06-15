@@ -524,7 +524,7 @@ static float mixed_uniform(float a) {
     }
 }
 
-static inline void zero_agent_velocity_state(Agent *agent) {
+static inline void clear_agent_motion(Agent *agent) {
     agent->sim_vx = 0.0f;
     agent->sim_vy = 0.0f;
     agent->yaw_rate = 0.0f;
@@ -572,7 +572,7 @@ static void invalidate_agent(Agent *agent) {
     agent->sim_heading = 0.0f;
     agent->cos_heading = 1.0f;
     agent->sin_heading = 0.0f;
-    zero_agent_velocity_state(agent);
+    clear_agent_motion(agent);
     agent->steering_angle = 0.0f;
     agent->sim_valid = 0;
 }
@@ -1214,6 +1214,7 @@ int load_map_binary(const char *filename, Drive *drive) {
     }
 
     // Skip objects section
+    int num_objects_features = 9; // x,y,z,heading,vx,vy,length,width,height (9 float arrays) + valid (1 int array)
     for (int i = 0; i < num_objects; i++) {
         int obj_id, obj_type, traj_len;
         if (fread(&obj_id, sizeof(int), 1, file) != 1 || fread(&obj_type, sizeof(int), 1, file) != 1
@@ -1222,7 +1223,7 @@ int load_map_binary(const char *filename, Drive *drive) {
             return -1;
         }
         // Skip: x,y,z,heading,vx,vy,length,width,height (9 float arrays) + valid (1 int array)
-        fseek(file, 9 * traj_len * sizeof(float) + traj_len * sizeof(int), SEEK_CUR);
+        fseek(file, num_objects_features * traj_len * sizeof(float) + traj_len * sizeof(int), SEEK_CUR);
     }
 
     // Lane graph section
@@ -4750,7 +4751,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         return;
     }
     if (agent->stopped) {
-        zero_agent_velocity_state(agent);
+        clear_agent_motion(agent);
         agent->steering_angle = 0.0f;
         return;
     }
