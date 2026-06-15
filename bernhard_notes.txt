@@ -5,6 +5,12 @@ puffer train puffer_drive --train.learning_rate 0.001
 SPS                                                                        313.4K
 SPS                                                                        341.4K
 
+TODO read puffer advantage.
+Why is my puffer not compiled with CUDA advantage?
+ADVANTAGE_CUDA
+
+what is adv_filter_ewma_beta? Is that the advantage filtering of GIGAFLOW
+
 lauch.json:
 
 {
@@ -18,11 +24,10 @@ lauch.json:
             "args": [
                 "train",
                 "puffer_drive",
-                "--vec.num-workers", "16",
-                "--vec.num-envs", "256",
-                "--env.num-agents", "64",
-                "--train.minibatch-size", "65536",
-                "--total_timesteps", "1_000_000_000"
+                "--vec.num-envs", "16",
+                "--env.num-agents", "1024",
+                "--train.minibatch-size", "131072",
+                "--train.max-minibatch-size", "131072", 
             ],
             "console": "integratedTerminal",
             "justMyCode": false
@@ -30,6 +35,26 @@ lauch.json:
     ]
 }
 
+
+# Run a named evaluator on a checkpoint (config from [eval.<name>])
+puffer eval puffer_drive --evaluator validation_gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
+
+# Ad-hoc: pick by simulation + override scale from the CLI
+puffer eval puffer_drive --eval_simulation replay \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 250 --render 1
+
+# Render the agent's observations (interactive HTML)
+puffer eval puffer_drive --eval_simulation gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 10 --render 1 --render-backend obs_html
+
+
+Eval nodes CARLA:
+Traffic lights are only red for an extremely short amount of time. Policies almost never have to wait (although they do).
+Models seem to deviate from lane center occasionally.
+Policies can drive backward.
 
 Usage: puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
               [--num_scenarios NUM_SCENARIOS] [--render RENDER] [--agent_index [AGENT_INDEX ...]] [--save-frames SAVE_FRAMES] [--gif-path GIF_PATH]
