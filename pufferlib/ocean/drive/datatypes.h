@@ -181,21 +181,26 @@ struct Agent {
     float *log_height;
     int *log_valid;
 
-    // Simulation state (always center-based, even when trajectory control uses the rear axle)
-    float sim_x; // Vehicle center x-coordinate
-    float sim_y; // Vehicle center y-coordinate
-    float sim_z;
-    float sim_heading;
-    float cos_heading; // Cached cosf(sim_heading) - updated in move_dynamics
-    float sin_heading; // Cached sinf(sim_heading) - updated in move_dynamics
-    float sim_vx;      // Vehicle center velocity x-component
-    float sim_vy;      // Vehicle center velocity y-component
-    float yaw_rate;    // Angular velocity used to derive rear-axle velocity
-    float sim_speed;
-    float sim_speed_signed;
-    float sim_length;
-    float sim_width;
-    float sim_height;
+    // Simulation state
+    float sim_x;       // Bounding box center x
+    float sim_y;       // Bounding box center y
+    float sim_z;       // Bounding box center z
+    float sim_heading; // Bounding box heading
+    float cos_heading;
+    float sin_heading;
+    float sim_vx;           // Bounding box velocity x
+    float sim_vy;           // Bounding box velocity y
+    float yaw_rate;         // Angular velocity used to convert between rear and center velocity
+    float sim_speed;        // Bounding box center speed magnitude
+    float sim_speed_signed; // Bounding box center signed longitudinal speed
+    float sim_length;       // Bounding box length
+    float sim_width;        // Bounding box width
+    float sim_height;       // Bounding box height
+    float radius;           // 0.5 * sqrt(L^2 + W^2); refreshed when L/W change
+    float prev_x;
+    float prev_y;
+    float prev_cos_heading;
+    float prev_sin_heading;
     int sim_valid;
 
     // Route information
