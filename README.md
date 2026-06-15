@@ -1,224 +1,203 @@
-# PufferDrive
+# PufferDrive Minimal PPO on Windows and WSL
 
-[![Unit Tests](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml/badge.svg)](https://github.com/Emerge-Lab/PufferDrive/actions/workflows/utest.yml)
+This branch adds a small reinforcement learning workflow on top of the
+original [PufferDrive](https://github.com/Emerge-Lab/PufferDrive) project.
 
-<img align="left" style="width:260px" src="https://github.com/Emerge-Lab/PufferDrive/blob/main/pufferlib/resources/drive/pufferdrive_20fps_long.gif" width="288px">
+The goal is simple:
 
-**PufferDrive is a fast and friendly driving simulator to train and test RL-based models.**
+1. Export Waymo Motion Dataset scenarios as JSON.
+2. Convert the JSON files to PufferDrive map binaries.
+3. Train a small continuous-action PPO policy.
+4. Render the trained policy as an MP4 video.
 
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
+This is a working training example, not a finished autonomous driving model.
+The default short run is mainly useful for checking that the complete pipeline
+works.
 
----
+## Why WSL is used
 
-**Docs**: https://emerge-lab.github.io/PufferDrive
+The native PufferDrive renderer uses Linux libraries and Raylib. On Windows,
+the easiest setup is:
 
----
+- Keep the Git repository on the Windows drive.
+- Run compilation, training, and native 3D rendering inside WSL.
+- Copy checkpoints and videos back to the Windows repository.
 
-### See our 2.0 release video
+The setup script creates a Linux copy at:
 
-<a href="https://www.youtube.com/watch?v=LfQ324R-cbE">
-  <img src="https://img.youtube.com/vi/LfQ324R-cbE/0.jpg" alt="PufferDrive 2.0" width="300">
-</a>
-
-## Installation
-
-Clone the repo
-```bash
-https://github.com/Emerge-Lab/PufferDrive.git
+```text
+~/PufferDrive-native
 ```
 
-Make a venv (`uv venv`), activate the venv
-```
-source .venv/bin/activate
-```
+Your original Windows files remain under:
 
-Inside the venv, install the dependencies
-```
-uv pip install -e .
+```text
+/mnt/c/Users/<username>/Desktop/PufferDrive
 ```
 
-Compile the C code
-```
-python setup.py build_ext --inplace --force
-```
-Run this while your virtual environment is active so the extension is built against the right interpreter.
+## 1. Clone this branch
 
-To test your setup, you can run
-```
-puffer train puffer_drive
-```
-See also the [puffer docs](https://puffer.ai/docs.html).
+From PowerShell:
 
-
-## Quick start
-
-Start a training run
-```
-puffer train puffer_drive
+```powershell
+git clone --branch codex/minimal-ppo-wsl https://github.com/HC-Seaple/PufferDrive.git
+cd PufferDrive
 ```
 
-### Minimal PPO on Windows/WSL
+If Ubuntu is not installed in WSL, open PowerShell as Administrator:
 
-For an inspectable continuous-action PPO implementation, Waymo JSON map
-preparation, and native third-person checkpoint rendering, see
-[Minimal PPO training](docs/src/minimal-ppo.md).
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install_wsl_admin.ps1
+```
 
-## Dataset
+Restart Windows if requested, then open Ubuntu or run `wsl`.
 
-<details>
-<summary>Downloading and using data</summary>
+## 2. Build the native environment
 
-### Data preparation
-
-To train with PufferDrive, you need to convert JSON files to map binaries. Run the following command with the path to your data folder:
+From WSL:
 
 ```bash
-python pufferlib/ocean/drive/drive.py
+cd /mnt/c/Users/<username>/Desktop/PufferDrive
+bash scripts/wsl_native_3d_setup.sh
 ```
 
-### Downloading Waymo Data
+This installs the Linux dependencies, creates a Python environment, copies the
+repository to the Linux filesystem, and builds the native extension.
 
-You can download the WOMD data from Hugging Face in two versions:
+The warning messages from the C compiler about ignored return values are not
+fatal. The setup is successful when it prints:
 
-- **Mini dataset**: [GPUDrive_mini](https://huggingface.co/datasets/EMERGE-lab/GPUDrive_mini) contains 1,000 training files and 300 test/validation files
-- **Medium dataset**: [10,000 files from the training dataset](https://huggingface.co/datasets/daphne-cornelisse/pufferdrive_train)
-- **Large dataset**: [GPUDrive](https://huggingface.co/datasets/EMERGE-lab/GPUDrive) contains 100,000 unique scenes
-
-**Note**: Replace 'GPUDrive_mini' with 'GPUDrive' in your download commands if you want to use the full dataset.
-
-### Additional Data Sources
-
-For more training data compatible with PufferDrive, see [ScenarioMax](https://github.com/valeoai/ScenarioMax). The GPUDrive data format is fully compatible with PufferDrive.
-</details>
-
-
-## Visualizer
-
-<details>
-<summary>Dependencies and usage</summary>
-
-## Local rendering
-
-To launch an interactive renderer, first build:
-```
-bash scripts/build_ocean.sh drive local
+```text
+Done. Native build is ready
 ```
 
-then launch:
-```bash
-./drive
-```
-this will run `demo()` with an existing model checkpoint.
+## 3. Prepare Waymo scenarios
 
-## Headless server setup
-
-Run the Raylib visualizer on a headless server and export as .mp4. This will rollout the pre-trained policy in the env.
-
-### Install dependencies
+Put one or more exported scenario JSON files in the Windows repository. Then
+run from WSL:
 
 ```bash
-sudo apt update
-sudo apt install ffmpeg xvfb
+cd /mnt/c/Users/<username>/Desktop/PufferDrive
+bash scripts/prepare_waymo_maps_wsl.sh \
+  ./scenario_a.json \
+  ./scenario_b.json
 ```
 
-For HPC (There are no root privileges), so install into the conda environment
+The binary maps are written to the Linux-native repository:
+
+```text
+~/PufferDrive-native/resources/drive/binaries/training
+```
+
+The files must be contiguous:
+
+```text
+map_000.bin
+map_001.bin
+map_002.bin
+```
+
+## 4. Run a small training test
+
+From the Windows-mounted repository in WSL:
+
 ```bash
-conda install -c conda-forge xorg-x11-server-xvfb-cos6-x86_64
-conda install -c conda-forge ffmpeg
+bash scripts/run_minimal_ppo_wsl.sh \
+  --map-dir resources/drive/binaries/training \
+  --num-maps 2 \
+  --num-envs 1 \
+  --total-timesteps 10000 \
+  --rollout-steps 128 \
+  --minibatch-size 128
 ```
 
-- `ffmpeg`: Video processing and conversion
-- `xvfb`: Virtual display for headless environments
+Change `--num-maps` to match the number of prepared map files.
 
-### Build and run
+Checkpoints are saved under:
 
-1. Build the application:
+```text
+~/PufferDrive-native/checkpoints/minimal_ppo
+```
+
+The training is running correctly when the step count increases, the losses
+remain finite, and `.pt` checkpoint files are created.
+
+## 5. Render the trained policy
+
 ```bash
-bash scripts/build_ocean.sh visualize local
+bash scripts/visualize_minimal_ppo_wsl.sh \
+  --map-dir resources/drive/binaries/training \
+  --num-maps 2 \
+  --episode-length 91 \
+  --draw-traces
 ```
 
-2. Run with virtual display:
-```bash
-xvfb-run -s "-screen 0 1280x720x24" ./visualize
+The script renders with the native Raylib 3D renderer and copies the MP4 and
+JSON metrics to the Windows folder:
+
+```text
+training_visualizations/
 ```
 
-The `-s` flag sets up a virtual screen at 1280x720 resolution with 24-bit color depth.
+## Visualize a Waymo JSON without training
 
----
+The following commands use the Windows virtual environment.
 
-> To force a rebuild, you can delete the cached compiled executable binary using `rm ./visualize`.
+Create a top-down replay:
 
----
-
-</details>
-
-
-## Benchmarks
-
-### Distributional realism
-
-We provide a PufferDrive implementation of the [Waymo Open Sim Agents Challenge (WOSAC)](https://waymo.com/open/challenges/2025/sim-agents/) for fast, easy evaluation of how well your trained agent matches distributional properties of human behavior. See documentation [here](https://emerge-lab.github.io/PufferDrive/wosac/).
-
-WOSAC evaluation with random policy:
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True
+```powershell
+.\.venv\Scripts\python.exe scripts\visualize_waymo_json.py scenario.json
 ```
 
-WOSAC evaluation with your checkpoint (must be .pt file):
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
+Create a simple 3D chase-camera replay for a selected Waymo track:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\render_waymo_follow_3d.py scenario.json `
+  --track-index 90 `
+  --start-frame 0 `
+  --end-frame 60
 ```
 
-### Human-compatibility
+The lightweight chase-camera renderer uses boxes and map lines. It is useful
+for quickly checking a recorded trajectory without compiling Raylib. The
+native checkpoint renderer uses the PufferDrive car models and full native
+rendering.
 
-You may be interested in how compatible your agent is with human partners. For this purpose, we support an eval where your policy only controls the self-driving car (SDC). The rest of the agents in the scene are stepped using the logs. While it is not a perfect eval since the human partners here are static, it will still give you a sense of how closely aligned your agent's behavior is to how people drive. You can run it like this:
-```bash
-puffer eval puffer_drive --eval.human-replay-eval True --load-model-path <your-trained-policy>.pt
+Outputs are written to:
+
+```text
+visualizations/
 ```
 
-## Development
+## Main files
 
-<details><summary>Documentation and browser demo</summary>
+| File | Purpose |
+| --- | --- |
+| `scripts/minimal_ppo_train.py` | Small PPO actor-critic training loop |
+| `scripts/parallel_data_collect.py` | Original rollout pattern used by the trainer |
+| `scripts/prepare_waymo_maps.py` | Converts Waymo JSON to PufferDrive maps |
+| `scripts/run_minimal_ppo_wsl.sh` | Starts training in the Linux-native copy |
+| `scripts/visualize_minimal_ppo.py` | Runs a checkpoint and records native 3D video |
+| `scripts/visualize_waymo_json.py` | Creates a top-down JSON replay |
+| `scripts/render_waymo_follow_3d.py` | Creates a lightweight 3D chase replay |
+| `docs/src/minimal-ppo.md` | More detail about PPO and command options |
 
-**Docs**
+## Current limitation
 
-A browsable documentation site now lives under `docs/` and is configured with mkbooks. To preview locally:
-```
-brew install mdbook
-mdbook serve --open docs
-```
-Open the served URL to see a local version of the docs.
+A 10,000-step run only verifies the architecture. It is usually not enough to
+learn good driving. Early policies may reverse, steer poorly, or fail to reach
+the goal.
 
-**Interactive demo**
+For a useful model, use more scenarios and training steps, then evaluate on
+scenarios that were not used for training. Useful measurements include:
 
-To edit the browser demo, follow these steps:
-- Download [emscripten](https://github.com/emscripten-core/emscripten)
-- emscripten install latest
-- Activate: `source emsdk/emsdk_env.sh`
-- Run `bash scripts/build_ocean.sh drive web`
-- This generates a number of `game*` files, move them to `assets/` to include them on the webpage
+- goal completion rate
+- collision rate
+- off-road rate
+- reverse-motion frequency
+- average episode return
 
-</details>
+## Upstream project
 
-
-## Citation
-
-If you use PufferDrive in your research, please cite:
-```bibtex
-@software{pufferdrive2025github,
-  author = {Daphne Cornelisse* and Spencer Cheng* and Pragnay Mandavilli and Julian Hunt and Kevin Joseph and Waël Doulazmi and Valentin Charraut and Aditya Gupta and Joseph Suarez and Eugene Vinitsky},
-  title = {{PufferDrive}: A Fast and Friendly Driving Simulator for Training and Evaluating {RL} Agents},
-  url = {https://github.com/Emerge-Lab/PufferDrive},
-  version = {2.0.0},
-  year = {2025},
-}
-```
+PufferDrive is developed by Emerge Lab. The original documentation is
+available at <https://emerge-lab.github.io/PufferDrive>.
