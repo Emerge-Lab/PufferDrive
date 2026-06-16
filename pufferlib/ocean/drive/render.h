@@ -30,7 +30,6 @@ const Color LIGHTGREEN = (Color) {152, 255, 152, 255};
 typedef struct Client {
     float width;
     float height;
-    Texture2D puffers;
     Vector3 camera_target;
     float camera_zoom;
     Camera3D camera;
@@ -349,17 +348,16 @@ Client *make_client(Drive *env) {
         client->egl_mode = 1;
     }
 #endif
-    client->puffers = LoadTexture("resources/puffers_128.png");
-    client->cars[0] = LoadModel("resources/drive/RedCar.glb");
-    client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
-    client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
-    client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
-    client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
-    client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
-    client->cyclist = LoadModel("resources/drive/cyclist.glb");
-    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
+    client->cars[0] = LoadModel("pufferlib/resources/drive/RedCar.glb");
+    client->cars[1] = LoadModel("pufferlib/resources/drive/WhiteCar.glb");
+    client->cars[2] = LoadModel("pufferlib/resources/drive/BlueCar.glb");
+    client->cars[3] = LoadModel("pufferlib/resources/drive/YellowCar.glb");
+    client->cars[4] = LoadModel("pufferlib/resources/drive/GreenCar.glb");
+    client->cars[5] = LoadModel("pufferlib/resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("pufferlib/resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("pufferlib/resources/drive/pedestrian.glb");
     int animCountCyc = 0;
-    client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
+    client->cycle_anim = LoadModelAnimations("pufferlib/resources/drive/cyclist.glb", &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
@@ -1771,7 +1769,6 @@ void close_client(Client *client) {
     }
     UnloadModel(client->cyclist);
     UnloadModel(client->pedestrian);
-    UnloadTexture(client->puffers);
 
     // CRITICAL: skip CloseWindow + egl_headless_cleanup in egl_mode.
     //

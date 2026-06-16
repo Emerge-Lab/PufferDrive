@@ -9,6 +9,8 @@
 
 // Test helper to run functions that call exit() in child processes
 int test_exit_function(void (*test_func)(void)) {
+    fflush(stdout);
+    fflush(stderr);
     pid_t pid = fork();
 
     if (pid == 0) {
