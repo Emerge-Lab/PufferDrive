@@ -5453,6 +5453,16 @@ static void compute_observations(Drive *env) {
             float dy_norm = (length > 0) ? dy / length : dy;
             float cos_angle = dx_norm * ego_entity->cos_heading + dy_norm * ego_entity->sin_heading;
             float sin_angle = -dx_norm * ego_entity->sin_heading + dy_norm * ego_entity->cos_heading;
+            if (is_edge && length > 0) {
+                float angle = atan2f(sin_angle, cos_angle);
+                if (angle > (float)M_PI / 2.0f) {
+                    angle -= (float)M_PI;
+                } else if (angle < -(float)M_PI / 2.0f) {
+                    angle += (float)M_PI;
+                }
+                cos_angle = cosf(angle);
+                sin_angle = sinf(angle);
+            }
 
             float *target;
             int *counter;
