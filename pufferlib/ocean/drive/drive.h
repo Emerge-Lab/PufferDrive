@@ -5055,7 +5055,8 @@ static RewardTerms compute_rewards(Drive *env, int i) {
 
     // Rl-align (GIGAFLOW): min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
     float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
-    float vel_aligned_penalty = agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed, 0.0f);
+    float vel_aligned_penalty =
+        agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed_signed, 0.0f);
     float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
 
     float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt *
@@ -5365,7 +5366,7 @@ static void compute_observations(Drive *env) {
                     // Partner orientation (sine)
                     obs[obs_idx++] = rel_heading_y;
                     // Partner speed
-                    obs[obs_idx++] = other_entity->sim_speed / MAX_SPEED;
+                    obs[obs_idx++] = other_entity->sim_speed_signed / MAX_SPEED;
                     // Target marker for adversarial policy.
                     obs[obs_idx++] = (index == env->active_agent_indices[0]) ? 1.0f : 0.0f;
                     // Alive marker for adversarial policy.
