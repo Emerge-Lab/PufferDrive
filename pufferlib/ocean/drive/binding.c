@@ -1893,6 +1893,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->max_boundary_segment_observations = (int)unpack(kwargs, "max_boundary_segment_observations");
     env->max_lane_segment_observations = (int)unpack(kwargs, "max_lane_segment_observations");
     env->max_partner_observations = (int)unpack(kwargs, "max_partner_observations");
+    env->target_max_partner_observations = (int)unpack(kwargs, "target_max_partner_observations");
+    env->adversary_max_partner_observations = (int)unpack(kwargs, "adversary_max_partner_observations");
     env->max_traffic_control_observations = (int)unpack(kwargs, "max_traffic_control_observations");
     env->traffic_control_scope = (int)unpack(kwargs, "traffic_control_scope");
     env->dt = (float)unpack(kwargs, "dt");

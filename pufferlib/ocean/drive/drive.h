@@ -498,6 +498,8 @@ struct Drive {
     int max_boundary_segment_observations;
     int max_lane_segment_observations;
     int max_partner_observations;
+    int target_max_partner_observations;
+    int adversary_max_partner_observations;
     int max_traffic_control_observations;
     int traffic_control_scope;
     int obs_lane_segment_count;
@@ -5280,6 +5282,15 @@ static void compute_observations(Drive *env) {
         }
 
         // ===== Partner observations =====
+        int partner_observation_limit = env->max_partner_observations;
+        if (env->sdc_controller == CONTROLLER_POLICY) {
+            int is_target = env->active_agent_indices[i] == env->active_agent_indices[0];
+            partner_observation_limit =
+                is_target ? env->target_max_partner_observations : env->adversary_max_partner_observations;
+            if (partner_observation_limit > env->max_partner_observations) {
+                partner_observation_limit = env->max_partner_observations;
+            }
+        }
         if (ego_entity->is_blind_partner) {
             int total_partner_floats = env->max_partner_observations * PARTNER_FEATURES;
             memset(&obs[obs_idx], 0, total_partner_floats * sizeof(float));
@@ -5319,7 +5330,7 @@ static void compute_observations(Drive *env) {
             int cars_seen = 0;
             if (candidate_count > 0) {
                 int num_agents_to_observe =
-                    (candidate_count < env->max_partner_observations) ? candidate_count : env->max_partner_observations;
+                    (candidate_count < partner_observation_limit) ? candidate_count : partner_observation_limit;
 
                 // Partial selection sort: find the k-th smallest for each k
                 for (int k = 0; k < num_agents_to_observe; k++) {

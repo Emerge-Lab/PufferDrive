@@ -200,6 +200,8 @@ class Drive(pufferlib.PufferEnv):
         max_lane_segment_observations=32,
         max_boundary_segment_observations=32,
         max_partner_observations=16,
+        target_max_partner_observations=16,
+        adversary_max_partner_observations=-1,
         max_traffic_control_observations=4,
         traffic_control_scope=0,
         starting_map=0,
@@ -314,7 +316,17 @@ class Drive(pufferlib.PufferEnv):
         # Extract observation shapes from constants
         self.max_lane_segment_observations = max_lane_segment_observations
         self.max_boundary_segment_observations = max_boundary_segment_observations
-        self.max_partner_observations = max_partner_observations
+        self.target_max_partner_observations = int(target_max_partner_observations)
+        self.adversary_max_partner_observations = int(adversary_max_partner_observations)
+        if self.adversary_max_partner_observations < 0:
+            self.adversary_max_partner_observations = max(0, int(self.max_agents_per_env) - 1)
+        if self.target_max_partner_observations < 0 or self.adversary_max_partner_observations < 0:
+            raise ValueError("target/adversary max partner observations must be >= 0, or -1 for adversary auto")
+        self.max_partner_observations = max(
+            int(max_partner_observations),
+            self.target_max_partner_observations,
+            self.adversary_max_partner_observations,
+        )
         self.traffic_control_scope = traffic_control_scope
         self.max_traffic_control_observations = max_traffic_control_observations
         self.max_goal_position = float(max_goal_position)
@@ -875,6 +887,8 @@ class Drive(pufferlib.PufferEnv):
             "max_lane_segment_observations": self.max_lane_segment_observations,
             "max_boundary_segment_observations": self.max_boundary_segment_observations,
             "max_partner_observations": self.max_partner_observations,
+            "target_max_partner_observations": self.target_max_partner_observations,
+            "adversary_max_partner_observations": self.adversary_max_partner_observations,
             "max_traffic_control_observations": self.max_traffic_control_observations,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
