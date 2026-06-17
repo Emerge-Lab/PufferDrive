@@ -46,8 +46,8 @@ EGO_LABELS = [
     "width",
     "length",
     "steering",
-    "a_long",
-    "a_lat",
+    "accel_long",
+    "accel_lat",
     "lane_center",
     "lane_align",
     "speed_limit",
@@ -92,16 +92,24 @@ DEFAULT_ENV_KWARGS = {
 }
 
 DEFAULT_POLICY_KWARGS = {
-    "input_size": 64,
+    "ego_input_size": 64,
+    "partner_input_size": 64,
+    "lane_input_size": 64,
+    "boundary_input_size": 64,
+    "traffic_control_input_size": 64,
+    "context_input_size": 64,
     "backbone_hidden_size": 128,
     "backbone_num_layers": 1,
     "actor_hidden_size": 128,
     "actor_num_layers": 0,
     "critic_hidden_size": 128,
     "critic_num_layers": 0,
-    "encoder_gigaflow": True,
-    "dropout": 0.0,
-    "split_network": False,
+    "encoder_activation": "tanh",
+    "encoder_layer_norm": True,
+    "backbone_activation": "gelu",
+    "backbone_layer_norm": False,
+    "shared_network": True,
+    "mask_padded_features": False,
 }
 
 
