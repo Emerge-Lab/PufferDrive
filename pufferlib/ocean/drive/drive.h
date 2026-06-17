@@ -113,6 +113,7 @@
 #define TRAFFIC_CONTROL_FEATURES 7
 #define STATIC_TARGET_FEATURES 3
 #define DYNAMIC_TARGET_FEATURES 5
+#define OBS_VALID_COUNT_FEATURES 4
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
@@ -4545,7 +4546,7 @@ static int compute_observation_size(Drive *env) {
 
     int max_obs = ego_dim + PARTNER_FEATURES * env->max_partner_observations +
                   ROAD_FEATURES * (env->obs_lane_segment_count + env->obs_boundary_segment_count) +
-                  TRAFFIC_CONTROL_FEATURES * env->max_traffic_control_observations;
+                  TRAFFIC_CONTROL_FEATURES * env->max_traffic_control_observations + OBS_VALID_COUNT_FEATURES;
     if (env->reward_conditioning) {
         max_obs += NUM_REWARD_COEFS;
     }
@@ -5291,6 +5292,7 @@ static void compute_observations(Drive *env) {
                 partner_observation_limit = env->max_partner_observations;
             }
         }
+        int cars_seen = 0;
         if (ego_entity->is_blind_partner) {
             int total_partner_floats = env->max_partner_observations * PARTNER_FEATURES;
             memset(&obs[obs_idx], 0, total_partner_floats * sizeof(float));
@@ -5327,7 +5329,6 @@ static void compute_observations(Drive *env) {
                 candidates[candidate_count].dz = dz;
                 candidate_count++;
             }
-            int cars_seen = 0;
             if (candidate_count > 0) {
                 int num_agents_to_observe =
                     (candidate_count < partner_observation_limit) ? candidate_count : partner_observation_limit;
@@ -5524,6 +5525,8 @@ static void compute_observations(Drive *env) {
             memcpy(&obs[boundary_obs_idx], boundaries_scratch, boundary_to_write * ROAD_FEATURES * sizeof(float));
             memset(&obs[boundary_obs_idx + boundary_to_write * ROAD_FEATURES], 0,
                    (env->obs_boundary_segment_count - boundary_to_write) * ROAD_FEATURES * sizeof(float));
+            lanes_collected = lane_to_write;
+            boundaries_collected = boundary_to_write;
         } else {
             memset(&obs[lane_obs_idx + lanes_collected * ROAD_FEATURES], 0,
                    (env->obs_lane_segment_count - lanes_collected) * ROAD_FEATURES * sizeof(float));
@@ -5627,6 +5630,12 @@ static void compute_observations(Drive *env) {
         // Zero out remaining traffic control slots
         int remaining_traffic_obs = (env->max_traffic_control_observations - controls_added) * TRAFFIC_CONTROL_FEATURES;
         memset(&obs[obs_idx], 0, remaining_traffic_obs * sizeof(float));
+        obs_idx += remaining_traffic_obs;
+
+        obs[obs_idx++] = (float)lanes_collected;
+        obs[obs_idx++] = (float)boundaries_collected;
+        obs[obs_idx++] = (float)cars_seen;
+        obs[obs_idx++] = (float)controls_added;
     }
 }
 

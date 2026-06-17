@@ -11,53 +11,74 @@ from pufferlib.models import Convolutional as Conv  # noqa: F401
 
 Recurrent = pufferlib.models.LSTMWrapper
 
+ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU}
+
+
+def _activation(name):
+    if name not in ACTIVATIONS:
+        raise ValueError(f"Unsupported activation {name!r}. Expected one of {sorted(ACTIVATIONS)}")
+    return ACTIVATIONS[name]
+
 
 class DriveBackbone(nn.Module):
-    """
-    Neural network backbone
-    Architecture features:
-      - Split Actor/Critic (configurable)
-    """
+    def _create_encoder(self, in_features, out_size):
+        layers = [pufferlib.pytorch.layer_init(nn.Linear(in_features, out_size))]
+        if self.encoder_layer_norm:
+            layers.append(nn.LayerNorm(out_size))
+        layers.append(self.encoder_act_cls())
+        layers.append(pufferlib.pytorch.layer_init(nn.Linear(out_size, out_size)))
+        return nn.Sequential(*layers)
 
-    def _create_encoder(self, in_features, input_size, encoder_gigaflow, dropout=0.0):
-        if encoder_gigaflow:
-            return nn.Sequential(
-                pufferlib.pytorch.layer_init(nn.Linear(in_features, input_size)),
-                nn.LayerNorm(input_size),
-                nn.Tanh(),
-                nn.Dropout(dropout),
-                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
-            )
-        else:
-            return nn.Sequential(
-                pufferlib.pytorch.layer_init(nn.Linear(in_features, input_size)),
-                nn.LayerNorm(input_size),
-                pufferlib.pytorch.layer_init(nn.Linear(input_size, input_size)),
-            )
+    def _encode_and_pool(self, objects, valid_counts, encoder, out_size):
+        if not self.mask_padded_features:
+            return encoder(objects).max(dim=1).values
+
+        valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
+        encoded_objects = objects.new_full(
+            (objects.shape[0], objects.shape[1], out_size),
+            torch.finfo(objects.dtype).min,
+        )
+        encoded_objects[valid_mask] = encoder(objects[valid_mask])
+        pooled = encoded_objects.amax(dim=1)
+        return torch.where(valid_counts.unsqueeze(1) == 0, encoded_objects.new_zeros(pooled.shape), pooled)
 
     def __init__(
         self,
         env,
-        input_size,
+        ego_input_size,
+        partner_input_size,
+        lane_input_size,
+        boundary_input_size,
+        traffic_control_input_size,
+        context_input_size,
         backbone_hidden_size,
         backbone_num_layers,
         ego_dim,
-        encoder_gigaflow,
-        dropout,
+        encoder_activation,
+        encoder_layer_norm,
+        backbone_activation,
+        backbone_layer_norm,
+        mask_padded_features,
         strip_last_partner_features=0,
     ):
         super().__init__()
+        self.encoder_act_cls = _activation(encoder_activation)
+        self.encoder_layer_norm = encoder_layer_norm
+        self.ego_dim = ego_dim
+        self.ego_input_size = ego_input_size
+        self.partner_input_size = partner_input_size
+        self.lane_input_size = lane_input_size
+        self.boundary_input_size = boundary_input_size
+        self.traffic_control_input_size = traffic_control_input_size
+        self.context_input_size = context_input_size
 
-        # Observation dimensions from environment config
         self.max_partner_observations = env.max_partner_observations
         self.partner_features_count = env.partner_features
         self.strip_last_partner_features = strip_last_partner_features
         self.partner_encoder_features = self.partner_features_count - self.strip_last_partner_features
-        # Road features size (lanes + boundaries)
         self.obs_lane_segment_count = env.obs_lane_segment_count
         self.obs_boundary_segment_count = env.obs_boundary_segment_count
         self.road_features_count = env.road_features
-        # Traffic control size
         self.max_traffic_control_observations = env.max_traffic_control_observations
         self.traffic_control_features_count = env.traffic_control_features
         self.traffic_control_continuous_features = env.traffic_control_features - 2
@@ -66,62 +87,45 @@ class DriveBackbone(nn.Module):
             + binding.NUM_TRAFFIC_CONTROL_TYPES
             + binding.NUM_TRAFFIC_CONTROL_STATES
         )
-        # Conditioning size (reward coefficients + target info)
-        self.conditioning_dim = env.num_reward_coefs + env.target_dim
+        self.obs_valid_count_features = env.obs_valid_count_features
+        self.mask_padded_features = mask_padded_features
+        self.context_dim = env.num_reward_coefs + env.target_dim
 
-        num_feature_sets = 1
-
-        # 1. observations Encoders
-        # Each encoder projects raw features into a common input_size embedding space
-        self.ego_encoder = self._create_encoder(ego_dim, input_size, encoder_gigaflow)
+        self.ego_encoder = self._create_encoder(ego_dim, ego_input_size)
+        encoders_out = ego_input_size
         if self.obs_lane_segment_count > 0:
-            self.lane_encoder = self._create_encoder(
-                self.road_features_count,
-                input_size,
-                encoder_gigaflow,
-                dropout=dropout,
-            )
-            num_feature_sets += 1
+            self.lane_encoder = self._create_encoder(self.road_features_count, lane_input_size)
+            encoders_out += lane_input_size
         if self.obs_boundary_segment_count > 0:
-            self.boundary_encoder = self._create_encoder(
-                self.road_features_count,
-                input_size,
-                encoder_gigaflow,
-                dropout=dropout,
-            )
-            num_feature_sets += 1
+            self.boundary_encoder = self._create_encoder(self.road_features_count, boundary_input_size)
+            encoders_out += boundary_input_size
         if self.max_partner_observations > 0:
-            self.partner_encoder = self._create_encoder(
-                self.partner_encoder_features,
-                input_size,
-                encoder_gigaflow,
-            )
-            num_feature_sets += 1
+            self.partner_encoder = self._create_encoder(self.partner_encoder_features, partner_input_size)
+            encoders_out += partner_input_size
         if self.max_traffic_control_observations > 0:
             self.traffic_control_encoder = self._create_encoder(
                 self.traffic_control_features_after_onehot,
-                input_size,
-                encoder_gigaflow,
+                traffic_control_input_size,
             )
-            num_feature_sets += 1
-        if self.conditioning_dim > 0:
-            self.conditioning_encoder = self._create_encoder(self.conditioning_dim, input_size, encoder_gigaflow)
-            num_feature_sets += 1
+            encoders_out += traffic_control_input_size
+        if self.context_dim > 0:
+            self.context_encoder = self._create_encoder(self.context_dim, context_input_size)
+            encoders_out += context_input_size
 
-        # 2. Main Backbone MLP
+        backbone_act_cls = _activation(backbone_activation)
         backbone_layers = []
-        bb_in = num_feature_sets * input_size
+        bb_in = encoders_out
         for _ in range(backbone_num_layers):
-            backbone_layers.append(nn.GELU())
+            backbone_layers.append(backbone_act_cls())
             backbone_layers.append(pufferlib.pytorch.layer_init(nn.Linear(bb_in, backbone_hidden_size)))
+            if backbone_layer_norm:
+                backbone_layers.append(nn.LayerNorm(backbone_hidden_size))
             bb_in = backbone_hidden_size
-        # Add final GELU before heads
-        backbone_layers.append(nn.GELU())
+        backbone_layers.append(backbone_act_cls())
         self.backbone = nn.Sequential(*backbone_layers)
-        self.out_dim = backbone_hidden_size if backbone_num_layers > 0 else num_feature_sets * input_size
+        self.out_dim = backbone_hidden_size if backbone_num_layers > 0 else encoders_out
 
-    def forward(self, observations, ego_dim):
-        # Extract and slice observations from the flat buffer
+    def _split_observations(self, observations, ego_dim):
         partner_dim = self.max_partner_observations * self.partner_features_count
         lane_dim = self.obs_lane_segment_count * self.road_features_count
         boundary_dim = self.obs_boundary_segment_count * self.road_features_count
@@ -129,50 +133,83 @@ class DriveBackbone(nn.Module):
 
         slide_idx = ego_dim
         ego_observations = observations[:, :slide_idx]
-
-        conditioning_observations = observations[:, slide_idx : slide_idx + self.conditioning_dim]
-        slide_idx += self.conditioning_dim
-
+        context_observations = observations[:, slide_idx : slide_idx + self.context_dim]
+        slide_idx += self.context_dim
         partner_observations = observations[:, slide_idx : slide_idx + partner_dim]
         slide_idx += partner_dim
-
         lane_observations = observations[:, slide_idx : slide_idx + lane_dim]
         slide_idx += lane_dim
-
         boundary_observations = observations[:, slide_idx : slide_idx + boundary_dim]
         slide_idx += boundary_dim
-
         traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
+        slide_idx += traffic_control_dim
+        count_observations = observations[:, slide_idx : slide_idx + self.obs_valid_count_features]
+        return (
+            ego_observations,
+            context_observations,
+            partner_observations,
+            lane_observations,
+            boundary_observations,
+            traffic_control_observations,
+            count_observations,
+        )
 
-        # Encode Ego State
-        ego_features = self.ego_encoder(ego_observations)
+    def _valid_counts(self, count_observations):
+        capacities = (
+            self.obs_lane_segment_count,
+            self.obs_boundary_segment_count,
+            self.max_partner_observations,
+            self.max_traffic_control_observations,
+        )
+        return [count_observations[:, i].long().clamp_(0, capacity) for i, capacity in enumerate(capacities)]
 
-        feature_list = [ego_features]
+    def forward(self, observations, ego_dim):
+        (
+            ego_observations,
+            context_observations,
+            partner_observations,
+            lane_observations,
+            boundary_observations,
+            traffic_control_observations,
+            count_observations,
+        ) = self._split_observations(observations, ego_dim)
+        lane_counts, boundary_counts, partner_counts, traffic_control_counts = self._valid_counts(count_observations)
 
-        # Encode Lanes and Boundaries separately
+        feature_list = [self.ego_encoder(ego_observations)]
+
         if self.obs_lane_segment_count > 0:
             lane_objects = lane_observations.view(-1, self.obs_lane_segment_count, self.road_features_count)
-            lane_features, _ = self.lane_encoder(lane_objects).max(dim=1)
+            lane_features = self._encode_and_pool(lane_objects, lane_counts, self.lane_encoder, self.lane_input_size)
             feature_list.append(lane_features)
         if self.obs_boundary_segment_count > 0:
             boundary_objects = boundary_observations.view(-1, self.obs_boundary_segment_count, self.road_features_count)
-
-            boundary_features, _ = self.boundary_encoder(boundary_objects).max(dim=1)
+            boundary_features = self._encode_and_pool(
+                boundary_objects,
+                boundary_counts,
+                self.boundary_encoder,
+                self.boundary_input_size,
+            )
             feature_list.append(boundary_features)
-
-        # Encode Partners
         if self.max_partner_observations > 0:
-            partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
+            partner_objects = partner_observations.view(
+                -1,
+                self.max_partner_observations,
+                self.partner_features_count,
+            )
             if self.strip_last_partner_features > 0:
                 partner_objects = partner_objects[..., : -self.strip_last_partner_features]
-            partner_encoded = self.partner_encoder(partner_objects)
-            partner_features, _ = partner_encoded.max(dim=1)
+            partner_features = self._encode_and_pool(
+                partner_objects,
+                partner_counts,
+                self.partner_encoder,
+                self.partner_input_size,
+            )
             feature_list.append(partner_features)
-
-        # Encode Traffic Controls
         if self.max_traffic_control_observations > 0:
             traffic_control_objects = traffic_control_observations.view(
-                -1, self.max_traffic_control_observations, self.traffic_control_features_count
+                -1,
+                self.max_traffic_control_observations,
+                self.traffic_control_features_count,
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
@@ -180,112 +217,190 @@ class DriveBackbone(nn.Module):
             traffic_control_type_onehot = F.one_hot(
                 traffic_control_type.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
-            ).float()
+            ).to(traffic_control_continuous.dtype)
             traffic_control_state_onehot = F.one_hot(
                 traffic_control_state.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
-            ).float()
+            ).to(traffic_control_continuous.dtype)
             traffic_control_objects = torch.cat(
                 [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
                 dim=2,
             )
-            traffic_control_features, _ = self.traffic_control_encoder(traffic_control_objects).max(dim=1)
+            traffic_control_features = self._encode_and_pool(
+                traffic_control_objects,
+                traffic_control_counts,
+                self.traffic_control_encoder,
+                self.traffic_control_input_size,
+            )
             feature_list.append(traffic_control_features)
+        if self.context_dim > 0:
+            feature_list.append(self.context_encoder(context_observations))
 
-        # Add optional features if enabled
-        if self.conditioning_dim > 0:
-            conditioning_features = self.conditioning_encoder(conditioning_observations)
-            feature_list.append(conditioning_features)
+        return self.backbone(torch.cat(feature_list, dim=1))
 
-        # Concatenate all features and pass through main backbone
-        concat_features = torch.cat(feature_list, dim=1)
-        return self.backbone(concat_features)
+    def pool_slot_counts(self, observations, ego_dim):
+        (
+            _ego_observations,
+            _context_observations,
+            partner_observations,
+            lane_observations,
+            boundary_observations,
+            traffic_control_observations,
+            _count_observations,
+        ) = self._split_observations(observations, ego_dim)
+
+        counts = {}
+        if self.obs_lane_segment_count > 0:
+            lane_objects = lane_observations.view(-1, self.obs_lane_segment_count, self.road_features_count)
+            lane_winners = self.lane_encoder(lane_objects).max(dim=1).indices
+            lane_counts = torch.zeros(
+                observations.shape[0],
+                self.obs_lane_segment_count,
+                device=observations.device,
+                dtype=torch.int64,
+            )
+            counts["pool_lane"] = lane_counts.scatter_add(1, lane_winners, torch.ones_like(lane_winners))
+        if self.obs_boundary_segment_count > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_boundary_segment_count, self.road_features_count)
+            boundary_winners = self.boundary_encoder(boundary_objects).max(dim=1).indices
+            boundary_counts = torch.zeros(
+                observations.shape[0],
+                self.obs_boundary_segment_count,
+                device=observations.device,
+                dtype=torch.int64,
+            )
+            counts["pool_boundary"] = boundary_counts.scatter_add(
+                1,
+                boundary_winners,
+                torch.ones_like(boundary_winners),
+            )
+        if self.max_partner_observations > 0:
+            partner_objects = partner_observations.view(-1, self.max_partner_observations, self.partner_features_count)
+            if self.strip_last_partner_features > 0:
+                partner_objects = partner_objects[..., : -self.strip_last_partner_features]
+            partner_winners = self.partner_encoder(partner_objects).max(dim=1).indices
+            partner_counts = torch.zeros(
+                observations.shape[0],
+                self.max_partner_observations,
+                device=observations.device,
+                dtype=torch.int64,
+            )
+            counts["pool_partner"] = partner_counts.scatter_add(1, partner_winners, torch.ones_like(partner_winners))
+        if self.max_traffic_control_observations > 0:
+            traffic_control_objects = traffic_control_observations.view(
+                -1,
+                self.max_traffic_control_observations,
+                self.traffic_control_features_count,
+            )
+            traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
+            traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
+            traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
+            traffic_control_type_onehot = F.one_hot(
+                traffic_control_type.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
+            ).to(traffic_control_continuous.dtype)
+            traffic_control_state_onehot = F.one_hot(
+                traffic_control_state.long(),
+                num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
+            ).to(traffic_control_continuous.dtype)
+            traffic_control_objects = torch.cat(
+                [traffic_control_continuous, traffic_control_type_onehot, traffic_control_state_onehot],
+                dim=2,
+            )
+            traffic_control_winners = self.traffic_control_encoder(traffic_control_objects).max(dim=1).indices
+            traffic_control_counts = torch.zeros(
+                observations.shape[0],
+                self.max_traffic_control_observations,
+                device=observations.device,
+                dtype=torch.int64,
+            )
+            counts["pool_traffic"] = traffic_control_counts.scatter_add(
+                1,
+                traffic_control_winners,
+                torch.ones_like(traffic_control_winners),
+            )
+        return counts
 
 
 class Drive(nn.Module):
     def __init__(
         self,
         env,
-        input_size: int,
-        backbone_hidden_size: int,
-        backbone_num_layers: int,
-        actor_hidden_size: int,
-        actor_num_layers: int,
-        critic_hidden_size: int,
-        critic_num_layers: int,
-        encoder_gigaflow: bool,
-        dropout: int,
-        split_network: bool,
+        ego_input_size: int = 64,
+        partner_input_size: int = 64,
+        lane_input_size: int = 64,
+        boundary_input_size: int = 64,
+        traffic_control_input_size: int = 64,
+        context_input_size: int = 64,
+        backbone_hidden_size: int = 512,
+        backbone_num_layers: int = 4,
+        actor_hidden_size: int = 512,
+        actor_num_layers: int = 0,
+        critic_hidden_size: int = 512,
+        critic_num_layers: int = 0,
+        encoder_activation: str = "relu",
+        encoder_layer_norm: bool = True,
+        backbone_activation: str = "gelu",
+        backbone_layer_norm: bool = False,
+        shared_network: bool = True,
+        mask_padded_features: bool = False,
+        **legacy_kwargs,
     ):
         super().__init__()
+        if "split_network" in legacy_kwargs:
+            shared_network = not bool(legacy_kwargs.pop("split_network"))
+        if legacy_kwargs:
+            unknown = ", ".join(sorted(legacy_kwargs))
+            raise TypeError(f"Unexpected Drive policy kwargs: {unknown}")
 
-        # Configuration flags from policy kwargs
-        self.split_network = split_network
+        self.shared_network = shared_network
         self.ego_dim = env.ego_features
-
-        # Prepare arguments for the Backbone
         backbone_args = {
             "env": env,
-            "input_size": input_size,
+            "ego_input_size": ego_input_size,
+            "partner_input_size": partner_input_size,
+            "lane_input_size": lane_input_size,
+            "boundary_input_size": boundary_input_size,
+            "traffic_control_input_size": traffic_control_input_size,
+            "context_input_size": context_input_size,
             "backbone_hidden_size": backbone_hidden_size,
             "backbone_num_layers": backbone_num_layers,
             "ego_dim": self.ego_dim,
-            "encoder_gigaflow": encoder_gigaflow,
-            "dropout": dropout,
+            "encoder_activation": encoder_activation,
+            "encoder_layer_norm": encoder_layer_norm,
+            "backbone_activation": backbone_activation,
+            "backbone_layer_norm": backbone_layer_norm,
+            "mask_padded_features": mask_padded_features,
         }
-
-        # Instantiate backbones
         self.actor_backbone = DriveBackbone(**backbone_args)
+        self.critic_backbone = self.actor_backbone if self.shared_network else DriveBackbone(**backbone_args)
 
-        # If split_network is True, create a separate backbone for the critic.
-        # Otherwise, share the same backbone for both.
-        if self.split_network:
-            self.critic_backbone = DriveBackbone(**backbone_args)
-        else:
-            self.critic_backbone = self.actor_backbone
-
-        # Setup action and value heads
         self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
-        if self.is_continuous:
-            self.atn_dim = (env.single_action_space.shape[0],) * 2
-        else:
-            self.atn_dim = env.single_action_space.nvec.tolist()
+        self.atn_dim = (
+            (env.single_action_space.shape[0],) * 2 if self.is_continuous else env.single_action_space.nvec.tolist()
+        )
 
-        # n-layer MLP for actor head (num_layers = number of hidden layers)
         backbone_out_dim = self.actor_backbone.out_dim
-        actor_head_layers = []
-        actor_in = backbone_out_dim
-        for _ in range(actor_num_layers):
-            actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_hidden_size)))
-            actor_head_layers.append(nn.ReLU())
-            actor_in = actor_hidden_size
-        actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, sum(self.atn_dim)), std=0.01))
-        self.actor_head = nn.Sequential(*actor_head_layers)
+        self.actor_head = self._make_head(
+            backbone_out_dim, actor_hidden_size, actor_num_layers, sum(self.atn_dim), 0.01
+        )
+        self.critic_head = self._make_head(backbone_out_dim, critic_hidden_size, critic_num_layers, 1, 1)
 
-        # n-layer MLP for critic head (num_layers = number of hidden layers)
-        critic_head_layers = []
-        critic_in = backbone_out_dim
-        for _ in range(critic_num_layers):
-            critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
-            critic_head_layers.append(nn.ReLU())
-            critic_in = critic_hidden_size
-        critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
-        self.critic_head = nn.Sequential(*critic_head_layers)
+    @staticmethod
+    def _make_head(input_dim, hidden_size, num_layers, output_dim, std):
+        layers = []
+        head_in = input_dim
+        for _ in range(num_layers):
+            layers.append(pufferlib.pytorch.layer_init(nn.Linear(head_in, hidden_size)))
+            layers.append(nn.ReLU())
+            head_in = hidden_size
+        layers.append(pufferlib.pytorch.layer_init(nn.Linear(head_in, output_dim), std=std))
+        return nn.Sequential(*layers)
 
     def forward(self, observations, state=None):
-        """
-        Forward pass handling both Actor and Critic inference.
-        """
-        # Forward pass for actor
         actor_hidden = self.actor_backbone(observations, self.ego_dim)
+        critic_hidden = actor_hidden if self.shared_network else self.critic_backbone(observations, self.ego_dim)
 
-        # Forward pass for critic (may use separate backbone)
-        if self.split_network:
-            critic_hidden = self.critic_backbone(observations, self.ego_dim)
-        else:
-            critic_hidden = actor_hidden
-
-        # Compute actions
         if self.is_continuous:
             params = self.actor_head(actor_hidden)
             loc, scale = torch.split(params, self.atn_dim, dim=1)
@@ -294,10 +409,7 @@ class Drive(nn.Module):
         else:
             actions = torch.split(self.actor_head(actor_hidden), self.atn_dim, dim=1)
 
-        # Compute value
-        value = self.critic_head(critic_hidden)
-
-        return actions, value
+        return actions, self.critic_head(critic_hidden)
 
     def forward_train(self, x, state=None):
         return self.forward(x, state)
@@ -305,18 +417,14 @@ class Drive(nn.Module):
     def forward_eval(self, x, state=None):
         return self.forward(x, state)
 
-    # Required for PufferLib recurrent wrappers
+    def pool_slot_counts(self, observations, state=None):
+        return self.actor_backbone.pool_slot_counts(observations, self.ego_dim)
+
     def encode_observations(self, observations, state=None):
-        assert not self.split_network, "LSTM wrapper doesn't support split_network=True"
+        assert self.shared_network, "LSTM wrapper requires shared_network=True"
         return self.actor_backbone(observations, self.ego_dim)
 
     def decode_actions(self, hidden):
-        """
-        USE ONLY FOR LSTM WRAPPER.
-        Decodes actions and value from the hidden state.
-        Args:
-            hidden: The hidden state for the actor (policy).
-        """
         if self.is_continuous:
             parameters = self.actor_head(hidden)
             loc, scale = torch.split(parameters, self.atn_dim, dim=1)
@@ -327,113 +435,34 @@ class Drive(nn.Module):
             action = torch.split(action, self.atn_dim, dim=1)
 
         value = self.critic_head(hidden)
-
         return action, value
 
 
-class TargetDrive(nn.Module):
-    def __init__(
-        self,
-        env,
-        input_size: int,
-        backbone_hidden_size: int,
-        backbone_num_layers: int,
-        actor_hidden_size: int,
-        actor_num_layers: int,
-        critic_hidden_size: int,
-        critic_num_layers: int,
-        encoder_gigaflow: bool,
-        dropout: int,
-        split_network: bool,
-    ):
-        super().__init__()
+class TargetDrive(Drive):
+    def __init__(self, env, *args, **kwargs):
+        super().__init__(env, *args, **kwargs)
 
-        self.split_network = split_network
-        self.ego_dim = env.ego_features
+        backbone_kwargs = self._target_backbone_kwargs(env, *args, **kwargs)
+        self.actor_backbone = DriveBackbone(**backbone_kwargs)
+        self.critic_backbone = self.actor_backbone if self.shared_network else DriveBackbone(**backbone_kwargs)
 
-        backbone_args = {
+    def _target_backbone_kwargs(self, env, *args, **kwargs):
+        params = {
             "env": env,
-            "input_size": input_size,
-            "backbone_hidden_size": backbone_hidden_size,
-            "backbone_num_layers": backbone_num_layers,
-            "ego_dim": self.ego_dim,
-            "encoder_gigaflow": encoder_gigaflow,
-            "dropout": dropout,
+            "ego_input_size": kwargs.get("ego_input_size", 64),
+            "partner_input_size": kwargs.get("partner_input_size", 64),
+            "lane_input_size": kwargs.get("lane_input_size", 64),
+            "boundary_input_size": kwargs.get("boundary_input_size", 64),
+            "traffic_control_input_size": kwargs.get("traffic_control_input_size", 64),
+            "context_input_size": kwargs.get("context_input_size", 64),
+            "backbone_hidden_size": kwargs.get("backbone_hidden_size", 512),
+            "backbone_num_layers": kwargs.get("backbone_num_layers", 4),
+            "ego_dim": env.ego_features,
+            "encoder_activation": kwargs.get("encoder_activation", "relu"),
+            "encoder_layer_norm": kwargs.get("encoder_layer_norm", True),
+            "backbone_activation": kwargs.get("backbone_activation", "gelu"),
+            "backbone_layer_norm": kwargs.get("backbone_layer_norm", False),
+            "mask_padded_features": kwargs.get("mask_padded_features", False),
             "strip_last_partner_features": 2,
         }
-
-        self.actor_backbone = DriveBackbone(**backbone_args)
-
-        if self.split_network:
-            self.critic_backbone = DriveBackbone(**backbone_args)
-        else:
-            self.critic_backbone = self.actor_backbone
-
-        self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
-        if self.is_continuous:
-            self.atn_dim = (env.single_action_space.shape[0],) * 2
-        else:
-            self.atn_dim = env.single_action_space.nvec.tolist()
-
-        backbone_out_dim = self.actor_backbone.out_dim
-        actor_head_layers = []
-        actor_in = backbone_out_dim
-        for _ in range(actor_num_layers):
-            actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_hidden_size)))
-            actor_head_layers.append(nn.ReLU())
-            actor_in = actor_hidden_size
-        actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, sum(self.atn_dim)), std=0.01))
-        self.actor_head = nn.Sequential(*actor_head_layers)
-
-        critic_head_layers = []
-        critic_in = backbone_out_dim
-        for _ in range(critic_num_layers):
-            critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
-            critic_head_layers.append(nn.ReLU())
-            critic_in = critic_hidden_size
-        critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
-        self.critic_head = nn.Sequential(*critic_head_layers)
-
-    def forward(self, observations, state=None):
-        actor_hidden = self.actor_backbone(observations, self.ego_dim)
-
-        if self.split_network:
-            critic_hidden = self.critic_backbone(observations, self.ego_dim)
-        else:
-            critic_hidden = actor_hidden
-
-        if self.is_continuous:
-            params = self.actor_head(actor_hidden)
-            loc, scale = torch.split(params, self.atn_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            actions = torch.distributions.Normal(loc, std)
-        else:
-            actions = torch.split(self.actor_head(actor_hidden), self.atn_dim, dim=1)
-
-        value = self.critic_head(critic_hidden)
-
-        return actions, value
-
-    def forward_train(self, x, state=None):
-        return self.forward(x, state)
-
-    def forward_eval(self, x, state=None):
-        return self.forward(x, state)
-
-    def encode_observations(self, observations, state=None):
-        assert not self.split_network, "LSTM wrapper doesn't support split_network=True"
-        return self.actor_backbone(observations, self.ego_dim)
-
-    def decode_actions(self, hidden):
-        if self.is_continuous:
-            parameters = self.actor_head(hidden)
-            loc, scale = torch.split(parameters, self.atn_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            action = torch.distributions.Normal(loc, std)
-        else:
-            action = self.actor_head(hidden)
-            action = torch.split(action, self.atn_dim, dim=1)
-
-        value = self.critic_head(hidden)
-
-        return action, value
+        return params
