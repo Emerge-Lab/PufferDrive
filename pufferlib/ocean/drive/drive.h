@@ -128,6 +128,10 @@
 #define CLASSIC 0
 #define JERK 1
 
+static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
+static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
+#define STEERING_LIMIT 0.667f
+
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
