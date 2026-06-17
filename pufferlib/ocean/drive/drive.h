@@ -1639,6 +1639,15 @@ int load_map_binary(const char *filename, Drive *drive) {
                 fclose(file);
                 return -1;
             }
+            float lane_length;
+            if (fread(&lane_length, sizeof(float), 1, file) != 1) {
+                fclose(file);
+                return -1;
+            }
+            if (slen > 0 && fseek(file, slen * sizeof(float), SEEK_CUR) != 0) {
+                fclose(file);
+                return -1;
+            }
         } else {
             road->num_entries = 0;
             road->num_exits = 0;
@@ -1728,11 +1737,6 @@ int load_map_binary(const char *filename, Drive *drive) {
     if (n_lanes_graph > 0) {
         drive->lane_graph.lane_ids = (int *)malloc(n_lanes_graph * sizeof(int));
         if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t)n_lanes_graph) {
-            fclose(file);
-            return -1;
-        }
-        drive->lane_graph.lane_lengths = (float *)malloc(n_lanes_graph * sizeof(float));
-        if (fread(drive->lane_graph.lane_lengths, sizeof(float), n_lanes_graph, file) != (size_t)n_lanes_graph) {
             fclose(file);
             return -1;
         }
