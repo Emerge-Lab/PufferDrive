@@ -15,7 +15,7 @@ echo "START TIME: $(date)"
 start=`date +%s`
 
 source .venv/bin/activate
-.venv/bin/puffer train puffer_drive --wandb --vec.num-envs 28
+.venv/bin/puffer train puffer_drive --wandb --vec.num-envs 28 --vec.num_workers 14
 
 end=`date +%s`
 runtime=$((end-start))
