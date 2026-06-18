@@ -4,12 +4,12 @@
 # with older glibc versions.
 #
 # Architecture:
-#   - miniforge3 lives on /scratch (NOT in the overlay) so its python is a
+#   - miniforge3 lives on scratch (NOT in the overlay) so its python is a
 #     real file accessible from any node, in or out of singularity. The venv
-#     symlinks `bin/python` into the /scratch miniforge3, which makes
+#     symlinks `bin/python` into the scratch miniforge3, which makes
 #     `source venv/activate` work on the login node directly without
 #     needing to enter the container.
-#   - All Python packages (torch, pufferlib, etc.) live in the venv on /scratch
+#   - All Python packages (torch, pufferlib, etc.) live in the venv on scratch
 #     too — fuse2fs is not on the write path for any install step.
 #   - The singularity image still supplies CUDA + cuDNN at job runtime. The
 #     overlay is preserved for the rare case where you need to install
@@ -22,19 +22,45 @@
 
 set -e
 
+# Parse command line options first to intercept --scratch-dir
+CLI_SCRATCH_DIR=""
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --scratch-dir)
+            if [[ -n "$2" && "$2" != -* ]]; then
+                CLI_SCRATCH_DIR="$2"
+                shift 2
+            else
+                echo "Error: --scratch-dir requires a path argument." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}" # restore main positional parameters (commands)
+
+# Resolution priority: 1. CLI flag  2. Existing Env Var  3. Default cluster path
+BASE_SCRATCH_DIR="${CLI_SCRATCH_DIR:-${BASE_SCRATCH_DIR:-/scratch/$USER}}"
+export BASE_SCRATCH_DIR
+
 # Configuration - adjust these paths for your setup (all env-var overridable).
 # Defaults match submit_cluster.py --container_overlay / --container_image so
 # both scripts agree on which overlay they're reading/writing.
-OVERLAY_PATH="${OVERLAY_PATH:-/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3}"
+OVERLAY_PATH="${OVERLAY_PATH:-$BASE_SCRATCH_DIR/images/PufferDrive/overlay-15GB-500K.ext3}"
 IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"
 OVERLAY_TEMPLATE="${OVERLAY_TEMPLATE:-/share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz}"
 CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Venv lives on /scratch (regular ext4) — bypasses fuse2fs entirely for installs.
-VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
-# miniforge3 lives on /scratch too so the venv's python symlink resolves
+# Venv lives on scratch (regular ext4) — bypasses fuse2fs entirely for installs.
+VENV_PATH="${VENV_PATH:-$BASE_SCRATCH_DIR/venvs/pufferdrive}"
+# miniforge3 lives on scratch too so the venv's python symlink resolves
 # from any node without needing the singularity overlay to be mounted.
-MINIFORGE3_DIR="${MINIFORGE3_DIR:-/scratch/$USER/miniforge3}"
+MINIFORGE3_DIR="${MINIFORGE3_DIR:-$BASE_SCRATCH_DIR/miniforge3}"
 # Pin to a miniforge3 release that ships Python 3.12. 25.x switched to 3.13,
 # but torch's cu121 wheels are cp39..cp312 only (no cp313), so 3.13 breaks
 # the install. Bump this once torch publishes cp313 wheels for our index.
@@ -62,7 +88,7 @@ create_overlay() {
     echo ""
     echo "Next step: Submit the install job:"
     echo "  sbatch --account=YOUR_ACCOUNT --gres=gpu:1 --cpus-per-task=8 --mem=32gb --time=60 \\"
-    echo "    --wrap \"$0 install\""
+    echo "    --wrap \"$0 --scratch-dir $BASE_SCRATCH_DIR install\""
 }
 
 # Append the NCCL LD_LIBRARY_PATH fix to a venv's activate script so every
@@ -86,9 +112,9 @@ fi
 EOF
 }
 
-# Install miniforge3 to /scratch if it isn't there yet. The conda-forge
+# Install miniforge3 to scratch if it isn't there yet. The conda-forge
 # installer is a self-contained shell script — no root, no singularity
-# required. Doing this on /scratch (rather than inside the overlay)
+# required. Doing this on scratch (rather than inside the overlay)
 # means $MINIFORGE3_DIR/bin/python3 is a real file accessible from any
 # node, so the venv's bin/python symlink resolves outside singularity too.
 ensure_miniforge3() {
@@ -122,7 +148,7 @@ ensure_uv() {
         UV_BIN="$(command -v uv)"
         return 0
     fi
-    for cand in "$HOME/.local/bin/uv" "/scratch/$USER/.local/bin/uv"; do
+    for cand in "$HOME/.local/bin/uv" "$BASE_SCRATCH_DIR/.local/bin/uv"; do
         if [ -x "$cand" ]; then
             UV_BIN="$cand"
             export PATH="$(dirname "$cand"):$PATH"
@@ -146,7 +172,7 @@ ensure_venv() {
     ensure_uv
     # If the venv exists but its python doesn't resolve into the current
     # $MINIFORGE3_DIR (e.g. it points at /ext3/miniforge3 from before we
-    # moved miniforge3 onto /scratch), rebuild. readlink -f resolves the
+    # moved miniforge3 onto scratch), rebuild. readlink -f resolves the
     # whole symlink chain, so this catches the case where the link is
     # valid inside the container (overlay mounted) but stale relative to
     # where the new venv should point.
@@ -224,13 +250,14 @@ rebuild_extension() {
 run_in_container() {
     local cmd="$1"
     # Overlay mounted read-only — every read/write the install or rebuild
-    # cares about happens on /scratch ext4 (miniforge3 + venv). The overlay
+    # cares about happens on scratch ext4 (miniforge3 + venv). The overlay
     # is kept on the mount line for backward compatibility, but nothing
     # in the python flow writes to it.
+    # Note: We append --scratch-dir to preserve customization inside the container.
     singularity exec --nv \
         --overlay "$OVERLAY_PATH:ro" \
         "$IMAGE_PATH" \
-        bash -c "cd $PROJECT_ROOT && $cmd"
+        bash -c "cd $PROJECT_ROOT && $cmd --scratch-dir $BASE_SCRATCH_DIR"
 }
 
 case "${1:-}" in
@@ -241,7 +268,7 @@ case "${1:-}" in
         if [ -f /.singularity.d/Singularity ]; then
             install_deps
         else
-            # miniforge3 installs on /scratch via plain shell — no singularity
+            # miniforge3 installs on scratch via plain shell — no singularity
             # needed for that step. The rest (uv + pip + build_ext) runs in
             # the container so nvcc and the right glibc are on PATH.
             ensure_miniforge3
@@ -258,21 +285,25 @@ case "${1:-}" in
     *)
         echo "PufferDrive Container Setup"
         echo ""
-        echo "Usage: $0 <command>"
+        echo "Usage: $0 [--scratch-dir <path>] <command>"
+        echo ""
+        echo "Options:"
+        echo "  --scratch-dir   Base scratch space directory (default: /scratch/\$USER)"
         echo ""
         echo "Commands:"
         echo "  create-overlay  Create a new overlay filesystem (run on login node)"
-        echo "  install         Install all dependencies into venv on /scratch (submit as GPU job)"
+        echo "  install         Install all dependencies into venv on scratch (submit as GPU job)"
         echo "  rebuild         Rebuild C extension only (submit as GPU job)"
         echo ""
-        echo "Environment variables:"
-        echo "  MINIFORGE3_DIR  Where the base python lives (default: /scratch/\$USER/miniforge3)"
-        echo "  VENV_PATH       Where the venv lives (default: /scratch/\$USER/venvs/pufferdrive)"
-        echo "  OVERLAY_PATH    Singularity overlay (kept for system-tool installs; not used by the python flow)"
+        echo "Environment variables (Overrides):"
+        echo "  BASE_SCRATCH_DIR Base scratch directory path if flag isn't used"
+        echo "  MINIFORGE3_DIR   Where the base python lives (default: \$BASE_SCRATCH_DIR/miniforge3)"
+        echo "  VENV_PATH        Where the venv lives (default: \$BASE_SCRATCH_DIR/venvs/pufferdrive)"
+        echo "  OVERLAY_PATH     Singularity overlay (kept for system-tool installs; not used by the python flow)"
         echo ""
         echo "Example workflow:"
-        echo "  1. $0 create-overlay"
-        echo "  2. sbatch --gres=gpu:1 --time=60 --wrap \"$0 install\""
-        echo "  3. source \$VENV_PATH/bin/activate && python scripts/submit_cluster.py --container ..."
+        echo "  1. $0 --scratch-dir /scratch/custom_path create-overlay"
+        echo "  2. sbatch --gres=gpu:1 --time=60 --wrap \"$0 --scratch-dir /scratch/custom_path install\""
+        echo "  3. source /scratch/custom_path/venvs/pufferdrive/bin/activate && python scripts/submit_cluster.py --container ..."
         ;;
 esac
