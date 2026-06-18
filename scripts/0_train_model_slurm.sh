@@ -4,8 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64G
-#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --cpus-per-task=28
 #SBATCH --output=/lustre/scwpod02/client/kyutai/kesai/bernhard/carla_closed_loop/results/logs/eval_server_%a_%A.out
 #SBATCH --error=/lustre/scwpod02/client/kyutai/kesai/bernhard/carla_closed_loop/results/logs/eval_server_%a_%A.err
 #SBATCH --partition=kyutai
