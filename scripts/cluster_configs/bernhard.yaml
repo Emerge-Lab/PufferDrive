@@ -5,4 +5,4 @@ gpus: 1
 cpus: 28
 mem: 128gb
 time: 2880  # minutes
-gpu_type: h100  # rtx8000, a100, v100 (optional, uses partition default)
+gpu_type: None  # rtx8000, a100, v100 (optional, uses partition default)
