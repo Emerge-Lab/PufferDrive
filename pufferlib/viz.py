@@ -615,6 +615,8 @@ def plot_observation(
     obs_slots_traffic_controls_n=4,
     obs_dropout_lane=0.0,
     obs_dropout_boundary=0.0,
+    obs_lane_stride=1,
+    obs_boundary_stride=1,
     agent_idx=0,
     obs_norm_goal_offset_m=100.0,
     obs_norm_xy_offset_m=100.0,
@@ -785,7 +787,7 @@ def plot_observation(
     ax.text(
         0.12,
         0.95,
-        f"Lanes: {count_lane}\nBoundaries: {count_boundary}",
+        f"Lanes: {count_lane}\nBoundaries: {count_boundary}\nStride: {obs_lane_stride}/{obs_boundary_stride}",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",
@@ -957,6 +959,12 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "partner_features": int(binding.PARTNER_FEATURES),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
+        "obs_slots_lane_n": int(env_cfg["obs_slots_lane_n"]),
+        "obs_slots_boundary_n": int(env_cfg["obs_slots_boundary_n"]),
+        "obs_dropout_lane": float(env_cfg.get("obs_dropout_lane", 0.0)),
+        "obs_dropout_boundary": float(env_cfg.get("obs_dropout_boundary", 0.0)),
+        "obs_lane_stride": int(env_cfg.get("obs_lane_stride", 1)),
+        "obs_boundary_stride": int(env_cfg.get("obs_boundary_stride", 1)),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
         "target_features": 3 if env_cfg.get("target_type", "static") == "static" else 5,
         "scales": scales,
@@ -1029,6 +1037,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             <div class="label">ID</div><div class="value" id="meta-id">-</div>
             <div class="label">Step</div><div class="value highlight" id="stepDisplay" style="font-size:30px">0</div>
             <div class="label">Camera</div><div class="value highlight" id="camMode" onclick="toggleCamMode()">Free Roam</div>
+            <div class="label">Obs Road</div><div class="value" id="meta-obs-road">-</div>
             <button onclick="toggleTheme()" style="width:100%; margin-top:10px">Theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
@@ -1101,6 +1110,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
+            document.getElementById('meta-obs-road').textContent = `L ${H.lane_count}/${H.obs_slots_lane_n} s${H.obs_lane_stride} d${Number(H.obs_dropout_lane).toFixed(2)} | B ${H.boundary_count}/${H.obs_slots_boundary_n} s${H.obs_boundary_stride} d${Number(H.obs_dropout_boundary).toFixed(2)}`;
             document.getElementById('sld').max = frameMax();
             const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
             document.getElementById('loading-overlay').style.display = 'none';

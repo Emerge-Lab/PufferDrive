@@ -49,6 +49,8 @@ typedef struct {
     int max_agents_per_env;
     int obs_slots_lane_n;
     int obs_slots_boundary_n;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     float obs_dropout_lane;
     float obs_dropout_boundary;
     int obs_slots_partners_n;
@@ -195,6 +197,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->obs_slots_boundary_n = atoi(value);
     } else if (MATCH("env", "obs_slots_lane_n")) {
         env_config->obs_slots_lane_n = atoi(value);
+    } else if (MATCH("env", "obs_lane_stride")) {
+        env_config->obs_lane_stride = atoi(value);
+    } else if (MATCH("env", "obs_boundary_stride")) {
+        env_config->obs_boundary_stride = atoi(value);
     } else if (MATCH("env", "obs_dropout_lane")) {
         env_config->obs_dropout_lane = atof(value);
     } else if (MATCH("env", "obs_dropout_boundary")) {

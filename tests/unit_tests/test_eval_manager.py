@@ -156,10 +156,12 @@ def test_clean_macro_loses_to_explicit_override():
         "foo": {
             "type": "multi_scenario",
             "env.obs_dropout_lane": 0.5,  # explicit > macro default of 0.0
+            "env.obs_lane_stride": 3,
         }
     }
     cfg = _build_section_config("foo", sections["foo"], sections)
     assert cfg["env"]["obs_dropout_lane"] == 0.5
+    assert cfg["env"]["obs_lane_stride"] == 3
 
 
 def test_manager_from_config_skips_template_sections():

@@ -1,8 +1,8 @@
 """Tests for the per-process map cache (use_map_cache env knob).
 
 Covers: cache-on vs cache-off observation parity, refcount discipline across
-close orderings, slot-reuse keeping cache size bounded, and per-entry owner_pid
-correctness in a forked child.
+close orderings, stride-specific cache keys, slot-reuse keeping cache size
+bounded, and per-entry owner_pid correctness in a forked child.
 """
 
 import os
@@ -75,6 +75,28 @@ def test_obs_reward_done_parity_cache_on_vs_off():
         np.testing.assert_array_equal(off_rew[t], on_rew[t], err_msg=f"rewards diverged at step {t}")
         np.testing.assert_array_equal(off_term[t], on_term[t], err_msg=f"terminals diverged at step {t}")
         np.testing.assert_array_equal(off_trunc[t], on_trunc[t], err_msg=f"truncations diverged at step {t}")
+
+
+def test_map_cache_key_includes_road_obs_stride():
+    env_a = None
+    env_b = None
+    try:
+        env_a = _make_drive(use_map_cache=1, obs_lane_stride=1, obs_boundary_stride=1)
+        env_a.reset(seed=0)
+        live_after_a = drive_binding.map_cache_live_count()
+
+        env_b = _make_drive(use_map_cache=1, obs_lane_stride=2, obs_boundary_stride=3)
+        env_b.reset(seed=0)
+        live_after_b = drive_binding.map_cache_live_count()
+
+        assert live_after_b == live_after_a + 1, (
+            "Map cache reused a grid built with different obs_lane_stride/obs_boundary_stride."
+        )
+    finally:
+        if env_b is not None:
+            env_b.close()
+        if env_a is not None:
+            env_a.close()
 
 
 @pytest.mark.parametrize(

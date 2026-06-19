@@ -194,8 +194,12 @@ img = plot_observation(
     reward_conditioning=rew_cond,
     num_target_waypoints=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_lane_stride=env.obs_lane_stride,
+    obs_boundary_stride=env.obs_boundary_stride,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     obs_norm_goal_offset_m=env.obs_norm_goal_offset_m,
     obs_norm_xy_offset_m=env.obs_norm_xy_offset_m,
@@ -227,8 +231,10 @@ for t in range(HORIZON):
         reward_conditioning=rew_cond,
         num_target_waypoints=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
-        obs_slots_lane_n=env.obs_slots_lane_kept,
-        obs_slots_boundary_n=env.obs_slots_boundary_kept,
+        obs_slots_lane_n=env.obs_slots_lane_n,
+        obs_slots_boundary_n=env.obs_slots_boundary_n,
+        obs_dropout_lane=env.obs_dropout_lane,
+        obs_dropout_boundary=env.obs_dropout_boundary,
         obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     )
     ego_features_over_time.append(ego)
@@ -275,8 +281,10 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     reward_conditioning=rew_cond,
     num_target_waypoints=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
 )
 
@@ -464,8 +472,10 @@ def unpack_all_timesteps(bufs, agent_idx):
             reward_conditioning=rew_cond,
             num_target_waypoints=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
-            obs_slots_lane_n=env.obs_slots_lane_kept,
-            obs_slots_boundary_n=env.obs_slots_boundary_kept,
+            obs_slots_lane_n=env.obs_slots_lane_n,
+            obs_slots_boundary_n=env.obs_slots_boundary_n,
+            obs_dropout_lane=env.obs_dropout_lane,
+            obs_dropout_boundary=env.obs_dropout_boundary,
             obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
         )
         egos.append(ego)
@@ -540,8 +550,10 @@ for t in range(HORIZON):
         reward_conditioning=rew_cond,
         num_target_waypoints=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
-        obs_slots_lane_n=env.obs_slots_lane_kept,
-        obs_slots_boundary_n=env.obs_slots_boundary_kept,
+        obs_slots_lane_n=env.obs_slots_lane_n,
+        obs_slots_boundary_n=env.obs_slots_boundary_n,
+        obs_dropout_lane=env.obs_dropout_lane,
+        obs_dropout_boundary=env.obs_dropout_boundary,
         obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     )
     dists = np.sqrt(part[:, 0] ** 2 + part[:, 1] ** 2)
@@ -566,8 +578,10 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     reward_conditioning=rew_cond,
     num_target_waypoints=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
 )
 
