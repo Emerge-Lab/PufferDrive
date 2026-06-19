@@ -19,7 +19,7 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
     --account bernhard --partition kyutai --time 2880 \
     --args \
         wandb=1 \
-        vec.num-envs=28
+        vec.num-envs=14
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
@@ -28,7 +28,7 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
     --account bernhard --partition kyutai --time 5760 \
     --args \
         wandb=1 \
-        vec.num-envs=224
+        vec.num-envs=112
 
 ./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
 export OVERLAY_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3
