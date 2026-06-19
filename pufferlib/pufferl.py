@@ -4070,8 +4070,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         raise pufferlib.APIUsageError("mine_failures requires at least one mining scenario")
 
     env_kwargs_list = []
-    for worker_idx in range(num_workers):
-        worker_kwargs = copy.deepcopy(args["env"])
+    worker_scenario_ranges = []
+
+    def apply_common_mining_worker_kwargs(worker_kwargs):
         worker_kwargs["emit_completed_episodes"] = True
         worker_kwargs["capture_replay"] = False
         worker_kwargs["capture_compact_replay"] = capture_mining_replay
@@ -4080,13 +4081,42 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         worker_kwargs["deterministic_traffic_lights"] = True
         if fixed_adv_reward_weight_drive is not None:
             worker_kwargs["adv_reward_weight_drive"] = fixed_adv_reward_weight_drive
-        worker_kwargs["eval_mode"] = 0
-        worker_kwargs["resample_frequency"] = 0
-        worker_kwargs["starting_map"] = 0
-        worker_kwargs["num_eval_scenarios"] = 1
-        worker_kwargs["num_maps"] = 1
-        worker_kwargs["maps"] = selected_map_names[worker_idx % len(selected_map_names)]
-        env_kwargs_list.append(worker_kwargs)
+
+    if eval_simulation == "gigaflow":
+        for worker_idx in range(num_workers):
+            worker_kwargs = copy.deepcopy(args["env"])
+            apply_common_mining_worker_kwargs(worker_kwargs)
+            worker_kwargs["eval_mode"] = 0
+            worker_kwargs["resample_frequency"] = 0
+            worker_kwargs["starting_map"] = 0
+            worker_kwargs["num_eval_scenarios"] = 1
+            worker_kwargs["num_maps"] = 1
+            worker_kwargs["maps"] = selected_map_names[worker_idx % len(selected_map_names)]
+            env_kwargs_list.append(worker_kwargs)
+    else:
+        scenario_length = int(args["env"].get("scenario_length") or 91)
+        args["env"]["scenario_length"] = scenario_length
+        args["env"]["num_maps"] = len(selected_map_names)
+        args["env"]["maps"] = None
+
+        scenarios_per_worker = target_num_episodes // num_workers
+        remainder = target_num_episodes % num_workers
+        current_start = 0
+        for worker_idx in range(num_workers):
+            worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
+            worker_kwargs = copy.deepcopy(args["env"])
+            apply_common_mining_worker_kwargs(worker_kwargs)
+            worker_kwargs["simulation_mode"] = "replay"
+            worker_kwargs["eval_mode"] = 1
+            worker_kwargs["resample_frequency"] = scenario_length
+            worker_kwargs["scenario_length"] = scenario_length
+            worker_kwargs["starting_map"] = current_start
+            worker_kwargs["num_eval_scenarios"] = worker_num_scenarios
+            worker_kwargs["num_maps"] = len(selected_map_names)
+            worker_kwargs["maps"] = None
+            env_kwargs_list.append(worker_kwargs)
+            worker_scenario_ranges.append((current_start, worker_num_scenarios))
+            current_start += worker_num_scenarios
 
     args["vec"] = dict(
         backend=backend,
@@ -4121,7 +4151,12 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
         if fixed_adv_reward_weight_drive is not None:
             print(f"  Adv reward weight drive: {fixed_adv_reward_weight_drive:.6g}")
         print(f"  Eval simulation: {args['eval_simulation']}")
-        print(f"  Worker map assignment: {', '.join(selected_map_names)}")
+        if eval_simulation == "gigaflow":
+            print(f"  Worker map assignment: {', '.join(selected_map_names)}")
+        else:
+            print(f"  Replay scenarios: {len(selected_map_names)}")
+            for worker_idx, (start, count) in enumerate(worker_scenario_ranges):
+                print(f"  Worker {worker_idx}: scenarios {start}-{start + count - 1} ({count} scenarios)")
 
     if vecenv is None:
         package = args["package"]
