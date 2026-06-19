@@ -2,6 +2,37 @@ puffer train puffer_drive --vec.num-workers 1 --vec.num-envs 1 --env.num-agents 
 
 puffer train puffer_drive --train.learning_rate 0.001 
 
+.venv/bin/puffer train puffer_drive --wandb --vec.num-envs 16 --train.precision bfloat16 --train.compile 1
+
+.venv/bin/puffer train puffer_drive --vec.num-envs 16
+
+ --wandb
+.venv/bin/puffer train puffer_drive --train.precision bfloat16 --train.compile 1 --env.use-map-cache 1
+
+uv run convert --py123d_path /home/jaeger/ordnung/data/nuPlan/123D --output /home/jaeger/ordnung/data/nuPlan/PufferDrive --preset nuplan
+
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 2880 \
+    --args \
+        wandb \
+        vec.num-envs 28
+
+./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
+export OVERLAY_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3
+export IMAGE_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
+export OVERLAY_TEMPLATE=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3.gz
+export VENV_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/venvs/pufferdrive
+export CONTAINER_PYTHON=/home/bernhard/miniconda3/envs/puffer/bin/python3.14
+
+"train",
+                "puffer_drive",
+                "--wandb",
+                "--vec.num-envs", "16",
+
 SPS                                                                        313.4K
 SPS                                                                        341.4K
 
