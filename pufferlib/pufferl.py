@@ -231,18 +231,53 @@ class TrainableTorchActor:
 
 
 class TargetTorchActor:
-    def __init__(self, policy, env):
+    def __init__(self, policy, env, policy_env=None):
         self.policy = policy
         self.env = env
+        self.policy_env = policy_env or getattr(policy, "_puffer_policy_env", env)
         self.hidden_size = getattr(policy, "hidden_size", None)
+        self.live_ego_features = env.ego_features
+        self.live_num_reward_coefs = env.num_reward_coefs
+        self.live_target_dim = env.target_dim
+        self.target_ego_features = self.policy_env.ego_features
+        self.target_num_reward_coefs = self.policy_env.num_reward_coefs
+        self.target_dim = self.policy_env.target_dim
+        if self.live_ego_features != self.target_ego_features or self.live_target_dim != self.target_dim:
+            raise pufferlib.APIUsageError(
+                "Target policy observation shape mismatch: live env has "
+                f"ego={self.live_ego_features}, target={self.live_target_dim}; target policy expects "
+                f"ego={self.target_ego_features}, target={self.target_dim}"
+            )
+
         self.target_max_partner_obs_distance = float(getattr(env, "target_max_partner_obs_distance", 0.0))
-        self.partner_start = env.ego_features + env.num_reward_coefs + env.target_dim
-        self.max_partner_observations = env.max_partner_observations
-        self.partner_features = env.partner_features
-        self.max_position = env.max_position
+        self.partner_start = self.target_ego_features + self.target_num_reward_coefs + self.target_dim
+        self.max_partner_observations = self.policy_env.max_partner_observations
+        self.partner_features = self.policy_env.partner_features
+        self.max_position = self.policy_env.max_position
+        self.fixed_reward_conditioning = getattr(self.policy_env, "fixed_reward_conditioning", None)
 
     def prepare_observation(self, raw_observation):
-        observations = raw_observation.clone()
+        observations = raw_observation
+        if self.live_num_reward_coefs != self.target_num_reward_coefs:
+            ego_end = self.live_ego_features
+            live_context_end = ego_end + self.live_num_reward_coefs + self.live_target_dim
+            target_obs = observations[:, ego_end + self.live_num_reward_coefs : live_context_end]
+            tail_obs = observations[:, live_context_end:]
+            parts = [observations[:, :ego_end]]
+            if self.target_num_reward_coefs > 0:
+                if self.fixed_reward_conditioning is None:
+                    raise pufferlib.APIUsageError("Conditioned target policy requires fixed reward conditioning values")
+                reward_conditioning = torch.as_tensor(
+                    self.fixed_reward_conditioning,
+                    dtype=observations.dtype,
+                    device=observations.device,
+                ).expand(observations.shape[0], -1)
+                parts.append(reward_conditioning)
+            parts.extend([target_obs, tail_obs])
+            observations = torch.cat(parts, dim=1)
+        else:
+            observations = observations.clone()
+
         if self.target_max_partner_obs_distance <= 0.0 or self.max_partner_observations <= 0:
             return observations
 
@@ -270,8 +305,239 @@ class TargetTorchActor:
         )
 
 
-def _make_target_policy_env_view(env):
+TARGET_POLICY_ENV_KEYS = {
+    "action_type",
+    "dynamics_model",
+    "target_type",
+    "num_target_waypoints",
+    "max_lane_segment_observations",
+    "lane_segment_dropout",
+    "max_boundary_segment_observations",
+    "boundary_segment_dropout",
+    "max_traffic_control_observations",
+    "traffic_control_scope",
+    "reward_conditioning",
+    "reward_randomization",
+    "max_goal_position",
+    "max_position",
+    "max_veh_len",
+    "max_veh_width",
+    "max_road_segment_length",
+    "max_road_segment_width",
+    "max_traffic_control_distance",
+    "agent_obs_max_dist",
+    "target_max_partner_obs_distance",
+    "goal_radius",
+    "goal_speed",
+    "reward_vehicle_collision",
+    "reward_offroad_collision",
+    "reward_comfort",
+    "reward_lane_align",
+    "reward_vel_align",
+    "reward_lane_center",
+    "reward_center_bias",
+    "reward_velocity",
+    "reward_reverse",
+    "reward_stop_line",
+    "reward_timestep",
+    "reward_overspeed",
+}
+
+TARGET_POLICY_KWARGS = {
+    "ego_input_size",
+    "partner_input_size",
+    "lane_input_size",
+    "boundary_input_size",
+    "traffic_control_input_size",
+    "context_input_size",
+    "backbone_hidden_size",
+    "backbone_num_layers",
+    "actor_hidden_size",
+    "actor_num_layers",
+    "critic_hidden_size",
+    "critic_num_layers",
+    "encoder_activation",
+    "encoder_layer_norm",
+    "backbone_activation",
+    "backbone_layer_norm",
+    "shared_network",
+    "mask_padded_features",
+}
+
+TARGET_POLICY_ENV_ATTR_KEYS = {
+    "reward_conditioning",
+    "reward_randomization",
+    "max_goal_position",
+    "max_position",
+    "max_veh_len",
+    "max_veh_width",
+    "max_road_segment_length",
+    "max_road_segment_width",
+    "max_traffic_control_distance",
+    "agent_obs_max_dist",
+    "target_max_partner_obs_distance",
+    "goal_radius",
+    "goal_speed",
+    "reward_vehicle_collision",
+    "reward_offroad_collision",
+    "reward_comfort",
+    "reward_lane_align",
+    "reward_vel_align",
+    "reward_lane_center",
+    "reward_center_bias",
+    "reward_velocity",
+    "reward_reverse",
+    "reward_stop_line",
+    "reward_timestep",
+    "reward_overspeed",
+}
+
+REWARD_CONDITIONING_BOUNDS = (
+    (2.0, 12.0),  # REWARD_COEF_GOAL_RADIUS
+    (0.0, 20.0),  # REWARD_COEF_GOAL_SPEED
+    (0.0, 3.0),  # REWARD_COEF_COLLISION
+    (0.0, 3.0),  # REWARD_COEF_OFFROAD
+    (0.0, 0.1),  # REWARD_COEF_COMFORT
+    (2.5e-4, 2.5e-2),  # REWARD_COEF_LANE_ALIGN
+    (0.0, 1.0),  # REWARD_COEF_VEL_ALIGN
+    (2.5e-4, 7.5e-3),  # REWARD_COEF_LANE_CENTER
+    (-0.5, 0.5),  # REWARD_COEF_CENTER_BIAS
+    (0.0, 5e-3),  # REWARD_COEF_VELOCITY
+    (2.5e-4, 7.5e-3),  # REWARD_COEF_REVERSE
+    (0.0, 1.0),  # REWARD_COEF_STOP_LINE
+    (0.0, 5e-5),  # REWARD_COEF_TIMESTEP
+    (0.0, 1.0),  # REWARD_COEF_OVERSPEED
+    (0.8, 1.25),  # REWARD_COEF_THROTTLE
+    (0.8, 1.25),  # REWARD_COEF_STEER
+    (0.666, 1.5),  # REWARD_COEF_ACC
+)
+
+REWARD_CONDITIONING_FIELDS = (
+    "goal_radius",
+    "goal_speed",
+    "reward_vehicle_collision",
+    "reward_offroad_collision",
+    "reward_comfort",
+    "reward_lane_align",
+    "reward_vel_align",
+    "reward_lane_center",
+    "reward_center_bias",
+    "reward_velocity",
+    "reward_reverse",
+    "reward_stop_line",
+    "reward_timestep",
+    "reward_overspeed",
+)
+
+
+def _infer_target_policy_config_path(target_policy_path):
+    if target_policy_path is None or str(target_policy_path).lower() == "none":
+        return None
+
+    root, _ = os.path.splitext(target_policy_path)
+    candidates = [
+        f"{root}_config.yaml",
+        os.path.join(os.path.dirname(target_policy_path), "config.yaml"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _load_target_policy_config(args, target_policy_path):
+    config_path = args.get("target_policy_config") or args["train"].get("target_policy_config")
+    if config_path is not None and str(config_path).lower() == "none":
+        config_path = None
+    if config_path is None:
+        config_path = _infer_target_policy_config_path(target_policy_path)
+    if config_path is None:
+        return None, None
+    if not os.path.exists(config_path):
+        raise pufferlib.APIUsageError(f"Target policy config not found: {config_path}")
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f), config_path
+
+
+def _bool_config(value):
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _fixed_reward_conditioning_from_env(env):
+    values = [float(getattr(env, field)) for field in REWARD_CONDITIONING_FIELDS]
+    values.extend([1.0, 1.0, 1.0])  # throttle, steer, acceleration shaping multipliers
+    normalized = []
+    for value, (min_val, max_val) in zip(values, REWARD_CONDITIONING_BOUNDS):
+        coef = (value - min_val) / ((max_val - min_val) + 1e-8)
+        coef = max(0.0, min(1.0, coef))
+        normalized.append(2.0 * coef - 1.0)
+    return tuple(normalized)
+
+
+def _prepare_target_policy_args(args, target_policy_path):
+    target_args = copy.deepcopy(args)
+    target_args["load_model_path"] = target_policy_path
+    target_args["target_policy_path"] = target_policy_path
+    target_args["policy_name"] = "TargetDrive"
+
+    target_config, target_config_path = _load_target_policy_config(args, target_policy_path)
+    if target_config is None:
+        target_args["_target_policy_config_path"] = None
+        return target_args
+
+    policy_config = target_config.get("policy", {})
+    for key, value in policy_config.items():
+        if key in TARGET_POLICY_KWARGS:
+            target_args["policy"][key] = value
+
+    env_config = target_config.get("env", {})
+    for key, value in env_config.items():
+        if key in TARGET_POLICY_ENV_KEYS:
+            target_args["env"][key] = value
+
+    target_args["_target_policy_config_path"] = target_config_path
+    return target_args
+
+
+def _make_target_policy_env_view(env, target_args=None):
     target_env = copy.copy(env)
+    target_args = target_args or {}
+    target_env_config = target_args.get("env", {})
+
+    expected = {
+        "dynamics_model": getattr(env, "dynamics_model", None),
+        "target_type": getattr(env, "target_type_str", None),
+        "num_target_waypoints": getattr(env, "num_target_waypoints", None),
+        "max_lane_segment_observations": getattr(env, "max_lane_segment_observations", None),
+        "lane_segment_dropout": getattr(env, "lane_segment_dropout", None),
+        "max_boundary_segment_observations": getattr(env, "max_boundary_segment_observations", None),
+        "boundary_segment_dropout": getattr(env, "boundary_segment_dropout", None),
+        "max_traffic_control_observations": getattr(env, "max_traffic_control_observations", None),
+        "traffic_control_scope": getattr(env, "traffic_control_scope", None),
+    }
+    for key, live_value in expected.items():
+        target_value = target_env_config.get(key, live_value)
+        if live_value is not None and target_value != live_value:
+            raise pufferlib.APIUsageError(
+                f"Target policy config {key}={target_value!r} does not match live env {key}={live_value!r}. "
+                "Only reward-conditioning layout differences are supported."
+            )
+
+    for key in TARGET_POLICY_ENV_ATTR_KEYS:
+        if key in target_env_config and hasattr(target_env, key):
+            setattr(target_env, key, target_env_config[key])
+
+    target_env.reward_conditioning = _bool_config(target_env_config.get("reward_conditioning", env.reward_conditioning))
+    target_env.reward_randomization = _bool_config(
+        target_env_config.get("reward_randomization", env.reward_randomization)
+    )
+    target_env.num_reward_coefs = len(REWARD_CONDITIONING_BOUNDS) if target_env.reward_conditioning else 0
+    target_env.fixed_reward_conditioning = (
+        _fixed_reward_conditioning_from_env(target_env) if target_env.reward_conditioning else None
+    )
+    target_env.target_policy_config_path = target_args.get("_target_policy_config_path")
     return target_env
 
 
@@ -1870,11 +2136,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         if target_policy_path is not None and str(target_policy_path).lower() != "none":
             print(f"Skipping train.target_policy because env.sdc_controller={sdc_controller!r}")
     elif target_policy_path is not None and str(target_policy_path).lower() != "none":
-        target_args = copy.deepcopy(args)
-        target_args["load_model_path"] = target_policy_path
-        target_args["policy_name"] = "TargetDrive"
-        target_env = _make_target_policy_env_view(vecenv.driver_env)
+        target_args = _prepare_target_policy_args(args, target_policy_path)
+        target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
         target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
+        target_policy._puffer_policy_env = target_env
         for param in target_policy.parameters():
             param.requires_grad = False
         target_policy.eval()
@@ -2422,11 +2687,10 @@ def _load_target_policy_for_eval(args, vecenv, env_name, target_policy=None):
     if target_policy_path is None or str(target_policy_path).lower() == "none":
         raise pufferlib.APIUsageError("Target-policy eval requires train.target_policy or --target-policy-path")
 
-    target_args = copy.deepcopy(args)
-    target_args["load_model_path"] = target_policy_path
-    target_args["policy_name"] = "TargetDrive"
-    target_env = _make_target_policy_env_view(vecenv.driver_env)
+    target_args = _prepare_target_policy_args(args, target_policy_path)
+    target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
     target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
+    target_policy._puffer_policy_env = target_env
     target_policy.eval()
     return target_policy
 
@@ -3880,12 +4144,10 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             if policy is not None and policy.__class__.__name__ != "TargetDrive":
                 raise pufferlib.APIUsageError("target-actor traffic mining requires a TargetDrive policy")
 
-            target_args = copy.deepcopy(args)
-            target_args["load_model_path"] = target_policy_path
-            target_args["target_policy_path"] = target_policy_path
-            target_args["policy_name"] = "TargetDrive"
-            target_env = _make_target_policy_env_view(vecenv.driver_env)
+            target_args = _prepare_target_policy_args(args, target_policy_path)
+            target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
             policy = policy or load_policy(target_args, vecenv, env_name, policy_env=target_env)
+            policy._puffer_policy_env = target_env
             policy.eval()
             policy_actor = TargetTorchActor(policy, vecenv.driver_env)
             if policy_homogeneous_target_actor and target_policy is None:
@@ -4452,6 +4714,12 @@ def load_config(env_name, config_dir=None):
         type=str,
         default=None,
         help="Optional explicit target policy checkpoint for adversarial evaluation/rendering",
+    )
+    parser.add_argument(
+        "--target-policy-config",
+        type=str,
+        default=None,
+        help="Optional target policy config.yaml used to reconstruct frozen target architecture/observation layout",
     )
     parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
