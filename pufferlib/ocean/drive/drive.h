@@ -118,8 +118,8 @@
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
-// Heading deviation since last kept point that forces a keep when obs stride > 1 (~30 degrees).
-#define OBS_STRIDE_HEADING_THRESHOLD 0.5236f
+// Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
+#define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25)
 
 // TARGET_TYPE modes (controls what target info is in observations)
