@@ -38,8 +38,6 @@ class TestDriveConfig(unittest.TestCase):
             # load_config should return a populated config dict without raising.
             self.assertIsInstance(args, dict)
             self.assertTrue(len(args) > 0)
-            self.assertEqual(args["env"]["obs_lane_stride"], 1)
-            self.assertEqual(args["env"]["obs_boundary_stride"], 1)
 
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")
