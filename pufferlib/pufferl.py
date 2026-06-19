@@ -2949,6 +2949,33 @@ def _resolve_gigaflow_mining_maps(args):
     return selected
 
 
+def _resolve_replay_mining_scenarios(args):
+    map_dir = args["env"]["map_dir"]
+    all_scenario_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
+    if not all_scenario_files:
+        raise FileNotFoundError(f"No .bin files found in {map_dir}")
+
+    target_num_episodes = args.get("num_episodes") or args["num_scenarios"]
+    if target_num_episodes > len(all_scenario_files):
+        raise pufferlib.APIUsageError(
+            f"mine_failures requested {target_num_episodes} replay episodes, "
+            f"but only {len(all_scenario_files)} scenarios are available in {map_dir}"
+        )
+
+    return [os.path.basename(path) for path in all_scenario_files[:target_num_episodes]]
+
+
+def _resolve_mining_scenarios(args):
+    eval_simulation = args["eval_simulation"]
+    if eval_simulation == "gigaflow":
+        return _resolve_gigaflow_mining_maps(args)
+    if eval_simulation == "replay":
+        return _resolve_replay_mining_scenarios(args)
+    raise pufferlib.APIUsageError(
+        f"mine_failures supports eval_simulation 'gigaflow' or 'replay'. Got: {eval_simulation!r}"
+    )
+
+
 def _get_random_eval_filename_suffix(args):
     parts = []
 
@@ -4000,8 +4027,11 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     if args is None:
         args = _prepare_mine_failures_args(env_name, load_config(env_name))
 
-    if args["eval_simulation"] != "gigaflow":
-        raise pufferlib.APIUsageError("mine_failures currently supports gigaflow only")
+    eval_simulation = args["eval_simulation"]
+    if eval_simulation not in ("gigaflow", "replay"):
+        raise pufferlib.APIUsageError(
+            f"mine_failures supports eval_simulation 'gigaflow' or 'replay'. Got: {eval_simulation!r}"
+        )
 
     if args["train"]["use_rnn"]:
         raise pufferlib.APIUsageError("mine_failures does not support RNN policies yet")
@@ -4035,9 +4065,9 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             raise pufferlib.APIUsageError("--adv-reward-weight-drive must be in [0, 1]")
     args["env"]["compute_eval_metrics"] = True
 
-    selected_map_names = _resolve_gigaflow_mining_maps(args)
+    selected_map_names = _resolve_mining_scenarios(args)
     if not selected_map_names:
-        raise pufferlib.APIUsageError("mine_failures requires at least one gigaflow map")
+        raise pufferlib.APIUsageError("mine_failures requires at least one mining scenario")
 
     env_kwargs_list = []
     for worker_idx in range(num_workers):
