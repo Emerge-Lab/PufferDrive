@@ -506,6 +506,7 @@ class Drive(pufferlib.PufferEnv):
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
+        self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
         super().__init__(buf=buf)
         self._map_cache = binding.map_cache_init() if self.enable_map_cache else None
         self.env_ids = []
@@ -943,6 +944,11 @@ class Drive(pufferlib.PufferEnv):
         return int(self.rng.integers(0, 2**24))
 
     def reset(self, seed=None):
+        if getattr(self, "_eval_exhausted", False):
+            self.tick = 0
+            self.truncations[:] = 0
+            return self.observations, [{"agent_offsets": self.agent_offsets}]
+
         reset_seed = self.random_seed if seed is None else seed
         binding.vec_reset(self.c_envs, reset_seed)
         self.tick = 0
@@ -954,6 +960,18 @@ class Drive(pufferlib.PufferEnv):
         return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
+        if getattr(self, "_eval_exhausted", False):
+            self.rewards[:] = 0
+            self.terminals[:] = 0
+            self.truncations[:] = 0
+            return (
+                self.observations,
+                self.rewards,
+                self.terminals,
+                self.truncations,
+                [{"agent_offsets": self.agent_offsets}],
+            )
+
         if self.capture_replay:
             self._capture_replay_step()
         if self.capture_compact_replay:
@@ -1044,6 +1062,7 @@ class Drive(pufferlib.PufferEnv):
                         self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
                     )
                 if self.current_num_eval_scenarios == 0:
+                    self._eval_exhausted = True
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)
                 binding.vec_close(self.c_envs)
                 if self._map_cache is not None:
