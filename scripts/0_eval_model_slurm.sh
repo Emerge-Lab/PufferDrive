@@ -15,7 +15,7 @@ echo "START TIME: $(date)"
 start=`date +%s`
 
 source .venv/bin/activate
-.venv/bin/puffer eval puffer_drive --eval_simulation replay --render 1 --load-model-path /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/puffer_eval/model.pt
+.venv/bin/puffer eval puffer_drive --eval_simulation replay --render 1 --render-backend obs_html --load-model-path /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/puffer_eval/model.pt
 
 end=`date +%s`
 runtime=$((end-start))
