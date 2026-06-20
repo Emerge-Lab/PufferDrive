@@ -4217,7 +4217,12 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
 
     if needs_traffic_policy:
         if policy_homogeneous_target_actor or traffic_policy_target_actor:
-            target_policy_path = (
+            traffic_target_policy_path = (
+                args.get("load_model_path")
+                if traffic_policy_target_actor and not policy_homogeneous_target_actor
+                else None
+            )
+            target_policy_path = traffic_target_policy_path or (
                 args.get("target_policy_path") or args.get("load_model_path") or args["train"].get("target_policy")
             )
             if target_policy_path is None or str(target_policy_path).lower() == "none":
