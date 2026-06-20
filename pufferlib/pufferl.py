@@ -2955,14 +2955,21 @@ def _resolve_replay_mining_scenarios(args):
     if not all_scenario_files:
         raise FileNotFoundError(f"No .bin files found in {map_dir}")
 
-    target_num_episodes = args.get("num_episodes") or args["num_scenarios"]
-    if target_num_episodes > len(all_scenario_files):
+    num_scenarios = args["num_scenarios"]
+    if num_scenarios == -1:
+        num_scenarios = len(all_scenario_files)
+    elif num_scenarios <= 0:
         raise pufferlib.APIUsageError(
-            f"mine_failures requested {target_num_episodes} replay episodes, "
+            f"mine_failures replay scenarios must be positive or -1 for all scenarios. Got: {num_scenarios}"
+        )
+
+    if num_scenarios > len(all_scenario_files):
+        raise pufferlib.APIUsageError(
+            f"mine_failures requested {num_scenarios} replay scenarios, "
             f"but only {len(all_scenario_files)} scenarios are available in {map_dir}"
         )
 
-    return [os.path.basename(path) for path in all_scenario_files[:target_num_episodes]]
+    return [os.path.basename(path) for path in all_scenario_files[:num_scenarios]]
 
 
 def _resolve_mining_scenarios(args):
@@ -4043,12 +4050,10 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     else:
         args["vec"]["seed"] = None
 
-    target_num_episodes = args.get("num_episodes") or args["num_scenarios"]
     backend = args["vec"]["backend"]
     if backend == "PufferEnv":
         backend = "Multiprocessing"
 
-    num_workers = min(args["vec"]["num_envs"], target_num_episodes)
     capture_mining_replay = bool(args.get("capture_mining_replay", 0))
     capture_mining_replay_failures_only = bool(args.get("capture_mining_replay_failures_only", 1))
     append_mining_run = bool(args.get("append_mining_run", 0))
@@ -4068,6 +4073,19 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
     selected_map_names = _resolve_mining_scenarios(args)
     if not selected_map_names:
         raise pufferlib.APIUsageError("mine_failures requires at least one mining scenario")
+    if eval_simulation == "replay":
+        target_num_episodes = len(selected_map_names)
+        args["num_episodes"] = target_num_episodes
+        args["num_scenarios"] = target_num_episodes
+    else:
+        requested_num_episodes = args.get("num_episodes") or args["num_scenarios"]
+        if requested_num_episodes == -1:
+            raise pufferlib.APIUsageError("mine_failures gigaflow mode requires a positive --num-episodes")
+        if requested_num_episodes <= 0:
+            raise pufferlib.APIUsageError(f"mine_failures episodes must be positive. Got: {requested_num_episodes}")
+        target_num_episodes = requested_num_episodes
+
+    num_workers = min(args["vec"]["num_envs"], target_num_episodes)
 
     env_kwargs_list = []
     worker_scenario_ranges = []
@@ -4794,8 +4812,18 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit seed for evaluation/render runs")
-    parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
-    parser.add_argument("--num-episodes", type=int, default=None, help="Number of completed episodes to mine")
+    parser.add_argument(
+        "--num-scenarios",
+        type=int,
+        default=3,
+        help="Number of scenarios to eval. In replay mine_failures, use -1 for all .bin files.",
+    )
+    parser.add_argument(
+        "--num-episodes",
+        type=int,
+        default=None,
+        help="Number of completed episodes to mine. Ignored by replay mine_failures; use --num-scenarios there.",
+    )
     parser.add_argument(
         "--adv-reward-weight-drive",
         type=float,
