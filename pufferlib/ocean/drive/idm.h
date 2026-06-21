@@ -16,6 +16,12 @@
 #define IDM_DEFAULT_DESIRED_SPEED 15.0f
 #define IDM_ROUTE_SAMPLE_DS 1.0f
 #define IDM_MAX_CANDIDATES 256
+#define IDM_LATERAL_SNAP_THRESHOLD 0.05f
+#define IDM_MAX_LATERAL_STEP 0.05f
+#define IDM_LATERAL_STEP_RATIO 0.2f
+#define IDM_HEADING_SNAP_THRESHOLD 0.05f
+#define IDM_MAX_HEADING_STEP 0.05f
+#define IDM_HEADING_STEP_RATIO 0.1f
 
 #define NUPLAN_IDM_MIN_SPACING 1.0f
 #define NUPLAN_IDM_SAFE_TIME_HEADWAY 1.5f
@@ -921,6 +927,58 @@ static int idm_advance_along_route_lanes(Drive *env, int agent_idx, float distan
     return 0;
 }
 
+static int idm_advance_along_route_lanes_limited(Drive *env, int agent_idx, float distance, float speed,
+                                                 float *old_heading_out) {
+    Agent *agent = &env->agents[agent_idx];
+    float old_x = agent->sim_x;
+    float old_y = agent->sim_y;
+    float old_heading = agent->sim_heading;
+
+    if (!idm_advance_along_route_lanes(env, agent_idx, distance, old_heading_out)) {
+        return 0;
+    }
+
+    float target_x = agent->sim_x;
+    float target_y = agent->sim_y;
+    float target_z = agent->sim_z;
+    float target_heading = agent->sim_heading;
+
+    float forward_x = cosf(target_heading);
+    float forward_y = sinf(target_heading);
+    float lateral_x = -forward_y;
+    float lateral_y = forward_x;
+
+    float dx = target_x - old_x;
+    float dy = target_y - old_y;
+    float forward_step = dx * forward_x + dy * forward_y;
+    float lateral_step = dx * lateral_x + dy * lateral_y;
+
+    float max_lateral_step = fminf(IDM_MAX_LATERAL_STEP, fmaxf(0.0f, speed) * env->dt * IDM_LATERAL_STEP_RATIO);
+    if (fabsf(lateral_step) > IDM_LATERAL_SNAP_THRESHOLD && fabsf(lateral_step) > max_lateral_step) {
+        lateral_step = clip(lateral_step, -max_lateral_step, max_lateral_step);
+        agent->sim_x = old_x + forward_step * forward_x + lateral_step * lateral_x;
+        agent->sim_y = old_y + forward_step * forward_y + lateral_step * lateral_y;
+        agent->sim_z = target_z;
+    } else {
+        agent->sim_x = target_x;
+        agent->sim_y = target_y;
+        agent->sim_z = target_z;
+    }
+
+    float heading_delta = compute_heading_diff(target_heading, old_heading);
+    float max_heading_step = fminf(IDM_MAX_HEADING_STEP, fmaxf(0.0f, speed) * env->dt * IDM_HEADING_STEP_RATIO);
+    if (fabsf(heading_delta) > IDM_HEADING_SNAP_THRESHOLD && fabsf(heading_delta) > max_heading_step) {
+        heading_delta = clip(heading_delta, -max_heading_step, max_heading_step);
+        agent->sim_heading = normalize_heading(old_heading + heading_delta);
+    } else {
+        agent->sim_heading = target_heading;
+    }
+
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    return 1;
+}
+
 static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
     Agent *agent = &env->agents[agent_idx];
 
@@ -956,7 +1014,7 @@ static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
 
     float old_heading = agent->sim_heading;
     float distance = new_speed * env->dt;
-    if (!idm_advance_along_route_lanes(env, agent_idx, distance, &old_heading)) {
+    if (!idm_advance_along_route_lanes_limited(env, agent_idx, distance, new_speed, &old_heading)) {
         agent->stopped = 1;
         new_speed = 0.0f;
         accel = (new_speed - current_speed) / env->dt;
@@ -1008,7 +1066,7 @@ static void nuplan_idm_move_with_leader(Drive *env, int agent_idx, IDMLeader lea
 
     float old_heading = agent->sim_heading;
     float distance = new_speed * env->dt;
-    if (!idm_advance_along_route_lanes(env, agent_idx, distance, &old_heading)) {
+    if (!idm_advance_along_route_lanes_limited(env, agent_idx, distance, new_speed, &old_heading)) {
         agent->stopped = 1;
         new_speed = 0.0f;
         accel = (new_speed - current_speed) / env->dt;
