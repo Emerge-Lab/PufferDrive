@@ -78,15 +78,12 @@ def _select_map_files(map_dir, simulation_mode, maps, num_maps):
             raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({len(all_map_files)}).")
         return all_map_files[:num_maps]
 
-    if simulation_mode != "gigaflow":
-        raise ValueError("The maps selector is only supported in gigaflow mode.")
-
     selected_files = []
     seen = set()
     available_map_names = [os.path.basename(path) for path in all_map_files]
     for selector in map_selectors:
         matched_file = None
-        if isinstance(selector, int):
+        if isinstance(selector, int) and simulation_mode == "gigaflow":
             target_name = f"opendrive__Town{selector:02d}.bin"
             for path in all_map_files:
                 if os.path.basename(path) == target_name:
@@ -104,7 +101,7 @@ def _select_map_files(map_dir, simulation_mode, maps, num_maps):
 
         if matched_file is None:
             raise ValueError(
-                f"Unknown gigaflow map selector {selector!r}. Available CARLA maps: {', '.join(available_map_names)}"
+                f"Unknown {simulation_mode} map selector {selector!r}. Available maps: {', '.join(available_map_names)}"
             )
         if matched_file in seen:
             continue
@@ -113,7 +110,7 @@ def _select_map_files(map_dir, simulation_mode, maps, num_maps):
         seen.add(matched_file)
 
     if not selected_files:
-        raise ValueError("The maps selector did not match any gigaflow maps.")
+        raise ValueError(f"The maps selector did not match any {simulation_mode} maps.")
 
     return selected_files
 

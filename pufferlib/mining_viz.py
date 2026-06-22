@@ -54,6 +54,13 @@ def _normalize_scenario(scenario):
     return scenario or {}
 
 
+def _infer_map_simulation_mode(map_path):
+    map_name = Path(map_path).name
+    if map_name.startswith("opendrive__"):
+        return "gigaflow"
+    return "replay"
+
+
 def _ensure_python_scalar(value):
     if isinstance(value, np.generic):
         return value.item()
@@ -145,6 +152,7 @@ def _materialize_replay_bundle(replay_bundle):
 @lru_cache(maxsize=16)
 def load_map_static(map_path):
     resolved_map_path = _resolve_map_path(map_path)
+    simulation_mode = _infer_map_simulation_mode(resolved_map_path)
     env = Drive(
         map_dir=str(resolved_map_path.parent),
         maps=resolved_map_path.name,
@@ -152,9 +160,11 @@ def load_map_static(map_path):
         num_agents=1,
         min_agents_per_env=1,
         max_agents_per_env=1,
-        simulation_mode="gigaflow",
-        scenario_length=1,
-        resample_frequency=0,
+        simulation_mode=simulation_mode,
+        eval_mode=1 if simulation_mode == "replay" else 0,
+        num_eval_scenarios=1,
+        scenario_length=91 if simulation_mode == "replay" else 1,
+        resample_frequency=91 if simulation_mode == "replay" else 0,
         report_interval=10_000,
     )
     try:
