@@ -3317,7 +3317,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_stop_line_crossing(env, &tmp_agent)) {
+        if (check_stop_line_crossing(env, &tmp_agent, true)) {
             continue;
         }
 
