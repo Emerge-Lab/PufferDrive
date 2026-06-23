@@ -1,0 +1,100 @@
+# Replay-mode simulation on nuPlan maps (internal section: [env]).
+# The ego SDC is policy-controlled; all other agents replay their logged
+# trajectories. Mirrors the proven validation_replay env, tuned for training.
+env:
+  # --- Simulation ---
+  simulation_mode: replay
+  # control_sdc_only: only agent 0 (the ego SDC) is policy-driven; the rest
+  # are log-replayed. So controlled agents per env == 1, and the number of
+  # parallel scenarios ~= num_agents / max_agents_per_env.
+  control_mode: control_sdc_only
+  # Total agent-slot buffer across all parallel scenarios. With 64 max agents
+  # per scene this gives ~16 parallel nuPlan scenes / controlled SDCs. Bump
+  # both num_agents and num_workers/num_envs for more PPO throughput.
+  num_agents: 1024
+  min_agents_per_env: 1
+  max_agents_per_env: 64
+  action_type: discrete
+  dynamics_model: jerk
+  dt: 0.1
+  spawn_initial_speed: 0.0
+  collision_behavior: 1
+  offroad_behavior: 1
+  traffic_light_behavior: 1
+  use_map_cache: 0
+  # 200-step episodes (nuPlan scenes are ~20s @ 0.1s).
+  scenario_length: 200
+  # Resample a fresh scenario every episode so training cycles through maps.
+  resample_frequency: 200
+  # termination_mode 1: early reset once the inactive-agent ratio is exceeded.
+  termination_mode: 1
+  inactive_agent_threshold: 0.4
+  init_step: 0
+  sdc_controller: policy
+  non_sdc_controller: replay
+  non_vehicle_controller: auto
+  init_mode: create_all_valid
+  compute_eval_metrics: false
+
+  # --- Goal / Target ---
+  target_type: static
+  goal_on_lane: true
+  goal_radius: 2.0
+  goal_speed: 1000.0
+  num_target_waypoints: 3
+  min_waypoint_spacing: 20.0
+  max_waypoint_spacing: 60.0
+
+  # --- Rewards (collision/offroad bumped to 5.5, as in replay_sdc) ---
+  reward_conditioning: false
+  reward_randomization: false
+  reward_goal: 1.0
+  reward_collision: 5.5
+  reward_offroad: 5.5
+  reward_stop_line: 1.0
+  reward_comfort: 0.05
+  reward_lane_align: 0.025
+  reward_vel_align: 1.0
+  reward_lane_center: 0.0038
+  reward_center_bias: 0.0
+  reward_velocity: 0.1
+  reward_reverse: 0.005
+  reward_timestep: 0.000025
+  reward_overspeed: 0.05
+  reward_ade: 0.0
+
+  # --- Map ---
+  # Point this at your nuPlan .bin directory. num_maps caps how many are loaded.
+  map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+  num_maps: 250
+
+  # --- Observation slot counts ---
+  obs_slots_lane_n: 80
+  obs_slots_boundary_n: 80
+  obs_slots_partners_n: 16
+  obs_slots_traffic_controls_n: 4
+  obs_dropout_lane: 0.0
+  obs_dropout_boundary: 0.0
+  # Stride for lane and boundary segments; 1 means use every segment, 2 means use every other segment, etc.
+  obs_lane_stride: 1
+  obs_boundary_stride: 1
+  # --- Observation normalization ---
+  obs_norm_goal_offset_m: 120.0
+  obs_norm_xy_offset_m: 120.0
+  obs_norm_veh_length_m: 15.0
+  obs_norm_veh_width_m: 10.0
+  obs_norm_road_seg_length_m: 10.0
+  obs_norm_road_seg_width_m: 5.0
+  # --- Observation ranges (meters, ego frame) ---
+  obs_range_road_front_m: 120.0
+  obs_range_road_behind_m: 20.0
+  obs_range_road_side_m: 30.0
+  obs_range_partner_m: 100.0
+  obs_range_traffic_control_m: 100.0
+
+  # --- Robustness features ---
+  partner_blindness_prob: 0.0
+  partner_blindness_trigger_prob: 0.0
+  phantom_braking_prob: 0.0
+  phantom_braking_trigger_prob: 0.0
+  phantom_braking_duration: 10

@@ -81,7 +81,7 @@ def format_results_table(results):
 def main():
     parser = argparse.ArgumentParser(description="Validate WOSAC log-likelihood metrics")
     parser.add_argument("--env", default="puffer_drive")
-    parser.add_argument("--config", default="config/ocean/drive.ini")
+    parser.add_argument("--config", default="config/ocean/drive/recipes/default.yaml")
     args = parser.parse_args()
 
     config = load_config(args.env)

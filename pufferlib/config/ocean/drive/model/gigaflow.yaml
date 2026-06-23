@@ -1,0 +1,36 @@
+# Policy/network definition (internal sections: [base] net ids, [policy], [rnn]).
+base:
+  policy_name: Drive
+  # Options: Recurrent, None
+  rnn_name: null
+
+policy:
+  # Encoder layer (per-encoder embedding width)
+  ego_input_size: 64
+  partner_input_size: 64
+  lane_input_size: 64
+  boundary_input_size: 64
+  traffic_control_input_size: 64
+  context_input_size: 64
+  # Encoder activation - options: "relu", "tanh", "gelu"
+  encoder_activation: relu
+  encoder_layer_norm: true
+  mask_padded_features: false
+  # Shared backbone layer
+  backbone_hidden_size: 512
+  backbone_num_layers: 4
+  # Backbone activation - options: "relu", "tanh", "gelu"
+  backbone_activation: gelu
+  backbone_layer_norm: false
+  # Actor head layer
+  actor_hidden_size: 512
+  actor_num_layers: 0
+  # Critic head layer
+  critic_hidden_size: 512
+  critic_num_layers: 0
+  # Dual or shared actor-critic backbone
+  shared_network: true
+
+rnn:
+  input_size: 512
+  hidden_size: 512

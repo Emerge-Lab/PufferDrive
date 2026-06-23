@@ -1,0 +1,5 @@
+# Vectorized-env settings (internal section: [vec]).
+vec:
+  num_envs: 20
+  num_workers: auto
+  batch_size: auto
