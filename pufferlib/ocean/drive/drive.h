@@ -2174,7 +2174,7 @@ static bool check_agent_corners_cross_stop_line(float corners[4][2], TrafficCont
     return false;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][2], bool include_yellow) {
+static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][2], bool include_yellow_violation) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -2200,7 +2200,7 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][
         }
         int light_state = tc->states[env->timestep];
         if (light_state != TRAFFIC_CONTROL_STATE_RED
-            && !(include_yellow && light_state == TRAFFIC_CONTROL_STATE_YELLOW)) {
+            && !(include_yellow_violation && light_state == TRAFFIC_CONTROL_STATE_YELLOW)) {
             continue;
         }
 
