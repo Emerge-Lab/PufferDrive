@@ -119,6 +119,8 @@
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
+// Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
+#define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25)
 
 // TARGET_TYPE modes (controls what target info is in observations)
@@ -166,6 +168,7 @@ static const int ROAD_OFFSETS[25][2]
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define STEERING_LIMIT 0.667f
+static const float REAR_AXLE_RATIO = 0.5f;
 
 // Jerk action space (for JERK dynamics model)
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
@@ -279,8 +282,9 @@ struct Log {
 };
 
 struct GridMapEntity {
-    int entity_idx;   // Index into the road_elements array
-    int geometry_idx; // Index into element's geometry array
+    int entity_idx;    // Index into the road_elements array
+    int geometry_idx;  // Index into element's geometry array
+    int valid_for_obs; // Whether this entity should be included in observations
 };
 
 struct GridMap {
@@ -314,6 +318,8 @@ struct SharedMapData {
     GridMap *grid_map;
     int *neighbor_offsets;
     struct LaneGraph lane_graph;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     int ref_count;
     pid_t owner_pid;
 };
@@ -426,6 +432,8 @@ struct Drive {
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
     int traffic_control_scope;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
     int road_dropout_enabled;
@@ -702,6 +710,7 @@ static void add_entity_to_grid(
     int grid_index,
     int entity_idx,
     int geometry_idx,
+    int valid_for_obs,
     int *cell_entities_insert_index) {
     if (grid_index == -1) {
         return;
@@ -720,6 +729,7 @@ static void add_entity_to_grid(
 
     env->grid_map->cells[grid_index][count].entity_idx = entity_idx;
     env->grid_map->cells[grid_index][count].geometry_idx = geometry_idx;
+    env->grid_map->cells[grid_index][count].valid_for_obs = valid_for_obs;
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
@@ -793,14 +803,31 @@ static void init_grid_map(Drive *env) {
     bool *drivable_grid_seen = (bool *) calloc(grid_cell_count, sizeof(bool));
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *element = &env->road_elements[i];
+        int obs_stride = 1;
+        if (is_road_lane(element->type)) {
+            obs_stride = env->obs_lane_stride;
+        } else if (is_road_edge(element->type)) {
+            obs_stride = env->obs_boundary_stride;
+        }
+        int last_kept_idx = 0;
         for (int j = 0; j < element->segment_size - 1; j++) {
+            // Keep a point every obs_stride points, plus wherever heading deviates enough
+            // since the last kept point (densifies curves/intersections)
+            int valid_for_obs = 1;
+            if (obs_stride > 1 && j > 0) {
+                float heading_dev = fabsf(normalize_heading(element->headings[j] - element->headings[last_kept_idx]));
+                valid_for_obs = j - last_kept_idx >= obs_stride || heading_dev > OBS_STRIDE_HEADING_THRESHOLD;
+            }
+            if (valid_for_obs) {
+                last_kept_idx = j;
+            }
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
             float y_center = (element->y[j] + element->y[j + 1]) / 2;
             int grid_index = get_grid_index(env, x_center, y_center);
             if (grid_index == -1) {
                 continue;
             }
-            add_entity_to_grid(env, grid_index, i, j, cell_entities_insert_index);
+            add_entity_to_grid(env, grid_index, i, j, valid_for_obs, cell_entities_insert_index);
             if (is_drivable_road_lane(element->type) && !drivable_grid_seen[grid_index]) {
                 drivable_grid_seen[grid_index] = true;
                 env->grid_map->num_drivable_grid_cell++;
@@ -940,6 +967,7 @@ static int get_neighbors_entities(
         for (int j = 0; j < count && entity_list_count < max_size; j++) {
             entity_list[entity_list_count].entity_idx = env->grid_map->cells[neighbor_idx][j].entity_idx;
             entity_list[entity_list_count].geometry_idx = env->grid_map->cells[neighbor_idx][j].geometry_idx;
+            entity_list[entity_list_count].valid_for_obs = env->grid_map->cells[neighbor_idx][j].valid_for_obs;
             entity_list_count += 1;
         }
     }
@@ -2249,7 +2277,7 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
     return has_positive != has_negative;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent) {
+static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -2273,7 +2301,9 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent) {
         if (env->timestep >= tc->state_size) {
             continue;
         }
-        if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
+        int light_state = tc->states[env->timestep];
+        if (light_state != TRAFFIC_CONTROL_STATE_RED
+            && !(include_yellow_violation && light_state == TRAFFIC_CONTROL_STATE_YELLOW)) {
             continue;
         }
 
@@ -2357,7 +2387,7 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
         return false;
     }
 
-    if (check_stop_line_crossing(env, agent)) {
+    if (check_stop_line_crossing(env, agent, false)) {
         return true;
     }
 
@@ -3212,7 +3242,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     } else {
         // Random size for training mode
         spawn_length = random_uniform(0.8f, 7.0f);
-        spawn_width = random_uniform(0.8f, 3.0f);
+        spawn_width = random_uniform(0.8f, 2.7f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -3700,9 +3730,11 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
-static struct SharedMapData *map_cache_lookup(const char *map_name) {
+static struct SharedMapData *map_cache_lookup(Drive *env) {
     for (int i = 0; i < g_map_cache_count; i++) {
-        if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, map_name) == 0) {
+        if (g_map_cache[i] != NULL && strcmp(g_map_cache[i]->map_name, env->map_name) == 0
+            && g_map_cache[i]->obs_lane_stride == env->obs_lane_stride
+            && g_map_cache[i]->obs_boundary_stride == env->obs_boundary_stride) {
             return g_map_cache[i];
         }
     }
@@ -3760,7 +3792,7 @@ static void free_shared_map_data(struct SharedMapData *shared) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
-    struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env->map_name) : NULL;
+    struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
         // Cache hit: load only the per-env data (agents, traffic-control elements),
         // then discard the freshly-loaded geometry and borrow the shared copy.
@@ -3803,6 +3835,8 @@ void init(Drive *env) {
             entry->grid_map = env->grid_map;
             entry->neighbor_offsets = env->neighbor_offsets;
             entry->lane_graph = env->lane_graph;
+            entry->obs_lane_stride = env->obs_lane_stride;
+            entry->obs_boundary_stride = env->obs_boundary_stride;
             entry->ref_count = 1;
             entry->owner_pid = getpid();
             map_cache_insert(entry);
@@ -3812,12 +3846,6 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
-    set_active_agents(env);
-    env->logs_capacity = env->active_agent_count;
-    if (env->simulation_mode == SIMULATION_REPLAY) {
-        remove_bad_trajectories(env);
-    }
-    set_start_position(env);
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -3842,6 +3870,12 @@ void init(Drive *env) {
         }
         generate_traffic_light_states(env);
     }
+    set_active_agents(env);
+    env->logs_capacity = env->active_agent_count;
+    if (env->simulation_mode == SIMULATION_REPLAY) {
+        remove_bad_trajectories(env);
+    }
+    set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
     if (env->simulation_mode == SIMULATION_REPLAY) {
@@ -4746,6 +4780,9 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         if (lanes_found >= env->obs_slots_lane_n && boundaries_found >= env->obs_slots_boundary_n) {
             break;
         }
+        if (!neighbor_entities[k].valid_for_obs) {
+            continue;
+        }
         int entity_idx = neighbor_entities[k].entity_idx;
         int geometry_idx = neighbor_entities[k].geometry_idx;
         RoadMapElement *road_element = &env->road_elements[entity_idx];
@@ -5017,7 +5054,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
         speed = clip(speed, -MAX_SPEED, MAX_SPEED);
         // Compute yaw rate
-        float beta = atanf(0.5f * tanf(steering));
+        float beta = atanf(REAR_AXLE_RATIO * tanf(steering));
         // New heading
         float yaw_rate = (speed * cosf(beta) * tanf(steering)) / agent->wheelbase;
 
@@ -5135,8 +5172,11 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float v_eff = fmaxf(fabsf(v_new), 1.0f);
         float signed_curvature = a_lat_new / (v_eff * v_eff);
 
-        // Convert curvature to steering angle
-        float steering_angle = atanf(signed_curvature * agent->wheelbase);
+        // Convert center yaw curvature to steering angle with bicycle slip.
+        float curvature_wheelbase = signed_curvature * agent->wheelbase;
+        float sin_beta_target = clip(REAR_AXLE_RATIO * curvature_wheelbase, -0.99f, 0.99f);
+        float beta_target = asinf(sin_beta_target);
+        float steering_angle = atan2f(curvature_wheelbase, cosf(beta_target));
 
         // Apply steering rate limit (±0.6 rad/s)
         float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
@@ -5144,8 +5184,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Apply steering position limit (±0.55 rad)
         float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
 
-        // Recalculate curvature from limited steering
-        signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
+        // Recalculate yaw curvature from limited steering and slip angle.
+        float beta = atanf(REAR_AXLE_RATIO * tanf(new_steering_angle));
+        signed_curvature = cosf(beta) * tanf(new_steering_angle) / agent->wheelbase;
 
         // Recalculate lateral acceleration from actual curvature
         a_lat_new = v_new * v_new * signed_curvature;
@@ -5156,11 +5197,11 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float dx_local, dy_local;
 
         if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
-            dx_local = d;
-            dy_local = 0.0f;
+            dx_local = d * cosf(beta);
+            dy_local = d * sinf(beta);
         } else {
-            dx_local = sinf(theta) / signed_curvature;
-            dy_local = (1.0f - cosf(theta)) / signed_curvature;
+            dx_local = (sinf(beta + theta) - sinf(beta)) / signed_curvature;
+            dy_local = (cosf(beta) - cosf(beta + theta)) / signed_curvature;
         }
 
         float dx = dx_local * heading_x - dy_local * heading_y;
@@ -5172,8 +5213,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_heading = normalize_heading(agent->sim_heading + theta);
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
-        agent->sim_vx = v_new * cosf(agent->sim_heading);
-        agent->sim_vy = v_new * sinf(agent->sim_heading);
+        agent->sim_vx = v_new * cosf(agent->sim_heading + beta);
+        agent->sim_vy = v_new * sinf(agent->sim_heading + beta);
         const float yaw_rate = v_new * signed_curvature;
         agent->yaw_rate = yaw_rate;
 
