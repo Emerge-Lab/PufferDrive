@@ -622,6 +622,7 @@ static int idm_advance_along_route_lanes(Drive *env, int agent_idx, float distan
 
 static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
     Agent *agent = &env->agents[agent_idx];
+    copy_pose_to_prev(agent);
 
     if (agent->removed) {
         invalidate_agent(agent);
