@@ -30,6 +30,58 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         wandb=1 \
         vec.num-envs=14
 
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+        wandb=1 \
+        vec.num-envs=14\
+        env.max-waypoint-spacing=40.0 \
+        env.num-agents=2048 \
+        env.obs-norm-veh-length-m=10.0 \
+        env.obs-norm-veh-width-m=5.0 \
+        env.obs-range-partner-m=120.0 \
+        env.obs-range-road-behind-m=30.0 \
+        env.obs-range-road-side-m=40.0 \
+        env.obs-range-traffic-control-m=120.0 \
+        env.obs-slots-boundary-n=30 \
+        env.obs-slots-lane-n=50 \
+        env.obs-slots-partners-n=12 \
+        env.resample-frequency=102400 \
+        env.reward-comfort=0.5 \
+        env.reward-goal=0.2 \
+        env.reward-lane-align=0.5 \
+        env.reward-lane-center=0.05 \
+        env.reward-overspeed=0.1 \
+        env.reward-timestep=0.0 \
+        env.reward-velocity=0.1 \
+        env.scenario-length=1024 \
+        env.use-map-cache=1 \
+        eval.behaviors-defaults.render=true \
+        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        eval.dnf-triage.enabled=false \
+        eval.dnf-triage.render=true \
+        eval.validation-gigaflow.enabled=true \
+        eval.validation-gigaflow.render=true \
+        eval.validation-replay.enabled=true \
+        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        mine.render=true \
+        policy.backbone-num-layers=2 \
+        policy.boundary-input-size=128 \
+        policy.context-input-size=128 \
+        policy.ego-input-size=128 \
+        policy.lane-input-size=128 \
+        policy.partner-input-size=128 \
+        policy.traffic-control-input-size=128 \
+        train.checkpoint-interval=50 \
+        train.compile=true \
+        train.max-minibatch-size=98304 \
+        train.minibatch-size=98304 \
+        train.precision=bfloat16 \
+
+
 ./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
 export OVERLAY_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3
 export IMAGE_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
@@ -54,14 +106,14 @@ what is adv_filter_ewma_beta? Is that the advantage filtering of GIGAFLOW
 lauch.json:
 
 {
-    "version": "0.2.0",
-    "configurations": [
+    "version"="0.2.0",
+    "configurations"=[
         {
-            "name": "PufferDrive Train",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/.venv/bin/puffer",
-            "args": [
+            "name"="PufferDrive Train",
+            "type"="python",
+            "request"="launch",
+            "program"="${workspaceFolder}/.venv/bin/puffer",
+            "args"=[
                 "train",
                 "puffer_drive",
                 "--vec.num-envs", "16",
@@ -69,8 +121,8 @@ lauch.json:
                 "--train.minibatch-size", "131072",
                 "--train.max-minibatch-size", "131072", 
             ],
-            "console": "integratedTerminal",
-            "justMyCode": false
+            "console"="integratedTerminal",
+            "justMyCode"=false
         }
     ]
 }
@@ -80,7 +132,7 @@ lauch.json:
 puffer eval puffer_drive --evaluator validation_gigaflow \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
 
-# Ad-hoc: pick by simulation + override scale from the CLI
+# Ad-hoc=pick by simulation + override scale from the CLI
 puffer eval puffer_drive --eval_simulation replay \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   --num_scenarios 250 --render 1
@@ -96,7 +148,7 @@ Traffic lights are only red for an extremely short amount of time. Policies almo
 Models seem to deviate from lane center occasionally.
 Policies can drive backward.
 
-Usage: puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
+Usage=puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
               [--num_scenarios NUM_SCENARIOS] [--render RENDER] [--agent_index [AGENT_INDEX ...]] [--save-frames SAVE_FRAMES] [--gif-path GIF_PATH]
               [--fps FPS] [--max-runs MAX_RUNS] [--wandb] [--wandb-project WANDB_PROJECT] [--wandb-group WANDB_GROUP] [--run-name RUN_NAME] [--neptune]
               [--neptune-name NEPTUNE_NAME] [--neptune-project NEPTUNE_PROJECT] [--tb] [--local-rank LOCAL_RANK] [--tag TAG]
@@ -293,7 +345,7 @@ Usage: puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-
 
 
 ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│  PufferLib 3.0  🐡                                                                                       CPU: 95.7%                              GPU: 0.0%                               DRAM: 44.0%                                              VRAM: 0.0%  │
+│  PufferLib 3.0  🐡                                                                                       CPU=95.7%                              GPU=0.0%                               DRAM=44.0%                                              VRAM=0.0%  │
 │                                                                                                                                                                                                                                                               │
 │  Summary                                                                     Value    Evaluate                                                  1m 16s               48%    Losses                                                                     Value  │
 │  Env                                                                  puffer_drive      Forward                                                    25s               15%    filter_threshold                                                           0.047  │
@@ -331,7 +383,7 @@ Usage: puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-
 With Expo and PBO
 
 ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│  PufferLib 3.0          🐡                                                                               CPU: 93.5%                              GPU: 0.0%                               DRAM: 43.0%                                              VRAM: 0.0%  │
+│  PufferLib 3.0          🐡                                                                               CPU=93.5%                              GPU=0.0%                               DRAM=43.0%                                              VRAM=0.0%  │
 │                                                                                                                                                                                                                                                               │
 │  Summary                                                                     Value    Evaluate                                                  1m 23s               48%    Losses                                                                     Value  │
 │  Env                                                                  puffer_drive      Forward                                                    29s               17%    filter_threshold                                                           0.053  │
