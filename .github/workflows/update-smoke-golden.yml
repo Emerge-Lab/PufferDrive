@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 'emerge/**'
+      - '3.0'
       - 'ev/**'
 
 permissions:

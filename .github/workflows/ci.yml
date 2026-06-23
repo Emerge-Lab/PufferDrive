@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [ main, 'emerge/**' ]
+    branches: [ main, '3.0' ]
   push:
-    branches: [ main, 'emerge/**' ]
+    branches: [ main, '3.0' ]
 
 jobs:
   unit-tests:
