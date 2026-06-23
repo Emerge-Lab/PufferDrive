@@ -2410,16 +2410,12 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         return false;
     }
 
-    float cos1 = car1->cos_heading;
-    float sin1 = car1->sin_heading;
-    float cos2 = car2->cos_heading;
-    float sin2 = car2->sin_heading;
     float car1_corners[4][2];
     compute_bounding_box_corners(
         car1->sim_x,
         car1->sim_y,
-        cos1,
-        sin1,
+        car1->cos_heading,
+        car1->sin_heading,
         car1->sim_length / 2.0f,
         car1->sim_width / 2.0f,
         car1_corners);
@@ -2427,13 +2423,17 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
     compute_bounding_box_corners(
         car2->sim_x,
         car2->sim_y,
-        cos2,
-        sin2,
+        car2->cos_heading,
+        car2->sin_heading,
         car2->sim_length / 2.0f,
         car2->sim_width / 2.0f,
         car2_corners);
 
-    float axes[4][2] = {{cos1, sin1}, {-sin1, cos1}, {cos2, sin2}, {-sin2, cos2}};
+    float axes[4][2]
+        = {{car1->cos_heading, car1->sin_heading},
+           {-car1->sin_heading, car1->cos_heading},
+           {car2->cos_heading, car2->sin_heading},
+           {-car2->sin_heading, car2->cos_heading}};
 
     for (int i = 0; i < 4; i++) {
         float min1 = INFINITY, max1 = -INFINITY;
@@ -2571,7 +2571,6 @@ static int collision_check(Drive *env, int agent_idx) {
     return car_collided_with_index;
 }
 
-// Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     Agent *agent = &env->agents[agent_idx];
     Agent *other = &env->agents[other_idx];
