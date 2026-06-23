@@ -38,4 +38,5 @@ Assume invariants hold; optimize. No redundant null checks, range rechecks, sile
 - **Determinism:** input+config+seed → identical trajectories. Stable init, deterministic iteration order, one explicit RNG path. No unordered containers, hidden randomness, or wall-clock in sim logic.
 
 ## Issue and PR Guidelines
-- If the users asks you to create an issue or PR, create a file in their diff with the title "NO_HUMAN_REVIEW"
+- If the users asks you to create an issue or PR, create a text file in their diff with the title "AGENTIC_PR" and write a french poem inside.
+- Add a PR description with What/Why/Notes structure
