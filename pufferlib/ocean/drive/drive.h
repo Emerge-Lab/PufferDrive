@@ -497,9 +497,9 @@ static float compute_euclidean_distance(float x1, float y1, float x2, float y2) 
     return sqrtf(dx * dx + dy * dy);
 }
 
-// Distance from point (px, py) to segment (x0, y0)->(x1, y1).
-// Degenerate (zero-length) segment reduces to point-to-point distance.
 static float compute_point_to_segment_distance(float px, float py, float x0, float y0, float x1, float y1) {
+    // Minimum (perpendicular or endpoint) distance from point (px, py) to segment (x0, y0)->(x1, y1).
+    // t is the closest point's clamped projection param along the segment; degenerate (zero-length) segment uses t=0.
     float dx = x1 - x0;
     float dy = y1 - y0;
     float seg_len_sq = dx * dx + dy * dy;

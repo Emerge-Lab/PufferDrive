@@ -196,7 +196,7 @@ struct Agent {
     float sim_length;       // Bounding box length
     float sim_width;        // Bounding box width
     float sim_height;       // Bounding box height
-    float radius;           // 0.5 * sqrt(L^2 + W^2); refreshed when L/W change
+    float radius;           // Circumradius (smallest enclosing circle) -> 0.5*sqrt(L^2+W^2)
     float prev_x;
     float prev_y;
     float prev_cos_heading;
