@@ -2213,10 +2213,11 @@ static bool check_segment_intersects_aabb(float p0[2], float p1[2], float half_l
 }
 
 static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float by, Agent *agent) {
-    // Transform both endpoints into the box-local frame at prev and cur, then test the 4 boundary
-    // segments of the swept quad {line@t, line@t+1, A-traj, B-traj} vs the origin-centered AABB.
+    // Segment AB is static; the box sweeps from prev to cur pose. Projecting AB into the box-local frame
+    // at both poses makes the box a fixed origin-centered AABB and AB a quad with corners a_prev, b_prev,
+    // a_cur, b_cur. Any of the quad's 4 edges hitting the AABB means the box crossed AB this step.
     float a_prev[2], b_prev[2], a_cur[2], b_cur[2];
-    float half_l = agent->sim_length / 2.0f, half_w = agent->sim_width / 2.0f;
+    float half_length = agent->sim_length / 2.0f, half_width = agent->sim_width / 2.0f;
     project_point_to_local(
         ax,
         ay,
@@ -2253,34 +2254,33 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
         agent->sin_heading,
         &b_cur[0],
         &b_cur[1]);
-    if (check_segment_intersects_aabb(a_prev, b_prev, half_l, half_w)
-        || check_segment_intersects_aabb(a_cur, b_cur, half_l, half_w)
-        || check_segment_intersects_aabb(a_prev, a_cur, half_l, half_w)
-        || check_segment_intersects_aabb(b_prev, b_cur, half_l, half_w)) {
+    if (check_segment_intersects_aabb(a_prev, b_prev, half_length, half_width)
+        || check_segment_intersects_aabb(a_cur, b_cur, half_length, half_width)
+        || check_segment_intersects_aabb(a_prev, a_cur, half_length, half_width)
+        || check_segment_intersects_aabb(b_prev, b_cur, half_length, half_width)) {
         return true;
     }
 
-    // Boundary miss can still mean the swept segment quad contains the AABB.
-    // Same-sign test assumes the quad is convex; a self-intersecting (bowtie) quad — large per-step
-    // relative rotation — can report a contained AABB as outside. Degenerate prev == cur collapses
-    // to a line: opposite signs => false, and the boundary tests above already caught any overlap.
+    // Edges can all miss while the quad still contains the AABB. A consistent cross-product sign around
+    // the quad means the origin lies inside it. Assumes a convex quad — a bowtie (large per-step
+    // rotation) may misreport; a degenerate prev == cur quad is a line, already covered above.
     float swept_quad[4][2] = {
         {a_prev[0], a_prev[1]},
         {b_prev[0], b_prev[1]},
         {b_cur[0], b_cur[1]},
         {a_cur[0], a_cur[1]},
     };
-    bool has_positive = false;
-    bool has_negative = false;
+    bool has_positive_cross = false;
+    bool has_negative_cross = false;
     for (int i = 0; i < 4; i++) {
         int j = (i + 1) % 4;
         float edge_x = swept_quad[j][0] - swept_quad[i][0];
         float edge_y = swept_quad[j][1] - swept_quad[i][1];
         float cross = edge_x * -swept_quad[i][1] - edge_y * -swept_quad[i][0];
-        has_positive = has_positive || cross > 0.0f;
-        has_negative = has_negative || cross < 0.0f;
+        has_positive_cross = has_positive_cross || cross > 0.0f;
+        has_negative_cross = has_negative_cross || cross < 0.0f;
     }
-    return has_positive != has_negative;
+    return has_positive_cross != has_negative_cross;
 }
 
 static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation) {
