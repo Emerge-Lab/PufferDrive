@@ -648,42 +648,48 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     return 0.0f;
 }
 
-static inline void project_vector_to_local(float vx, float vy, float cos_h, float sin_h, float *lx, float *ly) {
-    // Rotate a world-frame vector into a local frame with heading (cos_h, sin_h). Rotation only.
-    *lx = vx * cos_h + vy * sin_h;
-    *ly = -vx * sin_h + vy * cos_h;
+static inline void project_vector_to_local(
+    float world_vec_x,
+    float world_vec_y,
+    float cos_heading,
+    float sin_heading,
+    float *local_x,
+    float *local_y) {
+    // Rotate a world-frame vector into a local frame with heading (cos_heading, sin_heading). Rotation only.
+    *local_x = world_vec_x * cos_heading + world_vec_y * sin_heading;
+    *local_y = -world_vec_x * sin_heading + world_vec_y * cos_heading;
 }
 
 static inline void project_point_to_local(
-    float px,
-    float py,
-    float cx,
-    float cy,
-    float cos_h,
-    float sin_h,
-    float *lx,
-    float *ly) {
-    // Transform a world point into a local frame centered at (cx,cy) with heading (cos_h,sin_h).
-    // Translate to the center, then rotate.
-    project_vector_to_local(px - cx, py - cy, cos_h, sin_h, lx, ly);
+    float world_x,
+    float world_y,
+    float center_x,
+    float center_y,
+    float cos_heading,
+    float sin_heading,
+    float *local_x,
+    float *local_y) {
+    // Transform a world point into a local frame centered at (center_x,center_y) with heading
+    // (cos_heading,sin_heading). Translate to the center, then rotate.
+    project_vector_to_local(world_x - center_x, world_y - center_y, cos_heading, sin_heading, local_x, local_y);
 }
 
 static inline void project_point_to_ego_frame(
     const Agent *ego,
     float world_x,
     float world_y,
-    float *ego_x,
-    float *ego_y) {
-    project_point_to_local(world_x, world_y, ego->sim_x, ego->sim_y, ego->cos_heading, ego->sin_heading, ego_x, ego_y);
+    float *rel_x,
+    float *rel_y) {
+    project_point_to_local(world_x, world_y, ego->sim_x, ego->sim_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
 }
 
 static inline void project_vector_to_ego_frame(
     const Agent *ego,
     float world_x,
     float world_y,
-    float *ego_x,
-    float *ego_y) {
-    project_vector_to_local(world_x, world_y, ego->cos_heading, ego->sin_heading, ego_x, ego_y);
+    float *rel_x,
+    float *rel_y) {
+    project_vector_to_local(world_x, world_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
 }
 
 // ========================================
