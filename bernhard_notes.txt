@@ -32,12 +32,14 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
     --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
     --account bernhard --partition kyutai --time 5760 \
     --args \
+        run-name=000_longrun \
         wandb=1 \
-        vec.num-envs=14\
+        train.total-timesteps=300000000000 \
+        vec.num-envs=24 \
         env.max-waypoint-spacing=40.0 \
         env.num-agents=2048 \
         env.obs-norm-veh-length-m=10.0 \
@@ -59,14 +61,13 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         env.reward-velocity=0.1 \
         env.scenario-length=1024 \
         env.use-map-cache=1 \
-        eval.behaviors-defaults.render=true \
-        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
         eval.dnf-triage.enabled=false \
         eval.dnf-triage.render=true \
         eval.validation-gigaflow.enabled=true \
         eval.validation-gigaflow.render=true \
         eval.validation-replay.enabled=true \
         eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
         mine.render=true \
         policy.backbone-num-layers=2 \
         policy.boundary-input-size=128 \
@@ -77,9 +78,63 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         policy.traffic-control-input-size=128 \
         train.checkpoint-interval=50 \
         train.compile=true \
-        train.max-minibatch-size=98304 \
-        train.minibatch-size=98304 \
+        train.max-minibatch-size=393216 \
+        train.minibatch-size=393216 \
         train.precision=bfloat16 \
+        eval.behaviors-defaults.enabled=0
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+        run-name=000_longrun \
+        wandb=1 \
+        train.total-timesteps=300000000000 \
+        vec.num-envs=24 \
+        env.max-waypoint-spacing=40.0 \
+        env.num-agents=2048 \
+        env.obs-norm-veh-length-m=10.0 \
+        env.obs-norm-veh-width-m=5.0 \
+        env.obs-range-partner-m=120.0 \
+        env.obs-range-road-behind-m=30.0 \
+        env.obs-range-road-side-m=40.0 \
+        env.obs-range-traffic-control-m=120.0 \
+        env.obs-slots-boundary-n=30 \
+        env.obs-slots-lane-n=50 \
+        env.obs-slots-partners-n=12 \
+        env.resample-frequency=102400 \
+        env.reward-comfort=0.5 \
+        env.reward-goal=0.2 \
+        env.reward-lane-align=0.5 \
+        env.reward-lane-center=0.05 \
+        env.reward-overspeed=0.1 \
+        env.reward-timestep=0.0 \
+        env.reward-velocity=0.1 \
+        env.scenario-length=1024 \
+        env.use-map-cache=1 \
+        eval.dnf-triage.enabled=false \
+        eval.dnf-triage.render=true \
+        eval.validation-gigaflow.enabled=true \
+        eval.validation-gigaflow.render=true \
+        eval.validation-replay.enabled=true \
+        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        mine.render=true \
+        policy.backbone-num-layers=2 \
+        policy.boundary-input-size=128 \
+        policy.context-input-size=128 \
+        policy.ego-input-size=128 \
+        policy.lane-input-size=128 \
+        policy.partner-input-size=128 \
+        policy.traffic-control-input-size=128 \
+        train.checkpoint-interval=50 \
+        train.compile=true \
+        train.max-minibatch-size=393216 \
+        train.minibatch-size=393216 \
+        train.precision=bfloat16 \
+        eval.behaviors-defaults.enabled=0
 
 
 ./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
