@@ -103,6 +103,8 @@ def test_html_render_backend_produces_html(tmp_path, backend):
             "obs_slots_partners_n": 16,
             "obs_slots_lane_n": 80,
             "obs_slots_boundary_n": 80,
+            "obs_lane_stride": 2,
+            "obs_boundary_stride": 3,
             "obs_slots_traffic_controls_n": 4,
         },
         "eval": {

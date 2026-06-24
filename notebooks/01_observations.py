@@ -38,6 +38,10 @@ print(f"min: {obs.min():.4f}, max: {obs.max():.4f}, mean: {obs.mean():.4f}, std:
 print(f"NaN: {np.isnan(obs).sum()}, Inf: {np.isinf(obs).sum()}")
 print(f"% zeros: {(obs == 0).mean() * 100:.1f}%")
 print(f"% outside [-1,1]: {((obs < -1) | (obs > 1)).mean() * 100:.2f}%")
+print(
+    f"road obs: lanes={env.obs_slots_lane_kept}/{env.obs_slots_lane_n} stride={env.obs_lane_stride}, "
+    f"boundaries={env.obs_slots_boundary_kept}/{env.obs_slots_boundary_n} stride={env.obs_boundary_stride}"
+)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 axes[0].hist(obs.flatten(), bins=100, edgecolor="black", alpha=0.7)
@@ -61,9 +65,11 @@ ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     reward_conditioning=env.reward_conditioning,
     num_target_waypoints=env.num_target_waypoints,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
 )
 print(f"ego: {ego.shape} = {ego}")
 print(f"target: {target.shape}")
@@ -274,9 +280,13 @@ img = plot_observation(
     reward_conditioning=env.reward_conditioning,
     num_target_waypoints=env.num_target_waypoints,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_lane_stride=env.obs_lane_stride,
+    obs_boundary_stride=env.obs_boundary_stride,
 )
 fig, ax = plt.subplots(figsize=(10, 10))
 ax.imshow(img)
