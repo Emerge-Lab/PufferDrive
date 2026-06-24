@@ -84,11 +84,11 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
     --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
     --account bernhard --partition kyutai --time 5760 \
     --args \
-        run-name=000_longrun \
+        run-name=003_longrun \
         wandb=1 \
         train.total-timesteps=300000000000 \
         vec.num-envs=24 \
@@ -129,16 +129,17 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         policy.partner-input-size=128 \
         policy.traffic-control-input-size=128 \
         train.checkpoint-interval=50 \
-        train.compile=1 \
-        train.max-minibatch-size=393216 \
-        train.minibatch-size=393216 \
+        train.compile=0 \
+        train.max-minibatch-size=128000 \
+        train.minibatch-size=128000 \
         train.precision=bfloat16 \
         eval.behaviors-defaults.enabled=0 \
         eval.validation-defaults.interval=1
 
+
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
     --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
     --account bernhard --partition kyutai --time 5760 \
     --args \
@@ -178,15 +179,18 @@ policy.backbone-num-layers=3 \
 policy.ego-input-size=128 \
 policy.lane-input-size=128 \
 policy.partner-input-size=128 \
-policy.shared-network=false \
+policy.shared-network=0 \
 policy.traffic-control-input-size=128 \
-tb=true \
 train.checkpoint-interval=50 \
-train.compile=true \
-train.normalize-rewards=false \
+train.compile=1 \
+train.normalize-rewards=0 \
 train.precision=bfloat16 \
 train.seed=4 \
-train.update-epochs=3
+train.update-epochs=3 \
+
+
+
+eval.validation-defaults.interval=1
 
 
 env.traffic-control-scope=0 \
