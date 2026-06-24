@@ -4232,7 +4232,13 @@ def mine_failures(env_name, args=None, vecenv=None, policy=None, target_policy=N
             if policy is not None and policy.__class__.__name__ != "TargetDrive":
                 raise pufferlib.APIUsageError("target-actor traffic mining requires a TargetDrive policy")
 
-            target_args = _prepare_target_policy_args(args, target_policy_path)
+            traffic_args = args
+            if traffic_target_policy_path is not None and args.get("traffic_policy_config") is not None:
+                traffic_args = copy.deepcopy(args)
+                traffic_args["target_policy_config"] = args.get("traffic_policy_config")
+                traffic_args["train"]["target_policy_config"] = args.get("traffic_policy_config")
+
+            target_args = _prepare_target_policy_args(traffic_args, target_policy_path)
             target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
             policy = policy or load_policy(target_args, vecenv, env_name, policy_env=target_env)
             policy._puffer_policy_env = target_env
@@ -4808,6 +4814,12 @@ def load_config(env_name, config_dir=None):
         type=str,
         default=None,
         help="Optional target policy config.yaml used to reconstruct frozen target architecture/observation layout",
+    )
+    parser.add_argument(
+        "--traffic-policy-config",
+        type=str,
+        default=None,
+        help="Optional config.yaml used to reconstruct target-actor traffic policy architecture/observation layout",
     )
     parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
