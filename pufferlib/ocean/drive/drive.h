@@ -423,6 +423,7 @@ struct Drive {
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
+    int terminate_on_goal;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
@@ -2174,7 +2175,7 @@ static bool check_agent_corners_cross_stop_line(float corners[4][2], TrafficCont
     return false;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][2]) {
+static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][2], bool include_yellow_violation) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -2198,7 +2199,9 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][
         if (env->timestep >= tc->state_size) {
             continue;
         }
-        if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
+        int light_state = tc->states[env->timestep];
+        if (light_state != TRAFFIC_CONTROL_STATE_RED
+            && !(include_yellow_violation && light_state == TRAFFIC_CONTROL_STATE_YELLOW)) {
             continue;
         }
 
@@ -2279,7 +2282,7 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     float corners[4][2];
     compute_agent_corners(agent, corners);
 
-    if (check_stop_line_crossing(env, agent, corners)) {
+    if (check_stop_line_crossing(env, agent, corners, false)) {
         return true;
     }
 
@@ -3036,7 +3039,7 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
 static bool check_spawn_red_light_violation(Drive *env, Agent *tmp_agent) {
     float corners[4][2];
     compute_agent_corners(tmp_agent, corners);
-    return check_stop_line_crossing(env, tmp_agent, corners);
+    return check_stop_line_crossing(env, tmp_agent, corners, true);
 }
 
 static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
@@ -3652,12 +3655,6 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
-    set_active_agents(env);
-    env->logs_capacity = env->active_agent_count;
-    if (env->simulation_mode == SIMULATION_REPLAY) {
-        remove_bad_trajectories(env);
-    }
-    set_start_position(env);
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -3682,6 +3679,12 @@ void init(Drive *env) {
         }
         generate_traffic_light_states(env);
     }
+    set_active_agents(env);
+    env->logs_capacity = env->active_agent_count;
+    if (env->simulation_mode == SIMULATION_REPLAY) {
+        remove_bad_trajectories(env);
+    }
+    set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
     if (env->simulation_mode == SIMULATION_REPLAY) {
@@ -5225,6 +5228,17 @@ void c_step(Drive *env) {
         float ratio_inactive = (float) count_inactive / (float) env->active_agent_count;
         if (ratio_inactive > env->inactive_agent_threshold) {
             early_reset = 1;
+        }
+    }
+
+    if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_REPLAY
+        && env->control_mode == CONTROL_SDC_ONLY) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_target_waypoints) {
+                env->logs[i].num_goals_reached += 1;
+                early_reset = 1;
+            }
         }
     }
 
