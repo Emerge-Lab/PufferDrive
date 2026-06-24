@@ -72,6 +72,8 @@ class Drive(pufferlib.PufferEnv):
         buf=None,
         seed=1,
         init_step=0,
+        init_step_spread=False,
+        init_step_min_horizon=20,
         eval_mode=0,
         num_eval_scenarios=16,
         init_mode="create_all_valid",
@@ -249,6 +251,16 @@ class Drive(pufferlib.PufferEnv):
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_step = init_step
+        # Per-env randomized replay start. When enabled, each parallel env copy
+        # is seeded at a different expert timestep (Option A spread), so the
+        # batch covers the whole trajectory instead of all starting at init_step.
+        # self.init_step stays the nominal base (used for full-trajectory export
+        # buffer sizing); only the value passed to each env_init is randomized.
+        self.init_step_spread = bool(init_step_spread)
+        self.init_step_min_horizon = int(init_step_min_horizon)
+        # Dedicated, reproducible stream so spread sampling doesn't perturb the
+        # random_seed property's draw order. Offset keeps it distinct from self.rng.
+        self._init_step_rng = np.random.default_rng(seed + 0x9E3779B9)
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -269,6 +281,21 @@ class Drive(pufferlib.PufferEnv):
             self.simulation_mode = 1
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
+
+        if self.init_step_spread:
+            if self.simulation_mode != 1:
+                raise ValueError(
+                    "init_step_spread is only supported in replay simulation_mode (it seeds each env at a different expert timestep)."
+                )
+            if self.scenario_length is None:
+                raise ValueError(
+                    "init_step_spread requires a concrete scenario_length to bound the sampled start steps."
+                )
+            if self.scenario_length - self.init_step_min_horizon <= 0:
+                raise ValueError(
+                    f"init_step_min_horizon ({self.init_step_min_horizon}) leaves no room to sample a start in a "
+                    f"scenario of length {self.scenario_length}; it must be < scenario_length."
+                )
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -461,7 +488,7 @@ class Drive(pufferlib.PufferEnv):
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
-            "init_step": self.init_step,
+            "init_step": self._sample_init_step(),
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "sdc_controller": self.sdc_controller,
@@ -491,6 +518,16 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration": self.phantom_braking_duration,
         }
+
+    def _sample_init_step(self):
+        # Returns the replay start step for one env. With spread off this is the
+        # fixed base; with spread on it's uniform over [0, scenario_length -
+        # init_step_min_horizon), guaranteeing at least init_step_min_horizon
+        # remaining steps so every env keeps a usable learning horizon.
+        if not self.init_step_spread:
+            return self.init_step
+        upper = self.scenario_length - self.init_step_min_horizon
+        return int(self._init_step_rng.integers(0, upper))
 
     @property
     def random_seed(self):
