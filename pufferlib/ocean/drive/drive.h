@@ -685,11 +685,11 @@ static inline void project_point_to_ego_frame(
 
 static inline void project_vector_to_ego_frame(
     const Agent *ego,
-    float world_x,
-    float world_y,
+    float world_vec_x,
+    float world_vec_y,
     float *rel_x,
     float *rel_y) {
-    project_vector_to_local(world_x, world_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
+    project_vector_to_local(world_vec_x, world_vec_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
 }
 
 // ========================================
