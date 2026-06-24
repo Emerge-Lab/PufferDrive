@@ -1,0 +1,331 @@
+puffer train puffer_drive --vec.num-workers 1 --vec.num-envs 1 --env.num-agents 32  --train.minibatch-size 256
+
+puffer train puffer_drive --train.learning_rate 0.001 
+
+.venv/bin/puffer train puffer_drive --wandb --vec.num-envs 16 --train.precision bfloat16 --train.compile 1
+
+.venv/bin/puffer train puffer_drive --vec.num-envs 16
+
+.venv/bin/puffer train puffer_drive --train.precision bfloat16 --train.compile 1 --env.use-map-cache 1
+
+uv run convert --py123d_path /home/jaeger/ordnung/data/nuPlan/123D --output /home/jaeger/ordnung/data/nuPlan/PufferDrive --preset nuplan
+
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 2880 \
+    --args \
+        wandb=1 \
+        vec.num-envs=14
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+        wandb=1 \
+        vec.num-envs=14
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+        run-name=001_shortrun \
+        wandb=1 \
+        train.total-timesteps=300000000000 \
+        vec.num-envs=24 \
+        env.max-waypoint-spacing=40.0 \
+        env.num-agents=2048 \
+        env.obs-norm-veh-length-m=10.0 \
+        env.obs-norm-veh-width-m=5.0 \
+        env.obs-range-partner-m=120.0 \
+        env.obs-range-road-behind-m=30.0 \
+        env.obs-range-road-side-m=40.0 \
+        env.obs-range-traffic-control-m=120.0 \
+        env.obs-slots-boundary-n=30 \
+        env.obs-slots-lane-n=50 \
+        env.obs-slots-partners-n=12 \
+        env.resample-frequency=102400 \
+        env.reward-comfort=0.5 \
+        env.reward-goal=0.2 \
+        env.reward-lane-align=0.5 \
+        env.reward-lane-center=0.05 \
+        env.reward-overspeed=0.1 \
+        env.reward-timestep=0.0 \
+        env.reward-velocity=0.1 \
+        env.scenario-length=1024 \
+        env.use-map-cache=1 \
+        eval.dnf-triage.enabled=false \
+        eval.dnf-triage.render=true \
+        eval.validation-gigaflow.enabled=true \
+        eval.validation-gigaflow.render=true \
+        eval.validation-replay.enabled=true \
+        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        mine.render=true \
+        policy.backbone-num-layers=2 \
+        policy.boundary-input-size=128 \
+        policy.context-input-size=128 \
+        policy.ego-input-size=128 \
+        policy.lane-input-size=128 \
+        policy.partner-input-size=128 \
+        policy.traffic-control-input-size=128 \
+        train.checkpoint-interval=50 \
+        train.compile=true \
+        train.max-minibatch-size=393216 \
+        train.minibatch-size=393216 \
+        train.precision=bfloat16 \
+        eval.behaviors-defaults.enabled=0
+
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+        run-name=000_longrun \
+        wandb=1 \
+        train.total-timesteps=300000000000 \
+        vec.num-envs=24 \
+        env.max-waypoint-spacing=40.0 \
+        env.num-agents=2048 \
+        env.obs-norm-veh-length-m=10.0 \
+        env.obs-norm-veh-width-m=5.0 \
+        env.obs-range-partner-m=120.0 \
+        env.obs-range-road-behind-m=30.0 \
+        env.obs-range-road-side-m=40.0 \
+        env.obs-range-traffic-control-m=120.0 \
+        env.obs-slots-boundary-n=30 \
+        env.obs-slots-lane-n=50 \
+        env.obs-slots-partners-n=12 \
+        env.resample-frequency=102400 \
+        env.reward-comfort=0.5 \
+        env.reward-goal=0.2 \
+        env.reward-lane-align=0.5 \
+        env.reward-lane-center=0.05 \
+        env.reward-overspeed=0.1 \
+        env.reward-timestep=0.0 \
+        env.reward-velocity=0.1 \
+        env.scenario-length=1024 \
+        env.use-map-cache=1 \
+        eval.dnf-triage.enabled=false \
+        eval.dnf-triage.render=true \
+        eval.validation-gigaflow.enabled=true \
+        eval.validation-gigaflow.render=true \
+        eval.validation-replay.enabled=true \
+        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+        mine.render=true \
+        policy.backbone-num-layers=2 \
+        policy.boundary-input-size=128 \
+        policy.context-input-size=128 \
+        policy.ego-input-size=128 \
+        policy.lane-input-size=128 \
+        policy.partner-input-size=128 \
+        policy.traffic-control-input-size=128 \
+        train.checkpoint-interval=50 \
+        train.compile=true \
+        train.max-minibatch-size=393216 \
+        train.minibatch-size=393216 \
+        train.precision=bfloat16 \
+        eval.behaviors-defaults.enabled=0
+
+Usage=puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
+              [--num_scenarios NUM_SCENARIOS] [--render RENDER] [--agent_index [AGENT_INDEX ...]] [--save-frames SAVE_FRAMES] [--gif-path GIF_PATH]
+              [--fps FPS] [--max-runs MAX_RUNS] [--wandb] [--wandb-project WANDB_PROJECT] [--wandb-group WANDB_GROUP] [--run-name RUN_NAME] [--neptune]
+              [--neptune-name NEPTUNE_NAME] [--neptune-project NEPTUNE_PROJECT] [--tb] [--local-rank LOCAL_RANK] [--tag TAG]
+              [--eval_simulation EVAL_SIMULATION] [--package PACKAGE] [--env-name ENV_NAME] [--policy-name POLICY_NAME] [--rnn-name RNN_NAME]
+              [--max-suggestion-cost MAX_SUGGESTION_COST] [--vec.backend VEC.BACKEND] [--vec.num-envs VEC.NUM_ENVS] [--vec.num-workers VEC.NUM_WORKERS]
+              [--vec.batch-size VEC.BATCH_SIZE] [--vec.zero-copy VEC.ZERO_COPY] [--vec.seed VEC.SEED] [--env.simulation-mode ENV.SIMULATION_MODE]
+              [--env.num-agents ENV.NUM_AGENTS] [--env.min-agents-per-env ENV.MIN_AGENTS_PER_ENV] [--env.max-agents-per-env ENV.MAX_AGENTS_PER_ENV]
+              [--env.action-type ENV.ACTION_TYPE] [--env.dynamics-model ENV.DYNAMICS_MODEL] [--env.dt ENV.DT]
+              [--env.spawn-initial-speed ENV.SPAWN_INITIAL_SPEED] [--env.collision-behavior ENV.COLLISION_BEHAVIOR]
+              [--env.offroad-behavior ENV.OFFROAD_BEHAVIOR] [--env.traffic-light-behavior ENV.TRAFFIC_LIGHT_BEHAVIOR]
+              [--env.use-map-cache ENV.USE_MAP_CACHE] [--env.scenario-length ENV.SCENARIO_LENGTH] [--env.resample-frequency ENV.RESAMPLE_FREQUENCY]
+              [--env.termination-mode ENV.TERMINATION_MODE] [--env.inactive-agent-threshold ENV.INACTIVE_AGENT_THRESHOLD]
+              [--env.init-step ENV.INIT_STEP] [--env.control-mode ENV.CONTROL_MODE] [--env.sdc-controller ENV.SDC_CONTROLLER]
+              [--env.non-sdc-controller ENV.NON_SDC_CONTROLLER] [--env.non-vehicle-controller ENV.NON_VEHICLE_CONTROLLER]
+              [--env.init-mode ENV.INIT_MODE] [--env.compute-eval-metrics ENV.COMPUTE_EVAL_METRICS] [--env.target-type ENV.TARGET_TYPE]
+              [--env.goal-on-lane ENV.GOAL_ON_LANE] [--env.goal-radius ENV.GOAL_RADIUS] [--env.goal-speed ENV.GOAL_SPEED]
+              [--env.num-target-waypoints ENV.NUM_TARGET_WAYPOINTS] [--env.min-waypoint-spacing ENV.MIN_WAYPOINT_SPACING]
+              [--env.max-waypoint-spacing ENV.MAX_WAYPOINT_SPACING] [--env.reward-conditioning ENV.REWARD_CONDITIONING]
+              [--env.reward-randomization ENV.REWARD_RANDOMIZATION] [--env.reward-goal ENV.REWARD_GOAL] [--env.reward-collision ENV.REWARD_COLLISION]
+              [--env.reward-offroad ENV.REWARD_OFFROAD] [--env.reward-stop-line ENV.REWARD_STOP_LINE] [--env.reward-comfort ENV.REWARD_COMFORT]
+              [--env.reward-lane-align ENV.REWARD_LANE_ALIGN] [--env.reward-vel-align ENV.REWARD_VEL_ALIGN]
+              [--env.reward-lane-center ENV.REWARD_LANE_CENTER] [--env.reward-center-bias ENV.REWARD_CENTER_BIAS]
+              [--env.reward-velocity ENV.REWARD_VELOCITY] [--env.reward-reverse ENV.REWARD_REVERSE] [--env.reward-timestep ENV.REWARD_TIMESTEP]
+              [--env.reward-overspeed ENV.REWARD_OVERSPEED] [--env.reward-ade ENV.REWARD_ADE] [--env.map-dir ENV.MAP_DIR] [--env.num-maps ENV.NUM_MAPS]
+              [--env.obs-slots-lane-n ENV.OBS_SLOTS_LANE_N] [--env.obs-slots-boundary-n ENV.OBS_SLOTS_BOUNDARY_N]
+              [--env.obs-slots-partners-n ENV.OBS_SLOTS_PARTNERS_N] [--env.obs-slots-traffic-controls-n ENV.OBS_SLOTS_TRAFFIC_CONTROLS_N]
+              [--env.obs-dropout-lane ENV.OBS_DROPOUT_LANE] [--env.obs-dropout-boundary ENV.OBS_DROPOUT_BOUNDARY]
+              [--env.obs-norm-goal-offset-m ENV.OBS_NORM_GOAL_OFFSET_M] [--env.obs-norm-xy-offset-m ENV.OBS_NORM_XY_OFFSET_M]
+              [--env.obs-norm-veh-length-m ENV.OBS_NORM_VEH_LENGTH_M] [--env.obs-norm-veh-width-m ENV.OBS_NORM_VEH_WIDTH_M]
+              [--env.obs-norm-road-seg-length-m ENV.OBS_NORM_ROAD_SEG_LENGTH_M] [--env.obs-norm-road-seg-width-m ENV.OBS_NORM_ROAD_SEG_WIDTH_M]
+              [--env.obs-range-road-front-m ENV.OBS_RANGE_ROAD_FRONT_M] [--env.obs-range-road-behind-m ENV.OBS_RANGE_ROAD_BEHIND_M]
+              [--env.obs-range-road-side-m ENV.OBS_RANGE_ROAD_SIDE_M] [--env.obs-range-partner-m ENV.OBS_RANGE_PARTNER_M]
+              [--env.obs-range-traffic-control-m ENV.OBS_RANGE_TRAFFIC_CONTROL_M] [--env.partner-blindness-prob ENV.PARTNER_BLINDNESS_PROB]
+              [--env.partner-blindness-trigger-prob ENV.PARTNER_BLINDNESS_TRIGGER_PROB] [--env.phantom-braking-prob ENV.PHANTOM_BRAKING_PROB]
+              [--env.phantom-braking-trigger-prob ENV.PHANTOM_BRAKING_TRIGGER_PROB] [--env.phantom-braking-duration ENV.PHANTOM_BRAKING_DURATION]
+              [--policy.input-size POLICY.INPUT_SIZE] [--policy.encoder-gigaflow POLICY.ENCODER_GIGAFLOW] [--policy.dropout POLICY.DROPOUT]
+              [--policy.backbone-hidden-size POLICY.BACKBONE_HIDDEN_SIZE] [--policy.backbone-num-layers POLICY.BACKBONE_NUM_LAYERS]
+              [--policy.actor-hidden-size POLICY.ACTOR_HIDDEN_SIZE] [--policy.actor-num-layers POLICY.ACTOR_NUM_LAYERS]
+              [--policy.critic-hidden-size POLICY.CRITIC_HIDDEN_SIZE] [--policy.critic-num-layers POLICY.CRITIC_NUM_LAYERS]
+              [--policy.split-network POLICY.SPLIT_NETWORK] [--rnn.input-size RNN.INPUT_SIZE] [--rnn.hidden-size RNN.HIDDEN_SIZE]
+              [--train.name TRAIN.NAME] [--train.project TRAIN.PROJECT] [--train.seed TRAIN.SEED]
+              [--train.torch-deterministic TRAIN.TORCH_DETERMINISTIC] [--train.cpu-offload TRAIN.CPU_OFFLOAD] [--train.device TRAIN.DEVICE]
+              [--train.optimizer TRAIN.OPTIMIZER] [--train.anneal-lr TRAIN.ANNEAL_LR] [--train.amp TRAIN.AMP] [--train.precision TRAIN.PRECISION]
+              [--train.total-timesteps TRAIN.TOTAL_TIMESTEPS] [--train.learning-rate TRAIN.LEARNING_RATE] [--train.gamma TRAIN.GAMMA]
+              [--train.gae-lambda TRAIN.GAE_LAMBDA] [--train.update-epochs TRAIN.UPDATE_EPOCHS] [--train.clip-coef TRAIN.CLIP_COEF]
+              [--train.vf-coef TRAIN.VF_COEF] [--train.vf-clip-coef TRAIN.VF_CLIP_COEF] [--train.max-grad-norm TRAIN.MAX_GRAD_NORM]
+              [--train.normalize-rewards TRAIN.NORMALIZE_REWARDS] [--train.ent-coef TRAIN.ENT_COEF] [--train.adam-beta1 TRAIN.ADAM_BETA1]
+              [--train.adam-beta2 TRAIN.ADAM_BETA2] [--train.adam-eps TRAIN.ADAM_EPS] [--train.data-dir TRAIN.DATA_DIR]
+              [--train.resume-state-path TRAIN.RESUME_STATE_PATH] [--train.checkpoint-interval TRAIN.CHECKPOINT_INTERVAL]
+              [--train.batch-size TRAIN.BATCH_SIZE] [--train.minibatch-size TRAIN.MINIBATCH_SIZE] [--train.max-minibatch-size TRAIN.MAX_MINIBATCH_SIZE]
+              [--train.bptt-horizon TRAIN.BPTT_HORIZON] [--train.compile TRAIN.COMPILE] [--train.compile-mode TRAIN.COMPILE_MODE]
+              [--train.compile-fullgraph TRAIN.COMPILE_FULLGRAPH] [--train.vtrace-rho-clip TRAIN.VTRACE_RHO_CLIP]
+              [--train.vtrace-c-clip TRAIN.VTRACE_C_CLIP] [--train.adv-sampling-prio-alpha TRAIN.ADV_SAMPLING_PRIO_ALPHA]
+              [--train.adv-sampling-prio-beta0 TRAIN.ADV_SAMPLING_PRIO_BETA0] [--train.ppo-granularity TRAIN.PPO_GRANULARITY]
+              [--train.adv-filter-ewma-beta TRAIN.ADV_FILTER_EWMA_BETA] [--train.adv-filter-threshold-scale TRAIN.ADV_FILTER_THRESHOLD_SCALE]
+              [--train.render TRAIN.RENDER] [--train.render-interval TRAIN.RENDER_INTERVAL] [--train.obs-only TRAIN.OBS_ONLY]
+              [--train.show-grid TRAIN.SHOW_GRID] [--train.show-lasers TRAIN.SHOW_LASERS] [--train.show-human-logs TRAIN.SHOW_HUMAN_LOGS]
+              [--train.render-map TRAIN.RENDER_MAP] [--sweep.method SWEEP.METHOD] [--sweep.metric SWEEP.METRIC] [--sweep.goal SWEEP.GOAL]
+              [--sweep.downsample SWEEP.DOWNSAMPLE] [--mine.output-dir MINE.OUTPUT_DIR] [--mine.num-episodes MINE.NUM_EPISODES]
+              [--mine.score-threshold MINE.SCORE_THRESHOLD] [--mine.render MINE.RENDER]
+              [--eval.validation-defaults.enabled EVAL.VALIDATION_DEFAULTS.ENABLED]
+              [--eval.validation-defaults.interval EVAL.VALIDATION_DEFAULTS.INTERVAL] [--eval.validation-defaults.mode EVAL.VALIDATION_DEFAULTS.MODE]
+              [--eval.validation-defaults.clean EVAL.VALIDATION_DEFAULTS.CLEAN]
+              [--eval.validation-defaults.env.eval-mode EVAL.VALIDATION_DEFAULTS.ENV.EVAL_MODE]
+              [--eval.validation-defaults.env.collision-behavior EVAL.VALIDATION_DEFAULTS.ENV.COLLISION_BEHAVIOR]
+              [--eval.validation-defaults.env.offroad-behavior EVAL.VALIDATION_DEFAULTS.ENV.OFFROAD_BEHAVIOR]
+              [--eval.validation-defaults.env.traffic-light-behavior EVAL.VALIDATION_DEFAULTS.ENV.TRAFFIC_LIGHT_BEHAVIOR]
+              [--eval.validation-defaults.env.reward-randomization EVAL.VALIDATION_DEFAULTS.ENV.REWARD_RANDOMIZATION]
+              [--eval.validation-defaults.env.termination-mode EVAL.VALIDATION_DEFAULTS.ENV.TERMINATION_MODE]
+              [--eval.validation-defaults.env.num-agents EVAL.VALIDATION_DEFAULTS.ENV.NUM_AGENTS]
+              [--eval.validation-defaults.env.target-type EVAL.VALIDATION_DEFAULTS.ENV.TARGET_TYPE]
+              [--eval.validation-defaults.env.goal-speed EVAL.VALIDATION_DEFAULTS.ENV.GOAL_SPEED]
+              [--eval.validation-defaults.env.reward-collision EVAL.VALIDATION_DEFAULTS.ENV.REWARD_COLLISION]
+              [--eval.validation-defaults.env.reward-offroad EVAL.VALIDATION_DEFAULTS.ENV.REWARD_OFFROAD]
+              [--eval.validation-defaults.env.reward-stop-line EVAL.VALIDATION_DEFAULTS.ENV.REWARD_STOP_LINE]
+              [--eval.validation-defaults.env.reward-goal EVAL.VALIDATION_DEFAULTS.ENV.REWARD_GOAL]
+              [--eval.validation-defaults.env.reward-overspeed EVAL.VALIDATION_DEFAULTS.ENV.REWARD_OVERSPEED]
+              [--eval.validation-defaults.env.reward-comfort EVAL.VALIDATION_DEFAULTS.ENV.REWARD_COMFORT]
+              [--eval.validation-defaults.env.reward-velocity EVAL.VALIDATION_DEFAULTS.ENV.REWARD_VELOCITY]
+              [--eval.validation-defaults.env.reward-lane-align EVAL.VALIDATION_DEFAULTS.ENV.REWARD_LANE_ALIGN]
+              [--eval.validation-defaults.env.reward-lane-center EVAL.VALIDATION_DEFAULTS.ENV.REWARD_LANE_CENTER]
+              [--eval.validation-defaults.env.reward-timestep EVAL.VALIDATION_DEFAULTS.ENV.REWARD_TIMESTEP]
+              [--eval.validation-defaults.env.reward-reverse EVAL.VALIDATION_DEFAULTS.ENV.REWARD_REVERSE]
+              [--eval.validation-defaults.env.reward-ade EVAL.VALIDATION_DEFAULTS.ENV.REWARD_ADE]
+              [--eval.validation-defaults.env.obs-dropout-lane EVAL.VALIDATION_DEFAULTS.ENV.OBS_DROPOUT_LANE]
+              [--eval.validation-defaults.env.obs-dropout-boundary EVAL.VALIDATION_DEFAULTS.ENV.OBS_DROPOUT_BOUNDARY]
+              [--eval.validation-defaults.env.obs-slots-lane-n EVAL.VALIDATION_DEFAULTS.ENV.OBS_SLOTS_LANE_N]
+              [--eval.validation-defaults.env.obs-slots-boundary-n EVAL.VALIDATION_DEFAULTS.ENV.OBS_SLOTS_BOUNDARY_N]
+              [--eval.validation-defaults.eval.num-scenarios EVAL.VALIDATION_DEFAULTS.EVAL.NUM_SCENARIOS]
+              [--eval.validation-defaults.eval.export-episode-csv EVAL.VALIDATION_DEFAULTS.EVAL.EXPORT_EPISODE_CSV]
+              [--eval.validation-defaults.eval.verify-coverage EVAL.VALIDATION_DEFAULTS.EVAL.VERIFY_COVERAGE]
+              [--eval.validation-replay.inherits EVAL.VALIDATION_REPLAY.INHERITS] [--eval.validation-replay.type EVAL.VALIDATION_REPLAY.TYPE]
+              [--eval.validation-replay.enabled EVAL.VALIDATION_REPLAY.ENABLED] [--eval.validation-replay.render EVAL.VALIDATION_REPLAY.RENDER]
+              [--eval.validation-replay.render-backend EVAL.VALIDATION_REPLAY.RENDER_BACKEND]
+              [--eval.validation-replay.env.simulation-mode EVAL.VALIDATION_REPLAY.ENV.SIMULATION_MODE]
+              [--eval.validation-replay.env.control-mode EVAL.VALIDATION_REPLAY.ENV.CONTROL_MODE]
+              [--eval.validation-replay.env.map-dir EVAL.VALIDATION_REPLAY.ENV.MAP_DIR]
+              [--eval.validation-replay.env.num-maps EVAL.VALIDATION_REPLAY.ENV.NUM_MAPS]
+              [--eval.validation-replay.env.max-agents-per-env EVAL.VALIDATION_REPLAY.ENV.MAX_AGENTS_PER_ENV]
+              [--eval.validation-replay.env.scenario-length EVAL.VALIDATION_REPLAY.ENV.SCENARIO_LENGTH]
+              [--eval.validation-replay.env.resample-frequency EVAL.VALIDATION_REPLAY.ENV.RESAMPLE_FREQUENCY]
+              [--eval.validation-replay.eval.render-num-scenarios EVAL.VALIDATION_REPLAY.EVAL.RENDER_NUM_SCENARIOS]
+              [--eval.validation-replay.eval.render-max-steps EVAL.VALIDATION_REPLAY.EVAL.RENDER_MAX_STEPS]
+              [--eval.validation-gigaflow.inherits EVAL.VALIDATION_GIGAFLOW.INHERITS] [--eval.validation-gigaflow.type EVAL.VALIDATION_GIGAFLOW.TYPE]
+              [--eval.validation-gigaflow.enabled EVAL.VALIDATION_GIGAFLOW.ENABLED] [--eval.validation-gigaflow.render EVAL.VALIDATION_GIGAFLOW.RENDER]
+              [--eval.validation-gigaflow.render-backend EVAL.VALIDATION_GIGAFLOW.RENDER_BACKEND]
+              [--eval.validation-gigaflow.render-views EVAL.VALIDATION_GIGAFLOW.RENDER_VIEWS]
+              [--eval.validation-gigaflow.env.simulation-mode EVAL.VALIDATION_GIGAFLOW.ENV.SIMULATION_MODE]
+              [--eval.validation-gigaflow.env.map-dir EVAL.VALIDATION_GIGAFLOW.ENV.MAP_DIR]
+              [--eval.validation-gigaflow.env.num-maps EVAL.VALIDATION_GIGAFLOW.ENV.NUM_MAPS]
+              [--eval.validation-gigaflow.env.num-agents EVAL.VALIDATION_GIGAFLOW.ENV.NUM_AGENTS]
+              [--eval.validation-gigaflow.env.min-agents-per-env EVAL.VALIDATION_GIGAFLOW.ENV.MIN_AGENTS_PER_ENV]
+              [--eval.validation-gigaflow.env.max-agents-per-env EVAL.VALIDATION_GIGAFLOW.ENV.MAX_AGENTS_PER_ENV]
+              [--eval.validation-gigaflow.env.scenario-length EVAL.VALIDATION_GIGAFLOW.ENV.SCENARIO_LENGTH]
+              [--eval.validation-gigaflow.env.resample-frequency EVAL.VALIDATION_GIGAFLOW.ENV.RESAMPLE_FREQUENCY]
+              [--eval.validation-gigaflow.eval.render-num-scenarios EVAL.VALIDATION_GIGAFLOW.EVAL.RENDER_NUM_SCENARIOS]
+              [--eval.validation-gigaflow.eval.render-max-steps EVAL.VALIDATION_GIGAFLOW.EVAL.RENDER_MAX_STEPS]
+              [--eval.dnf-triage.inherits EVAL.DNF_TRIAGE.INHERITS] [--eval.dnf-triage.type EVAL.DNF_TRIAGE.TYPE]
+              [--eval.dnf-triage.enabled EVAL.DNF_TRIAGE.ENABLED] [--eval.dnf-triage.render EVAL.DNF_TRIAGE.RENDER]
+              [--eval.dnf-triage.render-backend EVAL.DNF_TRIAGE.RENDER_BACKEND]
+              [--eval.dnf-triage.env.simulation-mode EVAL.DNF_TRIAGE.ENV.SIMULATION_MODE] [--eval.dnf-triage.env.map-dir EVAL.DNF_TRIAGE.ENV.MAP_DIR]
+              [--eval.dnf-triage.env.num-maps EVAL.DNF_TRIAGE.ENV.NUM_MAPS]
+              [--eval.dnf-triage.env.min-agents-per-env EVAL.DNF_TRIAGE.ENV.MIN_AGENTS_PER_ENV]
+              [--eval.dnf-triage.env.max-agents-per-env EVAL.DNF_TRIAGE.ENV.MAX_AGENTS_PER_ENV]
+              [--eval.dnf-triage.env.scenario-length EVAL.DNF_TRIAGE.ENV.SCENARIO_LENGTH]
+              [--eval.dnf-triage.env.resample-frequency EVAL.DNF_TRIAGE.ENV.RESAMPLE_FREQUENCY]
+              [--eval.dnf-triage.eval.num-scenarios EVAL.DNF_TRIAGE.EVAL.NUM_SCENARIOS]
+              [--eval.dnf-triage.eval.render-num-scenarios EVAL.DNF_TRIAGE.EVAL.RENDER_NUM_SCENARIOS]
+              [--eval.dnf-triage.eval.render-max-steps EVAL.DNF_TRIAGE.EVAL.RENDER_MAX_STEPS]
+              [--eval.behaviors-defaults.enabled EVAL.BEHAVIORS_DEFAULTS.ENABLED] [--eval.behaviors-defaults.interval EVAL.BEHAVIORS_DEFAULTS.INTERVAL]
+              [--eval.behaviors-defaults.mode EVAL.BEHAVIORS_DEFAULTS.MODE] [--eval.behaviors-defaults.clean EVAL.BEHAVIORS_DEFAULTS.CLEAN]
+              [--eval.behaviors-defaults.render EVAL.BEHAVIORS_DEFAULTS.RENDER]
+              [--eval.behaviors-defaults.render-views EVAL.BEHAVIORS_DEFAULTS.RENDER_VIEWS]
+              [--eval.behaviors-defaults.env.simulation-mode EVAL.BEHAVIORS_DEFAULTS.ENV.SIMULATION_MODE]
+              [--eval.behaviors-defaults.env.control-mode EVAL.BEHAVIORS_DEFAULTS.ENV.CONTROL_MODE]
+              [--eval.behaviors-defaults.env.init-mode EVAL.BEHAVIORS_DEFAULTS.ENV.INIT_MODE]
+              [--eval.behaviors-defaults.env.scenario-length EVAL.BEHAVIORS_DEFAULTS.ENV.SCENARIO_LENGTH]
+              [--eval.behaviors-defaults.env.obs-slots-partners-n EVAL.BEHAVIORS_DEFAULTS.ENV.OBS_SLOTS_PARTNERS_N]
+              [--eval.behaviors-defaults.eval.num-scenarios EVAL.BEHAVIORS_DEFAULTS.EVAL.NUM_SCENARIOS]
+              [--eval.behaviors-defaults.eval.render-num-scenarios EVAL.BEHAVIORS_DEFAULTS.EVAL.RENDER_NUM_SCENARIOS]
+              [--eval.behaviors-defaults.eval.render-max-steps EVAL.BEHAVIORS_DEFAULTS.EVAL.RENDER_MAX_STEPS]
+              [--eval.behaviors-full-dir.inherits EVAL.BEHAVIORS_FULL_DIR.INHERITS] [--eval.behaviors-full-dir.type EVAL.BEHAVIORS_FULL_DIR.TYPE]
+              [--eval.behaviors-full-dir.enabled EVAL.BEHAVIORS_FULL_DIR.ENABLED]
+              [--eval.behaviors-full-dir.env.map-dir EVAL.BEHAVIORS_FULL_DIR.ENV.MAP_DIR]
+              [--eval.behaviors-hard-stop.inherits EVAL.BEHAVIORS_HARD_STOP.INHERITS] [--eval.behaviors-hard-stop.type EVAL.BEHAVIORS_HARD_STOP.TYPE]
+              [--eval.behaviors-hard-stop.enabled EVAL.BEHAVIORS_HARD_STOP.ENABLED]
+              [--eval.behaviors-hard-stop.env.map-dir EVAL.BEHAVIORS_HARD_STOP.ENV.MAP_DIR]
+              [--eval.behaviors-highway-straight.inherits EVAL.BEHAVIORS_HIGHWAY_STRAIGHT.INHERITS]
+              [--eval.behaviors-highway-straight.type EVAL.BEHAVIORS_HIGHWAY_STRAIGHT.TYPE]
+              [--eval.behaviors-highway-straight.enabled EVAL.BEHAVIORS_HIGHWAY_STRAIGHT.ENABLED]
+              [--eval.behaviors-highway-straight.env.map-dir EVAL.BEHAVIORS_HIGHWAY_STRAIGHT.ENV.MAP_DIR]
+              [--eval.behaviors-lane-change.inherits EVAL.BEHAVIORS_LANE_CHANGE.INHERITS]
+              [--eval.behaviors-lane-change.type EVAL.BEHAVIORS_LANE_CHANGE.TYPE]
+              [--eval.behaviors-lane-change.enabled EVAL.BEHAVIORS_LANE_CHANGE.ENABLED]
+              [--eval.behaviors-lane-change.env.map-dir EVAL.BEHAVIORS_LANE_CHANGE.ENV.MAP_DIR]
+              [--eval.behaviors-merge.inherits EVAL.BEHAVIORS_MERGE.INHERITS] [--eval.behaviors-merge.type EVAL.BEHAVIORS_MERGE.TYPE]
+              [--eval.behaviors-merge.enabled EVAL.BEHAVIORS_MERGE.ENABLED] [--eval.behaviors-merge.env.map-dir EVAL.BEHAVIORS_MERGE.ENV.MAP_DIR]
+              [--eval.behaviors-parked-cars.inherits EVAL.BEHAVIORS_PARKED_CARS.INHERITS]
+              [--eval.behaviors-parked-cars.type EVAL.BEHAVIORS_PARKED_CARS.TYPE]
+              [--eval.behaviors-parked-cars.enabled EVAL.BEHAVIORS_PARKED_CARS.ENABLED]
+              [--eval.behaviors-parked-cars.env.map-dir EVAL.BEHAVIORS_PARKED_CARS.ENV.MAP_DIR]
+              [--eval.behaviors-roundabout.inherits EVAL.BEHAVIORS_ROUNDABOUT.INHERITS]
+              [--eval.behaviors-roundabout.type EVAL.BEHAVIORS_ROUNDABOUT.TYPE] [--eval.behaviors-roundabout.enabled EVAL.BEHAVIORS_ROUNDABOUT.ENABLED]
+              [--eval.behaviors-roundabout.env.map-dir EVAL.BEHAVIORS_ROUNDABOUT.ENV.MAP_DIR]
+              [--eval.behaviors-stopped-traffic.inherits EVAL.BEHAVIORS_STOPPED_TRAFFIC.INHERITS]
+              [--eval.behaviors-stopped-traffic.type EVAL.BEHAVIORS_STOPPED_TRAFFIC.TYPE]
+              [--eval.behaviors-stopped-traffic.enabled EVAL.BEHAVIORS_STOPPED_TRAFFIC.ENABLED]
+              [--eval.behaviors-stopped-traffic.env.map-dir EVAL.BEHAVIORS_STOPPED_TRAFFIC.ENV.MAP_DIR]
+              [--eval.behaviors-traffic-light-green.inherits EVAL.BEHAVIORS_TRAFFIC_LIGHT_GREEN.INHERITS]
+              [--eval.behaviors-traffic-light-green.type EVAL.BEHAVIORS_TRAFFIC_LIGHT_GREEN.TYPE]
+              [--eval.behaviors-traffic-light-green.enabled EVAL.BEHAVIORS_TRAFFIC_LIGHT_GREEN.ENABLED]
+              [--eval.behaviors-traffic-light-green.env.map-dir EVAL.BEHAVIORS_TRAFFIC_LIGHT_GREEN.ENV.MAP_DIR]
+              [--eval.behaviors-traffic-light-stop.inherits EVAL.BEHAVIORS_TRAFFIC_LIGHT_STOP.INHERITS]
+              [--eval.behaviors-traffic-light-stop.type EVAL.BEHAVIORS_TRAFFIC_LIGHT_STOP.TYPE]
+              [--eval.behaviors-traffic-light-stop.enabled EVAL.BEHAVIORS_TRAFFIC_LIGHT_STOP.ENABLED]
+              [--eval.behaviors-traffic-light-stop.env.map-dir EVAL.BEHAVIORS_TRAFFIC_LIGHT_STOP.ENV.MAP_DIR]
+              [--eval.behaviors-unprotected-left.inherits EVAL.BEHAVIORS_UNPROTECTED_LEFT.INHERITS]
+              [--eval.behaviors-unprotected-left.type EVAL.BEHAVIORS_UNPROTECTED_LEFT.TYPE]
+              [--eval.behaviors-unprotected-left.enabled EVAL.BEHAVIORS_UNPROTECTED_LEFT.ENABLED]
+              [--eval.behaviors-unprotected-left.env.map-dir EVAL.BEHAVIORS_UNPROTECTED_LEFT.ENV.MAP_DIR]
+              [--eval.behaviors-unprotected-right.inherits EVAL.BEHAVIORS_UNPROTECTED_RIGHT.INHERITS]
+              [--eval.behaviors-unprotected-right.type EVAL.BEHAVIORS_UNPROTECTED_RIGHT.TYPE]
+              [--eval.behaviors-unprotected-right.enabled EVAL.BEHAVIORS_UNPROTECTED_RIGHT.ENABLED]
+              [--eval.behaviors-unprotected-right.env.map-dir EVAL.BEHAVIORS_UNPROTECTED_RIGHT.ENV.MAP_DIR] [--eval.wosac.type EVAL.WOSAC.TYPE]
+              [--eval.wosac.enabled EVAL.WOSAC.ENABLED] [--eval.wosac.interval EVAL.WOSAC.INTERVAL] [--eval.wosac.mode EVAL.WOSAC.MODE]
+              [--eval.wosac.clean EVAL.WOSAC.CLEAN] [--eval.wosac.render EVAL.WOSAC.RENDER] [--eval.wosac.env.control-mode EVAL.WOSAC.ENV.CONTROL_MODE]
+              [--eval.wosac.env.init-mode EVAL.WOSAC.ENV.INIT_MODE] [--eval.wosac.env.init-step EVAL.WOSAC.ENV.INIT_STEP]
+              [--eval.wosac.env.goal-radius EVAL.WOSAC.ENV.GOAL_RADIUS] [--eval.wosac.eval.wosac-num-rollouts EVAL.WOSAC.EVAL.WOSAC_NUM_ROLLOUTS]
+              [--eval.wosac.eval.wosac-num-agents EVAL.WOSAC.EVAL.WOSAC_NUM_AGENTS]
+              [--eval.wosac.eval.wosac-sanity-check EVAL.WOSAC.EVAL.WOSAC_SANITY_CHECK]
+              [--eval.wosac.eval.wosac-aggregate-results EVAL.WOSAC.EVAL.WOSAC_AGGREGATE_RESULTS]
+              [--controlled-exp.train.learning-rate.values CONTROLLED_EXP.TRAIN.LEARNING_RATE.VALUES]
+              [--controlled-exp.train.ent-coef.values CONTROLLED_EXP.TRAIN.ENT_COEF.VALUES] [-h]
