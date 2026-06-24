@@ -211,6 +211,10 @@ class DriveBackbone(nn.Module):
                 traffic_control_type.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
             ).to(traffic_control_continuous.dtype)
+
+            print("Min index encountered:", traffic_control_state.min().item(), file=sys.stderr, flush=True)
+            print("Max index encountered:", traffic_control_state.max().item(), file=sys.stderr, flush=True)
+            print("Expected max limit (num_classes):", binding.NUM_TRAFFIC_CONTROL_STATES, file=sys.stderr, flush=True)
             traffic_control_state_onehot = F.one_hot(
                 traffic_control_state.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_STATES,
