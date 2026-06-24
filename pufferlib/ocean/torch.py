@@ -214,7 +214,7 @@ class DriveBackbone(nn.Module):
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
             print('self.traffic_control_continuous_features + 1', self.traffic_control_continuous_features + 1)
             traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
-            print(traffic_control_state.tolist())
+            # print(traffic_control_state.tolist())
             traffic_control_type_onehot = F.one_hot(
                 traffic_control_type.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
