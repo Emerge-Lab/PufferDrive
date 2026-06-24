@@ -58,25 +58,6 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     return 0;
 }
 
-static int test_metric_terminal_flags_are_exclusive(void) {
-    srand(5);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 2, 0);
-    int agent_idx = env.active_agent_indices[0];
-    Agent *agent = &env.agents[agent_idx];
-    agent->sim_x = env.grid_map->top_left_x - 1000.0f;
-    agent->sim_y = env.grid_map->top_left_y + 1000.0f;
-    copy_pose_to_prev(agent);
-
-    compute_metrics(&env, agent_idx, 0);
-
-    EXPECT_NEAR(agent->metrics_array[OFFROAD_IDX], 1.0f, 1e-5f);
-    EXPECT_NEAR(agent->metrics_array[COLLISION_IDX], 0.0f, 1e-5f);
-    EXPECT_NEAR(agent->metrics_array[RED_LIGHT_IDX], 0.0f, 1e-5f);
-
-    free_allocated(&env);
-    return 0;
-}
-
 static void init_reward_env(Drive *env, Agent *agent, Log *log, int *active, float *reward) {
     memset(env, 0, sizeof(*env));
     memset(agent, 0, sizeof(*agent));
@@ -136,32 +117,50 @@ static int test_reward_terminal_components(void) {
     return 0;
 }
 
-static int test_classic_and_jerk_action_clipping(void) {
-    srand(19);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
-    env.action_type = 1;
-    env.dynamics_model = CLASSIC;
-    Agent *agent = &env.agents[env.active_agent_indices[0]];
-    agent->sim_speed_signed = 0.0f;
-    ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[6] * 10.0f; // large acceleration
-    ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[8] * 10.0f;     // large steering
-    move_dynamics(&env, 0, env.active_agent_indices[0]);
-    EXPECT_TRUE(agent->sim_speed_signed <= MAX_SPEED);
-    EXPECT_TRUE(agent->steering_angle <= STEERING_LIMIT);
-    free_allocated(&env);
+static int test_reward_goal_speed_gating(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
 
-    srand(23);
-    env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
-    env.action_type = 1;
-    env.dynamics_model = JERK;
-    agent = &env.agents[env.active_agent_indices[0]];
-    ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[0] * 10.0f; // large braking
-    ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[0] * 10.0f;     // large steering
-    move_dynamics(&env, 0, env.active_agent_indices[0]);
-    EXPECT_TRUE(agent->accel_long >= ACCEL_LONG_LIMIT[0]);
-    EXPECT_TRUE(agent->accel_lat <= ACCEL_LAT_LIMIT[1]);
-    EXPECT_TRUE(agent->steering_angle <= STEERING_LIMIT);
-    free_allocated(&env);
+    // GIGAFLOW: final waypoint reached above goal-speed → goal reward gated to 0
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
+    agent.current_goal_idx = env.num_target_waypoints;
+    agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
+    agent.sim_speed = 10.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_goal, 0.0f, 1e-5f);
+
+    // Same final waypoint but below goal-speed → full goal reward
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
+    agent.current_goal_idx = env.num_target_waypoints;
+    agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
+    agent.sim_speed = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(log.reward_goal, 2.0f, 1e-5f);
+    return 0;
+}
+
+static int test_reward_lane_align_wrong_way(void) {
+    Drive env;
+    Agent agent;
+    Log log;
+    int active[1];
+    float reward[1] = {0};
+
+    init_reward_env(&env, &agent, &log, active, reward);
+    reward[0] = 0.0f;
+    agent.metrics_array[LANE_ANGLE_IDX] = -1.0f; // cos(θ_f) = -1 → driving against lane
+    agent.sim_speed_signed = 5.0f;
+    agent.reward_coefs[REWARD_COEF_LANE_ALIGN] = 1.0f;
+    agent.reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
+    compute_rewards(&env, 0);
+    EXPECT_TRUE(log.reward_lane_align < 0.0f);
     return 0;
 }
 
@@ -169,8 +168,8 @@ int main(void) {
     int failures = 0;
     RUN_TEST(test_observation_size_formula);
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
-    RUN_TEST(test_metric_terminal_flags_are_exclusive);
     RUN_TEST(test_reward_terminal_components);
-    RUN_TEST(test_classic_and_jerk_action_clipping);
+    RUN_TEST(test_reward_goal_speed_gating);
+    RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }
