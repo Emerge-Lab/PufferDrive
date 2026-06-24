@@ -114,13 +114,13 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         env.scenario-length=1024 \
         env.use-map-cache=1 \
         eval.dnf-triage.enabled=false \
-        eval.dnf-triage.render=true \
-        eval.validation-gigaflow.enabled=true \
-        eval.validation-gigaflow.render=true \
-        eval.validation-replay.enabled=true \
+        eval.dnf-triage.render=1 \
+        eval.validation-gigaflow.enabled=1 \
+        eval.validation-gigaflow.render=1 \
+        eval.validation-replay.enabled=1 \
         eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
         eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
-        mine.render=true \
+        mine.render=1 \
         policy.backbone-num-layers=2 \
         policy.boundary-input-size=128 \
         policy.context-input-size=128 \
@@ -129,11 +129,12 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         policy.partner-input-size=128 \
         policy.traffic-control-input-size=128 \
         train.checkpoint-interval=50 \
-        train.compile=true \
+        train.compile=1 \
         train.max-minibatch-size=393216 \
         train.minibatch-size=393216 \
         train.precision=bfloat16 \
-        eval.behaviors-defaults.enabled=0
+        eval.behaviors-defaults.enabled=0 \
+        eval.validation-defaults.interval=1
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
@@ -171,18 +172,14 @@ env.resample-frequency=256000 \
 env.reward-goal=0.5 \
 env.reward-lane-center=0.005 \
 env.scenario-length=2560 \
-env.traffic-control-scope=0 \
 env.use-map-cache=1 \
 policy.backbone-hidden-size=1024 \
 policy.backbone-num-layers=3 \
-policyboundary-input-size=128 \
 policy.ego-input-size=128 \
 policy.lane-input-size=128 \
 policy.partner-input-size=128 \
 policy.shared-network=false \
 policy.traffic-control-input-size=128 \
-render-mode=matplotlib \
-render-obs=0 \
 tb=true \
 train.checkpoint-interval=50 \
 train.compile=true \
@@ -190,6 +187,13 @@ train.normalize-rewards=false \
 train.precision=bfloat16 \
 train.seed=4 \
 train.update-epochs=3
+
+
+env.traffic-control-scope=0 \
+policyboundary-input-size=128 \
+render-obs=0 \
+
+pufferl.py: error: unrecognized arguments: --env.traffic-control-scope 0 --policyboundary-input-size 128 --render-obs 0 true
 
 Usage=puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
               [--num_scenarios NUM_SCENARIOS] [--render RENDER] [--agent_index [AGENT_INDEX ...]] [--save-frames SAVE_FRAMES] [--gif-path GIF_PATH]
