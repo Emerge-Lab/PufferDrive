@@ -288,14 +288,10 @@ class DriveBackbone(nn.Module):
             ).to(traffic_control_continuous.dtype)
 
             # Temporary debug check
-            if not (0 <= traffic_control_state).all() or not (traffic_control_state < binding.NUM_TRAFFIC_CONTROL_STATES).all():
-                print("!!! FOUND INVALID TRAFFIC CONTROL STATE INDICES !!!", file=sys.stderr)
-                print("Min index encountered:", traffic_control_state.min().item(), file=sys.stderr)
-                print("Max index encountered:", traffic_control_state.max().item(), file=sys.stderr)
-                print("Expected max limit (num_classes):", binding.NUM_TRAFFIC_CONTROL_STATES, file=sys.stderr)
-                
-                # FIX 1 & 2: Clamp traffic_control_state itself using the correct limit variable
-                # traffic_control_state = torch.clamp(traffic_control_state, 0, binding.NUM_TRAFFIC_CONTROL_STATES - 1)
+            # if not (0 <= traffic_control_state).all() or not (traffic_control_state < binding.NUM_TRAFFIC_CONTROL_STATES).all():
+            print("Min index encountered:", traffic_control_state.min().item(), file=sys.stderr, flush=True)
+            print("Max index encountered:", traffic_control_state.max().item(), file=sys.stderr, flush=True)
+            print("Expected max limit (num_classes):", binding.NUM_TRAFFIC_CONTROL_STATES, file=sys.stderr, flush=True)
                 
             traffic_control_state_onehot = F.one_hot(
                 traffic_control_state.long(),
