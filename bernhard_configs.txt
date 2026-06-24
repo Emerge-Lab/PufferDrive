@@ -135,6 +135,62 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         train.precision=bfloat16 \
         eval.behaviors-defaults.enabled=0
 
+python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
+    --prefix bernhard \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
+    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
+    --account bernhard --partition kyutai --time 5760 \
+    --args \
+run-name=002_longrun_4B \
+wandb=1 \
+train.total-timesteps=37500000000 \
+train.max-minibatch-size=128000 \
+train.minibatch-size=128000 \
+eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+env.dt=0.3 \
+env.max-agents-per-env=120 \
+env.num-agents=4096 \
+env.obs-boundary-stride=1 \
+env.obs-dropout-boundary=0.3 \
+env.obs-dropout-lane=0.2 \
+env.obs-lane-stride=1 \
+env.obs-norm-goal-offset-m=200.0 \
+env.obs-norm-veh-length-m=10.0 \
+env.obs-norm-veh-width-m=5.0 \
+env.obs-norm-xy-offset-m=150.0 \
+env.obs-range-partner-m=150.0 \
+env.obs-range-road-behind-m=40.0 \
+env.obs-range-road-front-m=150.0 \
+env.obs-range-road-side-m=50.0 \
+env.obs-range-traffic-control-m=150.0 \
+env.obs-slots-boundary-n=40 \
+env.obs-slots-lane-n=60 \
+env.obs-slots-partners-n=12 \
+env.resample-frequency=256000 \
+env.reward-goal=0.5 \
+env.reward-lane-center=0.005 \
+env.scenario-length=2560 \
+env.traffic-control-scope=0 \
+env.use-map-cache=1 \
+policy.backbone-hidden-size=1024 \
+policy.backbone-num-layers=3 \
+policyboundary-input-size=128 \
+policy.ego-input-size=128 \
+policy.lane-input-size=128 \
+policy.partner-input-size=128 \
+policy.shared-network=false \
+policy.traffic-control-input-size=128 \
+render-mode=matplotlib \
+render-obs=0 \
+tb=true \
+train.checkpoint-interval=50 \
+train.compile=true \
+train.normalize-rewards=false \
+train.precision=bfloat16 \
+train.seed=4 \
+train.update-epochs=3
+
 Usage=puffer [--load-model-path LOAD_MODEL_PATH] [--load-id LOAD_ID] [--render-mode {auto,human,ansi,rgb_array,raylib,None}] [--video-path VIDEO_PATH]
               [--num_scenarios NUM_SCENARIOS] [--render RENDER] [--agent_index [AGENT_INDEX ...]] [--save-frames SAVE_FRAMES] [--gif-path GIF_PATH]
               [--fps FPS] [--max-runs MAX_RUNS] [--wandb] [--wandb-project WANDB_PROJECT] [--wandb-group WANDB_GROUP] [--run-name RUN_NAME] [--neptune]
