@@ -153,6 +153,9 @@ class DriveBackbone(nn.Module):
         slide_idx += boundary_dim
 
         traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
+        print("slide_idx", slide_idx)
+        print("traffic_control_dim", traffic_control_dim)
+        print("self.obs_valid_count_features", self.obs_valid_count_features)
         count_observations = observations[
             :, slide_idx + traffic_control_dim : slide_idx + traffic_control_dim + self.obs_valid_count_features
         ]
@@ -201,12 +204,17 @@ class DriveBackbone(nn.Module):
 
         # Encode Traffic Controls
         if self.obs_slots_traffic_controls_n > 0:
+            print('self.obs_slots_traffic_controls_n', self.obs_slots_traffic_controls_n)
+            print('self.traffic_control_features_count', self.traffic_control_features_count)
+            print('traffic_control_observations.shape', traffic_control_observations.shape)
             traffic_control_objects = traffic_control_observations.view(
                 -1, self.obs_slots_traffic_controls_n, self.traffic_control_features_count
             )
             traffic_control_continuous = traffic_control_objects[:, :, : self.traffic_control_continuous_features]
             traffic_control_type = traffic_control_objects[:, :, self.traffic_control_continuous_features]
+            print('self.traffic_control_continuous_features + 1', self.traffic_control_continuous_features + 1)
             traffic_control_state = traffic_control_objects[:, :, self.traffic_control_continuous_features + 1]
+            print(traffic_control_state.tolist())
             traffic_control_type_onehot = F.one_hot(
                 traffic_control_type.long(),
                 num_classes=binding.NUM_TRAFFIC_CONTROL_TYPES,
