@@ -129,7 +129,7 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
         policy.partner-input-size=128 \
         policy.traffic-control-input-size=128 \
         train.checkpoint-interval=50 \
-        train.compile=0 \
+        train.compile=1 \
         train.max-minibatch-size=128000 \
         train.minibatch-size=128000 \
         train.precision=bfloat16 \
@@ -139,7 +139,7 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
+    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_8.yaml \
     --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
     --account bernhard --partition kyutai --time 5760 \
     --args \
@@ -187,11 +187,9 @@ train.normalize-rewards=0 \
 train.precision=bfloat16 \
 train.seed=4 \
 train.update-epochs=3 \
-
-
-
 eval.validation-defaults.interval=1
 
+TODO compile pufferlib.
 
 env.traffic-control-scope=0 \
 policyboundary-input-size=128 \
