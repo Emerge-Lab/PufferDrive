@@ -137,9 +137,6 @@
 
 // GIGAFLOW specific
 #define MAX_ROUTE_LENGTH 64
-#define N_DENSITY_SAMPLES    300
-#define DENSITY_RADIUS_CELLS  10   // 10 * 5m = 50m radius for heading density estimation
-#define DENSITY_POWER         2.0f // exponent on 1/density weight; higher = more aggressive correction
 // Traffic light generation
 #define TL_DEFAULT_RED_DURATION 2.0f
 #define TL_DEFAULT_YELLOW_DURATION 3.0f
@@ -475,8 +472,6 @@ struct Drive {
     int next_episode_index;
     int completed_episodes_count;
     CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
-    float *spawn_density_map; // one float per grid cell; density = count * R (parallel-heading mean resultant)
-    float *spawn_cell_cdf;   // CDF over drivable cells weighted by 1/density; used in spawn_agent
 };
 
 typedef struct {
@@ -907,98 +902,6 @@ static void cache_neighbor_offsets(Drive *env) {
             base_index += grid_count;
         }
     }
-}
-
-// ========================================
-// Spawn Density Map Functions
-// ========================================
-
-// Sample n positions from drivable cells using the same proposal as spawn_agent.
-// Returns the actual count written into sx/sy/sh (may be < n if map is sparse).
-static int sample_density_positions(Drive *env, float *sx, float *sy, float *sh, int n) {
-    int sampled = 0;
-    for (int a = 0; a < n * 10 && sampled < n; a++) {
-        int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
-        int grid_idx = env->grid_map->grid_index_drivable[list_idx];
-
-        GridMapEntity candidates[MAX_ENTITIES_PER_CELL];
-        int ncand = 0;
-        for (int i = 0; i < env->grid_map->cell_entities_count[grid_idx]; i++) {
-            GridMapEntity e = env->grid_map->cells[grid_idx][i];
-            if (is_drivable_road_lane(env->road_elements[e.entity_idx].type))
-                candidates[ncand++] = e;
-        }
-        if (ncand == 0) continue;
-
-        GridMapEntity chosen = candidates[rand() % ncand];
-        RoadMapElement *ln = &env->road_elements[chosen.entity_idx];
-        int k = chosen.geometry_idx;
-        if (k + 1 >= ln->segment_size) continue;
-
-        float t = (float) rand() / RAND_MAX;
-        sx[sampled] = ln->x[k] + t * (ln->x[k + 1] - ln->x[k]);
-        sy[sampled] = ln->y[k] + t * (ln->y[k + 1] - ln->y[k]);
-        sh[sampled] = ln->headings[k];
-        sampled++;
-    }
-    return sampled;
-}
-
-// Compute env->spawn_density_map: one float per grid cell.
-// density = count * R, where count = samples within DENSITY_RADIUS_CELLS cells of the cell
-// centre, and R = mean resultant length of headings (using 2*theta so 0 and pi collapse).
-//   Wide road  (many samples, aligned headings):  count high, R≈1 → density high
-//   Interchange(many samples, mixed headings):    count high, R≈0 → density low
-//   Sparse lane(few samples):                     count low        → density low
-// Spawn weight = 1/density so wide straight roads are drawn less often.
-static void compute_grid_density_map(Drive *env, const float *sx, const float *sy,
-                                      const float *sh, int n) {
-    int cols = env->grid_map->grid_cols;
-    int rows = env->grid_map->grid_rows;
-    float r2  = (DENSITY_RADIUS_CELLS * GRID_CELL_SIZE) * (DENSITY_RADIUS_CELLS * GRID_CELL_SIZE);
-
-    if (env->spawn_density_map) free(env->spawn_density_map);
-    env->spawn_density_map = (float *) calloc(cols * rows, sizeof(float));
-
-    for (int ci = 0; ci < cols * rows; ci++) {
-        float cx = env->grid_map->top_left_x    + (ci % cols + 0.5f) * GRID_CELL_SIZE;
-        float cy = env->grid_map->bottom_right_y + (ci / cols + 0.5f) * GRID_CELL_SIZE;
-
-        int   count = 0;
-        float sum_c = 0.0f, sum_s = 0.0f;
-        for (int i = 0; i < n; i++) {
-            float dx = sx[i] - cx, dy = sy[i] - cy;
-            if (dx * dx + dy * dy > r2) continue;
-            sum_c += cosf(2.0f * sh[i]);
-            sum_s += sinf(2.0f * sh[i]);
-            count++;
-        }
-        if (count == 0) continue;
-
-        float fc = sum_c / count, fs = sum_s / count;
-        float R  = sqrtf(fc * fc + fs * fs);
-        env->spawn_density_map[ci] = (float) count * R;
-    }
-}
-
-// Build a CDF over drivable cells weighted by 1/density so sparse/narrow-road cells
-// are drawn more often and wide-road cells are drawn less often.
-static void compute_spawn_cell_cdf(Drive *env) {
-    int n = env->grid_map->num_drivable_grid_cell;
-    if (env->spawn_cell_cdf) free(env->spawn_cell_cdf);
-    env->spawn_cell_cdf = (float *) malloc(n * sizeof(float));
-
-    float total = 0.0f;
-    for (int i = 0; i < n; i++) {
-        int gi = env->grid_map->grid_index_drivable[i];
-        float d = env->spawn_density_map[gi];
-        // float w = (d > 0.0f) ? powf(1.0f / d, DENSITY_POWER) : 1.0f;
-        float w = 1.0f;
-        total += w;
-        env->spawn_cell_cdf[i] = total;
-    }
-    for (int i = 0; i < n; i++)
-        env->spawn_cell_cdf[i] /= total;
 }
 
 static int get_neighbors_entities(
@@ -3368,14 +3271,8 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
         int chosen_lane_idx = -1;
 
-        float u = (float) rand() / RAND_MAX;
-        int lo = 0, hi = env->grid_map->num_drivable_grid_cell - 1;
-        while (lo < hi) {
-            int mid = (lo + hi) / 2;
-            if (env->spawn_cell_cdf[mid] < u) lo = mid + 1;
-            else hi = mid;
-        }
-        int grid_idx = env->grid_map->grid_index_drivable[lo];
+        int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
+        int grid_idx = env->grid_map->grid_index_drivable[list_idx];
 
         GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
         int candidate_count = 0;
@@ -3618,14 +3515,6 @@ void set_active_agents(Drive *env) {
 
     // In GIGAFLOW mode, spawn agents dynamically on the map
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
-        // Build spawn density map once per map load (NULL after c_close / first init).
-        if (env->spawn_density_map == NULL) {
-            float dsx[N_DENSITY_SAMPLES], dsy[N_DENSITY_SAMPLES], dsh[N_DENSITY_SAMPLES];
-            int nd = sample_density_positions(env, dsx, dsy, dsh, N_DENSITY_SAMPLES);
-            compute_grid_density_map(env, dsx, dsy, dsh, nd);
-            compute_spawn_cell_cdf(env);
-        }
-
         int num_agents_to_create = env->num_controllable_agents;
 
         // Initialize agents for GIGAFLOW mode
@@ -4092,10 +3981,6 @@ void c_close(Drive *env) {
     free(env->expert_static_agent_indices);
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
-    free(env->spawn_density_map);
-    env->spawn_density_map = NULL;
-    free(env->spawn_cell_cdf);
-    env->spawn_cell_cdf = NULL;
     free(env->map_name);
     free(env->ini_file);
 }
