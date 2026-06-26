@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import math
 import os
+import re
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -109,6 +111,74 @@ def fixed_target_bounds(agent_arrays, frame_idx, target_slot, half_width=50.0):
     tx = float(agent_arrays["x"][frame_idx, target_slot])
     ty = float(agent_arrays["y"][frame_idx, target_slot])
     return [tx - half_width, tx + half_width, ty - half_width, ty + half_width]
+
+
+def collision_partner_slot(agent_arrays, frame_idx, target_slot):
+    if target_slot is None or not agent_arrays["valid"][frame_idx, target_slot]:
+        return None
+
+    tx = float(agent_arrays["x"][frame_idx, target_slot])
+    ty = float(agent_arrays["y"][frame_idx, target_slot])
+    candidates = []
+    for slot_idx in np.flatnonzero(agent_arrays["valid"][frame_idx]):
+        if slot_idx == target_slot:
+            continue
+        dx = float(agent_arrays["x"][frame_idx, slot_idx]) - tx
+        dy = float(agent_arrays["y"][frame_idx, slot_idx]) - ty
+        candidates.append((dx * dx + dy * dy, int(slot_idx)))
+    return min(candidates)[1] if candidates else None
+
+
+def _trajectory_axis_center(values, collision_value, half_width, margin):
+    low = float(np.min(values)) - margin
+    high = float(np.max(values)) + margin
+    if high - low <= 2 * half_width:
+        min_center = high - half_width
+        max_center = low + half_width
+        return float(np.clip(collision_value, min_center, max_center))
+
+    trajectory_center = 0.5 * (low + high)
+    return float(np.clip(trajectory_center, collision_value - half_width, collision_value + half_width))
+
+
+def collision_trajectory_bounds(
+    agent_arrays,
+    frame_start,
+    frame_idx,
+    target_slot,
+    partner_slot,
+    half_width=50.0,
+    margin=3.0,
+):
+    if partner_slot is None:
+        return fixed_target_bounds(agent_arrays, frame_idx, target_slot, half_width=half_width)
+
+    focus_slots = [target_slot, partner_slot]
+    xs = []
+    ys = []
+    for slot_idx in focus_slots:
+        valid = agent_arrays["valid"][frame_start : frame_idx + 1, slot_idx]
+        frames = np.flatnonzero(valid) + frame_start
+        xs.extend(agent_arrays["x"][frames, slot_idx].astype(float).tolist())
+        ys.extend(agent_arrays["y"][frames, slot_idx].astype(float).tolist())
+
+    if not xs:
+        return fixed_target_bounds(agent_arrays, frame_idx, target_slot, half_width=half_width)
+
+    collision_x = 0.5 * (
+        float(agent_arrays["x"][frame_idx, target_slot]) + float(agent_arrays["x"][frame_idx, partner_slot])
+    )
+    collision_y = 0.5 * (
+        float(agent_arrays["y"][frame_idx, target_slot]) + float(agent_arrays["y"][frame_idx, partner_slot])
+    )
+    center_x = _trajectory_axis_center(xs, collision_x, half_width, margin)
+    center_y = _trajectory_axis_center(ys, collision_y, half_width, margin)
+    return [
+        center_x - half_width,
+        center_x + half_width,
+        center_y - half_width,
+        center_y + half_width,
+    ]
 
 
 def draw_roads(ax, map_static, bounds):
@@ -241,8 +311,19 @@ def render_failure_png(
         None,
     )
     final_idx = agent_arrays["valid"].shape[0] - 1
+    frame_start = 0
+    if last_n_frames is not None:
+        frame_start = max(0, final_idx - int(last_n_frames) + 1)
+    partner_slot = collision_partner_slot(agent_arrays, final_idx, target_slot)
     if target_crop_half_width is not None:
-        bounds = fixed_target_bounds(agent_arrays, final_idx, target_slot, half_width=float(target_crop_half_width))
+        bounds = collision_trajectory_bounds(
+            agent_arrays,
+            frame_start,
+            final_idx,
+            target_slot,
+            partner_slot,
+            half_width=float(target_crop_half_width),
+        )
     else:
         focus_slots = list(slots.values())
         bounds = crop_bounds(agent_arrays, focus_slots)
@@ -258,9 +339,6 @@ def render_failure_png(
     ax.set_facecolor("#ffffff")
     draw_roads(ax, payload["map"], bounds)
 
-    frame_start = 0
-    if last_n_frames is not None:
-        frame_start = max(0, final_idx - int(last_n_frames) + 1)
     visible_frame_count = final_idx - frame_start + 1
     sample_frames = sorted(set(np.linspace(frame_start, final_idx, min(6, visible_frame_count), dtype=int).tolist()))
     target_color = TARGET_COLOR
@@ -279,6 +357,19 @@ def render_failure_png(
 
     for frame_idx in sample_frames[:-1]:
         draw_vehicle(ax, agent_arrays, frame_idx, target_slot, target_color, alpha=0.18, edge=target_color, zorder=4)
+        for agent_id, slot_idx in slots.items():
+            if slot_idx == target_slot:
+                continue
+            draw_vehicle(
+                ax,
+                agent_arrays,
+                frame_idx,
+                slot_idx,
+                other_vehicle_color,
+                alpha=0.18,
+                edge=other_color,
+                zorder=3,
+            )
 
     for agent_id, slot_idx in slots.items():
         if slot_idx == target_slot:
@@ -410,6 +501,15 @@ def _filename_for_row(row):
     return f"episode_{episode_id:06d}_{fault_label}_{responsibility_label}.png"
 
 
+def _load_html_summary(html_path):
+    html = Path(html_path).read_text()
+    match = re.search(r"const DATA = (.*?);\n", html)
+    if match is None:
+        raise ValueError(f"Could not find embedded replay data in {html_path}")
+    payload = json.loads(match.group(1))
+    return payload.get("summary", {})
+
+
 def _render_job(job):
     replay_path, output_path, title, subtitle, last_n_frames = job
     render_failure_png(
@@ -502,6 +602,154 @@ def batch_render(
     }
 
 
+def batch_render_csv(
+    csv_path,
+    output_name="paper_figures",
+    responsibility_threshold=None,
+    last_n_frames=50,
+    workers=0,
+    limit=None,
+):
+    csv_path = Path(csv_path)
+    episodes_df = pd.read_csv(csv_path)
+    replay_dir = csv_path.parent / "replays"
+    if not replay_dir.is_dir():
+        raise FileNotFoundError(f"Replay directory not found: {replay_dir}")
+    replay_index = {path.name: path for path in replay_dir.glob("episode_*.replay.zlib")}
+
+    has_replay = _numeric_series(episodes_df, "has_replay") > 0
+    responsibility = pd.concat(
+        [
+            _numeric_series(episodes_df, "target_collision_responsibility"),
+            _numeric_series(episodes_df, "target_hit_responsibility"),
+        ],
+        axis=1,
+    ).max(axis=1)
+    selected_mask = has_replay
+    if responsibility_threshold is not None:
+        selected_mask &= responsibility > float(responsibility_threshold)
+    selected = episodes_df[selected_mask].copy()
+
+    jobs = []
+    skipped_missing_replay = 0
+    output_dir = csv_path.parent / output_name
+    for row in selected.to_dict(orient="records"):
+        episode_id = int(row["episode_id"])
+        filename = f"episode_{episode_id:06d}.replay.zlib"
+        replay_path = replay_index.get(filename)
+        if replay_path is None:
+            skipped_missing_replay += 1
+            continue
+        output_path = output_dir / _filename_for_row(row)
+        jobs.append((replay_path, output_path, None, None, last_n_frames))
+        if limit is not None and len(jobs) >= int(limit):
+            break
+
+    rendered = 0
+    failed = []
+    if workers and int(workers) > 1 and jobs:
+        with ProcessPoolExecutor(max_workers=int(workers)) as executor:
+            futures = {executor.submit(_render_job, job): job for job in jobs}
+            with tqdm(total=len(futures), desc=f"Rendering {csv_path.parent.name}") as pbar:
+                for future in as_completed(futures):
+                    job = futures[future]
+                    try:
+                        future.result()
+                        rendered += 1
+                    except Exception as exc:
+                        failed.append((str(job[0]), str(exc)))
+                    pbar.update(1)
+    else:
+        for job in tqdm(jobs, desc=f"Rendering {csv_path.parent.name}"):
+            try:
+                _render_job(job)
+                rendered += 1
+            except Exception as exc:
+                failed.append((str(job[0]), str(exc)))
+
+    return {
+        "csv_path": str(csv_path),
+        "selected": int(selected_mask.sum()),
+        "job_count": len(jobs),
+        "rendered": rendered,
+        "skipped_missing_replay": skipped_missing_replay,
+        "failed": failed,
+    }
+
+
+def batch_render_directory(
+    render_dir,
+    output_name="paper_figures_academic_mp8",
+    last_n_frames=50,
+    workers=0,
+    limit=None,
+    responsibility_threshold=None,
+):
+    render_dir = Path(render_dir)
+    replay_dir = render_dir / "replays"
+    if not replay_dir.is_dir():
+        raise FileNotFoundError(f"Replay directory not found: {replay_dir}")
+
+    jobs = []
+    missing_html = 0
+    invalid_html = []
+    for replay_path in sorted(replay_dir.glob("episode_*.replay.zlib")):
+        episode_stem = replay_path.name.removesuffix(".replay.zlib")
+        html_path = render_dir / f"{episode_stem}.html"
+        if not html_path.exists():
+            missing_html += 1
+            continue
+        try:
+            summary = _load_html_summary(html_path)
+        except Exception as exc:
+            invalid_html.append((str(html_path), str(exc)))
+            continue
+
+        episode_id = int(summary.get("episode_id", episode_stem.removeprefix("episode_")))
+        summary["episode_id"] = episode_id
+        responsibility = max(
+            _safe_float(summary.get("target_collision_responsibility")),
+            _safe_float(summary.get("target_hit_responsibility")),
+        )
+        if responsibility_threshold is not None and responsibility <= float(responsibility_threshold):
+            continue
+        output_path = render_dir / output_name / _filename_for_row(summary)
+        jobs.append((replay_path, output_path, None, None, last_n_frames))
+        if limit is not None and len(jobs) >= int(limit):
+            break
+
+    rendered = 0
+    failed = []
+    if workers and int(workers) > 1 and jobs:
+        with ProcessPoolExecutor(max_workers=int(workers)) as executor:
+            futures = {executor.submit(_render_job, job): job for job in jobs}
+            with tqdm(total=len(futures), desc=f"Rendering {render_dir.name}") as pbar:
+                for future in as_completed(futures):
+                    job = futures[future]
+                    try:
+                        future.result()
+                        rendered += 1
+                    except Exception as exc:
+                        failed.append((str(job[0]), str(exc)))
+                    pbar.update(1)
+    else:
+        for job in tqdm(jobs, desc=f"Rendering {render_dir.name}"):
+            try:
+                _render_job(job)
+                rendered += 1
+            except Exception as exc:
+                failed.append((str(job[0]), str(exc)))
+
+    return {
+        "render_dir": str(render_dir),
+        "job_count": len(jobs),
+        "rendered": rendered,
+        "missing_html": missing_html,
+        "invalid_html": invalid_html,
+        "failed": failed,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("replay_path", nargs="?")
@@ -515,6 +763,18 @@ def main():
     parser.add_argument("--responsibility-threshold", type=float, default=0.2)
     parser.add_argument("--workers", type=int, default=0, help="Parallel workers for batch rendering")
     parser.add_argument("--limit", type=int, default=None, help="Optional max number of batch jobs for smoke tests")
+    parser.add_argument(
+        "--batch-render-dir",
+        action="append",
+        default=[],
+        help="Render a directory containing episode HTML files and a replays/ subdirectory",
+    )
+    parser.add_argument(
+        "--batch-csv",
+        action="append",
+        default=[],
+        help="Render episodes selected from an explicit per-episode CSV and sibling replays/ directory",
+    )
     args = parser.parse_args()
     if args.batch_failure_runs:
         summary = batch_render(
@@ -526,6 +786,36 @@ def main():
             limit=args.limit,
         )
         print(summary)
+        return
+
+    if args.batch_render_dir:
+        summaries = [
+            batch_render_directory(
+                render_dir,
+                output_name=args.batch_output_name,
+                last_n_frames=args.last_n_frames or 50,
+                workers=args.workers,
+                limit=args.limit,
+                responsibility_threshold=args.responsibility_threshold,
+            )
+            for render_dir in args.batch_render_dir
+        ]
+        print(summaries)
+        return
+
+    if args.batch_csv:
+        summaries = [
+            batch_render_csv(
+                csv_path,
+                output_name=args.batch_output_name,
+                responsibility_threshold=args.responsibility_threshold,
+                last_n_frames=args.last_n_frames or 50,
+                workers=args.workers,
+                limit=args.limit,
+            )
+            for csv_path in args.batch_csv
+        ]
+        print(summaries)
         return
 
     if not args.replay_path or not args.output_path:
