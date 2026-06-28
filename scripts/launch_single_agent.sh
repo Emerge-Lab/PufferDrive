@@ -41,5 +41,5 @@ for SEED in "${SEED_LIST[@]}"; do
         --program_config "$PROGRAM_CONFIG" \
         --container --heartbeat \
         --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
-        --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}"
+        --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}" "wandb_group=${DATE_STAMP}"
 done
