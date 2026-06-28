@@ -31,40 +31,59 @@ import modal
 # ---------------------------------------------------------------------------
 # Image: Dockerfile base + repo + built C extensions.
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Modal re-imports this module inside the container to find function
+# definitions, so module-level path resolution has to work in both contexts.
+# Locally (modal run / modal deploy) the file lives at
+# <repo>/scripts/modal/modal_app.py — three levels deep, setup.py is at the
+# resolved repo root. In the container Modal mirrors it to /root/modal_app.py
+# where the image is already built and these path references are inert; the
+# baked repo lives at /workspace via add_local_dir.
+def _resolve_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for ancestor in (here.parent, *here.parents):
+        if (ancestor / "setup.py").exists():
+            return ancestor
+    return Path("/workspace")
+
+
+REPO_ROOT = _resolve_repo_root()
 DOCKERFILE = REPO_ROOT / "scripts" / "modal" / "Dockerfile"
 
+_IGNORE_SEGMENTS = (
+    ".git/",
+    ".venv/",
+    "wandb/",
+    "experiments/",
+    "runs/",
+    "build/",
+    "extern/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+)
+
+
+def _ignore(path) -> bool:
+    """add_local_dir ignore callable: True drops the file from the image."""
+    s = str(path)
+    return any(seg in s for seg in _IGNORE_SEGMENTS)
+
+
 image = (
-    modal.Image.from_dockerfile(
-        str(DOCKERFILE),
-        context_mount=modal.Mount.from_local_dir(
-            str(REPO_ROOT),
-            remote_path="/workspace",
-            # Skip heavy artefacts that aren't needed at runtime.
-            condition=lambda p: not any(
-                seg in p
-                for seg in (
-                    ".git/",
-                    ".venv/",
-                    "wandb/",
-                    "experiments/",
-                    "runs/",
-                    "build/",
-                    "extern/",
-                    "__pycache__/",
-                    ".pytest_cache/",
-                    ".mypy_cache/",
-                    ".ruff_cache/",
-                )
-            ),
-        ),
-    )
+    modal.Image.from_dockerfile(str(DOCKERFILE))
     .workdir("/workspace")
+    .add_local_dir(str(REPO_ROOT), "/workspace", copy=True, ignore=_ignore)
     # `-e .` triggers setup.py build_ext for the C + CUDA extensions.
-    # --no-build-isolation lets it see the torch already in the base image
-    # (otherwise pip builds a fresh torch in a sandbox — slow).
+    # --no-build-isolation lets uv use the torch already in /opt/venv
+    # instead of building it in a fresh sandbox (~2 min saved).
+    # The trailing numpy<2 / pandas<2.2 are additional constraints fed
+    # to uv's resolver alongside install_requires — without them an
+    # unconstrained `pandas` in setup.py would resolve to pandas 3+ and
+    # drag numpy 2 in, breaking the C extension's numpy 1 ABI
+    # (NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION in setup.py).
     .run_commands(
-        "pip install --break-system-packages --no-build-isolation -e .",
+        'uv pip install --no-build-isolation -e . "numpy<2" "pandas<2.2"',
         # Smoke-import to fail the build early if extensions didn't compile.
         "python -c 'import pufferlib.ocean.drive.binding; "
         "import pufferlib._C; print(\"extensions OK\")'",
@@ -108,6 +127,12 @@ def yaml_to_cli_args(cfg: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 @app.function(
     gpu="A100-80GB",
+    # Enough cores for drive.ini's vec.num_workers default (20) plus headroom.
+    # PufferLib refuses to start if num_workers > os.cpu_count().
+    cpu=24,
+    # Enough RAM for the C-side map cache + vec env workers. Bump for the
+    # multi-agent (nightly_best) config which loads heavier maps.
+    memory=32 * 1024,
     # 12h cap; nightly runs at total_timesteps=1B/10B can take this long. Bump
     # if a real run wedges short of completion.
     timeout=12 * 3600,
@@ -124,6 +149,7 @@ def train(
     wandb_group: str,
 ) -> str:
     """Run one training job. Returns the run_name on success."""
+    import os
     import subprocess
 
     import yaml
@@ -135,19 +161,29 @@ def train(
     cli_args += [
         "--train.seed",
         str(seed),
+        # PufferLib refuses to start if num_workers > os.cpu_count(). Modal's
+        # T4/A100 containers come with ~16 logical cores; pin workers/envs
+        # to a safe value regardless of yaml/drive.ini defaults.
+        "--vec.num-workers",
+        "8",
+        "--vec.num-envs",
+        "8",
         "--wandb-project",
         WANDB_PROJECT,
-        "--wandb-entity",
-        WANDB_ENTITY,
         "--wandb-group",
         wandb_group,
         "--run-name",
         run_name,
     ]
 
+    # pufferl.py has no --wandb-entity flag; wandb picks the entity up from
+    # WANDB_ENTITY in the env. WANDB_API_KEY arrives via the wandb-emerge
+    # Modal secret.
+    env = {**os.environ, "WANDB_ENTITY": WANDB_ENTITY}
+
     cmd = ["python", "-m", "pufferlib.pufferl", "train", "puffer_drive", *cli_args]
     print(f"[modal] launching: {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, check=True, cwd="/workspace")
+    subprocess.run(cmd, check=True, cwd="/workspace", env=env)
     return run_name
 
 
@@ -156,8 +192,11 @@ def train(
 # ---------------------------------------------------------------------------
 # Schedule: 04:00 UTC daily ≈ midnight ET / 21:00 PT previous day. Adjust if
 # the user wants a different wall-clock time.
-@app.function(timeout=60 * 60, secrets=[WANDB_SECRET])
-@modal.schedule(modal.Cron("0 4 * * *"))
+@app.function(
+    timeout=60 * 60,
+    secrets=[WANDB_SECRET],
+    schedule=modal.Cron("0 4 * * *"),
+)
 def nightly() -> None:
     """Fan out to per-seed, per-config training runs in parallel."""
     from datetime import datetime, timezone

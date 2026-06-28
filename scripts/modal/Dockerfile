@@ -22,8 +22,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONNOUSERSITE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    # Modal A100-80GB is sm_80. Single-arch keeps the C extension build fast.
-    TORCH_CUDA_ARCH_LIST=8.0
+    # Multi-arch so the same image runs on T4 (sm_75), A100 (sm_80), L4/L40S
+    # (sm_89), and H100/H200 (sm_90). Build is ~3-4x slower than single-arch
+    # but lets us swap Modal gpu= strings without rebuilding the image.
+    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.9;9.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -59,17 +61,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf /usr/bin/python3.12 /usr/local/bin/python && \
-    ln -sf /usr/bin/python3.12 /usr/local/bin/python3
+# Install uv — faster, deterministic resolver, replaces pip + venv + the
+# constraints-file dance. Modal disallows the Dockerfile ADD directive, so
+# fetch via curl.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
 
-# Heaviest pip deps go in their own layer so iterating on the rest of the
-# image doesn't redownload torch (~2GB).
-RUN python -m pip install --upgrade --break-system-packages \
-        pip \
-        setuptools \
-        wheel
-RUN python -m pip install --break-system-packages \
-        "torch>=2.4" \
-        "numpy<2"
+# Project venv at /opt/venv (kept off the overlay/image filesystem in
+# spirit — symbolic of the cluster's /scratch/$USER/venvs layout).
+RUN uv venv /opt/venv --python 3.12
+ENV PATH="/opt/venv/bin:${PATH}" \
+    VIRTUAL_ENV="/opt/venv"
+
+RUN uv pip install setuptools wheel
+
+# torch from pypi is built against CUDA 13; pull the cu128 wheel instead so it
+# matches the base image's CUDA toolkit. setup.py's CUDAExtension path checks
+# this and refuses to build if torch and host CUDA disagree.
+RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 torch
+
+# Pin numpy<2 and pandas<2.2 here so the later `uv pip install -e .` resolve
+# can't drag numpy 2 in via pandas 3 and break the C extension's numpy 1 ABI
+# (NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION in setup.py). uv's resolver
+# respects these caps when computing the install_requires solution, unlike
+# pip which would gladly upgrade pre-installed pandas during -e .
+RUN uv pip install "numpy<2" "pandas<2.2"
 
 WORKDIR /workspace
