@@ -1,8 +1,8 @@
 #!/bin/bash
 # Launch multi-agent "nightly best" training on the cluster via submit_cluster.py.
-# Mirrors launch_single_agent.sh but uses the oignons2-derived nightly_best.yaml
-# (multi-agent gigaflow over 8 CARLA towns, 10B total steps). Code-isolated per
-# run, container-wrapped, gpu-heartbeated, date-stamped wandb run names.
+# Mirrors launch_single_agent.sh but uses nightly_best.yaml (multi-agent
+# gigaflow over 8 CARLA towns, 10B total steps). Code-isolated per run,
+# container-wrapped, gpu-heartbeated, date-stamped wandb run names.
 #
 # Run on the login node (it sources the venv and submits from there):
 #   ./scripts/launch_nightly_best.sh

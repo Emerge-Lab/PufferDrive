@@ -1,11 +1,7 @@
-# Multi-agent "best launch" nightly training program config.
-# Derived from the oignons2 (emerge/temp_training) configuration at:
-#   weights/oignons2/config.yaml
-# Adapted to NYU Greene cluster paths and resource shape. Multi-agent gigaflow
-# training over the 8 local CARLA maps with the oignons2 policy architecture,
-# reward shaping (conditioning + randomization on), and partner-blindness /
-# phantom-braking perturbations enabled. Keys here override
-# pufferlib/config/ocean/drive.ini.
+# Multi-agent "best launch" nightly training program config. Multi-agent
+# gigaflow over the 8 local CARLA maps, full reward shaping (conditioning +
+# randomization on), partner-blindness / phantom-braking perturbations
+# enabled. Keys here override pufferlib/config/ocean/drive.ini.
 #
 # Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).
 
@@ -38,7 +34,7 @@ env.max_waypoint_spacing: 60.0
 env.goal_radius: 2.0
 env.goal_speed: 3.0
 
-# Observation shaping (matches oignons2)
+# Observation shaping
 env.obs_slots_lane_n: 80
 env.obs_slots_boundary_n: 80
 env.obs_slots_partners_n: 16
@@ -64,7 +60,7 @@ env.phantom_braking_prob: 0.02
 env.phantom_braking_trigger_prob: 0.02
 env.phantom_braking_duration: 10
 
-# Reward shaping (oignons2 weights + conditioning/randomization on)
+# Reward shaping (conditioning + randomization on)
 env.reward_conditioning: true
 env.reward_randomization: true
 env.reward_goal: 1.0
