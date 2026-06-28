@@ -2,8 +2,10 @@
 
 Nightly cron that launches PufferDrive training on Modal — 3 seeds of
 `single_agent_speed_run.yaml` plus 3 seeds of `nightly_best.yaml`, all on
-1× A100-80GB in parallel, all logging to wandb project `nightly-modal` in the
-`emerge_` org.
+1× A100-80GB in parallel. Single-agent runs log to wandb project
+`nightly-single`; multi-agent to `nightly-multi`. In each project the
+`wandb_group` is today's UTC date so a night's 3 seeds cluster together in
+the UI. All under the `emerge_` org.
 
 ## Files
 

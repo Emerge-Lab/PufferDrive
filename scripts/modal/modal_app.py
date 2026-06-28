@@ -1,10 +1,11 @@
 """Nightly PufferDrive training on Modal.
 
 Schedules a cron that, every night, launches:
-  - 3 seeds × scripts/cluster_configs/single_agent_speed_run.yaml
-  - 3 seeds × scripts/cluster_configs/nightly_best.yaml
-each on its own 1× A100-80GB container, all in parallel. All 6 runs log to the
-same wandb project (overridden here, not in the yamls) under distinct groups.
+  - 3 seeds × scripts/cluster_configs/single_agent_speed_run.yaml →
+    wandb project `nightly-single`, group = today's UTC date
+  - 3 seeds × scripts/cluster_configs/nightly_best.yaml →
+    wandb project `nightly-multi`, group = today's UTC date
+each on its own 1× A100-80GB container, all in parallel.
 
 One-time setup:
   modal token new                     # if not already authenticated
@@ -19,7 +20,8 @@ Trigger the full nightly fan-out manually (without waiting for cron):
 Trigger one run manually:
   modal run scripts/modal/modal_app.py::train \\
       --yaml-path scripts/cluster_configs/single_agent_speed_run.yaml \\
-      --seed 0 --run-name local_smoke --wandb-group smoke
+      --seed 0 --run-name local_smoke --wandb-group smoke \\
+      --wandb-project nightly-single
 """
 
 from __future__ import annotations
@@ -98,7 +100,8 @@ app = modal.App("pufferdrive-nightly", image=image)
 # Create with:
 #   modal secret create wandb-emerge WANDB_API_KEY=<key>
 WANDB_SECRET = modal.Secret.from_name("wandb-emerge")
-WANDB_PROJECT = "nightly-modal"
+WANDB_PROJECT_SINGLE = "nightly-single"
+WANDB_PROJECT_MULTI = "nightly-multi"
 WANDB_ENTITY = "emerge_"
 
 # ---------------------------------------------------------------------------
@@ -147,6 +150,7 @@ def train(
     seed: int,
     run_name: str,
     wandb_group: str,
+    wandb_project: str,
 ) -> str:
     """Run one training job. Returns the run_name on success."""
     import os
@@ -169,7 +173,7 @@ def train(
         "--vec.num-envs",
         "8",
         "--wandb-project",
-        WANDB_PROJECT,
+        wandb_project,
         "--wandb-group",
         wandb_group,
         "--run-name",
@@ -198,28 +202,35 @@ def train(
     schedule=modal.Cron("0 4 * * *"),
 )
 def nightly() -> None:
-    """Fan out to per-seed, per-config training runs in parallel."""
+    """Fan out to per-seed, per-config training runs in parallel.
+
+    Single-agent runs land in wandb project `nightly-single`, multi-agent in
+    `nightly-multi`. Within each project the wandb_group is today's UTC date
+    so a night's 3 seeds cluster together.
+    """
     from datetime import datetime, timezone
 
     date = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     seeds = [0, 1, 2]
 
-    jobs: list[tuple[str, int, str, str]] = []
+    jobs: list[tuple[str, int, str, str, str]] = []
     for seed in seeds:
         jobs.append(
             (
                 "scripts/cluster_configs/single_agent_speed_run.yaml",
                 seed,
-                f"{date}_single_seed{seed}",
-                "modal_single_agent",
+                f"{date}_seed{seed}",
+                date,
+                WANDB_PROJECT_SINGLE,
             )
         )
         jobs.append(
             (
                 "scripts/cluster_configs/nightly_best.yaml",
                 seed,
-                f"{date}_multi_seed{seed}",
-                "modal_multi_agent",
+                f"{date}_seed{seed}",
+                date,
+                WANDB_PROJECT_MULTI,
             )
         )
 
@@ -227,9 +238,9 @@ def nightly() -> None:
     # starmap blocks until every run finishes. exceptions in a single run
     # propagate; other runs continue.
     results = list(train.starmap(jobs, return_exceptions=True))
-    for (yaml_path, seed, run_name, _group), result in zip(jobs, results):
+    for (yaml_path, seed, run_name, _group, project), result in zip(jobs, results):
         status = "OK" if not isinstance(result, BaseException) else f"FAIL: {result!r}"
-        print(f"[modal] {run_name} ({yaml_path}, seed={seed}): {status}", flush=True)
+        print(f"[modal] {project}/{run_name} ({yaml_path}, seed={seed}): {status}", flush=True)
 
 
 # ---------------------------------------------------------------------------

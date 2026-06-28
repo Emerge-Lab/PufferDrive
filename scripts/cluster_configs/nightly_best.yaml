@@ -125,8 +125,11 @@ eval.behaviors_traffic_light_stop.enabled: 0
 eval.behaviors_unprotected_left.enabled: 0
 eval.behaviors_unprotected_right.enabled: 0
 
-# W&B — project nightly-multi-agent; group has no space (submit_cluster.py
-# joins the inner command without quoting arg values).
+# W&B — group has no space (submit_cluster.py joins the inner command
+# without quoting arg values). Launchers (launch_nightly_best.sh and
+# Modal's nightly()) override wandb_group to today's date at launch so
+# runs cluster by night in the UI; the static value here is just the
+# fallback for ad-hoc invocations.
 wandb: True
-wandb_project: nightly-multi-agent
-wandb_group: Nightly_MultiAgent
+wandb_project: nightly-multi
+wandb_group: nightly-multi
