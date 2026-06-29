@@ -7,10 +7,6 @@
 #define DRIVE_TEST_REPO_ROOT "."
 #endif
 
-// Neutral discrete action (zero longitudinal + zero lateral), encoded as long_idx * num_lat + lat_idx
-#define CLASSIC_NEUTRAL_ACTION 31 // accel_idx 3 (0.0) * 9 steer + steer_idx 4 (0.0)
-#define JERK_NEUTRAL_ACTION 7     // j_long_idx 2 (0.0) * 3 lat + j_lat_idx 1 (0.0)
-
 static inline const char *drive_carla_map(void) {
     return DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive/binaries/carla/opendrive__Town01.bin";
 }
@@ -139,7 +135,16 @@ static inline Drive drive_test_make_env(const char *map_file, int simulation_mod
 static inline void drive_set_neutral_actions(Drive *env) {
     if (env->action_type == 0) {
         int *actions = (int *) env->actions;
-        int neutral = env->dynamics_model == JERK ? JERK_NEUTRAL_ACTION : CLASSIC_NEUTRAL_ACTION;
+        int neutral;
+        if (env->dynamics_model == JERK) {
+            int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
+            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+            neutral = (num_long / 2) * num_lat + (num_lat / 2);
+        } else {
+            int num_accel = sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0]);
+            int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+            neutral = (num_accel / 2) * num_steer + (num_steer / 2);
+        }
         for (int i = 0; i < env->active_agent_count; i++) {
             actions[i] = neutral;
         }

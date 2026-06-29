@@ -68,11 +68,42 @@ static int test_dynamics_removed_agent_invalidated(void) {
     return 0;
 }
 
+static int test_neutral_actions_zero_out(void) {
+    {
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+        env.action_type = 0;
+        env.dynamics_model = CLASSIC;
+        drive_set_neutral_actions(&env);
+        int action_val = ((int *) env.actions)[0];
+        int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
+        int acceleration_index = action_val / num_steer;
+        int steering_index = action_val % num_steer;
+        EXPECT_NEAR(ACCELERATION_VALUES[acceleration_index], 0.0f, 1e-6f);
+        EXPECT_NEAR(STEERING_VALUES[steering_index], 0.0f, 1e-6f);
+        free_allocated(&env);
+    }
+    {
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+        env.action_type = 0;
+        env.dynamics_model = JERK;
+        drive_set_neutral_actions(&env);
+        int action_val = ((int *) env.actions)[0];
+        int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+        int j_long_idx = action_val / num_lat;
+        int j_lat_idx = action_val % num_lat;
+        EXPECT_NEAR(JERK_LONG[j_long_idx], 0.0f, 1e-6f);
+        EXPECT_NEAR(JERK_LAT[j_lat_idx], 0.0f, 1e-6f);
+        free_allocated(&env);
+    }
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_classic_action_clipping);
     RUN_TEST(test_jerk_action_clipping);
     RUN_TEST(test_dynamics_stopped_agent_clears_motion);
     RUN_TEST(test_dynamics_removed_agent_invalidated);
+    RUN_TEST(test_neutral_actions_zero_out);
     return test_summary(failures);
 }
