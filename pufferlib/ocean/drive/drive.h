@@ -5198,11 +5198,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float v_eff = fmaxf(fabsf(v_new), 1.0f);
         float signed_curvature = a_lat_new / (v_eff * v_eff);
 
-        // Convert center yaw curvature to steering angle with bicycle slip.
-        float curvature_wheelbase = signed_curvature * agent->wheelbase;
-        float sin_beta_target = clip(REAR_AXLE_RATIO * curvature_wheelbase, -0.99f, 0.99f);
-        float beta_target = asinf(sin_beta_target);
-        float steering_angle = atan2f(curvature_wheelbase, cosf(beta_target));
+        // Convert curvature to steering angle
+        float steering_angle = atanf(signed_curvature * agent->wheelbase);
 
         // Apply steering rate limit (±0.6 rad/s)
         float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
@@ -5210,9 +5207,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Apply steering position limit (±0.55 rad)
         float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
 
-        // Recalculate yaw curvature from limited steering and slip angle.
-        float beta = atanf(REAR_AXLE_RATIO * tanf(new_steering_angle));
-        signed_curvature = cosf(beta) * tanf(new_steering_angle) / agent->wheelbase;
+        // Recalculate curvature from limited steering
+        signed_curvature = tanf(new_steering_angle) / agent->wheelbase;
 
         // Recalculate lateral acceleration from actual curvature
         a_lat_new = v_new * v_new * signed_curvature;
@@ -5223,11 +5219,11 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float dx_local, dy_local;
 
         if (fabsf(signed_curvature) < 1e-5f || fabsf(theta) < 1e-5f) {
-            dx_local = d * cosf(beta);
-            dy_local = d * sinf(beta);
+            dx_local = d;
+            dy_local = 0.0f;
         } else {
-            dx_local = (sinf(beta + theta) - sinf(beta)) / signed_curvature;
-            dy_local = (cosf(beta) - cosf(beta + theta)) / signed_curvature;
+            dx_local = sinf(theta) / signed_curvature;
+            dy_local = (1.0f - cosf(theta)) / signed_curvature;
         }
 
         float dx = dx_local * heading_x - dy_local * heading_y;
@@ -5239,8 +5235,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->sim_heading = normalize_heading(agent->sim_heading + theta);
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
-        agent->sim_vx = v_new * cosf(agent->sim_heading + beta);
-        agent->sim_vy = v_new * sinf(agent->sim_heading + beta);
+        agent->sim_vx = v_new * cosf(agent->sim_heading);
+        agent->sim_vy = v_new * sinf(agent->sim_heading);
         const float yaw_rate = v_new * signed_curvature;
         agent->yaw_rate = yaw_rate;
 
