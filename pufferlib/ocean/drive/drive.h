@@ -2261,9 +2261,11 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
         return true;
     }
 
-    // Edges can all miss while the quad still contains the AABB. A consistent cross-product sign around
-    // the quad means the origin lies inside it. Assumes a convex quad — a bowtie (large per-step
-    // rotation) may misreport; a degenerate prev == cur quad is a line, already covered above.
+    // All edges can miss while the swept region still covers the box center: consistent cross-product
+    // sign means the origin is inside the quad. The quad chords the prev/cur segments, but the true
+    // endpoint paths are arcs, so at large per-step yaw the chords under-cover and a swept center reads
+    // as outside (missed); exact for normal driving's small yaw. Degenerate prev == cur is a line:
+    // opposite signs => false, and the boundary tests above already caught any overlap.
     float swept_quad[4][2] = {
         {a_prev[0], a_prev[1]},
         {b_prev[0], b_prev[1]},
@@ -2463,9 +2465,7 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
 }
 
 static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b_disp) {
-    // Each box's corner trajectories (prev->cur, transformed into the other box's prev/cur local frame)
-    // tested vs the other's origin-centered AABB, both directions.
-    // Final-pose SAT catches cross/plus overlaps where no corner trajectory enters the other box.
+    // Swept-OBB collision for the prev->cur step (tunnelling-safe).
 
     // Early z-axis rejection
     float a_top = a->sim_z + a->sim_height;
@@ -2474,7 +2474,7 @@ static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b
         return false;
     }
 
-    // Final-pose overlap (incl. cross/plus with no corner inside) is the complete static-overlap test.
+    // Current pose overlap (incl. cross/plus with no corner inside).
     if (check_obb_collision(a, b)) {
         return true;
     }
@@ -2484,6 +2484,9 @@ static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b
         return false;
     }
 
+    // Sweep each of other's corners along its prev->cur segment, transformed into ego's prev/cur
+    // local frame, and test vs ego's origin-centered AABB. Run both orderings: a corner of one box
+    // can sweep through the other even when the reverse ordering misses.
     for (int d = 0; d < 2; d++) {
         Agent *ego = d ? a : b;
         Agent *other = d ? b : a;
