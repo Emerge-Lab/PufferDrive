@@ -82,8 +82,9 @@
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 
 // Collision and distance thresholds
+#define COLLISION_SKIP_DISP_M 0.1f
+#define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 #define MAX_CHECKED_LANES 32
-#define COLLISION_QUICK_CHECK_DIST 15.0f // Quick distance check before OBB SAT
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
 #define MAX_STOPPED_SECONDS 60.0f
 #define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
@@ -496,6 +497,20 @@ static float compute_euclidean_distance(float x1, float y1, float x2, float y2) 
     return sqrtf(dx * dx + dy * dy);
 }
 
+static float compute_point_to_segment_distance(float px, float py, float x0, float y0, float x1, float y1) {
+    // Minimum (perpendicular or endpoint) distance from point (px, py) to segment (x0, y0)->(x1, y1).
+    // t is the closest point's clamped projection param along the segment; degenerate (zero-length) segment uses t=0.
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float seg_len_sq = dx * dx + dy * dy;
+    float t = 0.0f;
+    if (seg_len_sq > 1e-6f) {
+        t = ((px - x0) * dx + (py - y0) * dy) / seg_len_sq;
+        t = fmaxf(0.0f, fminf(1.0f, t));
+    }
+    return compute_euclidean_distance(px, py, x0 + t * dx, y0 + t * dy);
+}
+
 static int compare_depthpoint(const void *a, const void *b) {
     float diff = ((const DepthPoint *) a)->euclidean_dis - ((const DepthPoint *) b)->euclidean_dis;
     return (diff > 0.0f) - (diff < 0.0f);
@@ -585,6 +600,17 @@ static void invalidate_agent(Agent *agent) {
     agent->sim_valid = 0;
 }
 
+static void copy_pose_to_prev(Agent *agent) {
+    agent->prev_x = agent->sim_x;
+    agent->prev_y = agent->sim_y;
+    agent->prev_cos_heading = agent->cos_heading;
+    agent->prev_sin_heading = agent->sin_heading;
+}
+
+static inline void update_agent_radius(Agent *agent) {
+    agent->radius = 0.5f * sqrtf(agent->sim_length * agent->sim_length + agent->sim_width * agent->sim_width);
+}
+
 static inline void apply_infraction_behavior(Agent *agent, int behavior) {
     if (behavior == STOP_AGENT && !agent->stopped) {
         agent->stopped = 1;
@@ -622,23 +648,48 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     return 0.0f;
 }
 
-static inline void project_vector_to_ego_frame(
-    const Agent *ego,
+static inline void project_vector_to_local(
+    float world_vec_x,
+    float world_vec_y,
+    float cos_heading,
+    float sin_heading,
+    float *local_x,
+    float *local_y) {
+    // Rotate a world-frame vector into a local frame with heading (cos_heading, sin_heading). Rotation only.
+    *local_x = world_vec_x * cos_heading + world_vec_y * sin_heading;
+    *local_y = -world_vec_x * sin_heading + world_vec_y * cos_heading;
+}
+
+static inline void project_point_to_local(
     float world_x,
     float world_y,
-    float *ego_x,
-    float *ego_y) {
-    *ego_x = world_x * ego->cos_heading + world_y * ego->sin_heading;
-    *ego_y = -world_x * ego->sin_heading + world_y * ego->cos_heading;
+    float center_x,
+    float center_y,
+    float cos_heading,
+    float sin_heading,
+    float *local_x,
+    float *local_y) {
+    // Transform a world point into a local frame centered at (center_x,center_y) with heading
+    // (cos_heading,sin_heading). Translate to the center, then rotate.
+    project_vector_to_local(world_x - center_x, world_y - center_y, cos_heading, sin_heading, local_x, local_y);
 }
 
 static inline void project_point_to_ego_frame(
     const Agent *ego,
     float world_x,
     float world_y,
-    float *ego_x,
-    float *ego_y) {
-    project_vector_to_ego_frame(ego, world_x - ego->sim_x, world_y - ego->sim_y, ego_x, ego_y);
+    float *rel_x,
+    float *rel_y) {
+    project_point_to_local(world_x, world_y, ego->sim_x, ego->sim_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
+}
+
+static inline void project_vector_to_ego_frame(
+    const Agent *ego,
+    float world_vec_x,
+    float world_vec_y,
+    float *rel_x,
+    float *rel_y) {
+    project_vector_to_local(world_vec_x, world_vec_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
 }
 
 // ========================================
@@ -2109,72 +2160,132 @@ static float compute_displacement_error(Agent *agent, int timestep) {
     return displacement;
 }
 
-static bool check_line_intersection(float p1[2], float p2[2], float q1[2], float q2[2]) {
-    if (fmaxf(p1[0], p2[0]) < fminf(q1[0], q2[0]) || fminf(p1[0], p2[0]) > fmaxf(q1[0], q2[0])
-        || fmaxf(p1[1], p2[1]) < fminf(q1[1], q2[1]) || fminf(p1[1], p2[1]) > fmaxf(q1[1], q2[1])) {
-        return false;
-    }
-
-    // Calculate vectors
-    float dx1 = p2[0] - p1[0];
-    float dy1 = p2[1] - p1[1];
-    float dx2 = q2[0] - q1[0];
-    float dy2 = q2[1] - q1[1];
-
-    // Calculate cross products
-    float cross = dx1 * dy2 - dy1 * dx2;
-
-    // If lines are parallel
-    if (cross == 0) {
-        return false;
-    }
-
-    // Calculate relative vectors between start points
-    float dx3 = p1[0] - q1[0];
-    float dy3 = p1[1] - q1[1];
-
-    // Calculate parameters for intersection point
-    float s = (dx1 * dy3 - dy1 * dx3) / cross;
-    float t = (dx2 * dy3 - dy2 * dx3) / cross;
-
-    // Check if intersection point lies within both line segments
-    return (s >= 0 && s <= 1 && t >= 0 && t <= 1);
-}
-
-static void compute_agent_corners(const Agent *agent, float corners[4][2]) {
+static void compute_bounding_box_corners(
+    float x,
+    float y,
+    float cos_h,
+    float sin_h,
+    float half_l,
+    float half_w,
+    float corners[4][2]) {
     static const float offsets[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
-    float half_length = agent->sim_length / 2.0f;
-    float half_width = agent->sim_width / 2.0f;
-
     for (int i = 0; i < 4; i++) {
-        corners[i][0] = agent->sim_x
-            + (offsets[i][0] * half_length * agent->cos_heading - offsets[i][1] * half_width * agent->sin_heading);
-        corners[i][1] = agent->sim_y
-            + (offsets[i][0] * half_length * agent->sin_heading + offsets[i][1] * half_width * agent->cos_heading);
+        corners[i][0] = x + (offsets[i][0] * half_l * cos_h - offsets[i][1] * half_w * sin_h);
+        corners[i][1] = y + (offsets[i][0] * half_l * sin_h + offsets[i][1] * half_w * cos_h);
     }
 }
 
-static bool check_agent_corners_cross_stop_line(float corners[4][2], TrafficControlElement *traffic) {
-    float sl_dx = traffic->stop_line[3] - traffic->stop_line[0];
-    float sl_dy = traffic->stop_line[4] - traffic->stop_line[1];
-    float ext = (STOP_LINE_EXTENSION_FACTOR - 1.0f) * 0.5f;
-    float ext_p1[2] = {traffic->stop_line[0] - ext * sl_dx, traffic->stop_line[1] - ext * sl_dy};
-    float ext_p2[2] = {traffic->stop_line[3] + ext * sl_dx, traffic->stop_line[4] + ext * sl_dy};
-
-    for (int k = 0; k < 4; k++) {
-        if (k == 2) {
+static bool check_segment_intersects_aabb(float p0[2], float p1[2], float half_l, float half_w) {
+    // Liang-Barsky slab clip of segment p0->p1 against the origin-centered AABB
+    // [-half_l,half_l] x [-half_w,half_w]. True if the segment crosses the box or starts inside it.
+    // A degenerate (zero-length) segment reduces to a point-in-box test.
+    float dx = p1[0] - p0[0];
+    float dy = p1[1] - p0[1];
+    float t0 = 0.0f;
+    float t1 = 1.0f;
+    float p[4] = {-dx, dx, -dy, dy};
+    float q[4] = {p0[0] + half_l, half_l - p0[0], p0[1] + half_w, half_w - p0[1]};
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.0f) {
+            if (q[i] < 0.0f) {
+                return false; // parallel to this slab and outside it
+            }
             continue;
         }
-        int next = (k + 1) % 4;
-        if (check_line_intersection(corners[k], corners[next], ext_p1, ext_p2)) {
-            return true;
+        float r = q[i] / p[i];
+        if (p[i] < 0.0f) {
+            if (r > t1) {
+                return false;
+            }
+            if (r > t0) {
+                t0 = r;
+            }
+        } else {
+            if (r < t0) {
+                return false;
+            }
+            if (r < t1) {
+                t1 = r;
+            }
         }
     }
-
-    return false;
+    return true;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][2], bool include_yellow_violation) {
+static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float by, Agent *agent) {
+    // Segment AB is static; the box sweeps from prev to cur pose. Projecting AB into the box-local frame
+    // at both poses makes the box a fixed origin-centered AABB and AB a quad with corners a_prev, b_prev,
+    // a_cur, b_cur. Any of the quad's 4 edges hitting the AABB means the box crossed AB this step.
+    float a_prev[2], b_prev[2], a_cur[2], b_cur[2];
+    float half_length = agent->sim_length / 2.0f, half_width = agent->sim_width / 2.0f;
+    project_point_to_local(
+        ax,
+        ay,
+        agent->prev_x,
+        agent->prev_y,
+        agent->prev_cos_heading,
+        agent->prev_sin_heading,
+        &a_prev[0],
+        &a_prev[1]);
+    project_point_to_local(
+        bx,
+        by,
+        agent->prev_x,
+        agent->prev_y,
+        agent->prev_cos_heading,
+        agent->prev_sin_heading,
+        &b_prev[0],
+        &b_prev[1]);
+    project_point_to_local(
+        ax,
+        ay,
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        &a_cur[0],
+        &a_cur[1]);
+    project_point_to_local(
+        bx,
+        by,
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        &b_cur[0],
+        &b_cur[1]);
+    if (check_segment_intersects_aabb(a_prev, b_prev, half_length, half_width)
+        || check_segment_intersects_aabb(a_cur, b_cur, half_length, half_width)
+        || check_segment_intersects_aabb(a_prev, a_cur, half_length, half_width)
+        || check_segment_intersects_aabb(b_prev, b_cur, half_length, half_width)) {
+        return true;
+    }
+
+    // All edges can miss while the swept region still covers the box center: consistent cross-product
+    // sign means the origin is inside the quad. The quad chords the prev/cur segments, but the true
+    // endpoint paths are arcs, so at large per-step yaw the chords under-cover and a swept center reads
+    // as outside (missed); exact for normal driving's small yaw. Degenerate prev == cur is a line:
+    // opposite signs => false, and the boundary tests above already caught any overlap.
+    float swept_quad[4][2] = {
+        {a_prev[0], a_prev[1]},
+        {b_prev[0], b_prev[1]},
+        {b_cur[0], b_cur[1]},
+        {a_cur[0], a_cur[1]},
+    };
+    bool has_positive_cross = false;
+    bool has_negative_cross = false;
+    for (int i = 0; i < 4; i++) {
+        int j = (i + 1) % 4;
+        float edge_x = swept_quad[j][0] - swept_quad[i][0];
+        float edge_y = swept_quad[j][1] - swept_quad[i][1];
+        float cross = edge_x * -swept_quad[i][1] - edge_y * -swept_quad[i][0];
+        has_positive_cross = has_positive_cross || cross > 0.0f;
+        has_negative_cross = has_negative_cross || cross < 0.0f;
+    }
+    return has_positive_cross != has_negative_cross;
+}
+
+static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -2219,7 +2330,16 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, float corners[4][
             continue;
         }
 
-        if (check_agent_corners_cross_stop_line(corners, tc)) {
+        // Stop line segment vector (endpoint 0 -> endpoint 1)
+        float sl_dx = tc->stop_line[3] - tc->stop_line[0];
+        float sl_dy = tc->stop_line[4] - tc->stop_line[1];
+        // Lengthen the segment by STOP_LINE_EXTENSION_FACTOR, growing equally
+        // from both endpoints so agents crossing near the edges are still caught.
+        float ext = (STOP_LINE_EXTENSION_FACTOR - 1.0f) * 0.5f;
+        float ext_p1[2] = {tc->stop_line[0] - ext * sl_dx, tc->stop_line[1] - ext * sl_dy};
+        float ext_p2[2] = {tc->stop_line[3] + ext * sl_dx, tc->stop_line[4] + ext * sl_dy};
+
+        if (check_segment_crosses_moving_box(ext_p1[0], ext_p1[1], ext_p2[0], ext_p2[1], agent)) {
             return true;
         }
     }
@@ -2278,10 +2398,7 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
         return false;
     }
 
-    float corners[4][2];
-    compute_agent_corners(agent, corners);
-
-    if (check_stop_line_crossing(env, agent, corners, false)) {
+    if (check_stop_line_crossing(env, agent, false)) {
         return true;
     }
 
@@ -2304,19 +2421,30 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         return false;
     }
 
-    // Get car corners in world space
     float car1_corners[4][2];
+    compute_bounding_box_corners(
+        car1->sim_x,
+        car1->sim_y,
+        car1->cos_heading,
+        car1->sin_heading,
+        car1->sim_length / 2.0f,
+        car1->sim_width / 2.0f,
+        car1_corners);
     float car2_corners[4][2];
-    compute_agent_corners(car1, car1_corners);
-    compute_agent_corners(car2, car2_corners);
+    compute_bounding_box_corners(
+        car2->sim_x,
+        car2->sim_y,
+        car2->cos_heading,
+        car2->sin_heading,
+        car2->sim_length / 2.0f,
+        car2->sim_width / 2.0f,
+        car2_corners);
 
-    // Get the axes to check (normalized vectors perpendicular to each edge)
-    float axes[4][2] = {
-        {car1->cos_heading, car1->sin_heading},  // Car1's length axis
-        {-car1->sin_heading, car1->cos_heading}, // Car1's width axis
-        {car2->cos_heading, car2->sin_heading},  // Car2's length axis
-        {-car2->sin_heading, car2->cos_heading}  // Car2's width axis
-    };
+    float axes[4][2]
+        = {{car1->cos_heading, car1->sin_heading},
+           {-car1->sin_heading, car1->cos_heading},
+           {car2->cos_heading, car2->sin_heading},
+           {-car2->sin_heading, car2->cos_heading}};
 
     for (int i = 0; i < 4; i++) {
         float min1 = INFINITY, max1 = -INFINITY;
@@ -2336,6 +2464,78 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
     return true;
 }
 
+static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b_disp) {
+    // Swept-OBB collision for the prev->cur step (tunnelling-safe).
+
+    // Early z-axis rejection
+    float a_top = a->sim_z + a->sim_height;
+    float b_top = b->sim_z + b->sim_height;
+    if (a_top < b->sim_z || b_top < a->sim_z) {
+        return false;
+    }
+
+    // Current pose overlap (incl. cross/plus with no corner inside).
+    if (check_obb_collision(a, b)) {
+        return true;
+    }
+
+    // Both nearly static: a sub-threshold step can't open a tunnelling gap the sweep would catch.
+    if (a_disp < COLLISION_SKIP_DISP_M && b_disp < COLLISION_SKIP_DISP_M) {
+        return false;
+    }
+
+    // Sweep each of other's corners along its prev->cur segment, transformed into ego's prev/cur
+    // local frame, and test vs ego's origin-centered AABB. Run both orderings: a corner of one box
+    // can sweep through the other even when the reverse ordering misses.
+    for (int d = 0; d < 2; d++) {
+        Agent *ego = d ? a : b;
+        Agent *other = d ? b : a;
+        float oc_prev[4][2], oc_cur[4][2];
+        compute_bounding_box_corners(
+            other->prev_x,
+            other->prev_y,
+            other->prev_cos_heading,
+            other->prev_sin_heading,
+            other->sim_length / 2.0f,
+            other->sim_width / 2.0f,
+            oc_prev);
+        compute_bounding_box_corners(
+            other->sim_x,
+            other->sim_y,
+            other->cos_heading,
+            other->sin_heading,
+            other->sim_length / 2.0f,
+            other->sim_width / 2.0f,
+            oc_cur);
+        float ego_half_l = ego->sim_length / 2.0f, ego_half_w = ego->sim_width / 2.0f;
+        for (int k = 0; k < 4; k++) {
+            float q_prev[2], q_cur[2];
+            project_point_to_local(
+                oc_prev[k][0],
+                oc_prev[k][1],
+                ego->prev_x,
+                ego->prev_y,
+                ego->prev_cos_heading,
+                ego->prev_sin_heading,
+                &q_prev[0],
+                &q_prev[1]);
+            project_point_to_local(
+                oc_cur[k][0],
+                oc_cur[k][1],
+                ego->sim_x,
+                ego->sim_y,
+                ego->cos_heading,
+                ego->sin_heading,
+                &q_cur[0],
+                &q_cur[1]);
+            if (check_segment_intersects_aabb(q_prev, q_cur, ego_half_l, ego_half_w)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static int collision_check(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
@@ -2344,10 +2544,9 @@ static int collision_check(Drive *env, int agent_idx) {
     }
 
     int car_collided_with_index = -1;
+    float ego_disp = compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->prev_x, agent->prev_y);
 
-    // O(N) linear scan over all agents (active + static); no spatial grid used here.
-    // COLLISION_QUICK_CHECK_DIST (15m) is the real bottleneck — the 5m-cell grid
-    // neighborhood covers ~50m but this quick check prunes at 15m.
+    // Linear over all actors; pair radius quick-check prunes before OBB SAT.
     for (int i = 0; i < env->num_agents; i++) {
         int index = -1;
         if (i < env->active_agent_count) {
@@ -2360,14 +2559,22 @@ static int collision_check(Drive *env, int agent_idx) {
         }
 
         Agent *other_agent = &env->agents[index];
-
-        float dist_sq
-            = ((other_agent->sim_x - agent->sim_x) * (other_agent->sim_x - agent->sim_x)
-               + (other_agent->sim_y - agent->sim_y) * (other_agent->sim_y - agent->sim_y));
-        if (dist_sq > COLLISION_QUICK_CHECK_DIST * COLLISION_QUICK_CHECK_DIST) {
+        if (other_agent->sim_x == INVALID_POSITION || other_agent->removed || other_agent->sim_valid != 1) {
             continue;
         }
-        if (check_obb_collision(agent, other_agent)) {
+
+        float other_disp = compute_euclidean_distance(
+            other_agent->sim_x,
+            other_agent->sim_y,
+            other_agent->prev_x,
+            other_agent->prev_y);
+        float threshold = agent->radius + other_agent->radius + COLLISION_PAIR_MARGIN_M + ego_disp + other_disp;
+        float ddx = other_agent->sim_x - agent->sim_x;
+        float ddy = other_agent->sim_y - agent->sim_y;
+        if (ddx * ddx + ddy * ddy > threshold * threshold) {
+            continue;
+        }
+        if (check_moving_obb_collision(agent, other_agent, ego_disp, other_disp)) {
             car_collided_with_index = index;
             break;
         }
@@ -2376,7 +2583,6 @@ static int collision_check(Drive *env, int agent_idx) {
     return car_collided_with_index;
 }
 
-// Classify whether a collision is at-fault for the ego agent.
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     Agent *agent = &env->agents[agent_idx];
     Agent *other = &env->agents[other_idx];
@@ -2402,33 +2608,42 @@ static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     }
 
     float agent_corners[4][2];
-    compute_agent_corners(agent, agent_corners);
+    compute_bounding_box_corners(
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        agent->sim_length / 2.0f,
+        agent->sim_width / 2.0f,
+        agent_corners);
 
-    float other_half_length = 0.5f * other->sim_length;
-    float other_half_width = 0.5f * other->sim_width;
-    bool front_bumper_intersects = false;
-    for (int i = 0; i < 2; i++) {
-        float corner_dx = agent_corners[i][0] - other->sim_x;
-        float corner_dy = agent_corners[i][1] - other->sim_y;
-        float local_long = corner_dx * other->cos_heading + corner_dy * other->sin_heading;
-        float local_lat = -corner_dx * other->sin_heading + corner_dy * other->cos_heading;
-        if (fabsf(local_long) <= other_half_length && fabsf(local_lat) <= other_half_width) {
-            front_bumper_intersects = true;
-            break;
-        }
-    }
-
-    if (!front_bumper_intersects) {
-        float other_corners[4][2];
-        compute_agent_corners(other, other_corners);
-        for (int i = 0; i < 4; i++) {
-            int next = (i + 1) % 4;
-            if (check_line_intersection(agent_corners[0], agent_corners[1], other_corners[i], other_corners[next])) {
-                front_bumper_intersects = true;
-                break;
-            }
-        }
-    }
+    // Front bumper = segment between front-left (corner 0) and front-right (corner 1).
+    // Transform into other's local frame and test vs its origin-centered AABB: this catches both
+    // a bumper corner inside other and the bumper edge crossing other's boundary.
+    float front_left_local[2], front_right_local[2];
+    project_point_to_local(
+        agent_corners[0][0],
+        agent_corners[0][1],
+        other->sim_x,
+        other->sim_y,
+        other->cos_heading,
+        other->sin_heading,
+        &front_left_local[0],
+        &front_left_local[1]);
+    project_point_to_local(
+        agent_corners[1][0],
+        agent_corners[1][1],
+        other->sim_x,
+        other->sim_y,
+        other->cos_heading,
+        other->sin_heading,
+        &front_right_local[0],
+        &front_right_local[1]);
+    bool front_bumper_intersects = check_segment_intersects_aabb(
+        front_left_local,
+        front_right_local,
+        other->sim_length / 2.0f,
+        other->sim_width / 2.0f);
 
     if (front_bumper_intersects) {
         return true;
@@ -2470,52 +2685,30 @@ static inline void compute_pairwise_ttc(Agent *ego, Agent *other) {
         return;
     }
 
-    float ego_front_x = ego_x + 0.5f * ego->sim_length * ego_heading_x;
-    float ego_front_y = ego_y + 0.5f * ego->sim_length * ego_heading_y;
-    float ego_rear_x = ego_x - 0.5f * ego->sim_length * ego_heading_x;
-    float ego_rear_y = ego_y - 0.5f * ego->sim_length * ego_heading_y;
-    float ego_left_x = -ego_heading_y;
-    float ego_left_y = ego_heading_x;
-    float ego_half_width = 0.5f * ego->sim_width;
-
-    float other_front_x = other_x + 0.5f * other->sim_length * other_heading_x;
-    float other_front_y = other_y + 0.5f * other->sim_length * other_heading_y;
-    float other_rear_x = other_x - 0.5f * other->sim_length * other_heading_x;
-    float other_rear_y = other_y - 0.5f * other->sim_length * other_heading_y;
-    float other_left_x = -other_heading_y;
-    float other_left_y = other_heading_x;
-    float other_half_width = 0.5f * other->sim_width;
-
-    float ego_corners_x[4] = {
-        ego_front_x + ego_half_width * ego_left_x,
-        ego_front_x - ego_half_width * ego_left_x,
-        ego_rear_x + ego_half_width * ego_left_x,
-        ego_rear_x - ego_half_width * ego_left_x,
-    };
-    float ego_corners_y[4] = {
-        ego_front_y + ego_half_width * ego_left_y,
-        ego_front_y - ego_half_width * ego_left_y,
-        ego_rear_y + ego_half_width * ego_left_y,
-        ego_rear_y - ego_half_width * ego_left_y,
-    };
-    float other_corners_x[4] = {
-        other_front_x + other_half_width * other_left_x,
-        other_front_x - other_half_width * other_left_x,
-        other_rear_x + other_half_width * other_left_x,
-        other_rear_x - other_half_width * other_left_x,
-    };
-    float other_corners_y[4] = {
-        other_front_y + other_half_width * other_left_y,
-        other_front_y - other_half_width * other_left_y,
-        other_rear_y + other_half_width * other_left_y,
-        other_rear_y - other_half_width * other_left_y,
-    };
+    float ego_corners[4][2];
+    float other_corners[4][2];
+    compute_bounding_box_corners(
+        ego->sim_x,
+        ego->sim_y,
+        ego->cos_heading,
+        ego->sin_heading,
+        ego->sim_length / 2.0f,
+        ego->sim_width / 2.0f,
+        ego_corners);
+    compute_bounding_box_corners(
+        other->sim_x,
+        other->sim_y,
+        other->cos_heading,
+        other->sin_heading,
+        other->sim_length / 2.0f,
+        other->sim_width / 2.0f,
+        other_corners);
 
     float min_dtc_sq = DEFAULT_DTC * DEFAULT_DTC;
     for (int ego_corner = 0; ego_corner < 4; ego_corner++) {
         for (int other_corner = 0; other_corner < 4; other_corner++) {
-            float dx = ego_corners_x[ego_corner] - other_corners_x[other_corner];
-            float dy = ego_corners_y[ego_corner] - other_corners_y[other_corner];
+            float dx = ego_corners[ego_corner][0] - other_corners[other_corner][0];
+            float dy = ego_corners[ego_corner][1] - other_corners[other_corner][1];
             min_dtc_sq = fminf(min_dtc_sq, dx * dx + dy * dy);
         }
     }
@@ -2999,9 +3192,6 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
     scaled.sim_length *= 1.1f;
     scaled.sim_width *= 1.1f;
 
-    float corners[4][2];
-    compute_agent_corners(&scaled, corners);
-
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
         env,
@@ -3022,23 +3212,17 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
             if (abs_dz > Z_BUFFER) {
                 continue;
             }
-            float start[2] = {element->x[geometry_idx], element->y[geometry_idx]};
-            float end[2] = {element->x[geometry_idx + 1], element->y[geometry_idx + 1]};
-            for (int k = 0; k < 4; k++) {
-                int next = (k + 1) % 4;
-                if (check_line_intersection(corners[k], corners[next], start, end)) {
-                    return true;
-                }
+            if (check_segment_crosses_moving_box(
+                    element->x[geometry_idx],
+                    element->y[geometry_idx],
+                    element->x[geometry_idx + 1],
+                    element->y[geometry_idx + 1],
+                    &scaled)) {
+                return true;
             }
         }
     }
     return false;
-}
-
-static bool check_spawn_red_light_violation(Drive *env, Agent *tmp_agent) {
-    float corners[4][2];
-    compute_agent_corners(tmp_agent, corners);
-    return check_stop_line_crossing(env, tmp_agent, corners, true);
 }
 
 static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
@@ -3124,10 +3308,16 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         tmp_agent.sim_heading = spawn_heading;
         tmp_agent.cos_heading = cosf(spawn_heading);
         tmp_agent.sin_heading = sinf(spawn_heading);
+        // Spawn pose is static: prev == curr makes the moving-box checks degenerate to static.
+        tmp_agent.prev_x = spawn_x;
+        tmp_agent.prev_y = spawn_y;
+        tmp_agent.prev_cos_heading = tmp_agent.cos_heading;
+        tmp_agent.prev_sin_heading = tmp_agent.sin_heading;
         tmp_agent.yaw_rate = 0.0f;
         tmp_agent.sim_length = spawn_length;
         tmp_agent.sim_width = spawn_width;
         tmp_agent.sim_height = spawn_height;
+        update_agent_radius(&tmp_agent);
         tmp_agent.current_lane_idx = start_lane_idx;
 
         if (check_spawn_collision(env, num_agents, &tmp_agent)) {
@@ -3138,7 +3328,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_spawn_red_light_violation(env, &tmp_agent)) {
+        if (check_stop_line_crossing(env, &tmp_agent, true)) {
             continue;
         }
 
@@ -3158,9 +3348,11 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_heading = spawn_heading;
     agent->cos_heading = cosf(spawn_heading);
     agent->sin_heading = sinf(spawn_heading);
+    copy_pose_to_prev(agent);
     agent->sim_length = spawn_length;
     agent->sim_width = spawn_width;
     agent->sim_height = spawn_height;
+    update_agent_radius(agent);
     agent->sim_valid = 1;
     agent->wheelbase = 0.6f * spawn_length;
     agent->current_lane_idx = start_lane_idx;
@@ -3224,8 +3416,9 @@ static void set_start_position(Drive *env) {
             agent->sim_length = agent->log_length[step];
             agent->sim_width = agent->log_width[step];
             agent->sim_height = agent->log_height[step];
-            // Estimate wheelbase as 60% of length
+            update_agent_radius(agent);
             agent->wheelbase = 0.6f * agent->sim_length;
+            copy_pose_to_prev(agent);
 
             if (agent->type == UNKNOWN) {
                 continue;
@@ -3475,6 +3668,7 @@ void move_expert(Drive *env, int agent_idx) {
         agent->sim_length = agent->log_length[t];
         agent->sim_width = agent->log_width[t];
         agent->sim_height = agent->log_height[t];
+        update_agent_radius(agent);
         agent->wheelbase = 0.6f * agent->sim_length;
     }
     agent->yaw_rate = compute_log_yaw_rate(agent, t, env->dt);
@@ -3482,6 +3676,15 @@ void move_expert(Drive *env, int agent_idx) {
     agent->sim_vy = agent->log_velocity_y[t];
     update_agent_speed(agent);
     agent->sim_valid = agent->log_valid[t];
+
+    if (t == 0 || agent->log_valid[t - 1] == 0) {
+        copy_pose_to_prev(agent);
+    } else {
+        agent->prev_x = agent->log_trajectory_x[t - 1];
+        agent->prev_y = agent->log_trajectory_y[t - 1];
+        agent->prev_cos_heading = cosf(agent->log_heading[t - 1]);
+        agent->prev_sin_heading = sinf(agent->log_heading[t - 1]);
+    }
 }
 
 void remove_bad_trajectories(Drive *env) {
@@ -3965,9 +4168,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     float best_candidate_signed_lane_distance = 0.0f;
     float best_candidate_lane_heading = 0.0f;
 
-    float corners[4][2];
-    compute_agent_corners(agent, corners);
-
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
         env,
@@ -3995,21 +4195,18 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         int geometry_idx = entity_list[i].geometry_idx;
         RoadMapElement *element = &env->road_elements[entity_idx];
 
-        // Check for offroad collision with road edges
+        // Check for offroad crossing with road edges
         if (is_road_edge(element->type)) {
-            float start[2] = {element->x[geometry_idx], element->y[geometry_idx]};
-            float end[2] = {element->x[geometry_idx + 1], element->y[geometry_idx + 1]};
             float abs_dz = fabsf(element->z[geometry_idx] - agent->sim_z);
             if (abs_dz > Z_BUFFER) {
                 continue;
             }
-            for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
-                int next = (k + 1) % 4;
-                if (check_line_intersection(corners[k], corners[next], start, end)) {
-                    is_offroad = true;
-                    break;
-                }
-            }
+            is_offroad = check_segment_crosses_moving_box(
+                element->x[geometry_idx],
+                element->y[geometry_idx],
+                element->x[geometry_idx + 1],
+                element->y[geometry_idx + 1],
+                agent);
         }
 
         if (is_offroad) {
@@ -4212,11 +4409,18 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         return;
     }
 
-    float distance_to_goal
-        = compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
+    // Goal reaching: swept check against the step's motion segment (prev -> sim),
+    // so a high dt cannot jump over the goal disc between two states.
+    float distance_to_goal = compute_point_to_segment_distance(
+        agent->goal_position_x,
+        agent->goal_position_y,
+        agent->prev_x,
+        agent->prev_y,
+        agent->sim_x,
+        agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
-
-    // Goal reaching — guard against incrementing past num_target_waypoints
+    // Guard against incrementing past num_target_waypoints: replay mode leaves current_goal_idx
+    // saturated at num_target_waypoints, and the reached-goal condition must not fire again.
     if (agent->current_goal_idx < env->num_target_waypoints
         && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
@@ -4488,8 +4692,6 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     typedef struct {
         int index;
         float dist_sq;
-        float dx;
-        float dy;
         float dz;
     } AgentDistance;
     AgentDistance nearby_agents[env->num_agents];
@@ -4514,8 +4716,6 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         }
         nearby_agents[nearby_count].index = index;
         nearby_agents[nearby_count].dist_sq = dist_sq;
-        nearby_agents[nearby_count].dx = dx;
-        nearby_agents[nearby_count].dy = dy;
         nearby_agents[nearby_count].dz = dz;
         nearby_count++;
     }
@@ -4538,8 +4738,17 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
 
     for (int j = 0; j < partners_to_write; j++) {
         Agent *other = &env->agents[nearby_agents[j].index];
-        float rel_x, rel_y, rel_heading_x, rel_heading_y;
-        project_vector_to_ego_frame(ego, nearby_agents[j].dx, nearby_agents[j].dy, &rel_x, &rel_y);
+        float rel_x, rel_y, rel_heading_x, rel_heading_y, rel_vx, rel_vy;
+        project_point_to_ego_frame(ego, other->sim_x, other->sim_y, &rel_x, &rel_y);
+        project_point_to_local(
+            other->sim_vx,
+            other->sim_vy,
+            ego->sim_vx,
+            ego->sim_vy,
+            ego->cos_heading,
+            ego->sin_heading,
+            &rel_vx,
+            &rel_vy);
         project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
         obs[obs_idx++] = rel_x / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_y / env->obs_norm_xy_offset_m;
@@ -4782,6 +4991,7 @@ static void compute_observations(Drive *env) {
 
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
+    copy_pose_to_prev(agent);
 
     if (agent->removed) {
         invalidate_agent(agent);
@@ -5037,6 +5247,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
+        for (int i = 0; i < env->num_total_agents; i++) {
+            copy_pose_to_prev(&env->agents[i]);
+        }
         for (int x = 0; x < env->active_agent_count; x++) {
             env->logs[x] = (Log) {0};
             int agent_idx = env->active_agent_indices[x];
