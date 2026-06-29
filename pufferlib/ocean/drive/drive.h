@@ -475,7 +475,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
     {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
-    {0.0f, 0.1f, 1},       // REWARD_COEF_COMFORT         α_comfort ~ logU(0, 0.1)
+    {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5f, 0.1)
     {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
     {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ logU(2.5e-4, 7.5e-3)
