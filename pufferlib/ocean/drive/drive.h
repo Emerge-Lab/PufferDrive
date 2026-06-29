@@ -2328,8 +2328,11 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yell
             continue;
         }
 
+        // Stop line segment vector (endpoint 0 -> endpoint 1)
         float sl_dx = tc->stop_line[3] - tc->stop_line[0];
         float sl_dy = tc->stop_line[4] - tc->stop_line[1];
+        // Lengthen the segment by STOP_LINE_EXTENSION_FACTOR, growing equally
+        // from both endpoints so agents crossing near the edges are still caught.
         float ext = (STOP_LINE_EXTENSION_FACTOR - 1.0f) * 0.5f;
         float ext_p1[2] = {tc->stop_line[0] - ext * sl_dx, tc->stop_line[1] - ext * sl_dy};
         float ext_p2[2] = {tc->stop_line[3] + ext * sl_dx, tc->stop_line[4] + ext * sl_dy};
