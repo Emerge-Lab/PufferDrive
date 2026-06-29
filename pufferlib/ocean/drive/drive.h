@@ -164,7 +164,9 @@ static const int ROAD_OFFSETS[25][2]
 // Dynamics Models
 #define CLASSIC 0
 #define JERK 1
-
+// Action Type
+#define DISCRETE 0
+#define CONTINUOUS 1
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define STEERING_LIMIT 0.667f
@@ -465,26 +467,27 @@ struct Drive {
 typedef struct {
     float min_val;
     float max_val;
+    int log_scale;
 } RewardBound;
 
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
-    {2.0f, 12.0f},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
-    {0.0f, 20.0f},      // REWARD_COEF_GOAL_SPEED
-    {0.0f, 3.0f},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
-    {0.0f, 3.0f},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
-    {0.0f, 0.1f},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
-    {2.5e-4f, 2.5e-2f}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
-    {0.0f, 1.0f},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
-    {2.5e-4f, 7.5e-3f}, // REWARD_COEF_LANE_CENTER     α_l-center ~ U(2.5e-4, 7.5e-3)
-    {-0.5f, 0.5f},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
-    {0.0f, 5e-3f},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
-    {2.5e-4f, 7.5e-3f}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
-    {0.0f, 1.0f},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
-    {0.0f, 5e-5f},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
-    {0.0f, 1.0f},       // REWARD_COEF_OVERSPEED
-    {0.8f, 1.25f},      // REWARD_COEF_THROTTLE        C_throttle
-    {0.8f, 1.25f},      // REWARD_COEF_STEER           C_steer
-    {0.666f, 1.5f},     // REWARD_COEF_ACC             C_acc
+    {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
+    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
+    {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
+    {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
+    {0.0f, 0.1f, 1},       // REWARD_COEF_COMFORT         α_comfort ~ logU(0, 0.1)
+    {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ logU(2.5e-4, 7.5e-3)
+    {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
+    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_REVERSE         α_reverse ~ logU(2.5e-4, 7.5e-3)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
+    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
+    {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
+    {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
+    {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
 };
 
 // ========================================
@@ -534,16 +537,20 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
-static float random_uniform(float min_val, float max_val) {
+static float sample_uniform(float min_val, float max_val) {
     return min_val + ((float) rand() / (float) RAND_MAX) * (max_val - min_val);
 }
 
-static float mixed_uniform(float a) {
+static float sample_log_uniform(float min_val, float max_val) {
+    return expf(sample_uniform(logf(min_val), logf(max_val)));
+}
+
+static float sample_mixed_uniform(float a) {
     // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
     if ((float) rand() / (float) RAND_MAX < 0.5f) {
-        return random_uniform(1.0f / a, 1.0f);
+        return sample_uniform(1.0f / a, 1.0f);
     } else {
-        return random_uniform(1.0f, a);
+        return sample_uniform(1.0f, a);
     }
 }
 
@@ -2070,7 +2077,7 @@ static void compute_goals(Drive *env, int agent_idx) {
     for (int iter = 0; iter <= 4; iter++) {
         float total_spacing = 0.0f;
         for (int i = 0; i < num_target_waypoints; i++) {
-            goal_spacings[i] = random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
+            goal_spacings[i] = sample_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
             total_spacing += goal_spacings[i];
         }
 
@@ -3024,9 +3031,9 @@ static int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *ou
 
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
     agent->is_blind_partner
-        = (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
+        = (env->partner_blindness_prob > 0.0f && sample_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
     agent->is_phantom_braker
-        = (env->phantom_braking_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->phantom_braking_prob) ? 1 : 0;
+        = (env->phantom_braking_prob > 0.0f && sample_uniform(0.0f, 1.0f) < env->phantom_braking_prob) ? 1 : 0;
     agent->phantom_braking_counter = 0;
 }
 
@@ -3048,13 +3055,15 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         };
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
-            agent->reward_coefs[c] = random_uniform(REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
+            agent->reward_coefs[c] = REWARD_BOUNDS[c].log_scale
+                ? sample_log_uniform(REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
+                : sample_uniform(REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
-        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
+        agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(1.25f);
+        agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(1.25f);
+        agent->reward_coefs[REWARD_COEF_ACC] = sample_mixed_uniform(1.5f);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -3081,7 +3090,7 @@ static void generate_traffic_light_states(Drive *env) {
     float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (!env->eval_mode) && (sample_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -3103,14 +3112,14 @@ static void generate_traffic_light_states(Drive *env) {
 
         if (!env->eval_mode) {
             // Individual removal
-            if (random_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            if (sample_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
                 }
                 continue;
             }
             // Always green
-            if (random_uniform(0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+            if (sample_uniform(0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
                 }
@@ -3125,9 +3134,9 @@ static void generate_traffic_light_states(Drive *env) {
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;
         } else {
-            dur_green = random_uniform(0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = random_uniform(0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = random_uniform(0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+            dur_green = sample_uniform(0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+            dur_yellow = sample_uniform(0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
+            dur_red = sample_uniform(0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
         }
 
         int steps_green = (int) (dur_green / dt);
@@ -3248,12 +3257,12 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_length, spawn_width;
     if (env->eval_mode) {
         // Fixed size for eval mode
-        spawn_length = random_uniform(2.0f, 5.5f);
-        spawn_width = random_uniform(1.5f, 2.5f);
+        spawn_length = sample_uniform(2.0f, 5.5f);
+        spawn_width = sample_uniform(1.5f, 2.5f);
     } else {
         // Random size for training mode
-        spawn_length = random_uniform(0.8f, 7.0f);
-        spawn_width = random_uniform(0.8f, 2.7f);
+        spawn_length = sample_uniform(0.8f, 7.0f);
+        spawn_width = sample_uniform(0.8f, 2.7f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -4624,8 +4633,17 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     if (env->reward_conditioning) {
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float normalized_coef = (ego->reward_coefs[coef_idx] - REWARD_BOUNDS[coef_idx].min_val)
-                / ((REWARD_BOUNDS[coef_idx].max_val - REWARD_BOUNDS[coef_idx].min_val) + 1e-8f);
+            float lo = REWARD_BOUNDS[coef_idx].min_val;
+            float hi = REWARD_BOUNDS[coef_idx].max_val;
+            float coef = ego->reward_coefs[coef_idx];
+            float normalized_coef;
+            if (REWARD_BOUNDS[coef_idx].log_scale) {
+                // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
+                float clamped = fmaxf(lo, fminf(hi, coef));
+                normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
+            } else {
+                normalized_coef = (coef - lo) / ((hi - lo) + 1e-8f);
+            }
             float clamped_coef = fmaxf(0.0f, fminf(1.0f, normalized_coef));
             obs[obs_idx++] = 2.0f * clamped_coef - 1.0f;
         }
@@ -4682,7 +4700,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    if (ego->is_blind_partner && random_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+    if (ego->is_blind_partner && sample_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
@@ -5010,7 +5028,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         phantom_braking_active = 1;
     } else if (
         agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
-        && random_uniform(0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
+        && sample_uniform(0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
         agent->phantom_braking_counter = env->phantom_braking_duration - 1;
         phantom_braking_active = 1;
     }
@@ -5020,7 +5038,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float acceleration = 0.0f;
         float steering = 0.0f;
 
-        if (env->action_type == 0) { // discrete
+        if (env->action_type == DISCRETE) {
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *) env->actions;
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
@@ -5029,7 +5047,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
-        } else if (env->action_type == 1) { // continuous
+        } else if (env->action_type == CONTINUOUS) {
             float (*action_array_f)[2] = (float (*)[2]) env->actions;
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
@@ -5096,25 +5114,10 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->jerk_lat = (new_a_lat - agent->accel_lat) / env->dt;
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
-    } else {
-        // JERK dynamics model
+    } else if (env->dynamics_model == JERK) {
         // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == 1) { // continuous
-            float (*action_array_f)[2] = (float (*)[2]) env->actions;
-
-            // Asymmetric scaling for longitudinal jerk to match discrete action space
-            // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
-            float j_long_action = action_array_f[action_idx][0]; // [-1, 1]
-            if (j_long_action < 0) {
-                j_long = j_long_action * (-JERK_LONG[0]); // Negative: [-1, 0] → [-15, 0] (braking)
-            } else {
-                j_long = j_long_action * JERK_LONG[3]; // Positive: [0, 1] → [0, 4] (acceleration)
-            }
-
-            // Symmetric scaling for lateral jerk
-            j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
-        } else if (env->action_type == 0) { // discrete
+        if (env->action_type == DISCRETE) {
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *) env->actions;
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
@@ -5123,6 +5126,18 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             int j_lat_idx = action_val % num_lat;
             j_long = JERK_LONG[j_long_idx];
             j_lat = JERK_LAT[j_lat_idx];
+        } else if (env->action_type == CONTINUOUS) {
+            float (*action_array_f)[2] = (float (*)[2]) env->actions;
+            // Asymmetric scaling for longitudinal jerk to match discrete action space
+            // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
+            float j_long_action = action_array_f[action_idx][0]; // [-1, 1]
+            if (j_long_action < 0) {
+                j_long = j_long_action * (-JERK_LONG[0]); // Negative: [-1, 0] → [-15, 0] (braking)
+            } else {
+                j_long = j_long_action * JERK_LONG[3]; // Positive: [0, 1] → [0, 4] (acceleration)
+            }
+            // Symmetric scaling for lateral jerk
+            j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
         }
 
         if (phantom_braking_active) {
