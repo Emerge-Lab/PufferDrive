@@ -4357,7 +4357,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent_log->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
     }
 
-    // Velocity metric (GIGAFLOW) - forward progress aligned with lane
+    // Velocity metric - forward progress aligned with lane
     const float VELOCITY_MIN_SPEED = 2.5f; // m/s
     if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && lane_idx != -1) {
         float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
@@ -4370,18 +4370,13 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     // Comfort metric
-    const float COMFORT_LONG_ACCEL_POS_THRESHOLD = 3.0f;  // m/s²
-    const float COMFORT_LONG_ACCEL_NEG_THRESHOLD = -3.0f; // m/s²
-    const float COMFORT_LAT_ACCEL_THRESHOLD = 3.0f;       // m/s²
-    const float COMFORT_LONG_JERK_THRESHOLD = 5.0f;       // m/s³
-    const float COMFORT_LAT_JERK_THRESHOLD = 5.0f;        // m/s³
-    const int long_accel_violation = (agent->accel_long > COMFORT_LONG_ACCEL_POS_THRESHOLD)
-        || (agent->accel_long < COMFORT_LONG_ACCEL_NEG_THRESHOLD);
-    const int lat_accel_violation = fabsf(agent->accel_lat) > COMFORT_LAT_ACCEL_THRESHOLD;
-    const int long_jerk_violation = fabsf(agent->jerk_long) > COMFORT_LONG_JERK_THRESHOLD;
-    const int lat_jerk_violation = fabsf(agent->jerk_lat) > COMFORT_LAT_JERK_THRESHOLD;
-    agent->metrics_array[COMFORT_VIOLATION_IDX]
-        = (long_accel_violation || lat_accel_violation || long_jerk_violation || lat_jerk_violation) ? 1.0f : 0.0f;
+    const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
+    const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
+    int accel_violation
+        = (fabsf(agent->accel_long) > COMFORT_ACCEL_THRESHOLD) + (fabsf(agent->accel_lat) > COMFORT_ACCEL_THRESHOLD);
+    int jerk_violation
+        = (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
+    agent->metrics_array[COMFORT_VIOLATION_IDX] = (float) (accel_violation + jerk_violation);
 
     // Handle terminal events - NOTE: move it elsewhere?
     // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
