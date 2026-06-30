@@ -1,0 +1,66 @@
+benchmarks:
+  # Gigaflow - Multi agent only
+  - name: carla
+    mode: gigaflow
+    num_scenarios: 1000
+    num_scenarios_to_render: 8
+    num_maps: 8
+    max_agents_per_env: 50
+    scenario_length: 6000
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/carla
+      gcp:
+
+  - name: handball
+    mode: gigaflow
+    num_scenarios: 100
+    num_scenarios_to_render: 1
+    num_maps: 1
+    max_agents_per_env: 100
+    scenario_length: 3000
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/handball
+      gcp:
+
+  - name: womd_multi
+    mode: replay
+    num_scenarios: 100
+    num_scenarios_to_render: 10
+    scenario_length: 91
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/womd
+      gcp:
+
+  - name: womd_single
+    mode: replay
+    num_scenarios: 100
+    num_scenarios_to_render: 10
+    scenario_length: 91
+    control_mode: control_sdc_only
+    paths:
+      local: pufferlib/resources/drive/binaries/womd
+      gcp:
+
+  # # nuPlan - Multi agent / Single agent
+  - name: nuplan_multi
+    mode: replay
+    num_scenarios: 1000
+    num_scenarios_to_render: 10
+    scenario_length: 200
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/nuplan1000
+      gcp:
+
+  - name: nuplan_single
+    mode: replay
+    num_scenarios: 100
+    num_scenarios_to_render: 10
+    scenario_length: 200
+    control_mode: control_sdc_only
+    paths:
+      local: pufferlib/resources/drive/binaries/nuplan1000
+      gcp:
