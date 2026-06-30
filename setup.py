@@ -280,9 +280,28 @@ if not NO_TRAIN:
         "ipywidgets",
     ]
 
+# Non-package output dirs that may appear in a checkout. submitit snapshots its
+# runs under experiments/<run>/code/ by symlinking every repo entry back into the
+# tree, which creates an experiments -> ../experiments cycle. find_namespace_packages
+# walks with followlinks=True and (unlike find_packages) descends into every dir, so
+# without this exclude it follows the cycle forever and the build appears to hang.
+DISCOVERY_EXCLUDE = [
+    "experiments",
+    "experiments.*",
+    "scratch",
+    "scratch.*",
+    "wandb",
+    "wandb.*",
+    "notebooks",
+    "notebooks.*",
+]
+
 setup(
     version="3.0.0",
-    packages=find_namespace_packages() + find_packages() + c_extension_paths + ["pufferlib/extensions"],
+    packages=find_namespace_packages(exclude=DISCOVERY_EXCLUDE)
+    + find_packages()
+    + c_extension_paths
+    + ["pufferlib/extensions"],
     include_package_data=True,
     install_requires=install_requires,
     ext_modules=c_extensions + torch_extensions,

@@ -455,6 +455,7 @@ class Evaluator:
         episodes: captures each episode's compact-replay bundle, then writes one
         mining_viz .html per episode (scene + per-episode metrics, no NN obs)."""
         import importlib
+        import json
         import os
         import pickle
         import tempfile
@@ -565,6 +566,9 @@ class Evaluator:
 
         if html_paths:
             viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
+            # Sidecar so downstream tooling can read per-episode outcomes without
+            # scraping the gallery index JS.
+            (out_dir / "metrics.json").write_text(json.dumps(render_file_metrics, indent=2))
 
         return html_paths
 
@@ -574,6 +578,7 @@ class Evaluator:
         pufferlib.viz HTML per scenario showing the scene + each agent's unpacked
         NN observation. Reads env state + the obs array, so it needs no EGL/ffmpeg."""
         import importlib
+        import json
         import os
         from pathlib import Path
 
@@ -795,6 +800,9 @@ class Evaluator:
 
         if html_paths:
             viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
+            # Sidecar so downstream tooling can read per-episode outcomes without
+            # scraping the gallery index JS.
+            (out_dir / "metrics.json").write_text(json.dumps(render_file_metrics, indent=2))
         return html_paths
 
     def _render_env_overrides(self, args) -> dict:

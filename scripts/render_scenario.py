@@ -50,6 +50,17 @@ def main():
         help="Camera view mode",
     )
     parser.add_argument(
+        "--render-backend",
+        default="egl",
+        choices=["egl", "triage_html", "obs_html"],
+        help="egl -> mp4 (ffmpeg/libx264); triage_html/obs_html -> interactive HTML (CPU-only, no EGL)",
+    )
+    parser.add_argument(
+        "--terminate-on-goal",
+        action="store_true",
+        help="End the episode as soon as the SDC reaches its goal (control_sdc_only replay only)",
+    )
+    parser.add_argument(
         "--map-dir",
         default=None,
         help="Custom map directory (default: auto-find the map in binaries/)",
@@ -171,12 +182,14 @@ def main():
         env_overrides["collision_behavior"] = 0
         env_overrides["scenario_length"] = steps
         env_overrides["resample_frequency"] = steps
+        # Optionally cut the episode short the moment the SDC reaches its goal.
+        env_overrides["terminate_on_goal"] = int(cli.terminate_on_goal)
 
     eval_section = {
         "type": eval_type,
         "render": True,
         "render_views": [cli.view],
-        "render_backend": "egl",
+        "render_backend": cli.render_backend,
         "mode": "inline",
         "enabled": True,
         "interval": 0,
@@ -197,16 +210,23 @@ def main():
         mode_desc += f" (control_mode={control_mode})"
     print(f"Rendering {map_label} | mode={mode_desc} | {steps} steps | view={cli.view}")
     print(f"Checkpoint: {cli.checkpoint}")
-    print(f"Output: {cli.output_dir}/mp4/render_cli/")
+    # Each backend writes to its own subdir of output-dir:
+    #   egl -> mp4/<name>/*.mp4, triage_html -> gif/<name>/*.html, obs_html -> obs/<name>/*.html
+    out_subdir, out_ext = {
+        "egl": ("mp4", ".mp4"),
+        "triage_html": ("gif", ".html"),
+        "obs_html": ("obs", ".html"),
+    }[cli.render_backend]
+    print(f"Output: {cli.output_dir}/{out_subdir}/render_cli/")
 
     puffer_eval(env_name=env_name, args=args, evaluator_name="render_cli")
 
-    mp4_dir = os.path.join(cli.output_dir, "mp4", "render_cli")
-    mp4s = sorted(f for f in os.listdir(mp4_dir) if f.endswith(".mp4")) if os.path.isdir(mp4_dir) else []
-    if mp4s:
-        print(f"\nDone. Output: {os.path.join(mp4_dir, mp4s[-1])}")
+    result_dir = os.path.join(cli.output_dir, out_subdir, "render_cli")
+    outputs = sorted(f for f in os.listdir(result_dir) if f.endswith(out_ext)) if os.path.isdir(result_dir) else []
+    if outputs:
+        print(f"\nDone. Output: {os.path.join(result_dir, outputs[-1])}")
     else:
-        print(f"\nDone. Check {mp4_dir} for output.")
+        print(f"\nDone. Check {result_dir} for output.")
 
 
 if __name__ == "__main__":

@@ -4217,11 +4217,20 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         = compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->goal_position_x, agent->goal_position_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
 
-    // Goal reaching — guard against incrementing past num_target_waypoints
+    // Goal reaching — guard against incrementing past num_target_waypoints.
+    // Advance the goal alias in lockstep with current_goal_idx so distance_to_goal
+    // next step is measured against the new goal, not the one just reached.
+    // Otherwise a stale alias lets the same goal be counted as reached on
+    // consecutive steps, skipping intermediate waypoints.
     if (agent->current_goal_idx < env->num_target_waypoints
         && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent->current_goal_idx++;
+        if (agent->current_goal_idx < env->num_target_waypoints) {
+            agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
+            agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
+            agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
+        }
     }
 
     return;
@@ -5254,26 +5263,21 @@ void c_step(Drive *env) {
     // -> 4. Compute observations
     compute_observations(env);
 
-    // -> 5. Update goals for agents that reached their goal
+    // -> 5. Regenerate goals for agents that reached their final goal.
+    // The per-goal alias advance happens in compute_metrics; here we only handle
+    // the terminal case (last waypoint reached).
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached
-                env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Replay mode: leave current_goal_idx saturated so the
-                    // reached-goal condition won't fire again. Re-generating
-                    // route-based goals on WOMD maps fails (removed=1).
-                } else {
-                    compute_goals(env, agent_idx);
-                }
+        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_target_waypoints) {
+            // Last goal reached
+            env->logs[i].num_goals_reached += 1;
+            if (env->simulation_mode == SIMULATION_REPLAY) {
+                // Replay mode: leave current_goal_idx saturated so the
+                // reached-goal condition won't fire again. Re-generating
+                // route-based goals on WOMD maps fails (removed=1).
             } else {
-                // Advance alias to next goal
-                agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
-                agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
-                agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
+                compute_goals(env, agent_idx);
             }
         }
     }
