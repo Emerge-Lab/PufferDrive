@@ -4218,10 +4218,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
 
     // Goal reaching — guard against incrementing past num_target_waypoints.
-    // Advance the goal alias in lockstep with current_goal_idx so distance_to_goal
-    // next step is measured against the new goal, not the one just reached.
-    // Otherwise a stale alias lets the same goal be counted as reached on
-    // consecutive steps, skipping intermediate waypoints.
     if (agent->current_goal_idx < env->num_target_waypoints
         && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
