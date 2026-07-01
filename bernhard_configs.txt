@@ -6,7 +6,7 @@ puffer train puffer_drive --train.learning_rate 0.001
 
 .venv/bin/puffer train puffer_drive --vec.num-envs 16
 
-.venv/bin/puffer train puffer_drive --train.precision bfloat16 --train.compile 1 --env.use-map-cache 1
+.venv/bin/puffer train puffer_drive  --vec.num-envs 16 --train.precision bfloat16 --train.compile 1 --env.use-map-cache 1
 
 uv run convert --py123d_path /home/jaeger/ordnung/data/nuPlan/123D --output /home/jaeger/ordnung/data/nuPlan/PufferDrive --preset nuplan
 
@@ -18,7 +18,7 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
     --account bernhard --partition kyutai --time 2880 \
     --args \
         wandb=1 \
-        vec.num-envs=14
+        vec.num-envs=24
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
@@ -27,115 +27,8 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
     --account bernhard --partition kyutai --time 5760 \
     --args \
         wandb=1 \
-        vec.num-envs=14
-
-python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
-    --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
-    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
-    --account bernhard --partition kyutai --time 5760 \
-    --args \
-        run-name=001_shortrun \
-        wandb=1 \
-        train.total-timesteps=300000000000 \
         vec.num-envs=24 \
-        env.max-waypoint-spacing=40.0 \
-        env.num-agents=2048 \
-        env.obs-norm-veh-length-m=10.0 \
-        env.obs-norm-veh-width-m=5.0 \
-        env.obs-range-partner-m=120.0 \
-        env.obs-range-road-behind-m=30.0 \
-        env.obs-range-road-side-m=40.0 \
-        env.obs-range-traffic-control-m=120.0 \
-        env.obs-slots-boundary-n=30 \
-        env.obs-slots-lane-n=50 \
-        env.obs-slots-partners-n=12 \
-        env.resample-frequency=102400 \
-        env.reward-comfort=0.5 \
-        env.reward-goal=0.2 \
-        env.reward-lane-align=0.5 \
-        env.reward-lane-center=0.05 \
-        env.reward-overspeed=0.1 \
-        env.reward-timestep=0.0 \
-        env.reward-velocity=0.1 \
-        env.scenario-length=1024 \
-        env.use-map-cache=1 \
-        eval.dnf-triage.enabled=false \
-        eval.dnf-triage.render=true \
-        eval.validation-gigaflow.enabled=true \
-        eval.validation-gigaflow.render=true \
-        eval.validation-replay.enabled=true \
-        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
-        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
-        mine.render=true \
-        policy.backbone-num-layers=2 \
-        policy.boundary-input-size=128 \
-        policy.context-input-size=128 \
-        policy.ego-input-size=128 \
-        policy.lane-input-size=128 \
-        policy.partner-input-size=128 \
-        policy.traffic-control-input-size=128 \
-        train.checkpoint-interval=50 \
-        train.compile=true \
-        train.max-minibatch-size=393216 \
-        train.minibatch-size=393216 \
-        train.precision=bfloat16 \
-        eval.behaviors-defaults.enabled=0
-
-python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
-    --prefix bernhard \
-    --compute_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/bernhard_1.yaml \
-    --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
-    --account bernhard --partition kyutai --time 5760 \
-    --args \
-        run-name=003_longrun \
-        wandb=1 \
-        train.total-timesteps=300000000000 \
-        vec.num-envs=24 \
-        env.max-waypoint-spacing=40.0 \
-        env.num-agents=2048 \
-        env.obs-norm-veh-length-m=10.0 \
-        env.obs-norm-veh-width-m=5.0 \
-        env.obs-range-partner-m=120.0 \
-        env.obs-range-road-behind-m=30.0 \
-        env.obs-range-road-side-m=40.0 \
-        env.obs-range-traffic-control-m=120.0 \
-        env.obs-slots-boundary-n=30 \
-        env.obs-slots-lane-n=50 \
-        env.obs-slots-partners-n=12 \
-        env.resample-frequency=102400 \
-        env.reward-comfort=0.5 \
-        env.reward-goal=0.2 \
-        env.reward-lane-align=0.5 \
-        env.reward-lane-center=0.05 \
-        env.reward-overspeed=0.1 \
-        env.reward-timestep=0.0 \
-        env.reward-velocity=0.1 \
-        env.scenario-length=1024 \
-        env.use-map-cache=1 \
-        eval.dnf-triage.enabled=false \
-        eval.dnf-triage.render=1 \
-        eval.validation-gigaflow.enabled=1 \
-        eval.validation-gigaflow.render=1 \
-        eval.validation-replay.enabled=1 \
-        eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
-        eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
-        mine.render=1 \
-        policy.backbone-num-layers=2 \
-        policy.boundary-input-size=128 \
-        policy.context-input-size=128 \
-        policy.ego-input-size=128 \
-        policy.lane-input-size=128 \
-        policy.partner-input-size=128 \
-        policy.traffic-control-input-size=128 \
-        train.checkpoint-interval=50 \
-        train.compile=1 \
-        train.max-minibatch-size=128000 \
-        train.minibatch-size=128000 \
-        train.precision=bfloat16 \
-        eval.behaviors-defaults.enabled=0 \
-        eval.validation-defaults.interval=1
-
+        train.total-timesteps=80000000000
 
 python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments \
     --prefix bernhard \
@@ -143,11 +36,12 @@ python scripts/submit_cluster.py --save_dir /lustre/scwpod02/client/kyutai/kesai
     --program_config /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/scripts/cluster_configs/train_base.yaml \
     --account bernhard --partition kyutai --time 5760 \
     --args \
-run-name=002_longrun_4B \
+run-name=k_004_longrun_300B \
 wandb=1 \
-train.total-timesteps=37500000000 \
-train.max-minibatch-size=128000 \
-train.minibatch-size=128000 \
+train.total-timesteps=300000000000 \
+train.max-minibatch-size=131072 \
+train.minibatch-size=131072 \
+vec.num-envs=24 \
 eval.validation-replay.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
 eval.behaviors-full-dir.env.map-dir=/lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
 env.dt=0.3 \
@@ -186,10 +80,10 @@ train.compile=1 \
 train.normalize-rewards=0 \
 train.precision=bfloat16 \
 train.seed=4 \
-train.update-epochs=3 \
-eval.validation-defaults.interval=1
+train.update-epochs=3
 
-TODO compile pufferlib.
+ \
+eval.validation-defaults.interval=1
 
 env.traffic-control-scope=0 \
 policyboundary-input-size=128 \
