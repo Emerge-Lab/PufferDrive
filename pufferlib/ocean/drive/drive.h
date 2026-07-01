@@ -424,6 +424,7 @@ struct Drive {
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
+    int terminate_on_goal;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
@@ -5424,6 +5425,17 @@ void c_step(Drive *env) {
         float ratio_inactive = (float) count_inactive / (float) env->active_agent_count;
         if (ratio_inactive > env->inactive_agent_threshold) {
             early_reset = 1;
+        }
+    }
+
+    if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_REPLAY
+        && env->control_mode == CONTROL_SDC_ONLY) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_target_waypoints) {
+                env->logs[i].num_goals_reached += 1;
+                early_reset = 1;
+            }
         }
     }
 
