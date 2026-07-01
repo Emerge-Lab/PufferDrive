@@ -1808,7 +1808,21 @@ def load_eval_multi_scenarios_config(env_name, model_path=None, eval_overrides=N
     return args
 
 
-def _build_eval_run_args(env_name, model_path, suite, replay_expert_actions=False):
+def _parse_reward_overrides(spec):
+    """Parse "reward_collision=0.01,goal_speed=5.0" → {"reward_collision": 0.01, "goal_speed": 5.0}."""
+    if not spec:
+        return {}
+    overrides = {}
+    for pair in str(spec).split(","):
+        key, _, value = pair.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        overrides[key] = float(value.strip())
+    return overrides
+
+
+def _build_eval_run_args(env_name, model_path, suite, replay_expert_actions=False, reward_overrides=None):
     """Build run arguments from a benchmark suite."""
     overrides = pufferlib.evaluate.build_eval_overrides(
         mode=suite["simulation_mode"],
@@ -1819,6 +1833,7 @@ def _build_eval_run_args(env_name, model_path, suite, replay_expert_actions=Fals
         scenario_length=suite["scenario_length"],
         max_agents=suite["max_agents_per_env"],
         control_mode=suite["control_mode"],
+        reward_overrides=reward_overrides,
     )
     args = load_eval_multi_scenarios_config(env_name, model_path, overrides)
     args["env"]["replay_expert_actions"] = replay_expert_actions
@@ -1842,6 +1857,7 @@ def benchmark(env_name, args=None, policy=None, logger=None, quiet=False):
     render = eval_cfg["render"]
     render_only = eval_cfg["render_only"]
     render_obs = eval_cfg["render_obs"]
+    render_failures = eval_cfg["render_failures"]
 
     # Resolve paths and suites
     _, bench_dir, model_path = pufferlib.evaluate._resolve_benchmark_context(env_name, args, logger, policy)
@@ -1857,6 +1873,9 @@ def benchmark(env_name, args=None, policy=None, logger=None, quiet=False):
 
     def_agents = eval_cfg["num_agents"]
     sdc_envs = max(1, eval_cfg["benchmark_sdc_num_envs"])
+    reward_overrides = _parse_reward_overrides(eval_cfg.get("reward_overrides"))
+    if reward_overrides and not quiet:
+        print(f"🎛️  Inference reward-conditioning overrides: {reward_overrides}")
     all_summaries = []
 
     if not quiet:
@@ -1867,7 +1886,7 @@ def benchmark(env_name, args=None, policy=None, logger=None, quiet=False):
             print(f"\n📊 Processing Suite: {suite['suite_id']}")
         # Prepare Run Arguments
         suite["num_agents"] = def_agents
-        run_args = _build_eval_run_args(env_name, model_path, suite, replay_expert_actions)
+        run_args = _build_eval_run_args(env_name, model_path, suite, replay_expert_actions, reward_overrides)
         res_dir = os.path.join(bench_dir, suite["suite_id"])
         os.makedirs(res_dir, exist_ok=True)
         run_args["eval_results_dir"] = res_dir
@@ -1910,6 +1929,41 @@ def benchmark(env_name, args=None, policy=None, logger=None, quiet=False):
                 dump_metrics=True,
             )
             vecenv.close()
+
+        elif render_failures:
+            # Single serial pass: detect + render every scenario with an infraction.
+            run_args["env"]["num_eval_scenarios"] = suite["num_scenarios"]
+            run_args["env"]["starting_map"] = 0
+            run_args["render_obs"] = render_obs
+            run_args["num_scenarios"] = suite["num_scenarios"]
+            print(f"🚨 Render-Failures mode: scanning {suite['num_scenarios']} scenarios for infractions...")
+
+            run_args["vec"].update(
+                {
+                    "backend": "Serial" if run_args["vec"]["backend"] != "PufferEnv" else run_args["vec"]["backend"],
+                    "num_envs": 1,
+                    "num_workers": 1,
+                    "batch_size": 1,
+                }
+            )
+            vecenv = load_env(env_name, run_args)
+            pol_inst = None if replay_expert_actions else policy or load_policy(run_args, vecenv, env_name)
+            avg_infos = pufferlib.evaluate.evaluation_render(
+                run_args,
+                vecenv,
+                pol_inst,
+                quiet=quiet,
+                dump_metrics=True,
+                only_failures=True,
+            )
+            vecenv.close()
+
+            if avg_infos:
+                summary_entry.update(avg_infos)
+            failures_dir = os.path.join(res_dir, "failures")
+            htmls = sorted(glob.glob(os.path.join(failures_dir, "*.html")))
+            summary_entry["failures_dir"] = failures_dir
+            summary_entry["num_failures_rendered"] = sum(1 for h in htmls if not h.endswith("index.html"))
 
         else:
             if not quiet:

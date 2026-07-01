@@ -63,14 +63,26 @@ def _reset_rnn_state(args, policy, num_agents):
     }
 
 
-def build_eval_overrides(mode, num_agents, num_scenarios, map_dir, num_maps, scenario_length, max_agents, control_mode):
-    """Build evaluation overrides - only for default reward gigaflow, terminations modes."""
+def build_eval_overrides(
+    mode, num_agents, num_scenarios, map_dir, num_maps, scenario_length, max_agents, control_mode, reward_overrides=None
+):
+    """Build evaluation overrides - only for default reward gigaflow, terminations modes.
+
+    reward_overrides: optional {env_param: value} dict applied last, e.g. {"reward_collision": 0.01}.
+    With reward_conditioning=True these set the conditioning vector the policy observes at inference,
+    so distinct presets exercise distinct conditioned behaviors without retraining.
+    """
     env = {
         "eval_mode": 1,
+        "compute_eval_metrics": 1,
         "collision_behavior": 1,
         "offroad_behavior": 1,
         "traffic_light_behavior": 0,
         "dt": 0.1,
+        "use_neighbor_cache": 0,
+        "obs_slots_partners_n": 20,
+        "obs_slots_lane_n": 80,
+        "obs_slots_boundary_n": 80,
         "reward_randomization": False,
         "reward_collision": 3.0,
         "reward_offroad": 3.0,
@@ -80,16 +92,19 @@ def build_eval_overrides(mode, num_agents, num_scenarios, map_dir, num_maps, sce
         "reward_overspeed": 0.05,
         "reward_comfort": 0.05,
         "reward_velocity": 0.0025,
+        "reward_vel_align": 1.0,
         "reward_lane_align": 0.025,
         "reward_lane_center": 0.0038,
         "reward_timestep": 0.000025,
         "reward_reverse": 0.005,
         "goal_speed": 20.0,
+        "goal_radius": 2.0,
         "obs_dropout_lane": 0.0,
         "obs_dropout_boundary": 0.0,
-        # "num_goals": 3,
-        # "min_waypoint_spacing": 20.0,
-        # "max_waypoint_spacing": 20.0,
+        "num_goals": 3,
+        "goal_regen_mode": "rolling",
+        "min_goal_spacing": 30.0,
+        "max_goal_spacing": 30.0,
         "termination_mode": 0.0,
         "num_agents": num_agents,
         "control_mode": control_mode,
@@ -106,6 +121,7 @@ def build_eval_overrides(mode, num_agents, num_scenarios, map_dir, num_maps, sce
                 "max_agents_per_env": max_agents,
                 "map_dir": map_dir,
                 "num_maps": num_maps,
+                "goal_source": "route",
             }
         )
     elif mode == "replay":
@@ -114,14 +130,18 @@ def build_eval_overrides(mode, num_agents, num_scenarios, map_dir, num_maps, sce
                 "simulation_mode": mode,
                 "resample_frequency": scenario_length,
                 "scenario_length": scenario_length,
-                "max_agents_per_env": 64,
+                "max_agents_per_env": 200,
                 "map_dir": map_dir,
                 "num_maps": num_scenarios,
                 "goal_source": "route",
+                "use_neighbor_cache": 0,
             }
         )
     else:
         raise ValueError(f"Invalid mode: {mode}")
+
+    if reward_overrides:
+        env.update(reward_overrides)
 
     return {"env": env}
 
@@ -144,13 +164,18 @@ def _resolve_benchmark_context(env_name, args, logger, policy=None, create_dir=T
             if not model_path:
                 raise pufferlib.APIUsageError(f"Could not resolve a checkpoint from {requested_model_path}.")
 
+    # When evaluating a shared, read-only checkpoint (load_model_path points at someone else's run),
+    # all jobs would otherwise resolve the SAME bench_dir under that model's dir and clobber each other.
+    # eval.output_dir redirects results to a per-job location (the synced cloud OUTPUT_DIR on GCP).
+    output_base = args["eval"].get("output_dir") or exp_dir
+
     if not model_path and not policy:
-        bench_dir = os.path.join(exp_dir, "final_evaluation", "expert")
+        bench_dir = os.path.join(output_base, "final_evaluation", "expert")
     elif model_path:
         model_name = os.path.splitext(os.path.basename(model_path))[0]
-        bench_dir = os.path.join(exp_dir, "final_evaluation", model_name)
+        bench_dir = os.path.join(output_base, "final_evaluation", model_name)
     else:
-        bench_dir = os.path.join(exp_dir, "final_evaluation", "final_policy")
+        bench_dir = os.path.join(output_base, "final_evaluation", "final_policy")
 
     if create_dir:
         os.makedirs(bench_dir, exist_ok=True)
@@ -304,8 +329,13 @@ def evaluation_metrics(args, vecenv, policy, quiet=False):
     return avg_infos
 
 
-def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
-    """Generate interactive HTML replays (serial) via the compact C frame grabber."""
+def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False, only_failures=False):
+    """Generate interactive HTML replays (serial) via the compact C frame grabber.
+
+    only_failures: write a replay only for scenarios that reported an infraction
+    (collision/offroad/red-light). The rendered scenario is exactly the detected one — detection
+    and rendering share this single serial pass, so the RNG-derived scenario matches.
+    """
     np.random.seed(42)
     torch.manual_seed(42)
 
@@ -317,7 +347,7 @@ def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
     env_args = args["env"]
 
     eval_folder = args["eval_results_dir"]
-    gif_folder = os.path.join(eval_folder, "gif")
+    gif_folder = os.path.join(eval_folder, "failures" if only_failures else "gif")
     os.makedirs(gif_folder, exist_ok=True)
 
     drive = vecenv.envs[0]
@@ -362,6 +392,7 @@ def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
             state = {} if replay_expert_actions else _reset_rnn_state(args, policy, num_agents)
 
             hist = {k: [[] for _ in range(num_envs)] for k in chunk_keys + pool_keys + policy_keys}
+            failed_envs = {}
 
             for t in range(env_args["scenario_length"]):
                 agent_f32 = np.zeros((num_envs, agent_cap, af), dtype=np.float32)
@@ -441,6 +472,9 @@ def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
                                 "map_name": summary["map_name"].split("/")[-1].split(".")[0],
                             }
                         )
+                        failed_envs[env_idx] = (
+                            failed_envs.get(env_idx, False) or summary.get("total_infraction_count", 0) > 0
+                        )
                         for k, v in summary.items():
                             global_infos.setdefault(k, []).append(v)
 
@@ -449,6 +483,9 @@ def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
                 global_ep_id = batch_start + env_idx
                 if global_ep_id >= num_scenarios:
                     break
+
+                if only_failures and not failed_envs.get(env_idx):
+                    continue
 
                 replay = {"env": env_args, "eval_overrides": args.get("eval_env_overrides", {})}
                 replay.update({k: np.stack(hist[k][env_idx]) for k in chunk_keys})
@@ -465,4 +502,4 @@ def evaluation_render(args, vecenv, policy, quiet=False, dump_metrics=False):
     pufferlib.viz.build_gallery_index(gif_folder)
 
     if dump_metrics:
-        _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
+        return _export_metrics(global_infos, eval_folder, num_scenarios, quiet, verify_coverage=False)
