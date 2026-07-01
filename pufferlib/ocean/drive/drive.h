@@ -2781,40 +2781,40 @@ static float calculate_duration_scaled_violation_score(float violation_timestep_
     return fmaxf(0.0f, fminf(1.0f, score));
 }
 
-static float calculate_puffer_score(Log *log_agent, float duration_steps, float dt) {
-    if (!log_agent) {
+static float calculate_puffer_score(Log *agent_log, float duration_steps, float dt) {
+    if (!agent_log) {
         return 0.0f;
     }
 
     float safe_duration_steps = fmaxf(duration_steps, 1.0f);
     float episode_duration_s = fmaxf(safe_duration_steps * dt, dt);
 
-    float no_at_fault = (log_agent->at_fault_collision_rate > 0) ? 0.0f : 1.0f;
-    float no_offroad = (log_agent->offroad_rate > 0) ? 0.0f : 1.0f;
-    float no_red_light = (log_agent->red_light_violation_rate > 0) ? 0.0f : 1.0f;
-    float making_progress = (log_agent->progress_ratio > 0.2f) ? 1.0f : 0.0f;
+    float no_at_fault = (agent_log->at_fault_collision_rate > 0) ? 0.0f : 1.0f;
+    float no_offroad = (agent_log->offroad_rate > 0) ? 0.0f : 1.0f;
+    float no_red_light = (agent_log->red_light_violation_rate > 0) ? 0.0f : 1.0f;
+    float making_progress = (agent_log->progress_ratio > 0.2f) ? 1.0f : 0.0f;
 
     // Driving direction: 1.0 if <=2m, 0.5 if 2-6m, 0 if >6m wrong-way distance
-    float wrong_dist = log_agent->wrong_way_distance;
+    float wrong_dist = agent_log->wrong_way_distance;
     float direction_compliance = (wrong_dist <= 2.0f) ? 1.0f : (wrong_dist <= 6.0f) ? 0.5f : 0.0f;
 
     float multiplier = no_at_fault * no_offroad * no_red_light * making_progress * direction_compliance;
 
     // TTC within bound (>0.95s): weight 5
-    float ttc_score = log_agent->ttc_within_bound_rate; // Already 0-1
+    float ttc_score = agent_log->ttc_within_bound_rate; // Already 0-1
 
     // Progress ratio (capped at 1): weight 5
-    float progress_score = fminf(log_agent->progress_ratio, 1.0f);
+    float progress_score = fminf(agent_log->progress_ratio, 1.0f);
 
     // Speed compliance (nuPlan formula): max(0, 1 - sum(violation * dt) / T): weight 4
     float speed_threshold = fmaxf(episode_duration_s, 1e-3f);
-    float speed_score = fmaxf(0.0f, 1.0f - log_agent->speed_violation_sum / speed_threshold);
+    float speed_score = fmaxf(0.0f, 1.0f - agent_log->speed_violation_sum / speed_threshold);
 
     // Comfort (duration-scaled 10s windows): weight 2
-    float comfort_score = log_agent->comfort_score; // 0-1
+    float comfort_score = agent_log->comfort_score; // 0-1
 
     // Multi-lane (weight 3): tiered score based on accumulated time
-    float multi_lane_score = log_agent->multi_lane_score;
+    float multi_lane_score = agent_log->multi_lane_score;
 
     // Weighted average
     float weighted_sum
@@ -2823,18 +2823,18 @@ static float calculate_puffer_score(Log *log_agent, float duration_steps, float 
     float weighted_avg = weighted_sum / total_weight;
 
     // Store agent-only display fields
-    log_agent->no_at_fault = no_at_fault;
-    log_agent->no_offroad = no_offroad;
-    log_agent->no_red_light = no_red_light;
-    log_agent->making_progress = making_progress;
-    log_agent->driving_direction_score = direction_compliance;
-    log_agent->ttc_puffer_rate = ttc_score;
-    log_agent->speed_limit_compliance = speed_score;
-    log_agent->multiplier = multiplier;
-    log_agent->weighted_average = weighted_avg;
-    log_agent->puffer_score = multiplier * weighted_avg;
+    agent_log->no_at_fault = no_at_fault;
+    agent_log->no_offroad = no_offroad;
+    agent_log->no_red_light = no_red_light;
+    agent_log->making_progress = making_progress;
+    agent_log->driving_direction_score = direction_compliance;
+    agent_log->ttc_puffer_rate = ttc_score;
+    agent_log->speed_limit_compliance = speed_score;
+    agent_log->multiplier = multiplier;
+    agent_log->weighted_average = weighted_avg;
+    agent_log->puffer_score = multiplier * weighted_avg;
 
-    return log_agent->puffer_score;
+    return agent_log->puffer_score;
 }
 
 static void add_log(Drive *env) {
@@ -4139,7 +4139,7 @@ static void subsample_road_observation_rows(float *buffer, int collected_count, 
 
 static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     Agent *agent = &env->agents[agent_idx];
-    Log *log_agent = &env->logs[log_idx];
+    Log *agent_log = &env->logs[log_idx];
 
     reset_agent_metrics(env, agent_idx);
 
@@ -4168,14 +4168,11 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     bool is_offroad = false;
-    float half_width = agent->sim_width / 2.0f;
 
     // Track best candidate by combined distance/heading score
     float best_score = 1e9f;
-    int best_candidate_entity_idx = -1;
-    int best_candidate_geometry_idx = -1;
-    float best_candidate_signed_lane_distance = 0.0f;
-    float best_candidate_lane_heading = 0.0f;
+    int lane_idx = -1;
+    float signed_lane_distance = 0.0f, lane_heading = 0.0f;
 
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
@@ -4187,10 +4184,13 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         ROAD_OFFSETS,
         25);
 
+    if (list_size <= 0) {
+        is_offroad = true;
+    }
+
     // Vehicle-width based distance threshold (3x width)
     float max_distance_threshold = 3.0f * agent->sim_width;
 
-    // Track already-checked drivable lanes to avoid redundant processing
     int checked_lanes[MAX_CHECKED_LANES];
     int num_checked_lanes = 0;
 
@@ -4320,40 +4320,39 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
 
         if (score < best_score) {
             best_score = score;
-            best_candidate_entity_idx = entity_idx;
-            best_candidate_geometry_idx = closest_seg_idx;
-            best_candidate_signed_lane_distance = signed_dist;
-            best_candidate_lane_heading = avg_lane_heading;
+            lane_idx = entity_idx;
+            signed_lane_distance = signed_dist;
+            lane_heading = avg_lane_heading;
         }
     }
 
     // Update lane alignment metric (running average)
-    if (best_candidate_entity_idx != -1) {
+    if (lane_idx != -1) {
         agent->previous_lane_idx = agent->current_lane_idx;
-        agent->current_lane_idx = best_candidate_entity_idx;
-        agent->current_lane_geometry_idx = best_candidate_geometry_idx;
+        agent->current_lane_idx = lane_idx;
 
-        // Lane distance and angle metrics (GIGAFLOW Frenet coordinates)
+        // Lane distance and angle metrics
         // x_f = lateral offset from lane center (left = negative, right = positive)
-        agent->metrics_array[LANE_DIST_IDX] = best_candidate_signed_lane_distance;
+        agent->metrics_array[LANE_DIST_IDX] = signed_lane_distance;
         // Multi-lane detection: vehicle edge exceeds lane boundary
-        float edge_dist = fabsf(best_candidate_signed_lane_distance) + half_width;
+        float edge_dist = fabsf(signed_lane_distance) + agent->sim_width / 2.0f;
         if (env->compute_eval_metrics && edge_dist > MULTI_LANE_THRESHOLD && agent->sim_speed > 0.0f) {
-            log_agent->multi_lane_time += env->dt;
+            agent_log->multi_lane_time += env->dt;
         }
         // theta_f = angle relative to lane heading
-        float theta_f = compute_heading_diff(agent->sim_heading, best_candidate_lane_heading);
+        float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
     } else {
-        // Agent not on any lane - use "bad" values to indicate offroad state
+        // Agent not on any lane
         agent->previous_lane_idx = -1;
         agent->current_lane_idx = -1;
-        agent->current_lane_geometry_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
     }
 
     agent->closest_path_idx_wp = get_closest_waypoint_index_on_path(env, agent_idx);
+    agent->distance_since_spawn += agent->sim_speed * env->dt;
+    agent_log->avg_speed_per_agent += agent->sim_speed;
 
     // Speed limit metric (CUSTOM)
     float target_speed = 15.0f; // Default target speed
@@ -4364,22 +4363,22 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Binary overspeed metric, 1.0 if overspeeding by more than 2 m/s
     agent->metrics_array[SPEED_LIMIT_IDX] = (agent->sim_speed > target_speed + 2.0f) ? 1.0f : 0.0f;
     if (env->compute_eval_metrics) {
-        log_agent->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
+        agent_log->speed_violation_sum += fmaxf(agent->sim_speed - target_speed, 0.0f) * env->dt;
     }
 
-    // Velocity metric (GIGAFLOW) - forward progress aligned with lane
+    // Velocity metric - forward progress aligned with lane
     const float VELOCITY_MIN_SPEED = 2.5f; // m/s
-    if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && best_candidate_entity_idx != -1) {
+    if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && lane_idx != -1) {
         float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
         agent->metrics_array[VELOCITY_PROGRESS_IDX] = fmaxf(cos_theta, 0.0f);
         if (env->compute_eval_metrics && cos_theta < 0.0f) {
-            log_agent->wrong_way_distance += agent->sim_speed_signed * env->dt;
+            agent_log->wrong_way_distance += agent->sim_speed_signed * env->dt;
         }
     } else {
         agent->metrics_array[VELOCITY_PROGRESS_IDX] = 0.0f;
     }
 
-    // Comfort metric (GIGAFLOW)
+    // Comfort metric
     const float COMFORT_ACCEL_THRESHOLD = 3.0f; // m/s²
     const float COMFORT_JERK_THRESHOLD = 5.0f;  // m/s³
     int accel_violation
@@ -4404,7 +4403,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (car_collided_with_index != -1) {
         agent->metrics_array[COLLISION_IDX] = 1.0f;
         if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
-            log_agent->at_fault_collision_rate = 1.0f;
+            agent_log->at_fault_collision_rate = 1.0f;
             agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
         }
         apply_infraction_behavior(agent, env->collision_behavior);
@@ -4442,7 +4441,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
 static void compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
-    Log *log_agent = &env->logs[i];
+    Log *agent_log = &env->logs[i];
 
     // Collision reward
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
@@ -4450,27 +4449,24 @@ static void compute_rewards(Drive *env, int i) {
         // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
         float reward_collision = -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed);
         env->rewards[i] += reward_collision;
-        log_agent->episode_return += reward_collision;
-        log_agent->reward_collision += reward_collision;
-        log_agent->collision_rate = 1.0f;
+        agent_log->collision_rate = 1.0f;
+        agent_log->reward_collision += reward_collision;
     }
 
     // Offroad reward
     if (agent->metrics_array[OFFROAD_IDX] > 0.0f) {
         float reward_offroad = -agent->reward_coefs[REWARD_COEF_OFFROAD];
         env->rewards[i] += reward_offroad;
-        log_agent->offroad_rate = 1.0f;
-        log_agent->episode_return += reward_offroad;
-        log_agent->reward_offroad += reward_offroad;
+        agent_log->offroad_rate = 1.0f;
+        agent_log->reward_offroad += reward_offroad;
     }
 
     // Red light violation reward
     if (agent->metrics_array[RED_LIGHT_IDX] > 0.0f) {
         float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
         env->rewards[i] += reward_red_light;
-        log_agent->red_light_violation_rate = 1.0f;
-        log_agent->episode_return += reward_red_light;
-        log_agent->reward_red_light += reward_red_light;
+        agent_log->red_light_violation_rate = 1.0f;
+        agent_log->reward_red_light += reward_red_light;
     }
 
     // Goal reward
@@ -4484,15 +4480,14 @@ static void compute_rewards(Drive *env, int i) {
         }
         float reward_goal = env->reward_goal * weight;
         env->rewards[i] += reward_goal;
-        log_agent->episode_return += reward_goal;
-        log_agent->reward_goal += reward_goal;
-        log_agent->num_waypoints_reached += 1;
+        agent_log->num_waypoints_reached += 1;
+        agent_log->reward_goal += reward_goal;
     }
 
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
     float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
     float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
-    log_agent->lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
+    agent_log->lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
 
     // Rl-align: min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
     float against_lane_penalty = fminf(cos_theta, 0.0f); // negative when >90 degrees off
@@ -4502,8 +4497,7 @@ static void compute_rewards(Drive *env, int i) {
     float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt
         * (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
     env->rewards[i] += lane_align_reward;
-    log_agent->episode_return += lane_align_reward;
-    log_agent->reward_lane_align += lane_align_reward;
+    agent_log->reward_lane_align += lane_align_reward;
 
     // Rl-center: -α * dt * (|x_f - bias| - 0.05 / exp(|x_f - bias| - 0.5))
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
@@ -4512,67 +4506,61 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_reward
         = -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
     env->rewards[i] += lane_center_reward;
-    log_agent->lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
-    log_agent->episode_return += lane_center_reward;
-    log_agent->reward_lane_center += lane_center_reward;
+    agent_log->lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
+    agent_log->reward_lane_center += lane_center_reward;
 
     // Comfort reward
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
     float comfort_penalty = -agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
     env->rewards[i] += comfort_penalty;
-    log_agent->comfort_violation_count += comfort_violations;
-    log_agent->episode_return += comfort_penalty;
-    log_agent->reward_comfort += comfort_penalty;
+    agent_log->comfort_violation_count += comfort_violations;
+    agent_log->reward_comfort += comfort_penalty;
 
     // Velocity reward
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
     float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
     env->rewards[i] += velocity_reward;
-    log_agent->episode_return += velocity_reward;
-    log_agent->reward_velocity += velocity_reward;
-    log_agent->velocity_progress_sum += velocity_progress;
+    agent_log->velocity_progress_sum += velocity_progress;
+    agent_log->reward_velocity += velocity_reward;
 
     // Timestep reward
     float accel = sqrtf(agent->accel_long * agent->accel_long + agent->accel_lat * agent->accel_lat);
     if (agent->sim_speed > 0.01f || accel > 0.01f) {
         float timestep_penalty = -agent->reward_coefs[REWARD_COEF_TIMESTEP] * env->dt;
         env->rewards[i] += timestep_penalty;
-        log_agent->episode_return += timestep_penalty;
-        log_agent->reward_timestep += timestep_penalty;
+        agent_log->reward_timestep += timestep_penalty;
     }
 
     // Reverse reward
     if (agent->sim_speed_signed < -0.01f) {
         float reverse_penalty = -agent->reward_coefs[REWARD_COEF_REVERSE] * env->dt;
         env->rewards[i] += reverse_penalty;
-        log_agent->episode_return += reverse_penalty;
-        log_agent->reward_reverse += reverse_penalty;
+        agent_log->reward_reverse += reverse_penalty;
     }
 
     // Speed limit reward
     float speed_reward = -agent->reward_coefs[REWARD_COEF_OVERSPEED] * agent->metrics_array[SPEED_LIMIT_IDX];
     env->rewards[i] += speed_reward;
-    log_agent->avg_speed_per_agent += agent->sim_speed;
-    agent->distance_since_spawn += agent->sim_speed * env->dt;
-    log_agent->episode_return += speed_reward;
-    log_agent->reward_overspeed += speed_reward;
+    agent_log->reward_overspeed += speed_reward;
 
     // ADE reward
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
     if (current_ade > 0.0f && env->reward_ade != 0.0f) {
         float ade_reward = env->reward_ade * current_ade;
         env->rewards[i] += ade_reward;
-        log_agent->episode_return += ade_reward;
-        log_agent->reward_ade += ade_reward;
+        agent_log->reward_ade += ade_reward;
     }
-    log_agent->avg_displacement_error = current_ade;
+    agent_log->avg_displacement_error = current_ade;
+
+    // Update episode return
+    agent_log->episode_return += env->rewards[i];
 
     if (env->compute_eval_metrics) {
-        float ml_time = log_agent->multi_lane_time;
+        float ml_time = agent_log->multi_lane_time;
         float ml_score = (ml_time <= MULTI_LANE_FULL_SCORE_TIME) ? 1.0f
             : (ml_time <= MULTI_LANE_HALF_SCORE_TIME)            ? 0.5f
                                                                  : 0.0f;
-        log_agent->multi_lane_score = ml_score;
+        agent_log->multi_lane_score = ml_score;
         agent->metrics_array[MULTI_LANE_TIME_IDX] = ml_time;
         agent->metrics_array[MULTI_LANE_SCORE_IDX] = ml_score;
 
@@ -4582,20 +4570,20 @@ static void compute_rewards(Drive *env, int i) {
             agent->metrics_array[DISTANCE_TO_COLLISION_IDX] = 0.0f;
         }
         float min_vehicle_ttc = agent->metrics_array[TTC_IDX];
-        log_agent->ttc_samples += 1.0f;
+        agent_log->ttc_samples += 1.0f;
         if (min_vehicle_ttc < TTC_VIOLATION_THRESHOLD) {
-            log_agent->ttc_violations += 1.0f;
+            agent_log->ttc_violations += 1.0f;
         }
 
-        if (log_agent->ttc_samples > 0.0f) {
-            log_agent->ttc_within_bound_rate = 1.0f - (log_agent->ttc_violations / log_agent->ttc_samples);
+        if (agent_log->ttc_samples > 0.0f) {
+            agent_log->ttc_within_bound_rate = 1.0f - (agent_log->ttc_violations / agent_log->ttc_samples);
         } else {
-            log_agent->ttc_within_bound_rate = 1.0f;
+            agent_log->ttc_within_bound_rate = 1.0f;
         }
 
-        log_agent->comfort_score = calculate_duration_scaled_violation_score(
-            log_agent->comfort_violation_timestep_count,
-            log_agent->episode_length,
+        agent_log->comfort_score = calculate_duration_scaled_violation_score(
+            agent_log->comfort_violation_timestep_count,
+            agent_log->episode_length,
             env->dt);
     } else {
         agent->metrics_array[TTC_IDX] = DEFAULT_TTC;
@@ -4606,12 +4594,12 @@ static void compute_rewards(Drive *env, int i) {
     }
 
     // Update progress_ratio and puffer display fields during the episode
-    float episode_duration_s = log_agent->episode_length * env->dt;
+    float episode_duration_s = agent_log->episode_length * env->dt;
     float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
     reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
-    log_agent->progress_ratio = agent->distance_since_spawn / reference_progress_distance;
+    agent_log->progress_ratio = agent->distance_since_spawn / reference_progress_distance;
 
-    calculate_puffer_score(log_agent, log_agent->episode_length, env->dt);
+    calculate_puffer_score(agent_log, agent_log->episode_length, env->dt);
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
