@@ -1,0 +1,199 @@
+git merge origin/3.0
+git push origin bernhard
+
+
+./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
+export OVERLAY_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3
+export IMAGE_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
+export OVERLAY_TEMPLATE=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3.gz
+export VENV_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/venvs/pufferdrive
+export CONTAINER_PYTHON=/home/bernhard/miniconda3/envs/puffer/bin/python3.14
+
+"train",
+                "puffer_drive",
+                "--wandb",
+                "--vec.num-envs", "16",
+
+SPS                                                                        313.4K
+SPS                                                                        341.4K
+
+
+
+  File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/manager.py", line 123, in maybe_run
+    res = self._run_one(
+  File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/manager.py", line 148, in _run_one
+    res = self._run_inline(ev, policy=policy, env_name=env_name, global_step=global_step, epoch=epoch)
+  File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/manager.py", line 189, in _run_inline
+    res = ev.rollout(vecenv, policy, args)
+  File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/evaluators/base.py", line 113, in rollout
+    metrics = self._run_rollout_loop(vecenv, policy, args)
+  File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/evaluators/base.py", line 156, in _run_rollout_loop
+    logits, _ = policy.forward_eval(ob_t, state)
+    
+    
+    
+    
+    
+    slide_idx 687
+traffic_control_dim 28
+self.obs_valid_count_features 4
+self.obs_slots_traffic_controls_n 4
+self.traffic_control_features_count 7
+traffic_control_observations.shape torch.Size([393216, 28])
+self.traffic_control_continuous_features + 1 6
+
+
+
+slide_idx 687
+traffic_control_dim 28
+self.obs_valid_count_features 4
+self.obs_slots_traffic_controls_n 4
+self.traffic_control_features_count 7
+traffic_control_observations.shape torch.Size([1024, 28])
+self.traffic_control_continuous_features + 1 6
+[eval.validation_replay] wrote 250 per-episode rows to episode_metrics/validation_replay_epoch1_step6291456.csv
+slide_idx 687
+traffic_control_dim 28
+self.obs_valid_count_features 4
+self.obs_slots_traffic_controls_n 4
+self.traffic_control_features_count 7
+traffic_control_observations.shape torch.Size([1024, 28])
+self.traffic_control_continuous_features + 1 6
+
+Expected max limit (num_classes): 5
+Min index encountered: -0.999995231628418
+Max index encountered: 0.9999845027923584
+Expected max limit (num_classes): 5
+Min index encountered: -1.0
+Max index encountered: 1.0
+Expected max limit (num_classes): 5
+[EvalManager] Evaluator 'validation_gigaflow' raised at epoch 1; continuing with the rest:
+
+
+
+
+
+TODO read puffer advantage.
+Why is my puffer not compiled with CUDA advantage?
+ADVANTAGE_CUDA
+
+what is adv_filter_ewma_beta? Is that the advantage filtering of GIGAFLOW
+
+lauch.json:
+
+{
+    "version"="0.2.0",
+    "configurations"=[
+        {
+            "name"="PufferDrive Train",
+            "type"="python",
+            "request"="launch",
+            "program"="${workspaceFolder}/.venv/bin/puffer",
+            "args"=[
+                "train",
+                "puffer_drive",
+                "--vec.num-envs", "16",
+                "--env.num-agents", "1024",
+                "--train.minibatch-size", "131072",
+                "--train.max-minibatch-size", "131072", 
+            ],
+            "console"="integratedTerminal",
+            "justMyCode"=false
+        }
+    ]
+}
+
+
+# Run a named evaluator on a checkpoint (config from [eval.<name>])
+puffer eval puffer_drive --evaluator validation_gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
+
+# Ad-hoc=pick by simulation + override scale from the CLI
+puffer eval puffer_drive --eval_simulation replay \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 250 --render 1
+
+# Render the agent's observations (interactive HTML)
+puffer eval puffer_drive --eval_simulation gigaflow \
+  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 10 --render 1 --render-backend obs_html
+
+
+Eval nodes CARLA:
+Traffic lights are only red for an extremely short amount of time. Policies almost never have to wait (although they do).
+Models seem to deviate from lane center occasionally.
+Policies can drive backward.
+
+
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  PufferLib 3.0  🐡                                                                                       CPU=95.7%                              GPU=0.0%                               DRAM=44.0%                                              VRAM=0.0%  │
+│                                                                                                                                                                                                                                                               │
+│  Summary                                                                     Value    Evaluate                                                  1m 16s               48%    Losses                                                                     Value  │
+│  Env                                                                  puffer_drive      Forward                                                    25s               15%    filter_threshold                                                           0.047  │
+│  Params                                                                       1.0M      Env                                                        28s               18%    ema_max                                                                    4.726  │
+│  Steps                                                                       60.8M      Copy                                                       22s               13%    masked_fraction                                                            0.144  │
+│  SPS                                                                        343.7K      Misc                                                        0s                0%    kept_fraction                                                              0.764  │
+│  Epoch                                                                          29    Train                                                     1m 25s               51%    filtered_fraction                                                          0.236  │
+│  Uptime                                                                     3m 12s      Forward                                                    36s               21%    policy_loss                                                               -0.001  │
+│  Remaining                                                               8h 1m 55s      Learn                                                      47s               28%    value_loss                                                                 0.065  │
+│                                                                                         Copy                                                        0s                0%    entropy                                                                    1.937  │
+│                                                                                         Misc                                                        0s                0%    old_approx_kl                                                              0.006  │
+│                                                                                                                                                                             approx_kl                                                                  0.006  │
+│                                                                                                                                                                             clipfrac                                                                   0.065  │
+│                                                                                                                                                                             explained_variance                                                         0.926  │
+│                                                                                                                                                                                                                                                               │
+│  User Stats                                                                                                             Value    User Stats                                                                                                            Value  │
+│  obs/max                                                                                                                4.000    obs/min                                                                                                              -2.516  │
+│  obs/mean                                                                                                               0.180    n                                                                                                                    64.000  │
+│  offroad_rate                                                                                                           0.179    episode_length                                                                                                      113.655  │
+│  collision_rate                                                                                                         0.178    episode_return                                                                                                        0.672  │
+│  red_light_violation_rate                                                                                               0.054    comfort_violation_count                                                                                               0.001  │
+│  velocity_progress_sum                                                                                                  0.617    num_goals_reached                                                                                                     0.095  │
+│  lane_center_rate                                                                                                       0.678    dnf_rate                                                                                                              0.324  │
+│  score                                                                                                                  0.000    avg_speed_per_agent                                                                                                   4.854  │
+│  avg_distance_per_infraction                                                                                          145.226    reward_components/collision                                                                                          -0.373  │
+│  reward_components/offroad                                                                                             -0.269    reward_components/red_light                                                                                          -0.054  │
+│  reward_components/goal                                                                                                 0.669    reward_components/lane_align                                                                                         -0.003  │
+│  reward_components/lane_center                                                                                         -0.009    reward_components/comfort                                                                                            -0.009  │
+│  reward_components/velocity                                                                                             0.722    reward_components/timestep                                                                                           -0.000  │
+│  reward_components/reverse                                                                                             -0.000    reward_components/overspeed                                                                                          -0.002  │
+│  reward_components/ade                                                                                                  0.000                                                                                                                                 │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+With Expo and PBO
+
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  PufferLib 3.0          🐡                                                                               CPU=93.5%                              GPU=0.0%                               DRAM=43.0%                                              VRAM=0.0%  │
+│                                                                                                                                                                                                                                                               │
+│  Summary                                                                     Value    Evaluate                                                  1m 23s               48%    Losses                                                                     Value  │
+│  Env                                                                  puffer_drive      Forward                                                    29s               17%    filter_threshold                                                           0.053  │
+│  Params                                                                       1.0M      Env                                                        30s               17%    ema_max                                                                    5.300  │
+│  Steps                                                                       65.0M      Copy                                                       22s               13%    masked_fraction                                                            0.151  │
+│  SPS                                                                        363.7K      Misc                                                        0s                0%    kept_fraction                                                              0.746  │
+│  Epoch                                                                          31    Train                                                     1m 40s               51%    filtered_fraction                                                          0.254  │
+│  Uptime                                                                     3m 16s      Forward                                                    42s               22%    policy_loss                                                                0.000  │
+│  Remaining                                                              7h 35m 14s      Learn                                                      56s               28%    value_loss                                                                 0.079  │
+│                                                                                         Copy                                                        0s                0%    entropy                                                                    1.930  │
+│                                                                                         Misc                                                        0s                0%    old_approx_kl                                                              0.006  │
+│                                                                                                                                                                             approx_kl                                                                  0.006  │
+│                                                                                                                                                                             clipfrac                                                                   0.076  │
+│                                                                                                                                                                             explained_variance                                                         0.925  │
+│                                                                                                                                                                                                                                                               │
+│  User Stats                                                                                                             Value    User Stats                                                                                                            Value  │
+│  obs/max                                                                                                                4.000    obs/min                                                                                                              -2.434  │
+│  obs/mean                                                                                                               0.179    n                                                                                                                    64.000  │
+│  offroad_rate                                                                                                           0.150    episode_length                                                                                                      126.518  │
+│  collision_rate                                                                                                         0.197    episode_return                                                                                                        0.837  │
+│  red_light_violation_rate                                                                                               0.064    comfort_violation_count                                                                                               0.002  │
+│  velocity_progress_sum                                                                                                  0.618    num_goals_reached                                                                                                     0.118  │
+│  lane_center_rate                                                                                                       0.657    dnf_rate                                                                                                              0.312  │
+│  score                                                                                                                  0.000    avg_speed_per_agent                                                                                                   4.699  │
+│  avg_distance_per_infraction                                                                                          155.931    reward_components/collision                                                                                          -0.403  │
+│  reward_components/offroad                                                                                             -0.225    reward_components/red_light                                                                                          -0.064  │
+│  reward_components/goal                                                                                                 0.756    reward_components/lane_align                                                                                         -0.003  │
+│  reward_components/lane_center                                                                                         -0.011    reward_components/comfort                                                                                            -0.011  │
+│  reward_components/velocity                                                                                             0.802    reward_components/timestep                                                                                           -0.000  │
+│  reward_components/reverse                                                                                             -0.000    reward_components/overspeed                                                                                          -0.003  │
+│  reward_components/ade                                                                                                  0.000                                                                                                                                 │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
