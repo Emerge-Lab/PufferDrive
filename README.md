@@ -236,7 +236,7 @@ DEBUG=1 python setup.py build_ext --inplace --force
 NO_OCEAN=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
-# Debug train (LD_PRELOAD/libasan is Linux-only; on macOS the DEBUG=1 build links ASan directly)
+# Debug train
 CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
 # or
 gdb --args python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
