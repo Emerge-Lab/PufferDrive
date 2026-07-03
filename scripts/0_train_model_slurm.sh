@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem 1024G
 #SBATCH --cpus-per-task 224
-#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B/log_%a_%A.out
-#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B/log_%a_%A.err
+#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_006_longrun_300B/log_%a_%A.out
+#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_006_longrun_300B/log_%a_%A.err
 #SBATCH --partition kyutai
 
 # print info about current job
@@ -28,9 +28,9 @@ source .venv/bin/activate
 torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn -m pufferlib.pufferl train puffer_drive --wandb --train.data-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/${RUN_NAME} \
     --wandb --wandb-project pufferdrive --wandb-group cluster --train.checkpoint-interval 1000 --run-name ${RUN_NAME} \
     --train.total-timesteps 300000000000 \
-    --train.max-minibatch-size 100000 \
-    --train.minibatch-size 100000 \
-    --vec.num-envs 48 \
+    --train.max-minibatch-size 128000 \
+    --train.minibatch-size 128000 \
+    --vec.num-envs 24 \
     --vec.num-workers 24 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --eval.behaviors-full-dir.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
