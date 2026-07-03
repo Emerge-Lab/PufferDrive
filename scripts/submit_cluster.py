@@ -235,9 +235,7 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     """Snapshot the code tree into save_dir/code (or code_vN if taken).
 
     Top-level entries are symlinked (instant, avoids deep-copying data/),
-    except ancestors of the snapshot itself — linking those would create a
-    symlink cycle. pufferlib/ is hard-copied so branch switches don't break
-    running jobs, with resources/ (large static data) symlinked back.
+    except ancestors of the snapshot itself.
 
     Runs on the compute node via submitit, so imports stay local.
     """
