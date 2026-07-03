@@ -2103,6 +2103,24 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
+def normalize_flag_dashes(argv, parser):
+    """Rewrite underscore flag spellings to their registered dash form.
+
+    Config-derived flags are registered dash-style (--env.num-agents), so
+    --env.num_agents is rewritten to match. A flag that is itself registered
+    with underscores (e.g. --num_scenarios) is left untouched.
+    """
+    normalized = []
+    for token in argv:
+        if token.startswith("--"):
+            flag, sep, value = token.partition("=")
+            dashed = flag.replace("_", "-")
+            if flag not in parser._option_string_actions and dashed in parser._option_string_actions:
+                token = dashed + sep + value
+        normalized.append(token)
+    return normalized
+
+
 def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
@@ -2183,7 +2201,7 @@ def load_config(env_name, config_dir=None):
     )
 
     # Unpack to nested dict
-    parsed = vars(parser.parse_args())
+    parsed = vars(parser.parse_args(normalize_flag_dashes(sys.argv[1:], parser)))
     args = defaultdict(dict)
     for key, value in parsed.items():
         next = args
