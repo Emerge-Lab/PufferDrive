@@ -2,8 +2,7 @@
 name = "pufferlib"
 version = "3.0.0"
 description = "Fast and sane reinforcement learning"
-# <3.13: matplotlib==3.8.4 (setup.py install_requires) ships no cp313+ wheels
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.9"
 readme = {file = "README.md", content-type = "text/markdown"}
 license= {file = "LICENSE"}
 authors = [{ name = "Joseph Suarez", email = "jsuarez@puffer.ai" }]
@@ -14,6 +13,8 @@ classifiers=[
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dynamic = ["dependencies"]
 
