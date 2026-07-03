@@ -6,6 +6,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
 static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary);
 static int assign_to_dict(PyObject *dict, char *key, float value);
+static int assign_unsigned_long_to_dict(PyObject *dict, char *key, unsigned long value);
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
 #ifndef MY_SHARED
@@ -512,8 +513,8 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     int seed = PyLong_AsLong(seed_arg);
 
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        srand(i + seed);
+        // Offset by env slot so envs in the same worker do not share one RNG stream.
+        vec->envs[i]->seed_stream_state = (unsigned int) (i + seed);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
@@ -684,6 +685,21 @@ static int assign_to_dict(PyObject *dict, char *key, float value) {
         return 1;
     }
     if (PyDict_SetItemString(dict, key, v) < 0) {
+        PyErr_SetString(PyExc_TypeError, "Failed to set log value");
+        return 1;
+    }
+    Py_DECREF(v);
+    return 0;
+}
+
+static int assign_unsigned_long_to_dict(PyObject *dict, char *key, unsigned long value) {
+    PyObject *v = PyLong_FromUnsignedLong(value);
+    if (v == NULL) {
+        PyErr_SetString(PyExc_TypeError, "Failed to convert log value");
+        return 1;
+    }
+    if (PyDict_SetItemString(dict, key, v) < 0) {
+        Py_DECREF(v);
         PyErr_SetString(PyExc_TypeError, "Failed to set log value");
         return 1;
     }

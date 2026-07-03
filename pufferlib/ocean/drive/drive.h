@@ -211,6 +211,7 @@ struct CompletedEpisodeSummary {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
+    unsigned int episode_seed;
     // Scenario identity captured at completion (before c_reset resamples the
     // env slot), so per-episode consumers can attribute each row to its map.
     char map_name[256];
@@ -427,6 +428,10 @@ struct Drive {
     int terminate_on_goal;
     int reward_conditioning;
     int reward_randomization;
+    unsigned int rng_state;
+    unsigned int seed_stream_state;
+    unsigned int episode_seed;
+    unsigned int log_episode_seed;
     int compute_eval_metrics;
     int obs_slots_boundary_n;
     int obs_slots_lane_n;
@@ -535,17 +540,21 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
-static float random_uniform(float min_val, float max_val) {
-    return min_val + ((float) rand() / (float) RAND_MAX) * (max_val - min_val);
+static float random_uniform(unsigned int *rng_state, float min_val, float max_val) {
+    return min_val + ((float) rand_r(rng_state) / (float) RAND_MAX) * (max_val - min_val);
 }
 
-static float mixed_uniform(float a) {
+static float mixed_uniform(unsigned int *rng_state, float a) {
     // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
-    if ((float) rand() / (float) RAND_MAX < 0.5f) {
-        return random_uniform(1.0f / a, 1.0f);
-    } else {
-        return random_uniform(1.0f, a);
+    if ((float) rand_r(rng_state) / (float) RAND_MAX < 0.5f) {
+        return random_uniform(rng_state, 1.0f / a, 1.0f);
     }
+    return random_uniform(rng_state, 1.0f, a);
+}
+
+static void begin_episode_rng(Drive *env) {
+    env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
+    env->rng_state = env->episode_seed;
 }
 
 static inline void clear_agent_motion(Agent *agent) {
@@ -1826,7 +1835,7 @@ static int generate_random_route(
         int chosen_exit_idx;
         float chosen_exit_dist_sq;
         if (num_progressing_exits > 0) {
-            int chosen_idx = rand() % num_progressing_exits;
+            int chosen_idx = rand_r(&env->rng_state) % num_progressing_exits;
             chosen_exit_idx = progressing_exits[chosen_idx];
             chosen_exit_dist_sq = progressing_dist_sq[chosen_idx];
         } else {
@@ -1983,7 +1992,7 @@ static int pick_random_drivable_position(
                 if (k + 1 >= lane->segment_size) {
                     continue;
                 }
-                float t = (float) rand() / (float) RAND_MAX;
+                float t = (float) rand_r(&env->rng_state) / (float) RAND_MAX;
                 float ex = lane->x[k] + t * (lane->x[k + 1] - lane->x[k]);
                 float ey = lane->y[k] + t * (lane->y[k + 1] - lane->y[k]);
                 float ez = lane->z[k] + t * (lane->z[k + 1] - lane->z[k]);
@@ -1994,7 +2003,7 @@ static int pick_random_drivable_position(
                     continue;
                 }
                 n_cand++;
-                if (rand() % n_cand == 0) {
+                if (rand_r(&env->rng_state) % n_cand == 0) {
                     pick_x = ex;
                     pick_y = ey;
                     pick_z = ez;
@@ -2071,7 +2080,7 @@ static void compute_goals(Drive *env, int agent_idx) {
     for (int iter = 0; iter <= 4; iter++) {
         float total_spacing = 0.0f;
         for (int i = 0; i < num_target_waypoints; i++) {
-            goal_spacings[i] = random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
+            goal_spacings[i] = random_uniform(&env->rng_state, env->min_waypoint_spacing, env->max_waypoint_spacing);
             total_spacing += goal_spacings[i];
         }
 
@@ -2832,6 +2841,7 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
 }
 
 static void add_log(Drive *env) {
+    env->log_episode_seed = env->episode_seed;
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
@@ -2955,6 +2965,7 @@ static void add_log(Drive *env) {
         s->reward_reverse = 0.0f;
         s->reward_overspeed = 0.0f;
         s->reward_ade = 0.0f;
+        s->episode_seed = env->episode_seed;
         s->n = (float) env->active_agent_count;
         s->episode_index = env->next_episode_index++;
         s->map_name[0] = '\0';
@@ -3024,10 +3035,14 @@ static int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *ou
 // ========================================
 
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
-    agent->is_blind_partner
-        = (env->partner_blindness_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
+    agent->is_blind_partner = (env->partner_blindness_prob > 0.0f
+                               && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_prob)
+        ? 1
+        : 0;
     agent->is_phantom_braker
-        = (env->phantom_braking_prob > 0.0f && random_uniform(0.0f, 1.0f) < env->phantom_braking_prob) ? 1 : 0;
+        = (env->phantom_braking_prob > 0.0f && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_prob)
+        ? 1
+        : 0;
     agent->phantom_braking_counter = 0;
 }
 
@@ -3049,13 +3064,14 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         };
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
-            agent->reward_coefs[c] = random_uniform(REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
+            agent->reward_coefs[c]
+                = random_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
-        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(1.25f);
-        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(1.5f);
+        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(&env->rng_state, 1.25f);
+        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(&env->rng_state, 1.25f);
+        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(&env->rng_state, 1.5f);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -3082,7 +3098,7 @@ static void generate_traffic_light_states(Drive *env) {
     float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (!env->eval_mode) && (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -3104,14 +3120,14 @@ static void generate_traffic_light_states(Drive *env) {
 
         if (!env->eval_mode) {
             // Individual removal
-            if (random_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            if (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
                 }
                 continue;
             }
             // Always green
-            if (random_uniform(0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+            if (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
                 }
@@ -3126,9 +3142,12 @@ static void generate_traffic_light_states(Drive *env) {
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;
         } else {
-            dur_green = random_uniform(0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = random_uniform(0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = random_uniform(0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+            dur_green = random_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+            dur_yellow = random_uniform(
+                &env->rng_state,
+                0.5f * TL_DEFAULT_YELLOW_DURATION,
+                0.75f * TL_DEFAULT_YELLOW_DURATION);
+            dur_red = random_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
         }
 
         int steps_green = (int) (dur_green / dt);
@@ -3146,7 +3165,7 @@ static void generate_traffic_light_states(Drive *env) {
         int cycle_length = steps_green + steps_yellow + steps_red;
 
         // Random phase offset
-        int offset = rand() % cycle_length;
+        int offset = rand_r(&env->rng_state) % cycle_length;
 
         // Fill states: GREEN -> YELLOW -> RED -> repeat
         for (int t = 0; t < fill_steps; t++) {
@@ -3249,12 +3268,12 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_length, spawn_width;
     if (env->eval_mode) {
         // Fixed size for eval mode
-        spawn_length = random_uniform(2.0f, 5.5f);
-        spawn_width = random_uniform(1.5f, 2.5f);
+        spawn_length = random_uniform(&env->rng_state, 2.0f, 5.5f);
+        spawn_width = random_uniform(&env->rng_state, 1.5f, 2.5f);
     } else {
         // Random size for training mode
-        spawn_length = random_uniform(0.8f, 7.0f);
-        spawn_width = random_uniform(0.8f, 2.7f);
+        spawn_length = random_uniform(&env->rng_state, 0.8f, 7.0f);
+        spawn_width = random_uniform(&env->rng_state, 0.8f, 2.7f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -3273,7 +3292,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
         int chosen_lane_idx = -1;
 
-        int list_idx = rand() % env->grid_map->num_drivable_grid_cell;
+        int list_idx = rand_r(&env->rng_state) % env->grid_map->num_drivable_grid_cell;
         int grid_idx = env->grid_map->grid_index_drivable[list_idx];
 
         GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
@@ -3291,7 +3310,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        GridMapEntity chosen_entity = cell_candidates[rand() % candidate_count];
+        GridMapEntity chosen_entity = cell_candidates[rand_r(&env->rng_state) % candidate_count];
         chosen_lane_idx = chosen_entity.entity_idx;
 
         start_lane_idx = chosen_lane_idx;
@@ -3858,6 +3877,7 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
+    begin_episode_rng(env);
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -4106,14 +4126,14 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // Noise & Robustness Functions
 // ========================================
 
-static void subsample_road_observation_rows(float *buffer, int collected_count, int keep_count) {
+static void subsample_road_observation_rows(Drive *env, float *buffer, int collected_count, int keep_count) {
     if (keep_count <= 0 || collected_count <= keep_count) {
         return;
     }
     float tmp[ROAD_FEATURES];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
-        int swap_idx = (remaining > 1) ? sample_idx + (rand() % remaining) : sample_idx;
+        int swap_idx = (remaining > 1) ? sample_idx + (rand_r(&env->rng_state) % remaining) : sample_idx;
         if (swap_idx == sample_idx) {
             continue;
         }
@@ -4671,7 +4691,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    if (ego->is_blind_partner && random_uniform(0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+    if (ego->is_blind_partner && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
@@ -4851,8 +4871,8 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(lanes_buffer, lanes_found, lanes_to_copy);
-        subsample_road_observation_rows(boundaries_buffer, boundaries_found, boundaries_to_copy);
+        subsample_road_observation_rows(env, lanes_buffer, lanes_found, lanes_to_copy);
+        subsample_road_observation_rows(env, boundaries_buffer, boundaries_found, boundaries_to_copy);
         memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * ROAD_FEATURES * sizeof(float));
         memset(
             &obs[lane_obs_idx + lanes_to_copy * ROAD_FEATURES],
@@ -4999,7 +5019,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         phantom_braking_active = 1;
     } else if (
         agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
-        && random_uniform(0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
+        && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
         agent->phantom_braking_counter = env->phantom_braking_duration - 1;
         phantom_braking_active = 1;
     }
@@ -5247,6 +5267,7 @@ void c_reset(Drive *env) {
     }
 
     env->timestep = env->init_step;
+    begin_episode_rng(env);
 
     if (env->simulation_mode == SIMULATION_GIGAFLOW) {
         generate_traffic_light_states(env);

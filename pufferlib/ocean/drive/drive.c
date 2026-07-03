@@ -287,8 +287,8 @@ void performance_test() {
         // Set random discrete actions for all agents
         int (*actions)[2] = (int (*)[2]) env.actions;
         for (int j = 0; j < env.active_agent_count; j++) {
-            actions[j][0] = rand() % 7;
-            actions[j][1] = rand() % 13;
+            actions[j][0] = rand_r(&env.rng_state) % 7;
+            actions[j][1] = rand_r(&env.rng_state) % 13;
         }
         c_step(&env);
         i++;

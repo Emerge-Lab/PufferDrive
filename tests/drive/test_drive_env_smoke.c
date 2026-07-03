@@ -79,11 +79,55 @@ static int test_truncation_and_completed_episode_queue(void) {
     return 0;
 }
 
+static int test_episode_seed_is_deterministic_and_reported(void) {
+    Drive env_a = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    env_a.seed_stream_state = 12345;
+    env_a.scenario_length = 1;
+    allocate(&env_a);
+    c_reset(&env_a);
+
+    Drive env_b = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    env_b.seed_stream_state = 12345;
+    env_b.scenario_length = 1;
+    allocate(&env_b);
+    c_reset(&env_b);
+
+    Drive env_c = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    env_c.seed_stream_state = 54321;
+    env_c.scenario_length = 1;
+    allocate(&env_c);
+    c_reset(&env_c);
+
+    int obs_size = compute_observation_size(&env_a);
+    EXPECT_EQ_INT(env_a.episode_seed, env_b.episode_seed);
+    EXPECT_TRUE(env_a.episode_seed != env_c.episode_seed);
+    EXPECT_EQ_INT(env_a.active_agent_count, env_b.active_agent_count);
+    for (int i = 0; i < env_a.active_agent_count * obs_size; i++) {
+        EXPECT_NEAR(env_a.observations[i], env_b.observations[i], 1e-6f);
+    }
+
+    unsigned int first_episode_seed = env_a.episode_seed;
+    drive_set_neutral_actions(&env_a);
+    c_step(&env_a);
+    EXPECT_EQ_INT(env_a.completed_episodes_count, 1);
+
+    CompletedEpisodeSummary summary = {0};
+    EXPECT_EQ_INT(pop_completed_episode_summary(&env_a, &summary), 1);
+    EXPECT_EQ_INT(summary.episode_seed, first_episode_seed);
+    EXPECT_TRUE(env_a.episode_seed != first_episode_seed);
+
+    free_allocated(&env_a);
+    free_allocated(&env_b);
+    free_allocated(&env_c);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_carla_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
     RUN_TEST(test_truncation_and_completed_episode_queue);
+    RUN_TEST(test_episode_seed_is_deterministic_and_reported);
     return test_summary(failures);
 }

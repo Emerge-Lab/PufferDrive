@@ -2022,6 +2022,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
+    env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
 
     init(env);
     return 0;
@@ -2055,6 +2056,8 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "reward_components/reverse", summary->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", summary->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", summary->reward_ade);
+
+    assign_unsigned_long_to_dict(dict, "Seed", summary->episode_seed);
 
     PyObject *mn = PyUnicode_FromString(summary->map_name);
     if (!mn) {
@@ -2111,6 +2114,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+
+    if (env->eval_mode) {
+        assign_unsigned_long_to_dict(dict, "Seed", env->log_episode_seed);
+    }
 
     if (env->compute_eval_metrics) {
         // Puffer score components
