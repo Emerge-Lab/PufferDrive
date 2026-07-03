@@ -218,3 +218,5 @@ docs/_build/
 # Claude config
 .claude/
 CLAUDE.local.md
+
+episode_metrics
