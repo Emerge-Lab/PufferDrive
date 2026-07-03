@@ -4,33 +4,33 @@ Submitit script for launching PufferDrive training jobs on SLURM clusters.
 Example usage:
     # Single job with config file
     python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --program_config scripts/cluster_configs/train_base.yaml
+        --save-dir /path/to/experiments \
+        --compute-config scripts/cluster_configs/nyu_greene.yaml \
+        --program-config scripts/cluster_configs/train_base.yaml
 
     # Sweep over learning rates
     python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
+        --save-dir /path/to/experiments \
+        --compute-config scripts/cluster_configs/nyu_greene.yaml \
         --args learning_rate=1e-4:3e-4:1e-3
 
     # Override compute settings
     python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
+        --save-dir /path/to/experiments \
+        --compute-config scripts/cluster_configs/nyu_greene.yaml \
         --gpus 4 --time 120
 
     # Dry run (preview commands without submitting)
     python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
+        --save-dir /path/to/experiments \
+        --compute-config scripts/cluster_configs/nyu_greene.yaml \
         --dry
 
     # Run inside Singularity container (for glibc compatibility)
     python scripts/submit_cluster.py \
-        --save_dir /path/to/experiments \
-        --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --program_config scripts/cluster_configs/train_base.yaml \
+        --save-dir /path/to/experiments \
+        --compute-config scripts/cluster_configs/nyu_greene.yaml \
+        --program-config scripts/cluster_configs/train_base.yaml \
         --container
 """
 
@@ -50,7 +50,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Submit PufferDrive training jobs to SLURM cluster")
 
     # Job management
-    parser.add_argument("--save_dir", type=str, required=True, help="Base directory for experiment outputs")
+    parser.add_argument("--save-dir", type=str, required=True, help="Base directory for experiment outputs")
     parser.add_argument("--prefix", type=str, default=None, help="Prefix for job names and wandb run name")
     parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
     parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
@@ -58,8 +58,8 @@ def parse_args():
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
-    parser.add_argument("--compute_config", type=str, default=None, help="YAML file with SLURM settings")
-    parser.add_argument("--program_config", type=str, default=None, help="YAML file with training args")
+    parser.add_argument("--compute-config", type=str, default=None, help="YAML file with SLURM settings")
+    parser.add_argument("--program-config", type=str, default=None, help="YAML file with training args")
 
     # SLURM settings (override compute_config)
     parser.add_argument("--account", type=str, help="SLURM account")
@@ -67,7 +67,7 @@ def parse_args():
     parser.add_argument("--cpus", type=int, default=None, help="CPUs per task")
     parser.add_argument("--gpus", type=int, default=None, help="GPUs per node")
     parser.add_argument("--nodes", type=int, default=None, help="Number of nodes")
-    parser.add_argument("--gpu_type", type=str, default=None, help="GPU type (a100/v100/etc)")
+    parser.add_argument("--gpu-type", type=str, default=None, help="GPU type (a100/v100/etc)")
     parser.add_argument("--nodelist", type=str, default=None, help="Specific nodes to use")
     parser.add_argument(
         "--mem",
@@ -81,8 +81,8 @@ def parse_args():
     )
     parser.add_argument("--exclude", type=str, default="", help="Nodes to exclude")
     parser.add_argument("--time", type=int, default=None, help="Time limit in minutes")
-    parser.add_argument("--task_per_node", type=int, default=1, help="Tasks per node")
-    parser.add_argument("--max_pjob", type=int, default=None, help="Max parallel jobs")
+    parser.add_argument("--task-per-node", type=int, default=1, help="Tasks per node")
+    parser.add_argument("--max-pjob", type=int, default=None, help="Max parallel jobs")
 
     # Program settings
     parser.add_argument(
@@ -102,13 +102,13 @@ def parse_args():
     # Container settings
     parser.add_argument("--container", action="store_true", help="Run inside Singularity container")
     parser.add_argument(
-        "--container_image",
+        "--container-image",
         type=str,
         default="/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif",
         help="Singularity image path",
     )
     parser.add_argument(
-        "--container_overlay",
+        "--container-overlay",
         type=str,
         default=f"/scratch/{os.environ.get('USER', '')}/images/PufferDrive/overlay-15GB-500K.ext3",
         help="Singularity overlay path",

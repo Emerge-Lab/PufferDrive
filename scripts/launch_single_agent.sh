@@ -35,10 +35,10 @@ source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 IFS=':' read -ra SEED_LIST <<< "$SEEDS"
 for SEED in "${SEED_LIST[@]}"; do
     python scripts/submit_cluster.py \
-        --save_dir "/scratch/$USER/runs" \
+        --save-dir "/scratch/$USER/runs" \
         --prefix "$PREFIX" \
-        --compute_config "$COMPUTE_CONFIG" \
-        --program_config "$PROGRAM_CONFIG" \
+        --compute-config "$COMPUTE_CONFIG" \
+        --program-config "$PROGRAM_CONFIG" \
         --container --heartbeat \
         --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
         --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}"
