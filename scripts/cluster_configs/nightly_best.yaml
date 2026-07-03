@@ -6,12 +6,7 @@
 #
 # Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).
 
-# Environment scale. The rollout obs buffer is num_agents x bptt_horizon x
-# obs_dim float32 on the GPU (~424 KB per agent at bptt 128), so num_agents
-# is bounded by GPU memory: 153600 ~= 65 GB of the H200's 141 GB, leaving
-# headroom for the model, activations, and compile workspace. Matches
-# train.minibatch_size so the auto batch splits into whole minibatches.
-env.num_agents: 153600
+# Environment scale
 env.max_agents_per_env: 150
 env.use_map_cache: 1
 env.scenario_length: 1200
