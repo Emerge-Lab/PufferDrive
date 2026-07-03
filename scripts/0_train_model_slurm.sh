@@ -17,8 +17,15 @@ start=$(date +%s)
 export RUN_NAME=k_005_longrun_300B
 echo ${RUN_NAME}
 
+# TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
+export NUMEXPR_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+
 source .venv/bin/activate
-torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn -m pufferlib.pufferl train puffer_drive --wandb --vec.num-envs 28 --train.data-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/${RUN_NAME} \
+torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn -m pufferlib.pufferl train puffer_drive --wandb --train.data-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/${RUN_NAME} \
     --wandb --wandb-project pufferdrive --wandb-group cluster --train.checkpoint-interval 1000 --run-name ${RUN_NAME} \
     --train.total-timesteps 300000000000 \
     --train.max-minibatch-size 131072 \
