@@ -2104,19 +2104,25 @@ def load_policy(args, vecenv, env_name=""):
 
 
 def normalize_flag_dashes(argv, parser):
-    """Rewrite underscore flag spellings to their registered dash form.
+    """Rewrite flag tokens to whichever spelling the parser has registered.
 
-    Config-derived flags are registered dash-style (--env.num-agents), so
-    --env.num_agents is rewritten to match. A flag that is itself registered
-    with underscores (e.g. --num_scenarios) is left untouched.
+    Registration is inconsistent: config-derived flags are dash-style
+    (--env.num-agents) while a few top-level flags use underscores
+    (--num_scenarios). Accept both spellings for every flag by rewriting
+    unregistered tokens to their registered dash or underscore form.
     """
+    registered = parser._option_string_actions
     normalized = []
     for token in argv:
         if token.startswith("--"):
             flag, sep, value = token.partition("=")
-            dashed = flag.replace("_", "-")
-            if flag not in parser._option_string_actions and dashed in parser._option_string_actions:
-                token = dashed + sep + value
+            if flag not in registered:
+                dashed = flag.replace("_", "-")
+                underscored = "--" + flag[2:].replace("-", "_")
+                if dashed in registered:
+                    token = dashed + sep + value
+                elif underscored in registered:
+                    token = underscored + sep + value
         normalized.append(token)
     return normalized
 
