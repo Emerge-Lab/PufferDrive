@@ -4425,6 +4425,11 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent->current_goal_idx++;
+        if (agent->current_goal_idx < env->num_goals) {
+            agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
+            agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
+            agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+        }
     }
 
     return;
@@ -5455,22 +5460,15 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (agent->current_goal_idx == env->num_goals) {
-                // Last goal reached
-                env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Replay mode: leave current_goal_idx saturated so the
-                    // reached-goal condition won't fire again. Re-generating
-                    // route-based goals on WOMD maps fails (removed=1).
-                } else {
-                    compute_goals(env, agent_idx);
-                }
+        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
+            // Last goal reached
+            env->logs[i].num_goals_reached += 1;
+            if (env->simulation_mode == SIMULATION_REPLAY) {
+                // Replay mode: leave current_goal_idx saturated so the
+                // reached-goal condition won't fire again. Re-generating
+                // route-based goals on WOMD maps fails (removed=1).
             } else {
-                // Advance alias to next goal
-                agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
-                agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
-                agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+                compute_goals(env, agent_idx);
             }
         }
     }
