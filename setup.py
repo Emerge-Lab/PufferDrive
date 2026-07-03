@@ -273,7 +273,7 @@ if not NO_TRAIN:
         "rich_argparse",
         "pandas",
         "tqdm",
-        "matplotlib==3.8.4",
+        "matplotlib==3.11.0",
         "imageio",
         "pyro-ppl",
         "heavyball",
