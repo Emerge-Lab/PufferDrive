@@ -297,9 +297,18 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             isolated_root = f"{isolated_root}_v{version}"
         os.makedirs(isolated_root, exist_ok=True)
         # Symlink each top-level entry (instant, avoids deep-copying data/)
+        isolated_root_real = os.path.realpath(isolated_root)
         for entry in os.listdir(project_root):
             src = os.path.join(project_root, entry)
             dst = os.path.join(isolated_root, entry)
+            # Never link an ancestor of the isolated copy (e.g. experiments/
+            # when save_dir lives in the repo): that creates a symlink cycle
+            # isolated_root/<entry>/.../isolated_root, and setuptools package
+            # discovery walks symlinks, turning every later build into an
+            # effectively infinite directory walk.
+            src_real = os.path.realpath(src)
+            if isolated_root_real == src_real or isolated_root_real.startswith(src_real + os.sep):
+                continue
             if os.path.exists(dst) or os.path.islink(dst):
                 if os.path.isdir(dst) and not os.path.islink(dst):
                     shutil.rmtree(dst)

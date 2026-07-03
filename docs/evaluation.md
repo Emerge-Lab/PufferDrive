@@ -104,7 +104,8 @@ puffer eval puffer_drive --eval_simulation gigaflow \
 | `--num_maps N` | override `env.num_maps` (CARLA maps for gigaflow, bin count for replay) |
 
 Any other section value can be overridden with the generic dotted form, e.g.
-`--eval.validation_replay.env.scenario-length 91`.
+`--eval.validation-replay.env.scenario-length 91` (underscores in section and
+key names become dashes on the CLI).
 
 ### Subprocess mode
 
