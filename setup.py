@@ -287,9 +287,7 @@ if not NO_TRAIN:
 
 setup(
     version="3.0.0",
-    # Scope discovery to pufferlib/: walking the repo root follows symlinks
-    # (setuptools uses followlinks=True), and cluster jobs leave symlink
-    # cycles under experiments/ that make a root walk take effectively forever.
+    # Scope discovery to pufferlib, does not follow symlinks
     packages=["pufferlib"]
     + ["pufferlib." + pkg for pkg in find_namespace_packages(where="pufferlib")]
     + c_extension_paths
