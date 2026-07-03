@@ -83,25 +83,25 @@ Same as by-name, except instead of naming an evaluator you select one of the two
 built-in `validation_*` evaluators by simulation and override its config from the
 CLI — no `drive.ini` edit needed:
 
-- `--eval_simulation gigaflow` → runs the `validation_gigaflow` section
-- `--eval_simulation replay` → runs the `validation_replay` section
+- `--eval-simulation gigaflow` → runs the `validation_gigaflow` section
+- `--eval-simulation replay` → runs the `validation_replay` section
 
 The flags below override that evaluator's config for this run, and each applies
 **only when passed** — omit one and the evaluator's own `[eval.*]` value stands:
 
 ```bash
-puffer eval puffer_drive --eval_simulation gigaflow \
+puffer eval puffer_drive --eval-simulation gigaflow \
     --load-model-path <ckpt> \
-    --num_scenarios 50 --render 1 --render-backend obs_html --num_maps 4
+    --num-scenarios 50 --render 1 --render-backend obs_html --num-maps 4
 ```
 
 | Flag | Effect |
 |---|---|
-| `--eval_simulation gigaflow\|replay` | selects `validation_<sim>` when `--evaluator` is absent |
-| `--num_scenarios N` | override the evaluator's `eval.num_scenarios` |
+| `--eval-simulation gigaflow\|replay` | selects `validation_<sim>` when `--evaluator` is absent |
+| `--num-scenarios N` | override the evaluator's `eval.num_scenarios` |
 | `--render 0\|1` | toggle rendering on/off |
 | `--render-backend egl\|triage_html\|obs_html` | choose the renderer (see Render backends) |
-| `--num_maps N` | override `env.num_maps` (CARLA maps for gigaflow, bin count for replay) |
+| `--num-maps N` | override `env.num_maps` (CARLA maps for gigaflow, bin count for replay) |
 
 Any other section value can be overridden with the generic dotted form, e.g.
 `--eval.validation_replay.env.scenario-length 91`.

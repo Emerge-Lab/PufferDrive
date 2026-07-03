@@ -102,14 +102,14 @@ puffer eval puffer_drive --evaluator validation_gigaflow \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
 
 # Ad-hoc: pick by simulation + override scale from the CLI
-puffer eval puffer_drive --eval_simulation replay \
+puffer eval puffer_drive --eval-simulation replay \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 250 --render 1
+  --num-scenarios 250 --render 1
 
 # Render the agent's observations (interactive HTML)
-puffer eval puffer_drive --eval_simulation gigaflow \
+puffer eval puffer_drive --eval-simulation gigaflow \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 10 --render 1 --render-backend obs_html
+  --num-scenarios 10 --render 1 --render-backend obs_html
 ```
 
 **For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**

@@ -1667,9 +1667,9 @@ def eval(
     evaluator's config (env/vec overrides, render flag, etc.) comes from
     the [eval.<name>] section. Loads the policy from `--load-model-path`.
 
-    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
+    Ad-hoc form: instead of `--evaluator`, pass `--eval-simulation
     gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
-    flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
+    flags `--num-scenarios`, `--render`, `--render-backend`, `--num-maps`
     override the chosen evaluator's config for this run (only when passed),
     so a checkpoint can be evaluated at an arbitrary scale from the CLI
     without editing drive.ini.
@@ -1697,7 +1697,7 @@ def eval(
         evaluator_name = f"validation_{eval_simulation}"
     if evaluator_name is None:
         raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
+            "puffer eval requires --evaluator <name> (or --eval-simulation gigaflow|replay); "
             "named [eval.<name>] sections live in drive.ini"
         )
 
@@ -2104,25 +2104,16 @@ def load_policy(args, vecenv, env_name=""):
 
 
 def normalize_flag_dashes(argv, parser):
-    """Rewrite flag tokens to whichever spelling the parser has registered.
-
-    Registration is inconsistent: config-derived flags are dash-style
-    (--env.num-agents) while a few top-level flags use underscores
-    (--num_scenarios). Accept both spellings for every flag by rewriting
-    unregistered tokens to their registered dash or underscore form.
-    """
+    """Rewrite underscore flag spellings (--env.num_agents) to the
+    registered dash form (--env.num-agents)."""
     registered = parser._option_string_actions
     normalized = []
     for token in argv:
         if token.startswith("--"):
             flag, sep, value = token.partition("=")
-            if flag not in registered:
-                dashed = flag.replace("_", "-")
-                underscored = "--" + flag[2:].replace("-", "_")
-                if dashed in registered:
-                    token = dashed + sep + value
-                elif underscored in registered:
-                    token = underscored + sep + value
+            dashed = flag.replace("_", "-")
+            if flag not in registered and dashed in registered:
+                token = dashed + sep + value
         normalized.append(token)
     return normalized
 
@@ -2142,9 +2133,9 @@ def load_config(env_name, config_dir=None):
         "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
-    parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
+    parser.add_argument("--agent-index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
     parser.add_argument("--gif-path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)
@@ -2165,7 +2156,7 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     parser.add_argument(
-        "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
+        "--eval-simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
     args = parser.parse_known_args()[0]
 
