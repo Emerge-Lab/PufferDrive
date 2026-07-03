@@ -953,9 +953,9 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     // Draw boundary/edge segment observations in red (immediately after lane obs)
     int boundary_obs_start = lane_obs_start + env->obs_slots_lane_kept * LANE_FEATURES;
     for (int k = 0; k < env->obs_slots_boundary_kept; k++) {
-        int entity_idx = boundary_obs_start + k * ROAD_FEATURES;
+        int entity_idx = boundary_obs_start + k * BOUNDARY_FEATURES;
         bool is_empty = true;
-        for (int j = 0; j < ROAD_FEATURES; j++) {
+        for (int j = 0; j < BOUNDARY_FEATURES; j++) {
             if (agent_obs[entity_idx + j] != 0.0f) {
                 is_empty = false;
                 break;

@@ -133,6 +133,7 @@
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
+#define GT_GOAL_RADIUS_M 6.0f
 
 // Observation feature counts
 #define EGO_FEATURES 10
@@ -4317,7 +4318,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_gt_z_dist = fabsf(agent->sim_z - agent->gt_goal_z);
-    if (distance_to_goal_gt < 6.0f && goal_gt_z_dist < Z_BUFFER) {
+    if (distance_to_goal_gt < GT_GOAL_RADIUS_M && goal_gt_z_dist < Z_BUFFER) {
         agent_log->reached_goal_gt = 1.0f;
     }
 }
