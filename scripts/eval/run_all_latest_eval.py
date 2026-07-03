@@ -11,16 +11,16 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Run `puffer eval puffer_drive` on the latest model from each run folder."
     )
-    parser.add_argument("--runs-dir", default="runs", help="Directory containing run folders")
-    parser.add_argument("--num-scenarios", type=int, default=20, help="Number of scenarios for eval")
+    parser.add_argument("--runs_dir", default="runs", help="Directory containing run folders")
+    parser.add_argument("--num_scenarios", type=int, default=20, help="Number of scenarios for eval")
     parser.add_argument(
-        "--command-prefix",
-        default="puffer eval puffer_drive --eval-simulation gigaflow --render 1 --render-backend obs_html --num-maps 2",
-        help="Full base command to run before --load-model-path and --num-scenarios are appended",
+        "--command_prefix",
+        default="puffer eval puffer_drive --eval_simulation gigaflow --render 1 --render_backend obs_html --num_maps 2",
+        help="Full base command to run before --load_model_path and --num_scenarios are appended",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    parser.add_argument("--dry_run", action="store_true", help="Print commands without executing")
     parser.add_argument(
-        "--stop-on-error",
+        "--stop_on_error",
         action="store_true",
         help="Stop execution when one evaluation fails",
     )
@@ -44,7 +44,7 @@ def list_run_dirs(runs_dir):
 
 
 def build_command(prefix, model_path, num_scenarios):
-    return [*shlex.split(prefix), "--load-model-path", str(model_path), "--num-scenarios", str(num_scenarios)]
+    return [*shlex.split(prefix), "--load_model_path", str(model_path), "--num_scenarios", str(num_scenarios)]
 
 
 def move_videos_to_run(run_dir, workspace_dir):

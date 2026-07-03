@@ -22,9 +22,9 @@ sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --tim
 # it to launch other modes (e.g. mining, eval).
 source /scratch/$USER/venvs/pufferdrive/bin/activate
 python scripts/submit_cluster.py \
-    --save-dir /scratch/$USER/runs \
-    --compute-config scripts/cluster_configs/nyu_greene.yaml \
-    --program-config scripts/cluster_configs/train_base.yaml \
+    --save_dir /scratch/$USER/runs \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
     --container --heartbeat \
     --account <acct> --partition <gpu-partition> --time 2880 \
     --args train.checkpoint_interval=250 env.simulation_mode=gigaflow # use this to override config args
@@ -74,10 +74,10 @@ serialization round-trips cleanly.
 ```bash
 source /scratch/$USER/venvs/pufferdrive/bin/activate
 python scripts/submit_cluster.py \
-    --save-dir /scratch/$USER/runs \
+    --save_dir /scratch/$USER/runs \
     --prefix mytrain \
-    --compute-config scripts/cluster_configs/nyu_greene.yaml \
-    --program-config scripts/cluster_configs/train_base.yaml \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
     --account <acct> --partition <gpu-partition> --time 2880 \
     --container \
     --heartbeat \
@@ -92,7 +92,7 @@ Key flags:
 |---|---|
 | `--container` | wraps both submitit's outer launcher and the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE` |
 | `--heartbeat` | wraps the train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` preventing the cluster from killing your job due to low GPU usage |
-| `--args key=value ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
+| `--args key=value ...` | passes nested config keys as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation_mode replay` |
 | `--account` / `--partition` / `--time` | override `compute_config` SLURM settings |
 
 ### GPU heartbeat — required for long runs

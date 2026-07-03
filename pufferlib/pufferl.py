@@ -1665,18 +1665,18 @@ def eval(
 
     Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
     evaluator's config (env/vec overrides, render flag, etc.) comes from
-    the [eval.<name>] section. Loads the policy from `--load-model-path`.
+    the [eval.<name>] section. Loads the policy from `--load_model_path`.
 
-    Ad-hoc form: instead of `--evaluator`, pass `--eval-simulation
+    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
     gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
-    flags `--num-scenarios`, `--render`, `--render-backend`, `--num-maps`
+    flags `--num_scenarios`, `--render`, `--render_backend`, `--num_maps`
     override the chosen evaluator's config for this run (only when passed),
     so a checkpoint can be evaluated at an arbitrary scale from the CLI
     without editing drive.ini.
 
     Subprocess form: `--out <json>` writes the result dict to a JSON file
     so the parent EvalManager can read structured metrics back without
-    parsing stdout. `--global-step` and `--epoch` flow through so render
+    parsing stdout. `--global_step` and `--epoch` flow through so render
     mp4 filenames carry the right `_epoch{E}_step{N}` tag (otherwise
     every subprocess invocation would write `_epoch0_step0.mp4` and
     successive epochs would silently overwrite each other on disk).
@@ -1697,7 +1697,7 @@ def eval(
         evaluator_name = f"validation_{eval_simulation}"
     if evaluator_name is None:
         raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name> (or --eval-simulation gigaflow|replay); "
+            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
             "named [eval.<name>] sections live in drive.ini"
         )
 
@@ -2110,38 +2110,38 @@ def load_config(env_name, config_dir=None):
         formatter_class=RichHelpFormatter,
         add_help=False,
     )
-    parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
+    parser.add_argument("--load_model_path", type=str, default=None, help="Path to a pretrained checkpoint")
     parser.add_argument(
-        "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
+        "--load_id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
-        "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
+        "--render_mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
     )
-    parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--num-scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument("--video_path", type=str, default="videos", help="Path to save videos")
+    parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
-    parser.add_argument("--agent-index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
-    parser.add_argument("--save-frames", type=int, default=0)
-    parser.add_argument("--gif-path", type=str, default="eval.gif")
+    parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
+    parser.add_argument("--save_frames", type=int, default=0)
+    parser.add_argument("--gif_path", type=str, default="eval.gif")
     parser.add_argument("--fps", type=float, default=15)
-    parser.add_argument("--max-runs", type=int, default=200, help="Max number of sweep runs")
+    parser.add_argument("--max_runs", type=int, default=200, help="Max number of sweep runs")
     parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
-    parser.add_argument("--wandb-project", type=str, default="pufferlib")
-    parser.add_argument("--wandb-group", type=str, default="debug")
+    parser.add_argument("--wandb_project", type=str, default="pufferlib")
+    parser.add_argument("--wandb_group", type=str, default="debug")
     parser.add_argument(
-        "--run-name",
+        "--run_name",
         type=str,
         default=None,
         help="Wandb run display name. Unset → wandb auto-generates one.",
     )
     parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
-    parser.add_argument("--neptune-name", type=str, default="pufferai")
-    parser.add_argument("--neptune-project", type=str, default="ablations")
+    parser.add_argument("--neptune_name", type=str, default="pufferai")
+    parser.add_argument("--neptune_project", type=str, default="ablations")
     parser.add_argument("--tb", action="store_true", help="Use tensorboard for logging")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
     parser.add_argument(
-        "--eval-simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
+        "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
     )
     args = parser.parse_known_args()[0]
 
@@ -2176,7 +2176,7 @@ def load_config(env_name, config_dir=None):
     for section in p.sections():
         for key in p[section]:
             fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
-            parser.add_argument(fmt.replace("_", "-"), default=puffer_type(p[section][key]), type=puffer_type)
+            parser.add_argument(fmt, default=puffer_type(p[section][key]), type=puffer_type)
 
     parser.add_argument(
         "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"
@@ -2233,13 +2233,13 @@ def main():
         render = None
         num_maps = None
         scalar_flags = {
-            "--num-scenarios": "num_scenarios",
+            "--num_scenarios": "num_scenarios",
             "--render": "render",
-            "--num-maps": "num_maps",
+            "--num_maps": "num_maps",
         }
         str_flags = {
-            "--eval-simulation": "eval_simulation",
-            "--render-backend": "render_backend",
+            "--eval_simulation": "eval_simulation",
+            "--render_backend": "render_backend",
         }
         str_overrides = {}
         overrides = {}
@@ -2254,7 +2254,7 @@ def main():
                 out_path = sys.argv[i + 1]
                 del sys.argv[i : i + 2]
                 continue
-            if arg == "--global-step" and i + 1 < len(sys.argv):
+            if arg == "--global_step" and i + 1 < len(sys.argv):
                 global_step = int(sys.argv[i + 1])
                 del sys.argv[i : i + 2]
                 continue

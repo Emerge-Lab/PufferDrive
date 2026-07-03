@@ -497,15 +497,15 @@ int main(int argc, char *argv[]) {
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--show-grid") == 0) {
+        if (strcmp(argv[i], "--show_grid") == 0) {
             show_grid = 1;
-        } else if (strcmp(argv[i], "--obs-only") == 0) {
+        } else if (strcmp(argv[i], "--obs_only") == 0) {
             obs_only = 1;
         } else if (strcmp(argv[i], "--lasers") == 0) {
             lasers = 1;
-        } else if (strcmp(argv[i], "--log-trajectories") == 0) {
+        } else if (strcmp(argv[i], "--log_trajectories") == 0) {
             log_trajectories = 1;
-        } else if (strcmp(argv[i], "--frame-skip") == 0) {
+        } else if (strcmp(argv[i], "--frame_skip") == 0) {
             if (i + 1 < argc) {
                 frame_skip = atoi(argv[i + 1]);
                 i++; // Skip the next argument since we consumed it
@@ -513,7 +513,7 @@ int main(int argc, char *argv[]) {
                     frame_skip = 1; // Ensure valid value
                 }
             }
-        } else if (strcmp(argv[i], "--goal-radius") == 0) {
+        } else if (strcmp(argv[i], "--goal_radius") == 0) {
             if (i + 1 < argc) {
                 goal_radius = atof(argv[i + 1]);
                 i++;
@@ -521,21 +521,21 @@ int main(int argc, char *argv[]) {
                     goal_radius = 2.0f; // Ensure valid value
                 }
             }
-        } else if (strcmp(argv[i], "--map-name") == 0) {
+        } else if (strcmp(argv[i], "--map_name") == 0) {
             // Check if there's a next argument for the map path
             if (i + 1 < argc) {
                 map_name = argv[i + 1];
                 i++; // Skip the next argument since we used it as map path
             } else {
-                fprintf(stderr, "Error: --map-name option requires a map file path\n");
+                fprintf(stderr, "Error: --map_name option requires a map file path\n");
                 return 1;
             }
-        } else if (strcmp(argv[i], "--policy-name") == 0) {
+        } else if (strcmp(argv[i], "--policy_name") == 0) {
             if (i + 1 < argc) {
                 policy_name = argv[i + 1];
                 i++;
             } else {
-                fprintf(stderr, "Error: --policy-name option requires a policy file path\n");
+                fprintf(stderr, "Error: --policy_name option requires a policy file path\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--view") == 0) {
@@ -551,17 +551,17 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error: --view option requires a value (both/topdown/agent)\n");
                 return 1;
             }
-        } else if (strcmp(argv[i], "--output-topdown") == 0) {
+        } else if (strcmp(argv[i], "--output_topdown") == 0) {
             if (i + 1 < argc) {
                 output_topdown = argv[i + 1];
                 i++;
             }
-        } else if (strcmp(argv[i], "--output-agent") == 0) {
+        } else if (strcmp(argv[i], "--output_agent") == 0) {
             if (i + 1 < argc) {
                 output_agent = argv[i + 1];
                 i++;
             }
-        } else if (strcmp(argv[i], "--init-step") == 0) {
+        } else if (strcmp(argv[i], "--init_step") == 0) {
             if (i + 1 < argc) {
                 init_step = atoi(argv[i + 1]);
                 i++;
@@ -569,32 +569,32 @@ int main(int argc, char *argv[]) {
                     init_step = 0;
                 }
             }
-        } else if (strcmp(argv[i], "--init-mode") == 0) {
+        } else if (strcmp(argv[i], "--init_mode") == 0) {
             if (i + 1 < argc) {
                 init_mode = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--control-mode") == 0) {
+        } else if (strcmp(argv[i], "--control_mode") == 0) {
             if (i + 1 < argc) {
                 control_mode = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--max-controlled-agents") == 0) {
+        } else if (strcmp(argv[i], "--max_controlled_agents") == 0) {
             if (i + 1 < argc) {
                 max_controlled_agents = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--num-maps") == 0) {
+        } else if (strcmp(argv[i], "--num_maps") == 0) {
             if (i + 1 < argc) {
                 num_maps = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--scenario-length") == 0) {
+        } else if (strcmp(argv[i], "--scenario_length") == 0) {
             if (i + 1 < argc) {
                 scenario_length_cli = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--goal-behavior") == 0) {
+        } else if (strcmp(argv[i], "--goal_behavior") == 0) {
             if (i + 1 < argc) {
                 goal_behavior = atoi(argv[i + 1]);
                 i++;

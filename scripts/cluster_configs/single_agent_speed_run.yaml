@@ -8,9 +8,9 @@
 # Launch (3 seeds via the colon sweep):
 #   source /scratch/$USER/venvs/pufferdrive/bin/activate
 #   python scripts/submit_cluster.py \
-#       --save-dir /scratch/$USER/runs --prefix $(date +%Y-%m-%d)_single_agent \
-#       --compute-config scripts/cluster_configs/nyu_greene.yaml \
-#       --program-config scripts/cluster_configs/single_agent_speed_run.yaml \
+#       --save_dir /scratch/$USER/runs --prefix $(date +%Y-%m-%d)_single_agent \
+#       --compute_config scripts/cluster_configs/nyu_greene.yaml \
+#       --program_config scripts/cluster_configs/single_agent_speed_run.yaml \
 #       --container --heartbeat --account <acct> --partition <gpu-partition> --time 720 \
 #       --args train.seed=0:1:2
 

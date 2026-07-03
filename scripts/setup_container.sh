@@ -23,7 +23,7 @@
 set -e
 
 # Configuration - adjust these paths for your setup (all env-var overridable).
-# Defaults match submit_cluster.py --container-overlay / --container-image so
+# Defaults match submit_cluster.py --container_overlay / --container_image so
 # both scripts agree on which overlay they're reading/writing.
 OVERLAY_PATH="${OVERLAY_PATH:-/scratch/$USER/images/PufferDrive/overlay-15GB-500K.ext3}"
 IMAGE_PATH="${IMAGE_PATH:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"

@@ -9,16 +9,16 @@ Usage (gigaflow — random agents on CARLA/WOMD road network):
         --checkpoint path/to/model.pt \\
         --map Town10HD \\
         --steps 1000 \\
-        --num-agents 100 \\
+        --num_agents 100 \\
         --view topdown_sim
 
 Usage (replay — policy controls SDC, others follow logged trajectories):
     python scripts/render_scenario.py \\
         --checkpoint path/to/model.pt \\
-        --map-dir pufferlib/resources/drive/binaries/sudden_brake_bins/ \\
-        --simulation-mode replay \\
+        --map_dir pufferlib/resources/drive/binaries/sudden_brake_bins/ \\
+        --simulation_mode replay \\
         --view bev \\
-        --all-maps # Renders all maps in the map-dir
+        --all_maps # Renders all maps in the map-dir
 
 Views:
     sim_state    - fixed perspective camera with 3D car models (view_mode=0)
@@ -40,9 +40,9 @@ def main():
     parser.add_argument(
         "--map", default=None, help="Map name for auto-lookup (e.g. Town01, tfrecord-00021-of-00150_24)"
     )
-    parser.add_argument("--output-dir", default="renders", help="Output directory for mp4s")
+    parser.add_argument("--output_dir", default="renders", help="Output directory for mp4s")
     parser.add_argument("--steps", type=int, default=None, help="Simulation steps (default: 1000 gigaflow, 91 replay)")
-    parser.add_argument("--num-agents", type=int, default=None, help="Agents per scenario (gigaflow only, default 100)")
+    parser.add_argument("--num_agents", type=int, default=None, help="Agents per scenario (gigaflow only, default 100)")
     parser.add_argument(
         "--view",
         default="topdown_sim",
@@ -50,26 +50,26 @@ def main():
         help="Camera view mode",
     )
     parser.add_argument(
-        "--map-dir",
+        "--map_dir",
         default=None,
         help="Custom map directory (default: auto-find the map in binaries/)",
     )
     parser.add_argument(
-        "--simulation-mode",
+        "--simulation_mode",
         default="gigaflow",
         choices=["gigaflow", "replay"],
         help="Simulation mode: gigaflow (random spawn) or replay (log trajectories, policy controls SDC)",
     )
     parser.add_argument(
-        "--init-step", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
+        "--init_step", type=int, default=None, help="Timestep to start from (default: 0 gigaflow, 10 replay)"
     )
     parser.add_argument(
-        "--control-mode",
+        "--control_mode",
         default=None,
         help="Override control mode (default: control_vehicles for gigaflow, control_sdc_only for replay)",
     )
     parser.add_argument(
-        "--all-maps",
+        "--all_maps",
         action="store_true",
         help="Render one video per .bin file in map-dir (default: render one)",
     )
@@ -123,13 +123,13 @@ def main():
         if not os.path.exists(dst):
             os.symlink(map_bin, dst)
     else:
-        print("Error: provide --map-dir or --map")
+        print("Error: provide --map_dir or --map")
         sys.exit(1)
 
     os.makedirs(cli.output_dir, exist_ok=True)
 
     # Count .bin files now so num_maps and num_agents can be set in env_overrides.
-    # --map creates a temp dir with exactly 1 .bin; --map-dir may have many.
+    # --map creates a temp dir with exactly 1 .bin; --map_dir may have many.
     num_bin_files = len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
     if num_bin_files == 0:
         print(f"Error: no .bin files found in {map_dir}")
@@ -137,7 +137,7 @@ def main():
 
     if cli.all_maps:
         num_scenarios = num_bin_files
-        print(f"[render_scenario] --all-maps: rendering {num_scenarios} scenarios")
+        print(f"[render_scenario] --all_maps: rendering {num_scenarios} scenarios")
     else:
         num_scenarios = 1
 

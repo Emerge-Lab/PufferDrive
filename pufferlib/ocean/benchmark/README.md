@@ -4,12 +4,12 @@
 
 WOSAC evaluation with random policy
 ```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True
+puffer eval puffer_drive --eval.wosac_realism_eval True
 ```
 
 WOSAC evaluation with your checkpoint
 ```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
+puffer eval puffer_drive --eval.wosac_realism_eval True --load_model_path <your-trained-policy>.pt
 ```
 
 ## Links

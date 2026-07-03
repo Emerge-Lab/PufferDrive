@@ -46,28 +46,28 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
 
         # Render config flags
         if config.get("show_grid", False):
-            base_cmd.append("--show-grid")
+            base_cmd.append("--show_grid")
         if config.get("obs_only", False):
-            base_cmd.append("--obs-only")
+            base_cmd.append("--obs_only")
         if config.get("show_lasers", False):
             base_cmd.append("--lasers")
         if config.get("show_human_logs", False):
-            base_cmd.append("--log-trajectories")
+            base_cmd.append("--log_trajectories")
 
         env_cfg = getattr(vecenv, "driver_env", None)
         if env_cfg is not None:
             if getattr(env_cfg, "goal_radius", None) is not None:
-                base_cmd.extend(["--goal-radius", str(env_cfg.goal_radius)])
+                base_cmd.extend(["--goal_radius", str(env_cfg.goal_radius)])
             if getattr(env_cfg, "init_step", 0) > 0:
-                base_cmd.extend(["--init-step", str(env_cfg.init_step)])
+                base_cmd.extend(["--init_step", str(env_cfg.init_step)])
             if getattr(env_cfg, "init_mode", None) is not None:
-                base_cmd.extend(["--init-mode", str(env_cfg.init_mode)])
+                base_cmd.extend(["--init_mode", str(env_cfg.init_mode)])
             if getattr(env_cfg, "control_mode", None) is not None:
-                base_cmd.extend(["--control-mode", str(env_cfg.control_mode)])
+                base_cmd.extend(["--control_mode", str(env_cfg.control_mode)])
             if getattr(env_cfg, "control_all_agents", False):
-                base_cmd.append("--pure-self-play")
+                base_cmd.append("--pure_self_play")
             if getattr(env_cfg, "deterministic_agent_selection", False):
-                base_cmd.append("--deterministic-selection")
+                base_cmd.append("--deterministic_selection")
 
             # Policy-controlled agents (prefer num_policy_controlled_agents, fallback to max_controlled_agents)
             n_policy = getattr(env_cfg, "num_policy_controlled_agents", getattr(env_cfg, "max_controlled_agents", -1))
@@ -76,12 +76,12 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
             except (TypeError, ValueError):
                 n_policy = -1
             if n_policy > 0:
-                base_cmd += ["--num-policy-controlled-agents", str(n_policy)]
+                base_cmd += ["--num_policy_controlled_agents", str(n_policy)]
 
             if getattr(env_cfg, "num_maps", False):
-                base_cmd.extend(["--num-maps", str(env_cfg.num_maps)])
+                base_cmd.extend(["--num_maps", str(env_cfg.num_maps)])
             if getattr(env_cfg, "scenario_length", None):
-                base_cmd.extend(["--scenario-length", str(env_cfg.scenario_length)])
+                base_cmd.extend(["--scenario_length", str(env_cfg.scenario_length)])
 
         # Handle single or multiple map rendering
         render_maps = config.get("render_map", None)
@@ -100,11 +100,11 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         for i, map_path in enumerate(render_maps):
             cmd = list(base_cmd)  # copy
             if map_path is not None and os.path.exists(map_path):
-                cmd.extend(["--map-name", str(map_path)])
+                cmd.extend(["--map_name", str(map_path)])
 
             # Output paths (overwrite each iteration; then moved/renamed)
-            cmd.extend(["--output-topdown", "resources/drive/output_topdown.mp4"])
-            cmd.extend(["--output-agent", "resources/drive/output_agent.mp4"])
+            cmd.extend(["--output_topdown", "resources/drive/output_topdown.mp4"])
+            cmd.extend(["--output_agent", "resources/drive/output_agent.mp4"])
 
             result = subprocess.run(cmd, cwd=os.getcwd(), capture_output=True, text=True, timeout=120, env=env_vars)
 

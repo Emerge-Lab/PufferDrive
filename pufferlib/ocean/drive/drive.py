@@ -1183,7 +1183,7 @@ if __name__ == "__main__":
     # test_performance()
     parser = argparse.ArgumentParser(description="Process maps for PufferDrive.")
     parser.add_argument(
-        "--data-dir", type=str, default="data/train", help="Path to the directory containing JSON map files."
+        "--data_dir", type=str, default="data/train", help="Path to the directory containing JSON map files."
     )
     args = parser.parse_args()
     process_all_maps(args.data_dir)

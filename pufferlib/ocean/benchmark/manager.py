@@ -210,7 +210,7 @@ class EvalManager:
         # render path can stamp them into mp4 filenames (otherwise every
         # epoch's renders collide as `_epoch0_step0.mp4`).
         if global_step is not None:
-            cmd += ["--global-step", str(int(global_step))]
+            cmd += ["--global_step", str(int(global_step))]
         if epoch is not None:
             cmd += ["--epoch", str(int(epoch))]
         # Subprocess loads the freshest checkpoint on disk. Caller (training
@@ -218,7 +218,7 @@ class EvalManager:
         # see has_subprocess_evals_at.
         ckpt = self.latest_checkpoint(env_name)
         if ckpt:
-            cmd += ["--load-model-path", ckpt]
+            cmd += ["--load_model_path", ckpt]
         subprocess.run(cmd, check=True)
         with open(out_path) as f:
             payload = json.load(f)

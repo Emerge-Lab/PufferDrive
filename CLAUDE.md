@@ -10,7 +10,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
-- **Train:** `puffer train puffer_drive [--train.learning-rate 0.001 --env.num-agents 512]`
+- **Train:** `puffer train puffer_drive [--train.learning_rate 0.001 --env.num_agents 512]`
 
 ## Coding Standards
 - **Naming:** explicit (`active_agent_count`, `closest_lane_idx`); never `n/tmp/val/foo` except tiny local math. Keep units in names: `_seconds/_meters/_mps/_idx/_count`.

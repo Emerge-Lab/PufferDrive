@@ -63,9 +63,9 @@ sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=4 --mem=8gb --time=15 \
 
 ```bash
 python scripts/submit_cluster.py \
-    --compute-config scripts/cluster_configs/nyu_greene.yaml \
-    --program-config scripts/cluster_configs/train_base.yaml \
-    --save-dir experiments \
+    --compute_config scripts/cluster_configs/nyu_greene.yaml \
+    --program_config scripts/cluster_configs/train_base.yaml \
+    --save_dir experiments \
     --container
 ```
 
@@ -99,17 +99,17 @@ run inline during training and standalone here.
 ```bash
 # Run a named evaluator on a checkpoint (config from [eval.<name>])
 puffer eval puffer_drive --evaluator validation_gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
+  --load_model_path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
 
 # Ad-hoc: pick by simulation + override scale from the CLI
-puffer eval puffer_drive --eval-simulation replay \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num-scenarios 250 --render 1
+puffer eval puffer_drive --eval_simulation replay \
+  --load_model_path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 250 --render 1
 
 # Render the agent's observations (interactive HTML)
-puffer eval puffer_drive --eval-simulation gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num-scenarios 10 --render 1 --render-backend obs_html
+puffer eval puffer_drive --eval_simulation gigaflow \
+  --load_model_path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  --num_scenarios 10 --render 1 --render_backend obs_html
 ```
 
 **For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
@@ -120,7 +120,7 @@ Roll a trained policy out against a scenario suite, capture per-episode compact 
 
 ```bash
 puffer mine_failures puffer_drive \
-    --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
+    --load_model_path experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
     --mine.output_dir ./failure_mining/puffer_drive_xxxx \
     --mine.num_episodes 200 \
     --mine.score_threshold -10.0
