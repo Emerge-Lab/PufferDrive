@@ -334,10 +334,8 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
-        import glob
         import os
         import subprocess
-        import sys
         import submitit
 
         project_root = isolate_code(project_root, save_dir)
