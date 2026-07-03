@@ -1,7 +1,7 @@
 #!/bin/bash
 
 BASE_DIR="experiments"
-# Unified eval pipeline: --eval_simulation picks validation_<sim>; the simple
+# Unified eval pipeline: --eval-simulation picks validation_<sim>; the simple
 # flags below override that evaluator's [eval.*] section for this run.
 COMMAND_PREFIX="puffer eval puffer_drive"
 
@@ -14,11 +14,11 @@ EVAL_SIMULATION="replay"
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --num_scenarios)
+        --num-scenarios)
             NUM_SCENARIOS="$2"
             shift 2
             ;;
-        --eval_simulation)
+        --eval-simulation)
             EVAL_SIMULATION="$2"
             shift 2
             ;;
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
             RENDER="$2"
             shift 2
             ;;
-        --render-backend|--render_backend)
+        --render-backend)
             RENDER_BACKEND="$2"
             shift 2
             ;;
@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-COMMAND_SUFFIX="--num_scenarios ${NUM_SCENARIOS} --render ${RENDER} --eval_simulation ${EVAL_SIMULATION}"
+COMMAND_SUFFIX="--num-scenarios ${NUM_SCENARIOS} --render ${RENDER} --eval-simulation ${EVAL_SIMULATION}"
 if [ -n "${RENDER_BACKEND}" ]; then
     COMMAND_SUFFIX="${COMMAND_SUFFIX} --render-backend ${RENDER_BACKEND}"
 fi

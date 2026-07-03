@@ -2103,21 +2103,6 @@ def load_policy(args, vecenv, env_name=""):
     return policy
 
 
-def normalize_flag_dashes(argv, parser):
-    """Rewrite underscore flag spellings (--env.num_agents) to the
-    registered dash form (--env.num-agents)."""
-    registered = parser._option_string_actions
-    normalized = []
-    for token in argv:
-        if token.startswith("--"):
-            flag, sep, value = token.partition("=")
-            dashed = flag.replace("_", "-")
-            if flag not in registered and dashed in registered:
-                token = dashed + sep + value
-        normalized.append(token)
-    return normalized
-
-
 def load_config(env_name, config_dir=None):
     parser = argparse.ArgumentParser(
         description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
@@ -2198,7 +2183,7 @@ def load_config(env_name, config_dir=None):
     )
 
     # Unpack to nested dict
-    parsed = vars(parser.parse_args(normalize_flag_dashes(sys.argv[1:], parser)))
+    parsed = vars(parser.parse_args())
     args = defaultdict(dict)
     for key, value in parsed.items():
         next = args
@@ -2249,16 +2234,12 @@ def main():
         num_maps = None
         scalar_flags = {
             "--num-scenarios": "num_scenarios",
-            "--num_scenarios": "num_scenarios",
             "--render": "render",
             "--num-maps": "num_maps",
-            "--num_maps": "num_maps",
         }
         str_flags = {
             "--eval-simulation": "eval_simulation",
-            "--eval_simulation": "eval_simulation",
             "--render-backend": "render_backend",
-            "--render_backend": "render_backend",
         }
         str_overrides = {}
         overrides = {}
