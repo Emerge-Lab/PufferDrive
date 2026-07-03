@@ -12,8 +12,8 @@ puffer train puffer_drive --train.learning_rate 0.001
 torchrun --standalone --nnodes=1 --nproc-per-node=1 --max_restarts=0 --start-method spawn -m pufferlib.pufferl train puffer_drive --wandb --train.data-dir /home/jaeger/ordnung/internal/PufferDrive/experiments/debug_000 \
     --wandb --wandb-project pufferdrive --wandb-group cluster --train.checkpoint-interval 1000 --run-name debug_000 \
     --train.total-timesteps 30000000000 \
-    --train.max-minibatch-size 65536 \
-    --train.minibatch-size 65536 \
+    --train.max-minibatch-size 32768 \
+    --train.minibatch-size 32768 \
     --vec.num-envs 16 \
     --vec.num-workers 16 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \

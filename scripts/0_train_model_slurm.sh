@@ -6,15 +6,15 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem 1024G
 #SBATCH --cpus-per-task 224
-#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_007_longrun_300B/log_%a_%A.out
-#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_007_longrun_300B/log_%a_%A.err
+#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.out
+#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.err
 #SBATCH --partition kyutai
 
 # print info about current job
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_007_longrun_300B
+export RUN_NAME=k_008_longrun_300B
 echo ${RUN_NAME}
 
 # TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
@@ -30,8 +30,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --train.total-timesteps 300000000000 \
     --train.max-minibatch-size 128000 \
     --train.minibatch-size 128000 \
-    --vec.num-envs 24 \
-    --vec.num-workers 24 \
+    --vec.num-envs 48 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --eval.behaviors-full-dir.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --env.dt 0.3 \
