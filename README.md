@@ -5,7 +5,7 @@ MARL autonomous driving RL environment. C simulation engine (GigaFlow/Waymo repl
 ## Install (local)
 
 ```bash
-# Python env (3.12 — pinned in .python-version; 3.13+ fails on the matplotlib==3.8.4 pin)
+# Python env
 uv venv && source .venv/bin/activate
 uv pip install -e .
 
