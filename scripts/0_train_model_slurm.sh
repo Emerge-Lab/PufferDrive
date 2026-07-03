@@ -6,13 +6,13 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem 1024G
 #SBATCH --cpus-per-task 224
-#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B_%a_%A.out
-#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B_%a_%A.err
+#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B/log_%a_%A.out
+#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_005_longrun_300B/log_%a_%A.err
 #SBATCH --partition kyutai
 
 # print info about current job
 echo "START TIME: $(date)"
-start `date +%s`
+start=$(date +%s)
 
 export RUN_NAME=k_005_longrun_300B
 echo ${RUN_NAME}
@@ -64,7 +64,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --train.seed 4 \
     --train.update-epochs 3
 
-end `date +%s`
-runtime $((end-start))
+end=$(date +%s)
+runtime=$((end-start))
 echo "END TIME: $(date)"
 echo "Runtime: ${runtime}"
