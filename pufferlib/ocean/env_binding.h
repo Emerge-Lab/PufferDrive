@@ -900,7 +900,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
             agent_i32[i32_base + 2] = a->sim_valid;
-            agent_i32[i32_base + 3] = a->active_agent;
+            agent_i32[i32_base + 3] = a->control_state;
             agent_i32[i32_base + 4] = a->stopped;
             agent_i32[i32_base + 5] = a->removed;
             agent_i32[i32_base + 6] = a->current_lane_idx;
@@ -1377,7 +1377,8 @@ PyMODINIT_FUNC PyInit_binding(void) {
 
     // Make constants accessible from Python
     PyModule_AddIntConstant(m, "MAX_ENTITIES_PER_CELL", MAX_ENTITIES_PER_CELL);
-    PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
+    PyModule_AddIntConstant(m, "LANE_FEATURES", LANE_FEATURES);
+    PyModule_AddIntConstant(m, "BOUNDARY_FEATURES", BOUNDARY_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
     PyModule_AddIntConstant(m, "OBS_VALID_COUNT_FEATURES", OBS_VALID_COUNT_FEATURES);
@@ -1393,17 +1394,18 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_GREEN", TRAFFIC_CONTROL_STATE_GREEN);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_STATE_OFF", TRAFFIC_CONTROL_STATE_OFF);
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
-    PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
-    PyModule_AddIntConstant(m, "DYNAMIC_TARGET_FEATURES", DYNAMIC_TARGET_FEATURES);
-    PyModule_AddIntConstant(m, "MAX_TARGET_WAYPOINTS", MAX_TARGET_WAYPOINTS);
+    PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
+    PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
-    PyModule_AddIntConstant(m, "TARGET_STATIC", TARGET_STATIC);
-    PyModule_AddIntConstant(m, "TARGET_DYNAMIC", TARGET_DYNAMIC);
+    PyModule_AddIntConstant(m, "GOAL_REGEN_FINITE", GOAL_REGEN_FINITE);
+    PyModule_AddIntConstant(m, "GOAL_REGEN_ROLLING", GOAL_REGEN_ROLLING);
+    PyModule_AddIntConstant(m, "GOAL_SOURCE_ROUTE", GOAL_SOURCE_ROUTE);
+    PyModule_AddIntConstant(m, "GOAL_SOURCE_MAP", GOAL_SOURCE_MAP);
     PyModule_AddIntConstant(m, "CONTROLLER_STATIC", CONTROLLER_STATIC);
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
