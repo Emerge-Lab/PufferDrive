@@ -13,7 +13,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=1 --max_restarts=0 --start-met
     --wandb --wandb-project pufferdrive --wandb-group cluster --train.checkpoint-interval 1000 --run-name debug_000 \
     --train.total-timesteps 30000000000 \
     --train.max-minibatch-size 32768 \
-    --train.minibatch-size 32768 \
+    --train.minibatch-size 131072 \
     --vec.num-envs 16 \
     --vec.num-workers 16 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
