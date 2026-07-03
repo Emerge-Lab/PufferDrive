@@ -84,7 +84,7 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
 # Single node
 puffer train puffer_drive
 
-# Override config on the fly (section flags are dash-style: --env.num-agents, not --env.num_agents)
+# Override config on the fly
 puffer train puffer_drive --train.learning-rate 0.001 --env.num-agents 512
 
 # Local smoke test on a machine without CUDA
