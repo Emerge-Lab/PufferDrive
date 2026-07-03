@@ -72,6 +72,7 @@ class Drive(pufferlib.PufferEnv):
         terminate_on_goal=False,
         buf=None,
         seed=1,
+        episode_seed=-1,
         init_step=0,
         init_step_spread=False,
         init_step_min_horizon=20,
@@ -181,6 +182,7 @@ class Drive(pufferlib.PufferEnv):
         self.inactive_agent_threshold = inactive_agent_threshold
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
+        self.episode_seed = int(episode_seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
 
@@ -510,6 +512,7 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration": self.phantom_braking_duration,
+            "episode_seed": self.episode_seed,
         }
 
     def _sample_init_step(self):

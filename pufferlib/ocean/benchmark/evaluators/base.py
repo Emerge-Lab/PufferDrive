@@ -410,7 +410,7 @@ class Evaluator:
         # by the next evaluator's _render_view (every evaluator runs at the
         # same global_step, so a shared dir + step glob would collect every
         # earlier evaluator's mp4s into this one's result.frames).
-        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "mp4" / self.name
+        out_dir = self._render_out_dir(args, "mp4")
         out_dir.mkdir(parents=True, exist_ok=True)
 
         package = args.get("package", "ocean")
@@ -474,7 +474,7 @@ class Evaluator:
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
-        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "gif" / self.name
+        out_dir = self._render_out_dir(args, "gif")
         out_dir.mkdir(parents=True, exist_ok=True)
         # Per-rendered-file metrics, accumulated inline from each scenario's
         # completed_episode summary so the gallery sort uses this render's
@@ -589,7 +589,7 @@ class Evaluator:
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
-        out_dir = Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / "obs" / self.name
+        out_dir = self._render_out_dir(args, "obs")
         out_dir.mkdir(parents=True, exist_ok=True)
         epoch = int(args.get("epoch") or 0)
         global_step = int(args.get("global_step") or 0)
@@ -671,7 +671,7 @@ class Evaluator:
                 policy_std_hist = [[] for _ in range(n_in_batch)]
                 policy_log_prob_hist = [[] for _ in range(n_in_batch)]
                 pool_hist = None
-                batch_summary = None
+                batch_summaries = {}
                 for t in range(max_steps):
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
@@ -751,8 +751,12 @@ class Evaluator:
                     ob, _, _, _, step_infos = vec.step(clipped_action)
                     for d in self._flatten_infos(step_infos):
                         if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
-                            batch_summary = d
+                            batch_summaries[int(d.get("env_slot", -1))] = d
                     progress.update(to_render)
+                # Summaries of the most recent render batch, keyed by env_slot,
+                # for callers that compare the replayed episode against a source
+                # CSV row (scripts/eval/render_failure_seeds.py).
+                self.last_render_summaries = batch_summaries
                 for e in range(to_render):
                     map_name = os.path.basename(str(scenarios[e].get("map_name") or "map")).split(".")[0]
                     # Numeric index last so build_gallery_index's `*_<N>.html`
@@ -783,8 +787,8 @@ class Evaluator:
                             compact_replay[k] = hists[e]
                     viz.generate_interactive_replay(scenarios[e], compact_replay, filename=str(path))
                     html_paths.append(path)
-                    if batch_summary is not None:
-                        render_file_metrics[path.name] = _episode_metrics_from_info(batch_summary)
+                    if e in batch_summaries:
+                        render_file_metrics[path.name] = _episode_metrics_from_info(batch_summaries[e])
                     scenarios_done += 1
                     progress.update(1)
                     if scenarios_done >= num_scenarios:
@@ -796,6 +800,13 @@ class Evaluator:
         if html_paths:
             viz.build_gallery_index(str(out_dir), file_metrics=render_file_metrics or None)
         return html_paths
+
+    def _render_out_dir(self, args, backend_prefix):
+        from pathlib import Path
+
+        if args.get("render_out_dir"):
+            return Path(args["render_out_dir"])
+        return Path(args.get("render_results_dir") or args.get("eval_results_dir") or ".") / backend_prefix / self.name
 
     def _render_env_overrides(self, args) -> dict:
         """Build env kwargs for the render env. Default: same as the

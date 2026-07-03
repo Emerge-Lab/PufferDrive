@@ -432,6 +432,8 @@ struct Drive {
     unsigned int seed_stream_state;
     unsigned int episode_seed;
     unsigned int log_episode_seed;
+    int use_forced_episode_seed;
+    unsigned int forced_episode_seed;
     int compute_eval_metrics;
     int obs_slots_boundary_n;
     int obs_slots_lane_n;
@@ -553,7 +555,11 @@ static float mixed_uniform(unsigned int *rng_state, float a) {
 }
 
 static void begin_episode_rng(Drive *env) {
-    env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
+    if (env->use_forced_episode_seed) {
+        env->episode_seed = env->forced_episode_seed;
+    } else {
+        env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
+    }
     env->rng_state = env->episode_seed;
 }
 

@@ -122,6 +122,43 @@ static int test_episode_seed_is_deterministic_and_reported(void) {
     return 0;
 }
 
+static int test_forced_episode_seed_reproduces_episode(void) {
+    Drive env_natural = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    env_natural.seed_stream_state = 12345;
+    env_natural.scenario_length = 1;
+    allocate(&env_natural);
+    c_reset(&env_natural);
+    unsigned int target_seed = env_natural.episode_seed;
+
+    Drive env_forced = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    env_forced.seed_stream_state = 99999;
+    env_forced.use_forced_episode_seed = 1;
+    env_forced.forced_episode_seed = target_seed;
+    env_forced.scenario_length = 1;
+    allocate(&env_forced);
+    c_reset(&env_forced);
+
+    EXPECT_EQ_INT(env_forced.episode_seed, target_seed);
+    EXPECT_EQ_INT(env_forced.active_agent_count, env_natural.active_agent_count);
+    int obs_size = compute_observation_size(&env_natural);
+    for (int i = 0; i < env_natural.active_agent_count * obs_size; i++) {
+        EXPECT_NEAR(env_forced.observations[i], env_natural.observations[i], 1e-6f);
+    }
+
+    drive_set_neutral_actions(&env_forced);
+    c_step(&env_forced);
+    EXPECT_EQ_INT(env_forced.completed_episodes_count, 1);
+
+    CompletedEpisodeSummary summary = {0};
+    EXPECT_EQ_INT(pop_completed_episode_summary(&env_forced, &summary), 1);
+    EXPECT_EQ_INT(summary.episode_seed, target_seed);
+    EXPECT_EQ_INT(env_forced.episode_seed, target_seed);
+
+    free_allocated(&env_natural);
+    free_allocated(&env_forced);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_carla_gigaflow_load_step_log);
@@ -129,5 +166,6 @@ int main(void) {
     RUN_TEST(test_nuplan_replay_load_step_log);
     RUN_TEST(test_truncation_and_completed_episode_queue);
     RUN_TEST(test_episode_seed_is_deterministic_and_reported);
+    RUN_TEST(test_forced_episode_seed_reproduces_episode);
     return test_summary(failures);
 }

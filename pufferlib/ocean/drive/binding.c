@@ -2023,6 +2023,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
     env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
+    int episode_seed = (int) unpack(kwargs, "episode_seed");
+    env->use_forced_episode_seed = (episode_seed >= 0);
+    env->forced_episode_seed = (unsigned int) episode_seed;
 
     init(env);
     return 0;
