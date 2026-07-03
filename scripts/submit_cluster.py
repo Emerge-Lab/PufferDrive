@@ -301,11 +301,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         for entry in os.listdir(project_root):
             src = os.path.join(project_root, entry)
             dst = os.path.join(isolated_root, entry)
-            # Never link an ancestor of the isolated copy (e.g. experiments/
-            # when save_dir lives in the repo): that creates a symlink cycle
-            # isolated_root/<entry>/.../isolated_root, and setuptools package
-            # discovery walks symlinks, turning every later build into an
-            # effectively infinite directory walk.
+            # Do not symlink ancestors to avoid infinite recursion
             src_real = os.path.realpath(src)
             if isolated_root_real == src_real or isolated_root_real.startswith(src_real + os.sep):
                 continue
