@@ -76,17 +76,14 @@ env.reward_reverse: 0.005
 env.reward_timestep: 2.5e-05
 env.reward_overspeed: 0.05
 
-# Policy — 3x1024 backbone, split actor/critic, gigaflow encoder
-policy.input_size: 256
+# Policy — 3x1024 backbone, split actor/critic
 policy.backbone_hidden_size: 1024
 policy.backbone_num_layers: 3
 policy.actor_hidden_size: 1024
 policy.actor_num_layers: 0
 policy.critic_hidden_size: 1024
 policy.critic_num_layers: 0
-policy.split_network: true
-policy.encoder_gigaflow: true
-policy.dropout: 0.0
+policy.shared_network: false
 
 # Training — 10B steps, large minibatch, compiled bfloat16
 train.total_timesteps: 10_000_000_000
