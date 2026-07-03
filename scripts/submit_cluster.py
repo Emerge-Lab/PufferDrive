@@ -287,6 +287,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import subprocess
         import sys
         import submitit
+        from pathlib import Path
 
         # Code isolation: symlink top-level entries, hard copy pufferlib/ source
         isolated_root = os.path.join(save_dir, "code")
@@ -297,13 +298,12 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             isolated_root = f"{isolated_root}_v{version}"
         os.makedirs(isolated_root, exist_ok=True)
         # Symlink each top-level entry (instant, avoids deep-copying data/)
-        isolated_root_real = os.path.realpath(isolated_root)
+        isolated_root_real = Path(isolated_root).resolve()
         for entry in os.listdir(project_root):
             src = os.path.join(project_root, entry)
             dst = os.path.join(isolated_root, entry)
             # Do not symlink ancestors to avoid infinite recursion
-            src_real = os.path.realpath(src)
-            if isolated_root_real == src_real or isolated_root_real.startswith(src_real + os.sep):
+            if isolated_root_real.is_relative_to(Path(src).resolve()):
                 continue
             if os.path.exists(dst) or os.path.islink(dst):
                 if os.path.isdir(dst) and not os.path.islink(dst):
