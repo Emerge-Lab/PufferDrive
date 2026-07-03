@@ -14,7 +14,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_005_longrun_300B
+export RUN_NAME=k_006_longrun_300B
 echo ${RUN_NAME}
 
 # TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
@@ -30,7 +30,8 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --train.total-timesteps 300000000000 \
     --train.max-minibatch-size 131072 \
     --train.minibatch-size 131072 \
-    --vec.num-envs 24 \
+    --vec.num-envs 48 \
+    --vec.num-workers 24 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --eval.behaviors-full-dir.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --env.dt 0.3 \
@@ -62,14 +63,16 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --policy.ego-input-size 128 \
     --policy.lane-input-size 128 \
     --policy.partner-input-size 128 \
-    --policy.shared-network 0 \
+    --policy.shared-network false \
     --policy.traffic-control-input-size 128 \
     --train.checkpoint-interval 50 \
-    --train.compile 1 \
-    --train.normalize-rewards 0 \
+    --train.compile true \
+    --train.normalize-rewards false \
     --train.precision bfloat16 \
     --train.seed 4 \
-    --train.update-epochs 3
+    --train.update-epochs 3 \
+    --policy.boundary-input-size 128 \
+    --tb
 
 end=$(date +%s)
 runtime=$((end-start))
