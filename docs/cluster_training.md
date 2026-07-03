@@ -21,7 +21,7 @@ sbatch --account=<acct> --partition=cpu_short --cpus-per-task=8 --mem=16gb --tim
 # with --container --heartbeat. --main defaults to RL training; override
 # it to launch other modes (e.g. mining, eval).
 source /scratch/$USER/venvs/pufferdrive/bin/activate
-EXPERIMENTS_DIR=/scratch/$USER/runs
+EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
 python scripts/submit_cluster.py \
     --save_dir $EXPERIMENTS_DIR \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
@@ -74,7 +74,7 @@ serialization round-trips cleanly.
 
 ```bash
 source /scratch/$USER/venvs/pufferdrive/bin/activate
-EXPERIMENTS_DIR=/scratch/$USER/runs
+EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
 python scripts/submit_cluster.py \
     --save_dir $EXPERIMENTS_DIR \
     --prefix mytrain \

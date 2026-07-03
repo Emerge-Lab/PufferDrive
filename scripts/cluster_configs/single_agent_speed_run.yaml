@@ -7,7 +7,7 @@
 #
 # Launch (3 seeds via the colon sweep):
 #   source /scratch/$USER/venvs/pufferdrive/bin/activate
-#   EXPERIMENTS_DIR=/scratch/$USER/runs
+#   EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
 #   python scripts/submit_cluster.py \
 #       --save_dir $EXPERIMENTS_DIR --prefix $(date +%Y-%m-%d)_single_agent \
 #       --compute_config scripts/cluster_configs/nyu_greene.yaml \

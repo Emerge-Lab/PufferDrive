@@ -63,7 +63,7 @@ sbatch --account=$ACCOUNT --gres=gpu:1 --cpus-per-task=4 --mem=8gb --time=15 \
 
 ```bash
 source /scratch/$USER/venvs/pufferdrive/bin/activate
-EXPERIMENTS_DIR=/scratch/$USER/runs
+EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
 python scripts/submit_cluster.py \
     --compute_config scripts/cluster_configs/nyu_greene.yaml \
     --program_config scripts/cluster_configs/train_base.yaml \
