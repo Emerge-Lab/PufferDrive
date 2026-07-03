@@ -1152,11 +1152,8 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         </div>
     </div>
     <canvas id="c"></canvas>
-    __B64_SCRIPT_TAGS__
     <script>
-        // Read base64 chunks from non-executed text/plain tags. Keeping them out of the JS source keeps
-        // this script under V8's ~512MiB max source-string length (a giant inline literal fails to compile).
-        const B64_CHUNKS = Array.from(document.querySelectorAll('script.b64chunk'), n => n.textContent);
+        const B64_PAYLOAD = "__B64_PAYLOAD__";
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
@@ -1184,13 +1181,10 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         }
         function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
         async function initReplay() {
-            // fetch() of a data: URI decodes base64 natively — far faster than an atob + per-char copy loop.
-            // Payload is split into chunks (each < V8's ~512MiB max string length); decode each and concat the bytes.
-            const parts = [];
-            for (const b64 of B64_CHUNKS) parts.push(await (await fetch('data:application/octet-stream;base64,' + b64)).blob());
-            const compressed = new Blob(parts);
+            const binary = atob(B64_PAYLOAD), bytes = new Uint8Array(binary.length);
+            for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
             const ds = new DecompressionStream('deflate');
-            const buf = await new Response(compressed.stream().pipeThrough(ds)).arrayBuffer();
+            const buf = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
             const view = new DataView(buf), headerLen = view.getUint32(0, true);
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
@@ -1491,14 +1485,8 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
 </body>
 </html>
     """
-    # Split base64 on 4-char boundaries so each chunk decodes to whole bytes, and emit each as a
-    # non-executed <script type="text/plain"> tag. This keeps both every text node and the main JS
-    # source under V8's ~512MiB max string length (base64 has no '<', so "</script>" can't appear).
-    B64_CHUNK_CHARS = 64 * 1024 * 1024
-    chunks = [payload[i : i + B64_CHUNK_CHARS] for i in range(0, len(payload), B64_CHUNK_CHARS)]
-    b64_script_tags = "".join('<script type="text/plain" class="b64chunk">' + c + "</script>" for c in chunks)
     final_html = (
-        html_template.replace("__B64_SCRIPT_TAGS__", b64_script_tags)
+        html_template.replace("__B64_PAYLOAD__", payload)
         .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
         .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
     )

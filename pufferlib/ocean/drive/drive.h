@@ -1135,7 +1135,7 @@ int load_map_binary(const char *filename, Drive *drive) {
             fclose(file);
             return -1;
         }
-        if (fread(&agent->control_state, sizeof(int), 1, file) != 1) {
+        if (fread(&agent->mark_as_expert, sizeof(int), 1, file) != 1) {
             fclose(file);
             return -1;
         }
@@ -1415,7 +1415,8 @@ static float compute_lane_progress(
     float pos_y,
     float cos_heading,
     float sin_heading,
-    bool align_heading) {
+    bool align_heading,
+    float *out_dist_sq) {
     float best_progress = 0.0f;
     float best_dist_sq = 1e30f;
 
@@ -1452,6 +1453,9 @@ static float compute_lane_progress(
         }
     }
 
+    if (out_dist_sq != NULL) {
+        *out_dist_sq = best_dist_sq;
+    }
     return best_progress;
 }
 
@@ -1723,7 +1727,13 @@ static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
     // First lane only contributes the arc-length still ahead of the agent, not its full length.
     RoadMapElement *current_lane = &road_elements[current_lane_idx];
     route_distance_meters += current_lane->length
-        - compute_lane_progress(current_lane, agent->sim_x, agent->sim_y, agent->cos_heading, agent->sin_heading, true);
+        - compute_lane_progress(current_lane,
+                                agent->sim_x,
+                                agent->sim_y,
+                                agent->cos_heading,
+                                agent->sin_heading,
+                                true,
+                                NULL);
 
     // Random walk through the lane graph, appending exit lanes until we cover the target distance.
     while (route_distance_meters < ROUTE_TARGET_DISTANCE && route_length < MAX_ROUTE_LENGTH) {
@@ -1768,26 +1778,33 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
         return false;
     }
 
-    // Agent's progress base on its route: the route slot of its current lane + arc-length on that lane.
+    // Localize the agent on its route by actual position: from the last known slot forward, pick the route
+    // slot whose lane the agent is physically closest to, and take its arc-length on that lane as the base.
+    // current_lane_idx (nearest lane by distance+heading) is frequently off-route, so matching by lane index
+    // could leave the base on a stale earlier slot and place goals behind the agent; projecting the position
+    // guarantees base_s_on_lane is the agent's true progress and every chained goal sits ahead of it.
     int base_route_idx = agent->current_route_idx;
     if (base_route_idx < 0 || base_route_idx >= agent->route_length) {
         base_route_idx = 0;
     }
-    if (agent->current_lane_idx != -1) {
-        for (int route_idx = base_route_idx; route_idx < agent->route_length; route_idx++) {
-            if (agent->route[route_idx] == agent->current_lane_idx) {
-                base_route_idx = route_idx;
-                break;
-            }
+    float base_s_on_lane = 0.0f;
+    float best_dist_sq = 1e30f;
+    for (int route_idx = base_route_idx; route_idx < agent->route_length; route_idx++) {
+        float lane_dist_sq;
+        float lane_progress = compute_lane_progress(
+            &env->road_elements[agent->route[route_idx]],
+            agent->sim_x,
+            agent->sim_y,
+            agent->cos_heading,
+            agent->sin_heading,
+            true,
+            &lane_dist_sq);
+        if (lane_dist_sq < best_dist_sq) {
+            best_dist_sq = lane_dist_sq;
+            base_route_idx = route_idx;
+            base_s_on_lane = lane_progress;
         }
     }
-    float base_s_on_lane = compute_lane_progress(
-        &env->road_elements[agent->route[base_route_idx]],
-        agent->sim_x,
-        agent->sim_y,
-        agent->cos_heading,
-        agent->sin_heading,
-        true);
     agent->current_route_idx = base_route_idx;
 
     // Remaining route distance from the agent's base to the route end (rest of the base lane + every later lane).
@@ -1849,7 +1866,8 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
             agent->sim_y,
             agent->cos_heading,
             agent->sin_heading,
-            true);
+            true,
+            NULL);
         placed_goal_count = chain_goals(
             env,
             agent->route,
@@ -1917,7 +1935,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     float seed_y = seed_lane->y[seed_entity.geometry_idx];
     float seed_heading = seed_lane->headings[seed_entity.geometry_idx];
     float seed_s_on_lane
-        = compute_lane_progress(seed_lane, seed_x, seed_y, cosf(seed_heading), sinf(seed_heading), true);
+        = compute_lane_progress(seed_lane, seed_x, seed_y, cosf(seed_heading), sinf(seed_heading), true, NULL);
 
     // Random goal count in [1, num_goals], each at its own sampled forward spacing.
     int requested_goal_count = 1 + rand() % env->num_goals;
@@ -1963,7 +1981,8 @@ static int roll_goals(Drive *env, Agent *agent) {
         agent->list_goal_y[last_goal_idx],
         0.0f,
         0.0f,
-        false);
+        false,
+        NULL);
 
     // Follow the agent's route when goals come from a route source, otherwise free-roam. Falls back to
     // free-roam if the seed lane isn't on the route; on route exhaustion the caller regenerates a route.
@@ -3125,7 +3144,8 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
 
     // Initialize identity fields
     agent->type = VEHICLE;
-    agent->control_state = CONTROL_STATE_ACTIVE;
+    agent->active_agent = 1;
+    agent->mark_as_expert = 0;
 
     // Default vehicle dimensions
     // length: [0.8, 7.0] m
@@ -3367,7 +3387,7 @@ static bool should_control_agent(Drive *env, int agent_idx) {
         type_is_controllable = is_controllable_agent(agent->type);
     }
 
-    if (!type_is_controllable || agent->control_state > 0) {
+    if (!type_is_controllable || agent->mark_as_expert) {
         return false;
     }
 

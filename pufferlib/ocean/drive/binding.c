@@ -1292,53 +1292,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) r->length);
-            if (!pf) {
-                Py_DECREF(road);
-                Py_DECREF(road_list);
-                return NULL;
-            }
-            if (PyDict_SetItemString(road, "length", pf) < 0) {
-                Py_DECREF(pf);
-                Py_DECREF(road);
-                Py_DECREF(road_list);
-                return NULL;
-            }
-            Py_DECREF(pf);
-
-            if (is_road_lane(r->type) && r->cum_lengths != NULL && seg_len > 0) {
-                tmp = PyList_New(seg_len);
-                if (!tmp) {
-                    Py_DECREF(road);
-                    Py_DECREF(road_list);
-                    return NULL;
-                }
-                for (int j = 0; j < seg_len; j++) {
-                    PyObject *fv = PyFloat_FromDouble((double) r->cum_lengths[j]);
-                    if (!fv) {
-                        Py_DECREF(tmp);
-                        Py_DECREF(road);
-                        Py_DECREF(road_list);
-                        return NULL;
-                    }
-                    PyList_SetItem(tmp, j, fv);
-                }
-            } else {
-                tmp = PyList_New(0);
-                if (!tmp) {
-                    Py_DECREF(road);
-                    Py_DECREF(road_list);
-                    return NULL;
-                }
-            }
-            if (PyDict_SetItemString(road, "cum_lengths", tmp) < 0) {
-                Py_DECREF(tmp);
-                Py_DECREF(road);
-                Py_DECREF(road_list);
-                return NULL;
-            }
-            Py_DECREF(tmp);
-
             PyList_SetItem(road_list, i, road);
         }
         if (PyDict_SetItemString(dict, "road_elements", road_list) < 0) {
