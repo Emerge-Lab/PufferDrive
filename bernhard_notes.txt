@@ -2,6 +2,25 @@ git merge origin/3.0
 git push origin bernhard
 
 
+# Not in valentins config but in my config. 
+# non_sdc_controller: policy
+# non_vehicle_controller: auto
+# sdc_controller: policy
+# goal_on_lane: true
+# mine:
+#  num_episodes: 100
+#  output_dir: ''
+# render: 'true'
+#  score_threshold: -inf
+# train:
+#    amp true
+
+# Not in my config but in valentins config:
+# traffic_control_scope: 0
+# num_maps: 1
+# render_mode: matplotlib
+# render_obs: 0
+
 ./scripts/setup_container.sh --scratch-dir /lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch create-overlay
 export OVERLAY_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/overlay-15GB-500K.ext3
 export IMAGE_PATH=/lustre/scwpod02/client/kyutai/kesai/bernhard/puffer_scratch/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
