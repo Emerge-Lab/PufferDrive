@@ -148,6 +148,50 @@ renders/index.html           # sortable index of all episodes
 
 Open `renders/index.html` in a browser to triage. The index page filters by "failures only" / "replays only" and sorts by any metric column. Each row links to the per-episode viewer with the scene's full 2D animation.
 
+## Nightly runs and the regression report
+
+`scripts/launch_nightly_best.sh` (multi-agent, `nightly_best.yaml`) and
+`scripts/launch_single_agent.sh` (single-agent speed run) each submit 3 seeds
+via `submit_cluster.py`, stamped with the launch date as the wandb group and
+`<date>_seed<N>` run names. Runs land in the public projects
+[`emerge_/nightly-multi`](https://wandb.ai/emerge_/nightly-multi) and
+[`emerge_/nightly-single`](https://wandb.ai/emerge_/nightly-single).
+
+The **[PufferDrive Nightlies report](https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ==)**
+tracks night-over-night regressions. Per project:
+
+1. **Nightly trend** — each metric's final value per night, mean across seeds
+   with stderr bands, on a real date axis.
+2. **Nightly finals** — bar charts of the same finals, one bar per night.
+3. **Training curves** — one mean-over-seeds curve per night, overlaid.
+
+The date-axis trend panels need data wandb can't aggregate natively
+(final-value-per-run grouped and averaged), so `scripts/nightly_report.py`
+materializes it: one derived "trend" run per (project, seed) in
+[`emerge_/nightly-trends`](https://wandb.ai/emerge_/nightly-trends), holding
+one row per night with that seed's final metric values, timestamped at the
+night's midnight. The launchers rebuild these before each submission, so the
+report stays current with no other scheduler. Trend runs are disposable —
+deleting them loses nothing; the next update recreates them from the real
+runs.
+
+```bash
+# Rebuild the trend runs by hand (e.g. after tonight's runs finish)
+python scripts/nightly_report.py update
+
+# Rewrite the report in place (needs: pip install wandb-workspaces)
+python scripts/nightly_report.py report
+
+# Mint a brand-new report instead of editing the existing one
+python scripts/nightly_report.py report --create
+```
+
+To add a metric to the report: add its key to `TREND_METRICS` /
+`FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
+`update` followed by `report`. The script targets wandb.ai regardless of any
+locally configured wandb host (`WANDB_BASE_URL` is defaulted, an explicit env
+var still wins).
+
 ## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
 ### `[env]` — Simulation
