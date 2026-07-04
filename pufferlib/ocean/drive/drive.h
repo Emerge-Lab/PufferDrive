@@ -1823,7 +1823,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     // Sample a spacing per goal, then walk the route placing goals at those forward distances.
     float goal_spacings_meters[MAX_GOALS];
     for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
-        goal_spacings_meters[goal_idx] = sample_uniform(env->min_goal_spacing, env->max_goal_spacing);
+        goal_spacings_meters[goal_idx] = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
     }
 
     float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
@@ -1941,7 +1941,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     int requested_goal_count = 1 + rand() % env->num_goals;
     float goal_spacings_meters[MAX_GOALS];
     for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
-        goal_spacings_meters[goal_idx] = sample_uniform(env->min_goal_spacing, env->max_goal_spacing);
+        goal_spacings_meters[goal_idx] = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
     }
     float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
     int goal_lane[MAX_GOALS];
@@ -2001,7 +2001,7 @@ static int roll_goals(Drive *env, Agent *agent) {
     }
 
     // Walk one spacing forward to find the appended goal before touching the window.
-    float spacing_meters = sample_uniform(env->min_goal_spacing, env->max_goal_spacing);
+    float spacing_meters = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
     float next_x, next_y, next_z, next_s_on_lane;
     int next_lane_idx, next_cursor_idx; // next_cursor_idx unused: single-step append, no chaining
     if (!route_point_at_distance(
@@ -2759,9 +2759,9 @@ static void add_log(Drive *env) {
         env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
-        // Score: 1 per agent that reached all 3 target waypoints without
+        // Score: 1 per agent that reached all 3 goals without
         // being removed/stopped. Was hardcoded to >=4, unreachable given
-        // num_target_waypoints=3 in the ini, so score was always 0.
+        // num_goals=3 in the ini, so score was always 0.
         if (num_goals_reached >= 3 && !agent->removed && !agent->stopped) {
             env->log.score += 1.0f;
         }
@@ -3806,8 +3806,8 @@ void init(Drive *env) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
-            // For replay mode, always place waypoints along the logged
-            // trajectory. Route-based compute_goals can produce goals that
+            // For replay mode, always place goals along the logged
+            // trajectory. Route-based goal generation can produce goals that
             // diverge from the actual path the SDC should follow.
             {
                 int start = env->init_step > 0 ? env->init_step : 0;
@@ -3824,7 +3824,9 @@ void init(Drive *env) {
                     agent->list_goal_x[g] = agent->log_trajectory_x[t];
                     agent->list_goal_y[g] = agent->log_trajectory_y[t];
                     agent->list_goal_z[g] = agent->log_trajectory_z[t];
+                    agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
                 }
+                agent->goal_count = num_wp;
                 agent->current_goal_idx = 0;
                 agent->current_goal_x = agent->list_goal_x[0];
                 agent->current_goal_y = agent->list_goal_y[0];
@@ -5239,7 +5241,9 @@ void c_reset(Drive *env) {
                 agent->list_goal_x[g] = agent->log_trajectory_x[t];
                 agent->list_goal_y[g] = agent->log_trajectory_y[t];
                 agent->list_goal_z[g] = agent->log_trajectory_z[t];
+                agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
             }
+            agent->goal_count = num_wp;
             agent->current_goal_idx = 0;
             agent->current_goal_x = agent->list_goal_x[0];
             agent->current_goal_y = agent->list_goal_y[0];

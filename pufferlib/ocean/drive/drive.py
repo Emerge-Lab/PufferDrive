@@ -821,8 +821,8 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
-            goal_x[idx] = np.float32(agent.get("goal_position_x", 0.0))
-            goal_y[idx] = np.float32(agent.get("goal_position_y", 0.0))
+            goal_x[idx] = np.float32(agent.get("current_goal_x", 0.0))
+            goal_y[idx] = np.float32(agent.get("current_goal_y", 0.0))
         return {
             "valid": valid,
             "id": agent_id,
