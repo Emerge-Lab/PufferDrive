@@ -135,6 +135,11 @@ static inline Agent idm_make_sample_agent(const Agent *ego, float x, float y, fl
     sample.sim_heading = normalize_heading(heading);
     sample.cos_heading = cosf(sample.sim_heading);
     sample.sin_heading = sinf(sample.sim_heading);
+    // Static probe: prev == cur so any swept geometry check degenerates to a static box test.
+    sample.prev_x = x;
+    sample.prev_y = y;
+    sample.prev_cos_heading = sample.cos_heading;
+    sample.prev_sin_heading = sample.sin_heading;
     sample.sim_length = ego->sim_length + 2.0f * IDM_BBOX_MARGIN;
     sample.sim_width = ego->sim_width + 2.0f * IDM_BBOX_MARGIN;
     sample.removed = 0;
@@ -162,9 +167,6 @@ static int idm_boxes_overlap(const Agent *sample, const Agent *other) {
     return check_obb_collision(&sample_expanded, &other_expanded);
 }
 static int idm_sample_hits_red_light(Drive *env, Agent *sample, int lane_idx) {
-    float corners[4][2];
-    compute_agent_corners(sample, corners);
-
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *traffic = &env->traffic_elements[i];
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
@@ -199,14 +201,8 @@ static int idm_sample_hits_red_light(Drive *env, Agent *sample, int lane_idx) {
         float ext_p1[2] = {traffic->stop_line[0] - ext * sl_dx, traffic->stop_line[1] - ext * sl_dy};
         float ext_p2[2] = {traffic->stop_line[3] + ext * sl_dx, traffic->stop_line[4] + ext * sl_dy};
 
-        for (int k = 0; k < 4; k++) {
-            if (k == 2) {
-                continue;
-            }
-            int next = (k + 1) % 4;
-            if (check_line_intersection(corners[k], corners[next], ext_p1, ext_p2)) {
-                return 1;
-            }
+        if (check_segment_crosses_moving_box(ext_p1[0], ext_p1[1], ext_p2[0], ext_p2[1], sample)) {
+            return 1;
         }
     }
 
@@ -220,6 +216,11 @@ static inline void idm_update_sample_agent_pose(Agent *sample, RoadMapElement *l
     sample->sim_heading = normalize_heading(lane->headings[seg_idx]);
     sample->cos_heading = cosf(sample->sim_heading);
     sample->sin_heading = sinf(sample->sim_heading);
+    // Keep prev == cur so swept geometry checks stay static for the static probe.
+    sample->prev_x = sample->sim_x;
+    sample->prev_y = sample->sim_y;
+    sample->prev_cos_heading = sample->cos_heading;
+    sample->prev_sin_heading = sample->sin_heading;
 }
 
 static int idm_set_projected_agent_pose(Drive *env, Agent *agent, IDMLaneProjection projection, float distance) {
@@ -621,6 +622,7 @@ static int idm_advance_along_route_lanes(Drive *env, int agent_idx, float distan
 
 static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
     Agent *agent = &env->agents[agent_idx];
+    copy_pose_to_prev(agent);
 
     if (agent->removed) {
         invalidate_agent(agent);
