@@ -1,15 +1,17 @@
 """Create or rewrite the "PufferDrive Nightlies" wandb report.
 
 Layout, per nightly project (nightly-multi, nightly-single):
-  1. Nightly finals — native bar charts grouped by run group (the launch
-     date): one bar per night, the mean over that night's seeds of each
-     metric's final value.
-  2. Training curves — one mean-over-seeds line per night (run group) with
+  1. Nightly trend — line panels over the per-seed trend runs that
+     scripts/update_nightly_trends.py maintains: x = night index (0 = the
+     first night, in days), y = mean across seeds with stderr bands.
+  2. Nightly finals — native bar charts grouped by run group (the launch
+     date): one bar per night, mean over seeds; the bar labels carry the
+     actual dates.
+  3. Training curves — one mean-over-seeds line per night (run group) with
      stderr bands, so nights overlay for regression comparison.
 
-Everything is a live wandb query: new nights appear automatically, nothing
-to re-run. Requires the wandb-workspaces package
-(pip install wandb-workspaces).
+Panels are live wandb queries; the launchers refresh the trend runs each
+night. Requires the wandb-workspaces package (pip install wandb-workspaces).
 
     python scripts/make_nightly_report.py             # edit the existing report
     python scripts/make_nightly_report.py --create    # mint a fresh report
@@ -48,8 +50,36 @@ CURVE_METRICS = [
 ]
 
 
+def trend_section(project):
+    runset = wr.Runset(entity=ENTITY, project=project, name="trend runs", query="trend")
+    panels = [
+        wr.LinePlot(
+            y=[m],
+            groupby="group",
+            groupby_aggfunc="mean",
+            groupby_rangefunc="stderr",
+            title=f"{m} - final by night index",
+        )
+        for m in FINALS_METRICS
+    ]
+    return [
+        wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
+        wr.P(
+            "x = night index in days (0 = 2026-07-04); night_ts on each point "
+            "maps back to the date. Trend runs are rebuilt by "
+            "scripts/update_nightly_trends.py at each nightly launch."
+        ),
+        wr.PanelGrid(runsets=[runset], panels=panels),
+    ]
+
+
 def finals_section(project):
-    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
+    runset = wr.Runset(
+        entity=ENTITY,
+        project=project,
+        name=f"{project} (all nights)",
+        filters='group != "trend"',
+    )
     bar_panels = [
         wr.BarPlot(
             metrics=[m],
@@ -71,7 +101,12 @@ def finals_section(project):
 
 
 def curves_section(project):
-    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
+    runset = wr.Runset(
+        entity=ENTITY,
+        project=project,
+        name=f"{project} (all nights)",
+        filters='group != "trend"',
+    )
     panels = [
         wr.LinePlot(
             x="agent_steps",
@@ -105,6 +140,8 @@ def main():
         report = wr.Report.from_url(REPORT_URL)
 
     blocks = []
+    for project in PROJECTS:
+        blocks += trend_section(project)
     for project in PROJECTS:
         blocks += finals_section(project)
     for project in PROJECTS:
