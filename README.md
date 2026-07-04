@@ -165,15 +165,11 @@ tracks night-over-night regressions. Per project:
 2. **Nightly finals** — bar charts of the same finals, one bar per night.
 3. **Training curves** — one mean-over-seeds curve per night, overlaid.
 
-The date-axis trend panels need data wandb can't aggregate natively
-(final-value-per-run grouped and averaged), so `scripts/nightly_report.py`
-materializes it: one derived "trend" run per (project, seed) in
-[`emerge_/nightly-trends`](https://wandb.ai/emerge_/nightly-trends), holding
-one row per night with that seed's final metric values, timestamped at the
-night's midnight. The launchers rebuild these before each submission, so the
-report stays current with no other scheduler. Trend runs are disposable —
-deleting them loses nothing; the next update recreates them from the real
-runs.
+`scripts/nightly_report.py` maintains one derived "trend" run per (project,
+seed) in [`emerge_/nightly-trends`](https://wandb.ai/emerge_/nightly-trends),
+which the trend panels read. The launchers rebuild these before each
+submission, so the report stays current with no other scheduler. Trend runs
+are disposable — the next update recreates them from the real runs.
 
 ```bash
 # Rebuild the trend runs by hand (e.g. after tonight's runs finish)
