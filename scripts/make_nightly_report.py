@@ -28,6 +28,8 @@ import wandb_workspaces.reports.v2 as wr
 
 ENTITY = "emerge_"
 PROJECTS = ["nightly-multi", "nightly-single"]
+# 2026-07-03 midnight: one day before the first night, so the first point is visible
+NIGHT_ZERO_TS = 1783051200.0
 REPORT_URL = "https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ=="
 
 FINALS_METRICS = [
@@ -59,6 +61,9 @@ def trend_section(project):
             groupby="group",
             groupby_aggfunc="mean",
             groupby_rangefunc="stderr",
+            # Anchor the axis at night zero: with a single night logged the
+            # autorange spans [0, 2x], which renders as the year 1969.
+            range_x=(NIGHT_ZERO_TS, None),
             title=m,
         )
         for m in FINALS_METRICS
