@@ -184,9 +184,7 @@ python scripts/nightly_report.py report --create
 
 To add a metric to the report: add its key to `TREND_METRICS` /
 `FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
-`update` followed by `report`. The script targets wandb.ai regardless of any
-locally configured wandb host (`WANDB_BASE_URL` is defaulted, an explicit env
-var still wins).
+`update` followed by `report`.
 
 ## Key Configuration (`pufferlib/config/ocean/drive.ini`)
 
