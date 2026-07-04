@@ -383,7 +383,7 @@ static float idm_desired_speed(Drive *env, Agent *agent) {
     float desired_speed = idm_lane_speed_limit(env, agent->current_lane_idx);
 
     if (desired_speed <= 0.0f && agent->route != NULL && agent->route_length > 0) {
-        int route_idx = agent->current_route_index;
+        int route_idx = agent->current_route_idx;
         if (route_idx < 0) {
             route_idx = 0;
         } else if (route_idx >= agent->route_length) {
@@ -431,11 +431,11 @@ static IDMLaneProjection idm_project_to_route_lanes(Drive *env, Agent *agent) {
         return best;
     }
 
-    int start_route = agent->current_route_index - 1;
+    int start_route = agent->current_route_idx - 1;
     if (start_route < 0) {
         start_route = 0;
     }
-    int end_route = agent->current_route_index + 4;
+    int end_route = agent->current_route_idx + 4;
     if (end_route > agent->route_length) {
         end_route = agent->route_length;
     }
@@ -529,7 +529,7 @@ static int idm_set_pose_on_lane_segment(
     agent->sim_heading = normalize_heading(lane->headings[seg_idx]);
     agent->cos_heading = cosf(agent->sim_heading);
     agent->sin_heading = sinf(agent->sim_heading);
-    agent->current_route_index = route_idx;
+    agent->current_route_idx = route_idx;
     agent->current_lane_idx = lane_idx;
     agent->current_lane_geometry_idx = seg_idx;
     return 1;

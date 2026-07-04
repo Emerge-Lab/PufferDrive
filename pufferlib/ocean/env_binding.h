@@ -900,7 +900,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
             agent_i32[i32_base + 2] = a->sim_valid;
-            agent_i32[i32_base + 3] = a->control_state;
+            agent_i32[i32_base + 3] = a->active_agent;
             agent_i32[i32_base + 4] = a->stopped;
             agent_i32[i32_base + 5] = a->removed;
             agent_i32[i32_base + 6] = a->current_lane_idx;
