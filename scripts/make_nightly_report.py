@@ -58,7 +58,7 @@ def trend_section(project):
             groupby="group",
             groupby_aggfunc="mean",
             groupby_rangefunc="stderr",
-            title=f"{m} - final by night index",
+            title=m,
         )
         for m in FINALS_METRICS
     ]
