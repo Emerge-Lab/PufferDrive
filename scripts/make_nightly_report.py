@@ -3,8 +3,7 @@
 Layout, per nightly project (nightly-multi, nightly-single):
   1. Nightly finals — native bar charts grouped by run group (the launch
      date): one bar per night, the mean over that night's seeds of each
-     metric's final value. Plus scatter panels of final value vs run end
-     time (one point per seed) for a continuous time axis.
+     metric's final value.
   2. Training curves — one mean-over-seeds line per night (run group) with
      stderr bands, so nights overlay for regression comparison.
 
@@ -39,10 +38,6 @@ FINALS_METRICS = [
     "validation_gigaflow/score",
     "validation_gigaflow/collision_rate",
 ]
-SCATTER_METRICS = [
-    "environment/score",
-    "environment/episode_return",
-]
 CURVE_METRICS = [
     "environment/score",
     "environment/episode_return",
@@ -65,22 +60,13 @@ def finals_section(project):
         )
         for m in FINALS_METRICS
     ]
-    scatter_panels = [
-        wr.ScatterPlot(
-            x="_timestamp",
-            y=m,
-            running_ymean=True,
-            title=f"{m} - final vs time (per seed)",
-        )
-        for m in SCATTER_METRICS
-    ]
     return [
         wr.H1(f"{project}: nightly finals"),
         wr.P(
-            "Bars: one per night (run group), mean over seeds of the final "
-            "logged value, with stderr. Scatter: per-seed finals on a time axis."
+            "One bar per night (run group): mean over seeds of the final "
+            "logged value, with stderr."
         ),
-        wr.PanelGrid(runsets=[runset], panels=bar_panels + scatter_panels),
+        wr.PanelGrid(runsets=[runset], panels=bar_panels),
     ]
 
 
