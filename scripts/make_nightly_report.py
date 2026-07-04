@@ -2,8 +2,8 @@
 
 Layout, per nightly project (nightly-multi, nightly-single):
   1. Nightly trend — line panels over the per-seed trend runs that
-     scripts/update_nightly_trends.py maintains: x = night index (0 = the
-     first night, in days), y = mean across seeds with stderr bands.
+     scripts/update_nightly_trends.py maintains: x = the night as a real
+     date axis, y = mean across seeds with stderr bands.
   2. Nightly finals — native bar charts grouped by run group (the launch
      date): one bar per night, mean over seeds; the bar labels carry the
      actual dates.
@@ -54,6 +54,7 @@ def trend_section(project):
     runset = wr.Runset(entity=ENTITY, project=project, name="trend runs", query="trend")
     panels = [
         wr.LinePlot(
+            x="_timestamp",
             y=[m],
             groupby="group",
             groupby_aggfunc="mean",
@@ -65,8 +66,8 @@ def trend_section(project):
     return [
         wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
         wr.P(
-            "x = night index in days (0 = 2026-07-04); night_ts on each point "
-            "maps back to the date. Trend runs are rebuilt by "
+            "x = the night (wall-time axis; each trend row is stamped with "
+            "its night\'s midnight). Trend runs are rebuilt by "
             "scripts/update_nightly_trends.py at each nightly launch."
         ),
         wr.PanelGrid(runsets=[runset], panels=panels),

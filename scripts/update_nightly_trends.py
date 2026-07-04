@@ -2,12 +2,12 @@
 
 The nightly launchers stamp every run's wandb group with the launch date.
 This script folds those into one small trend run per seed (trend-seed0,
-trend-seed1, ...): each logs the final value of every metric at
-step = night index (days since NIGHT_ZERO, so 0 = 2026-07-04, 1 = the next
-night, ...). A line panel grouped over the trend runs then plots the mean
-across seeds with stderr bands, x = night index — see the "PufferDrive
-Nightlies" report (scripts/make_nightly_report.py). Each row also logs
-night_ts (unix timestamp of the date) to map indices back to dates.
+trend-seed1, ...): each logs the final value of every metric with the row
+_timestamp overridden to the night's midnight (and step = days since
+NIGHT_ZERO for monotonicity). A wall-time line panel grouped over the trend
+runs then plots the mean across seeds with stderr bands on a real date
+axis — see the "PufferDrive Nightlies" report
+(scripts/make_nightly_report.py).
 
 Re-running deletes and rebuilds the trend runs, so in-progress nights update
 and new nights append. The nightly launchers invoke this before submitting,
@@ -81,7 +81,7 @@ def main():
                 run = by_seed[seed][night]
                 night_index = (night - NIGHT_ZERO).days
                 row = {
-                    "night_ts": datetime.datetime.combine(
+                    "_timestamp": datetime.datetime.combine(
                         night, datetime.time()
                     ).timestamp()
                 }
