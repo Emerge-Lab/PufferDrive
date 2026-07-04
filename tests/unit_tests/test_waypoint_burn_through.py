@@ -1,24 +1,18 @@
 """Tests that replay-mode waypoint progression burns exactly ONE waypoint per
-goal-reach event, with the goal alias advancing in lockstep.
+goal-reach event, with the goal alias advancing contextually.
 
-Feature under test (drive.h, compute_metrics): when the swept goal-reach check
-fires, current_goal_idx increments AND the goal alias (goal_position_x/y/z) is
-advanced to the next waypoint in the same call. Before this fix the alias was
-only advanced later in c_step, so a reset-time or consecutive-step fire kept
-testing against the SAME stale waypoint while current_goal_idx silently
-incremented — "burning through" later waypoints without ever presenting them.
+Feature under test (drive.h, compute_metrics): when the car spawns on top of a waypoint
+the waypoint is consumed correctly and does not result in multiple ones being consumed
+without updating the waypoint info.
 
 Fixture map
 -----------
-Same checked-in replay .bin as test_terminate_on_goal.py
-(pufferlib/resources/drive/binaries/sdc_replay_test/): the logged SDC is
-essentially stationary, so ALL target waypoints sit within goal_radius from
-step 0. That makes goal-consumption pressure maximal — the exact burn-through
-scenario — while keeping the run deterministic (sdc_controller="replay").
+The first 2 waypoints sit within goal_radius from step 0. This tests that we burn through
+those 2 alone and we don't use the stale alias and burn through the third one as well.
 
 Observability
 -------------
-get_state() exposes, per agent: the goal alias (goal_position_x/y), the
+get_state() exposes, per agent: the goal alias (current_goal_x/y), the
 per-step reached-goal flag (metrics_array[REACHED_GOAL_METRIC_IDX], recomputed
 every step), and the full logged trajectory. The expected waypoint list is
 reconstructed with the same sampling formula c_reset uses in replay mode, so
@@ -42,7 +36,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
 
 SCENARIO_LENGTH = 400
-NUM_TARGET_WAYPOINTS = 3
+NUM_GOALS = 3
 GOAL_RADIUS = 2.0
 
 # metrics_array layout (datatypes.h): REACHED_GOAL_IDX
@@ -72,7 +66,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         termination_mode=0,
         terminate_on_goal=terminate_on_goal,
         report_interval=1,
-        num_target_waypoints=NUM_TARGET_WAYPOINTS,
+        num_goals=NUM_GOALS,
         goal_radius=GOAL_RADIUS,
     )
 
@@ -90,8 +84,8 @@ def _expected_waypoints(agent_state):
     trajectory_size = agent_state["trajectory_size"]
     remaining = max(trajectory_size - 1, 1)
     waypoints = []
-    for g in range(NUM_TARGET_WAYPOINTS):
-        t = min((g + 1) * remaining // NUM_TARGET_WAYPOINTS, trajectory_size - 1)
+    for g in range(NUM_GOALS):
+        t = min((g + 1) * remaining // NUM_GOALS, trajectory_size - 1)
         waypoints.append((agent_state["log_trajectory_x"][t], agent_state["log_trajectory_y"][t]))
     return waypoints
 
@@ -99,7 +93,7 @@ def _expected_waypoints(agent_state):
 def _alias_waypoint_index(agent_state, waypoints):
     """Map the current goal alias to its waypoint index; the alias must match
     exactly one expected waypoint."""
-    alias = (agent_state["goal_position_x"], agent_state["goal_position_y"])
+    alias = (agent_state["current_goal_x"], agent_state["current_goal_y"])
     matches = [
         k
         for k, (wp_x, wp_y) in enumerate(waypoints)
@@ -150,7 +144,7 @@ def test_each_goal_fire_burns_exactly_one_waypoint():
                 f"was already consumed (current_goal_idx should be saturated)."
             )
             consumed_count += 1
-            if current_wp_idx < NUM_TARGET_WAYPOINTS - 1:
+            if current_wp_idx < NUM_GOALS - 1:
                 assert new_wp_idx == current_wp_idx + 1, (
                     f"Step {step}: fire on wp{current_wp_idx} must advance the alias "
                     f"by exactly one waypoint, but it moved to wp{new_wp_idx} "
@@ -170,8 +164,8 @@ def test_each_goal_fire_burns_exactly_one_waypoint():
         f"With terminate_on_goal=0 the episode must run to scenario_length="
         f"{SCENARIO_LENGTH}, but truncated at {truncated_at}."
     )
-    assert consumed_count == NUM_TARGET_WAYPOINTS, (
-        f"Episode should consume all {NUM_TARGET_WAYPOINTS} waypoints exactly "
+    assert consumed_count == NUM_GOALS, (
+        f"Episode should consume all {NUM_GOALS} waypoints exactly "
         f"once each, but accounting shows {consumed_count} consumptions."
     )
 
@@ -180,7 +174,7 @@ def test_goal_termination_accounts_for_every_waypoint():
     """With terminate_on_goal=1, the episode may only truncate once every
     waypoint has been individually consumed: waypoints consumed before stepping
     (post-reset alias index) + fires observed while stepping + the one fire on
-    the truncating step must equal num_target_waypoints. Burn-through would
+    the truncating step must equal num_goals. Burn-through would
     truncate with fewer accounted consumptions."""
     env = _make_sdc_replay_env(terminate_on_goal=True)
     try:
@@ -208,11 +202,11 @@ def test_goal_termination_accounts_for_every_waypoint():
     )
     # The truncating step itself consumes exactly the one remaining waypoint.
     total_consumed = consumed_before_stepping + fires_observed + 1
-    assert total_consumed == NUM_TARGET_WAYPOINTS, (
+    assert total_consumed == NUM_GOALS, (
         f"Truncation fired after {total_consumed} accounted waypoint "
         f"consumptions ({consumed_before_stepping} before stepping, "
         f"{fires_observed} observed fires, +1 truncating fire); expected "
-        f"{NUM_TARGET_WAYPOINTS}. Fewer means waypoints were burned through "
+        f"{NUM_GOALS}. Fewer means waypoints were burned through "
         f"without being presented as goals."
     )
 
