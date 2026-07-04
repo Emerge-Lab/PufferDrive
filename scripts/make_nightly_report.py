@@ -2,8 +2,9 @@
 
 Layout, per nightly project (nightly-multi, nightly-single):
   1. Nightly trend — line panels over the per-seed trend runs that
-     scripts/update_nightly_trends.py maintains: x = the night as a real
-     date axis, y = mean across seeds with stderr bands.
+     scripts/update_nightly_trends.py maintains in the nightly-trends
+     project: x = the night as a real date axis, y = mean across seeds with
+     stderr bands.
   2. Nightly finals — native bar charts grouped by run group (the launch
      date): one bar per night, mean over seeds; the bar labels carry the
      actual dates.
@@ -38,6 +39,7 @@ FINALS_METRICS = [
     "environment/collision_rate",
     "environment/offroad_rate",
     "environment/num_goals_reached",
+    "environment/avg_distance_per_infraction",
     "SPS",
     "validation_gigaflow/score",
     "validation_gigaflow/collision_rate",
@@ -53,7 +55,12 @@ CURVE_METRICS = [
 
 
 def trend_section(project):
-    runset = wr.Runset(entity=ENTITY, project=project, name="trend runs", query="trend")
+    runset = wr.Runset(
+        entity=ENTITY,
+        project="nightly-trends",
+        name=f"{project} trend runs",
+        filters=f'group == "{project}"',
+    )
     panels = [
         wr.LinePlot(
             x="_timestamp",
@@ -80,12 +87,7 @@ def trend_section(project):
 
 
 def finals_section(project):
-    runset = wr.Runset(
-        entity=ENTITY,
-        project=project,
-        name=f"{project} (all nights)",
-        filters='group != "trend"',
-    )
+    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
     bar_panels = [
         wr.BarPlot(
             metrics=[m],
@@ -107,12 +109,7 @@ def finals_section(project):
 
 
 def curves_section(project):
-    runset = wr.Runset(
-        entity=ENTITY,
-        project=project,
-        name=f"{project} (all nights)",
-        filters='group != "trend"',
-    )
+    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
     panels = [
         wr.LinePlot(
             x="agent_steps",
