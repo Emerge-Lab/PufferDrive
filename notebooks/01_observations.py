@@ -70,7 +70,6 @@ ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
     obs_dropout_lane=env.obs_dropout_lane,
     obs_dropout_boundary=env.obs_dropout_boundary,
-    obs_goal_lane_distance=env.obs_goal_lane_distance,
 )
 print(f"ego: {ego.shape} = {ego}")
 print(f"target: {target.shape}")

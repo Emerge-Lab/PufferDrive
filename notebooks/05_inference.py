@@ -596,7 +596,7 @@ ax.annotate("EGO", (0, 0), fontsize=9, ha="center", va="center", color="white", 
 for i in range(lanes.shape[0]):
     if np.allclose(lanes[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = lanes[i]
+    rx, ry, rz, length, _, dc, ds = lanes[i][:7]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
@@ -618,7 +618,7 @@ ax.scatter(
 for i in range(boundaries.shape[0]):
     if np.allclose(boundaries[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = boundaries[i]
+    rx, ry, rz, length, _, dc, ds = boundaries[i][:7]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
