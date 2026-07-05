@@ -21,7 +21,7 @@ env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 env.num_maps: 1
 env.min_agents_per_env: 1
 env.max_agents_per_env: 1
-env.num_agents: 1024
+env.num_agents: 2048
 env.use_map_cache: 1
 
 # Single goal placed at a random drivable point on the map whose Euclidean
@@ -32,13 +32,14 @@ env.num_target_waypoints: 1
 env.goal_on_lane: False
 env.min_waypoint_spacing: 6.0
 env.max_waypoint_spacing: 500.0
+env.obs_norm_goal_offset_m: 500.0
 
 # Traffic lights fully off: not observed, not scored, no reward penalty.
 env.traffic_light_behavior: 0
 env.obs_slots_traffic_controls_n: 0
 
 # Training
-train.total_timesteps: 1_000_000_000
+train.total_timesteps: 10_000_000_000
 
 # Disable nuPlan-based evaluators. validation_gigaflow stays on but is
 # reconfigured to triage_html (CPU-only scene playback + per-episode metrics

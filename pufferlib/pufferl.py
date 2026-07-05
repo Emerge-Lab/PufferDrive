@@ -302,6 +302,9 @@ class PuffeRL:
         self.losses = {}
         self.best_score = -float("inf")
         self.ema_max = 0.0
+        # from yvonne.viz_spawn_goal import SpawnGoalLogger
+        # _viz_dir = os.path.join(config.get("data_dir", "runs"), "spawn_goal")
+        # self._spawn_goal_viz = SpawnGoalLogger(save_dir=_viz_dir, flush_every=0)
         # Set later via PuffeRL.attach_eval_manager (before evaluate() fires).
         self._eval_manager = None
 
@@ -448,6 +451,9 @@ class PuffeRL:
 
             profile("eval_misc", epoch)
             for i in info:
+                if isinstance(i, dict) and i.get("summary_type") == "completed_episode":
+                    # self._spawn_goal_viz.add(i)
+                    continue
                 for k, v in pufferlib.unroll_nested_dict(i):
                     if isinstance(v, np.ndarray):
                         v = v.tolist()
@@ -458,6 +464,10 @@ class PuffeRL:
 
             profile("env", epoch)
             self.vecenv.send(action)
+
+        # save_every = self.config.get("spawn_goal_save_every", 10)
+        # if self.epoch % save_every == 0:
+        #     self._spawn_goal_viz.save(self.epoch)
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
@@ -1269,6 +1279,7 @@ class WandbLogger:
             name=args.get("run_name") or None,
             project=args["wandb_project"],
             group=args["wandb_group"],
+            entity='emerge_',
             allow_val_change=True,
             save_code=False,
             resume=resume,
@@ -1425,6 +1436,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
     torch.manual_seed(train_seed)
+    args["env"]["emit_completed_episodes"] = True
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
 
@@ -1850,7 +1862,10 @@ def mine_failures(env_name, args=None):
             episode_id = next_episode_id
             next_episode_id += 1
             bundle_bytes = info.pop("compact_replay_bundle", None)
-            row = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in info.items()}
+            _SPATIAL = {"agent_spawn_x", "agent_spawn_y", "agent_final_goal_x",
+                        "agent_final_goal_y", "agent_outcome", "num_summary_agents"}
+            row = {k: (float(v) if isinstance(v, (int, float)) else v)
+                   for k, v in info.items() if k not in _SPATIAL}
             row["episode_id"] = episode_id
             row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
                 1.0, float(row.get("total_infractions", 0.0))

@@ -21,6 +21,17 @@ _GALLERY_METRIC_KEYS = (
 )
 
 
+_SPATIAL_KEYS = frozenset(
+    {"agent_spawn_x", "agent_spawn_y", "agent_final_goal_x", "agent_final_goal_y",
+     "agent_outcome", "num_summary_agents"}
+)
+
+
+def _strip_spatial_fields(d):
+    """Remove per-agent spawn/goal arrays from a completed_episode summary dict."""
+    return {k: v for k, v in d.items() if k not in _SPATIAL_KEYS}
+
+
 def _episode_metrics_from_info(info):
     """Pull the gallery-sort metrics out of a `completed_episode` summary dict."""
     out = {}
@@ -162,7 +173,7 @@ class Evaluator:
             obs, _, terminals, truncations, infos = vecenv.step(action)
             for d in self._flatten_infos(infos):
                 if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
-                    self._episode_rows.append(d)
+                    self._episode_rows.append(_strip_spatial_fields(d))
                 else:
                     infos_collected.append(d)
             # Mask LSTM state per-agent for envs that just terminated or

@@ -236,6 +236,12 @@ struct Agent {
     float goal_position_y; // alias = goal_positions_y[current_goal_idx]
     float goal_position_z; // alias = goal_positions_z[current_goal_idx]
     int current_goal_idx;  // index of next goal to reach (0..N-1)
+    int goal_lane_graph_idx[MAX_TARGET_WAYPOINTS]; // lane-graph node for each goal; -1 if not in graph
+
+    // World-coordinate spawn position captured at the start of each episode
+    // (sim_x/y shift during the episode; this persists until the next spawn)
+    float spawn_x;
+    float spawn_y;
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set

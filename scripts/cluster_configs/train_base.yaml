@@ -6,10 +6,28 @@
 # and env.num_agents are all intentionally omitted so runs inherit the ini.
 
 # Training
-train.total_timesteps: 10_000_000_000
-train.checkpoint_interval: 1000
+train.total_timesteps: 100_000_000_000
+train.checkpoint_interval: 100
+
+vec.num_envs: 24
+
+eval.validation_replay.enabled: 0
+eval.validation_gigaflow.render_backend: obs_html
+eval.behaviors_full_dir.enabled: 0
+eval.behaviors_hard_stop.enabled: 0
+eval.behaviors_highway_straight.enabled: 0
+eval.behaviors_lane_change.enabled: 0
+eval.behaviors_merge.enabled: 0
+eval.behaviors_parked_cars.enabled: 0
+eval.behaviors_roundabout.enabled: 0
+eval.behaviors_stopped_traffic.enabled: 0
+eval.behaviors_traffic_light_green.enabled: 0
+eval.behaviors_traffic_light_stop.enabled: 0
+eval.behaviors_unprotected_left.enabled: 0
+eval.behaviors_unprotected_right.enabled: 0
 
 # W&B logging
 wandb: True
-wandb_project: pufferdrive
-wandb_group: cluster
+wandb_project: single_agent_nightly_test
+wandb_group: Nightly_Test
+

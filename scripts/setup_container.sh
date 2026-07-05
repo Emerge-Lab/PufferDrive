@@ -32,6 +32,8 @@ CONTAINER_DIR="${CONTAINER_DIR:-$(dirname "$OVERLAY_PATH")}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Venv lives on /scratch (regular ext4) — bypasses fuse2fs entirely for installs.
 VENV_PATH="${VENV_PATH:-/scratch/$USER/venvs/pufferdrive}"
+# Redirect uv's cache off the home filesystem (quota-constrained) onto /scratch.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/scratch/$USER/.cache/uv}"
 # miniforge3 lives on /scratch too so the venv's python symlink resolves
 # from any node without needing the singularity overlay to be mounted.
 MINIFORGE3_DIR="${MINIFORGE3_DIR:-/scratch/$USER/miniforge3}"

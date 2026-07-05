@@ -2074,6 +2074,34 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         return -1;
     }
     Py_DECREF(sid);
+
+    // Per-agent spatial data for spawn/goal visualization
+    int n_ag = summary->num_summary_agents;
+    PyObject *sx = PyList_New(n_ag);
+    PyObject *sy = PyList_New(n_ag);
+    PyObject *gx = PyList_New(n_ag);
+    PyObject *gy = PyList_New(n_ag);
+    PyObject *oc = PyList_New(n_ag);
+    if (!sx || !sy || !gx || !gy || !oc) {
+        Py_XDECREF(sx); Py_XDECREF(sy); Py_XDECREF(gx); Py_XDECREF(gy); Py_XDECREF(oc);
+        return -1;
+    }
+    for (int i = 0; i < n_ag; i++) {
+        PyList_SET_ITEM(sx, i, PyFloat_FromDouble((double) summary->agent_spawn_x[i]));
+        PyList_SET_ITEM(sy, i, PyFloat_FromDouble((double) summary->agent_spawn_y[i]));
+        PyList_SET_ITEM(gx, i, PyFloat_FromDouble((double) summary->agent_final_goal_x[i]));
+        PyList_SET_ITEM(gy, i, PyFloat_FromDouble((double) summary->agent_final_goal_y[i]));
+        PyList_SET_ITEM(oc, i, PyLong_FromLong((long) summary->agent_outcome[i]));
+    }
+    int ok = PyDict_SetItemString(dict, "agent_spawn_x", sx) == 0
+        && PyDict_SetItemString(dict, "agent_spawn_y", sy) == 0
+        && PyDict_SetItemString(dict, "agent_final_goal_x", gx) == 0
+        && PyDict_SetItemString(dict, "agent_final_goal_y", gy) == 0
+        && PyDict_SetItemString(dict, "agent_outcome", oc) == 0;
+    Py_DECREF(sx); Py_DECREF(sy); Py_DECREF(gx); Py_DECREF(gy); Py_DECREF(oc);
+    if (!ok) {
+        return -1;
+    }
     return 0;
 }
 
