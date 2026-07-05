@@ -903,7 +903,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     }
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;
-    for (int k = 0; k < env->obs_slots_lane_kept; k++) {
+    for (int k = 0; k < env->obs_slots_lane_n; k++) {
         int entity_idx = lane_obs_start + k * ROAD_FEATURES;
         bool is_empty = true;
         for (int j = 0; j < ROAD_FEATURES; j++) {
@@ -958,8 +958,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
     }
     // Draw boundary/edge segment observations in red (immediately after lane obs)
-    int boundary_obs_start = lane_obs_start + env->obs_slots_lane_kept * ROAD_FEATURES;
-    for (int k = 0; k < env->obs_slots_boundary_kept; k++) {
+    int boundary_obs_start = lane_obs_start + env->obs_slots_lane_n * ROAD_FEATURES;
+    for (int k = 0; k < env->obs_slots_boundary_n; k++) {
         int entity_idx = boundary_obs_start + k * ROAD_FEATURES;
         bool is_empty = true;
         for (int j = 0; j < ROAD_FEATURES; j++) {

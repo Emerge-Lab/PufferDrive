@@ -7,8 +7,8 @@ static int test_observation_size_formula(void) {
     env.num_target_waypoints = 3;
     env.reward_conditioning = 0;
     env.obs_slots_partners_n = 2;
-    env.obs_slots_lane_kept = 5;
-    env.obs_slots_boundary_kept = 7;
+    env.obs_slots_lane_n = 5;
+    env.obs_slots_boundary_n = 7;
     env.obs_slots_traffic_controls_n = 4;
     int expected = EGO_FEATURES + 3 * STATIC_TARGET_FEATURES + 2 * PARTNER_FEATURES + 12 * ROAD_FEATURES
         + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
@@ -39,7 +39,7 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     float *obs = env.observations;
     int partner_base = EGO_FEATURES + env.num_target_waypoints * STATIC_TARGET_FEATURES;
     int road_base = partner_base + env.obs_slots_partners_n * PARTNER_FEATURES;
-    int traffic_base = road_base + (env.obs_slots_lane_kept + env.obs_slots_boundary_kept) * ROAD_FEATURES;
+    int traffic_base = road_base + (env.obs_slots_lane_n + env.obs_slots_boundary_n) * ROAD_FEATURES;
     int valid_base = obs_size - OBS_VALID_COUNT_FEATURES;
 
     EXPECT_NEAR(obs[valid_base + 2], 0.0f, 1e-5f);

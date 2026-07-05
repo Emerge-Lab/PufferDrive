@@ -244,8 +244,8 @@ class Drive(pufferlib.PufferEnv):
             + self.num_reward_coefs
             + self.target_dim
             + self.obs_slots_partners_n * self.partner_features
-            + self.obs_slots_lane_kept * self.road_features
-            + self.obs_slots_boundary_kept * self.road_features
+            + self.obs_slots_lane_n * self.road_features
+            + self.obs_slots_boundary_n * self.road_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
             + self.obs_valid_count_features
         )

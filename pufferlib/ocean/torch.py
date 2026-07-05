@@ -75,8 +75,8 @@ class DriveBackbone(nn.Module):
         self.obs_slots_partners_n = env.obs_slots_partners_n
         self.partner_features_count = env.partner_features
         # Road features size (lanes + boundaries)
-        self.obs_slots_lane_kept = env.obs_slots_lane_kept
-        self.obs_slots_boundary_kept = env.obs_slots_boundary_kept
+        self.obs_slots_lane_n = env.obs_slots_lane_n
+        self.obs_slots_boundary_n = env.obs_slots_boundary_n
         self.road_features_count = env.road_features
         # Traffic control size
         self.obs_slots_traffic_controls_n = env.obs_slots_traffic_controls_n
@@ -96,10 +96,10 @@ class DriveBackbone(nn.Module):
         # Each encoder projects raw features into its own embedding space
         self.ego_encoder = self._create_encoder(ego_dim, ego_input_size)
         encoders_out = ego_input_size
-        if self.obs_slots_lane_kept > 0:
+        if self.obs_slots_lane_n > 0:
             self.lane_encoder = self._create_encoder(self.road_features_count, lane_input_size)
             encoders_out += lane_input_size
-        if self.obs_slots_boundary_kept > 0:
+        if self.obs_slots_boundary_n > 0:
             self.boundary_encoder = self._create_encoder(self.road_features_count, boundary_input_size)
             encoders_out += boundary_input_size
         if self.obs_slots_partners_n > 0:
@@ -132,8 +132,8 @@ class DriveBackbone(nn.Module):
     def forward(self, observations, ego_dim):
         # Extract and slice observations from the flat buffer
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        lane_dim = self.obs_slots_lane_n * self.road_features_count
+        boundary_dim = self.obs_slots_boundary_n * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim
@@ -159,8 +159,8 @@ class DriveBackbone(nn.Module):
             count_observations[:, i].long().clamp_(0, capacity)
             for i, capacity in enumerate(
                 (
-                    self.obs_slots_lane_kept,
-                    self.obs_slots_boundary_kept,
+                    self.obs_slots_lane_n,
+                    self.obs_slots_boundary_n,
                     self.obs_slots_partners_n,
                     self.obs_slots_traffic_controls_n,
                 )
@@ -173,12 +173,12 @@ class DriveBackbone(nn.Module):
         feature_list = [ego_features]
 
         # Encode Lanes and Boundaries separately
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+        if self.obs_slots_lane_n > 0:
+            lane_objects = lane_observations.view(-1, self.obs_slots_lane_n, self.road_features_count)
             lane_features = self._encode_and_pool(lane_objects, lane_counts, self.lane_encoder, self.lane_input_size)
             feature_list.append(lane_features)
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+        if self.obs_slots_boundary_n > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_n, self.road_features_count)
             boundary_features = self._encode_and_pool(
                 boundary_objects,
                 boundary_counts,
@@ -237,8 +237,8 @@ class DriveBackbone(nn.Module):
 
     def pool_slot_counts(self, observations, ego_dim):
         partner_dim = self.obs_slots_partners_n * self.partner_features_count
-        lane_dim = self.obs_slots_lane_kept * self.road_features_count
-        boundary_dim = self.obs_slots_boundary_kept * self.road_features_count
+        lane_dim = self.obs_slots_lane_n * self.road_features_count
+        boundary_dim = self.obs_slots_boundary_n * self.road_features_count
         traffic_control_dim = self.obs_slots_traffic_controls_n * self.traffic_control_features_count
 
         slide_idx = ego_dim + self.context_dim
@@ -251,18 +251,18 @@ class DriveBackbone(nn.Module):
         traffic_control_observations = observations[:, slide_idx : slide_idx + traffic_control_dim]
 
         counts = {}
-        if self.obs_slots_lane_kept > 0:
-            lane_objects = lane_observations.view(-1, self.obs_slots_lane_kept, self.road_features_count)
+        if self.obs_slots_lane_n > 0:
+            lane_objects = lane_observations.view(-1, self.obs_slots_lane_n, self.road_features_count)
             lane_winners = self.lane_encoder(lane_objects).max(dim=1).indices
             lane_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_lane_kept, device=observations.device, dtype=torch.int64
+                observations.shape[0], self.obs_slots_lane_n, device=observations.device, dtype=torch.int64
             )
             counts["pool_lane"] = lane_counts.scatter_add(1, lane_winners, torch.ones_like(lane_winners))
-        if self.obs_slots_boundary_kept > 0:
-            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_kept, self.road_features_count)
+        if self.obs_slots_boundary_n > 0:
+            boundary_objects = boundary_observations.view(-1, self.obs_slots_boundary_n, self.road_features_count)
             boundary_winners = self.boundary_encoder(boundary_objects).max(dim=1).indices
             boundary_counts = torch.zeros(
-                observations.shape[0], self.obs_slots_boundary_kept, device=observations.device, dtype=torch.int64
+                observations.shape[0], self.obs_slots_boundary_n, device=observations.device, dtype=torch.int64
             )
             counts["pool_boundary"] = boundary_counts.scatter_add(
                 1, boundary_winners, torch.ones_like(boundary_winners)
