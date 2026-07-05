@@ -331,6 +331,9 @@ class Drive(nn.Module):
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
         self.ego_dim = env.ego_features
+        # Obs length this network was built for; consumers feeding obs from a
+        # different env (e.g. inline eval) must match it.
+        self.expected_obs_dim = env.num_obs
 
         # Prepare arguments for the Backbone
         backbone_args = {

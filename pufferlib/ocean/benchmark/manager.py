@@ -185,6 +185,15 @@ class EvalManager:
                 env_kwargs=[args["env"] for _ in range(num_envs)],
                 **vec_call_kwargs,
             )
+        expected_obs_dim = getattr(policy, "expected_obs_dim", None)
+        eval_obs_dim = vecenv.single_observation_space.shape[0]
+        if expected_obs_dim is not None and expected_obs_dim != eval_obs_dim:
+            vecenv.close()
+            raise ValueError(
+                f"Evaluator '{ev.name}' env produces {eval_obs_dim}-float observations but the "
+                f"policy was built for {expected_obs_dim}: eval sections must not override obs "
+                "geometry (obs_slots_*, target/reward-conditioning layout keys)."
+            )
         try:
             res = ev.rollout(vecenv, policy, args)
         finally:
