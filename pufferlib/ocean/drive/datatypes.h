@@ -276,8 +276,7 @@ struct TrafficControlElement {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *distances;       // n_lanes * n_lanes row-major (row = from, col = to)
-    int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
+    float *distances; // n_lanes * n_lanes row-major (row = from, col = to)
 };
 
 void free_agent(struct Agent *agent) {
@@ -312,5 +311,4 @@ void free_traffic_element(struct TrafficControlElement *element) {
 void free_lane_graph(struct LaneGraph *graph) {
     free(graph->lane_ids);
     free(graph->distances);
-    free(graph->lane_to_graph_idx);
 }

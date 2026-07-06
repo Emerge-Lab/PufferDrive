@@ -34,7 +34,6 @@ typedef struct {
     float dt;
     int goal_regen_mode;
     int goal_source;
-    int obs_goal_lane_distance;
     int scenario_length;
     int termination_mode;
     int init_step;
@@ -124,12 +123,6 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else {
             printf("Warning: Unknown goal_source value '%s', defaulting to route\n", value);
             env_config->goal_source = 0;
-        }
-    } else if (MATCH("env", "obs_goal_lane_distance")) {
-        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-            env_config->obs_goal_lane_distance = 1;
-        } else {
-            env_config->obs_goal_lane_distance = 0;
         }
     } else if (MATCH("env", "reward_collision")) {
         env_config->reward_collision = atof(value);

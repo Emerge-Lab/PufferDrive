@@ -298,7 +298,6 @@ int eval_gif(
         .obs_boundary_stride = conf.obs_boundary_stride,
         .goal_regen_mode = conf.goal_regen_mode,
         .goal_source = conf.goal_source,
-        .obs_goal_lane_distance = conf.obs_goal_lane_distance,
         .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,

@@ -79,7 +79,6 @@ static inline Drive drive_test_env_config(
     env.num_goals = 3;
     env.goal_regen_mode = GOAL_REGEN_FINITE;
     env.goal_source = GOAL_SOURCE_ROUTE;
-    env.obs_goal_lane_distance = 0;
     env.obs_slots_lane_n = 32;
     env.obs_slots_boundary_n = 32;
     env.obs_slots_lane_kept = 32;

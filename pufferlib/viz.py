@@ -618,7 +618,6 @@ def plot_observation(
     obs_dropout_boundary=0.0,
     obs_lane_stride=1,
     obs_boundary_stride=1,
-    obs_goal_lane_distance=False,
     agent_idx=0,
     obs_norm_goal_offset_m=100.0,
     obs_norm_xy_offset_m=100.0,
@@ -753,8 +752,7 @@ def plot_observation(
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
         length, width = lane_obs[i][3] * rl2p, lane_obs[i][4] * rw2p
         dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
-        # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
-        color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
+        color = "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
             [rel_x + dir_cos * length / 2, rel_x - dir_cos * length / 2],
@@ -785,8 +783,7 @@ def plot_observation(
     ax.text(
         0.12,
         0.95,
-        f"Lanes: {count_lane}\nBoundaries: {count_boundary}\nStride: {obs_lane_stride}/{obs_boundary_stride}"
-        + ("\nLanes: green=near goal -> red=far" if obs_goal_lane_distance else ""),
+        f"Lanes: {count_lane}\nBoundaries: {count_boundary}\nStride: {obs_lane_stride}/{obs_boundary_stride}",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",
