@@ -1,7 +1,7 @@
 # Debug command:
 #    DEBUG=1 python setup.py build_ext --inplace --force
 
-from setuptools import find_packages, find_namespace_packages, setup, Extension
+from setuptools import find_namespace_packages, setup, Extension
 import numpy
 import os
 import urllib.request
@@ -87,15 +87,20 @@ cxx_args = [
 nvcc_args = []
 
 if DEBUG:
+    # Apple clang has no LeakSanitizer; -fsanitize=leak is a hard error there.
+    if platform.system() == "Darwin":
+        sanitize_flag = "-fsanitize=address,undefined,bounds,pointer-overflow"
+    else:
+        sanitize_flag = "-fsanitize=address,undefined,bounds,pointer-overflow,leak"
     extra_compile_args += [
         "-O0",
         "-g",
-        "-fsanitize=address,undefined,bounds,pointer-overflow,leak",
+        sanitize_flag,
         "-fno-omit-frame-pointer",
     ]
     extra_link_args += [
         "-g",
-        "-fsanitize=address,undefined,bounds,pointer-overflow,leak",
+        sanitize_flag,
     ]
     cxx_args += [
         "-O0",
@@ -268,7 +273,7 @@ if not NO_TRAIN:
         "rich_argparse",
         "pandas",
         "tqdm",
-        "matplotlib==3.8.4",
+        "matplotlib==3.11.0",
         "imageio",
         "pyro-ppl",
         "heavyball",
@@ -282,7 +287,11 @@ if not NO_TRAIN:
 
 setup(
     version="3.0.0",
-    packages=find_namespace_packages() + find_packages() + c_extension_paths + ["pufferlib/extensions"],
+    # Scope discovery to pufferlib, does not follow symlinks
+    packages=["pufferlib"]
+    + ["pufferlib." + pkg for pkg in find_namespace_packages(where="pufferlib")]
+    + c_extension_paths
+    + ["pufferlib/extensions"],
     include_package_data=True,
     install_requires=install_requires,
     ext_modules=c_extensions + torch_extensions,
