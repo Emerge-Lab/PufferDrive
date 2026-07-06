@@ -11,12 +11,7 @@ as a shape/view error inside the rollout forward pass.
 Deliberately not tied to any specific fix: it exercises the public pipeline
 (load_config -> load_env -> load_policy -> PuffeRL -> EvalManager) and only
 asserts that nothing crashes, the rollouts actually evaluate agents, and
-training still works after the evals. No golden values, so it runs on any
-host (no QEMU pinning needed) as a plain unit test.
-
-Evals are dispatched via run_one_by_name, NOT maybe_run: maybe_run catches
-evaluator exceptions and continues, which would let a crashing rollout pass
-this test silently.
+training still works after the evals.
 """
 
 import os
@@ -237,12 +232,12 @@ def test_train_then_eval_across_dropout_rates():
                 try:
                     pufferl.utilization.stop()
                 except Exception:
-                    pass
+                    assert False, "PuffeRL.utilization.stop() failed; check for dangling threads"
             if vecenv is not None:
                 try:
                     vecenv.close()
                 except Exception:
-                    pass
+                    assert False, "vecenv.close() failed; check for dangling threads"
 
 
 if __name__ == "__main__":
