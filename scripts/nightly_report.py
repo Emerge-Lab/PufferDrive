@@ -60,6 +60,7 @@ TREND_METRICS = [
     "validation_gigaflow/episode_return",
     "validation_gigaflow/collision_rate",
     "validation_gigaflow/offroad_rate",
+    "validation_gigaflow/avg_distance_per_infraction",
 ]
 FINALS_METRICS = [
     "environment/score",
@@ -71,6 +72,7 @@ FINALS_METRICS = [
     "SPS",
     "validation_gigaflow/score",
     "validation_gigaflow/collision_rate",
+    "validation_gigaflow/avg_distance_per_infraction",
 ]
 CURVE_METRICS = [
     "environment/score",
