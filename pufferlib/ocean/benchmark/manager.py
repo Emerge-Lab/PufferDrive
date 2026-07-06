@@ -32,6 +32,8 @@ from pathlib import Path
 import pufferlib
 
 from pufferlib.ocean.benchmark.evaluators import EVALUATOR_REGISTRY, EvalResult, Evaluator
+from pufferlib.ocean.drive.drive import compute_effective_road_obs_count
+from pufferlib.ocean.torch import DriveBackbone
 
 # clean_eval macro — env knobs to zero/enforce. Per-section explicit values
 # win over the macro (see _build_section_config).
@@ -185,10 +187,14 @@ class EvalManager:
                 env_kwargs=[args["env"] for _ in range(num_envs)],
                 **vec_call_kwargs,
             )
+        # TODO: temporary fix for the DriveBackbone slot-count mismatch bug
+        # Swap backbones at the eval layout and restore the training layout after
+        saved_road_slots = _swap_policy_road_slots(policy, args["env"])
         try:
             res = ev.rollout(vecenv, policy, args)
         finally:
             vecenv.close()
+            _restore_policy_road_slots(saved_road_slots)
         return res
 
     def _run_subprocess(self, ev: Evaluator, env_name: str, global_step, epoch=None) -> EvalResult:
@@ -278,6 +284,37 @@ class EvalManager:
                         logger.log(payload)
             except ImportError:
                 pass
+
+
+def _swap_policy_road_slots(policy, env_args: dict) -> list:
+    """
+    Point every DriveBackbone in `policy` at the eval env's road-obs layout
+    DriveBackbone slices the flat obs buffer with the training env's dropout-reduced kept slot counts
+    Eval env emits obs_slots_*_n based on its own config
+    Returns the saved per-module counts for _restore_policy_road_slots
+    """
+    if "obs_slots_lane_n" not in env_args:
+        return []
+    eval_lane_kept = compute_effective_road_obs_count(
+        int(env_args["obs_slots_lane_n"]), float(env_args.get("obs_dropout_lane", 0.0))
+    )
+    eval_boundary_kept = compute_effective_road_obs_count(
+        int(env_args["obs_slots_boundary_n"]), float(env_args.get("obs_dropout_boundary", 0.0))
+    )
+    saved = []
+    for module in policy.modules():
+        if not isinstance(module, DriveBackbone):
+            continue
+        saved.append((module, module.obs_slots_lane_kept, module.obs_slots_boundary_kept))
+        module.obs_slots_lane_kept = eval_lane_kept
+        module.obs_slots_boundary_kept = eval_boundary_kept
+    return saved
+
+
+def _restore_policy_road_slots(saved: list) -> None:
+    for module, lane_kept, boundary_kept in saved:
+        module.obs_slots_lane_kept = lane_kept
+        module.obs_slots_boundary_kept = boundary_kept
 
 
 def _discover_eval_sections(args: dict) -> dict:
