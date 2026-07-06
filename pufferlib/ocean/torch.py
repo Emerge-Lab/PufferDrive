@@ -34,11 +34,16 @@ class DriveBackbone(nn.Module):
             return encoder(objects).max(dim=1).values
 
         valid_mask = torch.arange(objects.shape[1], device=objects.device) < valid_counts.unsqueeze(1)
-        encoded_objects = objects.new_full(
+        encoded_valid = encoder(objects[valid_mask])
+        # Under autocast the encoder output dtype differs from the observation
+        # dtype, and index_put requires source and destination to match.
+        encoded_objects = torch.full(
             (objects.shape[0], objects.shape[1], out_size),
-            torch.finfo(objects.dtype).min,
+            torch.finfo(encoded_valid.dtype).min,
+            dtype=encoded_valid.dtype,
+            device=objects.device,
         )
-        encoded_objects[valid_mask] = encoder(objects[valid_mask])
+        encoded_objects[valid_mask] = encoded_valid
         pooled = encoded_objects.amax(dim=1)
         return torch.where(valid_counts.unsqueeze(1) == 0, encoded_objects.new_zeros(()), pooled)
 
