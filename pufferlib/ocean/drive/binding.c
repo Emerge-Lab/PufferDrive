@@ -1823,6 +1823,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->num_goals = (int) unpack(kwargs, "num_goals");
     env->goal_regen_mode = (int) unpack(kwargs, "goal_regen_mode");
     env->goal_source = (int) unpack(kwargs, "goal_source");
+    env->obs_goal_lane_distance = (int) unpack(kwargs, "obs_goal_lane_distance");
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");

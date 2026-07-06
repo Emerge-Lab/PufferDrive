@@ -85,6 +85,7 @@ class Drive(pufferlib.PufferEnv):
         map_dir=None,
         goal_regen_mode="finite",
         goal_source="route",
+        obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
@@ -158,6 +159,7 @@ class Drive(pufferlib.PufferEnv):
             self.goal_source = binding.GOAL_SOURCE_MAP
         else:
             raise ValueError(f"goal_source must be 'route' or 'map'. Got: {goal_source}")
+        self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -241,6 +243,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_features = binding.GOAL_FEATURES
         self.goal_dim = self.num_goals * self.goal_features
 
+        # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
@@ -466,6 +469,7 @@ class Drive(pufferlib.PufferEnv):
             "num_goals": self.num_goals,
             "goal_regen_mode": self.goal_regen_mode,
             "goal_source": self.goal_source,
+            "obs_goal_lane_distance": self.obs_goal_lane_distance,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,

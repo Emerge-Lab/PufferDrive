@@ -127,8 +127,9 @@
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
 #define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier
 // GOAL_SOURCE modes
-#define GOAL_SOURCE_ROUTE 0 // seed from the agent's own forward route
-#define GOAL_SOURCE_MAP 1   // seed from a uniformly sampled map lane
+#define GOAL_SOURCE_ROUTE 0               // seed from the agent's own forward route
+#define GOAL_SOURCE_MAP 1                 // seed from a uniformly sampled map lane
+#define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
@@ -136,8 +137,8 @@
 
 // Observation feature counts
 #define EGO_FEATURES 10
-#define LANE_FEATURES 7
-#define BOUNDARY_FEATURES 7
+#define LANE_FEATURES 9
+#define BOUNDARY_FEATURES 9
 #define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
@@ -401,6 +402,7 @@ struct Drive {
     int logs_capacity;
     int goal_regen_mode;
     int goal_source;
+    int obs_goal_lane_distance;
     char *ini_file;
     int collision_behavior;           // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
@@ -1318,6 +1320,7 @@ int load_map_binary(const char *filename, Drive *drive) {
     drive->lane_graph.n_lanes = n_lanes_graph;
     drive->lane_graph.lane_ids = NULL;
     drive->lane_graph.distances = NULL;
+    drive->lane_graph.lane_to_graph_idx = NULL;
     if (n_lanes_graph > 0) {
         drive->lane_graph.lane_ids = (int *) malloc(n_lanes_graph * sizeof(int));
         if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t) n_lanes_graph) {
@@ -1329,6 +1332,23 @@ int load_map_binary(const char *filename, Drive *drive) {
             != (size_t) (n_lanes_graph * n_lanes_graph)) {
             fclose(file);
             return -1;
+        }
+
+        // Build reverse lookup road-element idx -> graph idx. lane_ids[g] holds road-element
+        // indices (binary is reindexed so road id == array idx, drive.h:1003).
+        int num_roads = drive->num_road_elements;
+        drive->lane_graph.lane_to_graph_idx = (int *) malloc(num_roads * sizeof(int));
+        for (int r = 0; r < num_roads; r++) {
+            drive->lane_graph.lane_to_graph_idx[r] = -1;
+        }
+        for (int g = 0; g < n_lanes_graph; g++) {
+            int lane_idx = drive->lane_graph.lane_ids[g];
+            if (lane_idx < 0 || lane_idx >= num_roads) {
+                printf("[ERROR] -> lane_graph lane_id %d out of range [0,%d).\n", lane_idx, num_roads);
+                fclose(file);
+                return -1;
+            }
+            drive->lane_graph.lane_to_graph_idx[lane_idx] = g;
         }
     }
 
@@ -1889,7 +1909,8 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
 
 static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     // Map goal source: seed from a uniform map lane, then chain 1..num_goals goals forward
-    // via a route-free random lane-walk. No route is stored; goals are chained by lane adjacency.
+    // via a route-free random lane-walk. No route is stored; the agent navigates by the GPS lane-distance feature,
+    // not by following a path.
 
     // Pick a uniform drivable grid cell, then collect every drivable lane entity inside it.
     int drivable_cell_list_idx = rand() % env->grid_map->num_drivable_grid_cell;
@@ -4625,6 +4646,29 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
     }
 
+    // GPS lane-distance features
+    int goal_graph_idx = -1;
+    if (env->obs_goal_lane_distance && env->lane_graph.lane_to_graph_idx != NULL
+        && ego->current_goal_idx < ego->goal_count) {
+        int goal_lane = ego->list_goal_lane[ego->current_goal_idx];
+        if (goal_lane >= 0 && goal_lane < env->num_road_elements) {
+            goal_graph_idx = env->lane_graph.lane_to_graph_idx[goal_lane];
+        }
+    }
+    // Ego's own lane->goal distance: reference for the relative column (delta vs ego lane).
+    float ego_dist_to_goal_m = -1.0f; // <0 = no valid reference -> relative column stays 0
+    if (goal_graph_idx >= 0) {        // implies obs_goal_lane_distance and a non-NULL lane_to_graph_idx
+        int ego_lane = ego->current_lane_idx;
+        if (ego_lane >= 0 && ego_lane < env->num_road_elements) {
+            int ego_graph_idx = env->lane_graph.lane_to_graph_idx[ego_lane];
+            if (ego_graph_idx >= 0) {
+                float d = env->lane_graph.distances[ego_graph_idx * env->lane_graph.n_lanes + goal_graph_idx];
+                // Map binaries store unreachable pairs as a negative sentinel or NaN; both clamp to max.
+                ego_dist_to_goal_m = (!isfinite(d) || d < 0.0f) ? LANE_GRAPH_DISTANCE_NORM_M : d;
+            }
+        }
+    }
+
     int lane_obs_idx = obs_idx;
     int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * LANE_FEATURES;
     obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * BOUNDARY_FEATURES;
@@ -4704,6 +4748,26 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
         segment_dest[feature_base + 5] = rel_seg_dir_x;
         segment_dest[feature_base + 6] = rel_seg_dir_y;
+        // Goal-distance columns: lanes only (boundaries have BOUNDARY_FEATURES stride, no room).
+        if (is_lane) {
+            float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
+            if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
+                int lane_graph_idx = env->lane_graph.lane_to_graph_idx[entity_idx];
+                if (lane_graph_idx >= 0) {
+                    float d = env->lane_graph.distances[lane_graph_idx * env->lane_graph.n_lanes + goal_graph_idx];
+                    float d_m = (!isfinite(d) || d < 0.0f) ? LANE_GRAPH_DISTANCE_NORM_M : d; // unreachable/NaN -> max
+                    goal_dist_abs = clip(d_m / LANE_GRAPH_DISTANCE_NORM_M, 0.0f, 1.0f);
+                    if (ego_dist_to_goal_m >= 0.0f) {
+                        goal_dist_rel = clip((d_m - ego_dist_to_goal_m) / LANE_GRAPH_DISTANCE_NORM_M, -1.0f, 1.0f);
+                    }
+                }
+            }
+            segment_dest[feature_base + 7] = goal_dist_abs;
+            segment_dest[feature_base + 8] = goal_dist_rel;
+        } else {
+            segment_dest[feature_base + 7] = 0.0f;
+            segment_dest[feature_base + 8] = 0.0f;
+        }
     }
 
     if (env->road_dropout_enabled) {
