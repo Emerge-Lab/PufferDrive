@@ -1395,7 +1395,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
     PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
     PyModule_AddIntConstant(m, "DYNAMIC_TARGET_FEATURES", DYNAMIC_TARGET_FEATURES);
-    PyModule_AddIntConstant(m, "MAX_TARGET_WAYPOINTS", MAX_TARGET_WAYPOINTS);
+    PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);

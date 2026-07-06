@@ -94,7 +94,7 @@
 
 // Path
 #define MAX_NUM_WP_PATH 200
-#define MAX_TARGET_WAYPOINTS 20
+#define MAX_GOALS 20
 
 // obs_html_frame array field counts
 #define AGENT_F32_FIELDS                                                                                               \
@@ -206,8 +206,8 @@ struct Agent {
     // Route information
     int route_length;
     int *route;
-    int route_gt_len;        // Number of leading route lanes supported by GT before extension
-    int current_route_index; // Tracks progress through route array
+    int route_gt_len;      // Number of leading route lanes supported by GT before extension
+    int current_route_idx; // Tracks progress through route array
 
     // Path
     struct Path *path;
@@ -234,13 +234,13 @@ struct Agent {
     float seconds_stopped;
 
     // Goal positions (N sequential waypoints)
-    float goal_positions_x[MAX_TARGET_WAYPOINTS];
-    float goal_positions_y[MAX_TARGET_WAYPOINTS];
-    float goal_positions_z[MAX_TARGET_WAYPOINTS];
-    float goal_position_x; // alias = goal_positions_x[current_goal_idx]
-    float goal_position_y; // alias = goal_positions_y[current_goal_idx]
-    float goal_position_z; // alias = goal_positions_z[current_goal_idx]
-    int current_goal_idx;  // index of next goal to reach (0..N-1)
+    float list_goal_x[MAX_GOALS];
+    float list_goal_y[MAX_GOALS];
+    float list_goal_z[MAX_GOALS];
+    float current_goal_x; // alias = list_goal_x[current_goal_idx]
+    float current_goal_y; // alias = list_goal_y[current_goal_idx]
+    float current_goal_z; // alias = list_goal_z[current_goal_idx]
+    int current_goal_idx; // index of next goal to reach (0..N-1)
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set

@@ -790,13 +790,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             Py_DECREF(tmp);
 
             /* Goal position */
-            pf = PyFloat_FromDouble((double) a->goal_position_x);
+            pf = PyFloat_FromDouble((double) a->current_goal_x);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_x", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_x", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -804,13 +804,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->goal_position_y);
+            pf = PyFloat_FromDouble((double) a->current_goal_y);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_y", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_y", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -818,13 +818,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->goal_position_z);
+            pf = PyFloat_FromDouble((double) a->current_goal_z);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_z", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_z", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -932,13 +932,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(a->current_route_index);
+            tmp = PyLong_FromLong(a->current_route_idx);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "current_route_index", tmp) < 0) {
+            if (PyDict_SetItemString(agent, "current_route_idx", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1965,11 +1965,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->next_episode_index = 0;
     env->completed_episodes_count = 0;
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
-    env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
-    env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
-    env->num_target_waypoints = (int) unpack(kwargs, "num_target_waypoints");
-    if (env->num_target_waypoints > MAX_TARGET_WAYPOINTS) {
-        env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
+    env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
+    env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
+    env->num_goals = (int) unpack(kwargs, "num_goals");
+    if (env->num_goals > MAX_GOALS) {
+        env->num_goals = MAX_GOALS;
     }
     env->target_type = (int) unpack(kwargs, "target_type");
     env->goal_on_lane = (int) unpack(kwargs, "goal_on_lane");

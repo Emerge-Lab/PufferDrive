@@ -74,9 +74,9 @@ static inline Drive drive_test_env_config(
     env.emit_completed_episodes = 1;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
-    env.min_waypoint_spacing = 20.0f;
-    env.max_waypoint_spacing = 60.0f;
-    env.num_target_waypoints = 3;
+    env.min_goal_spacing = 20.0f;
+    env.max_goal_spacing = 60.0f;
+    env.num_goals = 3;
     env.target_type = TARGET_STATIC;
     env.goal_on_lane = 1;
     env.obs_slots_lane_n = 32;
