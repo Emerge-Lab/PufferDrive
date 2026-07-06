@@ -8,7 +8,6 @@ Running the test: python -m unittest tests/test_drive_config.py
 
 import os
 import sys
-import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -16,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.pufferl import _ARCH_ENV_KEYS, _merge_checkpoint_arch, load_config, pufferlib
+from pufferlib.pufferl import load_config, pufferlib
 
 VERBOSITY = 0
 
@@ -53,24 +52,6 @@ class TestDriveConfig(unittest.TestCase):
             Drive(obs_lane_stride=0)
         with self.assertRaisesRegex(ValueError, "obs_boundary_stride"):
             Drive(obs_boundary_stride=0)
-
-    def test_checkpoint_arch_merge_keeps_obs_stride(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            exp_dir = Path(tmp_dir)
-            models_dir = exp_dir / "models"
-            models_dir.mkdir()
-            model_path = models_dir / "model.pt"
-            model_path.touch()
-            with open(exp_dir / "config.yaml", "w") as f:
-                f.write("env:\n  obs_lane_stride: 5\n  obs_boundary_stride: 6\n")
-
-            args = {"env": {"obs_lane_stride": 1, "obs_boundary_stride": 1}, "train": {}}
-            _merge_checkpoint_arch(args, str(model_path))
-
-        self.assertIn("obs_lane_stride", _ARCH_ENV_KEYS)
-        self.assertIn("obs_boundary_stride", _ARCH_ENV_KEYS)
-        self.assertEqual(args["env"]["obs_lane_stride"], 5)
-        self.assertEqual(args["env"]["obs_boundary_stride"], 6)
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_cli_override(self):

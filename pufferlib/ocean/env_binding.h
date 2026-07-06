@@ -4,7 +4,6 @@
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
-static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary);
 static int assign_to_dict(PyObject *dict, char *key, float value);
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
@@ -519,43 +518,6 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-
-    PyObject *list = PyList_New(0);
-    if (!list) {
-        return NULL;
-    }
-
-    for (int i = 0; i < vec->num_envs; i++) {
-        Env *env = vec->envs[i];
-        CompletedEpisodeSummary summary;
-        while (pop_completed_episode_summary(env, &summary)) {
-            PyObject *dict = PyDict_New();
-            if (!dict) {
-                Py_DECREF(list);
-                return NULL;
-            }
-            if (my_completed_episode_to_dict(dict, env, &summary) != 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            assign_to_dict(dict, "env_slot", (float) i);
-            if (PyList_Append(list, dict) < 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            Py_DECREF(dict);
-        }
-    }
-    return list;
-}
-
 static PyObject *vec_step(PyObject *self, PyObject *arg) {
     int num_args = PyTuple_Size(arg);
     if (num_args != 1) {
@@ -708,87 +670,40 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     float num_agents = (float) PyLong_AsLong(num_agents_arg);
     int num_keys = sizeof(Log) / sizeof(float);
 
-    Env *env = vec->envs[0];
-    if (env->eval_mode) {
-        PyObject *list = PyList_New(vec->num_envs);
-        PyObject *dict = PyDict_New();
-
-        if (env->log.n == 0) {
-            return dict;
+    Log aggregate = {0};
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *) &aggregate)[j] += ((float *) &env->log)[j];
         }
+    }
 
-        // Got enough data. Reset logs and return metrics
-        for (int i = 0; i < vec->num_envs; i++) {
-            PyObject *dict = PyDict_New();
-            Env *env = vec->envs[i];
-            float n = env->log.n;
-            // Average across agents
-            for (int i = 0; i < num_keys; i++) {
-                ((float *) &env->log)[i] /= n;
-            }
-            my_log(dict, env, &env->log, n);
-            assign_to_dict(dict, "n", n);
-            // Add map_name to dict
-            if (env->map_name) {
-                PyObject *s = PyUnicode_FromString(env->map_name);
-                if (s != NULL) {
-                    PyDict_SetItemString(dict, "map_name", s);
-                    Py_DECREF(s);
-                }
-            }
+    PyObject *dict = PyDict_New();
 
-            PyList_SetItem(list, i, dict);
-        }
-        // Reset logs to 0 after extracting metrics (prevents accumulation across episodes)
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &env->log)[j] = 0.0f;
-            }
-        }
-        return list;
-    } else {
-        Log aggregate = {0};
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &aggregate)[j] += ((float *) &env->log)[j];
-            }
-        }
-
-        PyObject *dict = PyDict_New();
-
-        // Only log if we have at least num_agents worth of data
-        Env *env = vec->envs[0];
-        if (env->eval_mode) {
-            if (aggregate.n == 0) {
-                return dict;
-            }
-        } else {
-            if (aggregate.n < num_agents) {
-                return dict;
-            }
-        }
-
-        // Got enough data. Reset logs and return metrics
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &env->log)[j] = 0.0f;
-            }
-        }
-
-        float n = aggregate.n;
-
-        // Average across agents
-        for (int i = 0; i < num_keys; i++) {
-            ((float *) &aggregate)[i] /= n;
-        }
-        // User populates dict
-        my_log(dict, env, &aggregate, n);
-        assign_to_dict(dict, "n", n);
+    // Only log if we have at least num_agents worth of data
+    if (aggregate.n < num_agents) {
         return dict;
     }
+
+    // Got enough data. Reset logs and return metrics
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *) &env->log)[j] = 0.0f;
+        }
+    }
+
+    float n = aggregate.n;
+
+    // Average across agents
+    for (int i = 0; i < num_keys; i++) {
+        ((float *) &aggregate)[i] /= n;
+    }
+    // User populates dict
+    Env *env = vec->envs[0];
+    my_log(dict, env, &aggregate, n);
+    assign_to_dict(dict, "n", n);
+    return dict;
 }
 
 static PyObject *vec_get(PyObject *self, PyObject *args) {
@@ -826,133 +741,6 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
     }
 
     return list;
-}
-
-static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 6 arguments");
-        return NULL;
-    }
-
-    VecEnv *vec = unpack_vecenv(args);
-    if (!vec) {
-        return NULL;
-    }
-
-    PyArrayObject *agent_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 1);
-    PyArrayObject *agent_i32_array = (PyArrayObject *) PyTuple_GetItem(args, 2);
-    PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
-    PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
-    PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
-
-    if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array)) {
-        PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
-        return NULL;
-    }
-
-    memset(PyArray_DATA(agent_f32_array), 0, PyArray_NBYTES(agent_f32_array));
-    memset(PyArray_DATA(agent_i32_array), 0, PyArray_NBYTES(agent_i32_array));
-    memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
-    memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
-    memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
-
-    float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
-    int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
-    float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
-    float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
-    short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
-
-    int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
-    int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
-    int agent_cap = (int) PyArray_DIM(agent_f32_array, 1);
-    int agent_f32_fields = (int) PyArray_DIM(agent_f32_array, 2);
-    int agent_i32_fields = (int) PyArray_DIM(agent_i32_array, 2);
-    int metric_fields = (int) PyArray_DIM(metrics_f32_array, 2);
-    int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
-    int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
-    int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
-
-    for (int e = 0; e < env_count; e++) {
-        Drive *drive = (Drive *) vec->envs[e];
-        int agent_count = drive->num_total_agents < agent_cap ? drive->num_total_agents : agent_cap;
-        int traffic_count = drive->num_traffic_elements < traffic_cap ? drive->num_traffic_elements : traffic_cap;
-
-        for (int i = 0; i < agent_count; i++) {
-            Agent *a = &drive->agents[i];
-            int f32_base = (e * agent_cap + i) * agent_f32_fields;
-            int i32_base = (e * agent_cap + i) * agent_i32_fields;
-            int metrics_base = (e * agent_cap + i) * metric_fields;
-
-            agent_f32[f32_base + 0] = a->sim_x;
-            agent_f32[f32_base + 1] = a->sim_y;
-            agent_f32[f32_base + 2] = a->sim_z;
-            agent_f32[f32_base + 3] = a->sim_heading;
-            agent_f32[f32_base + 4] = a->sim_length;
-            agent_f32[f32_base + 5] = a->sim_width;
-            agent_f32[f32_base + 6] = a->sim_speed;
-            agent_f32[f32_base + 7] = a->steering_angle;
-            agent_f32[f32_base + 8] = a->accel_long;
-            agent_f32[f32_base + 9] = a->accel_lat;
-            agent_f32[f32_base + 10] = a->jerk_long;
-            agent_f32[f32_base + 11] = a->jerk_lat;
-
-            agent_i32[i32_base + 0] = i;
-            agent_i32[i32_base + 1] = a->type;
-            agent_i32[i32_base + 2] = a->sim_valid;
-            agent_i32[i32_base + 3] = a->active_agent;
-            agent_i32[i32_base + 4] = a->stopped;
-            agent_i32[i32_base + 5] = a->removed;
-            agent_i32[i32_base + 6] = a->current_lane_idx;
-            agent_i32[i32_base + 7] = -1;
-
-            memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
-        }
-
-        if (drive->active_agent_indices) {
-            for (int j = 0; j < drive->active_agent_count; j++) {
-                int agent_idx = drive->active_agent_indices[j];
-                if (agent_idx < 0 || agent_idx >= agent_count) {
-                    continue;
-                }
-                int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
-                int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
-                agent_i32[i32_base + 7] = j;
-
-                if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
-                    continue;
-                }
-                Log *log = &drive->logs[j];
-                puffer_f32[puffer_base + 0] = log->puffer_score;
-                puffer_f32[puffer_base + 1] = log->no_at_fault;
-                puffer_f32[puffer_base + 2] = log->no_offroad;
-                puffer_f32[puffer_base + 3] = log->no_red_light;
-                puffer_f32[puffer_base + 4] = log->making_progress;
-                puffer_f32[puffer_base + 5] = log->driving_direction_score;
-                puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
-                puffer_f32[puffer_base + 7] = log->progress_ratio;
-                puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
-                puffer_f32[puffer_base + 9] = log->comfort_score;
-                puffer_f32[puffer_base + 10] = log->multi_lane_score;
-                puffer_f32[puffer_base + 11] = log->wrong_way_distance;
-                puffer_f32[puffer_base + 12] = log->speed_violation_sum;
-                puffer_f32[puffer_base + 13] = log->multiplier;
-                puffer_f32[puffer_base + 14] = log->weighted_average;
-            }
-        }
-
-        for (int i = 0; i < traffic_count; i++) {
-            TrafficControlElement *t = &drive->traffic_elements[i];
-            int base = (e * traffic_cap + i) * traffic_fields;
-            traffic_i16[base + 0] = 1;
-            traffic_i16[base + 1] = (short) t->type;
-            if (t->states && drive->timestep >= 0 && drive->timestep < t->state_size) {
-                traffic_i16[base + 2] = (short) t->states[drive->timestep];
-            }
-        }
-    }
-
-    Py_RETURN_NONE;
 }
 
 static PyObject *vec_close(PyObject *self, PyObject *args) {
@@ -1328,10 +1116,6 @@ static PyMethodDef methods[]
        {"vec_init", (PyCFunction) vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
        {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
        {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
-       {"vec_pop_completed_episodes",
-        vec_pop_completed_episodes,
-        METH_VARARGS,
-        "Drain per-env queues of completed-episode summary dicts"},
        {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
        {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
        {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set the mp4 filename suffix for an env"},
@@ -1341,10 +1125,6 @@ static PyMethodDef methods[]
         "Release a single env's render client without destroying the env"},
        {"vec_close", vec_close, METH_VARARGS, "Close the vector of environments"},
        {"vec_get", vec_get, METH_VARARGS, "Get attributes from each env in a VecEnv"},
-       {"vec_get_obs_html_frame",
-        vec_get_obs_html_frame,
-        METH_VARARGS,
-        "Fill compact obs_html frame arrays from a VecEnv"},
        {"shared", (PyCFunction) my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
        {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
        {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},

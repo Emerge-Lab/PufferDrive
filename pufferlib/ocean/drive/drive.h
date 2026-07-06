@@ -182,40 +182,6 @@ typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
 typedef struct Agent Agent;
-typedef struct CompletedEpisodeSummary CompletedEpisodeSummary;
-
-#define COMPLETED_EPISODE_QUEUE_CAPACITY 16
-
-struct CompletedEpisodeSummary {
-    float episode_length;
-    float episode_return;
-    float collision_rate;
-    float offroad_rate;
-    float red_light_violation_rate;
-    float num_goals_reached;
-    float score;
-    float dnf_rate;
-    float total_distance_travelled;
-    float total_infractions;
-    float n;
-    int episode_index;
-    float reward_collision;
-    float reward_offroad;
-    float reward_red_light;
-    float reward_goal;
-    float reward_lane_align;
-    float reward_lane_center;
-    float reward_comfort;
-    float reward_velocity;
-    float reward_timestep;
-    float reward_reverse;
-    float reward_overspeed;
-    float reward_ade;
-    // Scenario identity captured at completion (before c_reset resamples the
-    // env slot), so per-episode consumers can attribute each row to its map.
-    char map_name[256];
-    char scenario_id[128];
-};
 typedef struct RoadMapElement RoadMapElement;
 typedef struct TrafficControlElement TrafficControlElement;
 typedef struct GridMapEntity GridMapEntity;
@@ -444,7 +410,6 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
-    int eval_mode;
     // Observation normalization constants
     float obs_norm_goal_offset_m;
     float obs_norm_xy_offset_m;
@@ -457,10 +422,6 @@ struct Drive {
     float obs_range_road_front_m;
     float obs_range_road_behind_m;
     float obs_range_road_side_m;
-    int emit_completed_episodes;
-    int next_episode_index;
-    int completed_episodes_count;
-    CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
 };
 
 typedef struct {
@@ -2925,98 +2886,6 @@ static void add_log(Drive *env) {
     // Log composition counts per agent so vec_log averaging recovers the per-env value
     env->log.expert_static_car_count += env->expert_static_agent_count;
     env->log.static_car_count += env->static_agent_count;
-
-    if (env->emit_completed_episodes && env->completed_episodes_count < COMPLETED_EPISODE_QUEUE_CAPACITY) {
-        // Snapshot per-episode aggregates from env->logs[] before c_reset
-        // zeros them. The agent loop above mirrors the same per-agent sums,
-        // so we re-aggregate here for the per-episode summary (env->log
-        // itself is cumulative across episodes within a vec_log interval,
-        // so we can't snapshot it directly).
-        CompletedEpisodeSummary *s = &env->completed_episodes[env->completed_episodes_count++];
-        s->episode_length = 0.0f;
-        s->episode_return = 0.0f;
-        s->collision_rate = 0.0f;
-        s->offroad_rate = 0.0f;
-        s->red_light_violation_rate = 0.0f;
-        s->num_goals_reached = 0.0f;
-        s->score = 0.0f;
-        s->dnf_rate = 0.0f;
-        s->total_distance_travelled = 0.0f;
-        s->total_infractions = 0.0f;
-        s->reward_collision = 0.0f;
-        s->reward_offroad = 0.0f;
-        s->reward_red_light = 0.0f;
-        s->reward_goal = 0.0f;
-        s->reward_lane_align = 0.0f;
-        s->reward_lane_center = 0.0f;
-        s->reward_comfort = 0.0f;
-        s->reward_velocity = 0.0f;
-        s->reward_timestep = 0.0f;
-        s->reward_reverse = 0.0f;
-        s->reward_overspeed = 0.0f;
-        s->reward_ade = 0.0f;
-        s->n = (float) env->active_agent_count;
-        s->episode_index = env->next_episode_index++;
-        s->map_name[0] = '\0';
-        if (env->map_name) {
-            strncpy(s->map_name, env->map_name, sizeof(s->map_name) - 1);
-            s->map_name[sizeof(s->map_name) - 1] = '\0';
-        }
-        s->scenario_id[0] = '\0';
-        strncpy(s->scenario_id, env->scenario_id, sizeof(s->scenario_id) - 1);
-        s->scenario_id[sizeof(s->scenario_id) - 1] = '\0';
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *agent_i = &env->agents[env->active_agent_indices[i]];
-            int collided = env->logs[i].collision_rate;
-            int offroad = env->logs[i].offroad_rate;
-            int red_light = env->logs[i].red_light_violation_rate;
-            int num_goals = env->logs[i].num_goals_reached;
-            int num_waypoints = env->logs[i].num_waypoints_reached;
-            s->episode_length += env->logs[i].episode_length;
-            s->episode_return += env->logs[i].episode_return;
-            s->collision_rate += collided;
-            s->offroad_rate += offroad;
-            s->red_light_violation_rate += red_light;
-            s->num_goals_reached += num_goals;
-            if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped) {
-                s->score += 1.0f;
-            }
-            // Mirror the aggregate Log DNF predicate (see drive.h:2577):
-            // the agent stayed clean of infractions but never reached even
-            // one waypoint — i.e. wandered without making progress.
-            if (!offroad && !collided && !red_light && num_waypoints < 1) {
-                s->dnf_rate += 1.0f;
-            }
-            s->total_distance_travelled += agent_i->distance_since_spawn;
-            if (collided || offroad || red_light) {
-                s->total_infractions += 1.0f;
-            }
-            s->reward_collision += env->logs[i].reward_collision;
-            s->reward_offroad += env->logs[i].reward_offroad;
-            s->reward_red_light += env->logs[i].reward_red_light;
-            s->reward_goal += env->logs[i].reward_goal;
-            s->reward_lane_align += env->logs[i].reward_lane_align;
-            s->reward_lane_center += env->logs[i].reward_lane_center;
-            s->reward_comfort += env->logs[i].reward_comfort;
-            s->reward_velocity += env->logs[i].reward_velocity;
-            s->reward_timestep += env->logs[i].reward_timestep;
-            s->reward_reverse += env->logs[i].reward_reverse;
-            s->reward_overspeed += env->logs[i].reward_overspeed;
-            s->reward_ade += env->logs[i].reward_ade;
-        }
-    }
-}
-
-static int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *out) {
-    if (env->completed_episodes_count == 0) {
-        return 0;
-    }
-    *out = env->completed_episodes[0];
-    for (int i = 1; i < env->completed_episodes_count; i++) {
-        env->completed_episodes[i - 1] = env->completed_episodes[i];
-    }
-    env->completed_episodes_count--;
-    return 1;
 }
 
 // ========================================
@@ -3082,7 +2951,7 @@ static void generate_traffic_light_states(Drive *env) {
     float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (random_uniform(0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -3102,34 +2971,26 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        if (!env->eval_mode) {
-            // Individual removal
-            if (random_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
-                for (int t = 0; t < fill_steps; t++) {
-                    tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
-                }
-                continue;
+        // Individual removal
+        if (random_uniform(0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            for (int t = 0; t < fill_steps; t++) {
+                tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
             }
-            // Always green
-            if (random_uniform(0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
-                for (int t = 0; t < fill_steps; t++) {
-                    tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
-                }
-                continue;
+            continue;
+        }
+        // Always green
+        if (random_uniform(0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+            for (int t = 0; t < fill_steps; t++) {
+                tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
             }
+            continue;
         }
 
         // Compute phase durations
         float dur_green, dur_yellow, dur_red;
-        if (env->eval_mode) {
-            dur_green = TL_DEFAULT_GREEN_DURATION;
-            dur_yellow = TL_DEFAULT_YELLOW_DURATION;
-            dur_red = TL_DEFAULT_RED_DURATION;
-        } else {
-            dur_green = random_uniform(0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = random_uniform(0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = random_uniform(0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
-        }
+        dur_green = random_uniform(0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+        dur_yellow = random_uniform(0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
+        dur_red = random_uniform(0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
 
         int steps_green = (int) (dur_green / dt);
         if (steps_green < 1) {
@@ -3247,15 +3108,8 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // width: [0.8, 3.0] m
     // width = min(width, length)
     float spawn_length, spawn_width;
-    if (env->eval_mode) {
-        // Fixed size for eval mode
-        spawn_length = random_uniform(2.0f, 5.5f);
-        spawn_width = random_uniform(1.5f, 2.5f);
-    } else {
-        // Random size for training mode
-        spawn_length = random_uniform(0.8f, 7.0f);
-        spawn_width = random_uniform(0.8f, 2.7f);
-    }
+    spawn_length = random_uniform(0.8f, 7.0f);
+    spawn_width = random_uniform(0.8f, 2.7f);
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
     }

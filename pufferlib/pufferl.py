@@ -302,8 +302,6 @@ class PuffeRL:
         self.losses = {}
         self.best_score = -float("inf")
         self.ema_max = 0.0
-        # Set later via PuffeRL.attach_eval_manager (before evaluate() fires).
-        self._eval_manager = None
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -527,29 +525,6 @@ class PuffeRL:
 
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
-
-        # All evaluation is now driven by the unified EvalManager. Each
-        # [eval.<name>] section in drive.ini is one evaluator instance;
-        # the manager fires any whose interval divides this epoch. See
-        # docs/eval_unification.md for the design.
-        # Under DDP, only rank 0 runs eval — every rank has identical
-        # weights so duplicating the rollout wastes memory + compute,
-        # and parallel mp4 writes from N ranks race on filenames. Other
-        # ranks block on the next allreduce until rank 0 rejoins.
-        is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
-        if self._eval_manager is not None and is_rank0:
-            # Subprocess evals load the policy from disk. Save the latest
-            # checkpoint first so they see this epoch's weights, not the
-            # last save_checkpoint() from `checkpoint_interval`.
-            if self._eval_manager.has_subprocess_evals_at(self.epoch):
-                self.save_checkpoint()
-            self._eval_manager.maybe_run(
-                epoch=self.epoch,
-                policy=self.uncompiled_policy,
-                env_name=self.config["env"],
-                logger=self.logger,
-                global_step=self.agent_steps,
-            )
 
         return logs
 
@@ -1457,15 +1432,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 experiment_dir=experiment_dir,
             )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(**args["train"], env=env_name)
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     if args["train"].get("resume_state_path"):
         pufferl.load_training_state(args["train"]["resume_state_path"])
-
-    from pufferlib.ocean.benchmark.manager import EvalManager
-
-    pufferl._eval_manager = EvalManager.from_config(args, run_id=logger.run_id if logger else None)
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
@@ -1541,23 +1512,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     #     stats = pufferl.evaluate()
     #     i += 1
 
-    # Force every enabled evaluator to fire once at shutdown, regardless
-    # of whether `epoch % interval == 0` lines up. Restores the
-    # `epoch % interval == 0 or done_training` semantics from the legacy
-    # eval pipeline — without this the final epoch's metrics get dropped
-    # whenever total_timesteps lands off-cycle. Rank-0 only under DDP
-    # for the same reasons as the in-loop call above.
-    is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
-    if pufferl._eval_manager is not None and is_rank0:
-        pufferl._eval_manager.maybe_run(
-            epoch=pufferl.epoch,
-            policy=pufferl.uncompiled_policy,
-            env_name=pufferl.config["env"],
-            logger=pufferl.logger,
-            global_step=pufferl.agent_steps,
-            force=True,
-        )
-
     logs = pufferl.mean_and_log()
     if logs is not None:
         all_logs.append(logs)
@@ -1566,334 +1520,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     model_path = pufferl.close()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
-
-
-# Env keys that define the observation / action layout a checkpoint was trained
-# with. They must match at eval or the policy unpacks the obs at the wrong
-# offsets, so they come from the checkpoint — unlike the eval-policy env config
-# (sim mode, maps, rewards, behaviors), which the [eval.<name>] section owns.
-_ARCH_ENV_KEYS = (
-    # action / dynamics
-    "action_type",
-    "dynamics_model",
-    "trajectory_prediction_length",
-    "num_trajectory_scaling_factors",
-    "trajectory_scaling_factors",
-    # observation token counts + scope
-    "obs_slots_partners_n",
-    "obs_slots_lane_n",
-    "obs_slots_boundary_n",
-    "obs_lane_stride",
-    "obs_boundary_stride",
-    "obs_slots_traffic_controls_n",
-    "obs_dropout_lane",
-    "obs_dropout_boundary",
-    "traffic_control_scope",
-    "reward_conditioning",
-    # target / goal representation
-    "target_type",
-    "num_target_waypoints",
-    "min_waypoint_spacing",
-    "max_waypoint_spacing",
-    # observation normalization scales + spatial extent — the policy was
-    # trained against these, so wrong values feed it mis-scaled / clipped obs.
-    "obs_norm_xy_offset_m",
-    "obs_norm_goal_offset_m",
-    "obs_norm_veh_length_m",
-    "obs_norm_veh_width_m",
-    "obs_norm_road_seg_length_m",
-    "obs_norm_road_seg_width_m",
-    "obs_range_traffic_control_m",
-    "obs_range_partner_m",
-    "obs_range_road_front_m",
-    "obs_range_road_behind_m",
-    "obs_range_road_side_m",
-)
-
-
-def _merge_checkpoint_arch(args, model_path):
-    """Adopt a checkpoint's architecture from its sibling config.yaml.
-
-    A standalone eval may load a checkpoint whose network shape or observation
-    layout differs from drive.ini. The training run writes config.yaml next to
-    models/, so pull from it before the policy/env are built:
-      - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
-        else load_state_dict mismatches.
-      - the obs/action-layout env keys (_ARCH_ENV_KEYS) — else the eval env
-        packs observations the policy can't unpack.
-    The eval-policy env config (simulation_mode, map_dir, num_*, rewards,
-    behaviors) is intentionally left to the [eval.<name>] section.
-    """
-    config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
-    if not os.path.exists(config_yaml_path):
-        return args
-    with open(config_yaml_path) as f:
-        yaml_config = yaml.safe_load(f) or {}
-    for section in ("policy", "rnn"):
-        if isinstance(yaml_config.get(section), dict):
-            args.setdefault(section, {}).update(yaml_config[section])
-    for key in ("rnn_name", "policy_name"):
-        if key in yaml_config:
-            args[key] = yaml_config[key]
-    args.setdefault("train", {})["use_rnn"] = args.get("rnn_name") is not None
-    env_cfg = yaml_config.get("env", {})
-    if isinstance(env_cfg, dict):
-        args.setdefault("env", {})
-        for key in _ARCH_ENV_KEYS:
-            if key in env_cfg:
-                args["env"][key] = env_cfg[key]
-    print(f"[eval] merged policy/rnn + obs-layout config from {config_yaml_path}")
-    return args
-
-
-def eval(
-    env_name,
-    args=None,
-    vecenv=None,
-    policy=None,
-    evaluator_name=None,
-    out_path=None,
-    global_step=None,
-    epoch=None,
-    eval_simulation=None,
-    num_scenarios=None,
-    render=None,
-    render_backend=None,
-    num_maps=None,
-):
-    """Run a single named evaluator from drive.ini.
-
-    Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
-    evaluator's config (env/vec overrides, render flag, etc.) comes from
-    the [eval.<name>] section. Loads the policy from `--load-model-path`.
-
-    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
-    gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
-    flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
-    override the chosen evaluator's config for this run (only when passed),
-    so a checkpoint can be evaluated at an arbitrary scale from the CLI
-    without editing drive.ini.
-
-    Subprocess form: `--out <json>` writes the result dict to a JSON file
-    so the parent EvalManager can read structured metrics back without
-    parsing stdout. `--global-step` and `--epoch` flow through so render
-    mp4 filenames carry the right `_epoch{E}_step{N}` tag (otherwise
-    every subprocess invocation would write `_epoch0_step0.mp4` and
-    successive epochs would silently overwrite each other on disk).
-    """
-    from pufferlib.ocean.benchmark.manager import EvalManager
-
-    args = args or load_config(env_name)
-
-    # When evaluating a checkpoint, adopt its network architecture from the
-    # training run's sibling config.yaml so the policy is built to match the
-    # weights regardless of what drive.ini currently says.
-    if args.get("load_model_path"):
-        _merge_checkpoint_arch(args, args["load_model_path"])
-
-    if evaluator_name is None:
-        evaluator_name = args.get("evaluator")
-    if evaluator_name is None and eval_simulation:
-        evaluator_name = f"validation_{eval_simulation}"
-    if evaluator_name is None:
-        raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
-            "named [eval.<name>] sections live in drive.ini"
-        )
-
-    # Derive a default render output dir from the model path when none is set.
-    # experiments/puffer_drive_e6guw2wv/models/model.pt → benchmark/puffer_e6guw2wv
-    if not args.get("render_results_dir") and not args.get("eval_results_dir"):
-        load_model_path = args.get("load_model_path")
-        if load_model_path:
-            exp_name = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(load_model_path))))
-            run_id = exp_name.removeprefix(f"{env_name}_")
-            args["render_results_dir"] = os.path.join("benchmark", f"puffer_{run_id}")
-
-    manager = EvalManager.from_config(args)
-    target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
-    if target is None:
-        raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
-
-    # Ad-hoc CLI overrides applied to the chosen evaluator for this run.
-    # The evaluator reads self.config / self.render at rollout time, so
-    # mutating them here takes effect without touching drive.ini.
-    if num_scenarios is not None:
-        target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
-    if num_maps is not None:
-        target.config.setdefault("env", {})["num_maps"] = int(num_maps)
-    if render is not None:
-        target.render = bool(render)
-    if render_backend is not None:
-        target.config["render_backend"] = render_backend
-
-    # Build a fresh vecenv inside the manager via the evaluator's overrides.
-    # Policy can come from a checkpoint (load_model_path) or be passed in.
-    if policy is None:
-        # Need a probe vecenv just to construct the policy with the right
-        # obs/action spaces. Use the matching evaluator's env_overrides so
-        # the obs shape matches what the rollout will see.
-        probe_args = manager._build_eval_args(target, env_name=env_name, global_step=None)
-        probe_vec = load_env(env_name, probe_args)
-        policy = load_policy(probe_args, probe_vec, env_name)
-        probe_vec.close()
-
-    result = manager.run_one_by_name(
-        evaluator_name,
-        policy=policy,
-        env_name=env_name,
-        logger=None,
-        global_step=global_step,
-        epoch=epoch,
-    )
-
-    print("EVAL_RESULT_JSON_START")
-    import json
-
-    print(json.dumps({"name": evaluator_name, "metrics": result.metrics}))
-    print("EVAL_RESULT_JSON_END")
-
-    if out_path:
-        with open(out_path, "w") as f:
-            json.dump(
-                {"name": evaluator_name, "metrics": result.metrics, "frames": [str(p) for p in result.frames]},
-                f,
-            )
-
-    return result.metrics
-
-
-def mine_failures(env_name, args=None):
-    """Roll out a trained policy against a fixed scenario suite, capture per-
-    episode compact replays + summaries, and produce a sortable HTML index.
-
-    Config keys (under `mine.` or via CLI flags):
-      - mine.output_dir (default: f"./failure_mining/{env_name}")
-      - mine.num_episodes (default: 100)
-      - mine.score_threshold (default: -inf, i.e. capture every episode;
-        episodes with `episode_return` strictly below this threshold are
-        flagged as failures and have their replay bundle written to disk)
-      - mine.render (default: True; render each captured replay to HTML and
-        write a top-level index.html via mining_viz)
-
-    Other args reused from training/eval: load_model_path, env.*, policy_name,
-    train.device, vec.* (only num_envs is meaningful here; mining always uses
-    a single vec env).
-    """
-    import csv
-    import pandas as pd
-
-    from pufferlib import mining_viz
-
-    args = args or load_config(env_name)
-    mine_cfg = args.get("mine") or {}
-    output_dir = mine_cfg.get("output_dir") or f"./failure_mining/{env_name}"
-    num_episodes = int(mine_cfg.get("num_episodes", 100))
-    score_threshold = float(mine_cfg.get("score_threshold", float("-inf")))
-    do_render = bool(mine_cfg.get("render", True))
-
-    env_kwargs = dict(args["env"])
-    env_kwargs["capture_compact_replay"] = True
-    env_kwargs["emit_completed_episodes"] = True
-    env_kwargs["eval_mode"] = env_kwargs.get("eval_mode", 1)
-    env_kwargs["resample_frequency"] = 0
-    # Mining is sequential: one vec env, walk episodes one batch at a time.
-    vec_kwargs = dict(args["vec"])
-    vec_kwargs.setdefault("num_envs", 1)
-    vec_kwargs.setdefault("num_workers", 1)
-    vec_kwargs.setdefault("batch_size", vec_kwargs["num_envs"])
-
-    package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
-    make_env = env_module.env_creator(env_name)
-    vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **vec_kwargs)
-
-    policy = load_policy({**args, "env": env_kwargs}, vecenv, env_name)
-    policy.eval()
-
-    device = args["train"]["device"]
-    if isinstance(device, int):
-        device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
-
-    replay_dir = os.path.join(output_dir, "replays")
-    render_dir = os.path.join(output_dir, "renders") if do_render else None
-    os.makedirs(replay_dir, exist_ok=True)
-    if render_dir is not None:
-        os.makedirs(render_dir, exist_ok=True)
-
-    rows = []
-    next_episode_id = 0
-    seed = args.get("train", {}).get("seed") or 0
-    if hasattr(vecenv, "async_reset"):
-        vecenv.async_reset(seed=seed)
-    obs_arr, *_ = vecenv.recv()
-    pbar_total = num_episodes
-    pbar_done = 0
-    print(f"[mine_failures] target episodes={num_episodes} output={output_dir} score_threshold={score_threshold}")
-    while pbar_done < num_episodes:
-        with torch.no_grad():
-            o_t = torch.as_tensor(obs_arr).to(device)
-            state = {"reward": None, "done": None, "env_id": None, "mask": None}
-            logits, _ = policy.forward_eval(o_t, state)
-            action, _, _ = pufferlib.pytorch.sample_logits(logits)
-            action = action.cpu().numpy()
-            if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
-                action = action.reshape(-1, *vecenv.single_action_space.shape)
-        vecenv.send(action)
-        obs_arr, _, _, _, infos, *_ = vecenv.recv()
-        for info in infos:
-            if not isinstance(info, dict):
-                continue
-            if info.get("summary_type") != "completed_episode":
-                continue
-            episode_id = next_episode_id
-            next_episode_id += 1
-            bundle_bytes = info.pop("compact_replay_bundle", None)
-            row = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in info.items()}
-            row["episode_id"] = episode_id
-            row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
-                1.0, float(row.get("total_infractions", 0.0))
-            )
-            row["failed"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
-            row["has_replay"] = 0
-            row["replay_path"] = None
-            if bundle_bytes is not None and row["failed"]:
-                replay_path = os.path.join(replay_dir, f"episode_{episode_id:06d}.replay.zlib")
-                with open(replay_path, "wb") as f:
-                    f.write(bundle_bytes)
-                row["has_replay"] = 1
-                row["replay_path"] = replay_path
-            rows.append(row)
-            pbar_done += 1
-            if pbar_done >= num_episodes:
-                break
-
-    vecenv.close()
-
-    episodes_df = pd.DataFrame(rows)
-    csv_path = os.path.join(output_dir, "episodes.csv")
-    episodes_df.to_csv(csv_path, index=False)
-    print(
-        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, {int(episodes_df['failed'].sum())} failures captured)"
-    )
-
-    if do_render and render_dir is not None:
-        render_lookup = {}
-        rendered = 0
-        for row in rows:
-            if not row.get("has_replay"):
-                continue
-            ep_id = int(row["episode_id"])
-            out_html = os.path.join(render_dir, f"episode_{ep_id:06d}.html")
-            mining_viz.render_compact_replay_html(row["replay_path"], out_html, render_context={"summary": row})
-            render_lookup[ep_id] = os.path.relpath(out_html, render_dir)
-            rendered += 1
-        index_path = os.path.join(render_dir, "index.html")
-        mining_viz.generate_failure_index(episodes_df, render_lookup, index_path)
-        print(f"[mine_failures] rendered {rendered} replays + index at {index_path}")
-
-    return episodes_df
 
 
 def sweep(args=None, env_name=None):
@@ -2207,7 +1833,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, mine_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2215,83 +1841,6 @@ def main():
     env_name = sys.argv.pop(1)
     if mode == "train":
         train(env_name=env_name)
-    elif mode == "eval":
-        # Pull eval-specific argv before load_config consumes them. These
-        # aren't registered as configparser-style dotted keys because
-        # they're per-invocation, not per-config-section.
-        evaluator_name = None
-        out_path = None
-        global_step = None
-        epoch = None
-        # Ad-hoc overrides for the chosen evaluator (None = not passed, so the
-        # [eval.<name>] section value stands). Pulled from argv here rather
-        # than registered in load_config so we can tell "passed" from
-        # "default" and only override when the user actually set them.
-        eval_simulation = None
-        render_backend = None
-        num_scenarios = None
-        render = None
-        num_maps = None
-        scalar_flags = {
-            "--num-scenarios": "num_scenarios",
-            "--num_scenarios": "num_scenarios",
-            "--render": "render",
-            "--num-maps": "num_maps",
-            "--num_maps": "num_maps",
-        }
-        str_flags = {
-            "--eval-simulation": "eval_simulation",
-            "--eval_simulation": "eval_simulation",
-            "--render-backend": "render_backend",
-            "--render_backend": "render_backend",
-        }
-        str_overrides = {}
-        overrides = {}
-        i = 0
-        while i < len(sys.argv):
-            arg = sys.argv[i]
-            if arg == "--evaluator" and i + 1 < len(sys.argv):
-                evaluator_name = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--out" and i + 1 < len(sys.argv):
-                out_path = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--global-step" and i + 1 < len(sys.argv):
-                global_step = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--epoch" and i + 1 < len(sys.argv):
-                epoch = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            if arg in str_flags and i + 1 < len(sys.argv):
-                str_overrides[str_flags[arg]] = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg in scalar_flags and i + 1 < len(sys.argv):
-                overrides[scalar_flags[arg]] = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            i += 1
-        eval_simulation = str_overrides.get("eval_simulation")
-        render_backend = str_overrides.get("render_backend")
-        num_scenarios = overrides.get("num_scenarios")
-        render = overrides.get("render")
-        num_maps = overrides.get("num_maps")
-        eval(
-            env_name=env_name,
-            evaluator_name=evaluator_name,
-            out_path=out_path,
-            global_step=global_step,
-            epoch=epoch,
-            eval_simulation=eval_simulation,
-            num_scenarios=num_scenarios,
-            render=render,
-            render_backend=render_backend,
-            num_maps=num_maps,
-        )
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
@@ -2302,8 +1851,6 @@ def main():
         profile(env_name=env_name)
     elif mode == "export":
         export(env_name=env_name)
-    elif mode in ("mine_failures", "mine-failures"):
-        mine_failures(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

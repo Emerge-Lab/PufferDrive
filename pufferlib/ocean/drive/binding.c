@@ -1722,9 +1722,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
-    int starting_map_counter = unpack(kwargs, "starting_map_counter");
-    int eval_mode = unpack(kwargs, "eval_mode");
-    int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int sdc_controller = unpack(kwargs, "sdc_controller");
@@ -1736,7 +1733,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float) unpack(kwargs, "goal_radius");
-    int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1754,32 +1750,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_GIGAFLOW) {
-        if (eval_mode) {
-            // Eval mode: fixed agent count, sequential map cycling
-            int agents_per_env = max_agents_per_env;
-            int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
-
-            env_count = env_count > num_eval_scenarios ? num_eval_scenarios : env_count;
-
-            PyObject *agent_offsets = PyList_New(env_count + 1);
-            PyObject *map_ids_list = PyList_New(env_count);
-
-            int offset = 0;
-            for (int i = 0; i < env_count; i++) {
-                PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-                PyList_SetItem(map_ids_list, i, PyLong_FromLong((s_map_counter + i) % num_maps));
-                int remaining = num_agents - offset;
-                offset += (remaining < agents_per_env) ? remaining : agents_per_env;
-            }
-            PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
-
-            PyObject *tuple = PyTuple_New(3);
-            PyTuple_SetItem(tuple, 0, agent_offsets);
-            PyTuple_SetItem(tuple, 1, map_ids_list);
-            PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
-            return tuple;
-        }
-
         // Training mode: random agent counts per env
         int *agent_counts = malloc((num_agents / min_agents_per_env + 1) * sizeof(int));
         int remaining = num_agents;
@@ -1843,23 +1813,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int max_envs = num_agents;
     int maps_checked = 0;
 
-    if (eval_mode) {
-        max_envs = num_eval_scenarios;
-    }
-    // Define the upper boundary for the map window
-    int end_map_index = starting_map_counter + num_eval_scenarios;
-
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
-    // Added condition: s_map_counter < end_map_index
-    while (total_agent_count < num_agents && env_count < max_envs && (!eval_mode || s_map_counter < end_map_index)) {
-        if (eval_mode) {
-            map_id = s_map_counter % num_maps;
-            s_map_counter += 1; // This increments towards end_map_index
-        } else {
-            map_id = rand() % num_maps;
-        }
+    while (total_agent_count < num_agents && env_count < max_envs) {
+        map_id = rand() % num_maps;
 
         const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
 
@@ -1961,9 +1919,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
-    env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
-    env->next_episode_index = 0;
-    env->completed_episodes_count = 0;
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
     env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
@@ -2003,7 +1958,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
-    env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
@@ -2024,57 +1978,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
 
     init(env);
-    return 0;
-}
-
-static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
-    (void) env;
-    assign_to_dict(dict, "episode_index", (float) summary->episode_index);
-    assign_to_dict(dict, "n", summary->n);
-    assign_to_dict(dict, "episode_length", summary->episode_length);
-    assign_to_dict(dict, "episode_return", summary->episode_return);
-    assign_to_dict(dict, "collision_rate", summary->collision_rate);
-    assign_to_dict(dict, "offroad_rate", summary->offroad_rate);
-    assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
-    assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
-    assign_to_dict(dict, "score", summary->score);
-    assign_to_dict(dict, "dnf_rate", summary->dnf_rate);
-    assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
-    assign_to_dict(dict, "total_infractions", summary->total_infractions);
-
-    // Per-component reward breakdown for the per-episode CSV.
-    assign_to_dict(dict, "reward_components/collision", summary->reward_collision);
-    assign_to_dict(dict, "reward_components/offroad", summary->reward_offroad);
-    assign_to_dict(dict, "reward_components/red_light", summary->reward_red_light);
-    assign_to_dict(dict, "reward_components/goal", summary->reward_goal);
-    assign_to_dict(dict, "reward_components/lane_align", summary->reward_lane_align);
-    assign_to_dict(dict, "reward_components/lane_center", summary->reward_lane_center);
-    assign_to_dict(dict, "reward_components/comfort", summary->reward_comfort);
-    assign_to_dict(dict, "reward_components/velocity", summary->reward_velocity);
-    assign_to_dict(dict, "reward_components/timestep", summary->reward_timestep);
-    assign_to_dict(dict, "reward_components/reverse", summary->reward_reverse);
-    assign_to_dict(dict, "reward_components/overspeed", summary->reward_overspeed);
-    assign_to_dict(dict, "reward_components/ade", summary->reward_ade);
-
-    PyObject *mn = PyUnicode_FromString(summary->map_name);
-    if (!mn) {
-        return -1;
-    }
-    if (PyDict_SetItemString(dict, "map_name", mn) < 0) {
-        Py_DECREF(mn);
-        return -1;
-    }
-    Py_DECREF(mn);
-
-    PyObject *sid = PyUnicode_FromString(summary->scenario_id);
-    if (!sid) {
-        return -1;
-    }
-    if (PyDict_SetItemString(dict, "scenario_id", sid) < 0) {
-        Py_DECREF(sid);
-        return -1;
-    }
-    Py_DECREF(sid);
     return 0;
 }
 
