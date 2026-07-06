@@ -7,8 +7,9 @@
 #
 # Launch (3 seeds via the colon sweep):
 #   source /scratch/$USER/venvs/pufferdrive/bin/activate
+#   EXPERIMENTS_DIR=<where you want experiment outputs, e.g. /scratch/$USER/runs>
 #   python scripts/submit_cluster.py \
-#       --save_dir /scratch/$USER/runs --prefix $(date +%Y-%m-%d)_single_agent \
+#       --save_dir $EXPERIMENTS_DIR --prefix $(date +%Y-%m-%d)_single_agent \
 #       --compute_config scripts/cluster_configs/nyu_greene.yaml \
 #       --program_config scripts/cluster_configs/single_agent_speed_run.yaml \
 #       --container --heartbeat --account <acct> --partition <gpu-partition> --time 720 \
@@ -67,6 +68,9 @@ eval.behaviors_unprotected_right.enabled: 0
 
 # W&B. Group has no space: submit_cluster.py joins the inner command into a
 # bash -c string without quoting arg values, so a space would split the arg.
+# Launchers (launch_single_agent.sh and Modal's nightly()) override
+# wandb_group to today's date at launch so runs cluster by night in the UI;
+# the static value here is just the fallback for ad-hoc invocations.
 wandb: True
-wandb_project: single_agent_nightly_test
-wandb_group: Nightly_Test
+wandb_project: nightly-single
+wandb_group: nightly-single
