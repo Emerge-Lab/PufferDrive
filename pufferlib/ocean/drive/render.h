@@ -723,8 +723,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     int ego_dim = EGO_FEATURES;
     int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
-    int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
-                                                              : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
+    int target_features = (env->target_type == TARGET_STATIC) ? env->num_goals * STATIC_TARGET_FEATURES
+                                                              : env->num_goals * DYNAMIC_TARGET_FEATURES;
     int max_obs = compute_observation_size(env);
     float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
     float *agent_obs = &observations[agent_index][0];
@@ -737,7 +737,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float py = env->agents[active_idx].sim_y;
     float pz = env->agents[active_idx].sim_z;
     // draw goal (first target waypoint, in ego frame)
-    if (env->num_target_waypoints > 0) {
+    if (env->num_goals > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
         float goal_x = agent_obs[goal_obs_idx] * env->obs_norm_goal_offset_m;
         float goal_y = agent_obs[goal_obs_idx + 1] * env->obs_norm_goal_offset_m;
@@ -1339,17 +1339,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
         if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
             // Draw all target waypoints: brightest (first) to darkest (last)
-            int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS) {
-                num_wp = MAX_TARGET_WAYPOINTS;
+            int num_wp = env->num_goals;
+            if (num_wp > MAX_GOALS) {
+                num_wp = MAX_GOALS;
             }
             for (int wp = 0; wp < num_wp; wp++) {
                 if (wp < agent->current_goal_idx) {
                     continue; // already reached
                 }
-                float wx = agent->goal_positions_x[wp];
-                float wy = agent->goal_positions_y[wp];
-                float wz = agent->goal_positions_z[wp];
+                float wx = agent->list_goal_x[wp];
+                float wy = agent->list_goal_y[wp];
+                float wz = agent->list_goal_z[wp];
                 // Brightness: first=1.0, last=0.3
                 float alpha = 1.0f - 0.7f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
                 float radius = 1.5f - 0.5f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);

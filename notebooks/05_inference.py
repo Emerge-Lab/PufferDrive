@@ -118,7 +118,7 @@ obs_dim = obs.shape[1]
 dyn_model = config["env"]["dynamics_model"]
 tgt_type = config["env"]["target_type"]
 rew_cond = config["env"].get("reward_conditioning", False)
-n_tgt_wp = config["env"].get("num_target_waypoints", 3)
+n_tgt_wp = config["env"].get("num_goals", 3)
 
 
 def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
@@ -192,7 +192,7 @@ img = plot_observation(
     sample_obs,
     target_type=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -229,7 +229,7 @@ for t in range(HORIZON):
         buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0],
         target_type=tgt_type,
         reward_conditioning=rew_cond,
-        num_target_waypoints=n_tgt_wp,
+        num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
         obs_slots_lane_n=env.obs_slots_lane_n,
         obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -279,7 +279,7 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
     target_type=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -470,7 +470,7 @@ def unpack_all_timesteps(bufs, agent_idx):
             ob,
             target_type=tgt_type,
             reward_conditioning=rew_cond,
-            num_target_waypoints=n_tgt_wp,
+            num_goals=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
             obs_slots_lane_n=env.obs_slots_lane_n,
             obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -548,7 +548,7 @@ for t in range(HORIZON):
         ob,
         target_type=tgt_type,
         reward_conditioning=rew_cond,
-        num_target_waypoints=n_tgt_wp,
+        num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
         obs_slots_lane_n=env.obs_slots_lane_n,
         obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -576,7 +576,7 @@ ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
     target_type=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,

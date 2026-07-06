@@ -40,9 +40,9 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
-        min_waypoint_spacing=20.0,
-        max_waypoint_spacing=60.0,
-        num_target_waypoints=3,
+        min_goal_spacing=20.0,
+        max_goal_spacing=60.0,
+        num_goals=3,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -141,11 +141,11 @@ class Drive(pufferlib.PufferEnv):
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
         self.goal_radius = goal_radius
-        self.min_waypoint_spacing = min_waypoint_spacing
-        self.max_waypoint_spacing = max_waypoint_spacing
-        if num_target_waypoints > binding.MAX_TARGET_WAYPOINTS:
-            num_target_waypoints = binding.MAX_TARGET_WAYPOINTS
-        self.num_target_waypoints = num_target_waypoints
+        self.min_goal_spacing = min_goal_spacing
+        self.max_goal_spacing = max_goal_spacing
+        if num_goals > binding.MAX_GOALS:
+            num_goals = binding.MAX_GOALS
+        self.num_goals = num_goals
         self.target_type_str = target_type
         if target_type == "static":
             self.target_type = binding.TARGET_STATIC
@@ -237,7 +237,7 @@ class Drive(pufferlib.PufferEnv):
             self.target_features = binding.STATIC_TARGET_FEATURES
         else:
             self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.target_dim = self.num_target_waypoints * self.target_features
+        self.target_dim = self.num_goals * self.target_features
 
         self.num_obs = (
             self.ego_features
@@ -459,9 +459,9 @@ class Drive(pufferlib.PufferEnv):
             "use_map_cache": self.use_map_cache,
             "emit_completed_episodes": int(self.emit_completed_episodes),
             "goal_radius": self.goal_radius,
-            "min_waypoint_spacing": self.min_waypoint_spacing,
-            "max_waypoint_spacing": self.max_waypoint_spacing,
-            "num_target_waypoints": self.num_target_waypoints,
+            "min_goal_spacing": self.min_goal_spacing,
+            "max_goal_spacing": self.max_goal_spacing,
+            "num_goals": self.num_goals,
             "target_type": self.target_type,
             "goal_on_lane": self.goal_on_lane,
             "obs_slots_lane_n": self.obs_slots_lane_n,
@@ -815,8 +815,8 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
-            goal_x[idx] = np.float32(agent.get("goal_position_x", 0.0))
-            goal_y[idx] = np.float32(agent.get("goal_position_y", 0.0))
+            goal_x[idx] = np.float32(agent.get("current_goal_x", 0.0))
+            goal_y[idx] = np.float32(agent.get("current_goal_y", 0.0))
         return {
             "valid": valid,
             "id": agent_id,

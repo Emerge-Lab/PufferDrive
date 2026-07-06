@@ -25,13 +25,13 @@ env.num_agents: 1024
 env.use_map_cache: 1
 
 # Single goal placed at a random drivable point on the map whose Euclidean
-# distance from the agent lies in [min_waypoint_spacing, max_waypoint_spacing].
+# distance from the agent lies in [min_goal_spacing, max_goal_spacing].
 # 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
 # Town10HD map diameter (~260m) so goals can land anywhere on the network.
-env.num_target_waypoints: 1
+env.num_goals: 1
 env.goal_on_lane: False
-env.min_waypoint_spacing: 6.0
-env.max_waypoint_spacing: 500.0
+env.min_goal_spacing: 6.0
+env.max_goal_spacing: 500.0
 
 # Traffic lights fully off: not observed, not scored, no reward penalty.
 env.traffic_light_behavior: 0

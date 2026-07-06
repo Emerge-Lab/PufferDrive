@@ -4,7 +4,7 @@
 static int test_observation_size_formula(void) {
     Drive env = {0};
     env.target_type = TARGET_STATIC;
-    env.num_target_waypoints = 3;
+    env.num_goals = 3;
     env.reward_conditioning = 0;
     env.obs_slots_partners_n = 2;
     env.obs_slots_lane_kept = 5;
@@ -37,7 +37,7 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     EXPECT_EQ_INT(env.active_agent_count, 1);
     int obs_size = compute_observation_size(&env);
     float *obs = env.observations;
-    int partner_base = EGO_FEATURES + env.num_target_waypoints * STATIC_TARGET_FEATURES;
+    int partner_base = EGO_FEATURES + env.num_goals * STATIC_TARGET_FEATURES;
     int road_base = partner_base + env.obs_slots_partners_n * PARTNER_FEATURES;
     int traffic_base = road_base + (env.obs_slots_lane_kept + env.obs_slots_boundary_kept) * ROAD_FEATURES;
     int valid_base = obs_size - OBS_VALID_COUNT_FEATURES;
@@ -72,7 +72,7 @@ static void init_reward_env(Drive *env, Agent *agent, Log *log, int *active, flo
     env->dt = 0.1f;
     env->reward_goal = 2.0f;
     env->simulation_mode = SIMULATION_GIGAFLOW;
-    env->num_target_waypoints = 3;
+    env->num_goals = 3;
     env->compute_eval_metrics = 0;
     agent->reward_coefs[REWARD_COEF_COLLISION] = 3.0f;
     agent->reward_coefs[REWARD_COEF_OFFROAD] = 4.0f;
@@ -128,7 +128,7 @@ static int test_reward_goal_speed_gating(void) {
     init_reward_env(&env, &agent, &log, active, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
-    agent.current_goal_idx = env.num_target_waypoints;
+    agent.current_goal_idx = env.num_goals;
     agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
     agent.sim_speed = 10.0f;
     compute_rewards(&env, 0);
@@ -138,7 +138,7 @@ static int test_reward_goal_speed_gating(void) {
     init_reward_env(&env, &agent, &log, active, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
-    agent.current_goal_idx = env.num_target_waypoints;
+    agent.current_goal_idx = env.num_goals;
     agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
     agent.sim_speed = 1.0f;
     compute_rewards(&env, 0);
