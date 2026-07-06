@@ -92,8 +92,6 @@
 #define MULTI_LANE_TIME_IDX 16
 #define MULTI_LANE_SCORE_IDX 17
 
-// Path
-#define MAX_NUM_WP_PATH 200
 #define MAX_GOALS 20
 
 // obs_html_frame array field counts
@@ -149,21 +147,6 @@ static inline int traffic_control_in_scope(int type, int scope) {
     }
 }
 
-struct Waypoint {
-    float s;           // Arc length (cumulative distance from the start) - init position
-    float x;           // Global x-coordinate
-    float y;           // Global y-coordinate
-    float z;           // Global z-coordinate
-    float heading;     // Global heading (tangent angle) in radians
-    float cos_heading; // Cached cosf(heading) - set in build_path
-    float sin_heading; // Cached sinf(heading) - set in build_path
-    int lane_idx;      // Index of the lane this waypoint
-};
-struct Path {
-    struct Waypoint waypoints[MAX_NUM_WP_PATH];
-    int num_waypoints;
-};
-
 struct Agent {
     int id;
     int type;
@@ -209,10 +192,6 @@ struct Agent {
     int route_gt_len;      // Number of leading route lanes supported by GT before extension
     int current_route_idx; // Tracks progress through route array
 
-    // Path
-    struct Path *path;
-    int closest_path_idx_wp;
-
     // Metrics and status tracking (size must match NUM_METRICS in drive.h)
     float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
@@ -222,25 +201,28 @@ struct Agent {
     int previous_lane_idx;
     int current_lane_geometry_idx;
     int reached_goal_this_episode;
-    int num_waypoints_reached;
     int num_goals_reached;
     int active_agent;
     int mark_as_expert;
     int controller;
     float cumulative_displacement;
     int displacement_sample_count;
-    float path_progression;
     float distance_since_spawn;
     float seconds_stopped;
 
-    // Goal positions (N sequential waypoints)
+    // Goal positions
     float list_goal_x[MAX_GOALS];
     float list_goal_y[MAX_GOALS];
     float list_goal_z[MAX_GOALS];
-    float current_goal_x; // alias = list_goal_x[current_goal_idx]
-    float current_goal_y; // alias = list_goal_y[current_goal_idx]
-    float current_goal_z; // alias = list_goal_z[current_goal_idx]
-    int current_goal_idx; // index of next goal to reach (0..N-1)
+    int list_goal_lane[MAX_GOALS]; // lane idx of each goal (for GPS lookup); -1 if none
+    float current_goal_x;          // alias = list_goal_x[current_goal_idx]
+    float current_goal_y;          // alias = list_goal_y[current_goal_idx]
+    float current_goal_z;          // alias = list_goal_z[current_goal_idx]
+    int current_goal_idx;          // index of next goal to reach (0..N-1)
+    int goal_count;                // number of active goals (<= num_goals)
+    float gt_goal_x;               // Last valid ground-truth goal position x
+    float gt_goal_y;               // Last valid ground-truth goal position y
+    float gt_goal_z;               // Last valid ground-truth goal position z
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
@@ -294,7 +276,8 @@ struct TrafficControlElement {
 struct LaneGraph {
     int n_lanes;
     int *lane_ids;
-    float *distances; // n_lanes * n_lanes row-major
+    float *distances;       // n_lanes * n_lanes row-major (row = from, col = to)
+    int *lane_to_graph_idx; // road-element idx -> graph idx (-1 if lane absent from graph), sized num_road_elements
 };
 
 void free_agent(struct Agent *agent) {
@@ -309,7 +292,6 @@ void free_agent(struct Agent *agent) {
     free(agent->log_height);
     free(agent->log_valid);
     free(agent->route);
-    free(agent->path);
 }
 
 void free_road_element(struct RoadMapElement *element) {
@@ -330,4 +312,5 @@ void free_traffic_element(struct TrafficControlElement *element) {
 void free_lane_graph(struct LaneGraph *graph) {
     free(graph->lane_ids);
     free(graph->distances);
+    free(graph->lane_to_graph_idx);
 }

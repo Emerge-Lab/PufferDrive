@@ -31,7 +31,7 @@ print(
 )
 print(
     f"obs_slots_lane_kept={env.obs_slots_lane_kept}, obs_slots_boundary_kept={env.obs_slots_boundary_kept}, "
-    f"road_features={env.road_features}, stride={env.obs_lane_stride}/{env.obs_boundary_stride}"
+    f"lane_features={env.lane_features}, boundary_features={env.boundary_features}, stride={env.obs_lane_stride}/{env.obs_boundary_stride}"
 )
 print(
     f"obs_slots_traffic_controls_n={env.obs_slots_traffic_controls_n}, traffic_control_features={env.traffic_control_features}"
