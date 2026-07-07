@@ -4,15 +4,7 @@ The nightly launchers stamp every run's wandb group with the launch date.
 This tool folds those into a nightly regression view:
 
   update (default)  Rebuild the per-seed trend runs in the nightly-trends
-                    project (one run per source project and seed, named
-                    <project>-seed<N>, grouped by source project). Each logs
-                    the final value of every metric with the row _timestamp
-                    overridden to the night's midnight (and step = days since
-                    NIGHT_ZERO for monotonicity). Re-running deletes and
-                    rebuilds them, so in-progress nights update and new
-                    nights append. The launchers invoke this before
-                    submitting, which keeps the report current without any
-                    other scheduler.
+                    project.
 
   report [--create] Create or rewrite the report. Layout, per nightly
                     project: (1) trend line panels over the trend runs — x =
@@ -20,8 +12,7 @@ This tool folds those into a nightly regression view:
                     with stderr bands; (2) native bar charts of finals
                     grouped by run group (the launch date); (3) per-night
                     mean training curves. Panels are live queries, so new
-                    nights appear without edits. Requires wandb-workspaces
-                    (pip install wandb-workspaces).
+                    nights appear without edits.
 
     python scripts/nightly_report.py            # rebuild trend runs
     python scripts/nightly_report.py report     # rewrite the report in place
@@ -31,8 +22,7 @@ import argparse
 import datetime
 import os
 
-# The nightly projects live on wandb.ai regardless of any locally configured
-# wandb host. Explicit env still wins.
+# Ensure correct wandb for machines with multiple wandb accounts
 os.environ.setdefault("WANDB_BASE_URL", "https://api.wandb.ai")
 
 import wandb

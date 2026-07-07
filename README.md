@@ -175,7 +175,7 @@ are disposable — the next update recreates them from the real runs.
 # Rebuild the trend runs by hand (e.g. after tonight's runs finish)
 python scripts/nightly_report.py update
 
-# Rewrite the report in place (needs: pip install wandb-workspaces)
+# Rewrite the report in place
 python scripts/nightly_report.py report
 
 # Mint a brand-new report instead of editing the existing one

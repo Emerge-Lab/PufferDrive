@@ -274,6 +274,7 @@ if not NO_TRAIN:
         "heavyball",
         "neptune",
         "wandb",
+        "wandb-workspaces",
         "tensorboard",
         "jupytext",
         "torchinfo",
