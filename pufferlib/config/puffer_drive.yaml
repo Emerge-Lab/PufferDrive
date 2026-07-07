@@ -53,12 +53,12 @@ env:
   dt: 0.1
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
-  # Collision behavior - options: 0 - Ignore, 1 - Stop, 2 - Remove
-  collision_behavior: 1
-  # Offroad behavior - options: 0 - Ignore, 1 - Stop, 2 - Remove
-  offroad_behavior: 1
-  # Traffic light behavior - options: 0 - Ignore, 1 - Stop, 2 - Remove
-  traffic_light_behavior: 1
+  # Collision behavior - options: "ignore", "stop", "remove"
+  collision_behavior: stop
+  # Offroad behavior - options: "ignore", "stop", "remove"
+  offroad_behavior: stop
+  # Traffic light behavior - options: "ignore", "stop", "remove"
+  traffic_light_behavior: stop
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 0
   # Number of steps before reset
@@ -305,10 +305,10 @@ eval:
     clean: 'true'
     env:
       eval_mode: 1
-      collision_behavior: 1
-      offroad_behavior: 1
-      # Explicit 0 wins over the clean macro's red-light enforcement.
-      traffic_light_behavior: 0
+      collision_behavior: stop
+      offroad_behavior: stop
+      # Explicit "ignore" wins over the clean macro's red-light enforcement.
+      traffic_light_behavior: ignore
       reward_randomization: false
       termination_mode: 0
       num_agents: 1024

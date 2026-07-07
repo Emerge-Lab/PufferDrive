@@ -110,6 +110,7 @@
 #define MULTI_LANE_HALF_SCORE_TIME 5.7f                        // seconds
 
 // Collision/Infraction behaviors
+#define IGNORE_INFRACTION 0
 #define STOP_AGENT 1
 #define REMOVE_AGENT 2
 
@@ -406,9 +407,9 @@ struct Drive {
     int goal_source;
     int obs_goal_lane_distance;
     char *ini_file;
-    int collision_behavior;           // 0 = none, 1=stop, 2 = remove
-    int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
-    int traffic_light_behavior;       // 0 = none, 1=stop, 2 = remove
+    int collision_behavior;           // IGNORE_INFRACTION, STOP_AGENT, or REMOVE_AGENT
+    int offroad_behavior;             // IGNORE_INFRACTION, STOP_AGENT, or REMOVE_AGENT
+    int traffic_light_behavior;       // IGNORE_INFRACTION, STOP_AGENT, or REMOVE_AGENT
     int use_map_cache;                // 0 = each env owns its map copy, 1 = share static geometry across envs
     struct SharedMapData *shared_map; // non-NULL when this env borrows cached geometry
     // Metadata fields

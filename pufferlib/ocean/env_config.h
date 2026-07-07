@@ -76,6 +76,22 @@ typedef struct {
     int phantom_braking_duration;
 } env_init_config;
 
+// Shared "ignore"/"stop"/"remove" enum for the collision/offroad/traffic-light
+// behavior keys. Values mirror IGNORE_INFRACTION/STOP_AGENT/REMOVE_AGENT in drive.h.
+static int parse_infraction_behavior(const char *name, const char *value) {
+    if (strcmp(value, "\"ignore\"") == 0 || strcmp(value, "ignore") == 0) {
+        return 0; // IGNORE_INFRACTION
+    }
+    if (strcmp(value, "\"stop\"") == 0 || strcmp(value, "stop") == 0) {
+        return 1; // STOP_AGENT
+    }
+    if (strcmp(value, "\"remove\"") == 0 || strcmp(value, "remove") == 0) {
+        return 2; // REMOVE_AGENT
+    }
+    fprintf(stderr, "Invalid %s value '%s': must be \"ignore\", \"stop\", or \"remove\"\n", name, value);
+    exit(1);
+}
+
 // INI file parser handler - parses all environment configuration from drive.ini
 static int handler(void *config, const char *section, const char *name, const char *value) {
     env_init_config *env_config = (env_init_config *) config;
@@ -100,11 +116,11 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->dynamics_model = 1; // Default to JERK
         }
     } else if (MATCH("env", "collision_behavior")) {
-        env_config->collision_behavior = atoi(value);
+        env_config->collision_behavior = parse_infraction_behavior(name, value);
     } else if (MATCH("env", "offroad_behavior")) {
-        env_config->offroad_behavior = atoi(value);
+        env_config->offroad_behavior = parse_infraction_behavior(name, value);
     } else if (MATCH("env", "traffic_light_behavior")) {
-        env_config->traffic_light_behavior = atoi(value);
+        env_config->traffic_light_behavior = parse_infraction_behavior(name, value);
     } else if (MATCH("env", "use_map_cache")) {
         env_config->use_map_cache = atoi(value);
     } else if (MATCH("env", "goal_regen_mode")) {

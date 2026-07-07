@@ -68,9 +68,9 @@ static inline Drive drive_test_env_config(
     env.reward_timestep = 0.000025f;
     env.reward_overspeed = 0.05f;
     env.reward_ade = 0.0f;
-    env.collision_behavior = 0;
-    env.offroad_behavior = 0;
-    env.traffic_light_behavior = 0;
+    env.collision_behavior = IGNORE_INFRACTION;
+    env.offroad_behavior = IGNORE_INFRACTION;
+    env.traffic_light_behavior = IGNORE_INFRACTION;
     env.use_map_cache = use_map_cache;
     env.emit_completed_episodes = 1;
     env.goal_radius = 2.0f;

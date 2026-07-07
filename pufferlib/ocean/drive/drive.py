@@ -67,9 +67,9 @@ class Drive(pufferlib.PufferEnv):
         max_goal_spacing=60.0,
         num_goals=3,
         goal_radius=2.0,
-        collision_behavior=0,
-        offroad_behavior=0,
-        traffic_light_behavior=0,
+        collision_behavior="ignore",
+        offroad_behavior="ignore",
+        traffic_light_behavior="ignore",
         use_map_cache=0,
         # emit_completed_episodes=True: env emits one summary dict per
         # completed episode via info (drained from a per-env C-side queue).
@@ -185,9 +185,21 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
-        self.collision_behavior = collision_behavior
-        self.offroad_behavior = offroad_behavior
-        self.traffic_light_behavior = traffic_light_behavior
+        infraction_behavior_values = {
+            "ignore": binding.IGNORE_INFRACTION,
+            "stop": binding.STOP_AGENT,
+            "remove": binding.REMOVE_AGENT,
+        }
+        for behavior_name, behavior in (
+            ("collision_behavior", collision_behavior),
+            ("offroad_behavior", offroad_behavior),
+            ("traffic_light_behavior", traffic_light_behavior),
+        ):
+            if behavior not in infraction_behavior_values:
+                raise ValueError(f"{behavior_name} must be one of 'ignore', 'stop', or 'remove'. Got: {behavior}")
+        self.collision_behavior = infraction_behavior_values[collision_behavior]
+        self.offroad_behavior = infraction_behavior_values[offroad_behavior]
+        self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
