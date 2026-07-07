@@ -94,7 +94,7 @@ Key flags:
 |---|---|
 | `--container` | wraps both submitit's outer launcher and the inner train command in `singularity exec --nv --overlay $OVERLAY:ro $IMAGE` |
 | `--heartbeat` | wraps the train command in a brace group that backgrounds `python scripts/gpu_heartbeat.py` preventing the cluster from killing your job due to low GPU usage |
-| `--args key=value ...` | passes nested config keys (underscores converted to dashes) as `--key value` on the torchrun line; e.g. `env.simulation_mode=replay` becomes `--env.simulation-mode replay` |
+| `--args key=value ...` | passes dotted config keys straight through as Hydra overrides on the torchrun line; e.g. `env.simulation_mode=replay` stays `env.simulation_mode=replay`. Colon-separated values sweep: `train.learning_rate=1e-4:3e-4` |
 | `--account` / `--partition` / `--time` | override `compute_config` SLURM settings |
 
 ### GPU heartbeat — required for long runs
