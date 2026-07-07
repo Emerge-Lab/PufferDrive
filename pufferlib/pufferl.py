@@ -41,6 +41,7 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.viz
+from pufferlib.config_schema import ENV_SCHEMAS
 
 
 try:
@@ -2118,10 +2119,19 @@ def load_config(env_name, config_dir=None):
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name=env_name, overrides=overrides)
 
+    # Structured-schema validation (types, enum names, unknown keys) for envs
+    # that declare one. Overrides are already composed in, so CLI typos fail
+    # here too — at load time, not deep in env construction.
+    env_schema = ENV_SCHEMAS.get(env_name)
+    if env_schema is not None:
+        cfg["env"] = OmegaConf.merge(OmegaConf.structured(env_schema), cfg["env"])
+
     # Plain nested dict — the contract every downstream consumer relies on.
     # Protein's sweep.suggest() writes arbitrary keys into it, so no
-    # struct-mode OmegaConf objects may leak past this point.
-    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True))
+    # struct-mode OmegaConf objects may leak past this point. enum_to_str
+    # converts validated enum members back to their names; throw_on_missing
+    # rejects schema keys the YAML no longer provides.
+    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, enum_to_str=True, throw_on_missing=True))
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
 
