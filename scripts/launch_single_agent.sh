@@ -30,8 +30,7 @@ DATE_STAMP="$(date +%Y-%m-%d)"
 
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 
-# Refresh the nightly trend runs (prior nights' finals) so the wandb report
-# stays current; non-fatal if wandb is unreachable.
+# Refresh the nightly trend runs
 python scripts/nightly_report.py update || echo "trend update failed (non-fatal)"
 
 # One submission per seed so we can pass a per-seed run_name (wandb display
