@@ -138,7 +138,7 @@
 // Observation feature counts
 #define EGO_FEATURES 10
 #define LANE_FEATURES 9
-#define BOUNDARY_FEATURES 9
+#define BOUNDARY_FEATURES 7
 #define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
@@ -4748,7 +4748,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
         segment_dest[feature_base + 5] = rel_seg_dir_x;
         segment_dest[feature_base + 6] = rel_seg_dir_y;
-        // Goal-distance columns: lanes only (boundaries have BOUNDARY_FEATURES stride, no room).
+        // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
             float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
             if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
@@ -4764,9 +4764,6 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             }
             segment_dest[feature_base + 7] = goal_dist_abs;
             segment_dest[feature_base + 8] = goal_dist_rel;
-        } else {
-            segment_dest[feature_base + 7] = 0.0f;
-            segment_dest[feature_base + 8] = 0.0f;
         }
     }
 
