@@ -23,10 +23,10 @@ env.dynamics_model: jerk
 env.target_type: static
 env.dt: 0.3
 
-# Goal setup — three sequential waypoints, route-based placement [20, 60m]
-env.num_target_waypoints: 3
-env.min_waypoint_spacing: 20.0
-env.max_waypoint_spacing: 60.0
+# Goal setup — three sequential goals, route-based placement [20, 60m]
+env.num_goals: 3
+env.min_goal_spacing: 20.0
+env.max_goal_spacing: 60.0
 env.goal_radius: 2.0
 env.goal_speed: 1000.0
 
