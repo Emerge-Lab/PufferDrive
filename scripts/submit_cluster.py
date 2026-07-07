@@ -237,7 +237,8 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     Top-level entries are symlinked (instant, avoids deep-copying data/),
     except ancestors of the snapshot itself.
 
-    Runs on the compute node via submitit, so imports stay local.
+    Runs on the login node at submission time, so the snapshot reflects the
+    code as it was when the job was submitted, not when it left the queue.
     """
     import os
     import shutil
@@ -336,8 +337,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         import subprocess
         import submitit
 
-        project_root = isolate_code(project_root, save_dir)
-
+        # project_root is the code snapshot taken by isolate_code at submission time.
         # Change to project directory and set up environment
         os.chdir(project_root)
         os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
@@ -454,7 +454,11 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         print(f">>> Container mode enabled: {container_config['image']}")
 
     if not dry:
-        job = executor.submit(launch_training, args, from_config, command, save_dir, project_root, container_config)
+        # Snapshot the code now so edits made while the job waits in the queue
+        # don't leak into the run.
+        isolated_root = isolate_code(project_root, save_dir)
+        print(f">>> Code snapshot: {isolated_root}")
+        job = executor.submit(launch_training, args, from_config, command, save_dir, isolated_root, container_config)
         print(f"Submitted job {job.job_id}: {job_name}")
         return job
     else:
