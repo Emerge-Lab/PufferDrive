@@ -172,12 +172,10 @@ submission, so the report stays current with no other scheduler. Trend runs
 are disposable — the next update recreates them from the real runs.
 
 ```bash
-# Refresh the report's data: rebuild the trend runs from the nightly runs'
-# finals (e.g. after tonight's runs finish; the launchers also run this)
+# Refresh the report's data: rebuild the trend runs from the nightly runs' finals
 python scripts/nightly_report.py update
 
-# Rewrite the report's layout in place (only needed to change the panel set;
-# existing panels pick up new data on their own)
+# Rewrite the report's layout in place. Needed if panels change.
 python scripts/nightly_report.py report
 
 # Mint a brand-new report instead of editing the existing one
