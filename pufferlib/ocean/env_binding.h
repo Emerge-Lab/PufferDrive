@@ -1408,6 +1408,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
     PyModule_AddIntConstant(m, "CONTROLLER_IDM", CONTROLLER_IDM);
+    PyModule_AddIntConstant(m, "IGNORE_INFRACTION", IGNORE_INFRACTION);
+    PyModule_AddIntConstant(m, "STOP_AGENT", STOP_AGENT);
+    PyModule_AddIntConstant(m, "REMOVE_AGENT", REMOVE_AGENT);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 

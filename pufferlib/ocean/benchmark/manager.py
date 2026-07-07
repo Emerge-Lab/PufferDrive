@@ -43,7 +43,7 @@ CLEAN_EVAL_OVERRIDES = {
     "partner_blindness_prob": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
-    "traffic_light_behavior": 1,
+    "traffic_light_behavior": "stop",
 }
 
 
