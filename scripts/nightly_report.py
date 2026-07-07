@@ -3,16 +3,20 @@
 The nightly launchers stamp every run's wandb group with the launch date.
 This tool folds those into a nightly regression view:
 
-  update (default)  Rebuild the per-seed trend runs in the nightly-trends
-                    project.
+  update (default)  Refresh the report's data: rebuild the per-seed trend
+                    runs in the nightly-trends project from the nightly
+                    runs' final metric values. The launchers run this at
+                    every submission; run it by hand to pull in a night
+                    that finished since.
 
-  report [--create] Create or rewrite the report. Layout, per nightly
-                    project: (1) trend line panels over the trend runs — x =
-                    the night on a real date axis, y = mean across seeds
-                    with stderr bands; (2) native bar charts of finals
-                    grouped by run group (the launch date); (3) per-night
-                    mean training curves. Panels are live queries, so new
-                    nights appear without edits.
+  report [--create] Rewrite the report's layout: which panels exist and how
+                    they aggregate, per nightly project — (1) trend line
+                    panels over the trend runs (x = the night, y = mean
+                    across seeds with stderr bands); (2) bar charts of
+                    finals grouped by night; (3) per-night mean training
+                    curves. Panels are live queries, so new data appears
+                    without rerunning this — only rerun it to change the
+                    panel set (e.g. after editing TREND_METRICS et al.).
 
     python scripts/nightly_report.py            # rebuild trend runs
     python scripts/nightly_report.py report     # rewrite the report in place
