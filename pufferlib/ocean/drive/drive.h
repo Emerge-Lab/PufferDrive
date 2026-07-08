@@ -71,7 +71,7 @@
 // Avoidability-by-braking: counterfactual "could the target have braked to avoid this
 // collision" analysis, evaluated over a rolling history of the target's own trajectory.
 #define TARGET_BRAKE_HISTORY_LEN 30               // 3.0s of history at dt=0.1
-#define TARGET_AVOIDABILITY_BRAKE_DECEL 4.5f      // m/s^2 braking magnitude
+#define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f      // m/s^2 braking magnitude (matches planner max braking)
 #define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no tested reaction time avoids the crash
 #define TARGET_AVOIDABILITY_UNSET (-2.0f)         // per-episode "not yet computed" sentinel
 #define TARGET_AVOIDABILITY_NUM_OFFSETS 6

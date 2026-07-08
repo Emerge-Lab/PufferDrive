@@ -13,7 +13,7 @@
 #define PDM_MAX_ROLLOUT_STEPS 81
 #define PDM_DANGER_TTC 2.0f
 #define PDM_DANGER_TTC_BUFFER 0.5f
-#define PDM_URGENT_DECEL 8.0f
+#define PDM_URGENT_DECEL 5.0f // harmonized max braking (see IDM_MAX_DECEL)
 #define PDM_SAFE_SPEED_TTC 5.0f
 #define PDM_COLLISION_PENALTY 48.0f
 #define PDM_SPEED_WEIGHT 3.0f

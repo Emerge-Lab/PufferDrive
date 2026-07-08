@@ -6,7 +6,9 @@
 #define IDM_SAFE_TIME_HEADWAY 2.0f
 #define NUM_ACCELERATION_VALUES ((int)(sizeof(ACCELERATION_VALUES) / sizeof(ACCELERATION_VALUES[0])))
 #define IDM_MAX_ACCEL ACCELERATION_VALUES[NUM_ACCELERATION_VALUES - 1]
-#define IDM_MAX_DECEL (-ACCELERATION_VALUES[0])
+// Max braking is harmonized to 5 m/s^2 across all planners (IDM variants, PDM, jerk policy)
+// so baselines share the same braking authority; decoupled from the discrete action table.
+#define IDM_MAX_DECEL 5.0f
 #define IDM_DELTA 4.0f
 #define IDM_LOOKAHEAD_TIME 5.0f
 #define IDM_MIN_LOOKAHEAD 20.0f
@@ -27,7 +29,7 @@
 #define NUPLAN_IDM_MIN_SPACING 1.0f
 #define NUPLAN_IDM_SAFE_TIME_HEADWAY 1.5f
 #define NUPLAN_IDM_MAX_ACCEL 1.0f
-#define NUPLAN_IDM_MAX_DECEL 3.0f
+#define NUPLAN_IDM_MAX_DECEL 5.0f // harmonized max braking (see IDM_MAX_DECEL)
 #define NUPLAN_IDM_LOOKAHEAD_TIME 5.0f
 #define NUPLAN_IDM_MIN_LOOKAHEAD 20.0f
 #define NUPLAN_IDM_MAX_LOOKAHEAD 40.0f
