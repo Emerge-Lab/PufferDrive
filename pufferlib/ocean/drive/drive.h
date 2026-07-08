@@ -129,6 +129,7 @@
 // GOAL_SOURCE modes
 #define GOAL_SOURCE_ROUTE 0               // seed from the agent's own forward route
 #define GOAL_SOURCE_MAP 1                 // seed from a uniformly sampled map lane
+#define GOAL_SOURCE_GT 2                  // seed directly from the logged ground-truth trajectory
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
@@ -3392,7 +3393,7 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     }
 
     // In REPLAY mode without route data, control agents spawning far enough from their goal
-    if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
+    if (env->goal_source == GOAL_SOURCE_GT && agent->route_length == 0) {
         float dx = agent->gt_goal_x - agent->log_trajectory_x[env->init_step];
         float dy = agent->gt_goal_y - agent->log_trajectory_y[env->init_step];
         float dz = agent->gt_goal_z - agent->log_trajectory_z[env->init_step];
@@ -3802,7 +3803,7 @@ void init(Drive *env) {
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
-    if (env->simulation_mode == SIMULATION_REPLAY) {
+    if (env->goal_source == GOAL_SOURCE_GT) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
@@ -4326,10 +4327,16 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
-    if (distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+    if (agent->current_goal_idx < env->num_goals && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
+        && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
+        if (agent->current_goal_idx < env->num_goals) {
+            agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
+            agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
+            agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+        }
     }
 
     float distance_to_goal_gt = compute_point_to_segment_distance(
@@ -5223,7 +5230,7 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        if (env->simulation_mode == SIMULATION_REPLAY) {
+        if (env->goal_source == GOAL_SOURCE_GT) {
             int start = env->init_step > 0 ? env->init_step : 0;
             int remaining = agent->trajectory_size - 1 - start;
             if (remaining < 1) {
@@ -5350,7 +5357,6 @@ void c_step(Drive *env) {
         for (int i = 0; i < env->active_agent_count; i++) {
             Agent *agent = &env->agents[env->active_agent_indices[i]];
             if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
-                // num_goals_reached already incremented in compute_metrics; just trigger the reset here.
                 early_reset = 1;
             }
         }
@@ -5373,6 +5379,12 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
+            continue;
+        }
+        if (env->goal_source == GOAL_SOURCE_GT) {
+            // Replay mode: leave current_goal_idx saturated so the
+            // reached-goal condition won't fire again. Re-generating
+            // route-based goals on WOMD maps fails (removed=1).
             continue;
         }
         // Rolling slides the window forward by one goal; finite advances the alias to the next goal in the set.

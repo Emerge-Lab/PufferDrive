@@ -121,6 +121,8 @@ static int handler(void *config, const char *section, const char *name, const ch
             env_config->goal_source = 0; // GOAL_SOURCE_ROUTE
         } else if (strcmp(value, "\"map\"") == 0 || strcmp(value, "map") == 0) {
             env_config->goal_source = 1; // GOAL_SOURCE_MAP
+        } else if (strcmp(value, "\"gt\"") == 0 || strcmp(value, "gt") == 0) {
+            env_config->goal_source = 2; // GOAL_SOURCE_GT
         } else {
             printf("Warning: Unknown goal_source value '%s', defaulting to route\n", value);
             env_config->goal_source = 0;
