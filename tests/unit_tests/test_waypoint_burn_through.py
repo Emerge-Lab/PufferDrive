@@ -58,6 +58,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         num_maps=1,
         map_dir=MAP_DIR,
         simulation_mode="replay",
+        goal_source="gt",
         control_mode="control_sdc_only",
         sdc_controller="replay",
         non_sdc_controller="replay",
