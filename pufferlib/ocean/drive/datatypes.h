@@ -97,7 +97,7 @@
 #define MAX_TARGET_WAYPOINTS 20
 
 // Rolling per-agent trajectory history length for avoidability-by-braking analysis
-#define TARGET_BRAKE_HISTORY_LEN 30 // 3.0s at dt=0.1
+#define TARGET_BRAKE_HISTORY_LEN 80 // 8.0s at dt=0.1
 
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position

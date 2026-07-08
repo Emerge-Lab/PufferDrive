@@ -3229,11 +3229,10 @@ static bool target_avoidability_is_avoidable(Agent *target, const Agent *adversa
     return true; // loop always exits via the stop condition before this; bound is a safety cap
 }
 
-// Minimum braking lead-time (seconds) that would have let the target avoid the collision with
+// Last braking lead-time (seconds) that would have let the target avoid the collision with
 // other_agent_idx, or TARGET_AVOIDABILITY_NOT_AVOIDABLE if no braking within the recorded
-// history avoids it. Linear scan from the latest feasible brake point (1 step) outward; the
-// first that avoids is the latest-possible braking, i.e. the minimum lead-time.
-static float compute_avoidability_by_braking(Drive *env, int target_agent_idx, int other_agent_idx) {
+// history avoids it. Linear scan from the latest feasible brake point (1 step) outward.
+static float last_avoidable_time_by_braking(Drive *env, int target_agent_idx, int other_agent_idx) {
     Agent *target = &env->agents[target_agent_idx];
     Agent *adversary = &env->agents[other_agent_idx];
     AdversaryBrakeTrajectory adv_ext;
@@ -5097,7 +5096,7 @@ static void compute_metrics(Drive *env, int agent_idx) {
             if (target_agent_idx >= 0 && other_idx >= 0 &&
                 env->target_avoidability_by_braking_episode == TARGET_AVOIDABILITY_UNSET) {
                 env->target_avoidability_by_braking_episode =
-                    compute_avoidability_by_braking(env, target_agent_idx, other_idx);
+                    last_avoidable_time_by_braking(env, target_agent_idx, other_idx);
             }
             if (target_agent_idx >= 0 && other_idx >= 0 && is_at_fault_collision(env, target_agent_idx, other_idx)) {
                 env->target_hit_at_fault_this_step = 1;
