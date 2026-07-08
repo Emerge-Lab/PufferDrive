@@ -144,8 +144,8 @@ class Drive(pufferlib.PufferEnv):
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
-        if num_goals > binding.MAX_GOALS:
-            num_goals = binding.MAX_GOALS
+        if not 1 <= num_goals <= binding.MAX_GOALS:
+            raise ValueError(f"num_goals must be in [1, {binding.MAX_GOALS}]. Got: {num_goals}")
         self.num_goals = num_goals
         if goal_regen_mode == "finite":
             self.goal_regen_mode = binding.GOAL_REGEN_FINITE

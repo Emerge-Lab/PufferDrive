@@ -20,10 +20,12 @@ env.resample_frequency: 128000
 env.termination_mode: 1
 env.inactive_agent_threshold: 0.4
 env.dynamics_model: jerk
-env.target_type: static
 env.dt: 0.3
 
 # Goal setup — three sequential goals, route-based placement [20, 60m]
+env.goal_regen_mode: finite
+env.goal_source: route
+env.obs_goal_lane_distance: False
 env.num_goals: 3
 env.min_goal_spacing: 20.0
 env.max_goal_spacing: 60.0

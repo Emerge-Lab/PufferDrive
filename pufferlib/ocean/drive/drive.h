@@ -2759,10 +2759,8 @@ static void add_log(Drive *env) {
         env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
-        // Score: 1 per agent that reached all 3 goals without
-        // being removed/stopped. Was hardcoded to >=4, unreachable given
-        // num_goals=3 in the ini, so score was always 0.
-        if (num_goals_reached >= 3 && !agent->removed && !agent->stopped) {
+        // Score: 1 per agent that reached its full goal set without being removed/stopped.
+        if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
             env->log.score += 1.0f;
         }
         if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
@@ -2883,7 +2881,7 @@ static void add_log(Drive *env) {
             s->offroad_rate += offroad;
             s->red_light_violation_rate += red_light;
             s->num_goals_reached += num_goals;
-            if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped) {
+            if (num_goals >= env->num_goals && !agent_i->removed && !agent_i->stopped) {
                 s->score += 1.0f;
             }
             // Mirror the aggregate Log DNF predicate (see drive.h:2577):
@@ -3282,7 +3280,9 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     }
 
     // Compute initial goal
-    generate_new_goals_from_route(env, agent);
+    if (!generate_new_goals_from_route(env, agent)) {
+        return false;
+    }
 
     return true;
 }

@@ -1821,6 +1821,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
     env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
     env->num_goals = (int) unpack(kwargs, "num_goals");
+    if (env->num_goals < 1 || env->num_goals > MAX_GOALS) {
+        PyErr_Format(PyExc_ValueError, "num_goals must be in [1, %d]. Got: %d", MAX_GOALS, env->num_goals);
+        return -1;
+    }
     env->goal_regen_mode = (int) unpack(kwargs, "goal_regen_mode");
     env->goal_source = (int) unpack(kwargs, "goal_source");
     env->obs_goal_lane_distance = (int) unpack(kwargs, "obs_goal_lane_distance");
