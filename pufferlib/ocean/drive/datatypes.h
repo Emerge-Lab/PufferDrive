@@ -96,6 +96,9 @@
 #define MAX_NUM_WP_PATH 200
 #define MAX_TARGET_WAYPOINTS 20
 
+// Rolling per-agent trajectory history length for avoidability-by-braking analysis
+#define TARGET_BRAKE_HISTORY_LEN 30 // 3.0s at dt=0.1
+
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position
     float x;           // Global x-coordinate
@@ -262,6 +265,15 @@ struct Agent {
     int phantom_braking_counter;     // >0 means currently phantom braking
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
+
+    // Rolling trajectory history (last TARGET_BRAKE_HISTORY_LEN pre-step states) for
+    // avoidability-by-braking analysis. Index LEN-1 is one step ago; index 0 is oldest.
+    int brake_hist_count; // ramps 0..TARGET_BRAKE_HISTORY_LEN
+    float brake_hist_x[TARGET_BRAKE_HISTORY_LEN];
+    float brake_hist_y[TARGET_BRAKE_HISTORY_LEN];
+    float brake_hist_z[TARGET_BRAKE_HISTORY_LEN];
+    float brake_hist_heading[TARGET_BRAKE_HISTORY_LEN];
+    float brake_hist_speed_signed[TARGET_BRAKE_HISTORY_LEN];
 };
 
 struct RoadMapElement {

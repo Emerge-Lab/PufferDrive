@@ -69,8 +69,8 @@
 #define COMFORT_JERK_THRESHOLD 5.0f                            // m/s^3
 
 // Avoidability-by-braking: counterfactual "could the target have braked to avoid this
-// collision" analysis, evaluated over a rolling history of the target's own trajectory.
-#define TARGET_BRAKE_HISTORY_LEN 30               // 3.0s of history at dt=0.1
+// collision" analysis, evaluated over the per-agent rolling trajectory history
+// (brake_hist_*, see Agent in datatypes.h; TARGET_BRAKE_HISTORY_LEN there).
 #define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f      // m/s^2 braking magnitude (matches planner max braking)
 #define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no tested reaction time avoids the crash
 #define TARGET_AVOIDABILITY_UNSET (-2.0f)         // per-episode "not yet computed" sentinel
@@ -462,12 +462,6 @@ struct Drive {
     float target_collision_other_active_episode;
     float target_collision_other_stopped_episode;
     float target_collision_other_removed_episode;
-    int target_brake_hist_count; // ramps 0..TARGET_BRAKE_HISTORY_LEN
-    float target_brake_hist_x[TARGET_BRAKE_HISTORY_LEN];
-    float target_brake_hist_y[TARGET_BRAKE_HISTORY_LEN];
-    float target_brake_hist_z[TARGET_BRAKE_HISTORY_LEN];
-    float target_brake_hist_heading[TARGET_BRAKE_HISTORY_LEN];
-    float target_brake_hist_speed_signed[TARGET_BRAKE_HISTORY_LEN];
     float target_avoidability_by_braking_episode;
     char *map_name;
     float world_mean_x;
@@ -943,35 +937,31 @@ static inline void snapshot_previous_pose(Agent *agent) {
     agent->prev_sim_heading = agent->sim_heading;
 }
 
-// Pushes the target's current (pre-step) state into its rolling brake-history buffer.
+// Pushes an agent's current (pre-step) state into its rolling brake-history buffer.
 // Buffer index TARGET_BRAKE_HISTORY_LEN-1 holds the state one step ago; index 0 holds the
 // state TARGET_BRAKE_HISTORY_LEN steps ago. "Now" (this step's post-move state) is read
 // directly off the live Agent by the avoidability-by-braking analysis, not stored here.
-static void push_target_brake_history(Drive *env) {
-    if (env->active_agent_count <= 0) {
-        return;
-    }
-    Agent *target = &env->agents[env->active_agent_indices[0]];
-    if (target->removed || target->sim_x == INVALID_POSITION) {
+static void push_brake_history(Agent *agent) {
+    if (agent->removed || agent->sim_x == INVALID_POSITION) {
         return;
     }
 
     for (int k = 0; k < TARGET_BRAKE_HISTORY_LEN - 1; k++) {
-        env->target_brake_hist_x[k] = env->target_brake_hist_x[k + 1];
-        env->target_brake_hist_y[k] = env->target_brake_hist_y[k + 1];
-        env->target_brake_hist_z[k] = env->target_brake_hist_z[k + 1];
-        env->target_brake_hist_heading[k] = env->target_brake_hist_heading[k + 1];
-        env->target_brake_hist_speed_signed[k] = env->target_brake_hist_speed_signed[k + 1];
+        agent->brake_hist_x[k] = agent->brake_hist_x[k + 1];
+        agent->brake_hist_y[k] = agent->brake_hist_y[k + 1];
+        agent->brake_hist_z[k] = agent->brake_hist_z[k + 1];
+        agent->brake_hist_heading[k] = agent->brake_hist_heading[k + 1];
+        agent->brake_hist_speed_signed[k] = agent->brake_hist_speed_signed[k + 1];
     }
 
     int last = TARGET_BRAKE_HISTORY_LEN - 1;
-    env->target_brake_hist_x[last] = target->sim_x;
-    env->target_brake_hist_y[last] = target->sim_y;
-    env->target_brake_hist_z[last] = target->sim_z;
-    env->target_brake_hist_heading[last] = target->sim_heading;
-    env->target_brake_hist_speed_signed[last] = target->sim_speed_signed;
-    if (env->target_brake_hist_count < TARGET_BRAKE_HISTORY_LEN) {
-        env->target_brake_hist_count++;
+    agent->brake_hist_x[last] = agent->sim_x;
+    agent->brake_hist_y[last] = agent->sim_y;
+    agent->brake_hist_z[last] = agent->sim_z;
+    agent->brake_hist_heading[last] = agent->sim_heading;
+    agent->brake_hist_speed_signed[last] = agent->sim_speed_signed;
+    if (agent->brake_hist_count < TARGET_BRAKE_HISTORY_LEN) {
+        agent->brake_hist_count++;
     }
 }
 
@@ -3111,16 +3101,16 @@ static int collision_check(Drive *env, int agent_idx, float *collision_normal_x,
 // parallel to the local path direction. Clamps to the path's end if `s` exceeds its length.
 // Invariant: the caller passes idx_start in [0, LEN-1], so num_points >= 2 and the final
 // segment (k == num_points - 2) always resolves the sample; the loop cannot fall through.
-static void target_brake_path_sample(Drive *env, Agent *target, int idx_start, float s, float *out_x, float *out_y,
-                                     float *out_z, float *out_heading) {
+static void target_brake_path_sample(Agent *target, int idx_start, float s, float *out_x, float *out_y, float *out_z,
+                                     float *out_heading) {
     float px[TARGET_BRAKE_HISTORY_LEN + 1];
     float py[TARGET_BRAKE_HISTORY_LEN + 1];
     float pz[TARGET_BRAKE_HISTORY_LEN + 1];
     int num_points = 0;
     for (int k = idx_start; k < TARGET_BRAKE_HISTORY_LEN; k++) {
-        px[num_points] = env->target_brake_hist_x[k];
-        py[num_points] = env->target_brake_hist_y[k];
-        pz[num_points] = env->target_brake_hist_z[k];
+        px[num_points] = target->brake_hist_x[k];
+        py[num_points] = target->brake_hist_y[k];
+        pz[num_points] = target->brake_hist_z[k];
         num_points++;
     }
     px[num_points] = target->sim_x;
@@ -3152,15 +3142,15 @@ static void target_brake_path_sample(Drive *env, Agent *target, int idx_start, f
 // Returns -1 if not enough recorded history exists to test this offset, 0 if the target
 // still collides, 1 if braking avoids the collision (including trivially, by stopping).
 static int target_avoidability_test_offset(Drive *env, int target_agent_idx, int other_agent_idx, float offset_s) {
+    Agent *target = &env->agents[target_agent_idx];
     int steps_back = (int)roundf(offset_s / env->dt);
-    if (steps_back <= 0 || steps_back > env->target_brake_hist_count) {
+    if (steps_back <= 0 || steps_back > target->brake_hist_count) {
         return -1;
     }
 
     int idx_start = TARGET_BRAKE_HISTORY_LEN - steps_back;
-    Agent *target = &env->agents[target_agent_idx];
     Agent *other = &env->agents[other_agent_idx];
-    float v0 = fmaxf(0.0f, env->target_brake_hist_speed_signed[idx_start]);
+    float v0 = fmaxf(0.0f, target->brake_hist_speed_signed[idx_start]);
     if (v0 <= 0.0f) {
         return 1; // already stationary at brake-start
     }
@@ -3172,7 +3162,7 @@ static int target_avoidability_test_offset(Drive *env, int target_agent_idx, int
 
     float s_traveled = v0 * offset_s - 0.5f * TARGET_AVOIDABILITY_BRAKE_DECEL * offset_s * offset_s;
     float braked_x, braked_y, braked_z, braked_heading;
-    target_brake_path_sample(env, target, idx_start, s_traveled, &braked_x, &braked_y, &braked_z, &braked_heading);
+    target_brake_path_sample(target, idx_start, s_traveled, &braked_x, &braked_y, &braked_z, &braked_heading);
 
     Agent sample = *target;
     sample.sim_x = braked_x;
@@ -6173,7 +6163,9 @@ void c_reset(Drive *env) {
     env->target_collision_other_active_episode = 0.0f;
     env->target_collision_other_stopped_episode = 0.0f;
     env->target_collision_other_removed_episode = 0.0f;
-    env->target_brake_hist_count = 0;
+    for (int i = 0; i < env->num_agents; i++) {
+        env->agents[i].brake_hist_count = 0;
+    }
     env->target_avoidability_by_braking_episode = TARGET_AVOIDABILITY_UNSET;
 
     // Replay envs should expose the constructor-time initial state on the first reset.
@@ -6276,8 +6268,8 @@ void c_step(Drive *env) {
 
     for (int i = 0; i < env->num_agents; i++) {
         snapshot_previous_pose(&env->agents[i]);
+        push_brake_history(&env->agents[i]);
     }
-    push_target_brake_history(env);
 
     env->timestep++;
 
