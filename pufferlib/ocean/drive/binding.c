@@ -2045,6 +2045,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_other_active", log->target_collision_other_active);
     assign_to_dict(dict, "target_collision_other_stopped", log->target_collision_other_stopped);
     assign_to_dict(dict, "target_collision_other_removed", log->target_collision_other_removed);
+    assign_to_dict(dict, "target_avoidability_by_braking", log->target_avoidability_by_braking);
     assign_to_dict(dict, "adversaries_collision_severity", log->adversaries_collision_severity);
     assign_to_dict(dict, "adversaries_collision_responsibility", log->adversaries_collision_responsibility);
     assign_to_dict(dict, "adversaries_collision_impact_zone", log->adversaries_collision_impact_zone);
