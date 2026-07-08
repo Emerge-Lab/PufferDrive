@@ -141,8 +141,9 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_offroad=0.5,
         adv_reward_weight_traffic_light=0.5,
         adv_reward_weight_drive=0.5,
-        adv_target_offroad_reward=0.5,
+        adv_target_offroad_reward=0.0,
         adv_target_collision_reward=0.5,
+        adv_target_collision_reward_use_responsibility=True,
         adv_target_failure_reward=0.0,
         adv_target_avoidability_reward=0.0,
         adv_target_detection_reward=0.0,
@@ -264,6 +265,7 @@ class Drive(pufferlib.PufferEnv):
         self.adv_reward_weight_drive = adv_reward_weight_drive
         self.adv_target_offroad_reward = float(adv_target_offroad_reward)
         self.adv_target_collision_reward = float(adv_target_collision_reward)
+        self.adv_target_collision_reward_use_responsibility = bool(adv_target_collision_reward_use_responsibility)
         self.adv_target_failure_reward = float(adv_target_failure_reward)
         self.adv_target_avoidability_reward = float(adv_target_avoidability_reward)
         self.adv_target_detection_reward = float(adv_target_detection_reward)
@@ -879,6 +881,7 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_drive": self.adv_reward_weight_drive,
             "adv_target_offroad_reward": self.adv_target_offroad_reward,
             "adv_target_collision_reward": self.adv_target_collision_reward,
+            "adv_target_collision_reward_use_responsibility": self.adv_target_collision_reward_use_responsibility,
             "adv_target_failure_reward": self.adv_target_failure_reward,
             "adv_target_avoidability_reward": self.adv_target_avoidability_reward,
             "adv_target_detection_reward": self.adv_target_detection_reward,

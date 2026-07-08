@@ -461,6 +461,7 @@ struct Drive {
     float adv_reward_weight_drive;
     float adv_target_offroad_reward;
     float adv_target_collision_reward;
+    int adv_target_collision_reward_use_responsibility;
     float adv_target_failure_reward;
     float adv_target_avoidability_reward;
     float adv_target_detection_reward;
@@ -6392,7 +6393,11 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus - env->adv_target_hit_low_responsibility_penalty;
     }
 
-    bonus += responsibility * env->adv_target_collision_reward;
+    float collision_reward = env->adv_target_collision_reward;
+    if (env->adv_target_collision_reward_use_responsibility) {
+        collision_reward *= responsibility;
+    }
+    bonus += collision_reward;
     if (env->target_avoidability_by_braking_episode > 0.0f && env->target_first_time_detected_episode > 0.0f &&
         env->target_first_time_detected_episode >= env->target_avoidability_by_braking_episode) {
         bonus += env->adv_target_failure_reward;
