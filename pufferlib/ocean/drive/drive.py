@@ -143,6 +143,10 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_drive=0.5,
         adv_target_offroad_reward=0.5,
         adv_target_collision_reward=0.5,
+        adv_target_failure_reward=0.0,
+        adv_target_avoidability_reward=0.0,
+        adv_target_detection_reward=0.0,
+        adv_target_time_reward_tau=2.0,
         adv_target_hit_at_fault_bonus=0.0,
         adv_target_hit_low_responsibility_threshold=-1.0,
         adv_target_hit_low_responsibility_penalty=0.0,
@@ -260,6 +264,12 @@ class Drive(pufferlib.PufferEnv):
         self.adv_reward_weight_drive = adv_reward_weight_drive
         self.adv_target_offroad_reward = float(adv_target_offroad_reward)
         self.adv_target_collision_reward = float(adv_target_collision_reward)
+        self.adv_target_failure_reward = float(adv_target_failure_reward)
+        self.adv_target_avoidability_reward = float(adv_target_avoidability_reward)
+        self.adv_target_detection_reward = float(adv_target_detection_reward)
+        self.adv_target_time_reward_tau = float(adv_target_time_reward_tau)
+        if self.adv_target_time_reward_tau <= 0.0:
+            raise ValueError("adv_target_time_reward_tau must be > 0")
         self.adv_target_hit_at_fault_bonus = float(adv_target_hit_at_fault_bonus)
         self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
         self.adv_target_hit_low_responsibility_penalty = float(adv_target_hit_low_responsibility_penalty)
@@ -869,6 +879,10 @@ class Drive(pufferlib.PufferEnv):
             "adv_reward_weight_drive": self.adv_reward_weight_drive,
             "adv_target_offroad_reward": self.adv_target_offroad_reward,
             "adv_target_collision_reward": self.adv_target_collision_reward,
+            "adv_target_failure_reward": self.adv_target_failure_reward,
+            "adv_target_avoidability_reward": self.adv_target_avoidability_reward,
+            "adv_target_detection_reward": self.adv_target_detection_reward,
+            "adv_target_time_reward_tau": self.adv_target_time_reward_tau,
             "adv_target_hit_at_fault_bonus": self.adv_target_hit_at_fault_bonus,
             "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
             "adv_target_hit_low_responsibility_penalty": self.adv_target_hit_low_responsibility_penalty,

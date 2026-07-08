@@ -24,6 +24,10 @@ typedef struct {
     float reward_center_bias;
     float reward_timestep;
     float reward_reverse;
+    float adv_target_failure_reward;
+    float adv_target_avoidability_reward;
+    float adv_target_detection_reward;
+    float adv_target_time_reward_tau;
     float goal_radius;
     float spawn_initial_speed;
     float goal_speed;
@@ -125,6 +129,14 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->reward_timestep = atof(value);
     } else if (MATCH("env", "reward_reverse")) {
         env_config->reward_reverse = atof(value);
+    } else if (MATCH("env", "adv_target_failure_reward")) {
+        env_config->adv_target_failure_reward = atof(value);
+    } else if (MATCH("env", "adv_target_avoidability_reward")) {
+        env_config->adv_target_avoidability_reward = atof(value);
+    } else if (MATCH("env", "adv_target_detection_reward")) {
+        env_config->adv_target_detection_reward = atof(value);
+    } else if (MATCH("env", "adv_target_time_reward_tau")) {
+        env_config->adv_target_time_reward_tau = atof(value);
     } else if (MATCH("env", "goal_radius")) {
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "spawn_initial_speed")) {

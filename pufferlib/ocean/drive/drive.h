@@ -461,6 +461,10 @@ struct Drive {
     float adv_reward_weight_drive;
     float adv_target_offroad_reward;
     float adv_target_collision_reward;
+    float adv_target_failure_reward;
+    float adv_target_avoidability_reward;
+    float adv_target_detection_reward;
+    float adv_target_time_reward_tau;
     float adv_target_hit_at_fault_bonus;
     float adv_target_hit_low_responsibility_threshold;
     float adv_target_hit_low_responsibility_penalty;
@@ -6389,6 +6393,20 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
     }
 
     bonus += responsibility * env->adv_target_collision_reward;
+    if (env->target_avoidability_by_braking_episode > 0.0f && env->target_first_time_detected_episode > 0.0f &&
+        env->target_first_time_detected_episode >= env->target_avoidability_by_braking_episode) {
+        bonus += env->adv_target_failure_reward;
+    }
+    if (env->adv_target_avoidability_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
+        env->target_avoidability_by_braking_episode > 0.0f) {
+        bonus += env->adv_target_avoidability_reward *
+                 expf(-env->target_avoidability_by_braking_episode / env->adv_target_time_reward_tau);
+    }
+    if (env->adv_target_detection_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
+        env->target_first_time_detected_episode > 0.0f) {
+        bonus += env->adv_target_detection_reward *
+                 (1.0f - expf(-env->target_first_time_detected_episode / env->adv_target_time_reward_tau));
+    }
     if (env->target_hit_at_fault_this_step) {
         bonus += env->adv_target_hit_at_fault_bonus;
     }
