@@ -71,12 +71,12 @@
 // Avoidability-by-braking: counterfactual "could the target have braked to avoid this
 // collision" analysis, evaluated over the per-agent rolling trajectory history
 // (brake_hist_*, see Agent in datatypes.h; TARGET_BRAKE_HISTORY_LEN there).
-#define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f      // m/s^2 braking magnitude (matches planner max braking)
-#define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no tested reaction time avoids the crash
+#define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f // m/s^2 braking magnitude (matches planner max braking)
+// Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
+// (index 0 is the current pose). Bounds the fixed-size adversary extension array.
+#define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
+#define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no braking within history avoids the crash
 #define TARGET_AVOIDABILITY_UNSET (-2.0f)         // per-episode "not yet computed" sentinel
-#define TARGET_AVOIDABILITY_NUM_OFFSETS 6
-static const float TARGET_AVOIDABILITY_OFFSETS_S[TARGET_AVOIDABILITY_NUM_OFFSETS] = {3.0f, 2.5f, 2.0f,
-                                                                                     1.5f, 1.0f, 0.5f};
 
 // nuPlan-style collision classification
 #define COLLISION_TYPE_NONE 0
@@ -3096,11 +3096,43 @@ static int collision_check(Drive *env, int agent_idx, float *collision_normal_x,
     return car_collided_with_index;
 }
 
-// Samples the target's recorded brake-history path (buffer[idx_start..LEN-1], then the
-// live target position) at arc-length `s` from idx_start, returning position + a heading
-// parallel to the local path direction. Clamps to the path's end if `s` exceeds its length.
-// Invariant: the caller passes idx_start in [0, LEN-1], so num_points >= 2 and the final
-// segment (k == num_points - 2) always resolves the sample; the loop cannot fall through.
+// Adversary's future path under max braking + constant heading, from the collision moment
+// (index 0 = current pose) until it stops. Only x/y vary; heading, z and dimensions stay at
+// the adversary's current values, so callers rebuild a pose via `Agent sample = *adversary;
+// sample.sim_x = ext.x[j]; sample.sim_y = ext.y[j];`.
+typedef struct {
+    int num_steps; // valid poses in [0, num_steps); >= 1
+    float x[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+    float y[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+} AdversaryBrakeTrajectory;
+
+// Fills `out` with the adversary braking to a stop at TARGET_AVOIDABILITY_BRAKE_DECEL along
+// its current heading. Reverse motion (sim_speed_signed < 0) keeps moving backward along the
+// heading while |speed| decays to 0. The signed distance is clamped at the stop time so the
+// pose holds still afterward (the braking parabola would otherwise reverse past its peak).
+static inline void build_adversary_brake_trajectory(const Agent *adversary, float dt, AdversaryBrakeTrajectory *out) {
+    float v0 = adversary->sim_speed_signed;
+    float decel = TARGET_AVOIDABILITY_BRAKE_DECEL;
+    float stop_time = fabsf(v0) / decel; // seconds until |speed| reaches 0
+
+    out->num_steps = 0;
+    for (int j = 0; j < TARGET_AVOIDABILITY_MAX_EXT_STEPS; j++) {
+        float t = fminf(j * dt, stop_time);
+        float d = v0 * t - copysignf(0.5f * decel * t * t, v0);
+        out->x[j] = adversary->sim_x + d * adversary->cos_heading;
+        out->y[j] = adversary->sim_y + d * adversary->sin_heading;
+        out->num_steps++;
+        if (j * dt >= stop_time) {
+            break; // fully stopped; further steps would just repeat this pose
+        }
+    }
+}
+
+// Samples the target's braking path at arc-length `s`: the recorded rail
+// (brake_hist[idx_start..LEN-1] then the live pose), and once `s` exceeds the rail length, a
+// straight continuation from the rail end along the end heading. Heading is the local path
+// direction (equivalently the box orientation, invariant to the 180-deg flip of a reversing
+// car). Invariant: the caller passes idx_start in [0, LEN-1], so num_points >= 2.
 static void target_brake_path_sample(Agent *target, int idx_start, float s, float *out_x, float *out_y, float *out_z,
                                      float *out_heading) {
     float px[TARGET_BRAKE_HISTORY_LEN + 1];
@@ -3124,7 +3156,7 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
         float dy = py[k + 1] - py[k];
         float dz = pz[k + 1] - pz[k];
         float seg_len = sqrtf(dx * dx + dy * dy);
-        if (traveled + seg_len >= s || k == num_points - 2) {
+        if (traveled + seg_len >= s) {
             float t = seg_len > 1e-6f ? clip((s - traveled) / seg_len, 0.0f, 1.0f) : 0.0f;
             *out_x = px[k] + t * dx;
             *out_y = py[k] + t * dy;
@@ -3134,61 +3166,85 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
         }
         traveled += seg_len;
     }
+
+    // `s` exceeds the rail: continue straight from the rail end along the last-segment heading.
+    int last = num_points - 1;
+    float dx = px[last] - px[last - 1];
+    float dy = py[last] - py[last - 1];
+    float seg_len = sqrtf(dx * dx + dy * dy);
+    float heading = seg_len > 1e-6f ? atan2f(dy, dx) : target->sim_heading;
+    float overshoot = s - traveled; // distance past the rail end (>= 0)
+    *out_x = px[last] + overshoot * cosf(heading);
+    *out_y = py[last] + overshoot * sinf(heading);
+    *out_z = pz[last];
+    *out_heading = heading;
 }
 
-// Tests whether braking at TARGET_AVOIDABILITY_BRAKE_DECEL starting `offset_s` seconds
-// before the collision would have kept the target clear of `other_agent_idx`, whose
-// current (live) state stands in for "the adversary replaying its actual trajectory".
-// Returns -1 if not enough recorded history exists to test this offset, 0 if the target
-// still collides, 1 if braking avoids the collision (including trivially, by stopping).
-static int target_avoidability_test_offset(Drive *env, int target_agent_idx, int other_agent_idx, float offset_s) {
-    Agent *target = &env->agents[target_agent_idx];
-    int steps_back = (int)roundf(offset_s / env->dt);
-    if (steps_back <= 0 || steps_back > target->brake_hist_count) {
-        return -1;
-    }
-
+// True if the target, braking (TARGET_AVOIDABILITY_BRAKE_DECEL) along its rail then straight
+// from `steps_back` steps before the collision, avoids overlapping the adversary's extended
+// trajectory. Collisions are checked per timestep from the collision moment until the target
+// stops; a target that stops at or before the collision moment counts as avoided (the
+// adversary is not then checked against the stationary target).
+static bool target_avoidability_is_avoidable(Agent *target, const Agent *adversary,
+                                             const AdversaryBrakeTrajectory *adv_ext, float dt, int steps_back) {
     int idx_start = TARGET_BRAKE_HISTORY_LEN - steps_back;
-    Agent *other = &env->agents[other_agent_idx];
-    float v0 = fmaxf(0.0f, target->brake_hist_speed_signed[idx_start]);
+    float v0 = fabsf(target->brake_hist_speed_signed[idx_start]);
     if (v0 <= 0.0f) {
-        return 1; // already stationary at brake-start
+        return true; // already stationary at brake-start
     }
 
-    float v_final = v0 - TARGET_AVOIDABILITY_BRAKE_DECEL * offset_s;
-    if (v_final <= 0.0f) {
-        return 1; // reached zero speed before the collision instant
+    float decel = TARGET_AVOIDABILITY_BRAKE_DECEL;
+    float stop_time = v0 / decel;
+    if (steps_back * dt >= stop_time) {
+        return true; // target stops at or before the collision moment
     }
-
-    float s_traveled = v0 * offset_s - 0.5f * TARGET_AVOIDABILITY_BRAKE_DECEL * offset_s * offset_s;
-    float braked_x, braked_y, braked_z, braked_heading;
-    target_brake_path_sample(target, idx_start, s_traveled, &braked_x, &braked_y, &braked_z, &braked_heading);
 
     Agent sample = *target;
-    sample.sim_x = braked_x;
-    sample.sim_y = braked_y;
-    sample.sim_z = braked_z;
-    sample.sim_heading = normalize_heading(braked_heading);
-    sample.cos_heading = cosf(sample.sim_heading);
-    sample.sin_heading = sinf(sample.sim_heading);
+    Agent adv_sample = *adversary; // heading/z/dims constant; only x/y vary per step
+    for (int j = 0; j < TARGET_AVOIDABILITY_MAX_EXT_STEPS; j++) {
+        float tau = steps_back * dt + j * dt; // total braking time at this step
+        if (tau >= stop_time) {
+            return true; // target has stopped without hitting the adversary
+        }
 
-    bool still_collides = check_z_collision_possibility(&sample, other) && check_obb_collision(&sample, other);
-    return still_collides ? 0 : 1;
-}
+        float s = v0 * tau - 0.5f * decel * tau * tau;
+        float sx, sy, sz, sheading;
+        target_brake_path_sample(target, idx_start, s, &sx, &sy, &sz, &sheading);
+        sample.sim_x = sx;
+        sample.sim_y = sy;
+        sample.sim_z = sz;
+        sample.sim_heading = normalize_heading(sheading);
+        sample.cos_heading = cosf(sample.sim_heading);
+        sample.sin_heading = sinf(sample.sim_heading);
 
-// Minimum braking reaction time (one of TARGET_AVOIDABILITY_OFFSETS_S) that would have
-// avoided the target's collision with other_agent_idx, or TARGET_AVOIDABILITY_NOT_AVOIDABLE
-// if none of the tested reaction times avoid it.
-static float compute_avoidability_by_braking(Drive *env, int target_agent_idx, int other_agent_idx) {
-    float best = TARGET_AVOIDABILITY_NOT_AVOIDABLE;
-    for (int k = 0; k < TARGET_AVOIDABILITY_NUM_OFFSETS; k++) {
-        float offset_s = TARGET_AVOIDABILITY_OFFSETS_S[k];
-        int result = target_avoidability_test_offset(env, target_agent_idx, other_agent_idx, offset_s);
-        if (result == 1 && (best < 0.0f || offset_s < best)) {
-            best = offset_s;
+        int adv_idx = j < adv_ext->num_steps ? j : adv_ext->num_steps - 1; // stopped adversary stays put
+        adv_sample.sim_x = adv_ext->x[adv_idx];
+        adv_sample.sim_y = adv_ext->y[adv_idx];
+
+        if (check_z_collision_possibility(&sample, &adv_sample) && check_obb_collision(&sample, &adv_sample)) {
+            return false;
         }
     }
-    return best;
+
+    return true; // loop always exits via the stop condition before this; bound is a safety cap
+}
+
+// Minimum braking lead-time (seconds) that would have let the target avoid the collision with
+// other_agent_idx, or TARGET_AVOIDABILITY_NOT_AVOIDABLE if no braking within the recorded
+// history avoids it. Linear scan from the latest feasible brake point (1 step) outward; the
+// first that avoids is the latest-possible braking, i.e. the minimum lead-time.
+static float compute_avoidability_by_braking(Drive *env, int target_agent_idx, int other_agent_idx) {
+    Agent *target = &env->agents[target_agent_idx];
+    Agent *adversary = &env->agents[other_agent_idx];
+    AdversaryBrakeTrajectory adv_ext;
+    build_adversary_brake_trajectory(adversary, env->dt, &adv_ext);
+
+    for (int steps_back = 1; steps_back <= target->brake_hist_count; steps_back++) {
+        if (target_avoidability_is_avoidable(target, adversary, &adv_ext, env->dt, steps_back)) {
+            return steps_back * env->dt;
+        }
+    }
+    return TARGET_AVOIDABILITY_NOT_AVOIDABLE;
 }
 
 static bool is_adversarial_agent(Drive *env, int agent_idx) {
