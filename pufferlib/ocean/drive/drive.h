@@ -70,13 +70,21 @@
 
 // Avoidability-by-braking: counterfactual "could the target have braked to avoid this
 // collision" analysis, evaluated over the per-agent rolling trajectory history
-// (brake_hist_*, see Agent in datatypes.h; TARGET_BRAKE_HISTORY_LEN there).
+// (trajectory_hist_*, see Agent in datatypes.h; TARGET_TRAJECTORY_HISTORY_LEN there).
 #define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f // m/s^2 braking magnitude (matches planner max braking)
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
 #define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no braking within history avoids the crash
 #define TARGET_AVOIDABILITY_UNSET (-2.0f)         // per-episode "not yet computed" sentinel
+#define FIRST_DETECTED_NOT_DETECTED (-1.0f)
+#define FIRST_DETECTED_TTC_MARGIN_SECONDS 0.1f
+// Covers the largest TTC danger threshold at dt=0.1:
+// MAX_SPEED / TARGET_AVOIDABILITY_BRAKE_DECEL + margin = 40 / 5 + 0.1 = 8.1s.
+#define FIRST_DETECTED_TTC_MAX_STEPS 82
+#define FIRST_DETECTED_LAT_RSS_BASE_METERS 0.5f
+#define FIRST_DETECTED_LAT_RSS_ACCEL_MPS2 1.6f
+#define FIRST_DETECTED_LAT_RSS_MAX_METERS 2.0f
 
 // nuPlan-style collision classification
 #define COLLISION_TYPE_NONE 0
@@ -254,6 +262,9 @@ struct Log {
     float target_collision_other_stopped;
     float target_collision_other_removed;
     float target_avoidability_by_braking;
+    float target_first_time_detected_ttc;
+    float target_first_time_detected_lat_rss;
+    float target_first_time_detected;
     float adversaries_collision_count;
     float adversaries_collision_severity;
     float adversaries_collision_responsibility;
@@ -463,6 +474,9 @@ struct Drive {
     float target_collision_other_stopped_episode;
     float target_collision_other_removed_episode;
     float target_avoidability_by_braking_episode;
+    float target_first_time_detected_ttc_episode;
+    float target_first_time_detected_lat_rss_episode;
+    float target_first_time_detected_episode;
     char *map_name;
     float world_mean_x;
     float world_mean_y;
@@ -647,6 +661,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_other_stopped = log->target_collision_other_stopped;
     float target_collision_other_removed = log->target_collision_other_removed;
     float target_avoidability_by_braking = log->target_avoidability_by_braking;
+    float target_first_time_detected_ttc = log->target_first_time_detected_ttc;
+    float target_first_time_detected_lat_rss = log->target_first_time_detected_lat_rss;
+    float target_first_time_detected = log->target_first_time_detected;
     float adversaries_collision_count = log->adversaries_collision_count;
     float adversaries_collision_severity = log->adversaries_collision_severity;
     float adversaries_collision_responsibility = log->adversaries_collision_responsibility;
@@ -702,6 +719,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
         log->target_collision_other_removed = target_collision_other_removed / target_collision_count;
         log->target_avoidability_by_braking = target_avoidability_by_braking / target_collision_count;
+        log->target_first_time_detected_ttc = target_first_time_detected_ttc / target_collision_count;
+        log->target_first_time_detected_lat_rss = target_first_time_detected_lat_rss / target_collision_count;
+        log->target_first_time_detected = target_first_time_detected / target_collision_count;
     }
     log->target_collision_count = target_collision_count;
 
@@ -937,31 +957,31 @@ static inline void snapshot_previous_pose(Agent *agent) {
     agent->prev_sim_heading = agent->sim_heading;
 }
 
-// Pushes an agent's current (pre-step) state into its rolling brake-history buffer.
-// Buffer index TARGET_BRAKE_HISTORY_LEN-1 holds the state one step ago; index 0 holds the
-// state TARGET_BRAKE_HISTORY_LEN steps ago. "Now" (this step's post-move state) is read
-// directly off the live Agent by the avoidability-by-braking analysis, not stored here.
-static void push_brake_history(Agent *agent) {
+// Pushes an agent's current (pre-step) state into its rolling trajectory-history buffer.
+// Buffer index TARGET_TRAJECTORY_HISTORY_LEN-1 holds the state one step ago; index 0 holds the
+// state TARGET_TRAJECTORY_HISTORY_LEN steps ago. "Now" (this step's post-move state) is read
+// directly off the live Agent by target collision diagnostics, not stored here.
+static void push_trajectory_history(Agent *agent) {
     if (agent->removed || agent->sim_x == INVALID_POSITION) {
         return;
     }
 
-    for (int k = 0; k < TARGET_BRAKE_HISTORY_LEN - 1; k++) {
-        agent->brake_hist_x[k] = agent->brake_hist_x[k + 1];
-        agent->brake_hist_y[k] = agent->brake_hist_y[k + 1];
-        agent->brake_hist_z[k] = agent->brake_hist_z[k + 1];
-        agent->brake_hist_heading[k] = agent->brake_hist_heading[k + 1];
-        agent->brake_hist_speed_signed[k] = agent->brake_hist_speed_signed[k + 1];
+    for (int k = 0; k < TARGET_TRAJECTORY_HISTORY_LEN - 1; k++) {
+        agent->trajectory_hist_x[k] = agent->trajectory_hist_x[k + 1];
+        agent->trajectory_hist_y[k] = agent->trajectory_hist_y[k + 1];
+        agent->trajectory_hist_z[k] = agent->trajectory_hist_z[k + 1];
+        agent->trajectory_hist_heading[k] = agent->trajectory_hist_heading[k + 1];
+        agent->trajectory_hist_speed_signed[k] = agent->trajectory_hist_speed_signed[k + 1];
     }
 
-    int last = TARGET_BRAKE_HISTORY_LEN - 1;
-    agent->brake_hist_x[last] = agent->sim_x;
-    agent->brake_hist_y[last] = agent->sim_y;
-    agent->brake_hist_z[last] = agent->sim_z;
-    agent->brake_hist_heading[last] = agent->sim_heading;
-    agent->brake_hist_speed_signed[last] = agent->sim_speed_signed;
-    if (agent->brake_hist_count < TARGET_BRAKE_HISTORY_LEN) {
-        agent->brake_hist_count++;
+    int last = TARGET_TRAJECTORY_HISTORY_LEN - 1;
+    agent->trajectory_hist_x[last] = agent->sim_x;
+    agent->trajectory_hist_y[last] = agent->sim_y;
+    agent->trajectory_hist_z[last] = agent->sim_z;
+    agent->trajectory_hist_heading[last] = agent->sim_heading;
+    agent->trajectory_hist_speed_signed[last] = agent->sim_speed_signed;
+    if (agent->trajectory_hist_count < TARGET_TRAJECTORY_HISTORY_LEN) {
+        agent->trajectory_hist_count++;
     }
 }
 
@@ -3129,20 +3149,20 @@ static inline void build_adversary_brake_trajectory(const Agent *adversary, floa
 }
 
 // Samples the target's braking path at arc-length `s`: the recorded rail
-// (brake_hist[idx_start..LEN-1] then the live pose), and once `s` exceeds the rail length, a
-// straight continuation from the rail end along the end heading. Heading is the local path
+// (trajectory_hist[idx_start..LEN-1] then the live pose), and once `s` exceeds the rail length,
+// a straight continuation from the rail end along the end heading. Heading is the local path
 // direction (equivalently the box orientation, invariant to the 180-deg flip of a reversing
 // car). Invariant: the caller passes idx_start in [0, LEN-1], so num_points >= 2.
 static void target_brake_path_sample(Agent *target, int idx_start, float s, float *out_x, float *out_y, float *out_z,
                                      float *out_heading) {
-    float px[TARGET_BRAKE_HISTORY_LEN + 1];
-    float py[TARGET_BRAKE_HISTORY_LEN + 1];
-    float pz[TARGET_BRAKE_HISTORY_LEN + 1];
+    float px[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    float py[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    float pz[TARGET_TRAJECTORY_HISTORY_LEN + 1];
     int num_points = 0;
-    for (int k = idx_start; k < TARGET_BRAKE_HISTORY_LEN; k++) {
-        px[num_points] = target->brake_hist_x[k];
-        py[num_points] = target->brake_hist_y[k];
-        pz[num_points] = target->brake_hist_z[k];
+    for (int k = idx_start; k < TARGET_TRAJECTORY_HISTORY_LEN; k++) {
+        px[num_points] = target->trajectory_hist_x[k];
+        py[num_points] = target->trajectory_hist_y[k];
+        pz[num_points] = target->trajectory_hist_z[k];
         num_points++;
     }
     px[num_points] = target->sim_x;
@@ -3187,8 +3207,8 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
 // adversary is not then checked against the stationary target).
 static bool target_avoidability_is_avoidable(Agent *target, const Agent *adversary,
                                              const AdversaryBrakeTrajectory *adv_ext, float dt, int steps_back) {
-    int idx_start = TARGET_BRAKE_HISTORY_LEN - steps_back;
-    float v0 = fabsf(target->brake_hist_speed_signed[idx_start]);
+    int idx_start = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
+    float v0 = fabsf(target->trajectory_hist_speed_signed[idx_start]);
     if (v0 <= 0.0f) {
         return true; // already stationary at brake-start
     }
@@ -3238,12 +3258,123 @@ static float last_avoidable_time_by_braking(Drive *env, int target_agent_idx, in
     AdversaryBrakeTrajectory adv_ext;
     build_adversary_brake_trajectory(adversary, env->dt, &adv_ext);
 
-    for (int steps_back = 1; steps_back <= target->brake_hist_count; steps_back++) {
+    for (int steps_back = 1; steps_back <= target->trajectory_hist_count; steps_back++) {
         if (target_avoidability_is_avoidable(target, adversary, &adv_ext, env->dt, steps_back)) {
             return steps_back * env->dt;
         }
     }
     return TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+}
+
+typedef struct {
+    float ttc_seconds_before_collision;
+    float lat_rss_seconds_before_collision;
+    float combined_seconds_before_collision;
+} FirstTimeDetectedResult;
+
+static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back) {
+    int history_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
+    Agent sample = *agent;
+    sample.sim_x = agent->trajectory_hist_x[history_idx];
+    sample.sim_y = agent->trajectory_hist_y[history_idx];
+    sample.sim_z = agent->trajectory_hist_z[history_idx];
+    sample.sim_heading = normalize_heading(agent->trajectory_hist_heading[history_idx]);
+    sample.cos_heading = cosf(sample.sim_heading);
+    sample.sin_heading = sinf(sample.sim_heading);
+    sample.sim_speed_signed = agent->trajectory_hist_speed_signed[history_idx];
+    sample.sim_speed = fabsf(sample.sim_speed_signed);
+    sample.sim_vx = sample.sim_speed_signed * sample.cos_heading;
+    sample.sim_vy = sample.sim_speed_signed * sample.sin_heading;
+    return sample;
+}
+
+static float pairwise_obb_ttc_constant_velocity(const Agent *target, const Agent *adversary, float dt,
+                                                float danger_threshold_seconds) {
+    Agent target_sample = *target;
+    Agent adversary_sample = *adversary;
+
+    for (int future_step = 0; future_step < FIRST_DETECTED_TTC_MAX_STEPS; future_step++) {
+        float future_time_seconds = future_step * dt;
+        if (future_time_seconds >= danger_threshold_seconds) {
+            return INFINITY;
+        }
+
+        target_sample.sim_x = target->sim_x + target->sim_vx * future_time_seconds;
+        target_sample.sim_y = target->sim_y + target->sim_vy * future_time_seconds;
+        adversary_sample.sim_x = adversary->sim_x + adversary->sim_vx * future_time_seconds;
+        adversary_sample.sim_y = adversary->sim_y + adversary->sim_vy * future_time_seconds;
+
+        if (check_z_collision_possibility(&target_sample, &adversary_sample) &&
+            check_obb_collision(&target_sample, &adversary_sample)) {
+            return future_time_seconds;
+        }
+    }
+
+    return INFINITY;
+}
+
+static bool first_detected_lat_rss_is_dangerous(const Agent *target, const Agent *adversary) {
+    float target_left_x = -target->sin_heading;
+    float target_left_y = target->cos_heading;
+    float rel_x = adversary->sim_x - target->sim_x;
+    float rel_y = adversary->sim_y - target->sim_y;
+    float signed_lateral_distance = rel_x * target_left_x + rel_y * target_left_y;
+    float lateral_distance = fabsf(signed_lateral_distance);
+    float adversary_lateral_velocity = adversary->sim_vx * target_left_x + adversary->sim_vy * target_left_y;
+    float adversary_intrusion_speed = 0.0f;
+
+    if (lateral_distance > 1e-6f) {
+        float direction_to_corridor = -signed_lateral_distance / lateral_distance;
+        adversary_intrusion_speed = fmaxf(0.0f, adversary_lateral_velocity * direction_to_corridor);
+    }
+
+    float lateral_threshold = FIRST_DETECTED_LAT_RSS_BASE_METERS +
+                              adversary_intrusion_speed * adversary_intrusion_speed / FIRST_DETECTED_LAT_RSS_ACCEL_MPS2;
+    lateral_threshold = fminf(FIRST_DETECTED_LAT_RSS_MAX_METERS, lateral_threshold);
+    return lateral_distance < lateral_threshold;
+}
+
+static FirstTimeDetectedResult compute_first_time_detected(Drive *env, int target_agent_idx, int other_agent_idx) {
+    Agent *target = &env->agents[target_agent_idx];
+    Agent *adversary = &env->agents[other_agent_idx];
+    int history_count = target->trajectory_hist_count < adversary->trajectory_hist_count
+                            ? target->trajectory_hist_count
+                            : adversary->trajectory_hist_count;
+    FirstTimeDetectedResult result = {
+        FIRST_DETECTED_NOT_DETECTED,
+        FIRST_DETECTED_NOT_DETECTED,
+        FIRST_DETECTED_NOT_DETECTED,
+    };
+
+    for (int steps_back = history_count; steps_back >= 1; steps_back--) {
+        float seconds_before_collision = steps_back * env->dt;
+        Agent target_sample = trajectory_history_agent_sample(target, steps_back);
+        Agent adversary_sample = trajectory_history_agent_sample(adversary, steps_back);
+
+        if (result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED) {
+            float ttc_danger_threshold_seconds =
+                target_sample.sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL + FIRST_DETECTED_TTC_MARGIN_SECONDS;
+            float ttc_seconds = pairwise_obb_ttc_constant_velocity(&target_sample, &adversary_sample, env->dt,
+                                                                   ttc_danger_threshold_seconds);
+            if (ttc_seconds < ttc_danger_threshold_seconds) {
+                result.ttc_seconds_before_collision = seconds_before_collision;
+            }
+        }
+
+        if (result.lat_rss_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
+            first_detected_lat_rss_is_dangerous(&target_sample, &adversary_sample)) {
+            result.lat_rss_seconds_before_collision = seconds_before_collision;
+        }
+
+        if (result.ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
+            result.lat_rss_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED) {
+            break;
+        }
+    }
+
+    result.combined_seconds_before_collision =
+        fmaxf(result.ttc_seconds_before_collision, result.lat_rss_seconds_before_collision);
+    return result;
 }
 
 static bool is_adversarial_agent(Drive *env, int agent_idx) {
@@ -3666,6 +3797,9 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->target_collision_other_stopped += env->target_collision_other_stopped_episode;
             episode_log->target_collision_other_removed += env->target_collision_other_removed_episode;
             episode_log->target_avoidability_by_braking += env->target_avoidability_by_braking_episode;
+            episode_log->target_first_time_detected_ttc += env->target_first_time_detected_ttc_episode;
+            episode_log->target_first_time_detected_lat_rss += env->target_first_time_detected_lat_rss_episode;
+            episode_log->target_first_time_detected += env->target_first_time_detected_episode;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {
@@ -5097,6 +5231,11 @@ static void compute_metrics(Drive *env, int agent_idx) {
                 env->target_avoidability_by_braking_episode == TARGET_AVOIDABILITY_UNSET) {
                 env->target_avoidability_by_braking_episode =
                     last_avoidable_time_by_braking(env, target_agent_idx, other_idx);
+                FirstTimeDetectedResult first_time_detected =
+                    compute_first_time_detected(env, target_agent_idx, other_idx);
+                env->target_first_time_detected_ttc_episode = first_time_detected.ttc_seconds_before_collision;
+                env->target_first_time_detected_lat_rss_episode = first_time_detected.lat_rss_seconds_before_collision;
+                env->target_first_time_detected_episode = first_time_detected.combined_seconds_before_collision;
             }
             if (target_agent_idx >= 0 && other_idx >= 0 && is_at_fault_collision(env, target_agent_idx, other_idx)) {
                 env->target_hit_at_fault_this_step = 1;
@@ -6219,9 +6358,12 @@ void c_reset(Drive *env) {
     env->target_collision_other_stopped_episode = 0.0f;
     env->target_collision_other_removed_episode = 0.0f;
     for (int i = 0; i < env->num_agents; i++) {
-        env->agents[i].brake_hist_count = 0;
+        env->agents[i].trajectory_hist_count = 0;
     }
     env->target_avoidability_by_braking_episode = TARGET_AVOIDABILITY_UNSET;
+    env->target_first_time_detected_ttc_episode = FIRST_DETECTED_NOT_DETECTED;
+    env->target_first_time_detected_lat_rss_episode = FIRST_DETECTED_NOT_DETECTED;
+    env->target_first_time_detected_episode = FIRST_DETECTED_NOT_DETECTED;
 
     // Replay envs should expose the constructor-time initial state on the first reset.
     // Gigaflow envs need to fully respawn so explicit reset seeds affect the first scenario.
@@ -6323,7 +6465,7 @@ void c_step(Drive *env) {
 
     for (int i = 0; i < env->num_agents; i++) {
         snapshot_previous_pose(&env->agents[i]);
-        push_brake_history(&env->agents[i]);
+        push_trajectory_history(&env->agents[i]);
     }
 
     env->timestep++;

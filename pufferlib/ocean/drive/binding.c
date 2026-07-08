@@ -1750,7 +1750,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int map_id = 0;
     int env_count = 0;
     int max_envs = num_agents;
-    int maps_checked = 0;
 
     if (eval_mode) {
         max_envs = num_eval_scenarios;
@@ -1785,7 +1784,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            maps_checked++;
             for (int j = 0; j < env->num_total_agents; j++)
                 free_agent(&env->agents[j]);
             for (int j = 0; j < env->num_road_elements; j++)
@@ -2046,6 +2044,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_other_stopped", log->target_collision_other_stopped);
     assign_to_dict(dict, "target_collision_other_removed", log->target_collision_other_removed);
     assign_to_dict(dict, "target_avoidability_by_braking", log->target_avoidability_by_braking);
+    assign_to_dict(dict, "target_first_time_detected_ttc", log->target_first_time_detected_ttc);
+    assign_to_dict(dict, "target_first_time_detected_lat_rss", log->target_first_time_detected_lat_rss);
+    assign_to_dict(dict, "target_first_time_detected", log->target_first_time_detected);
     assign_to_dict(dict, "adversaries_collision_severity", log->adversaries_collision_severity);
     assign_to_dict(dict, "adversaries_collision_responsibility", log->adversaries_collision_responsibility);
     assign_to_dict(dict, "adversaries_collision_impact_zone", log->adversaries_collision_impact_zone);

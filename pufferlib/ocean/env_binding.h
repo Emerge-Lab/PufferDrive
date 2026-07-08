@@ -758,6 +758,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_collision_other_stopped = env->log.target_collision_other_stopped;
             float target_collision_other_removed = env->log.target_collision_other_removed;
             float target_avoidability_by_braking = env->log.target_avoidability_by_braking;
+            float target_first_time_detected_ttc = env->log.target_first_time_detected_ttc;
+            float target_first_time_detected_lat_rss = env->log.target_first_time_detected_lat_rss;
+            float target_first_time_detected = env->log.target_first_time_detected;
             float adversaries_collision_count = env->log.adversaries_collision_count;
             float adversaries_collision_severity = env->log.adversaries_collision_severity;
             float adversaries_collision_responsibility = env->log.adversaries_collision_responsibility;
@@ -812,6 +815,10 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 env->log.target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
                 env->log.target_collision_other_removed = target_collision_other_removed / target_collision_count;
                 env->log.target_avoidability_by_braking = target_avoidability_by_braking / target_collision_count;
+                env->log.target_first_time_detected_ttc = target_first_time_detected_ttc / target_collision_count;
+                env->log.target_first_time_detected_lat_rss =
+                    target_first_time_detected_lat_rss / target_collision_count;
+                env->log.target_first_time_detected = target_first_time_detected / target_collision_count;
             }
             env->log.target_collision_count = target_collision_count;
 
@@ -1015,6 +1022,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_collision_other_stopped = aggregate.target_collision_other_stopped;
         float target_collision_other_removed = aggregate.target_collision_other_removed;
         float target_avoidability_by_braking = aggregate.target_avoidability_by_braking;
+        float target_first_time_detected_ttc = aggregate.target_first_time_detected_ttc;
+        float target_first_time_detected_lat_rss = aggregate.target_first_time_detected_lat_rss;
+        float target_first_time_detected = aggregate.target_first_time_detected;
         float adversaries_collision_count = aggregate.adversaries_collision_count;
         float adversaries_collision_severity = aggregate.adversaries_collision_severity;
         float adversaries_collision_responsibility = aggregate.adversaries_collision_responsibility;
@@ -1072,6 +1082,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             aggregate.target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
             aggregate.target_collision_other_removed = target_collision_other_removed / target_collision_count;
             aggregate.target_avoidability_by_braking = target_avoidability_by_braking / target_collision_count;
+            aggregate.target_first_time_detected_ttc = target_first_time_detected_ttc / target_collision_count;
+            aggregate.target_first_time_detected_lat_rss = target_first_time_detected_lat_rss / target_collision_count;
+            aggregate.target_first_time_detected = target_first_time_detected / target_collision_count;
         }
         aggregate.target_collision_count = target_collision_count;
 
