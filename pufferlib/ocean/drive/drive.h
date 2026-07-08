@@ -261,10 +261,17 @@ struct Log {
     float target_collision_other_active;
     float target_collision_other_stopped;
     float target_collision_other_removed;
+    float target_collision_unavoidable_rate;
+    float target_collision_adversary_forced_rate;
+    float target_collision_target_failure_rate;
     float target_avoidability_by_braking;
+    float target_avoidability_by_braking_valid_count;
     float target_first_time_detected_ttc;
+    float target_first_time_detected_ttc_valid_count;
     float target_first_time_detected_lat_rss;
+    float target_first_time_detected_lat_rss_valid_count;
     float target_first_time_detected;
+    float target_first_time_detected_valid_count;
     float adversaries_collision_count;
     float adversaries_collision_severity;
     float adversaries_collision_responsibility;
@@ -660,10 +667,17 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_other_active = log->target_collision_other_active;
     float target_collision_other_stopped = log->target_collision_other_stopped;
     float target_collision_other_removed = log->target_collision_other_removed;
+    float target_collision_unavoidable_rate = log->target_collision_unavoidable_rate;
+    float target_collision_adversary_forced_rate = log->target_collision_adversary_forced_rate;
+    float target_collision_target_failure_rate = log->target_collision_target_failure_rate;
     float target_avoidability_by_braking = log->target_avoidability_by_braking;
+    float target_avoidability_by_braking_valid_count = log->target_avoidability_by_braking_valid_count;
     float target_first_time_detected_ttc = log->target_first_time_detected_ttc;
+    float target_first_time_detected_ttc_valid_count = log->target_first_time_detected_ttc_valid_count;
     float target_first_time_detected_lat_rss = log->target_first_time_detected_lat_rss;
+    float target_first_time_detected_lat_rss_valid_count = log->target_first_time_detected_lat_rss_valid_count;
     float target_first_time_detected = log->target_first_time_detected;
+    float target_first_time_detected_valid_count = log->target_first_time_detected_valid_count;
     float adversaries_collision_count = log->adversaries_collision_count;
     float adversaries_collision_severity = log->adversaries_collision_severity;
     float adversaries_collision_responsibility = log->adversaries_collision_responsibility;
@@ -718,12 +732,30 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_other_active = target_collision_other_active / target_collision_count;
         log->target_collision_other_stopped = target_collision_other_stopped / target_collision_count;
         log->target_collision_other_removed = target_collision_other_removed / target_collision_count;
-        log->target_avoidability_by_braking = target_avoidability_by_braking / target_collision_count;
-        log->target_first_time_detected_ttc = target_first_time_detected_ttc / target_collision_count;
-        log->target_first_time_detected_lat_rss = target_first_time_detected_lat_rss / target_collision_count;
-        log->target_first_time_detected = target_first_time_detected / target_collision_count;
+        log->target_collision_unavoidable_rate = target_collision_unavoidable_rate / target_collision_count;
+        log->target_collision_adversary_forced_rate = target_collision_adversary_forced_rate / target_collision_count;
+        log->target_collision_target_failure_rate = target_collision_target_failure_rate / target_collision_count;
+        log->target_avoidability_by_braking =
+            target_avoidability_by_braking_valid_count > 0.0f
+                ? target_avoidability_by_braking / target_avoidability_by_braking_valid_count
+                : TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+        log->target_first_time_detected_ttc =
+            target_first_time_detected_ttc_valid_count > 0.0f
+                ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
+                : FIRST_DETECTED_NOT_DETECTED;
+        log->target_first_time_detected_lat_rss =
+            target_first_time_detected_lat_rss_valid_count > 0.0f
+                ? target_first_time_detected_lat_rss / target_first_time_detected_lat_rss_valid_count
+                : FIRST_DETECTED_NOT_DETECTED;
+        log->target_first_time_detected = target_first_time_detected_valid_count > 0.0f
+                                              ? target_first_time_detected / target_first_time_detected_valid_count
+                                              : FIRST_DETECTED_NOT_DETECTED;
     }
     log->target_collision_count = target_collision_count;
+    log->target_avoidability_by_braking_valid_count = target_avoidability_by_braking_valid_count;
+    log->target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
+    log->target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
+    log->target_first_time_detected_valid_count = target_first_time_detected_valid_count;
 
     if (adversaries_collision_count > 0.0f) {
         log->adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
@@ -3796,10 +3828,32 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->target_collision_other_active += env->target_collision_other_active_episode;
             episode_log->target_collision_other_stopped += env->target_collision_other_stopped_episode;
             episode_log->target_collision_other_removed += env->target_collision_other_removed_episode;
-            episode_log->target_avoidability_by_braking += env->target_avoidability_by_braking_episode;
-            episode_log->target_first_time_detected_ttc += env->target_first_time_detected_ttc_episode;
-            episode_log->target_first_time_detected_lat_rss += env->target_first_time_detected_lat_rss_episode;
-            episode_log->target_first_time_detected += env->target_first_time_detected_episode;
+            if (env->target_avoidability_by_braking_episode == TARGET_AVOIDABILITY_NOT_AVOIDABLE) {
+                episode_log->target_collision_unavoidable_rate += 1.0f;
+            } else if (env->target_first_time_detected_episode > 0.0f &&
+                       env->target_avoidability_by_braking_episode > 0.0f) {
+                if (env->target_avoidability_by_braking_episode > env->target_first_time_detected_episode) {
+                    episode_log->target_collision_adversary_forced_rate += 1.0f;
+                } else {
+                    episode_log->target_collision_target_failure_rate += 1.0f;
+                }
+            }
+            if (env->target_avoidability_by_braking_episode > 0.0f) {
+                episode_log->target_avoidability_by_braking += env->target_avoidability_by_braking_episode;
+                episode_log->target_avoidability_by_braking_valid_count += 1.0f;
+            }
+            if (env->target_first_time_detected_ttc_episode > 0.0f) {
+                episode_log->target_first_time_detected_ttc += env->target_first_time_detected_ttc_episode;
+                episode_log->target_first_time_detected_ttc_valid_count += 1.0f;
+            }
+            if (env->target_first_time_detected_lat_rss_episode > 0.0f) {
+                episode_log->target_first_time_detected_lat_rss += env->target_first_time_detected_lat_rss_episode;
+                episode_log->target_first_time_detected_lat_rss_valid_count += 1.0f;
+            }
+            if (env->target_first_time_detected_episode > 0.0f) {
+                episode_log->target_first_time_detected += env->target_first_time_detected_episode;
+                episode_log->target_first_time_detected_valid_count += 1.0f;
+            }
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {

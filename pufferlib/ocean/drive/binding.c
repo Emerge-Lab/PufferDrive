@@ -2043,6 +2043,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_other_active", log->target_collision_other_active);
     assign_to_dict(dict, "target_collision_other_stopped", log->target_collision_other_stopped);
     assign_to_dict(dict, "target_collision_other_removed", log->target_collision_other_removed);
+    assign_to_dict(dict, "target_collision_unavoidable_rate", log->target_collision_unavoidable_rate);
+    assign_to_dict(dict, "target_collision_adversary_forced_rate", log->target_collision_adversary_forced_rate);
+    assign_to_dict(dict, "target_collision_target_failure_rate", log->target_collision_target_failure_rate);
     assign_to_dict(dict, "target_avoidability_by_braking", log->target_avoidability_by_braking);
     assign_to_dict(dict, "target_first_time_detected_ttc", log->target_first_time_detected_ttc);
     assign_to_dict(dict, "target_first_time_detected_lat_rss", log->target_first_time_detected_lat_rss);
