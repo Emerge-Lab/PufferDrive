@@ -66,6 +66,8 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         init_step_spread=False,
         init_step_min_horizon=20,
+        eval_mode=0,
+        num_eval_scenarios=16,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -85,6 +87,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
+        starting_map=0,
         obs_norm_goal_offset_m=100.0,
         obs_norm_xy_offset_m=100.0,
         obs_norm_veh_length_m=15.0,
@@ -158,6 +161,8 @@ class Drive(pufferlib.PufferEnv):
             self.dynamics_model_flag = 1
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.eval_mode = eval_mode
+        self.num_eval_scenarios = num_eval_scenarios
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
         self.terminate_on_goal = terminate_on_goal
@@ -348,11 +353,24 @@ class Drive(pufferlib.PufferEnv):
         available_maps = len(self.map_files)
         if num_maps > available_maps:
             raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({available_maps}).")
+
+        self.map_cursor = starting_map
+        self.map_window_start = starting_map
+
+        # Eval walks a fixed map window; each batch handles whatever scenarios
+        # remain between the cursor and the end of this worker's window.
+        self.scenarios_remaining = self.num_eval_scenarios
+        if self.eval_mode:
+            map_window_end = self.map_window_start + self.num_eval_scenarios
+            self.scenarios_remaining = min(self.num_eval_scenarios, map_window_end - self.map_cursor)
+
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
             num_maps=num_maps,
+            starting_map_counter=self.map_cursor,
+            eval_mode=self.eval_mode,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
@@ -363,8 +381,14 @@ class Drive(pufferlib.PufferEnv):
             seed=self.random_seed,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
+            num_eval_scenarios=self.scenarios_remaining,
             goal_radius=self.goal_radius,
         )
+        # In eval mode the counter is not wrapped, so exhaustion ends the sweep.
+        self.map_cursor = self.map_cursor + num_envs
+        # Set once a worker has evaluated its whole map window; a frozen worker
+        # stops stepping and emitting so it can't re-process or double-count.
+        self._eval_exhausted = self.eval_mode and self.scenarios_remaining == 0
 
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
@@ -493,6 +517,11 @@ class Drive(pufferlib.PufferEnv):
         return self.observations, []
 
     def step(self, actions):
+        if self._eval_exhausted:
+            self.rewards[:] = 0
+            self.terminals[:] = 0
+            self.truncations[:] = 0
+            return (self.observations, self.rewards, self.terminals, self.truncations, [])
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
@@ -504,10 +533,21 @@ class Drive(pufferlib.PufferEnv):
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
+            # Eval walks a fixed map window; each batch handles whatever scenarios
+            # remain between the cursor and the end of this worker's window.
+            self.scenarios_remaining = self.num_eval_scenarios
+            if self.eval_mode:
+                map_window_end = self.map_window_start + self.num_eval_scenarios
+                self.scenarios_remaining = min(self.num_eval_scenarios, map_window_end - self.map_cursor)
+            if self.scenarios_remaining == 0:
+                self._eval_exhausted = True
+                return (self.observations, self.rewards, self.terminals, self.truncations, info)
             binding.vec_close(self.c_envs)
             agent_offsets, map_ids, num_envs = binding.shared(
                 num_agents=self.num_agents,
                 num_maps=self.num_maps,
+                starting_map_counter=self.map_cursor,
+                eval_mode=self.eval_mode,
                 init_mode=self.init_mode,
                 control_mode=self.control_mode,
                 sdc_controller=self.sdc_controller,
@@ -519,8 +559,10 @@ class Drive(pufferlib.PufferEnv):
                 seed=self.random_seed,
                 min_agents_per_env=self.min_agents_per_env,
                 max_agents_per_env=self.max_agents_per_env,
+                num_eval_scenarios=self.scenarios_remaining,
                 goal_radius=self.goal_radius,
             )
+            self.map_cursor = self.map_cursor + num_envs
             env_ids = []
             for i in range(num_envs):
                 cur = agent_offsets[i]

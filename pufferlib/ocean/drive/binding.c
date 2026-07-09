@@ -1722,6 +1722,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     int num_agents = unpack(kwargs, "num_agents");
     int num_maps = unpack(kwargs, "num_maps");
+    int starting_map_counter = unpack(kwargs, "starting_map_counter");
+    int eval_mode = unpack(kwargs, "eval_mode");
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int sdc_controller = unpack(kwargs, "sdc_controller");
@@ -1733,6 +1735,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float) unpack(kwargs, "goal_radius");
+    int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1750,6 +1753,31 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_GIGAFLOW) {
+        if (eval_mode) {
+            // Eval mode: fixed agent count, sequential map cycling
+            int agents_per_env = max_agents_per_env;
+            int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
+            env_count = env_count > num_eval_scenarios ? num_eval_scenarios : env_count;
+
+            PyObject *agent_offsets = PyList_New(env_count + 1);
+            PyObject *map_ids_list = PyList_New(env_count);
+
+            int offset = 0;
+            for (int i = 0; i < env_count; i++) {
+                PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
+                PyList_SetItem(map_ids_list, i, PyLong_FromLong((starting_map_counter + i) % num_maps));
+                int remaining_agents = num_agents - offset;
+                offset += (remaining_agents < agents_per_env) ? remaining_agents : agents_per_env;
+            }
+            PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
+
+            PyObject *tuple = PyTuple_New(3);
+            PyTuple_SetItem(tuple, 0, agent_offsets);
+            PyTuple_SetItem(tuple, 1, map_ids_list);
+            PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+            return tuple;
+        }
+
         // Training mode: random agent counts per env
         int *agent_counts = malloc((num_agents / min_agents_per_env + 1) * sizeof(int));
         int remaining = num_agents;
@@ -1811,13 +1839,24 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int map_id = 0;
     int env_count = 0;
     int max_envs = num_agents;
-    int maps_checked = 0;
+
+    if (eval_mode) {
+        max_envs = num_eval_scenarios;
+    }
+    // Upper boundary for this worker's sequential map window
+    int end_map_index = starting_map_counter + num_eval_scenarios;
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
-    while (total_agent_count < num_agents && env_count < max_envs) {
-        map_id = rand() % num_maps;
+    while (total_agent_count < num_agents && env_count < max_envs
+           && (!eval_mode || starting_map_counter < end_map_index)) {
+        if (eval_mode) {
+            map_id = starting_map_counter % num_maps;
+            starting_map_counter += 1;
+        } else {
+            map_id = rand() % num_maps;
+        }
 
         const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
 
@@ -1837,7 +1876,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
-            maps_checked++;
             for (int j = 0; j < env->num_total_agents; j++) {
                 free_agent(&env->agents[j]);
             }

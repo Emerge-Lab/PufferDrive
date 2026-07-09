@@ -1679,6 +1679,89 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
+def eval(env_name, args=None, policy=None):
+    """Multiprocessed evaluation over a fixed set of scenarios.
+
+    Commit 1 scope: the map allocator + multiprocessed rollout only. The
+    requested `num_scenarios` are split into disjoint windows, one per worker
+    (`starting_map` + `num_eval_scenarios`), so the workers together cover the
+    whole sweep exactly once. `eval_mode=1` makes `my_shared` walk each
+    worker's window sequentially instead of sampling maps at random. Works for
+    both replay and gigaflow simulation modes. Per-episode metric reporting is
+    added in a later commit.
+    """
+    args = args or load_config(env_name)
+
+    if args["train"]["use_rnn"]:
+        raise pufferlib.APIUsageError("Multiprocessed eval does not support RNN policies yet")
+
+    num_scenarios = int(args["num_scenarios"])
+    if num_scenarios < 1:
+        raise pufferlib.APIUsageError(f"num_scenarios must be >= 1. Got: {num_scenarios}")
+
+    scenario_length = int(args["env"]["scenario_length"])
+    num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
+
+    # Assign each worker a disjoint window of the map set.
+    scenarios_per_worker = num_scenarios // num_workers
+    remainder = num_scenarios % num_workers
+    worker_env_kwargs = []
+    map_cursor = 0
+    for worker_idx in range(num_workers):
+        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
+        env_kwargs = copy.deepcopy(args["env"])
+        env_kwargs["eval_mode"] = 1
+        env_kwargs["starting_map"] = map_cursor
+        env_kwargs["num_eval_scenarios"] = worker_num_scenarios
+        env_kwargs["resample_frequency"] = scenario_length
+        worker_env_kwargs.append(env_kwargs)
+        map_cursor += worker_num_scenarios
+
+    print(f"Distributing {num_scenarios} scenarios across {num_workers} workers:")
+    for worker_idx, env_kwargs in enumerate(worker_env_kwargs):
+        map_start = env_kwargs["starting_map"]
+        scenario_count = env_kwargs["num_eval_scenarios"]
+        print(f"  Worker {worker_idx}: maps {map_start}-{map_start + scenario_count - 1} ({scenario_count} scenarios)")
+
+    package = args["package"]
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    env_module = importlib.import_module(module_name)
+    make_env = env_module.env_creator(env_name)
+    vecenv = pufferlib.vector.make(
+        [make_env] * num_workers,
+        env_args=[[]] * num_workers,
+        env_kwargs=worker_env_kwargs,
+        backend="Multiprocessing",
+        num_envs=num_workers,
+        num_workers=num_workers,
+        batch_size=num_workers,
+    )
+
+    policy = policy or load_policy(args, vecenv, env_name)
+    policy.eval()
+    device = torch_device(args["train"]["device"])
+
+    # The busiest worker sets the step budget; workers that finish early keep
+    # stepping their exhausted envs (drive.py stops resampling), which is a
+    # harmless no-op until the sweep ends.
+    max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
+    total_steps = max_scenarios_per_worker * scenario_length
+
+    obs, _ = vecenv.reset(args["train"]["seed"] or 42)
+    for _ in tqdm(range(total_steps), desc="Evaluating scenarios"):
+        with torch.no_grad():
+            obs_tensor = torch.as_tensor(obs).to(device)
+            logits, _ = policy.forward_eval(obs_tensor)
+            action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+        if isinstance(logits, torch.distributions.Normal):
+            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+        obs, _, _, _, _ = vecenv.step(action)
+
+    vecenv.close()
+    print(f"Multiprocessed eval complete: {num_scenarios} scenarios across {num_workers} workers.")
+
+
 def load_env(env_name, args):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -1833,7 +1916,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -1841,6 +1924,8 @@ def main():
     env_name = sys.argv.pop(1)
     if mode == "train":
         train(env_name=env_name)
+    elif mode == "eval":
+        eval(env_name=env_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
