@@ -1526,16 +1526,28 @@ static void update_agent_z(Drive *env, Agent *agent) {
     agent->sim_z = sum_z / check_count;
 }
 
-static int pick_random_exit_lane(RoadMapElement *road_elements, int lane_idx) {
+static int pick_random_exit_lane(RoadMapElement *road_elements, int lane_idx, const int *route, int route_length) {
     RoadMapElement *lane = &road_elements[lane_idx];
     int exits[ROUTE_EXIT_MAX_CANDIDATES];
+    int fresh_exits[ROUTE_EXIT_MAX_CANDIDATES]; // exits not already visited in `route`
     int num_exits = 0;
+    int num_fresh_exits = 0;
     for (int e = 0; e < lane->num_exits; e++) {
         int ex = lane->exit_lanes[e];
         if (ex == -1) {
             continue;
         }
         exits[num_exits++] = ex;
+        bool in_route = false;
+        for (int r = 0; r < route_length; r++) {
+            if (route[r] == ex) {
+                in_route = true;
+                break;
+            }
+        }
+        if (!in_route) {
+            fresh_exits[num_fresh_exits++] = ex;
+        }
         if (num_exits >= ROUTE_EXIT_MAX_CANDIDATES) {
             break;
         }
@@ -1543,6 +1555,10 @@ static int pick_random_exit_lane(RoadMapElement *road_elements, int lane_idx) {
 
     if (num_exits == 0) {
         return -1; // dead-end lane: expected (caller ends the walk / route)
+    }
+    // Prefer an exit not yet in the route to avoid looping; fall back to any exit when all are visited.
+    if (num_fresh_exits > 0) {
+        return fresh_exits[rand() % num_fresh_exits];
     }
     return exits[rand() % num_exits];
 }
@@ -1625,7 +1641,7 @@ static bool route_point_at_distance(
             }
             current_lane_idx = route[cursor_idx];
         } else {
-            current_lane_idx = pick_random_exit_lane(env->road_elements, current_lane_idx);
+            current_lane_idx = pick_random_exit_lane(env->road_elements, current_lane_idx, NULL, 0);
             if (current_lane_idx == -1) {
                 return false; // dead-end: no outgoing lane to continue the free-roam walk
             }
@@ -1742,7 +1758,8 @@ static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
             break;
         }
         current_lane = &road_elements[current_lane_idx];
-        int chosen_exit_lane_idx = pick_random_exit_lane(road_elements, current_lane_idx);
+        int chosen_exit_lane_idx
+            = pick_random_exit_lane(road_elements, current_lane_idx, candidate_route, route_length);
         if (chosen_exit_lane_idx == -1) {
             break; // dead-end lane: stop here, the route is as long as the graph allows
         }
