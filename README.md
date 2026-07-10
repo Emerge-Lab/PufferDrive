@@ -79,6 +79,9 @@ python scripts/submit_cluster.py \
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
 
+- **WOMD:** download raw data with `data_utils/download_womd_data.py`, or pre-converted `.bin` maps with `data_utils/download_database_gcp.sh`.
+- **nuPlan (replay training/eval):** see [`docs/nuplan_data.md`](docs/nuplan_data.md).
+
 ## Train
 
 ```bash
