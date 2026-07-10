@@ -236,17 +236,9 @@ static int g_xvfb_display_num = 0;
 // is resized instead. Matches 3.0 drive.h g_glfw_ready pattern.
 static int g_glfw_ready = 0;
 
-// Fallback asset directory for envs built without the Python binding
-// (env->resource_root empty), e.g. standalone binaries run from the repo root.
-#define DRIVE_RESOURCE_ROOT_FALLBACK "pufferlib/resources/drive"
-
-// Load a render asset from env->resource_root. raylib 5.5's LoadModel
-// returns a model with meshCount 0 exactly when loading fails, so that is
-// the fail-fast check for a missing/unreadable file.
 static Model load_drive_model(Drive *env, const char *filename) {
-    const char *root = env->resource_root[0] ? env->resource_root : DRIVE_RESOURCE_ROOT_FALLBACK;
     char model_path[sizeof(env->resource_root) + 64];
-    snprintf(model_path, sizeof(model_path), "%s/%s", root, filename);
+    snprintf(model_path, sizeof(model_path), "%s/%s", env->resource_root, filename);
     Model model = LoadModel(model_path);
     if (model.meshCount == 0) {
         RAISE_FILE_ERROR(model_path);
@@ -375,9 +367,8 @@ Client *make_client(Drive *env) {
     client->cyclist = load_drive_model(env, "cyclist.glb");
     client->pedestrian = load_drive_model(env, "pedestrian.glb");
     int animCountCyc = 0;
-    const char *anim_root = env->resource_root[0] ? env->resource_root : DRIVE_RESOURCE_ROOT_FALLBACK;
     char cyclist_anim_path[sizeof(env->resource_root) + 64];
-    snprintf(cyclist_anim_path, sizeof(cyclist_anim_path), "%s/cyclist.glb", anim_root);
+    snprintf(cyclist_anim_path, sizeof(cyclist_anim_path), "%s/cyclist.glb", env->resource_root);
     client->cycle_anim = LoadModelAnimations(cyclist_anim_path, &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;

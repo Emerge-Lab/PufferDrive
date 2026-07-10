@@ -83,6 +83,8 @@ void demo() {
     Drive env = {
         .human_agent_idx = 0,
         .map_name = map_path,
+        // Standalone binaries run from the repo root.
+        .resource_root = "pufferlib/resources/drive",
         .num_controllable_agents = conf.max_agents_per_env,
         .num_max_agents = conf.max_agents_per_env,
         .action_type = conf.action_type,
