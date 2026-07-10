@@ -3,34 +3,67 @@
 How to obtain the nuPlan dataset and turn it into the `.bin` scenario files
 that PufferDrive's replay mode and the nuPlan evaluators consume.
 
-## Getting nuPlan
+The pipeline has two external stages:
 
-nuPlan is Motional's planning dataset. Register and download it from the
-official page: <https://www.nuscenes.org/nuplan>.
+```
+raw nuPlan  →  [py123d]  →  .arrow  →  [123Drive]  →  .bin
+```
 
-For PufferDrive replay you need:
+- [py123d](https://github.com/kesai-labs/py123d) downloads nuPlan and parses
+  it into its arrow format ([nuPlan guide](https://github.com/kesai-labs/py123d/blob/main/docs/datasets/nuplan.rst)).
+- [123Drive](https://github.com/vcharraut/123Drive) converts py123d arrow
+  data into PufferDrive `.bin` files.
 
-- the **maps** package, and
-- the **mini split** log databases (`.db` files).
+## Stage 1 — download and parse nuPlan with py123d
 
+nuPlan is Motional's planning dataset, distributed from a public AWS bucket
+under a non-commercial license
+([terms](https://motional-nuplan.s3-ap-northeast-1.amazonaws.com/LICENSE)).
 The sensor blobs (camera/lidar) are not needed — replay only uses the logged
-agent trajectories and map geometry.
+agent trajectories and map geometry, which the defaults below fetch.
 
-## Converting to PufferDrive .bin
+```bash
+pip install "py123d[nuplan]"
+pip install "nuplan-devkit @ git+https://github.com/motional/nuplan-devkit/@nuplan-devkit-v1.2"
 
-Conversion is done by the external **py123d** converter; it is not part of
-this repository. Prior converted datasets in this repo's history: the CARLA
-town bins were converted via py123d (commit `c2667356`), and the nuPlan
-behavior-category eval bins referenced by the config were a py123d v0.2.1
-reconvert (commit `2b1d3ecb`).
+# Mini set (~11 GB) — enough for replay training and the nuPlan evals:
+py123d-download dataset=nuplan \
+    'dataset.downloader.splits=[nuplan-mini_train, nuplan-mini_val, nuplan-mini_test]'
 
-<!-- TODO(maintainers): converter repo URL + exact invocation -->
-- Converter repository: *(to be filled by maintainers)*
-- Invocation: *(to be filled by maintainers)*
+# Parse the downloaded logs + maps into py123d's arrow format:
+py123d-conversion datasets=["nuplan-mini"]
+```
 
-**RAM note:** convert with reduced parallelism. Each converter worker holds a
-fully parsed nuPlan log database in memory, and the default worker count
-assumes a large-RAM machine; on a laptop or small node the defaults will OOM.
+Set `NUPLAN_DATA_ROOT` (and `NUPLAN_MAPS_ROOT`) per the
+[py123d nuPlan guide](https://github.com/kesai-labs/py123d/blob/main/docs/datasets/nuplan.rst)
+before converting, or use the streaming mode described there
+(`py123d-conversion dataset=nuplan-mini-stream`), which downloads to a
+temporary directory and cleans up after itself. The full (non-mini) set is
+~135 GB: `py123d-download dataset=nuplan` / `py123d-conversion datasets=["nuplan"]`.
+
+## Stage 2 — convert arrow to .bin with 123Drive
+
+```bash
+git clone https://github.com/vcharraut/123Drive && cd 123Drive
+uv sync
+uv run convert --preset nuplan --py123d_path /path/to/py123d/data --output ./nuplan_bins
+```
+
+`--py123d_path` points at the py123d dataset root (the directory containing
+`logs/` and `maps/` from stage 1).
+
+**RAM notes:**
+
+- `--workers` defaults to `0` = 80% of CPU cores, and each worker holds a
+  parsed log in memory. If conversion OOMs, pass an explicit low worker
+  count (e.g. `--workers 4`) instead of the default.
+- Keep the `--preset nuplan` flag: among other settings it pins
+  `--duration_s 20`, chunking nuPlan's minute-long logs into 20 s scenarios
+  precisely to avoid RAM exhaustion.
+
+Useful extras: `--num_scenes N` limits output for a quick smoke test, and
+`uv run web` serves a browser viewer for the produced bins at
+`http://localhost:8080`.
 
 ## Expected output layout
 
