@@ -141,5 +141,57 @@ class TestDriveConfig(unittest.TestCase):
                 os.remove(temp_ini_path)
 
 
+class TestConfigYamlFlag(unittest.TestCase):
+    """--config layers a yaml file between the ini defaults and explicit CLI flags."""
+
+    def _load_with_config(self, yaml_text, extra_argv=()):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = os.path.join(tmp_dir, "config.yaml")
+            with open(config_path, "w") as f:
+                f.write(yaml_text)
+            argv = ["pufferl.py", "--config", config_path, *extra_argv]
+            with patch("sys.argv", argv):
+                return load_config("puffer_drive")
+
+    def test_config_flag_nested_yaml(self):
+        """A run-dumped (nested) config.yaml sets env/train keys; CLI flags still win."""
+        yaml_text = (
+            "env:\n"
+            "  num_agents: 77\n"
+            "  obs_lane_stride: 3\n"
+            "train:\n"
+            "  learning_rate: 0.25\n"
+            "  use_rnn: false\n"
+            "eval:\n"
+            "  validation_gigaflow:\n"
+            "    enabled: false\n"
+            "git:\n"
+            "  branch: some-branch\n"
+            "config: null\n"
+        )
+        args = self._load_with_config(yaml_text, extra_argv=["--train.learning-rate=0.5"])
+        self.assertEqual(args["env"]["num_agents"], 77)
+        self.assertEqual(args["env"]["obs_lane_stride"], 3)
+        self.assertEqual(args["eval"]["validation_gigaflow"]["enabled"], False)
+        # Explicit CLI flag beats the yaml value.
+        self.assertEqual(args["train"]["learning_rate"], 0.5)
+        # Provenance metadata from run dumps is not applied as a setting.
+        self.assertNotIn("branch", args.get("git", {}))
+
+    def test_config_flag_flat_dotted_yaml(self):
+        """A flat dotted cluster config loads identically to the nested form."""
+        yaml_text = "env.num_agents: 77\nenv.obs_lane_stride: 3\ntrain.learning_rate: 0.25\nwandb_project: nightly\n"
+        args = self._load_with_config(yaml_text)
+        self.assertEqual(args["env"]["num_agents"], 77)
+        self.assertEqual(args["env"]["obs_lane_stride"], 3)
+        self.assertEqual(args["train"]["learning_rate"], 0.25)
+        self.assertEqual(args["wandb_project"], "nightly")
+
+    def test_config_flag_unknown_key_raises(self):
+        """A typo'd key must fail loudly instead of silently no-opping."""
+        with self.assertRaisesRegex(ValueError, "num_agnets"):
+            self._load_with_config("env.num_agnets: 5\n")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=VERBOSITY)

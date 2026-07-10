@@ -1372,45 +1372,11 @@ def _save_experiment_config(args, path):
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
 
-    # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
+    # Fine-tuning: adopt the checkpoint's network architecture and observation
+    # layout from the run's config.yaml so the loaded weights match; rewards,
+    # maps, and simulation mode stay under ini/CLI control.
     if args["load_model_path"]:
-        experiment_dir = os.path.dirname(args["load_model_path"])
-        config_yaml_path = os.path.join(experiment_dir, "config.yaml")
-        KEYS_OF_INTEREST = {
-            "action_type",
-            "dynamics_model",
-            "target_type",
-            "num_target_waypoints",
-            "reward_conditioning",
-            "reward_randomization",
-            "trajectory_prediction_length",
-            "num_trajectory_scaling_factors",
-            "trajectory_scaling_factors",
-            "obs_slots_boundary_n",
-            "obs_slots_lane_n",
-            "obs_boundary_stride",
-            "obs_lane_stride",
-            "obs_dropout_boundary",
-            "obs_dropout_lane",
-            "obs_slots_partners_n",
-            "obs_slots_traffic_controls_n",
-            "traffic_control_scope",
-        }
-        if os.path.exists(config_yaml_path):
-            print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")
-            with open(config_yaml_path, "r") as f:
-                yaml_config = yaml.safe_load(f)
-
-            # Override Policy and RNN dimensions from model config
-            for section in ["policy", "rnn"]:
-                if section in yaml_config and isinstance(yaml_config[section], dict):
-                    for k, v in yaml_config[section].items():
-                        args[section][k] = v
-            # Override ENV parameters for observation size from model config
-            if "env" in yaml_config and isinstance(yaml_config["env"], dict):
-                for k, v in yaml_config["env"].items():
-                    if k in KEYS_OF_INTEREST:
-                        args["env"][k] = v
+        args = _merge_checkpoint_arch(args, args["load_model_path"])
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:
@@ -1614,9 +1580,9 @@ _ARCH_ENV_KEYS = (
 def _merge_checkpoint_arch(args, model_path):
     """Adopt a checkpoint's architecture from its sibling config.yaml.
 
-    A standalone eval may load a checkpoint whose network shape or observation
-    layout differs from drive.ini. The training run writes config.yaml next to
-    models/, so pull from it before the policy/env are built:
+    A standalone eval or a fine-tuning run may load a checkpoint whose network
+    shape or observation layout differs from drive.ini. The training run writes
+    config.yaml next to models/, so pull from it before the policy/env are built:
       - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
         else load_state_dict mismatches.
       - the obs/action-layout env keys (_ARCH_ENV_KEYS) — else the eval env
@@ -1626,6 +1592,7 @@ def _merge_checkpoint_arch(args, model_path):
     """
     config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
     if not os.path.exists(config_yaml_path):
+        print(f"[config] no config.yaml at {config_yaml_path}; policy/obs layout falls back to ini/CLI values")
         return args
     with open(config_yaml_path) as f:
         yaml_config = yaml.safe_load(f) or {}
@@ -1642,7 +1609,7 @@ def _merge_checkpoint_arch(args, model_path):
         for key in _ARCH_ENV_KEYS:
             if key in env_cfg:
                 args["env"][key] = env_cfg[key]
-    print(f"[eval] merged policy/rnn + obs-layout config from {config_yaml_path}")
+    print(f"[config] merged policy/rnn + obs-layout config from {config_yaml_path}")
     return args
 
 
@@ -2112,6 +2079,14 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="YAML config layered over the ini defaults. Accepts a run-dumped"
+        " config.yaml (nested sections) or a flat dotted cluster config"
+        " (env.num_agents: 128). Explicit CLI flags still win.",
+    )
+    parser.add_argument(
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
@@ -2181,6 +2156,35 @@ def load_config(env_name, config_dir=None):
     parser.add_argument(
         "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"
     )
+
+    # Layer a --config yaml over the ini defaults, below explicit CLI flags.
+    # Both formats reduce to dotted parser dests by flattening dict values:
+    # a run-dumped config.yaml is nested (env: {num_agents: 128}), a cluster
+    # config is already flat (env.num_agents: 128).
+    if args.config:
+        with open(args.config) as f:
+            yaml_config = yaml.safe_load(f) or {}
+        flattened_overrides = {}
+        # "git" is run provenance written by _save_experiment_config, not a setting.
+        pending_items = [(key, value) for key, value in yaml_config.items() if key != "git"]
+        while pending_items:
+            key, value = pending_items.pop()
+            if isinstance(value, dict):
+                pending_items.extend((f"{key}.{subkey}", subvalue) for subkey, subvalue in value.items())
+            else:
+                flattened_overrides[key] = value
+        # Keys present in run dumps that are derived (use_rnn) or self-referential
+        # (config), so they are never registered flags.
+        flattened_overrides.pop("train.use_rnn", None)
+        flattened_overrides.pop("config", None)
+        registered_dests = {action.dest for action in parser._actions}
+        unknown_keys = sorted(key for key in flattened_overrides if key not in registered_dests)
+        if unknown_keys:
+            raise ValueError(
+                f"--config {args.config} has keys unknown to env '{env_name}': "
+                f"{unknown_keys}. Remove them or fix the typo."
+            )
+        parser.set_defaults(**flattened_overrides)
 
     # Unpack to nested dict
     parsed = vars(parser.parse_args())
