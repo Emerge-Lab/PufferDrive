@@ -63,7 +63,7 @@ ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs[:1],
     target_type=env.target_type,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -110,10 +110,8 @@ coefs_manual = o[idx : idx + env.num_reward_coefs]
 idx += env.num_reward_coefs
 
 # Target
-target_manual = o[idx : idx + env.num_target_waypoints * env.target_features].reshape(
-    env.num_target_waypoints, env.target_features
-)
-idx += env.num_target_waypoints * env.target_features
+target_manual = o[idx : idx + env.num_goals * env.target_features].reshape(env.num_goals, env.target_features)
+idx += env.num_goals * env.target_features
 assert np.allclose(target_manual, target), "target mismatch"
 
 # Partners
@@ -278,7 +276,7 @@ img = plot_observation(
     obs[:1],
     target_type=env.target_type,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -363,7 +361,7 @@ first_target_y = obs[:, target_start + 1]
 target_dists = np.sqrt(first_target_x**2 + first_target_y**2)
 
 # Count active partners per agent
-partner_start = env.ego_features + env.num_reward_coefs + env.num_target_waypoints * env.target_features
+partner_start = env.ego_features + env.num_reward_coefs + env.num_goals * env.target_features
 partner_end = partner_start + env.obs_slots_partners_n * env.partner_features
 all_partners = obs[:, partner_start:partner_end].reshape(-1, env.obs_slots_partners_n, env.partner_features)
 partner_counts = (~np.all(all_partners == 0, axis=2)).sum(axis=1)

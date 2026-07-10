@@ -64,7 +64,7 @@ static int test_desired_speed_fallback_and_lane_limit(void) {
     agent.current_lane_idx = 0;
     agent.route = route;
     agent.route_length = 1;
-    agent.current_route_index = 0;
+    agent.current_route_idx = 0;
     EXPECT_NEAR(idm_desired_speed(&env, &agent), 12.0f, 1e-5f);
 
     lanes[1].speed_limit = 0.0f;
@@ -92,7 +92,7 @@ static int test_route_projection_and_advance(void) {
     env.num_road_elements = 2;
     agent.route = route;
     agent.route_length = 2;
-    agent.current_route_index = 0;
+    agent.current_route_idx = 0;
 
     IDMLaneProjection projection = idm_project_to_route_lanes(&env, &agent);
     EXPECT_EQ_INT(projection.valid, 1);
@@ -107,11 +107,11 @@ static int test_route_projection_and_advance(void) {
     agent = drive_test_agent(5.0f, 0.0f, 0.0f);
     agent.route = route;
     agent.route_length = 2;
-    agent.current_route_index = 0;
+    agent.current_route_idx = 0;
     env.agents = &agent;
     float old_heading = 0.0f;
     EXPECT_EQ_INT(idm_advance_along_route_lanes(&env, 0, 7.0f, &old_heading), 1);
-    EXPECT_EQ_INT(agent.current_route_index, 1);
+    EXPECT_EQ_INT(agent.current_route_idx, 1);
     EXPECT_NEAR(agent.sim_x, 12.0f, 1e-5f);
     return 0;
 }
@@ -165,11 +165,11 @@ static int test_leader_selection_and_move_idm(void) {
     agents[1] = drive_test_agent(10.0f, 0.0f, 0.0f);
     agents[0].route = ego_route;
     agents[0].route_length = 1;
-    agents[0].current_route_index = 0;
+    agents[0].current_route_idx = 0;
     agents[0].current_lane_idx = 0;
     agents[1].route = other_route;
     agents[1].route_length = 1;
-    agents[1].current_route_index = 0;
+    agents[1].current_route_idx = 0;
     agents[1].current_lane_idx = 0;
     agents[1].sim_vx = 2.0f;
     update_agent_speed(&agents[1]);
