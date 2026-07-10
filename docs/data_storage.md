@@ -1,0 +1,64 @@
+# Data storage — lab S3 buckets and dataset fetching
+
+How shared datasets (nuPlan bins, WOMD bins, checkpoints) are stored in the
+lab's S3 buckets and pulled onto a machine for training and evaluation.
+
+## Fetching data
+
+Datasets are registered in `data_utils/datasets.yaml` and land under a single
+local data root — `$PUFFERDRIVE_DATA_ROOT`, defaulting to `<repo>/data/`
+(gitignored):
+
+```bash
+python data_utils/fetch_data.py --list            # what exists, what is local
+python data_utils/fetch_data.py nuplan_dev_maps   # sync one dataset
+python data_utils/fetch_data.py nuplan_dev_maps --data-root /scratch/$USER/data
+```
+
+Syncs are incremental. On clusters, point `--data-root` (or export
+`PUFFERDRIVE_DATA_ROOT`) at shared scratch so one copy serves all jobs, then
+reference it from configs, e.g.
+`--env.map-dir $PUFFERDRIVE_DATA_ROOT/nuplan_dev_maps`.
+
+## AWS access
+
+Ask Eugene Vinitsky or Riccardo Savorgnan for an AWS user account. All access
+is controlled through IAM groups — no direct bucket policies.
+
+## Buckets
+
+| Bucket | Purpose | Versioning |
+| --- | --- | --- |
+| `pufferdrive-bins` | Production binaries (versioned deployments) | yes |
+| `pufferdrive-data` | Operational data — likely locked read-only in the future | no |
+| `pufferdrive-bins-test` | Shared testing deployments before promoting to prod | no |
+| `pufferdrive-personal` | Individual experiments and temporary files (`<bucket>/<user>/...`) | no |
+
+Current temporary home for development nuPlan maps:
+`s3://pufferdrive-personal/valentin/0.3.2/` (the `nuplan_dev_maps` manifest
+entry). Once the conversion stabilizes it moves to `pufferdrive-bins` under a
+proper version prefix.
+
+Adding a dataset = upload to the appropriate bucket, add an entry to
+`data_utils/datasets.yaml` (source URI, description, license), and it becomes
+fetchable by name.
+
+## Licensing constraints on redistribution
+
+What each upstream license allows determines where converted data may live
+and who may access it. Lab-internal S3 (IAM-gated) is fine for all of these;
+the constraints below apply to publishing outside the lab.
+
+- **nuPlan (Motional)** — CC BY-NC-SA 4.0, with Motional's dataset terms
+  prevailing on conflict. Redistribution of the data and derivatives
+  (including converted `.bin` files) is permitted if attributed to Motional,
+  non-commercial, and shared under the same CC BY-NC-SA 4.0 license. Public
+  hosting of converted nuPlan bins is therefore allowed with the right
+  license notice attached.
+- **Waymo Open Motion Dataset** — custom terms: copies and modifications
+  (which includes format-converted bins) may only be distributed to people
+  who have registered at waymo.com/open and agreed to Waymo's terms. Public
+  ungated hosting of WOMD-derived bins is not permitted; use gated
+  distribution or keep them lab-internal.
+- **CARLA assets** — CC-BY 4.0. The town map bins are freely redistributable
+  with attribution, which is why they ship directly in the repo.

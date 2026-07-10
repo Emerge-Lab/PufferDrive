@@ -1,0 +1,19 @@
+# Registry of shared datasets in the lab S3 buckets (see docs/data_storage.md).
+#
+# Fetch with:  python data_utils/fetch_data.py <name>
+#
+# Fields:
+#   s3_uri:      source prefix, synced recursively into $PUFFERDRIVE_DATA_ROOT/<name>/
+#   description: what the data is and where it is in its lifecycle
+#   license:     upstream license constraint — governs how copies may be shared
+
+nuplan_dev_maps:
+  s3_uri: s3://pufferdrive-personal/valentin/0.3.2/
+  description: >-
+    nuPlan maps used for current development. Temporary home under
+    pufferdrive-personal; moves to s3://pufferdrive-bins (versioned) once the
+    conversion stabilizes.
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Keep this notice with any copy; do not publish
+    outside the lab without the same license.
