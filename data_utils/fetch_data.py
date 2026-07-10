@@ -56,21 +56,25 @@ def fetch_dataset(manifest, name, data_root, dry_run):
     if shutil.which("aws") is None:
         sys.exit(
             "error: the AWS CLI is not installed. Install it (https://aws.amazon.com/cli/)\n"
-            "and configure lab IAM credentials — see docs/data_storage.md."
+            "— see docs/data_storage.md."
         )
     entry = manifest[name]
     destination_dir = os.path.join(data_root, name)
     sync_command = ["aws", "s3", "sync", entry["s3_uri"], destination_dir]
+    # The AWS CLI refuses even public buckets without credentials unless the
+    # request is explicitly unsigned.
+    if entry.get("public"):
+        sync_command.append("--no-sign-request")
     if dry_run:
         sync_command.append("--dryrun")
     print(f"license: {entry['license']}")
     print(f"syncing {entry['s3_uri']} -> {destination_dir}")
     completed = subprocess.run(sync_command)
     if completed.returncode != 0:
-        sys.exit(
-            f"error: aws s3 sync exited with {completed.returncode}. If this is a credential\n"
-            "error, configure lab IAM access first — see docs/data_storage.md."
+        credential_hint = "" if entry.get("public") else (
+            " If this is a credential\nerror, configure lab IAM access first — see docs/data_storage.md."
         )
+        sys.exit(f"error: aws s3 sync exited with {completed.returncode}.{credential_hint}")
     if not dry_run:
         file_count = sum(len(files) for _, _, files in os.walk(destination_dir))
         print(f"done: {file_count} files in {destination_dir}")

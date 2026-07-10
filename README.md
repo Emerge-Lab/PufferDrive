@@ -79,10 +79,11 @@ python scripts/submit_cluster.py \
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
 
-- **Shared lab datasets (S3):** `python data_utils/fetch_data.py --list`, then
+- **Shared datasets (S3):** `python data_utils/fetch_data.py --list`, then
   fetch by name — see [`docs/data_storage.md`](docs/data_storage.md). Requires
-  the [AWS CLI](https://aws.amazon.com/cli/) and lab IAM credentials; not
-  needed for install, build, or training on the bundled maps.
+  the [AWS CLI](https://aws.amazon.com/cli/); lab IAM credentials are needed
+  only for private datasets. Not needed for install, build, or training on
+  the bundled maps.
 
 ## Train
 

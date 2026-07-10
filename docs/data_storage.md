@@ -25,6 +25,14 @@ reference it from configs, e.g.
 Ask Eugene Vinitsky or Riccardo Savorgnan for an AWS user account. All access
 is controlled through IAM groups — no direct bucket policies.
 
+Credentials are only needed for private datasets. A manifest entry marked
+`public: true` lives in a public-read bucket and fetches without any AWS
+account (the script issues unsigned requests). All buckets are IAM-only
+today; if nuPlan-derived bins are promoted to a public-read location — which
+their CC BY-NC-SA license permits — flipping the manifest entry to
+`public: true` is the whole change. WOMD-derived data must stay IAM-gated
+(see below).
+
 ## Buckets
 
 | Bucket | Purpose | Versioning |

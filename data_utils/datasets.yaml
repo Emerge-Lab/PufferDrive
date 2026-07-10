@@ -6,6 +6,8 @@
 #   s3_uri:      source prefix, synced recursively into $PUFFERDRIVE_DATA_ROOT/<name>/
 #   description: what the data is and where it is in its lifecycle
 #   license:     upstream license constraint — governs how copies may be shared
+#   public:      optional, true for public-read buckets — fetches without AWS
+#                credentials (unsigned requests); omit for IAM-only buckets
 
 nuplan_dev_maps:
   s3_uri: s3://pufferdrive-personal/valentin/0.3.2/
