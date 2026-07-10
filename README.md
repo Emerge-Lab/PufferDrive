@@ -35,7 +35,7 @@ The venv lives outside the overlay because fuse2fs is single-threaded (~10 MB/s)
 | `VENV_PATH` | `/scratch/$USER/venvs/pufferdrive` |
 | `CONTAINER_PYTHON` | `/ext3/miniforge3/bin/python3` |
 
-The defaults match NYU Greene's filesystem layout. Override the env vars before invoking `setup_container.sh` if your cluster differs.
+The defaults match NYU Greene's filesystem layout. Override the env vars before invoking `setup_container.sh` if your cluster differs. In particular, the `/share/apps` defaults (`IMAGE_PATH`, `OVERLAY_TEMPLATE`) exist only on NYU Greene. `OVERLAY_TEMPLATE` is just a gzipped empty ext3 image: on other clusters point it at your site's template, or skip `create-overlay` and create the overlay directly with `apptainer overlay create --size 15360 --create-dir /ext3 <overlay-path>`. Set `IMAGE_PATH` to any CUDA-capable `.sif` (e.g. `apptainer pull docker://nvcr.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`).
 
 **One-time setup:**
 
