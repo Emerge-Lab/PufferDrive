@@ -33,6 +33,8 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --vec.num-envs 48 \
     --eval.validation-replay.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
     --eval.behaviors-full-dir.env.map-dir /lustre/scwpod02/client/kyutai/kesai/data/nuPlan/PufferDrive \
+    --eval.validation-replay.enabled False \
+    --eval.behaviors-full-dir.enabled False \
     --env.dt 0.3 \
     --env.max-agents-per-env 120 \
     --env.num-agents 4096 \
@@ -71,7 +73,8 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     --train.seed 4 \
     --train.update-epochs 3 \
     --policy.boundary-input-size 128 \
-    --tb
+    --tb \
+    --train.resume-state-path /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_008_longrun_300B/puffer_drive_jtzft7cx/trainer_state.pt
 
 end=$(date +%s)
 runtime=$((end-start))
