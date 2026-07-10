@@ -41,30 +41,18 @@ env.obs_slots_traffic_controls_n: 0
 # Training
 train.total_timesteps: 1_000_000_000
 
-# Disable nuPlan-based evaluators. validation_gigaflow stays on but is
-# reconfigured to triage_html (CPU-only scene playback + per-episode metrics
-# including dnf_rate), pinned to the same Town10HD single-agent setup the
-# training uses, so each eval cycle drops a gallery of rollouts you can browse
-# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
-eval.validation_replay.enabled: 0
+# validation_gigaflow reconfigured to obs_html (CPU-only scene playback +
+# per-episode metrics including dnf_rate), pinned to the same Town10HD
+# single-agent setup the training uses, so each eval cycle drops a gallery of
+# rollouts you can browse for DNFs. No eight-way ffmpeg/EGL spike from the
+# default egl backend. The nuPlan-based evaluators (validation_replay,
+# behaviors_full_dir) ship disabled in drive.ini, so no overrides are needed.
 eval.validation_gigaflow.render_backend: obs_html
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1
 eval.validation_gigaflow.env.num_agents: 64
 eval.validation_gigaflow.env.min_agents_per_env: 1
 eval.validation_gigaflow.env.max_agents_per_env: 1
-eval.behaviors_full_dir.enabled: 0
-eval.behaviors_hard_stop.enabled: 0
-eval.behaviors_highway_straight.enabled: 0
-eval.behaviors_lane_change.enabled: 0
-eval.behaviors_merge.enabled: 0
-eval.behaviors_parked_cars.enabled: 0
-eval.behaviors_roundabout.enabled: 0
-eval.behaviors_stopped_traffic.enabled: 0
-eval.behaviors_traffic_light_green.enabled: 0
-eval.behaviors_traffic_light_stop.enabled: 0
-eval.behaviors_unprotected_left.enabled: 0
-eval.behaviors_unprotected_right.enabled: 0
 
 # W&B. Group has no space: submit_cluster.py joins the inner command into a
 # bash -c string without quoting arg values, so a space would split the arg.
