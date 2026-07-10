@@ -244,8 +244,7 @@ int eval_gif(
     int num_maps,
     int scenario_length_override,
     int init_mode,
-    int control_mode,
-    int goal_behavior) {
+    int control_mode) {
     // Parse configuration from INI file
     env_init_config conf = {0}; // Initialize to zero
     const char *ini_file = "pufferlib/config/ocean/drive.ini";
@@ -296,7 +295,6 @@ int eval_gif(
         .compute_eval_metrics = conf.compute_eval_metrics,
         .obs_lane_stride = conf.obs_lane_stride,
         .obs_boundary_stride = conf.obs_boundary_stride,
-        .goal_behavior = goal_behavior,
         .init_mode = init_mode,
         .control_mode = control_mode,
     };
@@ -331,18 +329,21 @@ int eval_gif(
     InitWindow(img_width, img_height, "Puffer Drive");
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
-    // Load the textures and models
-    client->puffers = LoadTexture("resources/puffers_128.png");
-    client->cars[0] = LoadModel("resources/drive/RedCar.glb");
-    client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
-    client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
-    client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
-    client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
-    client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
-    client->cyclist = LoadModel("resources/drive/cyclist.glb");
-    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
+    // Load the models. The visualizer is invoked from the repo root, so the
+    // asset paths are repo-root-relative.
+    client->cars[0] = LoadModel("pufferlib/resources/drive/RedCar.glb");
+    client->cars[1] = LoadModel("pufferlib/resources/drive/WhiteCar.glb");
+    client->cars[2] = LoadModel("pufferlib/resources/drive/BlueCar.glb");
+    client->cars[3] = LoadModel("pufferlib/resources/drive/YellowCar.glb");
+    client->cars[4] = LoadModel("pufferlib/resources/drive/GreenCar.glb");
+    client->cars[5] = LoadModel("pufferlib/resources/drive/GreyCar.glb");
+    client->cyclist = LoadModel("pufferlib/resources/drive/cyclist.glb");
+    client->pedestrian = LoadModel("pufferlib/resources/drive/pedestrian.glb");
 
     Weights *weights = load_weights(policy_name);
+    if (weights == NULL) {
+        RAISE_FILE_ERROR(policy_name);
+    }
     printf("Active agents in map: %d\n", env.active_agent_count);
     DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
 
@@ -489,7 +490,6 @@ int main(int argc, char *argv[]) {
     int scenario_length_cli = -1;
     int init_mode = 0;
     int control_mode = 0;
-    int goal_behavior = 0;
 
     const char *view_mode = "both"; // "both", "topdown", "agent"
     const char *output_topdown = NULL;
@@ -594,11 +594,6 @@ int main(int argc, char *argv[]) {
                 scenario_length_cli = atoi(argv[i + 1]);
                 i++;
             }
-        } else if (strcmp(argv[i], "--goal-behavior") == 0) {
-            if (i + 1 < argc) {
-                goal_behavior = atoi(argv[i + 1]);
-                i++;
-            }
         }
     }
 
@@ -619,7 +614,6 @@ int main(int argc, char *argv[]) {
         num_maps,
         scenario_length_cli,
         init_mode,
-        control_mode,
-        goal_behavior);
+        control_mode);
     return 0;
 }

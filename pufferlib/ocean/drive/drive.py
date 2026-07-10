@@ -436,6 +436,12 @@ class Drive(pufferlib.PufferEnv):
             render_mode_flag = 0
         return {
             "render_mode": render_mode_flag,
+            # Absolute directory holding render assets (.glb models), so the C
+            # renderer loads them regardless of the process CWD. Derived from
+            # this file's location, not a config knob.
+            "resource_root": os.path.normpath(
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "resources", "drive")
+            ),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,
