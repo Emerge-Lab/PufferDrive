@@ -1989,6 +1989,12 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
+    char *resource_root = unpack_str(kwargs, "resource_root");
+    if (resource_root == NULL) {
+        return -1;
+    }
+    snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
+    free(resource_root);
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     int init_step = (int) unpack(kwargs, "init_step");
