@@ -30,7 +30,6 @@ const Color LIGHTGREEN = (Color) {152, 255, 152, 255};
 typedef struct Client {
     float width;
     float height;
-    Texture2D puffers;
     Vector3 camera_target;
     float camera_zoom;
     Camera3D camera;
@@ -75,7 +74,7 @@ void build_road_cache(Drive *env, Client *client) {
     int tri_count = 0, line_count = 0;
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *road = &env->road_elements[i];
-        int segs = road->segment_length - 1;
+        int segs = road->segment_size - 1;
         if (segs <= 0) {
             continue;
         }
@@ -139,7 +138,7 @@ void build_road_cache(Drive *env, Client *client) {
 
     for (int i = 0; i < env->num_road_elements; i++) {
         RoadMapElement *road = &env->road_elements[i];
-        for (int j = 0; j < road->segment_length - 1; j++) {
+        for (int j = 0; j < road->segment_size - 1; j++) {
             float sx = road->x[j], sy = road->y[j], sz = road->z[j];
             float ex = road->x[j + 1], ey = road->y[j + 1], ez = road->z[j + 1];
 
@@ -236,6 +235,16 @@ static int g_xvfb_display_num = 0;
 // invocations reuse the existing window + GL context; the EGL pbuffer
 // is resized instead. Matches 3.0 drive.h g_glfw_ready pattern.
 static int g_glfw_ready = 0;
+
+static Model load_drive_model(Drive *env, const char *filename) {
+    char model_path[sizeof(env->resource_root) + 64];
+    snprintf(model_path, sizeof(model_path), "%s/%s", env->resource_root, filename);
+    Model model = LoadModel(model_path);
+    if (model.meshCount == 0) {
+        RAISE_FILE_ERROR(model_path);
+    }
+    return model;
+}
 
 Client *make_client(Drive *env) {
     Client *client = (Client *) calloc(1, sizeof(Client));
@@ -349,17 +358,18 @@ Client *make_client(Drive *env) {
         client->egl_mode = 1;
     }
 #endif
-    client->puffers = LoadTexture("resources/puffers_128.png");
-    client->cars[0] = LoadModel("resources/drive/RedCar.glb");
-    client->cars[1] = LoadModel("resources/drive/WhiteCar.glb");
-    client->cars[2] = LoadModel("resources/drive/BlueCar.glb");
-    client->cars[3] = LoadModel("resources/drive/YellowCar.glb");
-    client->cars[4] = LoadModel("resources/drive/GreenCar.glb");
-    client->cars[5] = LoadModel("resources/drive/GreyCar.glb");
-    client->cyclist = LoadModel("resources/drive/cyclist.glb");
-    client->pedestrian = LoadModel("resources/drive/pedestrian.glb");
+    client->cars[0] = load_drive_model(env, "RedCar.glb");
+    client->cars[1] = load_drive_model(env, "WhiteCar.glb");
+    client->cars[2] = load_drive_model(env, "BlueCar.glb");
+    client->cars[3] = load_drive_model(env, "YellowCar.glb");
+    client->cars[4] = load_drive_model(env, "GreenCar.glb");
+    client->cars[5] = load_drive_model(env, "GreyCar.glb");
+    client->cyclist = load_drive_model(env, "cyclist.glb");
+    client->pedestrian = load_drive_model(env, "pedestrian.glb");
     int animCountCyc = 0;
-    client->cycle_anim = LoadModelAnimations("resources/drive/cyclist.glb", &animCountCyc);
+    char cyclist_anim_path[sizeof(env->resource_root) + 64];
+    snprintf(cyclist_anim_path, sizeof(cyclist_anim_path), "%s/cyclist.glb", env->resource_root);
+    client->cycle_anim = LoadModelAnimations(cyclist_anim_path, &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
@@ -378,7 +388,7 @@ Client *make_client(Drive *env) {
     // Fallback: use first road element midpoint if no valid agent found
     if (scene_cx == 0.0f && scene_cy == 0.0f && env->num_road_elements > 0) {
         RoadMapElement *r0 = &env->road_elements[0];
-        if (r0->segment_length > 0) {
+        if (r0->segment_size > 0) {
             scene_cx = r0->x[0];
             scene_cy = r0->y[0];
             scene_cz = r0->z[0];
@@ -725,8 +735,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     int ego_dim = EGO_FEATURES;
     int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
-    int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
-                                                              : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
+    int target_features = (env->target_type == TARGET_STATIC) ? env->num_goals * STATIC_TARGET_FEATURES
+                                                              : env->num_goals * DYNAMIC_TARGET_FEATURES;
     int max_obs = compute_observation_size(env);
     float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
     float *agent_obs = &observations[agent_index][0];
@@ -739,7 +749,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float py = env->agents[active_idx].sim_y;
     float pz = env->agents[active_idx].sim_z;
     // draw goal (first target waypoint, in ego frame)
-    if (env->num_target_waypoints > 0) {
+    if (env->num_goals > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
         float goal_x = agent_obs[goal_obs_idx] * env->obs_norm_goal_offset_m;
         float goal_y = agent_obs[goal_obs_idx + 1] * env->obs_norm_goal_offset_m;
@@ -782,7 +792,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         // Draw position of other agents
         float x = agent_obs[obs_idx] * env->obs_norm_xy_offset_m;
         float y = agent_obs[obs_idx + 1] * env->obs_norm_xy_offset_m;
-        float z = agent_obs[obs_idx + 2] * env->obs_norm_xy_offset_m;
+        float z = agent_obs[obs_idx + 2] * Z_BUFFER;
         if (lasers && mode == 0) {
             DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x, y, z + 1}, ORANGE);
         }
@@ -921,17 +931,17 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         // For road segments, draw line between start and end points
         float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
         float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
-        float z_middle = agent_obs[entity_idx + 2] * env->obs_norm_xy_offset_m;
+        float z_middle = agent_obs[entity_idx + 2] * Z_BUFFER;
         float rel_angle_x = (agent_obs[entity_idx + 5]);
         float rel_angle_y = (agent_obs[entity_idx + 6]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
+        float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         // Calculate endpoint using the relative angle directly
         // Calculate endpoint directly
-        float x_start = x_middle - segment_length * cosf(rel_angle);
-        float y_start = y_middle - segment_length * sinf(rel_angle);
-        float x_end = x_middle + segment_length * cosf(rel_angle);
-        float y_end = y_middle + segment_length * sinf(rel_angle);
+        float x_start = x_middle - segment_size * cosf(rel_angle);
+        float y_start = y_middle - segment_size * sinf(rel_angle);
+        float x_end = x_middle + segment_size * cosf(rel_angle);
+        float y_end = y_middle + segment_size * sinf(rel_angle);
 
         if (lasers && mode == 0) {
             DrawLine3D((Vector3) {0, 0, 0}, (Vector3) {x_middle, y_middle, z_middle + 1}, lineColor);
@@ -975,15 +985,15 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
         float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
         float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
-        float z_middle = agent_obs[entity_idx + 2] * env->obs_norm_xy_offset_m;
+        float z_middle = agent_obs[entity_idx + 2] * Z_BUFFER;
         float rel_angle_x = agent_obs[entity_idx + 5];
         float rel_angle_y = agent_obs[entity_idx + 6];
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
-        float segment_length = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
-        float x_start = x_middle - segment_length * cosf(rel_angle);
-        float y_start = y_middle - segment_length * sinf(rel_angle);
-        float x_end = x_middle + segment_length * cosf(rel_angle);
-        float y_end = y_middle + segment_length * sinf(rel_angle);
+        float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
+        float x_start = x_middle - segment_size * cosf(rel_angle);
+        float y_start = y_middle - segment_size * sinf(rel_angle);
+        float x_end = x_middle + segment_size * cosf(rel_angle);
+        float y_end = y_middle + segment_size * sinf(rel_angle);
 
         if (mode == 1) {
             float x_start_world = px + (x_start * heading_self_x - y_start * heading_self_y);
@@ -1084,7 +1094,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
         }
-        if (traffic->states == NULL || traffic->state_length <= 0) {
+        if (traffic->states == NULL || traffic->state_size <= 0) {
             continue;
         }
 
@@ -1092,8 +1102,8 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         if (state_idx < 0) {
             state_idx = 0;
         }
-        if (state_idx >= traffic->state_length) {
-            state_idx = traffic->state_length - 1;
+        if (state_idx >= traffic->state_size) {
+            state_idx = traffic->state_size - 1;
         }
         int tl_state = traffic->states[state_idx];
 
@@ -1341,17 +1351,17 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
         if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
             // Draw all target waypoints: brightest (first) to darkest (last)
-            int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS) {
-                num_wp = MAX_TARGET_WAYPOINTS;
+            int num_wp = env->num_goals;
+            if (num_wp > MAX_GOALS) {
+                num_wp = MAX_GOALS;
             }
             for (int wp = 0; wp < num_wp; wp++) {
                 if (wp < agent->current_goal_idx) {
                     continue; // already reached
                 }
-                float wx = agent->goal_positions_x[wp];
-                float wy = agent->goal_positions_y[wp];
-                float wz = agent->goal_positions_z[wp];
+                float wx = agent->list_goal_x[wp];
+                float wy = agent->list_goal_y[wp];
+                float wz = agent->list_goal_z[wp];
                 // Brightness: first=1.0, last=0.3
                 float alpha = 1.0f - 0.7f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
                 float radius = 1.5f - 0.5f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
@@ -1373,7 +1383,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             rlSetLineWidth(1.5f);
             for (int i = 0; i < env->num_road_elements; i++) {
                 RoadMapElement *element = &env->road_elements[i];
-                for (int j = 0; j < element->segment_length - 1; j++) {
+                for (int j = 0; j < element->segment_size - 1; j++) {
                     float sx = element->x[j], sy = element->y[j], sz = element->z[j];
                     float ex = element->x[j + 1], ey = element->y[j + 1], ez = element->z[j + 1];
                     if (is_road_lane(element->type)) {
@@ -1477,7 +1487,7 @@ void saveTopDownImage(
     if (log_trajectories) {
         for (int i = 0; i < env->num_total_agents; i++) {
             Agent *agent = &env->agents[i];
-            for (int j = 0; j < agent->trajectory_length; j++) {
+            for (int j = 0; j < agent->trajectory_size; j++) {
                 float x = agent->log_trajectory_x[j];
                 float y = agent->log_trajectory_y[j];
                 float valid = agent->log_valid[j];
@@ -1771,7 +1781,6 @@ void close_client(Client *client) {
     }
     UnloadModel(client->cyclist);
     UnloadModel(client->pedestrian);
-    UnloadTexture(client->puffers);
 
     // CRITICAL: skip CloseWindow + egl_headless_cleanup in egl_mode.
     //

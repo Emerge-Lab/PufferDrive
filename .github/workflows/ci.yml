@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [ main, 'emerge/**' ]
+    branches: [ main, '3.0' ]
   push:
-    branches: [ main, 'emerge/**' ]
+    branches: [ main, '3.0' ]
 
 jobs:
   unit-tests:
@@ -40,6 +40,39 @@ jobs:
       - name: Unit tests
         run: python -m pytest -v tests/unit_tests
 
+  c-drive-tests:
+    name: C Drive Tests
+    runs-on: ubuntu-latest
+    env:
+      PUFFER_CPU: 1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
+
+      - name: Install pufferlib
+        env:
+          TMPDIR: ${{ runner.temp }}/build
+          PIP_NO_CACHE_DIR: 1
+        run: |
+          sudo apt-get update && sudo apt-get install -y build-essential cmake xvfb libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
+          python -m pip install -U pip
+          pip install -e . --no-cache-dir
+          python setup.py build_ext --inplace --force
+
+      - name: C drive unit and render tests
+        run: make -C tests/drive test render
+
   notebook-tests:
     name: Notebook Execution
     runs-on: ubuntu-latest
@@ -66,7 +99,7 @@ jobs:
           PIP_NO_CACHE_DIR: 1
         run: |
           sudo apt-get update && sudo apt-get install -y build-essential cmake
-          python -m pip install -U pip pytest jupytext nbclient ipykernel ipywidgets
+          python -m pip install -U pip pytest jupytext nbclient ipykernel
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 
@@ -147,11 +180,11 @@ jobs:
           TMPDIR: ${{ runner.temp }}/build
           PIP_NO_CACHE_DIR: 1
         run: |
-          sudo apt-get update && sudo apt-get install -y build-essential cmake
+          sudo apt-get update && sudo apt-get install -y build-essential cmake libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
           python -m pip install -U pip
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 
       - name: Test simulator performance
-        run: python tests/smoke_tests/test_simulator_perf.py
+        run: make -C tests/drive perf
         timeout-minutes: 20

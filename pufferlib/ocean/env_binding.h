@@ -892,8 +892,8 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 5] = a->sim_width;
             agent_f32[f32_base + 6] = a->sim_speed;
             agent_f32[f32_base + 7] = a->steering_angle;
-            agent_f32[f32_base + 8] = a->a_long;
-            agent_f32[f32_base + 9] = a->a_lat;
+            agent_f32[f32_base + 8] = a->accel_long;
+            agent_f32[f32_base + 9] = a->accel_lat;
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
 
@@ -946,7 +946,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             int base = (e * traffic_cap + i) * traffic_fields;
             traffic_i16[base + 0] = 1;
             traffic_i16[base + 1] = (short) t->type;
-            if (t->states && drive->timestep >= 0 && drive->timestep < t->state_length) {
+            if (t->states && drive->timestep >= 0 && drive->timestep < t->state_size) {
                 traffic_i16[base + 2] = (short) t->states[drive->timestep];
             }
         }
@@ -1499,6 +1499,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "ROAD_FEATURES", ROAD_FEATURES);
     PyModule_AddIntConstant(m, "PARTNER_FEATURES", PARTNER_FEATURES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_FEATURES", TRAFFIC_CONTROL_FEATURES);
+    PyModule_AddIntConstant(m, "OBS_VALID_COUNT_FEATURES", OBS_VALID_COUNT_FEATURES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_TYPES", NUM_TRAFFIC_CONTROL_TYPES);
     PyModule_AddIntConstant(m, "NUM_TRAFFIC_CONTROL_STATES", NUM_TRAFFIC_CONTROL_STATES);
     PyModule_AddIntConstant(m, "TRAFFIC_CONTROL_TYPE_NONE", TRAFFIC_CONTROL_TYPE_NONE);
@@ -1513,7 +1514,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "EGO_FEATURES", EGO_FEATURES);
     PyModule_AddIntConstant(m, "STATIC_TARGET_FEATURES", STATIC_TARGET_FEATURES);
     PyModule_AddIntConstant(m, "DYNAMIC_TARGET_FEATURES", DYNAMIC_TARGET_FEATURES);
-    PyModule_AddIntConstant(m, "MAX_TARGET_WAYPOINTS", MAX_TARGET_WAYPOINTS);
+    PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);

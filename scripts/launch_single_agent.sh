@@ -30,6 +30,9 @@ DATE_STAMP="$(date +%Y-%m-%d)"
 
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 
+# Refresh the nightly trend runs
+python scripts/nightly_report.py update || echo "trend update failed (non-fatal)"
+
 # One submission per seed so we can pass a per-seed run_name (wandb display
 # name like 2026-05-31_seed0)
 IFS=':' read -ra SEED_LIST <<< "$SEEDS"
@@ -41,5 +44,5 @@ for SEED in "${SEED_LIST[@]}"; do
         --program_config "$PROGRAM_CONFIG" \
         --container --heartbeat \
         --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
-        --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}"
+        --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}" "wandb_group=${DATE_STAMP}"
 done

@@ -369,15 +369,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             PyDict_SetItemString(agent, "type", tmp);
             Py_DECREF(tmp);
 
-            /* Validate trajectory_length before using it */
-            int traj_len = (a->trajectory_length > 0 && a->trajectory_length < 10000) ? a->trajectory_length : 0;
+            /* Validate trajectory_size before using it */
+            int traj_len = (a->trajectory_size > 0 && a->trajectory_size < 10000) ? a->trajectory_size : 0;
             tmp = PyLong_FromLong(traj_len);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            PyDict_SetItemString(agent, "trajectory_length", tmp);
+            PyDict_SetItemString(agent, "trajectory_size", tmp);
             Py_DECREF(tmp);
 
             /* Log trajectory arrays - validate each pointer individually before access */
@@ -649,7 +649,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->a_long);
+            pf = PyFloat_FromDouble((double) a->accel_long);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -663,7 +663,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->a_lat);
+            pf = PyFloat_FromDouble((double) a->accel_lat);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -790,13 +790,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             Py_DECREF(tmp);
 
             /* Goal position */
-            pf = PyFloat_FromDouble((double) a->goal_position_x);
+            pf = PyFloat_FromDouble((double) a->current_goal_x);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_x", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_x", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -804,13 +804,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->goal_position_y);
+            pf = PyFloat_FromDouble((double) a->current_goal_y);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_y", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_y", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -818,13 +818,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
-            pf = PyFloat_FromDouble((double) a->goal_position_z);
+            pf = PyFloat_FromDouble((double) a->current_goal_z);
             if (!pf) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "goal_position_z", pf) < 0) {
+            if (PyDict_SetItemString(agent, "current_goal_z", pf) < 0) {
                 Py_DECREF(pf);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -932,13 +932,13 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(a->current_route_index);
+            tmp = PyLong_FromLong(a->current_route_idx);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(agent, "current_route_index", tmp) < 0) {
+            if (PyDict_SetItemString(agent, "current_route_idx", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1184,7 +1184,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                     SET_WAYPOINT_FLOAT("x", wp->x);
                     SET_WAYPOINT_FLOAT("y", wp->y);
                     SET_WAYPOINT_FLOAT("heading", wp->heading);
-                    SET_WAYPOINT_FLOAT("kappa", wp->kappa);
 
                     tmp_val = PyLong_FromLong(wp->lane_idx);
                     if (!tmp_val) {
@@ -1274,15 +1273,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            /* Validate segment_length before using it */
-            int seg_len = (r->segment_length > 0 && r->segment_length < 100000) ? r->segment_length : 0;
+            /* Validate segment_size before using it */
+            int seg_len = (r->segment_size > 0 && r->segment_size < 100000) ? r->segment_size : 0;
             tmp = PyLong_FromLong(seg_len);
             if (!tmp) {
                 Py_DECREF(road);
                 Py_DECREF(road_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(road, "segment_length", tmp) < 0) {
+            if (PyDict_SetItemString(road, "segment_size", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(road);
                 Py_DECREF(road_list);
@@ -1495,15 +1494,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            /* Validate state_length before using it */
-            int state_len = (t->state_length > 0 && t->state_length < 10000) ? t->state_length : 0;
+            /* Validate state_size before using it */
+            int state_len = (t->state_size > 0 && t->state_size < 10000) ? t->state_size : 0;
             tmp = PyLong_FromLong(state_len);
             if (!tmp) {
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
                 return NULL;
             }
-            if (PyDict_SetItemString(traffic, "state_length", tmp) < 0) {
+            if (PyDict_SetItemString(traffic, "state_size", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(traffic);
                 Py_DECREF(traffic_list);
@@ -1966,11 +1965,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->next_episode_index = 0;
     env->completed_episodes_count = 0;
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
-    env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
-    env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
-    env->num_target_waypoints = (int) unpack(kwargs, "num_target_waypoints");
-    if (env->num_target_waypoints > MAX_TARGET_WAYPOINTS) {
-        env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
+    env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
+    env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
+    env->num_goals = (int) unpack(kwargs, "num_goals");
+    if (env->num_goals > MAX_GOALS) {
+        env->num_goals = MAX_GOALS;
     }
     env->target_type = (int) unpack(kwargs, "target_type");
     env->goal_on_lane = (int) unpack(kwargs, "goal_on_lane");
@@ -1979,6 +1978,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
+    env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
+    env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
@@ -1986,8 +1987,15 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
+    env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
+    char *resource_root = unpack_str(kwargs, "resource_root");
+    if (resource_root == NULL) {
+        return -1;
+    }
+    snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
+    free(resource_root);
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     int init_step = (int) unpack(kwargs, "init_step");

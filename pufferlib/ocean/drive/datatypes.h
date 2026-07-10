@@ -87,44 +87,22 @@
 // Evaluation metrics
 #define AT_FAULT_COLLISION_IDX 12
 #define TTC_IDX 13
-#define TTC_TFL_IDX 14
+#define DISTANCE_TO_COLLISION_IDX 14
 #define PROGRESS_RATIO_IDX 15
 #define MULTI_LANE_TIME_IDX 16
 #define MULTI_LANE_SCORE_IDX 17
 
 // Path
 #define MAX_NUM_WP_PATH 200
-#define MAX_TARGET_WAYPOINTS 20
+#define MAX_GOALS 20
 
 // obs_html_frame array field counts
-#define AGENT_F32_FIELDS 12 // sim_x/y/z, heading, length, width, speed, steering, a_long, a_lat, jerk_long, jerk_lat
-#define AGENT_I32_FIELDS 8  // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define AGENT_F32_FIELDS                                                                                               \
+    12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
+#define AGENT_I32_FIELDS 8             // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-
-struct Waypoint {
-    float s;           // Arc length (cumulative distance from the start) - init position
-    float x;           // Global x-coordinate
-    float y;           // Global y-coordinate
-    float z;           // Global z-coordinate
-    float heading;     // Global heading (tangent angle) in radians
-    float cos_heading; // Cached cosf(heading) - set in build_path
-    float sin_heading; // Cached sinf(heading) - set in build_path
-    float kappa;       // Curvature at this point
-    int lane_idx;      // Index of the lane this waypoint
-};
-struct Path {
-    struct Waypoint waypoints[MAX_NUM_WP_PATH];
-    int num_waypoints;
-};
-
-struct ttc_result {
-    float min_ttc;
-    int other_idx;
-    float distance_to_collision;
-    float closing_speed;
-};
 
 static inline int is_road_lane(int type) {
     return (type >= 0 && type <= 9);
@@ -150,39 +128,48 @@ static inline int is_road(int type) {
     return is_road_lane(type) || is_road_line(type) || is_road_edge(type);
 }
 
+static inline int is_road_grid_candidate(int type) {
+    return is_road_lane(type) || is_road_edge(type);
+}
+
 static inline int is_controllable_agent(int type) {
     return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
 }
 
-static inline int normalize_road_type(int type) {
-    if (is_road_lane(type)) {
-        return 0;
-    } else if (is_road_line(type)) {
-        return 1;
-    } else if (is_road_edge(type)) {
-        return 2;
+static inline int traffic_control_in_scope(int type, int scope) {
+    if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN;
+    } else if (scope == TRAFFIC_CONTROL_SCOPE_ALL) {
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN
+            || type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN;
     } else {
-        return -1;
+        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
     }
 }
 
-static inline int unnormalize_road_type(int norm_type) {
-    if (norm_type == 0) {
-        return LANE_SURFACE_STREET;
-    } else if (norm_type == 1) {
-        return ROAD_LINE_BROKEN_SINGLE_WHITE;
-    } else if (norm_type == 2) {
-        return ROAD_EDGE_BOUNDARY;
-    } else {
-        return -1; // Invalid
-    }
-}
+struct Waypoint {
+    float s;           // Arc length (cumulative distance from the start) - init position
+    float x;           // Global x-coordinate
+    float y;           // Global y-coordinate
+    float z;           // Global z-coordinate
+    float heading;     // Global heading (tangent angle) in radians
+    float cos_heading; // Cached cosf(heading) - set in build_path
+    float sin_heading; // Cached sinf(heading) - set in build_path
+    int lane_idx;      // Index of the lane this waypoint
+};
+struct Path {
+    struct Waypoint waypoints[MAX_NUM_WP_PATH];
+    int num_waypoints;
+};
 
 struct Agent {
+    int id;
     int type;
 
     // Log trajectory
-    int trajectory_length;
+    int trajectory_size;
     float *log_trajectory_x;
     float *log_trajectory_y;
     float *log_trajectory_z;
@@ -194,28 +181,33 @@ struct Agent {
     float *log_height;
     int *log_valid;
 
-    // Simulation state (always center-based, even when trajectory control uses the rear axle)
-    float sim_x; // Vehicle center x-coordinate
-    float sim_y; // Vehicle center y-coordinate
-    float sim_z;
-    float sim_heading;
-    float cos_heading; // Cached cosf(sim_heading) - updated in move_dynamics
-    float sin_heading; // Cached sinf(sim_heading) - updated in move_dynamics
-    float sim_vx;      // Vehicle center velocity x-component
-    float sim_vy;      // Vehicle center velocity y-component
-    float yaw_rate;    // Angular velocity used to derive rear-axle velocity
-    float sim_speed;
-    float sim_speed_signed;
-    float sim_length;
-    float sim_width;
-    float sim_height;
+    // Simulation state
+    float sim_x;       // Bounding box center x
+    float sim_y;       // Bounding box center y
+    float sim_z;       // Bounding box center z
+    float sim_heading; // Bounding box heading
+    float cos_heading;
+    float sin_heading;
+    float sim_vx;           // Bounding box velocity x
+    float sim_vy;           // Bounding box velocity y
+    float yaw_rate;         // Angular velocity used to convert between rear and center velocity
+    float sim_speed;        // Bounding box center speed magnitude
+    float sim_speed_signed; // Bounding box center signed longitudinal speed
+    float sim_length;       // Bounding box length
+    float sim_width;        // Bounding box width
+    float sim_height;       // Bounding box height
+    float radius;           // Circumradius (smallest enclosing circle) -> 0.5*sqrt(L^2+W^2)
+    float prev_x;
+    float prev_y;
+    float prev_cos_heading;
+    float prev_sin_heading;
     int sim_valid;
 
     // Route information
     int route_length;
     int *route;
-    int route_gt_len;        // Number of leading route lanes supported by GT before extension
-    int current_route_index; // Tracks progress through route array
+    int route_gt_len;      // Number of leading route lanes supported by GT before extension
+    int current_route_idx; // Tracks progress through route array
 
     // Path
     struct Path *path;
@@ -224,7 +216,7 @@ struct Agent {
     // Metrics and status tracking (size must match NUM_METRICS in drive.h)
     float metrics_array[NUM_METRICS]; // [collision, offroad, red_light, stop_sign, reached_goal, lane_dist, lane_angle,
                                       // comfort_violation, velocity_progress, speed_limit, avg_displacement_error,
-                                      // progression, at_fault_collision, ttc, ttc_tfl, progress_ratio,
+                                      // progression, at_fault_collision, ttc, distance_to_collision, progress_ratio,
                                       // multi_lane_time, multi_lane_score]
     int current_lane_idx;
     int previous_lane_idx;
@@ -242,20 +234,20 @@ struct Agent {
     float seconds_stopped;
 
     // Goal positions (N sequential waypoints)
-    float goal_positions_x[MAX_TARGET_WAYPOINTS];
-    float goal_positions_y[MAX_TARGET_WAYPOINTS];
-    float goal_positions_z[MAX_TARGET_WAYPOINTS];
-    float goal_position_x; // alias = goal_positions_x[current_goal_idx]
-    float goal_position_y; // alias = goal_positions_y[current_goal_idx]
-    float goal_position_z; // alias = goal_positions_z[current_goal_idx]
-    int current_goal_idx;  // index of next goal to reach (0..N-1)
+    float list_goal_x[MAX_GOALS];
+    float list_goal_y[MAX_GOALS];
+    float list_goal_z[MAX_GOALS];
+    float current_goal_x; // alias = list_goal_x[current_goal_idx]
+    float current_goal_y; // alias = list_goal_y[current_goal_idx]
+    float current_goal_z; // alias = list_goal_z[current_goal_idx]
+    int current_goal_idx; // index of next goal to reach (0..N-1)
 
     int stopped; // 0/1 -> freeze if set
     int removed; // 0/1 -> remove from sim if set
 
     // Jerk dynamics
-    float a_long;
-    float a_lat;
+    float accel_long;
+    float accel_lat;
     float jerk_long;
     float jerk_lat;
     float steering_angle;
@@ -264,14 +256,6 @@ struct Agent {
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];
 
-    // Puffer score tracking (per-episode accumulators)
-    struct ttc_result cached_ttc;    // Filled once per step before reward computation
-    float wrong_way_distance;        // Accumulated wrong-way distance
-    float speed_violation_sum;       // For nuPlan speed compliance formula
-    int ttc_violations;              // Count of TTC < 0.95s violations
-    int ttc_samples;                 // Total TTC samples for rate
-    int at_fault_collision;          // 1 if at-fault collision occurred this episode
-    float multi_lane_time;           // Accumulated time (s) on multiple lanes
     int phantom_braking_counter;     // >0 means currently phantom braking
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
@@ -280,7 +264,7 @@ struct Agent {
 struct RoadMapElement {
     int type;
 
-    int segment_length;
+    int segment_size;
     float *x;
     float *y;
     float *z;
@@ -299,19 +283,13 @@ struct RoadMapElement {
 struct TrafficControlElement {
     int type;
 
-    int state_length;
+    int state_size;
     int *states;
     float stop_line[6]; // Two 3D endpoints: [x1,y1,z1, x2,y2,z2]
     float heading;
     int num_controlled_lanes;
     int *controlled_lanes;
 };
-
-typedef struct {
-    float z_dis;
-    float euclidean_dis;
-    float z;
-} DepthPoint;
 
 struct LaneGraph {
     int n_lanes;

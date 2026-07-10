@@ -148,13 +148,18 @@ def _build_config():
     _set_existing(
         args["policy"],
         {
-            "input_size": 32,
-            "backbone_hidden_size": 32,
-            "actor_hidden_size": 32,
-            "critic_hidden_size": 32,
+            "ego_input_size": 32,
+            "partner_input_size": 128,
+            "lane_input_size": 64,
+            "boundary_input_size": 64,
+            "traffic_control_input_size": 16,
+            "context_input_size": 8,
+            "backbone_hidden_size": 256,
+            "actor_hidden_size": 128,
+            "critic_hidden_size": 64,
         },
     )
-    _set_existing(args["rnn"], {"input_size": 32, "hidden_size": 32})
+    _set_existing(args["rnn"], {"input_size": 256, "hidden_size": 256})
 
     args["wandb"] = False
     args["neptune"] = False

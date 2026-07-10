@@ -34,35 +34,46 @@ ACTOR_HIDDEN_SIZE = 128
 ACTOR_NUM_LAYERS = 3
 CRITIC_HIDDEN_SIZE = 64
 CRITIC_NUM_LAYERS = 2
-SPLIT_NETWORK = False
-ENCODER_GIGAFLOW = True
-DROPOUT = 0.0
+SHARED_NETWORK = True
+ENCODER_ACTIVATION = "tanh"
+ENCODER_LAYER_NORM = True
+BACKBONE_ACTIVATION = "gelu"
+BACKBONE_LAYER_NORM = False
+MASK_PADDED_FEATURES = False
 
 env, obs, info = make_drive_env()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 policy = DrivePolicy(
     env,
-    input_size=INPUT_SIZE,
+    ego_input_size=INPUT_SIZE,
+    partner_input_size=INPUT_SIZE,
+    lane_input_size=INPUT_SIZE,
+    boundary_input_size=INPUT_SIZE,
+    traffic_control_input_size=INPUT_SIZE,
+    context_input_size=INPUT_SIZE,
     backbone_hidden_size=BACKBONE_HIDDEN_SIZE,
     backbone_num_layers=BACKBONE_NUM_LAYERS,
     actor_hidden_size=ACTOR_HIDDEN_SIZE,
     actor_num_layers=ACTOR_NUM_LAYERS,
     critic_hidden_size=CRITIC_HIDDEN_SIZE,
     critic_num_layers=CRITIC_NUM_LAYERS,
-    split_network=SPLIT_NETWORK,
-    encoder_gigaflow=ENCODER_GIGAFLOW,
-    dropout=DROPOUT,
+    encoder_activation=ENCODER_ACTIVATION,
+    encoder_layer_norm=ENCODER_LAYER_NORM,
+    backbone_activation=BACKBONE_ACTIVATION,
+    backbone_layer_norm=BACKBONE_LAYER_NORM,
+    shared_network=SHARED_NETWORK,
+    mask_padded_features=MASK_PADDED_FEATURES,
 ).to(device)
 
 print(f"Device: {device}")
 print(f"Obs dim: {obs.shape[1]}")
 print(f"Action dim: {policy.atn_dim}")
-print(f"Split network: {SPLIT_NETWORK}")
+print(f"Shared network: {SHARED_NETWORK}")
 print(f"Backbone: {BACKBONE_HIDDEN_SIZE} x {BACKBONE_NUM_LAYERS}L")
 print(f"Actor: {ACTOR_HIDDEN_SIZE} x {ACTOR_NUM_LAYERS}L")
 print(f"Critic: {CRITIC_HIDDEN_SIZE} x {CRITIC_NUM_LAYERS}L")
-print(f"Encoder gigaflow: {ENCODER_GIGAFLOW}, Dropout: {DROPOUT}")
+print(f"Encoder: {ENCODER_ACTIVATION}, LayerNorm: {ENCODER_LAYER_NORM}")
 
 # %% [markdown]
 # ## Model Summary (torchinfo)
@@ -76,22 +87,21 @@ summary(policy, input_data=obs_tensor, depth=4, col_names=["input_size", "output
 
 # %%
 backbone = policy.actor_backbone
-cond_dim = backbone.conditioning_dim
+context_dim = backbone.context_dim
 
-# Collect encoder info — encoder_gigaflow adds Tanh+Dropout between LN and second Linear
-# ego, partner, conditioning use encoder_gigaflow; lane, boundary, traffic_ctrl use dropout
+# Collect encoder info
 encoders = [
-    ("ego", env.ego_features, 1, "direct", ENCODER_GIGAFLOW),
-    ("conditioning", cond_dim, 1, "direct", ENCODER_GIGAFLOW) if cond_dim > 0 else None,
-    ("partner", env.partner_features, env.obs_slots_partners_n, "max-pool", ENCODER_GIGAFLOW),
-    ("lane", env.road_features, env.obs_slots_lane_kept, "max-pool", ENCODER_GIGAFLOW),
-    ("boundary", env.road_features, env.obs_slots_boundary_kept, "max-pool", ENCODER_GIGAFLOW),
+    ("ego", env.ego_features, 1, "direct", INPUT_SIZE),
+    ("context", context_dim, 1, "direct", INPUT_SIZE) if context_dim > 0 else None,
+    ("partner", env.partner_features, env.obs_slots_partners_n, "max-pool", INPUT_SIZE),
+    ("lane", env.road_features, env.obs_slots_lane_kept, "max-pool", INPUT_SIZE),
+    ("boundary", env.road_features, env.obs_slots_boundary_kept, "max-pool", INPUT_SIZE),
     (
         "traffic_ctrl",
         env.traffic_control_features - 2 + binding.NUM_TRAFFIC_CONTROL_TYPES + binding.NUM_TRAFFIC_CONTROL_STATES,
         env.obs_slots_traffic_controls_n,
         "max-pool (onehot)",
-        ENCODER_GIGAFLOW,
+        INPUT_SIZE,
     ),
 ]
 encoders = [e for e in encoders if e is not None]
@@ -106,36 +116,25 @@ y_positions = np.linspace(9, 1, n_enc)
 colors = plt.cm.Set2(np.linspace(0, 1, n_enc))
 
 # Draw encoders
-for i, ((name, in_f, n_obj, agg, gigaflow), y, c) in enumerate(zip(encoders, y_positions, colors)):
+for i, ((name, in_f, n_obj, agg, out_size), y, c) in enumerate(zip(encoders, y_positions, colors)):
     # Input box
     label = f"{name}\n{n_obj}x{in_f}" if n_obj > 1 else f"{name}\n{in_f}"
     ax.add_patch(plt.Rectangle((0.2, y - 0.3), 1.6, 0.6, facecolor=c, edgecolor="black", lw=1.2, alpha=0.8))
     ax.text(1.0, y, label, ha="center", va="center", fontsize=8, fontweight="bold")
 
-    # Encoder box — show gigaflow arch vs standard
+    # Encoder box
     ax.add_patch(plt.Rectangle((2.5, y - 0.25), 2.0, 0.5, facecolor="lightyellow", edgecolor="black", lw=1))
-    ax.text(3.5, y + 0.05, f"Linear({in_f},{INPUT_SIZE})", ha="center", va="center", fontsize=7)
-    if gigaflow:
-        ax.text(
-            3.5,
-            y - 0.12,
-            f"LN+Tanh+Drop+Linear({INPUT_SIZE},{INPUT_SIZE})",
-            ha="center",
-            va="center",
-            fontsize=5.5,
-            color="darkgreen",
-        )
-    else:
-        drop_str = f"+Drop({DROPOUT})" if DROPOUT > 0 and name not in ("ego", "partner", "conditioning") else ""
-        ax.text(
-            3.5,
-            y - 0.12,
-            f"LN{drop_str}+Linear({INPUT_SIZE},{INPUT_SIZE})",
-            ha="center",
-            va="center",
-            fontsize=6,
-            color="gray",
-        )
+    ax.text(3.5, y + 0.05, f"Linear({in_f},{out_size})", ha="center", va="center", fontsize=7)
+    ln_label = "LN+" if ENCODER_LAYER_NORM else ""
+    ax.text(
+        3.5,
+        y - 0.12,
+        f"{ln_label}{ENCODER_ACTIVATION}+Linear({out_size},{out_size})",
+        ha="center",
+        va="center",
+        fontsize=6,
+        color="gray",
+    )
 
     # Aggregation
     if n_obj > 1:
@@ -177,14 +176,13 @@ ax.text(9.45, 4.0, critic_label, ha="center", va="center", fontsize=6, fontweigh
 ax.annotate("", xy=(9.0, 6.0), xytext=(8.8, 5.3), arrowprops=dict(arrowstyle="->", lw=1.2))
 ax.annotate("", xy=(9.0, 4.0), xytext=(8.8, 4.7), arrowprops=dict(arrowstyle="->", lw=1.2))
 
-split_label = "SPLIT" if SPLIT_NETWORK else "SHARED"
+split_label = "SHARED" if SHARED_NETWORK else "SPLIT"
 ax.text(8.9, 4.55, split_label, ha="center", va="center", fontsize=7, color="red", fontweight="bold")
 
-gigaflow_label = "GIGAFLOW" if ENCODER_GIGAFLOW else "STANDARD"
 ax.text(
     5.0,
     0.3,
-    f"Encoder mode: {gigaflow_label} | Dropout: {DROPOUT}",
+    f"Encoder: {ENCODER_ACTIVATION} | LayerNorm: {ENCODER_LAYER_NORM}",
     ha="center",
     va="center",
     fontsize=8,
@@ -193,7 +191,7 @@ ax.text(
 )
 
 ax.set_title(
-    f"DrivePolicy Architecture (input_size={INPUT_SIZE}, backbone={BACKBONE_HIDDEN_SIZE})",
+    f"DrivePolicy Architecture (encoder_size={INPUT_SIZE}, backbone={BACKBONE_HIDDEN_SIZE})",
     fontsize=12,
     fontweight="bold",
 )
@@ -218,8 +216,8 @@ components = {
     "partner_encoder": backbone.partner_encoder,
     "traffic_ctrl_encoder": backbone.traffic_control_encoder,
 }
-if backbone.conditioning_dim > 0:
-    components["conditioning_encoder"] = backbone.conditioning_encoder
+if backbone.context_dim > 0:
+    components["context_encoder"] = backbone.context_encoder
 components["backbone_mlp"] = backbone.backbone
 components["actor_head"] = policy.actor_head
 components["critic_head"] = policy.critic_head
@@ -233,7 +231,7 @@ for n, c in zip(names, counts):
     print(f"{n:>25s} | {c:>10,d} | {c / total:>5.1%}")
 print("-" * 48)
 print(f"{'TOTAL':>25s} | {total:>10,d}")
-if SPLIT_NETWORK:
+if not SHARED_NETWORK:
     critic_bb = count_params(policy.critic_backbone)
     print(f"{'+ critic_backbone':>25s} | {critic_bb:>10,d}")
     print(f"{'GRAND TOTAL':>25s} | {total + critic_bb:>10,d}")
@@ -256,7 +254,7 @@ x = obs_tensor
 backbone = policy.actor_backbone
 
 slide_idx = env.ego_features
-cond_dim = backbone.conditioning_dim
+context_dim = backbone.context_dim
 partner_dim = env.obs_slots_partners_n * env.partner_features
 lane_dim = env.obs_slots_lane_kept * env.road_features
 boundary_dim = env.obs_slots_boundary_kept * env.road_features
@@ -266,10 +264,10 @@ traffic_dim = env.obs_slots_traffic_controls_n * env.traffic_control_features
 ego_obs = x[:, :slide_idx]
 slices = [("ego", 0, slide_idx, ego_obs.shape)]
 
-if cond_dim > 0:
-    cond_obs = x[:, slide_idx : slide_idx + cond_dim]
-    slices.append(("conditioning", slide_idx, slide_idx + cond_dim, cond_obs.shape))
-    slide_idx += cond_dim
+if context_dim > 0:
+    context_obs = x[:, slide_idx : slide_idx + context_dim]
+    slices.append(("context", slide_idx, slide_idx + context_dim, context_obs.shape))
+    slide_idx += context_dim
 
 partner_obs = x[:, slide_idx : slide_idx + partner_dim]
 slices.append(("partners", slide_idx, slide_idx + partner_dim, partner_obs.shape))
@@ -298,9 +296,9 @@ with torch.no_grad():
     ego_enc = backbone.ego_encoder(ego_obs)
     print(f"  ego_encoder:     {ego_obs.shape} -> {ego_enc.shape}")
 
-    if cond_dim > 0:
-        cond_enc = backbone.conditioning_encoder(cond_obs)
-        print(f"  cond_encoder:    {cond_obs.shape} -> {cond_enc.shape}")
+    if context_dim > 0:
+        context_enc = backbone.context_encoder(context_obs)
+        print(f"  context_encoder:    {context_obs.shape} -> {context_enc.shape}")
 
     p_reshaped = partner_obs.view(-1, env.obs_slots_partners_n, env.partner_features)
     p_enc, _ = backbone.partner_encoder(p_reshaped).max(dim=1)
@@ -328,8 +326,8 @@ with torch.no_grad():
 
     # Concat + backbone
     features = [ego_enc, l_enc, b_enc, p_enc, t_enc]
-    if cond_dim > 0:
-        features.append(cond_enc)
+    if context_dim > 0:
+        features.append(context_enc)
     concat = torch.cat(features, dim=1)
     hidden = backbone.backbone(concat)
     print(f"\n  concat: {concat.shape}")
@@ -384,9 +382,9 @@ with torch.no_grad():
     slide = env.ego_features
     activations["ego"] = backbone.ego_encoder(obs_tensor[:, : env.ego_features])
 
-    if cond_dim > 0:
-        activations["conditioning"] = backbone.conditioning_encoder(obs_tensor[:, slide : slide + cond_dim])
-        slide += cond_dim
+    if context_dim > 0:
+        activations["context"] = backbone.context_encoder(obs_tensor[:, slide : slide + context_dim])
+        slide += context_dim
 
     p_obs = obs_tensor[:, slide : slide + partner_dim].view(-1, env.obs_slots_partners_n, env.partner_features)
     activations["partner"], _ = backbone.partner_encoder(p_obs).max(dim=1)
@@ -470,12 +468,12 @@ plt.show()
 
 # %%
 configs = [
-    {"name": "tiny", "input_size": 32, "backbone_hidden_size": 64},
-    {"name": "small", "input_size": 64, "backbone_hidden_size": 128},
-    {"name": "medium", "input_size": 128, "backbone_hidden_size": 256, "backbone_num_layers": 2},
+    {"name": "tiny", "encoder_size": 32, "backbone_hidden_size": 64},
+    {"name": "small", "encoder_size": 64, "backbone_hidden_size": 128},
+    {"name": "medium", "encoder_size": 128, "backbone_hidden_size": 256, "backbone_num_layers": 2},
     {
         "name": "large",
-        "input_size": 128,
+        "encoder_size": 128,
         "backbone_hidden_size": 512,
         "backbone_num_layers": 2,
         "actor_num_layers": 2,
@@ -485,7 +483,7 @@ configs = [
     },
     {
         "name": "xlarge",
-        "input_size": 256,
+        "encoder_size": 256,
         "backbone_hidden_size": 1024,
         "backbone_num_layers": 3,
         "actor_num_layers": 2,
@@ -493,32 +491,51 @@ configs = [
         "critic_num_layers": 2,
         "critic_hidden_size": 512,
     },
-    {"name": "small+giga", "input_size": 64, "backbone_hidden_size": 128, "encoder_gigaflow": True, "dropout": 0.1},
+    {"name": "small+tanh", "encoder_size": 64, "backbone_hidden_size": 128, "encoder_activation": "tanh"},
     {
-        "name": "medium+giga",
-        "input_size": 128,
+        "name": "medium+tanh",
+        "encoder_size": 128,
         "backbone_hidden_size": 256,
         "backbone_num_layers": 2,
-        "encoder_gigaflow": True,
-        "dropout": 0.1,
+        "encoder_activation": "tanh",
     },
 ]
 
 POLICY_DEFAULTS = {
+    "ego_input_size": 64,
+    "partner_input_size": 64,
+    "lane_input_size": 64,
+    "boundary_input_size": 64,
+    "traffic_control_input_size": 64,
+    "context_input_size": 64,
     "backbone_num_layers": 1,
     "actor_hidden_size": 128,
     "actor_num_layers": 0,
     "critic_hidden_size": 128,
     "critic_num_layers": 0,
-    "encoder_gigaflow": False,
-    "dropout": 0.0,
-    "split_network": False,
+    "encoder_activation": "relu",
+    "encoder_layer_norm": True,
+    "backbone_activation": "gelu",
+    "backbone_layer_norm": False,
+    "shared_network": True,
+    "mask_padded_features": False,
 }
 
 results = []
 for cfg in configs:
-    name = cfg.pop("name")
-    full_cfg = {**POLICY_DEFAULTS, **cfg}
+    name = cfg["name"]
+    encoder_size = cfg.get("encoder_size", POLICY_DEFAULTS["ego_input_size"])
+    full_cfg = {**POLICY_DEFAULTS, **{k: v for k, v in cfg.items() if k not in ("name", "encoder_size")}}
+    full_cfg.update(
+        {
+            "ego_input_size": encoder_size,
+            "partner_input_size": encoder_size,
+            "lane_input_size": encoder_size,
+            "boundary_input_size": encoder_size,
+            "traffic_control_input_size": encoder_size,
+            "context_input_size": encoder_size,
+        }
+    )
     p = DrivePolicy(env, **full_cfg).to(device)
     n_params = sum(pp.numel() for pp in p.parameters())
 
@@ -532,17 +549,16 @@ for cfg in configs:
             torch.cuda.synchronize()
         ms_per_fwd = (time.time() - t0) / 100 * 1000
 
-    results.append({"name": name, "params": n_params, "ms/fwd": ms_per_fwd, **cfg})
-    cfg["name"] = name  # restore
+    results.append({"name": name, "encoder_size": encoder_size, "params": n_params, "ms/fwd": ms_per_fwd, **full_cfg})
     del p
 
 print(
-    f"{'Config':>12s} | {'input':>5s} | {'bb_h':>5s} | {'bb_L':>4s} | {'act_h':>5s} | {'act_L':>5s} | {'crt_h':>5s} | {'crt_L':>5s} | {'giga':>5s} | {'Params':>10s} | {'ms/fwd':>8s}"
+    f"{'Config':>12s} | {'enc':>5s} | {'bb_h':>5s} | {'bb_L':>4s} | {'act_h':>5s} | {'act_L':>5s} | {'crt_h':>5s} | {'crt_L':>5s} | {'enc_act':>7s} | {'Params':>10s} | {'ms/fwd':>8s}"
 )
 print("-" * 105)
 for r in results:
     print(
-        f"{r['name']:>12s} | {r['input_size']:>5d} | {r.get('backbone_hidden_size', 1024):>5d} | {r.get('backbone_num_layers', 1):>4d} | {r.get('actor_hidden_size', 1024):>5d} | {r.get('actor_num_layers', 1):>5d} | {r.get('critic_hidden_size', 1024):>5d} | {r.get('critic_num_layers', 1):>5d} | {str(r.get('encoder_gigaflow', False)):>5s} | {r['params']:>10,d} | {r['ms/fwd']:>7.2f}ms"
+        f"{r['name']:>12s} | {r['encoder_size']:>5d} | {r['backbone_hidden_size']:>5d} | {r['backbone_num_layers']:>4d} | {r['actor_hidden_size']:>5d} | {r['actor_num_layers']:>5d} | {r['critic_hidden_size']:>5d} | {r['critic_num_layers']:>5d} | {r['encoder_activation']:>7s} | {r['params']:>10,d} | {r['ms/fwd']:>7.2f}ms"
     )
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
@@ -550,11 +566,11 @@ names = [r["name"] for r in results]
 params = [r["params"] for r in results]
 times = [r["ms/fwd"] for r in results]
 
-bar_colors = ["coral" if r.get("encoder_gigaflow") else "steelblue" for r in results]
+bar_colors = ["coral" if r["encoder_activation"] == "tanh" else "steelblue" for r in results]
 
 axes[0].bar(names, params, color=bar_colors, edgecolor="black")
 axes[0].set_ylabel("Parameters")
-axes[0].set_title("Parameter Count (orange=gigaflow)")
+axes[0].set_title("Parameter Count (orange=tanh encoder)")
 axes[0].tick_params(axis="x", rotation=30)
 for i, v in enumerate(params):
     axes[0].text(i, v, f"{v:,}", ha="center", va="bottom", fontsize=7)
@@ -584,9 +600,9 @@ stacked = np.concatenate(all_obs, axis=0)
 
 slide = env.ego_features
 segments = [("ego", 0, env.ego_features, 1, env.ego_features)]
-if cond_dim > 0:
-    segments.append(("conditioning", slide, slide + cond_dim, 1, cond_dim))
-    slide += cond_dim
+if context_dim > 0:
+    segments.append(("context", slide, slide + context_dim, 1, context_dim))
+    slide += context_dim
 segments.append(("partners", slide, slide + partner_dim, env.obs_slots_partners_n, env.partner_features))
 slide += partner_dim
 segments.append(("lanes", slide, slide + lane_dim, env.obs_slots_lane_kept, env.road_features))
@@ -645,10 +661,10 @@ axes[0].set_title("Input Feature Sensitivity (|d hidden / d obs|)")
 seg_boundaries = [0, env.ego_features]
 seg_labels = ["ego"]
 s = env.ego_features
-if cond_dim > 0:
-    s += cond_dim
+if context_dim > 0:
+    s += context_dim
     seg_boundaries.append(s)
-    seg_labels.append("cond")
+    seg_labels.append("context")
 for name, dim in [
     ("partners", partner_dim),
     ("lanes", lane_dim),

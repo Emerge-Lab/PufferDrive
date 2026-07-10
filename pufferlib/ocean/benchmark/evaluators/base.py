@@ -60,7 +60,11 @@ class Evaluator:
         self.train_config = train_config
 
         # Common scalars pulled out for ergonomics.
-        self.enabled: bool = bool(config.get("enabled", True))
+        raw_enabled = config.get("enabled", True)
+        if isinstance(raw_enabled, str):
+            self.enabled: bool = raw_enabled.strip().lower() not in ("false", "0", "no")
+        else:
+            self.enabled: bool = bool(raw_enabled)
         self.interval: int = int(config.get("interval", 0))
         self.mode: str = config.get("mode", "inline")
         self.render: bool = bool(config.get("render", False))

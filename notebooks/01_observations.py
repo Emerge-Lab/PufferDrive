@@ -38,6 +38,10 @@ print(f"min: {obs.min():.4f}, max: {obs.max():.4f}, mean: {obs.mean():.4f}, std:
 print(f"NaN: {np.isnan(obs).sum()}, Inf: {np.isinf(obs).sum()}")
 print(f"% zeros: {(obs == 0).mean() * 100:.1f}%")
 print(f"% outside [-1,1]: {((obs < -1) | (obs > 1)).mean() * 100:.2f}%")
+print(
+    f"road obs: lanes={env.obs_slots_lane_kept}/{env.obs_slots_lane_n} stride={env.obs_lane_stride}, "
+    f"boundaries={env.obs_slots_boundary_kept}/{env.obs_slots_boundary_n} stride={env.obs_boundary_stride}"
+)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 axes[0].hist(obs.flatten(), bins=100, edgecolor="black", alpha=0.7)
@@ -59,11 +63,13 @@ ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs[:1],
     target_type=env.target_type,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
 )
 print(f"ego: {ego.shape} = {ego}")
 print(f"target: {target.shape}")
@@ -78,8 +84,8 @@ labels = [
     "width",
     "length",
     "steering",
-    "a_long",
-    "a_lat",
+    "accel_long",
+    "accel_lat",
     "lane_center_dist_01",
     "lane_heading_cos",
     "speed_limit",
@@ -104,10 +110,8 @@ coefs_manual = o[idx : idx + env.num_reward_coefs]
 idx += env.num_reward_coefs
 
 # Target
-target_manual = o[idx : idx + env.num_target_waypoints * env.target_features].reshape(
-    env.num_target_waypoints, env.target_features
-)
-idx += env.num_target_waypoints * env.target_features
+target_manual = o[idx : idx + env.num_goals * env.target_features].reshape(env.num_goals, env.target_features)
+idx += env.num_goals * env.target_features
 assert np.allclose(target_manual, target), "target mismatch"
 
 # Partners
@@ -138,6 +142,7 @@ traffic_manual = o[idx : idx + env.obs_slots_traffic_controls_n * env.traffic_co
 idx += env.obs_slots_traffic_controls_n * env.traffic_control_features
 assert np.allclose(traffic_manual, traffic), "traffic mismatch"
 
+idx += env.obs_valid_count_features
 assert idx == obs.shape[1], f"obs size mismatch: used {idx}, total {obs.shape[1]}"
 print(f"All slices match. Total features used: {idx}")
 
@@ -175,7 +180,7 @@ partner_labels = [
     "width",
     "heading_cos",
     "heading_sin",
-    "speed",
+    "sim_speed_signed",
     "seconds_stopped",
 ]
 active_mask = ~np.all(partners == 0, axis=1)
@@ -271,11 +276,15 @@ img = plot_observation(
     obs[:1],
     target_type=env.target_type,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
-    obs_slots_lane_n=env.obs_slots_lane_kept,
-    obs_slots_boundary_n=env.obs_slots_boundary_kept,
+    obs_slots_lane_n=env.obs_slots_lane_n,
+    obs_slots_boundary_n=env.obs_slots_boundary_n,
     obs_slots_traffic_controls_n=env.obs_slots_traffic_controls_n,
+    obs_dropout_lane=env.obs_dropout_lane,
+    obs_dropout_boundary=env.obs_dropout_boundary,
+    obs_lane_stride=env.obs_lane_stride,
+    obs_boundary_stride=env.obs_boundary_stride,
 )
 fig, ax = plt.subplots(figsize=(10, 10))
 ax.imshow(img)
@@ -324,13 +333,13 @@ axes[0, 0].set_xlabel("step")
 axes[0, 1].plot(ego_history[:, 3])
 axes[0, 1].set_title("steering")
 axes[0, 1].set_xlabel("step")
-# a_long
+# accel_long
 axes[1, 0].plot(ego_history[:, 4])
-axes[1, 0].set_title("a_long")
+axes[1, 0].set_title("accel_long")
 axes[1, 0].set_xlabel("step")
-# a_lat
+# accel_lat
 axes[1, 1].plot(ego_history[:, 5])
-axes[1, 1].set_title("a_lat")
+axes[1, 1].set_title("accel_lat")
 axes[1, 1].set_xlabel("step")
 plt.suptitle("Agent 0 ego features over 20 steps (no-op action)")
 plt.tight_layout()
@@ -341,7 +350,7 @@ plt.show()
 
 # %%
 # Current obs across all agents
-# Ego features (jerk): speed(0), width(1), length(2), steering(3), a_long(4), a_lat(5), lane_center(6), lane_heading(7), speed_limit(8)
+# Ego features (jerk): speed(0), width(1), length(2), steering(3), accel_long(4), accel_lat(5), lane_center(6), lane_heading(7), speed_limit(8)
 speeds = obs[:, 0]  # speed is at index 0
 
 # Target waypoints start after ego + reward coefs
@@ -352,7 +361,7 @@ first_target_y = obs[:, target_start + 1]
 target_dists = np.sqrt(first_target_x**2 + first_target_y**2)
 
 # Count active partners per agent
-partner_start = env.ego_features + env.num_reward_coefs + env.num_target_waypoints * env.target_features
+partner_start = env.ego_features + env.num_reward_coefs + env.num_goals * env.target_features
 partner_end = partner_start + env.obs_slots_partners_n * env.partner_features
 all_partners = obs[:, partner_start:partner_end].reshape(-1, env.obs_slots_partners_n, env.partner_features)
 partner_counts = (~np.all(all_partners == 0, axis=2)).sum(axis=1)

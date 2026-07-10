@@ -169,6 +169,7 @@ pufferlib/ocean/impulse_wars/benchmark/
 data/
 pufferlib/resources/drive/binaries/*/
 !pufferlib/resources/drive/binaries/carla/
+!pufferlib/resources/drive/binaries/carla_lhs/
 !pufferlib/resources/drive/binaries/carla/**
 # Re-ignore .DS_Store inside carla binaries
 pufferlib/resources/drive/binaries/carla/.DS_Store
@@ -186,6 +187,9 @@ pufferlib/resources/drive/binaries/carla/.DS_Store
 # Single-bin fixtures used by tests/test_drive_map_types.py
 !pufferlib/resources/drive/binaries/nuplan/
 !pufferlib/resources/drive/binaries/nuplan/**
+# SDC-replay fixture map used by tests/unit_tests/test_terminate_on_goal.py
+!pufferlib/resources/drive/binaries/sdc_replay_test/
+!pufferlib/resources/drive/binaries/sdc_replay_test/**
 
 # Compiled drive binary in root
 /drive

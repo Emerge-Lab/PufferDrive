@@ -78,7 +78,7 @@ METRIC_LABELS = [
     "progression",
     "at_fault_collision",
     "ttc",
-    "ttc_tfl",
+    "distance_to_collision",
     "progress_ratio",
     "multi_lane_time",
     "multi_lane_score",
@@ -337,7 +337,7 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
                 text_items.append((x, y + width, str(agent_id)))
 
             if config.show_goal and is_active:
-                gx, gy = agent.get("goal_position_x"), agent.get("goal_position_y")
+                gx, gy = agent.get("current_goal_x"), agent.get("current_goal_y")
                 if gx is not None and gy is not None:
                     goal_points.append((gx, gy))
                     goal_colors.append(color)
@@ -516,7 +516,7 @@ def unpack_obs(
     obs_flat,
     target_type: str = "static",
     reward_conditioning: bool = False,
-    num_target_waypoints: int = 5,
+    num_goals: int = 5,
     obs_slots_partners_n: int = 16,
     obs_slots_lane_n: int = 16,
     obs_slots_boundary_n: int = 16,
@@ -552,7 +552,7 @@ def unpack_obs(
 
     # Target obs
     target_features = binding.STATIC_TARGET_FEATURES if target_type == "static" else binding.DYNAMIC_TARGET_FEATURES
-    target_dim = num_target_waypoints * target_features
+    target_dim = num_goals * target_features
 
     # Extract ego state
     ego_state = obs_flat[:, :ego_dim]
@@ -563,7 +563,7 @@ def unpack_obs(
 
     target_end = target_start + target_dim
     target_obs = obs_flat[:, target_start:target_end]
-    target_obs = target_obs.reshape(-1, num_target_waypoints, target_features)
+    target_obs = target_obs.reshape(-1, num_goals, target_features)
 
     # Extract partners
     partners_start = target_end
@@ -608,13 +608,15 @@ def plot_observation(
     obs,
     target_type="static",
     reward_conditioning=False,
-    num_target_waypoints=10,
+    num_goals=10,
     obs_slots_partners_n=16,
     obs_slots_lane_n=32,
     obs_slots_boundary_n=32,
     obs_slots_traffic_controls_n=4,
     obs_dropout_lane=0.0,
     obs_dropout_boundary=0.0,
+    obs_lane_stride=1,
+    obs_boundary_stride=1,
     agent_idx=0,
     obs_norm_goal_offset_m=100.0,
     obs_norm_xy_offset_m=100.0,
@@ -638,7 +640,7 @@ def plot_observation(
         obs,
         target_type=target_type,
         reward_conditioning=reward_conditioning,
-        num_target_waypoints=num_target_waypoints,
+        num_goals=num_goals,
         obs_slots_partners_n=obs_slots_partners_n,
         obs_slots_lane_n=obs_slots_lane_n,
         obs_slots_boundary_n=obs_slots_boundary_n,
@@ -657,7 +659,7 @@ def plot_observation(
     )
     target_position_scale = scales["goal_to_position"] if target_type == "static" else 1.0
 
-    ego_speed, ego_width, ego_length, steering_angle, a_long, a_lat, lcenter, lalign, speed_limit, _ = ego_state
+    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, _ = ego_state
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -708,7 +710,7 @@ def plot_observation(
     # Add dynamics info text for JERK model
     ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
-    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {a_long:.2f}\naccel_lat: {a_lat:.2f}"
+    ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {accel_long:.2f}\naccel_lat: {accel_lat:.2f}"
 
     ax.text(
         0.02,
@@ -785,7 +787,7 @@ def plot_observation(
     ax.text(
         0.12,
         0.95,
-        f"Lanes: {count_lane}\nBoundaries: {count_boundary}",
+        f"Lanes: {count_lane}\nBoundaries: {count_boundary}\nStride: {obs_lane_stride}/{obs_boundary_stride}",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",
@@ -951,12 +953,18 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "obs_dim": int(replay["obs"].shape[2]),
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
-        "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
+        "num_goals": int(env_cfg["num_goals"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "partner_features": int(binding.PARTNER_FEATURES),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
+        "obs_slots_lane_n": int(env_cfg["obs_slots_lane_n"]),
+        "obs_slots_boundary_n": int(env_cfg["obs_slots_boundary_n"]),
+        "obs_dropout_lane": float(env_cfg.get("obs_dropout_lane", 0.0)),
+        "obs_dropout_boundary": float(env_cfg.get("obs_dropout_boundary", 0.0)),
+        "obs_lane_stride": int(env_cfg.get("obs_lane_stride", 1)),
+        "obs_boundary_stride": int(env_cfg.get("obs_boundary_stride", 1)),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
         "target_features": 3 if env_cfg.get("target_type", "static") == "static" else 5,
         "scales": scales,
@@ -1029,6 +1037,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             <div class="label">ID</div><div class="value" id="meta-id">-</div>
             <div class="label">Step</div><div class="value highlight" id="stepDisplay" style="font-size:30px">0</div>
             <div class="label">Camera</div><div class="value highlight" id="camMode" onclick="toggleCamMode()">Free Roam</div>
+            <div class="label">Obs Road</div><div class="value" id="meta-obs-road">-</div>
             <button onclick="toggleTheme()" style="width:100%; margin-top:10px">Theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
@@ -1101,6 +1110,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
+            document.getElementById('meta-obs-road').textContent = `L ${H.lane_count}/${H.obs_slots_lane_n} s${H.obs_lane_stride} d${Number(H.obs_dropout_lane).toFixed(2)} | B ${H.boundary_count}/${H.obs_slots_boundary_n} s${H.obs_boundary_stride} d${Number(H.obs_dropout_boundary).toFixed(2)}`;
             document.getElementById('sld').max = frameMax();
             const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
             document.getElementById('loading-overlay').style.display = 'none';
@@ -1188,7 +1198,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             if (H.reward_conditioning) p += 17;
             const scale = H.target_type === "static" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m;
             const out = [];
-            for (let i=0;i<H.num_target_waypoints;i++) {
+            for (let i=0;i<H.num_goals;i++) {
                 const o = p + i * H.target_features;
                 let empty = true;
                 for (let j=0;j<H.target_features;j++) if (obs[o+j] !== 0) empty = false;
@@ -1203,7 +1213,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
             let p = base, ego = obs.subarray(p, p+10); p += 10;
             if (H.reward_conditioning) p += 17;
-            const targetStart = p; p += H.num_target_waypoints * H.target_features;
+            const targetStart = p; p += H.num_goals * H.target_features;
             const partnersStart = p; p += H.obs_slots_partners_n * H.partner_features;
             const lanesStart = p; p += H.lane_count * 7;
             const boundsStart = p; p += H.boundary_count * 7;
@@ -1212,7 +1222,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
             const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
+            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
             return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
         }

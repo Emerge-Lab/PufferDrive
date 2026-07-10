@@ -40,15 +40,17 @@ typedef struct {
     int control_mode;
     int simulation_mode;
     char map_dir[256];
-    float min_waypoint_spacing;
-    float max_waypoint_spacing;
-    int num_target_waypoints;
+    float min_goal_spacing;
+    float max_goal_spacing;
+    int num_goals;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
     int max_agents_per_env;
     int obs_slots_lane_n;
     int obs_slots_boundary_n;
+    int obs_lane_stride;
+    int obs_boundary_stride;
     float obs_dropout_lane;
     float obs_dropout_boundary;
     int obs_slots_partners_n;
@@ -167,12 +169,12 @@ static int handler(void *config, const char *section, const char *name, const ch
             strncpy(env_config->map_dir, value, sizeof(env_config->map_dir) - 1);
             env_config->map_dir[sizeof(env_config->map_dir) - 1] = '\0';
         }
-    } else if (MATCH("env", "min_waypoint_spacing")) {
-        env_config->min_waypoint_spacing = atof(value);
-    } else if (MATCH("env", "max_waypoint_spacing")) {
-        env_config->max_waypoint_spacing = atof(value);
-    } else if (MATCH("env", "num_target_waypoints")) {
-        env_config->num_target_waypoints = atoi(value);
+    } else if (MATCH("env", "min_goal_spacing")) {
+        env_config->min_goal_spacing = atof(value);
+    } else if (MATCH("env", "max_goal_spacing")) {
+        env_config->max_goal_spacing = atof(value);
+    } else if (MATCH("env", "num_goals")) {
+        env_config->num_goals = atoi(value);
     } else if (MATCH("env", "reward_conditioning")) {
         if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
             env_config->reward_conditioning = 1;
@@ -195,6 +197,10 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->obs_slots_boundary_n = atoi(value);
     } else if (MATCH("env", "obs_slots_lane_n")) {
         env_config->obs_slots_lane_n = atoi(value);
+    } else if (MATCH("env", "obs_lane_stride")) {
+        env_config->obs_lane_stride = atoi(value);
+    } else if (MATCH("env", "obs_boundary_stride")) {
+        env_config->obs_boundary_stride = atoi(value);
     } else if (MATCH("env", "obs_dropout_lane")) {
         env_config->obs_dropout_lane = atof(value);
     } else if (MATCH("env", "obs_dropout_boundary")) {

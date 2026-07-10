@@ -7,6 +7,7 @@ import gymnasium
 import json
 import struct
 import os
+from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -40,9 +41,9 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
-        min_waypoint_spacing=20.0,
-        max_waypoint_spacing=60.0,
-        num_target_waypoints=3,
+        min_goal_spacing=20.0,
+        max_goal_spacing=60.0,
+        num_goals=3,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -70,9 +71,12 @@ class Drive(pufferlib.PufferEnv):
         termination_mode=0,
         terminate_on_goal=0,
         inactive_agent_threshold=0.4,
+        terminate_on_goal=False,
         buf=None,
         seed=1,
         init_step=0,
+        init_step_spread=False,
+        init_step_min_horizon=20,
         eval_mode=0,
         num_eval_scenarios=16,
         init_mode="create_all_valid",
@@ -86,9 +90,11 @@ class Drive(pufferlib.PufferEnv):
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
-        split_network=False,
+        shared_network=True,
         obs_slots_lane_n=32,
         obs_slots_boundary_n=32,
+        obs_lane_stride=1,
+        obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
@@ -119,7 +125,7 @@ class Drive(pufferlib.PufferEnv):
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.compute_eval_metrics = compute_eval_metrics
-        self.split_network = split_network
+        self.shared_network = shared_network
         self.render_mode = render_mode
         self.num_maps = num_maps
         self.report_interval = report_interval
@@ -138,11 +144,11 @@ class Drive(pufferlib.PufferEnv):
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
         self.goal_radius = goal_radius
-        self.min_waypoint_spacing = min_waypoint_spacing
-        self.max_waypoint_spacing = max_waypoint_spacing
-        if num_target_waypoints > binding.MAX_TARGET_WAYPOINTS:
-            num_target_waypoints = binding.MAX_TARGET_WAYPOINTS
-        self.num_target_waypoints = num_target_waypoints
+        self.min_goal_spacing = min_goal_spacing
+        self.max_goal_spacing = max_goal_spacing
+        if num_goals > binding.MAX_GOALS:
+            num_goals = binding.MAX_GOALS
+        self.num_goals = num_goals
         self.target_type_str = target_type
         if target_type == "static":
             self.target_type = binding.TARGET_STATIC
@@ -177,6 +183,7 @@ class Drive(pufferlib.PufferEnv):
         self.termination_mode = termination_mode
         self.terminate_on_goal = terminate_on_goal
         self.inactive_agent_threshold = inactive_agent_threshold
+        self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
@@ -184,8 +191,16 @@ class Drive(pufferlib.PufferEnv):
         self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
+        obs_lane_stride = int(obs_lane_stride)
+        obs_boundary_stride = int(obs_boundary_stride)
+        if obs_lane_stride < 1:
+            raise ValueError(f"obs_lane_stride must be >= 1. Got: {obs_lane_stride}")
+        if obs_boundary_stride < 1:
+            raise ValueError(f"obs_boundary_stride must be >= 1. Got: {obs_boundary_stride}")
         self.obs_slots_lane_n = obs_slots_lane_n
         self.obs_slots_boundary_n = obs_slots_boundary_n
+        self.obs_lane_stride = obs_lane_stride
+        self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
@@ -219,6 +234,7 @@ class Drive(pufferlib.PufferEnv):
         self.partner_features = binding.PARTNER_FEATURES
         self.road_features = binding.ROAD_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
+        self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
         # Target features based on target_type
@@ -226,7 +242,7 @@ class Drive(pufferlib.PufferEnv):
             self.target_features = binding.STATIC_TARGET_FEATURES
         else:
             self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.target_dim = self.num_target_waypoints * self.target_features
+        self.target_dim = self.num_goals * self.target_features
 
         self.num_obs = (
             self.ego_features
@@ -236,11 +252,17 @@ class Drive(pufferlib.PufferEnv):
             + self.obs_slots_lane_kept * self.road_features
             + self.obs_slots_boundary_kept * self.road_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
+            + self.obs_valid_count_features
         )
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
         self.init_step = init_step
+        # Per C environment randomized start point. When on, each parallel environment
+        # starts the episode at a randomized point.
+        self.init_step_spread = bool(init_step_spread)
+        # limit at which we set the starting point from the end of the total episode length
+        self.init_step_min_horizon = int(init_step_min_horizon)
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -261,6 +283,16 @@ class Drive(pufferlib.PufferEnv):
             self.simulation_mode = 1
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
+
+        if self.init_step_spread:
+            if self.simulation_mode != 1:
+                raise ValueError(
+                    "init_step_spread is only supported in replay simulation_mode (it seeds each environment at a different expert timestep)."
+                )
+            if self.scenario_length - self.init_step_min_horizon <= 0:
+                raise ValueError(
+                    f"init_step_min_horizon ({self.init_step_min_horizon}) leaves no room to sample a start in a scenario of length {self.scenario_length}; it must be < scenario_length."
+                )
 
         if self.control_mode_str == "control_vehicles":
             self.control_mode = 0
@@ -409,6 +441,10 @@ class Drive(pufferlib.PufferEnv):
             render_mode_flag = 0
         return {
             "render_mode": render_mode_flag,
+            # Absolute directory holding render assets (.glb models), so the C
+            # renderer loads them regardless of the process CWD. Derived from
+            # the installed package location, not a config knob.
+            "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,
@@ -432,13 +468,15 @@ class Drive(pufferlib.PufferEnv):
             "use_map_cache": self.use_map_cache,
             "emit_completed_episodes": int(self.emit_completed_episodes),
             "goal_radius": self.goal_radius,
-            "min_waypoint_spacing": self.min_waypoint_spacing,
-            "max_waypoint_spacing": self.max_waypoint_spacing,
-            "num_target_waypoints": self.num_target_waypoints,
+            "min_goal_spacing": self.min_goal_spacing,
+            "max_goal_spacing": self.max_goal_spacing,
+            "num_goals": self.num_goals,
             "target_type": self.target_type,
             "goal_on_lane": self.goal_on_lane,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
+            "obs_lane_stride": self.obs_lane_stride,
+            "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
@@ -449,10 +487,11 @@ class Drive(pufferlib.PufferEnv):
             "termination_mode": int(self.termination_mode),
             "terminate_on_goal": int(self.terminate_on_goal),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
+            "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
-            "init_step": self.init_step,
+            "init_step": self._sample_init_step(),
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
             "sdc_controller": self.sdc_controller,
@@ -483,6 +522,13 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration": self.phantom_braking_duration,
         }
+
+    def _sample_init_step(self):
+        # randomizer for the initialization of the C environment
+        if not self.init_step_spread:
+            return self.init_step
+        upper = self.scenario_length - self.init_step_min_horizon
+        return int(self.rng.integers(0, upper))
 
     @property
     def random_seed(self):
@@ -828,8 +874,8 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
-            goal_x[idx] = np.float32(agent.get("goal_position_x", 0.0))
-            goal_y[idx] = np.float32(agent.get("goal_position_y", 0.0))
+            goal_x[idx] = np.float32(agent.get("current_goal_x", 0.0))
+            goal_y[idx] = np.float32(agent.get("current_goal_y", 0.0))
         return {
             "valid": valid,
             "id": agent_id,
