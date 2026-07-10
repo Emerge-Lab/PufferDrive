@@ -147,6 +147,7 @@ dmypy.json
 
 checkpoints/
 experiments/
+slurm_logs/
 benchmark*/
 !pufferlib/ocean/benchmark/
 !pufferlib/ocean/benchmark/**
