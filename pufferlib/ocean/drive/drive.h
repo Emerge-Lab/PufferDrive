@@ -410,9 +410,7 @@ struct Drive {
     // second overwriting the first. Set via vec_set_video_suffix BEFORE
     // the first c_render of a rollout (make_client reads it when forking ffmpeg).
     char video_suffix[64];
-    // Absolute directory holding render assets (.glb models). Empty when the
-    // env is built without the Python binding (e.g. standalone visualizer);
-    // the renderer then falls back to a repo-root-relative path.
+    // Absolute directory holding render assets (.glb models).
     char resource_root[512];
     int log_length;
     float log_dt;
