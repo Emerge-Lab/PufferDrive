@@ -56,8 +56,7 @@ def fetch_dataset(manifest, name, data_root, dry_run):
         sys.exit(f"error: unknown dataset '{name}'. Available: {', '.join(sorted(manifest))}")
     if shutil.which("aws") is None:
         sys.exit(
-            "error: the AWS CLI is not installed. Install it (https://aws.amazon.com/cli/)\n"
-            "— see docs/data_storage.md."
+            "error: the AWS CLI is not installed. Install it (https://aws.amazon.com/cli/)\n— see docs/data_storage.md."
         )
     entry = manifest[name]
     destination_dir = os.path.join(data_root, name)
@@ -73,8 +72,10 @@ def fetch_dataset(manifest, name, data_root, dry_run):
     print(f"syncing {entry['s3_uri']} -> {destination_dir}")
     completed = subprocess.run(sync_command)
     if completed.returncode != 0:
-        credential_hint = "" if entry.get("public") else (
-            " If this is a credential\nerror, configure lab IAM access first — see docs/data_storage.md."
+        credential_hint = (
+            ""
+            if entry.get("public")
+            else (" If this is a credential\nerror, configure lab IAM access first — see docs/data_storage.md.")
         )
         sys.exit(f"error: aws s3 sync exited with {completed.returncode}.{credential_hint}")
     if not dry_run:
