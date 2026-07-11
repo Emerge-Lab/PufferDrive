@@ -1,14 +1,16 @@
-"""Fetch shared PufferDrive datasets from the lab S3 buckets.
+"""Fetch shared PufferDrive datasets from S3.
 
 Datasets are declared in data_utils/datasets.yaml and sync into
 $PUFFERDRIVE_DATA_ROOT/<name>/ (default: <repo>/data/<name>/, gitignored).
 
+    python data_utils/fetch_data.py                     # the default ~10 GB mini sets
     python data_utils/fetch_data.py --list
-    python data_utils/fetch_data.py nuplan_dev_maps
-    python data_utils/fetch_data.py nuplan_dev_maps --data-root /scratch/$USER/data
-    python data_utils/fetch_data.py nuplan_dev_maps --dry-run
+    python data_utils/fetch_data.py nuplan_val
+    python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
+    python data_utils/fetch_data.py nuplan_mini_val --dry-run
 
-Requires the AWS CLI with lab IAM credentials (see docs/data_storage.md).
+Requires the AWS CLI. Datasets marked public in the manifest need no AWS
+account; private ones need lab IAM credentials (see docs/data_storage.md).
 Syncs are incremental: re-running downloads only new or changed files.
 """
 
@@ -43,7 +45,8 @@ def list_datasets(manifest, data_root):
         # aws s3 sync creates the destination dir even when it fails, so an
         # empty dir does not count as fetched.
         status = "present" if os.path.isdir(local_dir) and os.listdir(local_dir) else "not fetched"
-        print(f"{name}  [{status}]")
+        default_marker = "  (default)" if entry.get("default") else ""
+        print(f"{name}  [{status}]{default_marker}")
         print(f"    source:  {entry['s3_uri']}")
         print(f"    size:    {entry['size']}")
         print(f"    local:   {local_dir}")
@@ -85,7 +88,11 @@ def fetch_dataset(manifest, name, data_root, dry_run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("dataset", nargs="?", help="dataset name from data_utils/datasets.yaml")
+    parser.add_argument(
+        "datasets",
+        nargs="*",
+        help="dataset names from data_utils/datasets.yaml; none = the entries marked default",
+    )
     parser.add_argument("--list", action="store_true", help="list datasets and their local status")
     parser.add_argument(
         "--data-root",
@@ -99,9 +106,14 @@ def main():
     if args.list:
         list_datasets(manifest, args.data_root)
         return
-    if args.dataset is None:
-        parser.error("provide a dataset name, or --list to see what is available")
-    fetch_dataset(manifest, args.dataset, args.data_root, args.dry_run)
+    dataset_names = args.datasets
+    if not dataset_names:
+        dataset_names = [name for name, entry in manifest.items() if entry.get("default")]
+        if not dataset_names:
+            sys.exit(f"error: no dataset given and no entry in {MANIFEST_PATH} is marked default: true")
+        print(f"no dataset given — fetching the defaults: {', '.join(dataset_names)}")
+    for name in dataset_names:
+        fetch_dataset(manifest, name, args.data_root, args.dry_run)
 
 
 if __name__ == "__main__":

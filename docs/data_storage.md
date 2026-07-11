@@ -10,14 +10,13 @@ local data root — `$PUFFERDRIVE_DATA_ROOT`, defaulting to `<repo>/data/`
 (gitignored):
 
 ```bash
-python data_utils/fetch_data.py --list              # what exists, what is local
-python data_utils/fetch_data.py nuplan_mini_train   # the default ~10 GB training set
-python data_utils/fetch_data.py nuplan_mini_val     # the default ~10 GB eval set
+python data_utils/fetch_data.py          # the defaults: nuplan_mini_train + nuplan_mini_val (~10 GB each)
+python data_utils/fetch_data.py --list   # what exists, what is local
 python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
 ```
 
-Start with the `nuplan_mini_*` sets (~10 GB each); the full splits run to
-hundreds of GB. Syncs are incremental. On clusters, point `--data-root` (or
+A bare run fetches the entries marked `default: true` in the manifest — the
+mini splits. The full splits run to hundreds of GB; fetch those by name. Syncs are incremental. On clusters, point `--data-root` (or
 export `PUFFERDRIVE_DATA_ROOT`) at shared scratch so one copy serves all
 jobs, then reference it from configs, e.g.
 `--env.map-dir $PUFFERDRIVE_DATA_ROOT/nuplan_mini_train`.

@@ -79,14 +79,14 @@ python scripts/submit_cluster.py \
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
 
-- **Shared datasets (S3):** `python data_utils/fetch_data.py --list`, then
-  fetch by name — see [`docs/data_storage.md`](docs/data_storage.md). Requires
-  the [AWS CLI](https://aws.amazon.com/cli/); lab IAM credentials are needed
-  only for private datasets. Not needed for install, build, or training on
-  the bundled maps.
-- **nuPlan (replay training/eval):** fetch `nuplan_mini_train` /
-  `nuplan_mini_val` as above, or convert yourself — see
-  [`docs/nuplan_data.md`](docs/nuplan_data.md).
+- **Shared datasets (S3):** `python data_utils/fetch_data.py` downloads the
+  default ~10 GB nuPlan mini sets; `--list` shows everything fetchable by
+  name — see [`docs/data_storage.md`](docs/data_storage.md). Requires the
+  [AWS CLI](https://aws.amazon.com/cli/); lab IAM credentials are needed only
+  for private datasets. Not needed for install, build, or training on the
+  bundled maps.
+- **nuPlan (replay training/eval):** fetched by the default above, or convert
+  yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
 - **WOMD:** download raw data with `data_utils/download_womd_data.py`, or
   pre-converted `.bin` maps with `data_utils/download_database_gcp.sh`.
 

@@ -5,20 +5,11 @@ that PufferDrive's replay mode and the nuPlan evaluators consume.
 
 ## Default path — fetch pre-converted bins
 
-Pre-converted bins are publicly downloadable (no AWS account needed — just
-the [AWS CLI](https://aws.amazon.com/cli/)); there is nothing to convert:
+Pre-converted bins are publicly downloadable:
 
 ```bash
-python data_utils/fetch_data.py nuplan_mini_train   # ~10 GB default training set
-python data_utils/fetch_data.py nuplan_mini_val     # ~10 GB default eval set
+python data_utils/fetch_data.py   # the ~10 GB nuplan_mini_train + nuplan_mini_val sets
 ```
-
-The bins are distributed under nuPlan's CC BY-NC-SA 4.0 license
-(non-commercial, attribution to Motional — see the LICENSE.txt alongside
-them). See [`docs/data_storage.md`](data_storage.md) for the full splits and
-bucket layout. The rest of this document is the do-it-yourself conversion
-pipeline — needed only for a new nuPlan version or custom conversion
-settings.
 
 ## Converting yourself
 
@@ -99,11 +90,6 @@ nuplan_mini_train_bins/
 A checked-in sample lives at
 `pufferlib/resources/drive/binaries/nuplan/nuplan__00018a38-0063-54d1-a3c1-1ab931a4a1e5.bin`.
 
-- `env.map_dir` may point either at a directory of `.bin` files or at a
-  single `.bin` file (`pufferlib/ocean/drive/drive.py:268-273`).
-- `env.num_maps` must not exceed the number of `.bin` files in `map_dir`;
-  the env aborts otherwise (`pufferlib/ocean/drive/drive.py:368-369`).
-
 ## Using the bins
 
 Replay training on nuPlan bins, controlling only the SDC:
@@ -117,21 +103,14 @@ puffer train puffer_drive \
     --env.scenario-length 200
 ```
 
-(`data/nuplan_mini_train` is where the default fetch lands; point
-`--env.map-dir` at your own output directory for self-converted bins.)
-
-This mirrors the `[eval.validation_replay]` setup in
-`pufferlib/config/ocean/drive.ini`. nuPlan mini logs are ~201 steps at 10 Hz,
-so `scenario_length` of 200 covers one full log.
-
 ## Enabling the nuPlan evals
 
 `[eval.validation_replay]` and `[eval.behaviors_full_dir]` in
-`pufferlib/config/ocean/drive.ini` ship **disabled** with placeholder
-`env.map_dir` values, because they require a local nuPlan bin directory.
+`pufferlib/config/ocean/drive.ini` ship **disabled**, with `env.map_dir`
+preset to `data/nuplan_mini_val` — where the default fetch lands.
 
-- **Inline during training:** edit the section — point `env.map_dir` at your
-  bin directory and set `enabled = true`.
+- **Inline during training:** after fetching, set `enabled = true` (and
+  point `env.map_dir` elsewhere if your bins live elsewhere).
 - **Standalone:** `puffer eval --evaluator <name>` runs a named evaluator
   even when it is disabled; only `env.map_dir` needs overriding, via the
   generic dotted CLI form:
@@ -141,8 +120,4 @@ puffer eval puffer_drive --evaluator validation_replay \
     --eval.validation-replay.env.map-dir data/nuplan_mini_val
 ```
 
-Per-category behavior evals (`[eval.behaviors_<category>]`) are user-defined
-sections: each inherits `behaviors_defaults`, sets `type = "behavior_class"`,
-and points `env.map_dir` at a directory of bins for one labelled scene
-category (hard_stop, merge, ...). See `docs/evaluation.md` for the full
-evaluator config schema.
+See `docs/evaluation.md` for the full evaluator config schema.
