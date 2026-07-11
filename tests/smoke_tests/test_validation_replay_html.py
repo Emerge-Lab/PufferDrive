@@ -97,6 +97,7 @@ def test_html_render_backend_produces_html(tmp_path, backend):
             # input; the env is built with these same values so the two agree.
             "action_type": "discrete",
             "dynamics_model": "jerk",
+            "goal_source": "gt",
             "goal_regen_mode": "finite",
             "reward_conditioning": False,
             "num_goals": 3,
