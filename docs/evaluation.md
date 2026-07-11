@@ -154,13 +154,6 @@ record the observation, so it's heavier but shows the policy's actual inputs.
 | `behaviors_full_dir` | behavior_class | behavior-class metrics over a nuPlan bin directory |
 | `wosac` | wosac | Waymo open sim agents challenge metrics |
 
-nuPlan bins are external data the user supplies — they are not shipped with
-the repo (see `docs/nuplan_data.md`). `validation_replay` and
-`behaviors_full_dir` therefore ship disabled until `env.map_dir` points at a
-local nuPlan bin directory. Per-category behavior evals are user-defined: add
-one `[eval.behaviors_<category>]` section per folder of labelled bins,
-following `behaviors_full_dir` as the pattern.
-
 `validation_replay` and `validation_gigaflow` inherit shared eval reward
 weights and clean-eval knobs from the `validation_defaults` template; the
 `behaviors_*` sections inherit from `behaviors_defaults`.

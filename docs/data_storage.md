@@ -16,24 +16,14 @@ python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
 ```
 
 A bare run fetches the entries marked `default: true` in the manifest — the
-mini splits. The full splits run to hundreds of GB; fetch those by name. Syncs are incremental. On clusters, point `--data-root` (or
-export `PUFFERDRIVE_DATA_ROOT`) at shared scratch so one copy serves all
-jobs, then reference it from configs, e.g.
-`--env.map-dir $PUFFERDRIVE_DATA_ROOT/nuplan_mini_train`.
+mini splits. The full splits run to hundreds of GB; fetch those by name.
+Syncs are incremental.
 
 ## AWS access
 
 Ask Eugene Vinitsky or Riccardo Savorgnan for an AWS user account. All access
-is controlled through IAM groups — no direct bucket policies.
-
-Credentials are only needed for private datasets. A manifest entry marked
-`public: true` is publicly readable and fetches without any AWS account (the
-script issues unsigned requests). The nuPlan bins are public: the
-`pufferdrive-bins` bucket policy grants anonymous `GetObject` + `ListBucket`
-scoped to the `nuplan/` prefix only — permitted by nuPlan's CC BY-NC-SA
-license, with the notice at `s3://pufferdrive-bins/nuplan/LICENSE.txt`.
-Everything else stays IAM-only, and WOMD-derived data must never go under a
-public prefix (see below).
+is controlled through IAM groups — no direct bucket policies. Credentials are
+only needed for private datasets.
 
 ## Buckets
 
@@ -59,12 +49,6 @@ s3://pufferdrive-bins/nuplan/0.3.2-mini/train/   # 10 GB sample — default
 s3://pufferdrive-bins/nuplan/0.3.2-mini/val/     # 10 GB sample — default
 ```
 
-The `-mini` prefixes are ~10 GB samples of each split (lexicographically
-first scenario tokens, which are UUIDs, so effectively a random sample) —
-the `nuplan_mini_train` / `nuplan_mini_val` manifest entries most users
-should fetch. A new conversion gets a new version prefix; old versions stay
-so results remain reproducible.
-
 Adding a dataset = upload to the appropriate bucket, add an entry to
 `data_utils/datasets.yaml` (source URI, description, license, size), and it
 becomes fetchable by name.
@@ -83,8 +67,4 @@ the constraints below apply to publishing outside the lab.
   license notice attached.
 - **Waymo Open Motion Dataset** — custom terms: copies and modifications
   (which includes format-converted bins) may only be distributed to people
-  who have registered at waymo.com/open and agreed to Waymo's terms. Public
-  ungated hosting of WOMD-derived bins is not permitted; use gated
-  distribution or keep them lab-internal.
-- **CARLA assets** — CC-BY 4.0. The town map bins are freely redistributable
-  with attribution, which is why they ship directly in the repo.
+  who have registered at waymo.com/open and agreed to Waymo's terms.
