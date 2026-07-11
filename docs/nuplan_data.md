@@ -3,6 +3,23 @@
 How to obtain the nuPlan dataset and turn it into the `.bin` scenario files
 that PufferDrive's replay mode and the nuPlan evaluators consume.
 
+## Default path — fetch pre-converted bins
+
+Pre-converted bins live in the lab S3 buckets; with bucket access there is
+nothing to convert:
+
+```bash
+python data_utils/fetch_data.py nuplan_mini_train   # ~10 GB default training set
+python data_utils/fetch_data.py nuplan_mini_val     # ~10 GB default eval set
+```
+
+See [`docs/data_storage.md`](data_storage.md) for the full splits, bucket
+layout, and access. The rest of this document is the do-it-yourself
+conversion pipeline — needed only without bucket access, for a new nuPlan
+version, or for custom conversion settings.
+
+## Converting yourself
+
 The pipeline has two external stages:
 
 ```
@@ -91,12 +108,15 @@ Replay training on nuPlan bins, controlling only the SDC:
 
 ```bash
 puffer train puffer_drive \
-    --env.map-dir /path/to/nuplan_mini_train_bins \
+    --env.map-dir data/nuplan_mini_train \
     --env.num-maps 250 \
     --env.simulation-mode replay \
     --env.control-mode control_sdc_only \
     --env.scenario-length 200
 ```
+
+(`data/nuplan_mini_train` is where the default fetch lands; point
+`--env.map-dir` at your own output directory for self-converted bins.)
 
 This mirrors the `[eval.validation_replay]` setup in
 `pufferlib/config/ocean/drive.ini`. nuPlan mini logs are ~201 steps at 10 Hz,
@@ -116,7 +136,7 @@ so `scenario_length` of 200 covers one full log.
 
 ```bash
 puffer eval puffer_drive --evaluator validation_replay \
-    --eval.validation-replay.env.map-dir /path/to/nuplan_mini_train_bins
+    --eval.validation-replay.env.map-dir data/nuplan_mini_val
 ```
 
 Per-category behavior evals (`[eval.behaviors_<category>]`) are user-defined
