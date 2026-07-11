@@ -9,9 +9,10 @@ $PUFFERDRIVE_DATA_ROOT/<name>/ (default: <repo>/data/<name>/, gitignored).
     python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
     python data_utils/fetch_data.py nuplan_mini_val --dry-run
 
-Requires the AWS CLI. Datasets marked public in the manifest need no AWS
-account; private ones need lab IAM credentials (see docs/data_storage.md).
-Syncs are incremental: re-running downloads only new or changed files.
+The AWS CLI ships with the package install. Datasets marked public in the
+manifest need no AWS account; private ones need lab IAM credentials (see
+docs/data_storage.md). Syncs are incremental: re-running downloads only new
+or changed files.
 """
 
 import argparse
@@ -59,7 +60,8 @@ def fetch_dataset(manifest, name, data_root, dry_run):
         sys.exit(f"error: unknown dataset '{name}'. Available: {', '.join(sorted(manifest))}")
     if shutil.which("aws") is None:
         sys.exit(
-            "error: the AWS CLI is not installed. Install it (https://aws.amazon.com/cli/)\n— see docs/data_storage.md."
+            "error: the AWS CLI is not on PATH. It installs with the package"
+            " (`uv pip install -e .`), or install it directly: pip install awscli"
         )
     entry = manifest[name]
     destination_dir = os.path.join(data_root, name)
