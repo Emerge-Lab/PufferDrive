@@ -10,15 +10,17 @@ local data root — `$PUFFERDRIVE_DATA_ROOT`, defaulting to `<repo>/data/`
 (gitignored):
 
 ```bash
-python data_utils/fetch_data.py --list            # what exists, what is local
-python data_utils/fetch_data.py nuplan_dev_maps   # sync one dataset
-python data_utils/fetch_data.py nuplan_dev_maps --data-root /scratch/$USER/data
+python data_utils/fetch_data.py --list              # what exists, what is local
+python data_utils/fetch_data.py nuplan_mini_train   # the default ~10 GB training set
+python data_utils/fetch_data.py nuplan_mini_val     # the default ~10 GB eval set
+python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
 ```
 
-Syncs are incremental. On clusters, point `--data-root` (or export
-`PUFFERDRIVE_DATA_ROOT`) at shared scratch so one copy serves all jobs, then
-reference it from configs, e.g.
-`--env.map-dir $PUFFERDRIVE_DATA_ROOT/nuplan_dev_maps`.
+Start with the `nuplan_mini_*` sets (~10 GB each); the full splits run to
+hundreds of GB. Syncs are incremental. On clusters, point `--data-root` (or
+export `PUFFERDRIVE_DATA_ROOT`) at shared scratch so one copy serves all
+jobs, then reference it from configs, e.g.
+`--env.map-dir $PUFFERDRIVE_DATA_ROOT/nuplan_mini_train`.
 
 ## AWS access
 
@@ -47,11 +49,21 @@ their CC BY-NC-SA license permits — flipping the manifest entry to
 and `py123d-conversions/{nuplan,waymo-open-motion-dataset}` (arrow stage).
 Most users never need these — fetch the converted bins instead.
 
-Current temporary home for development nuPlan bins:
-`s3://pufferdrive-personal/valentin/0.3.2/{nuplan_train,nuplan_val}` (the
-`nuplan_dev_train` / `nuplan_dev_val` manifest entries — note the train split
-is ~475 GB; start with val). Once the conversion stabilizes they move to
-`pufferdrive-bins` under a proper version prefix.
+Production bins live in `pufferdrive-bins` under
+`<dataset>/<conversion-version>/<split>/`:
+
+```
+s3://pufferdrive-bins/nuplan/0.3.2/train/        # full train, ~475 GB
+s3://pufferdrive-bins/nuplan/0.3.2/val/          # full val,   ~48 GB
+s3://pufferdrive-bins/nuplan/0.3.2-mini/train/   # 10 GB sample — default
+s3://pufferdrive-bins/nuplan/0.3.2-mini/val/     # 10 GB sample — default
+```
+
+The `-mini` prefixes are ~10 GB samples of each split (lexicographically
+first scenario tokens, which are UUIDs, so effectively a random sample) —
+the `nuplan_mini_train` / `nuplan_mini_val` manifest entries most users
+should fetch. A new conversion gets a new version prefix; old versions stay
+so results remain reproducible.
 
 Adding a dataset = upload to the appropriate bucket, add an entry to
 `data_utils/datasets.yaml` (source URI, description, license, size), and it
