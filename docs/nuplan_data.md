@@ -5,18 +5,20 @@ that PufferDrive's replay mode and the nuPlan evaluators consume.
 
 ## Default path — fetch pre-converted bins
 
-Pre-converted bins live in the lab S3 buckets; with bucket access there is
-nothing to convert:
+Pre-converted bins are publicly downloadable (no AWS account needed — just
+the [AWS CLI](https://aws.amazon.com/cli/)); there is nothing to convert:
 
 ```bash
 python data_utils/fetch_data.py nuplan_mini_train   # ~10 GB default training set
 python data_utils/fetch_data.py nuplan_mini_val     # ~10 GB default eval set
 ```
 
-See [`docs/data_storage.md`](data_storage.md) for the full splits, bucket
-layout, and access. The rest of this document is the do-it-yourself
-conversion pipeline — needed only without bucket access, for a new nuPlan
-version, or for custom conversion settings.
+The bins are distributed under nuPlan's CC BY-NC-SA 4.0 license
+(non-commercial, attribution to Motional — see the LICENSE.txt alongside
+them). See [`docs/data_storage.md`](data_storage.md) for the full splits and
+bucket layout. The rest of this document is the do-it-yourself conversion
+pipeline — needed only for a new nuPlan version or custom conversion
+settings.
 
 ## Converting yourself
 

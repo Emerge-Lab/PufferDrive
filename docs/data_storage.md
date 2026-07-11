@@ -28,12 +28,13 @@ Ask Eugene Vinitsky or Riccardo Savorgnan for an AWS user account. All access
 is controlled through IAM groups — no direct bucket policies.
 
 Credentials are only needed for private datasets. A manifest entry marked
-`public: true` lives in a public-read bucket and fetches without any AWS
-account (the script issues unsigned requests). All buckets are IAM-only
-today; if nuPlan-derived bins are promoted to a public-read location — which
-their CC BY-NC-SA license permits — flipping the manifest entry to
-`public: true` is the whole change. WOMD-derived data must stay IAM-gated
-(see below).
+`public: true` is publicly readable and fetches without any AWS account (the
+script issues unsigned requests). The nuPlan bins are public: the
+`pufferdrive-bins` bucket policy grants anonymous `GetObject` + `ListBucket`
+scoped to the `nuplan/` prefix only — permitted by nuPlan's CC BY-NC-SA
+license, with the notice at `s3://pufferdrive-bins/nuplan/LICENSE.txt`.
+Everything else stays IAM-only, and WOMD-derived data must never go under a
+public prefix (see below).
 
 ## Buckets
 
