@@ -6,15 +6,29 @@
 #   s3_uri:      source prefix, synced recursively into $PUFFERDRIVE_DATA_ROOT/<name>/
 #   description: what the data is and where it is in its lifecycle
 #   license:     upstream license constraint — governs how copies may be shared
+#   size:        approximate download size and file count, shown before syncing
 #   public:      optional, true for public-read buckets — fetches without AWS
 #                credentials (unsigned requests); omit for IAM-only buckets
 
-nuplan_dev_maps:
-  s3_uri: s3://pufferdrive-personal/valentin/0.3.2/
+nuplan_dev_val:
+  s3_uri: s3://pufferdrive-personal/valentin/0.3.2/nuplan_val/
+  size: ~48 GB, ~17k bins
   description: >-
-    nuPlan maps used for current development. Temporary home under
-    pufferdrive-personal; moves to s3://pufferdrive-bins (versioned) once the
-    conversion stabilizes.
+    nuPlan validation split as PufferDrive bins (py123d/123Drive conversion
+    0.3.2). Temporary home under pufferdrive-personal; moves to
+    s3://pufferdrive-bins (versioned) once the conversion stabilizes.
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Keep this notice with any copy; do not publish
+    outside the lab without the same license.
+
+nuplan_dev_train:
+  s3_uri: s3://pufferdrive-personal/valentin/0.3.2/nuplan_train/
+  size: ~475 GB, ~170k bins
+  description: >-
+    nuPlan train split as PufferDrive bins (py123d/123Drive conversion 0.3.2).
+    Temporary home under pufferdrive-personal; moves to s3://pufferdrive-bins
+    (versioned) once the conversion stabilizes.
   license: >-
     CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
     required, share-alike. Keep this notice with any copy; do not publish

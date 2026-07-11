@@ -31,7 +31,7 @@ def load_manifest():
     if not isinstance(manifest, dict) or not manifest:
         sys.exit(f"error: {MANIFEST_PATH} is empty or not a mapping of dataset entries")
     for name, entry in manifest.items():
-        for field in ("s3_uri", "description", "license"):
+        for field in ("s3_uri", "description", "license", "size"):
             if field not in entry:
                 sys.exit(f"error: dataset '{name}' in {MANIFEST_PATH} is missing the '{field}' field")
     return manifest
@@ -45,6 +45,7 @@ def list_datasets(manifest, data_root):
         status = "present" if os.path.isdir(local_dir) and os.listdir(local_dir) else "not fetched"
         print(f"{name}  [{status}]")
         print(f"    source:  {entry['s3_uri']}")
+        print(f"    size:    {entry['size']}")
         print(f"    local:   {local_dir}")
         print(f"    about:   {entry['description']}")
         print(f"    license: {entry['license']}")
@@ -68,6 +69,7 @@ def fetch_dataset(manifest, name, data_root, dry_run):
     if dry_run:
         sync_command.append("--dryrun")
     print(f"license: {entry['license']}")
+    print(f"size:    {entry['size']}")
     print(f"syncing {entry['s3_uri']} -> {destination_dir}")
     completed = subprocess.run(sync_command)
     if completed.returncode != 0:

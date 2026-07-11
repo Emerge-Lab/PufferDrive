@@ -42,14 +42,20 @@ their CC BY-NC-SA license permits — flipping the manifest entry to
 | `pufferdrive-bins-test` | Shared testing deployments before promoting to prod | no |
 | `pufferdrive-personal` | Individual experiments and temporary files (`<bucket>/<user>/...`) | no |
 
-Current temporary home for development nuPlan maps:
-`s3://pufferdrive-personal/valentin/0.3.2/` (the `nuplan_dev_maps` manifest
-entry). Once the conversion stabilizes it moves to `pufferdrive-bins` under a
-proper version prefix.
+`pufferdrive-data` holds the pipeline stages upstream of the bins:
+`raw-files/{nuplan,waymo-open-motion-dataset,qualcomm}` (original downloads)
+and `py123d-conversions/{nuplan,waymo-open-motion-dataset}` (arrow stage).
+Most users never need these — fetch the converted bins instead.
+
+Current temporary home for development nuPlan bins:
+`s3://pufferdrive-personal/valentin/0.3.2/{nuplan_train,nuplan_val}` (the
+`nuplan_dev_train` / `nuplan_dev_val` manifest entries — note the train split
+is ~475 GB; start with val). Once the conversion stabilizes they move to
+`pufferdrive-bins` under a proper version prefix.
 
 Adding a dataset = upload to the appropriate bucket, add an entry to
-`data_utils/datasets.yaml` (source URI, description, license), and it becomes
-fetchable by name.
+`data_utils/datasets.yaml` (source URI, description, license, size), and it
+becomes fetchable by name.
 
 ## Licensing constraints on redistribution
 
