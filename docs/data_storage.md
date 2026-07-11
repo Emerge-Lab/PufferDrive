@@ -5,9 +5,9 @@ lab's S3 buckets and pulled onto a machine for training and evaluation.
 
 ## Fetching data
 
-Datasets are registered in `data_utils/datasets.yaml` and land under a single
-local data root — `$PUFFERDRIVE_DATA_ROOT`, defaulting to `<repo>/data/`
-(gitignored):
+Datasets are registered in `data_utils/datasets.yaml` and land under
+`<repo>/data/` (gitignored), where the `drive.ini` defaults expect them.
+Fetching elsewhere (`--data-root`) means pointing `env.map_dir` there too.
 
 ```bash
 python data_utils/fetch_data.py          # the defaults: nuplan_mini_train + nuplan_mini_val (~10 GB each)
