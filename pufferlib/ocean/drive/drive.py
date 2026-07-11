@@ -11,6 +11,28 @@ import pufferlib
 from pufferlib.ocean.drive import binding
 
 
+def map_dir_missing_message(map_dir):
+    """Error text for a nonexistent map_dir. When its basename is a dataset
+    registered in data_utils/datasets.yaml, the message names the exact fetch
+    command instead of leaving the user with a bare missing-path error."""
+    message = f"map_dir '{map_dir}' does not exist."
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    manifest_path = os.path.join(repo_root, "data_utils", "datasets.yaml")
+    dataset_name = os.path.basename(os.path.normpath(str(map_dir)))
+    if not os.path.isfile(manifest_path):
+        return message
+    with open(manifest_path) as f:
+        is_registered_dataset = any(line.startswith(f"{dataset_name}:") for line in f)
+    if is_registered_dataset:
+        message += (
+            f" It is a fetchable dataset:\n"
+            f"    python data_utils/fetch_data.py {dataset_name}\n"
+            f"Run from the repo root, or point map_dir at wherever you fetched it"
+            f" — see docs/data_storage.md."
+        )
+    return message
+
+
 def compute_effective_road_obs_count(max_count, dropout):
     if max_count <= 0:
         return 0
@@ -270,6 +292,8 @@ class Drive(pufferlib.PufferEnv):
         if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
             self.map_files = [map_dir]
         else:
+            if not os.path.isdir(map_dir):
+                raise FileNotFoundError(map_dir_missing_message(map_dir))
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
         if self.simulation_mode_str == "gigaflow":
