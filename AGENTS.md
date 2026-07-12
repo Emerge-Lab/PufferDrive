@@ -6,7 +6,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - `pufferlib/ocean/drive/`: `drive.h/c` (sim core), `binding.c` (C-ext), `drive.py` (Gym wrapper), `visualize.c`
 - `pufferlib/ocean/`: `env_binding.h` (C env utils), `torch.py` (NN)
 - Root: `pufferl.py` (PPO loop), `models.py` (policies)
-- `config/`: monolithic Hydra YAMLs — `default.yaml` (base), `puffer_drive.yaml` (PufferDrive)
+- `config/`: monolithic Hydra YAML — `puffer_drive.yaml` (PufferDrive)
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
