@@ -25,14 +25,12 @@ class TestDriveConfig(unittest.TestCase):
     @patch("sys.argv", ["pufferl.py"])
     def test_load_config(self):
         """
-        Tests that load_config correctly loads configurations
-        from the default and environment-specific INI files, without
-        being affected by unittest's command-line arguments.
+        Tests that load_config correctly loads the monolithic Hydra config
+        for the env, without being affected by unittest's command-line
+        arguments.
         """
         try:
-            # The ENV_NAME 'puffer_drive' should load config from:
-            # 1. pufferlib/config/default.ini
-            # 2. pufferlib/config/ocean/drive.ini (and override defaults)
+            # The ENV_NAME 'puffer_drive' loads pufferlib/config/puffer_drive.yaml
             args = load_config("puffer_drive")
 
             # load_config should return a populated config dict without raising.
@@ -42,7 +40,7 @@ class TestDriveConfig(unittest.TestCase):
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")
 
-    @patch("sys.argv", ["pufferl.py", "--env.obs-lane-stride=3", "--env.obs-boundary-stride=4"])
+    @patch("sys.argv", ["pufferl.py", "env.obs_lane_stride=3", "env.obs_boundary_stride=4"])
     def test_obs_stride_cli_override(self):
         args = load_config("puffer_drive")
         self.assertEqual(args["env"]["obs_lane_stride"], 3)
@@ -72,73 +70,56 @@ class TestDriveConfig(unittest.TestCase):
         self.assertEqual(args["env"]["obs_lane_stride"], 5)
         self.assertEqual(args["env"]["obs_boundary_stride"], 6)
 
-    @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
+    @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):
-        """Test that command-line arguments override INI file values."""
-        # learning_rate is 0.001 in drive.ini, but we override it to 0.5 here
+        """Test that Hydra CLI overrides win over the config file values."""
         args = load_config("puffer_drive")
         self.assertEqual(args["train"]["learning_rate"], 0.5)
 
-    def test_full_line_comment_handling(self):
-        """Test that full-line comments in INI files are ignored."""
+    @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
+    def test_old_flag_syntax_rejected_with_hint(self):
+        """Pre-Hydra dashed flags must fail loudly with a migration hint."""
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "train.learning_rate=<value>"):
+            load_config("puffer_drive")
+
+    @patch("sys.argv", ["pufferl.py", "train.learning_rat=0.5"])
+    def test_unknown_override_key_rejected(self):
+        """Typo'd override keys must fail at compose time, not train silently."""
+        with self.assertRaises(Exception):
+            load_config("puffer_drive")
+
+    def test_custom_config_yaml(self):
+        """A yaml dropped into the config dir loads by name; comments
+        (full-line and inline) are ignored by the YAML parser."""
         config_dir = Path(pufferlib.__file__).parent / "config"
-        temp_ini_path = config_dir / "temp_comment_test.ini"
+        temp_yaml_path = config_dir / "temp_comment_test.yaml"
 
-        ini_content = """
-        [base]
-        env_name = temp_comment_test
+        yaml_content = """\
+env_name: temp_comment_test
+rnn_name: null
+train: {}
 
-        [comments]
-        real_key = "I exist"
-        # commented_key = "I do not"
-        ; another_comment = "me neither"
-        """
+comments:
+  real_key: I exist
+  # commented_key: I do not
+  inline_value: 12  # inline comment
+"""
 
         try:
-            with open(temp_ini_path, "w") as f:
-                f.write(ini_content)
+            with open(temp_yaml_path, "w") as f:
+                f.write(yaml_content)
 
             with patch("sys.argv", ["pufferl.py"]):
                 args = load_config("temp_comment_test")
 
             self.assertEqual(args["comments"]["real_key"], "I exist")
             self.assertNotIn("commented_key", args["comments"])
-            self.assertNotIn("another_comment", args["comments"])
-
-        finally:
-            if os.path.exists(temp_ini_path):
-                os.remove(temp_ini_path)
-
-    @unittest.skip("Known limitation: The parser does not support inline comments.")
-    def test_inline_comment_handling(self):
-        """Test that inline comments are ignored (currently a known limitation)."""
-        config_dir = Path(pufferlib.__file__).parent / "config"
-        temp_ini_path = config_dir / "temp_inline_comment_test.ini"
-
-        ini_content = """
-        [base]
-        env_name = temp_inline_comment_test
-
-        [comments]
-        inline_value = 12 ; inline comment
-        some_element = true # inline comment as well
-        """
-
-        try:
-            with open(temp_ini_path, "w") as f:
-                f.write(ini_content)
-
-            with patch("sys.argv", ["pufferl.py"]):
-                args = load_config("temp_inline_comment_test")
-
             self.assertEqual(args["comments"]["inline_value"], 12)
             self.assertIsInstance(args["comments"]["inline_value"], int)
-            self.assertEqual(args["comments"]["some_element"], True)
-            self.assertIsInstance(args["comments"]["some_element"], bool)
 
         finally:
-            if os.path.exists(temp_ini_path):
-                os.remove(temp_ini_path)
+            if os.path.exists(temp_yaml_path):
+                os.remove(temp_yaml_path)
 
 
 if __name__ == "__main__":

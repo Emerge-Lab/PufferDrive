@@ -12,7 +12,7 @@ Example usage:
     python scripts/submit_cluster.py \
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --args learning_rate=1e-4:3e-4:1e-3
+        --args train.learning_rate=1e-4:3e-4:1e-3
 
     # Override compute settings
     python scripts/submit_cluster.py \
@@ -173,9 +173,6 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         "wandb_group",
         "wandb_name",
     }
-    # Boolean flags that don't take values (store_true)
-    boolean_flags = {"wandb", "neptune"}
-
     for main_args in all_main_args:
         cmd = []
         name_entries = []
@@ -184,17 +181,10 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
         for key, val in main_args.items():
-            # Convert underscores to dashes for CLI compatibility
-            cli_key = key.replace("_", "-")
-
-            # Handle boolean flags that don't take values
-            if key in boolean_flags:
-                if val in (True, "True", "true", "1"):
-                    cmd.append(f"--{cli_key}")
-                # Skip if False - don't add the flag at all
-            else:
-                cmd.append(f"--{cli_key}")
-                cmd.append(str(val))
+            # Hydra override syntax: dotted.key=value, booleans lowercase
+            if isinstance(val, bool):
+                val = str(val).lower()
+            cmd.append(f"{key}={val}")
 
             if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
@@ -219,11 +209,11 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         # Wandb overrides: explicit flags take priority, then prefix for name
         wandb_name = args.wandb_name or args.prefix
         if wandb_name is not None:
-            cmd.extend(["--tag", wandb_name])
+            cmd.append(f"tag={wandb_name}")
         if args.wandb_group is not None:
-            cmd.extend(["--wandb-group", args.wandb_group])
+            cmd.append(f"wandb_group={args.wandb_group}")
         if args.wandb_project is not None:
-            cmd.extend(["--wandb-project", args.wandb_project])
+            cmd.append(f"wandb_project={args.wandb_project}")
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
@@ -376,7 +366,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             ] + main_parts
 
         # Add save_dir to command
-        full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
+        full_cmd = base_cmd + cmd + [f"train.data_dir={save_dir}"]
 
         # If heartbeat is enabled, wrap the training command in a brace group that:
         #   1. backgrounds python scripts/gpu_heartbeat.py
