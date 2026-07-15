@@ -1766,31 +1766,26 @@ def eval(env_name, args=None, policy=None):
             )
 
     vecenv.close()
-    _write_eval_reports(episode_summaries, num_scenarios, args, env_name)
+    if args.get("load_model_path"):
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))
+        out_dir = os.path.join(run_dir, "eval")
+    else:
+        out_dir = os.path.join("eval_results", env_name)
+    _write_eval_reports(episode_summaries, out_dir, num_scenarios)
     print(
         f"Multiprocessed eval complete: {len(episode_summaries)} episodes "
         f"from {num_scenarios} scenarios across {num_workers} workers."
     )
 
 
-def _write_eval_reports(episode_summaries, num_scenarios, args, env_name):
-    """Write a per-episode metrics CSV and a JSON of metric averages.
-
-    Outputs land next to the checkpoint (…/<run>/eval) when one is loaded,
-    otherwise under ./eval_results/<env_name>.
-    """
+def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
+    """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
     import json
 
     if not episode_summaries:
         print("No completed episodes were recorded; skipping report.")
         return
 
-    load_model_path = args.get("load_model_path")
-    if load_model_path:
-        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(load_model_path)))
-        out_dir = os.path.join(run_dir, "eval")
-    else:
-        out_dir = os.path.join("eval_results", env_name)
     os.makedirs(out_dir, exist_ok=True)
 
     df = pd.DataFrame(episode_summaries)
