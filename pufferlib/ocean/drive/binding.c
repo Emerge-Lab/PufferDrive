@@ -1736,6 +1736,24 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float) unpack(kwargs, "goal_radius");
     int num_eval_scenarios = unpack(kwargs, "num_eval_scenarios");
+    PyObject *eval_map_indices = PyDict_GetItemString(kwargs, "eval_map_indices");
+    int use_eval_map_indices = eval_map_indices != NULL && eval_map_indices != Py_None;
+    int eval_target_count = num_eval_scenarios;
+    if (use_eval_map_indices) {
+        if (!PyList_Check(eval_map_indices)) {
+            PyErr_SetString(PyExc_TypeError, "eval_map_indices must be a list of integers");
+            return NULL;
+        }
+        int eval_map_count = (int) PyList_Size(eval_map_indices);
+        for (int i = 0; i < eval_map_count; i++) {
+            long map_idx = PyLong_AsLong(PyList_GetItem(eval_map_indices, i));
+            if (map_idx < 0 || map_idx >= num_maps) {
+                PyErr_Format(PyExc_ValueError, "eval_map_indices[%d]=%ld out of range [0, %d)", i, map_idx, num_maps);
+                return NULL;
+            }
+        }
+        eval_target_count = eval_map_count < eval_target_count ? eval_map_count : eval_target_count;
+    }
     if (min_agents_per_env <= 0 || max_agents_per_env <= 0) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env and max_agents_per_env must be > 0");
         return NULL;
@@ -1754,20 +1772,23 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_GIGAFLOW) {
         if (eval_mode) {
-            // Eval mode: fixed agent count, sequential map cycling
+            // Every eval env gets a full agents_per_env budget (no leftover
+            // remainder env), so an episode's agent count is fixed by (map, seed)
+            // and does not change with the worker layout.
             int agents_per_env = max_agents_per_env;
-            int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
-            env_count = env_count > num_eval_scenarios ? num_eval_scenarios : env_count;
+            int env_count = num_agents / agents_per_env;
+            env_count = env_count > eval_target_count ? eval_target_count : env_count;
 
             PyObject *agent_offsets = PyList_New(env_count + 1);
             PyObject *map_ids_list = PyList_New(env_count);
 
             int offset = 0;
             for (int i = 0; i < env_count; i++) {
+                int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
+                                                  : (starting_map_counter + i) % num_maps;
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-                PyList_SetItem(map_ids_list, i, PyLong_FromLong((starting_map_counter + i) % num_maps));
-                int remaining_agents = num_agents - offset;
-                offset += (remaining_agents < agents_per_env) ? remaining_agents : agents_per_env;
+                PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
+                offset += agents_per_env;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
@@ -1841,19 +1862,23 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int max_envs = num_agents;
 
     if (eval_mode) {
-        max_envs = num_eval_scenarios;
+        max_envs = eval_target_count;
     }
     // Upper boundary for this worker's sequential map window
-    int end_map_index = starting_map_counter + num_eval_scenarios;
+    int end_map_index = starting_map_counter + eval_target_count;
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
     while (total_agent_count < num_agents && env_count < max_envs
-           && (!eval_mode || starting_map_counter < end_map_index)) {
+           && (!eval_mode || use_eval_map_indices || starting_map_counter < end_map_index)) {
         if (eval_mode) {
-            map_id = starting_map_counter % num_maps;
-            starting_map_counter += 1;
+            if (use_eval_map_indices) {
+                map_id = (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count));
+            } else {
+                map_id = starting_map_counter % num_maps;
+                starting_map_counter += 1;
+            }
         } else {
             map_id = rand() % num_maps;
         }
@@ -1960,6 +1985,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->eval_episode_done = 0;
+    env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
+    env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
     env->completed_episode_queue_head = 0;
     env->completed_episode_queue_tail = 0;
     env->completed_episode_queue_count = 0;
@@ -2082,6 +2109,16 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "n", summary->n);
     assign_to_dict(dict, "active_agent_count", (float) summary->active_agent_count);
     assign_to_dict(dict, "episode_timestep", (float) summary->timestep);
+
+    PyObject *seed_obj = PyLong_FromUnsignedLong(summary->episode_seed);
+    if (seed_obj == NULL) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "Seed", seed_obj) < 0) {
+        Py_DECREF(seed_obj);
+        return -1;
+    }
+    Py_DECREF(seed_obj);
 
     if (summary->map_name[0] != '\0') {
         PyObject *map_name = PyUnicode_FromString(summary->map_name);

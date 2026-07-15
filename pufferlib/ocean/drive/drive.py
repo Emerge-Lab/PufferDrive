@@ -69,6 +69,8 @@ class Drive(pufferlib.PufferEnv):
         init_step_min_horizon=20,
         eval_mode=0,
         num_eval_scenarios=16,
+        eval_map_indices=None,
+        eval_scenario_seeds=None,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -165,6 +167,12 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
+        self.eval_map_indices = self._int_list_or_none(eval_map_indices)
+        self.eval_scenario_seeds = self._int_list_or_none(eval_scenario_seeds)
+        if self.eval_map_indices is not None:
+            if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
+                raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
+        self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
         self.terminate_on_goal = terminate_on_goal
@@ -384,6 +392,7 @@ class Drive(pufferlib.PufferEnv):
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
             num_eval_scenarios=self.scenarios_remaining,
+            eval_map_indices=self.eval_map_indices,
             goal_radius=self.goal_radius,
         )
         # In eval mode the counter is not wrapped, so exhaustion ends the sweep.
@@ -401,6 +410,7 @@ class Drive(pufferlib.PufferEnv):
         for i in range(num_envs):
             cur = agent_offsets[i]
             nxt = agent_offsets[i + 1]
+            env_seed = self.eval_scenario_seeds[i] if self.eval_scenario_seeds is not None else self.random_seed
             env_id = binding.env_init(
                 self.observations[cur:nxt],
                 self.actions[cur:nxt],
@@ -408,7 +418,7 @@ class Drive(pufferlib.PufferEnv):
                 self.terminals[cur:nxt],
                 self.truncations[cur:nxt],
                 self.masks[cur:nxt],
-                self.random_seed,
+                env_seed,
                 **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
             )
             env_ids.append(env_id)
@@ -450,6 +460,7 @@ class Drive(pufferlib.PufferEnv):
             "use_map_cache": self.use_map_cache,
             "emit_completed_episodes": int(self.emit_completed_episodes),
             "eval_mode": self.eval_mode,
+            "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "goal_radius": self.goal_radius,
             "min_waypoint_spacing": self.min_waypoint_spacing,
             "max_waypoint_spacing": self.max_waypoint_spacing,
@@ -509,6 +520,12 @@ class Drive(pufferlib.PufferEnv):
             return self.init_step
         upper = self.scenario_length - self.init_step_min_horizon
         return int(self.rng.integers(0, upper))
+
+    @staticmethod
+    def _int_list_or_none(values):
+        if values is None or values == "None":
+            return None
+        return [int(value) for value in values]
 
     @property
     def random_seed(self):

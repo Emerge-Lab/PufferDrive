@@ -1736,6 +1736,7 @@ def eval(env_name, args=None, policy=None):
         batch_size=num_workers,
     )
 
+    torch.manual_seed(args["train"]["seed"] or 42)
     policy = policy or load_policy(args, vecenv, env_name)
     policy.eval()
     device = torch_device(args["train"]["device"])
