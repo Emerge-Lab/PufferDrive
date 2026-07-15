@@ -1320,9 +1320,16 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        # entity/base_url default to None, which lets wandb fall back to the
+        # environment login (WANDB_ENTITY / WANDB_BASE_URL / ~/.netrc). Set
+        # them explicitly to pin a specific server + org, e.g. the emerge_ org
+        # on api.wandb.ai instead of a cluster's self-hosted default.
+        base_url = args.get("wandb_base_url") or None
+        settings = wandb.Settings(console="off", **({"base_url": base_url} if base_url else {}))
         wandb.init(
             id=load_id or wandb.util.generate_id(),
             name=args.get("run_name") or None,
+            entity=args.get("wandb_entity") or None,
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
@@ -1330,7 +1337,7 @@ class WandbLogger:
             resume=resume,
             config=args,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
+            settings=settings,  # console="off" stops sending the dashboard to wandb
         )
         self.wandb = wandb
         self.run_id = wandb.run.id

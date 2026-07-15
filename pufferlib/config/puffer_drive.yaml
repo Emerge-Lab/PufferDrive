@@ -16,6 +16,12 @@ max_runs: 200
 wandb: false
 wandb_project: pufferlib
 wandb_group: debug
+# Pin the wandb server + org. null -> use the environment login
+# (WANDB_BASE_URL / WANDB_ENTITY / ~/.netrc). Set wandb_base_url to
+# https://api.wandb.ai and wandb_entity to emerge_ to log to the public
+# emerge_ org instead of a cluster's self-hosted default.
+wandb_entity: null
+wandb_base_url: null
 run_name: null
 neptune: false
 neptune_name: pufferai
