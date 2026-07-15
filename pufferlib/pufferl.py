@@ -113,6 +113,38 @@ def logits_to_float(logits):
     return tuple(l.float() for l in logits)
 
 
+class EMA:
+    """Exponential moving average of policy weights.
+
+    Keeps a detached shadow copy of the policy. update() blends the live
+    weights into the shadow with the configured decay; the shadow never
+    receives gradients. Adapted from microstratego's EMA
+    (pyengine/networks/exponential_weighted_average.py).
+    """
+
+    def __init__(self, policy, decay):
+        self.policy = policy
+        self.decay = decay
+        self.ema_model = copy.deepcopy(policy).eval()
+        for param in self.ema_model.parameters():
+            param.detach_()
+
+    def update(self):
+        with torch.no_grad():
+            for ema_param, param in zip(self.ema_model.parameters(), self.policy.parameters()):
+                ema_param.mul_(self.decay).add_((1.0 - self.decay) * param)
+
+    def sync_from_policy(self):
+        with torch.no_grad():
+            for ema_param, param in zip(self.ema_model.parameters(), self.policy.parameters()):
+                ema_param.copy_(param)
+
+    def apply_shadow(self):
+        with torch.no_grad():
+            for ema_param, param in zip(self.ema_model.parameters(), self.policy.parameters()):
+                param.copy_(ema_param)
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -269,6 +301,13 @@ class PuffeRL:
 
         self.optimizer = optimizer
 
+        # EMA shadow of the policy weights, updated once per train() epoch.
+        # Tracks the uncompiled/unwrapped module so it works under
+        # torch.compile and DDP (all ranks hold identical weights).
+        self.ema_policy = None
+        if config.get("use_ema", False):
+            self.ema_policy = EMA(self.uncompiled_policy, config.get("ema_decay", 0.999))
+
         # Logging
         self.logger = logger
         if logger is None:
@@ -319,6 +358,15 @@ class PuffeRL:
         policy_state = clean_policy_state_dict(policy_state)
         self.uncompiled_policy.load_state_dict(policy_state)
         self.optimizer.load_state_dict(state["optimizer_state_dict"])
+
+        # Restore the EMA shadow; checkpoints written before EMA existed
+        # have no ema_state_dict, so re-seed from the loaded policy weights.
+        if self.ema_policy is not None:
+            ema_state = state.get("ema_state_dict")
+            if ema_state is not None:
+                self.ema_policy.ema_model.load_state_dict(clean_policy_state_dict(ema_state))
+            else:
+                self.ema_policy.sync_from_policy()
 
         if "scheduler_state_dict" in state:
             self.scheduler.load_state_dict(state["scheduler_state_dict"])
@@ -476,6 +524,9 @@ class PuffeRL:
             self._train_ppo_trajectory(losses, profile, epoch)
         else:
             self._train_ppo_transition(losses, profile, epoch)
+
+        if self.ema_policy is not None:
+            self.ema_policy.update()
 
         profile("train_misc", epoch)
         if config["anneal_lr"]:
@@ -861,6 +912,11 @@ class PuffeRL:
         if not os.path.exists(model_path):
             torch.save(self.uncompiled_policy.state_dict(), model_path)
 
+        if self.ema_policy is not None:
+            ema_model_path = os.path.join(models_dir, f"ema_{model_name}")
+            if not os.path.exists(ema_model_path):
+                torch.save(self.ema_policy.ema_model.state_dict(), ema_model_path)
+
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
         new_best = current_score > self.best_score
         if new_best:
@@ -882,6 +938,8 @@ class PuffeRL:
             "ema_max": self.ema_max,
             "rng_state": capture_rng_state(),
         }
+        if self.ema_policy is not None:
+            state["ema_state_dict"] = self.ema_policy.ema_model.state_dict()
         state_path = os.path.join(path, "trainer_state.pt")
         torch.save(state, state_path + ".tmp")
         os.rename(state_path + ".tmp", state_path)
@@ -1476,6 +1534,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
+            # The EMA shadow was seeded from the freshly loaded policy in
+            # PuffeRL.__init__; restore the true shadow if the state has one.
+            if pufferl.ema_policy is not None and tstate.get("ema_state_dict") is not None:
+                pufferl.ema_policy.ema_model.load_state_dict(clean_policy_state_dict(tstate["ema_state_dict"]))
             # Fast-forward the LR scheduler to the resumed epoch so the cosine
             # schedule continues where it left off.
             for _ in range(pufferl.epoch):

@@ -220,6 +220,10 @@ train:
   max_grad_norm: 0.5
   normalize_rewards: true
   ent_coef: 0.01
+  # Exponential moving average of policy weights; the shadow is saved as
+  # models/ema_model_*.pt alongside each checkpoint and in trainer_state.pt
+  use_ema: false
+  ema_decay: 0.999
   # ---
   adam_beta1: 0.9
   adam_beta2: 0.999
