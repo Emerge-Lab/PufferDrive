@@ -226,6 +226,49 @@ cleanrl = [
     'tyro==0.8.6',
 ]
 
+# CARLA leaderboard co-simulation (pufferlib/ocean/cosim/carla/). carla 0.9.15
+# ships wheels only up to cp310, so this extra CANNOT be installed into a
+# py3.12 env — use a py<=3.10 env (e.g. the carl conda env) and build the C
+# binding for it: `python setup.py build_c --inplace` (version-tagged .so files
+# coexist).
+carla_cosim = [
+    'carla==0.9.15',
+]
+
+# nuPlan closed-loop co-simulation (pufferlib/ocean/cosim/nuplan/), verified on
+# py3.12 + numpy 2. Two packages CANNOT be listed here and must be installed
+# editable from local checkouts with --no-deps (their own pins — numpy==1.23.4,
+# hydra-core==1.1.0, pytorch-lightning==1.3.8 — are broken on py3.12):
+#   pip install -e /path/to/nuplan-devkit --no-deps
+#   pip install -e /path/to/CaRL/nuPlan --no-deps
+# Known wart: bokeh 2.4.3 (last version with bokeh.plotting.Figure, which
+# nuboard imports) uses np.bool8, removed in numpy 2 — patch
+# bokeh/core/property/primitive.py to np.bool_ after installing.
+nuplan_cosim = [
+    'hydra-core==1.3.2',    # nuplan pins 1.1.0, which crashes on py3.11+; 1.3.2
+                            # keeps 1.1 semantics when version_base is unset
+    'sqlalchemy==1.4.54',   # devkit needs the 1.4 ORM API
+    'geopandas',
+    'pyogrio',
+    'rasterio',
+    'shapely',
+    'pandas',
+    'scipy',
+    'pyarrow',
+    'opencv-python-headless',
+    'pytorch-lightning',    # run_simulation only calls pl.seed_everything
+    'bokeh==2.4.3',
+    'ray',                  # worker_pool_builder imports it even for worker=sequential
+    'pyinstrument',
+    'pyquaternion',
+    'cachetools',
+    'joblib',
+    'retry',
+    'ujson',
+    'aiofiles',
+    'aioboto3',
+]
+
 [project.scripts]
 puffer = "pufferlib.pufferl:main"
 

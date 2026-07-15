@@ -430,7 +430,6 @@ struct Drive {
     // scenario reset). No effect in gigaflow (goals regenerate there).
     int terminate_on_goal;
     float inactive_agent_threshold;
-    int terminate_on_goal;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
@@ -4119,7 +4118,7 @@ void c_set_traffic_light_states(Drive *env, const int *states) {
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
         }
-        if (traffic->states == NULL || ts < 0 || ts >= traffic->state_length) {
+        if (traffic->states == NULL || ts < 0 || ts >= traffic->state_size) {
             continue;
         }
         traffic->states[ts] = states[i];
@@ -4134,18 +4133,18 @@ void c_set_agent_goals(
         return;
     }
     Agent *agent = &env->agents[agent_idx];
-    if (num_wp > MAX_TARGET_WAYPOINTS) {
-        num_wp = MAX_TARGET_WAYPOINTS;
+    if (num_wp > MAX_GOALS) {
+        num_wp = MAX_GOALS;
     }
     for (int w = 0; w < num_wp; w++) {
-        agent->goal_positions_x[w] = gx[w] - env->world_mean_x;
-        agent->goal_positions_y[w] = gy[w] - env->world_mean_y;
-        agent->goal_positions_z[w] = gz[w];
+        agent->list_goal_x[w] = gx[w] - env->world_mean_x;
+        agent->list_goal_y[w] = gy[w] - env->world_mean_y;
+        agent->list_goal_z[w] = gz[w];
     }
     agent->current_goal_idx = 0;
-    agent->goal_position_x = agent->goal_positions_x[0];
-    agent->goal_position_y = agent->goal_positions_y[0];
-    agent->goal_position_z = agent->goal_positions_z[0];
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
 }
 
 void c_get_global_ground_truth_trajectories(

@@ -26,14 +26,14 @@ import numpy as np
 
 import data_utils.mirror_map_bin as _mbin
 
-# Fallback per-town offsets (ICP-computed; runtime recompute preferred).
+# Corrected per-town offsets
 TOWN_OFFSETS = {
-    "Town01": (-204.35, 151.29),
-    "Town02": (-93.72, 209.93),
-    "Town03": (-43.99, -4.55),
-    "Town04": (-5.46, -3.46),
-    "Town05": (46.99, 2.95),
-    "Town10HD": (8.09, 35.25),
+    "Town01": (-204.34, 148.75),
+    "Town02": (-93.70, 213.06),
+    "Town03": (-43.56, -4.60),
+    "Town04": (-10.98, -7.49),
+    "Town05": (49.04, 0.95),
+    "Town10HD": (8.13, 32.98),
 }
 
 _BIN_DIR = Path(__file__).resolve().parents[2] / "resources" / "drive" / "binaries" / "carla"
@@ -46,26 +46,57 @@ def bin_path_for_town(town: str) -> str:
 
 def _bin_lane_points(bin_path: str) -> np.ndarray:
     """All lane-polyline (x, y) points from a bin (type 0..9 == lanes)."""
+    return _bin_lane_points_headings(bin_path)[0]
+
+def _bin_lane_points_headings(bin_path: str):
+    """Lane-polyline points and per-point headings from a bin (type 0..9)."""
     data = _mbin.read_bin(Path(bin_path))
-    pts = []
+    pts, hds = [], []
     for road in data["roads"]:
         if 0 <= road["type"] <= 9:
             pts.extend(zip(road["x"], road["y"]))
-    return np.asarray(pts, dtype=np.float64)
+            hds.extend(road["headings"])
+    return np.asarray(pts, dtype=np.float64), np.asarray(hds, dtype=np.float64)
+
+HEADING_OCTANTS = 8  # ICP heading-match granularity (45 deg buckets)
 
 
 def compute_town_offset(carla_map, bin_path: str, sample_m: float = 2.0, iters: int = 10):
-    """Recover (tx, ty) by ICP-aligning CARLA road waypoints to the bin lanes,
-    with the y-flip reflection fixed. Returns (tx, ty)."""
+    """Recover (tx, ty) by ICP-aligning CARLA driving waypoints to the bin
+    lanes, with the y-flip reflection fixed. Matches only heading-compatible
+    lane points (waypoint travel direction within ~67 deg of the bin lane):
+    plain nearest-neighbor ICP can lock onto the opposite-direction lane of a
+    two-way road and converge with a stable one-lane lateral bias (observed
+    +2.59 m on Town01's east-west roads). Returns (tx, ty)."""
     wps = carla_map.generate_waypoints(sample_m)
     C = np.array([[w.transform.location.x, w.transform.location.y] for w in wps], dtype=np.float64)
-    B = _bin_lane_points(bin_path)
-    TC = C * np.array([1.0, -1.0])  # y-flip
+    CH = np.array([-math.radians(w.transform.rotation.yaw) for w in wps], dtype=np.float64)
+    B, BH = _bin_lane_points_headings(bin_path)
+    TC = C * np.array([1.0, -1.0])  # y-flip (headings already flipped via -yaw)
+
+    # Bucket bin points by heading octant; a waypoint in octant o may match
+    # octants o-1..o+1 (+-67.5 deg), which excludes the opposite direction.
+    bin_oct = np.round(BH / (2.0 * np.pi / HEADING_OCTANTS)).astype(int) % HEADING_OCTANTS
+    wp_oct = np.round(CH / (2.0 * np.pi / HEADING_OCTANTS)).astype(int) % HEADING_OCTANTS
+    cand = [np.where((bin_oct == (o - 1) % HEADING_OCTANTS)
+                     | (bin_oct == o)
+                     | (bin_oct == (o + 1) % HEADING_OCTANTS))[0] for o in range(HEADING_OCTANTS)]
+
     t = B.mean(0) - TC.mean(0)
+    sub = slice(None, None, 2)
+    P0, PO = TC[sub], wp_oct[sub]
     for _ in range(iters):
-        P = (TC + t)[::2]
-        idx = ((P[:, None, 0] - B[None, :, 0]) ** 2 + (P[:, None, 1] - B[None, :, 1]) ** 2).argmin(1)
-        t = t + (B[idx] - P).mean(0)
+        P = P0 + t
+        res = np.zeros_like(P)
+        for o in range(HEADING_OCTANTS):
+            m = PO == o
+            if not m.any() or not len(cand[o]):
+                continue
+            Bo = B[cand[o]]
+            idx = ((P[m, None, 0] - Bo[None, :, 0]) ** 2
+                   + (P[m, None, 1] - Bo[None, :, 1]) ** 2).argmin(1)
+            res[m] = Bo[idx] - P[m]
+        t = t + res.mean(0)
     return float(t[0]), float(t[1])
 
 

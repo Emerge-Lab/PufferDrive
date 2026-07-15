@@ -29,18 +29,38 @@ from pathlib import Path
 
 import numpy as np
 
-import carla
+# `carla` is imported lazily inside the functions that need it (build_carla,
+# _route_goal_xy, attach_chase_camera, main), NOT at module scope: BEVRenderer
+# and the other pure-python helpers here are reused by
+# pufferlib/ocean/cosim/nuplan/planner.py, which runs in the pufferdrive venv
+# (cp312) where the carla package (CARLA 0.9.15, cp310/cp37 wheels only) isn't
+# installed at all — same principle as carla_bridge.py's lazy carla import.
 
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import carla_bridge as cb
-from pufferlib.ocean.drive import carla_scenarios
+from pufferlib.ocean.cosim.carla import world_sync as ws
+# carla_scenarios imports carla at module scope (it's pure CARLA-actor
+# manipulation, unlike this module's carla_bridge/world_sync deps) and is
+# only used inside main() below, so it's imported there too.
 
-DEFAULT_ROUTES = "/workspace/CaRL/PlanT/data/longest6.xml"
+DEFAULT_ROUTES = "/scratch/yw4142/CaRL/PlanT/data/longest6.xml"
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 GOAL_RADIUS_M = 6.0  # advance the route-goal cursor only when the ego arrives within this
 DEFAULT_VEHICLE_LENGTH_M = 4.5  # fallback size for a parked/dead actor slot (out of obs range anyway)
 DEFAULT_VEHICLE_WIDTH_M = 2.0
 EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
+
+def clean_policy_state_dict(state_dict):
+    """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
+    avoid importing the training stack (wandb, neptune, the _C kernel, ...) in
+    the co-sim environment — same as cosim/carla/leaderboard_agent.py."""
+    def clean(key):
+        while key.startswith(("module.", "_orig_mod.")):
+            key = key.split(".", 1)[1]
+        return key
+
+    return {clean(k): v for k, v in state_dict.items()}
+
 
 def load_checkpoint_config(checkpoint):
     """The checkpoint's sibling config.yaml — the single source of truth for the
@@ -52,32 +72,7 @@ def load_checkpoint_config(checkpoint):
     return yaml.safe_load(open(Path(checkpoint).resolve().parents[1] / "config.yaml"))
 
 
-# Eval-time env config for the carla_combined gigaflow policy (obs dropout 0,
-# unlike the 0.5/0.4 used at train time — matches how the policy is evaluated).
-CARLA_ARCH = dict(
-    num_target_waypoints=3,
-    obs_slots_lane_n=80,
-    obs_slots_boundary_n=40,
-    obs_slots_partners_n=16,
-    obs_slots_traffic_controls_n=4,
-    obs_range_partner_m=200.0,
-    obs_range_road_front_m=200.0,
-    obs_range_road_behind_m=40.0,
-    obs_range_road_side_m=50.0,
-    obs_range_traffic_control_m=100.0,
-    obs_norm_xy_offset_m=200.0,
-    obs_norm_goal_offset_m=200.0,
-    obs_norm_road_seg_length_m=10.0,
-    obs_norm_road_seg_width_m=5.0,
-    obs_norm_veh_length_m=15.0,
-    obs_norm_veh_width_m=10.0,
-    reward_conditioning=True,
-    goal_speed=20.0,  # reward conditioning: arrive at goals at up to 20 m/s (default 3.0 crawls)
-    goal_radius=6.0,  # reach goals within 6 m (matches the GOAL_RADIUS_M cursor threshold)
-    target_type="static",
-    dynamics_model="jerk",
-    dt=0.1,  # co-sim runs lockstep with CARLA at 0.1s (sub_ticks=1)
-)
+DEFAULT_DT = 0.1  # co-sim runs lockstep with CARLA at 0.1s (sub_ticks=1)
 
 
 def parse_route(xml_path, route_id):
@@ -95,6 +90,8 @@ def parse_route(xml_path, route_id):
 
 
 def build_carla(client, town, route_wps, num_background, dt_sub):
+    import carla
+
     client.load_world(town)
     world = client.get_world()
     settings = world.get_settings()
@@ -207,6 +204,8 @@ def _route_goal_xy(cmap, cx, cy, route_yaw_deg):
     then search lateral neighbors for a matching-direction lane. If none is reachable
     (e.g. across a solid center line), keep the raw route point — it is at least in
     the correct travel direction even if not perfectly lane-centered."""
+    import carla
+
     def matches(w):
         return abs(((route_yaw_deg - w.transform.rotation.yaw) + 180.0) % 360.0 - 180.0) <= 90.0
 
@@ -262,6 +261,8 @@ def attach_chase_camera(world, ego, w=960, h=540):
     Returns (camera_actor, image_queue). Requires CARLA running WITH rendering
     (-RenderOffScreen), not -nullrhi."""
     import queue
+
+    import carla
 
     bp = world.get_blueprint_library().find("sensor.camera.rgb")
     bp.set_attribute("image_size_x", str(w))
@@ -348,6 +349,10 @@ class BEVRenderer:
 
 
 def main():
+    import carla
+
+    from pufferlib.ocean.drive import carla_scenarios
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--routes", default=DEFAULT_ROUTES)
     ap.add_argument("--route-id", type=int, default=0)
@@ -359,7 +364,8 @@ def main():
     ap.add_argument("--carla-port", type=int, default=2000)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--sub-ticks", type=int, default=None)  # default: round(dt / 0.1)
-    ap.add_argument("--dt", type=float, default=None, help="ego dynamics dt (default CARLA_ARCH=0.1; policy trained at 0.3)")
+    ap.add_argument("--dt", type=float, default=None,
+                    help="ego dynamics dt (default: the checkpoint's training dt, else 0.1)")
     ap.add_argument("--render", default=None, help="output mp4 path for a top-down BEV render")
     ap.add_argument("--bev-span", type=float, default=70.0, help="BEV half-window in meters")
     ap.add_argument("--carla-view", default=None,
@@ -372,8 +378,9 @@ def main():
     town_bin = args.town_bin or cb.bin_path_for_town(town)
     print(f"[cosim] route {args.route_id} town={town} waypoints={len(route_wps)} bin={town_bin}")
 
-    cfg = load_checkpoint_config(args.checkpoint)  # for the policy arch (below)
-    dt = args.dt if args.dt is not None else CARLA_ARCH["dt"]
+    cfg = load_checkpoint_config(args.checkpoint)  # for the env arch + policy arch (below)
+    # Policy dt defaults to the checkpoint's training dt (matching dynamics).
+    dt = args.dt if args.dt is not None else ((cfg or {}).get("env", {}).get("dt", DEFAULT_DT))
     sub_ticks = args.sub_ticks or max(1, round(dt / 0.1))  # CARLA at 0.1s, PufferDrive at dt
 
     # PufferDrive env (gigaflow spawns an agent pool; agent 0 = ego, rest = background).
@@ -387,7 +394,7 @@ def main():
         # (no lane-graph routing), which keeps reset fast even when a patched
         # bin has had non-driving lanes retyped out of the routable network.
         goal_on_lane=False,
-        **{**CARLA_ARCH, "dt": dt},
+        **ws.resolve_arch(cfg, dt=dt),
     )
     obs, _ = env.reset()
     obs = np.asarray(obs)
@@ -399,7 +406,6 @@ def main():
     if cfg is not None:
         import torch
         import pufferlib.ocean.torch as drive_torch
-        from pufferlib.pufferl import clean_policy_state_dict
 
         policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(env, **cfg["policy"]).to(args.device)
         sd = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
@@ -523,13 +529,24 @@ def main():
 
         imageio.mimwrite(args.carla_view, carla_frames, fps=10, codec="libx264")
         print(f"[cosim] wrote {args.carla_view} ({len(carla_frames)} frames)")
+    # Teardown while STILL synchronous: stop sensors, detach the TM from its
+    # vehicles, destroy actors, tick to apply — and only then release the world
+    # to async. Going async first races the TM thread against the destruction
+    # batch and aborts the process with "trying to operate on a destroyed
+    # actor" (std::terminate in the TM worker thread).
     if cam is not None and cam.is_alive:
         cam.stop()
-        cam.destroy()
+    tm_vehicles = [a for a in [*bg, *scenario_mgr.alive_actors()]
+                   if a is not None and a.is_alive and "vehicle" in a.type_id]
+    client.apply_batch_sync(
+        [carla.command.SetAutopilot(a.id, False, tm.get_port()) for a in tm_vehicles], True)
+    world.tick()  # let the TM observe the detach before anything is destroyed
     scenario_mgr.cleanup()
+    client.apply_batch_sync(
+        [carla.command.DestroyActor(a) for a in [cam, ego, *bg] if a is not None and a.is_alive], True)
+    world.tick()
     s = world.get_settings(); s.synchronous_mode = False; world.apply_settings(s)
     tm.set_synchronous_mode(False)
-    client.apply_batch([carla.command.DestroyActor(a) for a in [ego, *bg] if a is not None and a.is_alive])
     print("[cosim] done")
 
 
