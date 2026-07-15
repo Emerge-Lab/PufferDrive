@@ -6,6 +6,7 @@ Run: python -m unittest tests.unit_tests.test_config_schema
 """
 
 import os
+import re
 import sys
 import unittest
 from unittest.mock import patch
@@ -14,9 +15,40 @@ from omegaconf.errors import ConfigKeyError, ValidationError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pufferlib.config_schema import Controller, InfractionBehavior, TargetType
+from pufferlib.config_schema import (
+    ActionType,
+    ControlMode,
+    Controller,
+    DynamicsModel,
+    InfractionBehavior,
+    InitMode,
+    NonVehicleController,
+    SimulationMode,
+    TargetType,
+)
 from pufferlib.ocean.drive import binding
 from pufferlib.pufferl import load_config
+
+
+def _screaming_snake(name):
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
+
+
+# Enum classes checked against binding, and how to turn a member's Python
+# name into the suffix of its C constant. Every class defaults to its member
+# name verbatim; ControlMode's members stutter the group name in Python
+# (control_vehicles, not vehicles) so the leading "control_" is stripped
+# before joining, matching drive.h's CONTROL_MODE_VEHICLES etc.
+_DRIFT_CHECKED_ENUMS = [
+    (SimulationMode, lambda member: member.name),
+    (ActionType, lambda member: member.name),
+    (DynamicsModel, lambda member: member.name),
+    (InfractionBehavior, lambda member: member.name),
+    (ControlMode, lambda member: member.name.removeprefix("control_")),
+    (Controller, lambda member: member.name),
+    (InitMode, lambda member: member.name),
+    (TargetType, lambda member: member.name),
+]
 
 
 class TestConfigSchema(unittest.TestCase):
@@ -54,18 +86,38 @@ class TestConfigSchema(unittest.TestCase):
         args = load_config("puffer_drive")
         self.assertEqual(args["env"]["collision_behavior"], "stop")
 
-    def test_schema_enum_values_match_binding_constants(self):
-        """drive.h #defines are the source of truth for the ints; the schema
-        enums must never drift from them."""
-        self.assertEqual(InfractionBehavior.ignore.value, binding.IGNORE_INFRACTION)
-        self.assertEqual(InfractionBehavior.stop.value, binding.STOP_AGENT)
-        self.assertEqual(InfractionBehavior.remove.value, binding.REMOVE_AGENT)
-        self.assertEqual(Controller.static.value, binding.CONTROLLER_STATIC)
-        self.assertEqual(Controller.policy.value, binding.CONTROLLER_POLICY)
-        self.assertEqual(Controller.replay.value, binding.CONTROLLER_REPLAY)
-        self.assertEqual(Controller.idm.value, binding.CONTROLLER_IDM)
-        self.assertEqual(TargetType.static.value, binding.TARGET_STATIC)
-        self.assertEqual(TargetType.dynamic.value, binding.TARGET_DYNAMIC)
+    def test_schema_enums_match_binding_constants(self):
+        """drive.h #defines are the source of truth for the ints. Naming
+        convention (see config_schema.py docstring): every C constant is
+        `<ENUM_CLASS_SCREAMING_SNAKE>_<MEMBER_UPPER>`. This walks every enum
+        class instead of hand-picking members, so an enum added to
+        config_schema.py without a matching binding constant — or with a
+        mismatched value — fails here without needing a new assert line."""
+        for enum_cls, member_suffix in _DRIFT_CHECKED_ENUMS:
+            group = _screaming_snake(enum_cls.__name__)
+            for member in enum_cls:
+                const_name = f"{group}_{member_suffix(member).upper()}"
+                self.assertTrue(
+                    hasattr(binding, const_name),
+                    f"binding.{const_name} not found for {enum_cls.__name__}.{member.name} "
+                    "-- was the C #define renamed without updating config_schema.py, "
+                    "or is it missing from env_binding.h's PyModule_AddIntConstant calls?",
+                )
+                self.assertEqual(
+                    getattr(binding, const_name),
+                    member.value,
+                    f"binding.{const_name} != {enum_cls.__name__}.{member.name}.value",
+                )
+
+    def test_non_vehicle_controller_matches_controller_constants(self):
+        """NonVehicleController reuses Controller's C constants; only its
+        config-only 'auto' sentinel (-1) has no C counterpart (drive.py
+        resolves it to a concrete Controller before it reaches C)."""
+        for member in NonVehicleController:
+            if member.name == "auto":
+                continue
+            const_name = f"CONTROLLER_{member.name.upper()}"
+            self.assertEqual(getattr(binding, const_name), member.value)
 
 
 if __name__ == "__main__":

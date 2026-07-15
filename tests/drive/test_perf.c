@@ -14,7 +14,7 @@ static int test_simulator_raw_perf(void) {
     const int baseline_sps = 24690;
     const float threshold = 0.8f * (float) baseline_sps;
     srand(17);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     EXPECT_EQ_INT(env.active_agent_count, 32);
 
     int tick = 0;

@@ -12,7 +12,18 @@ YAML surfaces as a missing-value error at load time.
 Enum int values mirror the #defines in pufferlib/ocean/drive/drive.h (the
 source of truth, exported to Python via binding). Only the *names* gate
 config validation — drive.py still maps names to binding constants itself.
-tests/unit_tests/test_config_schema.py asserts the values stay in sync.
+
+Naming convention (Google enum style): every C #define is
+`<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
+`InfractionBehavior.stop` <-> `INFRACTION_BEHAVIOR_STOP`. This makes the C
+name mechanically derivable from the Python one (and vice versa) instead of
+needing a lookup table. NonVehicleController is the one exception: it
+reuses Controller's C constants (`CONTROLLER_*`) since it's the same
+underlying controller, plus a Python-only `auto` sentinel that drive.py
+resolves before it ever reaches C. tests/unit_tests/test_config_schema.py
+walks every class here and asserts the derived name exists in binding with
+the matching value, so a new enum is checked automatically without a new
+hand-written assert.
 """
 
 from dataclasses import dataclass

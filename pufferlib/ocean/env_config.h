@@ -77,16 +77,17 @@ typedef struct {
 } env_init_config;
 
 // Shared "ignore"/"stop"/"remove" enum for the collision/offroad/traffic-light
-// behavior keys. Values mirror IGNORE_INFRACTION/STOP_AGENT/REMOVE_AGENT in drive.h.
+// behavior keys. Values mirror INFRACTION_BEHAVIOR_IGNORE/INFRACTION_BEHAVIOR_STOP/INFRACTION_BEHAVIOR_REMOVE in
+// drive.h.
 static int parse_infraction_behavior(const char *name, const char *value) {
     if (strcmp(value, "\"ignore\"") == 0 || strcmp(value, "ignore") == 0) {
-        return 0; // IGNORE_INFRACTION
+        return 0; // INFRACTION_BEHAVIOR_IGNORE
     }
     if (strcmp(value, "\"stop\"") == 0 || strcmp(value, "stop") == 0) {
-        return 1; // STOP_AGENT
+        return 1; // INFRACTION_BEHAVIOR_STOP
     }
     if (strcmp(value, "\"remove\"") == 0 || strcmp(value, "remove") == 0) {
-        return 2; // REMOVE_AGENT
+        return 2; // INFRACTION_BEHAVIOR_REMOVE
     }
     fprintf(stderr, "Invalid %s value '%s': must be \"ignore\", \"stop\", or \"remove\"\n", name, value);
     exit(1);
@@ -99,21 +100,21 @@ static int handler(void *config, const char *section, const char *name, const ch
 
     if (MATCH("env", "action_type")) {
         if (strcmp(value, "\"discrete\"") == 0 || strcmp(value, "discrete") == 0) {
-            env_config->action_type = 0; // DISCRETE
+            env_config->action_type = 0; // ACTION_TYPE_DISCRETE
         } else if (strcmp(value, "\"continuous\"") == 0 || strcmp(value, "continuous") == 0) {
-            env_config->action_type = 1; // CONTINUOUS
+            env_config->action_type = 1; // ACTION_TYPE_CONTINUOUS
         } else {
-            printf("Warning: Unknown action_type value '%s', defaulting to DISCRETE\n", value);
-            env_config->action_type = 0; // Default to DISCRETE
+            printf("Warning: Unknown action_type value '%s', defaulting to ACTION_TYPE_DISCRETE\n", value);
+            env_config->action_type = 0; // Default to ACTION_TYPE_DISCRETE
         }
     } else if (MATCH("env", "dynamics_model")) {
         if (strcmp(value, "\"classic\"") == 0 || strcmp(value, "classic") == 0) {
-            env_config->dynamics_model = 0; // CLASSIC
+            env_config->dynamics_model = 0; // DYNAMICS_MODEL_CLASSIC
         } else if (strcmp(value, "\"jerk\"") == 0 || strcmp(value, "jerk") == 0) {
-            env_config->dynamics_model = 1; // JERK
+            env_config->dynamics_model = 1; // DYNAMICS_MODEL_JERK
         } else {
-            printf("Warning: Unknown dynamics_model value '%s', defaulting to JERK\n", value);
-            env_config->dynamics_model = 1; // Default to JERK
+            printf("Warning: Unknown dynamics_model value '%s', defaulting to DYNAMICS_MODEL_JERK\n", value);
+            env_config->dynamics_model = 1; // Default to DYNAMICS_MODEL_JERK
         }
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = parse_infraction_behavior(name, value);

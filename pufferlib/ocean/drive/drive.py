@@ -186,9 +186,9 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
-            "ignore": binding.IGNORE_INFRACTION,
-            "stop": binding.STOP_AGENT,
-            "remove": binding.REMOVE_AGENT,
+            "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
+            "stop": binding.INFRACTION_BEHAVIOR_STOP,
+            "remove": binding.INFRACTION_BEHAVIOR_REMOVE,
         }
         for behavior_name, behavior in (
             ("collision_behavior", collision_behavior),
@@ -213,9 +213,9 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         if dynamics_model == "classic":
-            self.dynamics_model_flag = 0
+            self.dynamics_model_flag = binding.DYNAMICS_MODEL_CLASSIC
         elif dynamics_model == "jerk":
-            self.dynamics_model_flag = 1
+            self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
@@ -317,9 +317,9 @@ class Drive(pufferlib.PufferEnv):
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
         if self.simulation_mode_str == "gigaflow":
-            self.simulation_mode = 0
+            self.simulation_mode = binding.SIMULATION_MODE_GIGAFLOW
         elif self.simulation_mode_str == "replay":
-            self.simulation_mode = 1
+            self.simulation_mode = binding.SIMULATION_MODE_REPLAY
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
 
@@ -329,7 +329,7 @@ class Drive(pufferlib.PufferEnv):
             )
 
         if self.init_step_spread:
-            if self.simulation_mode != 1:
+            if self.simulation_mode != binding.SIMULATION_MODE_REPLAY:
                 raise ValueError(
                     "init_step_spread is only supported in replay simulation_mode (it seeds each environment at a different expert timestep)."
                 )
@@ -339,13 +339,13 @@ class Drive(pufferlib.PufferEnv):
                 )
 
         if self.control_mode_str == "control_vehicles":
-            self.control_mode = 0
+            self.control_mode = binding.CONTROL_MODE_VEHICLES
         elif self.control_mode_str == "control_agents":
-            self.control_mode = 1
+            self.control_mode = binding.CONTROL_MODE_AGENTS
         elif self.control_mode_str == "control_wosac":
-            self.control_mode = 2
+            self.control_mode = binding.CONTROL_MODE_WOSAC
         elif self.control_mode_str == "control_sdc_only":
-            self.control_mode = 3
+            self.control_mode = binding.CONTROL_MODE_SDC_ONLY
         else:
             raise ValueError(
                 "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
@@ -380,16 +380,16 @@ class Drive(pufferlib.PufferEnv):
         self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
 
         if self.init_mode_str == "create_all_valid":
-            self.init_mode = 0
+            self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
         elif self.init_mode_str == "create_only_controlled":
-            self.init_mode = 1
+            self.init_mode = binding.INIT_MODE_CREATE_ONLY_CONTROLLED
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
 
         if action_type == "discrete":
-            self._action_type_flag = 0
+            self._action_type_flag = binding.ACTION_TYPE_DISCRETE
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
@@ -401,7 +401,7 @@ class Drive(pufferlib.PufferEnv):
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
-            self._action_type_flag = 1
+            self._action_type_flag = binding.ACTION_TYPE_CONTINUOUS
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
