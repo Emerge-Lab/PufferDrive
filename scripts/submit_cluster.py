@@ -55,6 +55,12 @@ def parse_args():
     parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
     parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
     parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
+    # Exported as env vars into the container command (not passed via --args,
+    # since URLs contain ':' which --args interprets as sweep separators).
+    parser.add_argument(
+        "--wandb-base-url", type=str, default=None, help="WANDB_BASE_URL, e.g. https://api.wandb.ai"
+    )
+    parser.add_argument("--wandb-entity", type=str, default=None, help="WANDB_ENTITY, e.g. emerge_")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
@@ -397,6 +403,13 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
+            # Pin the wandb server/org when requested, overriding the container's
+            # default login (e.g. a self-hosted server) so runs land on the
+            # intended entity.
+            if args.wandb_base_url:
+                cache_exports += f" && export WANDB_BASE_URL={args.wandb_base_url}"
+            if args.wandb_entity:
+                cache_exports += f" && export WANDB_ENTITY={args.wandb_entity}"
             train_str = " ".join(full_cmd)
             if args.heartbeat:
                 train_str = wrap_with_heartbeat(train_str)
