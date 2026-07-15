@@ -1679,30 +1679,38 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
-def eval(env_name, args=None, policy=None):
-    """Evaluate a policy across a fixed set of scenarios, in parallel.
+def _resolve_map_indices(map_dir, map_names):
+    """Map each logged map name back to its index in the sorted .bin map set."""
+    if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
+        map_files = [map_dir]
+    else:
+        map_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
+    name_to_idx = {os.path.basename(f).split(".")[0]: i for i, f in enumerate(map_files)}
+    indices = []
+    for name in map_names:
+        key = os.path.basename(str(name)).split(".")[0]
+        if key not in name_to_idx:
+            raise pufferlib.APIUsageError(f"Replay map '{key}' not found in {map_dir}")
+        indices.append(name_to_idx[key])
+    return indices
 
-    The requested ``num_scenarios`` scenarios are split into disjoint
-    contiguous windows, one per worker process, so the workers jointly cover
-    the whole set exactly once. Each completed episode is gathered into a
-    per-episode metrics CSV and a JSON of the metric averages. Works for both
-    replay and gigaflow simulation modes.
-    """
-    args = args or load_config(env_name)
 
-    if args["train"]["use_rnn"]:
-        raise pufferlib.APIUsageError("Multiprocessed eval does not support RNN policies yet")
+def _select_replay_rows(args):
+    """Read the replay CSV and keep the rows selected by --replay-filter/--replay-rows."""
+    df = pd.read_csv(args["replay_csv"])
+    if args.get("replay_filter"):
+        df = df.query(args["replay_filter"])
+    if args.get("replay_rows"):
+        positions = [int(r) for r in str(args["replay_rows"]).split(",")]
+        df = df.iloc[positions]
+    if "map_name" not in df.columns or "seed" not in df.columns:
+        raise pufferlib.APIUsageError("Replay CSV must contain 'map_name' and 'seed' columns")
+    return df
 
-    num_scenarios = int(args["num_scenarios"])
-    if num_scenarios < 1:
-        raise pufferlib.APIUsageError(f"num_scenarios must be >= 1. Got: {num_scenarios}")
 
-    scenario_length = int(args["env"]["scenario_length"])
-    num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
-
-    # Assign each worker a disjoint window of the map set.
-    scenarios_per_worker = num_scenarios // num_workers
-    remainder = num_scenarios % num_workers
+def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
+    """One disjoint contiguous map window per worker; together they cover the set once."""
+    scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
     map_cursor = 0
     for worker_idx in range(num_workers):
@@ -1715,13 +1723,36 @@ def eval(env_name, args=None, policy=None):
         env_kwargs["emit_completed_episodes"] = 1
         worker_env_kwargs.append(env_kwargs)
         map_cursor += worker_num_scenarios
+    max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
+    return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
-    print(f"Distributing {num_scenarios} scenarios across {num_workers} workers:")
-    for worker_idx, env_kwargs in enumerate(worker_env_kwargs):
-        map_start = env_kwargs["starting_map"]
-        scenario_count = env_kwargs["num_eval_scenarios"]
-        print(f"  Worker {worker_idx}: maps {map_start}-{map_start + scenario_count - 1} ({scenario_count} scenarios)")
 
+def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
+    """One full-budget env per (map, seed) pair, so each episode reproduces exactly."""
+    max_agents_per_env = int(args["env"]["max_agents_per_env"])
+    per, remainder = divmod(len(pairs), num_workers)
+    worker_env_kwargs = []
+    start = 0
+    for worker_idx in range(num_workers):
+        count = per + (1 if worker_idx < remainder else 0)
+        chunk = pairs[start : start + count]
+        start += count
+        env_kwargs = copy.deepcopy(args["env"])
+        env_kwargs["eval_mode"] = 1
+        env_kwargs["emit_completed_episodes"] = 1
+        env_kwargs["resample_frequency"] = scenario_length
+        env_kwargs["starting_map"] = 0
+        env_kwargs["num_eval_scenarios"] = count
+        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in chunk]
+        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in chunk]
+        env_kwargs["num_agents"] = count * max_agents_per_env
+        worker_env_kwargs.append(env_kwargs)
+    return worker_env_kwargs, scenario_length
+
+
+def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, policy=None):
+    """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
+    num_workers = len(worker_env_kwargs)
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
@@ -1741,15 +1772,9 @@ def eval(env_name, args=None, policy=None):
     policy.eval()
     device = torch_device(args["train"]["device"])
 
-    # The busiest worker sets the step budget; workers that finish early keep
-    # stepping their exhausted envs (drive.py stops resampling), which is a
-    # harmless no-op until the sweep ends.
-    max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
-    total_steps = max_scenarios_per_worker * scenario_length
-
     episode_summaries = []
     obs, _ = vecenv.reset(args["train"]["seed"] or 42)
-    for _ in tqdm(range(total_steps), desc="Evaluating scenarios"):
+    for _ in tqdm(range(total_steps), desc=desc):
         with torch.no_grad():
             obs_tensor = torch.as_tensor(obs).to(device)
             logits, _ = policy.forward_eval(obs_tensor)
@@ -1767,15 +1792,54 @@ def eval(env_name, args=None, policy=None):
             )
 
     vecenv.close()
+    return episode_summaries
+
+
+def eval(env_name, args=None, policy=None):
+    """Evaluate (or replay) a fixed set of scenarios in parallel and write per-episode reports.
+
+    Without --replay-csv, ``num_scenarios`` scenarios are split into disjoint contiguous
+    windows, one per worker. With --replay-csv, the selected (map, seed) pairs from a prior
+    eval are re-run exactly, one full-budget env per pair, so a subset reproduces bit-for-bit
+    under any worker count. Works for both replay and gigaflow simulation modes.
+    """
+    args = args or load_config(env_name)
+
+    if args["train"]["use_rnn"]:
+        raise pufferlib.APIUsageError("Multiprocessed eval does not support RNN policies yet")
+
+    scenario_length = int(args["env"]["scenario_length"])
+
+    if args.get("replay_csv"):
+        selected = _select_replay_rows(args)
+        map_indices = _resolve_map_indices(args["env"]["map_dir"], selected["map_name"].tolist())
+        pairs = list(zip(map_indices, (int(s) for s in selected["seed"].tolist())))
+        num_scenarios = len(pairs)
+        if num_scenarios < 1:
+            raise pufferlib.APIUsageError("Replay selection is empty")
+        num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
+        worker_env_kwargs, total_steps = _replay_worker_kwargs(args, pairs, num_workers, scenario_length)
+        out_subdir, desc = "replay", "Replaying scenarios"
+        print(f"Replaying {num_scenarios} scenarios across {num_workers} workers")
+    else:
+        num_scenarios = int(args["num_scenarios"])
+        if num_scenarios < 1:
+            raise pufferlib.APIUsageError(f"num_scenarios must be >= 1. Got: {num_scenarios}")
+        num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
+        worker_env_kwargs, total_steps = _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length)
+        out_subdir, desc = "eval", "Evaluating scenarios"
+        print(f"Distributing {num_scenarios} scenarios across {num_workers} workers")
+
+    episode_summaries = _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, policy)
+
     if args.get("load_model_path"):
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))
-        out_dir = os.path.join(run_dir, "eval")
+        out_dir = os.path.join(run_dir, out_subdir)
     else:
-        out_dir = os.path.join("eval_results", env_name)
+        out_dir = os.path.join("eval_results", env_name, out_subdir)
     _write_eval_reports(episode_summaries, out_dir, num_scenarios)
     print(
-        f"Multiprocessed eval complete: {len(episode_summaries)} episodes "
-        f"from {num_scenarios} scenarios across {num_workers} workers."
+        f"{desc} complete: {len(episode_summaries)} episodes from {num_scenarios} scenarios across {num_workers} workers."
     )
 
 
@@ -1799,7 +1863,7 @@ def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
     csv_path = os.path.join(out_dir, "episode_metrics.csv")
     df.to_csv(csv_path, index=False)
 
-    metric_means = df.select_dtypes(include=[np.number]).mean().to_dict()
+    metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
     summary = {
         "num_scenarios": num_scenarios,
         "num_episodes": int(len(df)),
@@ -1879,6 +1943,18 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
     parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
+    parser.add_argument(
+        "--replay-csv", type=str, default=None, help="Replay scenarios from a prior eval's episode_metrics.csv"
+    )
+    parser.add_argument(
+        "--replay-rows",
+        type=str,
+        default=None,
+        help="Comma-separated row positions to replay from --replay-csv (default: all)",
+    )
+    parser.add_argument(
+        "--replay-filter", type=str, default=None, help="Pandas query on the replay CSV columns to select rows"
+    )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)

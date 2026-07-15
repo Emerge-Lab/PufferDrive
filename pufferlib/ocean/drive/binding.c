@@ -2114,7 +2114,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     if (seed_obj == NULL) {
         return -1;
     }
-    if (PyDict_SetItemString(dict, "Seed", seed_obj) < 0) {
+    if (PyDict_SetItemString(dict, "seed", seed_obj) < 0) {
         Py_DECREF(seed_obj);
         return -1;
     }
