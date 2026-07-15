@@ -1680,15 +1680,13 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
 
 
 def eval(env_name, args=None, policy=None):
-    """Multiprocessed evaluation over a fixed set of scenarios.
+    """Evaluate a policy across a fixed set of scenarios, in parallel.
 
-    Commit 1 scope: the map allocator + multiprocessed rollout only. The
-    requested `num_scenarios` are split into disjoint windows, one per worker
-    (`starting_map` + `num_eval_scenarios`), so the workers together cover the
-    whole sweep exactly once. `eval_mode=1` makes `my_shared` walk each
-    worker's window sequentially instead of sampling maps at random. Works for
-    both replay and gigaflow simulation modes. Per-episode metric reporting is
-    added in a later commit.
+    The requested ``num_scenarios`` scenarios are split into disjoint
+    contiguous windows, one per worker process, so the workers jointly cover
+    the whole set exactly once. Each completed episode is gathered into a
+    per-episode metrics CSV and a JSON of the metric averages. Works for both
+    replay and gigaflow simulation modes.
     """
     args = args or load_config(env_name)
 
@@ -1714,6 +1712,7 @@ def eval(env_name, args=None, policy=None):
         env_kwargs["starting_map"] = map_cursor
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
+        env_kwargs["emit_completed_episodes"] = 1
         worker_env_kwargs.append(env_kwargs)
         map_cursor += worker_num_scenarios
 
@@ -1747,6 +1746,7 @@ def eval(env_name, args=None, policy=None):
     max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
     total_steps = max_scenarios_per_worker * scenario_length
 
+    episode_summaries = []
     obs, _ = vecenv.reset(args["train"]["seed"] or 42)
     for _ in tqdm(range(total_steps), desc="Evaluating scenarios"):
         with torch.no_grad():
@@ -1756,10 +1756,65 @@ def eval(env_name, args=None, policy=None):
             action = action.cpu().numpy().reshape(vecenv.action_space.shape)
         if isinstance(logits, torch.distributions.Normal):
             action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-        obs, _, _, _, _ = vecenv.step(action)
+        obs, _, _, _, infos = vecenv.step(action)
+        for worker_info in infos:
+            worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
+            episode_summaries.extend(
+                item
+                for item in worker_items
+                if isinstance(item, dict) and item.get("summary_type") == "completed_episode"
+            )
 
     vecenv.close()
-    print(f"Multiprocessed eval complete: {num_scenarios} scenarios across {num_workers} workers.")
+    _write_eval_reports(episode_summaries, num_scenarios, args, env_name)
+    print(
+        f"Multiprocessed eval complete: {len(episode_summaries)} episodes "
+        f"from {num_scenarios} scenarios across {num_workers} workers."
+    )
+
+
+def _write_eval_reports(episode_summaries, num_scenarios, args, env_name):
+    """Write a per-episode metrics CSV and a JSON of metric averages.
+
+    Outputs land next to the checkpoint (…/<run>/eval) when one is loaded,
+    otherwise under ./eval_results/<env_name>.
+    """
+    import json
+
+    if not episode_summaries:
+        print("No completed episodes were recorded; skipping report.")
+        return
+
+    load_model_path = args.get("load_model_path")
+    if load_model_path:
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(load_model_path)))
+        out_dir = os.path.join(run_dir, "eval")
+    else:
+        out_dir = os.path.join("eval_results", env_name)
+    os.makedirs(out_dir, exist_ok=True)
+
+    df = pd.DataFrame(episode_summaries)
+    df = df.drop(columns=[col for col in ("summary_type", "env_slot") if col in df.columns])
+    if "map_name" in df.columns:
+        df["map_name"] = df["map_name"].map(lambda name: os.path.basename(str(name)).split(".")[0])
+    lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
+    df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
+
+    csv_path = os.path.join(out_dir, "episode_metrics.csv")
+    df.to_csv(csv_path, index=False)
+
+    metric_means = df.select_dtypes(include=[np.number]).mean().to_dict()
+    summary = {
+        "num_scenarios": num_scenarios,
+        "num_episodes": int(len(df)),
+        "metrics_mean": {key: float(value) for key, value in metric_means.items()},
+    }
+    json_path = os.path.join(out_dir, "evaluation_summary.json")
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Wrote {len(df)} per-episode rows to {csv_path}")
+    print(f"Wrote metric averages to {json_path}")
 
 
 def load_env(env_name, args):

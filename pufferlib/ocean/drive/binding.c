@@ -1957,6 +1957,12 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
+    env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
+    env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->eval_episode_done = 0;
+    env->completed_episode_queue_head = 0;
+    env->completed_episode_queue_tail = 0;
+    env->completed_episode_queue_count = 0;
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
     env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
@@ -2066,5 +2072,38 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
     }
 
+    return 0;
+}
+
+static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
+    if (my_log(dict, env, &summary->log, summary->n) != 0) {
+        return -1;
+    }
+    assign_to_dict(dict, "n", summary->n);
+    assign_to_dict(dict, "active_agent_count", (float) summary->active_agent_count);
+    assign_to_dict(dict, "episode_timestep", (float) summary->timestep);
+
+    if (summary->map_name[0] != '\0') {
+        PyObject *map_name = PyUnicode_FromString(summary->map_name);
+        if (map_name == NULL) {
+            return -1;
+        }
+        if (PyDict_SetItemString(dict, "map_name", map_name) < 0) {
+            Py_DECREF(map_name);
+            return -1;
+        }
+        Py_DECREF(map_name);
+    }
+    if (summary->scenario_id[0] != '\0') {
+        PyObject *scenario_id = PyUnicode_FromString(summary->scenario_id);
+        if (scenario_id == NULL) {
+            return -1;
+        }
+        if (PyDict_SetItemString(dict, "scenario_id", scenario_id) < 0) {
+            Py_DECREF(scenario_id);
+            return -1;
+        }
+        Py_DECREF(scenario_id);
+    }
     return 0;
 }
