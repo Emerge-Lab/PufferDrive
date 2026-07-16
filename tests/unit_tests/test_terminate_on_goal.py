@@ -48,6 +48,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,  # don't resample mid-episode
         termination_mode=0,  # isolate terminate_on_goal as the only early-reset source
+        goal_source="gt",  # use the logged goal set from the replay
         terminate_on_goal=terminate_on_goal,
         report_interval=1,
         num_goals=3,
