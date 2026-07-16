@@ -72,9 +72,12 @@
 // collision" analysis, evaluated over the per-agent rolling trajectory history
 // (trajectory_hist_*, see Agent in datatypes.h; TARGET_TRAJECTORY_HISTORY_LEN there).
 #define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f // m/s^2 braking magnitude (matches planner max braking)
+#define TARGET_AVOIDABILITY_REACTION_TIME_SECONDS 1.0f
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
+// Target rollout includes 1s at constant speed before up to 8s of braking.
+#define TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS 91
 #define NO_AVOIDABLE_BRAKING_TIME (-1.0f)    // no braking within history avoids the crash
 #define AVOIDABLE_BRAKING_TIME_UNSET (-2.0f) // per-episode "not yet computed" sentinel
 #define FIRST_DETECTED_NOT_DETECTED (-1.0f)
@@ -3241,9 +3244,10 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
 static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back);
 static bool is_agent_at_fault_collision(const Agent *agent, const Agent *other);
 
-// Replay all adversaries while the target brakes from `steps_back` before the observed
-// collision. The observed collision adversary brakes after impact; all others continue at
-// constant speed and heading. Only target-at-fault collisions with other adversaries count.
+// Replay all adversaries while the target reacts at constant speed starting `steps_back`
+// before the observed collision, then brakes. The observed collision adversary brakes after
+// impact; all others continue at constant speed and heading. Only target-at-fault collisions
+// with other adversaries count.
 static bool target_braking_avoids_collision(Drive *env, int target_agent_idx, int collision_adversary_idx,
                                             const AdversaryBrakeTrajectory *collision_adversary_brake_trajectory,
                                             int steps_back) {
@@ -3255,15 +3259,16 @@ static bool target_braking_avoids_collision(Drive *env, int target_agent_idx, in
     }
 
     float decel = TARGET_AVOIDABILITY_BRAKE_DECEL;
-    float stop_time = v0 / decel;
+    float stop_time = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS + v0 / decel;
     Agent target_sample = *target;
-    for (int rollout_step = 0; rollout_step < TARGET_AVOIDABILITY_MAX_EXT_STEPS; rollout_step++) {
+    for (int rollout_step = 0; rollout_step < TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS; rollout_step++) {
         float tau = rollout_step * env->dt;
         if (tau >= stop_time) {
             return true;
         }
 
-        float s = v0 * tau - 0.5f * decel * tau * tau;
+        float braking_time_seconds = fmaxf(0.0f, tau - TARGET_AVOIDABILITY_REACTION_TIME_SECONDS);
+        float s = v0 * tau - 0.5f * decel * braking_time_seconds * braking_time_seconds;
         float sx, sy, sz, sheading;
         target_brake_path_sample(target, idx_start, s, &sx, &sy, &sz, &sheading);
         target_sample.sim_x = sx;
@@ -3272,7 +3277,7 @@ static bool target_braking_avoids_collision(Drive *env, int target_agent_idx, in
         target_sample.sim_heading = normalize_heading(sheading);
         target_sample.cos_heading = cosf(target_sample.sim_heading);
         target_sample.sin_heading = sinf(target_sample.sim_heading);
-        target_sample.sim_speed = v0 - decel * tau;
+        target_sample.sim_speed = v0 - decel * braking_time_seconds;
         target_sample.sim_speed_signed = target_sample.sim_speed;
         target_sample.sim_vx = target_sample.sim_speed * target_sample.cos_heading;
         target_sample.sim_vy = target_sample.sim_speed * target_sample.sin_heading;
