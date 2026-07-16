@@ -1720,7 +1720,6 @@ def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
         env_kwargs["starting_map"] = map_cursor
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
-        env_kwargs["emit_completed_episodes"] = 1
         worker_env_kwargs.append(env_kwargs)
         map_cursor += worker_num_scenarios
     max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
@@ -1739,7 +1738,6 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
         start += count
         env_kwargs = copy.deepcopy(args["env"])
         env_kwargs["eval_mode"] = 1
-        env_kwargs["emit_completed_episodes"] = 1
         env_kwargs["resample_frequency"] = scenario_length
         env_kwargs["starting_map"] = 0
         env_kwargs["num_eval_scenarios"] = count

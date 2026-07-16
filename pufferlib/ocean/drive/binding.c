@@ -1990,14 +1990,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
-    env->emit_completed_episodes = (int) unpack(kwargs, "emit_completed_episodes");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->eval_episode_done = 0;
     env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
     env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
-    env->completed_episode_queue_head = 0;
-    env->completed_episode_queue_tail = 0;
-    env->completed_episode_queue_count = 0;
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_waypoint_spacing = (float) unpack(kwargs, "min_waypoint_spacing");
     env->max_waypoint_spacing = (float) unpack(kwargs, "max_waypoint_spacing");
@@ -2110,15 +2106,23 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     return 0;
 }
 
-static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary) {
-    if (my_log(dict, env, &summary->log, summary->n) != 0) {
+// Build one per-episode row from a frozen eval env: its log holds exactly the
+// finished episode (the eval freeze stops it from running a second one).
+static int my_episode_to_dict(PyObject *dict, Env *env) {
+    float n = env->log.n;
+    Log normalized = env->log;
+    int num_log_fields = sizeof(Log) / sizeof(float);
+    for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
+        ((float *) &normalized)[field_idx] /= n;
+    }
+    if (my_log(dict, env, &normalized, n) != 0) {
         return -1;
     }
-    assign_to_dict(dict, "n", summary->n);
-    assign_to_dict(dict, "active_agent_count", (float) summary->active_agent_count);
-    assign_to_dict(dict, "episode_timestep", (float) summary->timestep);
+    assign_to_dict(dict, "n", n);
+    assign_to_dict(dict, "active_agent_count", (float) env->active_agent_count);
+    assign_to_dict(dict, "episode_timestep", (float) env->timestep);
 
-    PyObject *seed_obj = PyLong_FromUnsignedLong(summary->episode_seed);
+    PyObject *seed_obj = PyLong_FromUnsignedLong(env->log_episode_seed);
     if (seed_obj == NULL) {
         return -1;
     }
@@ -2128,8 +2132,8 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     }
     Py_DECREF(seed_obj);
 
-    if (summary->map_name[0] != '\0') {
-        PyObject *map_name = PyUnicode_FromString(summary->map_name);
+    if (env->map_name != NULL && env->map_name[0] != '\0') {
+        PyObject *map_name = PyUnicode_FromString(env->map_name);
         if (map_name == NULL) {
             return -1;
         }
@@ -2139,8 +2143,8 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         }
         Py_DECREF(map_name);
     }
-    if (summary->scenario_id[0] != '\0') {
-        PyObject *scenario_id = PyUnicode_FromString(summary->scenario_id);
+    if (env->scenario_id[0] != '\0') {
+        PyObject *scenario_id = PyUnicode_FromString(env->scenario_id);
         if (scenario_id == NULL) {
             return -1;
         }

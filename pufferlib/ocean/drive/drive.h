@@ -247,22 +247,6 @@ struct Log {
     float reward_ade;
 };
 
-#define COMPLETED_EPISODE_QUEUE_CAPACITY 256
-
-// Per-episode metrics, emitted at episode end when emit_completed_episodes is
-// set. Embeds the aggregated Log (already normalized per-agent) plus the
-// scenario identity captured before c_reset resamples the env slot.
-typedef struct CompletedEpisodeSummary CompletedEpisodeSummary;
-struct CompletedEpisodeSummary {
-    Log log;
-    float n;
-    int active_agent_count;
-    int timestep;
-    unsigned int episode_seed;
-    char map_name[256];
-    char scenario_id[128];
-};
-
 struct GridMapEntity {
     int entity_idx;    // Index into the road_elements array
     int geometry_idx;  // Index into element's geometry array
@@ -443,16 +427,11 @@ struct Drive {
     // frozen (no stepping, no re-emit) until the worker resamples, so each
     // scenario is evaluated exactly once regardless of why the episode ended.
     int eval_episode_done;
-    int emit_completed_episodes;
     int use_exact_episode_seed;
     unsigned int rng_state;
     unsigned int seed_stream_state;
     unsigned int episode_seed;
     unsigned int log_episode_seed;
-    CompletedEpisodeSummary completed_episode_queue[COMPLETED_EPISODE_QUEUE_CAPACITY];
-    int completed_episode_queue_head;
-    int completed_episode_queue_tail;
-    int completed_episode_queue_count;
 };
 
 typedef struct {
@@ -2834,50 +2813,6 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
 
 // Averages the summed Log across the episode's agents, matching how vec_log
 // normalizes its aggregate before reporting.
-static inline void normalize_episode_log(Log *log, float n) {
-    if (n <= 0.0f) {
-        return;
-    }
-    int num_log_fields = sizeof(Log) / sizeof(float);
-    for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
-        ((float *) log)[field_idx] /= n;
-    }
-}
-
-static inline void enqueue_completed_episode_summary(Drive *env, const Log *episode_log) {
-    CompletedEpisodeSummary summary = {0};
-    summary.log = *episode_log;
-    summary.n = episode_log->n;
-    summary.active_agent_count = env->active_agent_count;
-    summary.timestep = env->timestep;
-    summary.episode_seed = env->log_episode_seed;
-    if (env->map_name != NULL) {
-        snprintf(summary.map_name, sizeof(summary.map_name), "%s", env->map_name);
-    }
-    if (env->scenario_id[0] != '\0') {
-        snprintf(summary.scenario_id, sizeof(summary.scenario_id), "%s", env->scenario_id);
-    }
-    normalize_episode_log(&summary.log, summary.n);
-
-    // Ring buffer: drop the oldest summary if the Python consumer fell behind.
-    if (env->completed_episode_queue_count == COMPLETED_EPISODE_QUEUE_CAPACITY) {
-        env->completed_episode_queue_head = (env->completed_episode_queue_head + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
-        env->completed_episode_queue_count--;
-    }
-    env->completed_episode_queue[env->completed_episode_queue_tail] = summary;
-    env->completed_episode_queue_tail = (env->completed_episode_queue_tail + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
-    env->completed_episode_queue_count++;
-}
-
-static inline int pop_completed_episode_summary(Drive *env, CompletedEpisodeSummary *out_summary) {
-    if (env->completed_episode_queue_count <= 0) {
-        return 0;
-    }
-    *out_summary = env->completed_episode_queue[env->completed_episode_queue_head];
-    env->completed_episode_queue_head = (env->completed_episode_queue_head + 1) % COMPLETED_EPISODE_QUEUE_CAPACITY;
-    env->completed_episode_queue_count--;
-    return 1;
-}
 
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
@@ -2982,9 +2917,6 @@ static void add_log(Drive *env) {
     }
 
     env->log_episode_seed = env->episode_seed;
-    if (env->emit_completed_episodes) {
-        enqueue_completed_episode_summary(env, &episode_log);
-    }
 }
 
 // ========================================

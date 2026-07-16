@@ -46,7 +46,6 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         traffic_light_behavior=0,
         use_map_cache=0,
-        emit_completed_episodes=False,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -154,7 +153,6 @@ class Drive(pufferlib.PufferEnv):
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
-        self.emit_completed_episodes = bool(emit_completed_episodes)
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -458,7 +456,6 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "use_map_cache": self.use_map_cache,
-            "emit_completed_episodes": int(self.emit_completed_episodes),
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "goal_radius": self.goal_radius,
@@ -547,17 +544,20 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_step(self.c_envs)
         self.tick += 1
         info = []
-        if self.emit_completed_episodes:
-            for summary in binding.vec_pop_completed_episodes(self.c_envs):
-                summary["summary_type"] = "completed_episode"
-                info.append(summary)
-        if self.tick % self.report_interval == 0:
+        # vec_log is the training aggregate; it resets env->log, which eval reads
+        # per episode, so it must not run in eval mode.
+        if not self.eval_mode and self.tick % self.report_interval == 0:
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
+            # Read this batch's finished episodes before the envs are resampled/closed.
+            if self.eval_mode:
+                for summary in binding.vec_per_episode_log(self.c_envs):
+                    summary["summary_type"] = "completed_episode"
+                    info.append(summary)
             # Eval walks a fixed map window; each batch handles whatever scenarios
             # remain between the cursor and the end of this worker's window.
             self.scenarios_remaining = self.num_eval_scenarios

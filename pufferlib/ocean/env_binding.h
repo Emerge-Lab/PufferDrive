@@ -4,7 +4,7 @@
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
-static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary);
+static int my_episode_to_dict(PyObject *dict, Env *env);
 static int assign_to_dict(PyObject *dict, char *key, float value);
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
@@ -519,7 +519,9 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
+// One row per env whose (single, frozen) eval episode has finished. Envs with no
+// completed episode (log.n == 0) are skipped, so no division by zero.
+static PyObject *vec_per_episode_log(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
@@ -532,26 +534,26 @@ static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
 
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
-        CompletedEpisodeSummary summary;
-        while (pop_completed_episode_summary(env, &summary)) {
-            PyObject *dict = PyDict_New();
-            if (!dict) {
-                Py_DECREF(list);
-                return NULL;
-            }
-            if (my_completed_episode_to_dict(dict, env, &summary) != 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            assign_to_dict(dict, "env_slot", (float) i);
-            if (PyList_Append(list, dict) < 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            Py_DECREF(dict);
+        if (env->log.n <= 0.0f) {
+            continue;
         }
+        PyObject *dict = PyDict_New();
+        if (!dict) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        if (my_episode_to_dict(dict, env) != 0) {
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        assign_to_dict(dict, "env_slot", (float) i);
+        if (PyList_Append(list, dict) < 0) {
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(dict);
     }
     return list;
 }
@@ -1154,10 +1156,10 @@ static PyMethodDef methods[]
        {"vec_init", (PyCFunction) vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
        {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
        {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
-       {"vec_pop_completed_episodes",
-        vec_pop_completed_episodes,
+       {"vec_per_episode_log",
+        vec_per_episode_log,
         METH_VARARGS,
-        "Drain per-env queues of completed-episode summary dicts"},
+        "Return one per-episode metrics dict per env whose eval episode has finished"},
        {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
        {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
        {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set the mp4 filename suffix for an env"},
