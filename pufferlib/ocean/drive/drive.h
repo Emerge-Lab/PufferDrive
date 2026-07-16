@@ -1337,8 +1337,7 @@ int load_map_binary(const char *filename, Drive *drive) {
             return -1;
         }
 
-        // Build reverse lookup road-element idx -> graph idx. lane_ids[g] holds road-element
-        // indices (binary is reindexed so road id == array idx, drive.h:1003).
+        // Build reverse lookup road-element idx -> graph idx
         int num_roads = drive->num_road_elements;
         drive->lane_graph.lane_to_graph_idx = (int *) malloc(num_roads * sizeof(int));
         for (int r = 0; r < num_roads; r++) {
@@ -1420,6 +1419,10 @@ static float compute_lane_progress(
     float sin_heading,
     bool align_heading,
     float *out_dist_sq) {
+    // Arc-length progress (s, meters) of a world position along a lane polyline,
+    // via closest-point projection onto its segments. Pass 0 only considers
+    // segments pointing the same way as the heading (self-intersecting lanes);
+    // pass 1 drops that filter as fallback if pass 0 matched nothing.
     float best_progress = 0.0f;
     float best_dist_sq = 1e30f;
 
@@ -1434,13 +1437,16 @@ static float compute_lane_progress(
             float seg_len_sq = dx * dx + dy * dy;
             float seg_s = lane->cum_lengths[i + 1] - lane->cum_lengths[i];
 
+            // Skip degenerate (zero-length) segments
             if (seg_len_sq <= 1e-6f || seg_s <= 1e-6f) {
                 continue;
             }
+            // Pass 0: reject segments facing away from the agent heading
             if (align_heading && pass == 0 && dx * cos_heading + dy * sin_heading < 0.0f) {
                 continue;
             }
 
+            // Project position onto segment, clamped to its endpoints
             float t = ((pos_x - x0) * dx + (pos_y - y0) * dy) / seg_len_sq;
             t = fmaxf(0.0f, fminf(1.0f, t));
             float proj_x = x0 + t * dx;
@@ -1451,6 +1457,7 @@ static float compute_lane_progress(
                 best_progress = lane->cum_lengths[i] + t * seg_s;
             }
         }
+        // Second pass only needed when heading filter rejected every segment
         if (!align_heading || best_dist_sq < 1e30f) {
             break;
         }
