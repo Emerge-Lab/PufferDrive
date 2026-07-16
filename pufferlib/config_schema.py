@@ -82,9 +82,15 @@ class InitMode(Enum):
     create_only_controlled = 1
 
 
-class TargetType(Enum):
-    static = 0
-    dynamic = 1
+class GoalRegen(Enum):
+    finite = 0
+    rolling = 1
+
+
+class GoalSource(Enum):
+    route = 0
+    map = 1
+    gt = 2
 
 
 @dataclass
@@ -115,8 +121,9 @@ class DriveEnvConfig:
     non_vehicle_controller: NonVehicleController = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
-    target_type: TargetType = MISSING
-    goal_on_lane: bool = MISSING
+    goal_regen_mode: GoalRegen = MISSING
+    goal_source: GoalSource = MISSING
+    obs_goal_lane_distance: bool = MISSING
     goal_radius: float = MISSING
     goal_speed: float = MISSING
     num_goals: int = MISSING

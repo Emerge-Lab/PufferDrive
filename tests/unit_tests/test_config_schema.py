@@ -20,11 +20,12 @@ from pufferlib.config_schema import (
     ControlMode,
     Controller,
     DynamicsModel,
+    GoalRegen,
+    GoalSource,
     InfractionBehavior,
     InitMode,
     NonVehicleController,
     SimulationMode,
-    TargetType,
 )
 from pufferlib.ocean.drive import binding
 from pufferlib.pufferl import load_config
@@ -47,7 +48,8 @@ _DRIFT_CHECKED_ENUMS = [
     (ControlMode, lambda member: member.name.removeprefix("control_")),
     (Controller, lambda member: member.name),
     (InitMode, lambda member: member.name),
-    (TargetType, lambda member: member.name),
+    (GoalRegen, lambda member: member.name),
+    (GoalSource, lambda member: member.name),
 ]
 
 
