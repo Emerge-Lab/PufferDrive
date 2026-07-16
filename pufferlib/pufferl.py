@@ -1748,7 +1748,9 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
     return worker_env_kwargs, max_pairs_per_worker * scenario_length
 
 
-def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, expected_episodes, policy=None):
+def _run_eval_rollout(
+    args, env_name, worker_env_kwargs, total_steps, desc, expected_episodes, policy=None, expected_agents_per_batch=None
+):
     """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
     num_workers = len(worker_env_kwargs)
     package = args["package"]
@@ -1764,6 +1766,17 @@ def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, expe
         num_workers=num_workers,
         batch_size=num_workers,
     )
+
+    agents_per_batch = vecenv.agents_per_batch
+    if expected_agents_per_batch is not None and agents_per_batch != expected_agents_per_batch:
+        vecenv.close()
+        raise pufferlib.APIUsageError(
+            f"Replay agents_per_batch={agents_per_batch} but the CSV was produced with "
+            f"{expected_agents_per_batch}. The policy forward pass runs at this batch shape, and "
+            "GPU floating-point reductions are shape-dependent, so a different shape can flip actions "
+            "and diverge the trajectory. Re-run with matching num_agents and worker count so that "
+            f"num_agents * num_workers == {expected_agents_per_batch}."
+        )
 
     torch.manual_seed(args["train"]["seed"] or 42)
     policy = policy or load_policy(args, vecenv, env_name)
@@ -1783,11 +1796,10 @@ def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, expe
         obs, _, _, _, infos = vecenv.step(action)
         for worker_info in infos:
             worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
-            episode_summaries.extend(
-                item
-                for item in worker_items
-                if isinstance(item, dict) and item.get("summary_type") == "completed_episode"
-            )
+            for item in worker_items:
+                if isinstance(item, dict) and item.get("summary_type") == "completed_episode":
+                    item["agents_per_batch"] = agents_per_batch
+                    episode_summaries.append(item)
         if len(episode_summaries) >= expected_episodes:
             break
 
@@ -1810,6 +1822,7 @@ def eval(env_name, args=None, policy=None):
 
     scenario_length = int(args["env"]["scenario_length"])
 
+    expected_agents_per_batch = None
     if args.get("replay_csv"):
         selected = _select_replay_rows(args)
         map_indices = _resolve_map_indices(args["env"]["map_dir"], selected["map_name"].tolist())
@@ -1817,6 +1830,9 @@ def eval(env_name, args=None, policy=None):
         num_scenarios = len(pairs)
         if num_scenarios < 1:
             raise pufferlib.APIUsageError("Replay selection is empty")
+        if "agents_per_batch" in selected.columns:
+            logged = selected["agents_per_batch"].unique()
+            expected_agents_per_batch = int(logged[0]) if len(logged) == 1 else None
         num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
         worker_env_kwargs, total_steps = _replay_worker_kwargs(args, pairs, num_workers, scenario_length)
         out_subdir, desc = "replay", "Replaying scenarios"
@@ -1830,7 +1846,9 @@ def eval(env_name, args=None, policy=None):
         out_subdir, desc = "eval", "Evaluating scenarios"
         print(f"Distributing {num_scenarios} scenarios across {num_workers} workers")
 
-    episode_summaries = _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, num_scenarios, policy)
+    episode_summaries = _run_eval_rollout(
+        args, env_name, worker_env_kwargs, total_steps, desc, num_scenarios, policy, expected_agents_per_batch
+    )
 
     if args.get("load_model_path"):
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))
