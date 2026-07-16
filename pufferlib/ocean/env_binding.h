@@ -760,8 +760,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_collision_unavoidable_rate = env->log.target_collision_unavoidable_rate;
             float target_collision_adversary_forced_rate = env->log.target_collision_adversary_forced_rate;
             float target_collision_target_failure_rate = env->log.target_collision_target_failure_rate;
-            float target_avoidability_by_braking = env->log.target_avoidability_by_braking;
-            float target_avoidability_by_braking_valid_count = env->log.target_avoidability_by_braking_valid_count;
+            float target_last_avoidable_braking_seconds_before_collision =
+                env->log.target_last_avoidable_braking_seconds_before_collision;
+            float target_avoidable_by_braking_collision_count = env->log.target_avoidable_by_braking_collision_count;
             float target_first_time_detected_ttc = env->log.target_first_time_detected_ttc;
             float target_first_time_detected_ttc_valid_count = env->log.target_first_time_detected_ttc_valid_count;
             float target_first_time_detected_lat_rss = env->log.target_first_time_detected_lat_rss;
@@ -827,10 +828,11 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                     target_collision_adversary_forced_rate / target_collision_count;
                 env->log.target_collision_target_failure_rate =
                     target_collision_target_failure_rate / target_collision_count;
-                env->log.target_avoidability_by_braking =
-                    target_avoidability_by_braking_valid_count > 0.0f
-                        ? target_avoidability_by_braking / target_avoidability_by_braking_valid_count
-                        : TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+                env->log.target_last_avoidable_braking_seconds_before_collision =
+                    target_avoidable_by_braking_collision_count > 0.0f
+                        ? target_last_avoidable_braking_seconds_before_collision /
+                              target_avoidable_by_braking_collision_count
+                        : NO_AVOIDABLE_BRAKING_TIME;
                 env->log.target_first_time_detected_ttc =
                     target_first_time_detected_ttc_valid_count > 0.0f
                         ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
@@ -845,7 +847,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                         : FIRST_DETECTED_NOT_DETECTED;
             }
             env->log.target_collision_count = target_collision_count;
-            env->log.target_avoidability_by_braking_valid_count = target_avoidability_by_braking_valid_count;
+            env->log.target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
             env->log.target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
             env->log.target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
             env->log.target_first_time_detected_valid_count = target_first_time_detected_valid_count;
@@ -1052,8 +1054,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_collision_unavoidable_rate = aggregate.target_collision_unavoidable_rate;
         float target_collision_adversary_forced_rate = aggregate.target_collision_adversary_forced_rate;
         float target_collision_target_failure_rate = aggregate.target_collision_target_failure_rate;
-        float target_avoidability_by_braking = aggregate.target_avoidability_by_braking;
-        float target_avoidability_by_braking_valid_count = aggregate.target_avoidability_by_braking_valid_count;
+        float target_last_avoidable_braking_seconds_before_collision =
+            aggregate.target_last_avoidable_braking_seconds_before_collision;
+        float target_avoidable_by_braking_collision_count = aggregate.target_avoidable_by_braking_collision_count;
         float target_first_time_detected_ttc = aggregate.target_first_time_detected_ttc;
         float target_first_time_detected_ttc_valid_count = aggregate.target_first_time_detected_ttc_valid_count;
         float target_first_time_detected_lat_rss = aggregate.target_first_time_detected_lat_rss;
@@ -1121,10 +1124,11 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                 target_collision_adversary_forced_rate / target_collision_count;
             aggregate.target_collision_target_failure_rate =
                 target_collision_target_failure_rate / target_collision_count;
-            aggregate.target_avoidability_by_braking =
-                target_avoidability_by_braking_valid_count > 0.0f
-                    ? target_avoidability_by_braking / target_avoidability_by_braking_valid_count
-                    : TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+            aggregate.target_last_avoidable_braking_seconds_before_collision =
+                target_avoidable_by_braking_collision_count > 0.0f
+                    ? target_last_avoidable_braking_seconds_before_collision /
+                          target_avoidable_by_braking_collision_count
+                    : NO_AVOIDABLE_BRAKING_TIME;
             aggregate.target_first_time_detected_ttc =
                 target_first_time_detected_ttc_valid_count > 0.0f
                     ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
@@ -1139,7 +1143,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                     : FIRST_DETECTED_NOT_DETECTED;
         }
         aggregate.target_collision_count = target_collision_count;
-        aggregate.target_avoidability_by_braking_valid_count = target_avoidability_by_braking_valid_count;
+        aggregate.target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
         aggregate.target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
         aggregate.target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
         aggregate.target_first_time_detected_valid_count = target_first_time_detected_valid_count;

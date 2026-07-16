@@ -75,8 +75,8 @@
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
-#define TARGET_AVOIDABILITY_NOT_AVOIDABLE (-1.0f) // no braking within history avoids the crash
-#define TARGET_AVOIDABILITY_UNSET (-2.0f)         // per-episode "not yet computed" sentinel
+#define NO_AVOIDABLE_BRAKING_TIME (-1.0f)    // no braking within history avoids the crash
+#define AVOIDABLE_BRAKING_TIME_UNSET (-2.0f) // per-episode "not yet computed" sentinel
 #define FIRST_DETECTED_NOT_DETECTED (-1.0f)
 #define FIRST_DETECTED_TTC_MARGIN_SECONDS 0.1f
 // Covers the largest TTC danger threshold at dt=0.1:
@@ -264,8 +264,8 @@ struct Log {
     float target_collision_unavoidable_rate;
     float target_collision_adversary_forced_rate;
     float target_collision_target_failure_rate;
-    float target_avoidability_by_braking;
-    float target_avoidability_by_braking_valid_count;
+    float target_last_avoidable_braking_seconds_before_collision;
+    float target_avoidable_by_braking_collision_count;
     float target_first_time_detected_ttc;
     float target_first_time_detected_ttc_valid_count;
     float target_first_time_detected_lat_rss;
@@ -485,7 +485,7 @@ struct Drive {
     float target_collision_other_active_episode;
     float target_collision_other_stopped_episode;
     float target_collision_other_removed_episode;
-    float target_avoidability_by_braking_episode;
+    float target_last_avoidable_braking_seconds_before_collision;
     float target_first_time_detected_ttc_episode;
     float target_first_time_detected_lat_rss_episode;
     float target_first_time_detected_episode;
@@ -675,8 +675,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_collision_unavoidable_rate = log->target_collision_unavoidable_rate;
     float target_collision_adversary_forced_rate = log->target_collision_adversary_forced_rate;
     float target_collision_target_failure_rate = log->target_collision_target_failure_rate;
-    float target_avoidability_by_braking = log->target_avoidability_by_braking;
-    float target_avoidability_by_braking_valid_count = log->target_avoidability_by_braking_valid_count;
+    float target_last_avoidable_braking_seconds_before_collision =
+        log->target_last_avoidable_braking_seconds_before_collision;
+    float target_avoidable_by_braking_collision_count = log->target_avoidable_by_braking_collision_count;
     float target_first_time_detected_ttc = log->target_first_time_detected_ttc;
     float target_first_time_detected_ttc_valid_count = log->target_first_time_detected_ttc_valid_count;
     float target_first_time_detected_lat_rss = log->target_first_time_detected_lat_rss;
@@ -740,10 +741,10 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->target_collision_unavoidable_rate = target_collision_unavoidable_rate / target_collision_count;
         log->target_collision_adversary_forced_rate = target_collision_adversary_forced_rate / target_collision_count;
         log->target_collision_target_failure_rate = target_collision_target_failure_rate / target_collision_count;
-        log->target_avoidability_by_braking =
-            target_avoidability_by_braking_valid_count > 0.0f
-                ? target_avoidability_by_braking / target_avoidability_by_braking_valid_count
-                : TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+        log->target_last_avoidable_braking_seconds_before_collision =
+            target_avoidable_by_braking_collision_count > 0.0f
+                ? target_last_avoidable_braking_seconds_before_collision / target_avoidable_by_braking_collision_count
+                : NO_AVOIDABLE_BRAKING_TIME;
         log->target_first_time_detected_ttc =
             target_first_time_detected_ttc_valid_count > 0.0f
                 ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
@@ -757,7 +758,7 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
                                               : FIRST_DETECTED_NOT_DETECTED;
     }
     log->target_collision_count = target_collision_count;
-    log->target_avoidability_by_braking_valid_count = target_avoidability_by_braking_valid_count;
+    log->target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
     log->target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
     log->target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
     log->target_first_time_detected_valid_count = target_first_time_detected_valid_count;
@@ -3242,8 +3243,8 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
 // trajectory. Collisions are checked per timestep from the collision moment until the target
 // stops; a target that stops at or before the collision moment counts as avoided (the
 // adversary is not then checked against the stationary target).
-static bool target_avoidability_is_avoidable(Agent *target, const Agent *adversary,
-                                             const AdversaryBrakeTrajectory *adv_ext, float dt, int steps_back) {
+static bool target_braking_avoids_collision(Agent *target, const Agent *adversary,
+                                            const AdversaryBrakeTrajectory *adv_ext, float dt, int steps_back) {
     int idx_start = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
     float v0 = fabsf(target->trajectory_hist_speed_signed[idx_start]);
     if (v0 <= 0.0f) {
@@ -3286,21 +3287,19 @@ static bool target_avoidability_is_avoidable(Agent *target, const Agent *adversa
     return true; // loop always exits via the stop condition before this; bound is a safety cap
 }
 
-// Last braking lead-time (seconds) that would have let the target avoid the collision with
-// other_agent_idx, or TARGET_AVOIDABILITY_NOT_AVOIDABLE if no braking within the recorded
-// history avoids it. Linear scan from the latest feasible brake point (1 step) outward.
-static float last_avoidable_time_by_braking(Drive *env, int target_agent_idx, int other_agent_idx) {
+// Latest braking lead time that avoids the collision, measured in seconds before impact.
+static float last_avoidable_braking_seconds_before_collision(Drive *env, int target_agent_idx, int other_agent_idx) {
     Agent *target = &env->agents[target_agent_idx];
     Agent *adversary = &env->agents[other_agent_idx];
     AdversaryBrakeTrajectory adv_ext;
     build_adversary_brake_trajectory(adversary, env->dt, &adv_ext);
 
     for (int steps_back = 1; steps_back <= target->trajectory_hist_count; steps_back++) {
-        if (target_avoidability_is_avoidable(target, adversary, &adv_ext, env->dt, steps_back)) {
+        if (target_braking_avoids_collision(target, adversary, &adv_ext, env->dt, steps_back)) {
             return steps_back * env->dt;
         }
     }
-    return TARGET_AVOIDABILITY_NOT_AVOIDABLE;
+    return NO_AVOIDABLE_BRAKING_TIME;
 }
 
 typedef struct {
@@ -3833,19 +3832,21 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->target_collision_other_active += env->target_collision_other_active_episode;
             episode_log->target_collision_other_stopped += env->target_collision_other_stopped_episode;
             episode_log->target_collision_other_removed += env->target_collision_other_removed_episode;
-            if (env->target_avoidability_by_braking_episode == TARGET_AVOIDABILITY_NOT_AVOIDABLE) {
+            if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME) {
                 episode_log->target_collision_unavoidable_rate += 1.0f;
             } else if (env->target_first_time_detected_episode > 0.0f &&
-                       env->target_avoidability_by_braking_episode > 0.0f) {
-                if (env->target_avoidability_by_braking_episode > env->target_first_time_detected_episode) {
+                       env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
+                if (env->target_last_avoidable_braking_seconds_before_collision >
+                    env->target_first_time_detected_episode) {
                     episode_log->target_collision_adversary_forced_rate += 1.0f;
                 } else {
                     episode_log->target_collision_target_failure_rate += 1.0f;
                 }
             }
-            if (env->target_avoidability_by_braking_episode > 0.0f) {
-                episode_log->target_avoidability_by_braking += env->target_avoidability_by_braking_episode;
-                episode_log->target_avoidability_by_braking_valid_count += 1.0f;
+            if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
+                episode_log->target_last_avoidable_braking_seconds_before_collision +=
+                    env->target_last_avoidable_braking_seconds_before_collision;
+                episode_log->target_avoidable_by_braking_collision_count += 1.0f;
             }
             if (env->target_first_time_detected_ttc_episode > 0.0f) {
                 episode_log->target_first_time_detected_ttc += env->target_first_time_detected_ttc_episode;
@@ -5287,9 +5288,9 @@ static void compute_metrics(Drive *env, int agent_idx) {
             int other_idx = (agent_idx == target_agent_idx) ? car_collided_with_index : agent_idx;
             record_target_collision_diagnostics(env, target_agent_idx, other_idx);
             if (target_agent_idx >= 0 && other_idx >= 0 &&
-                env->target_avoidability_by_braking_episode == TARGET_AVOIDABILITY_UNSET) {
-                env->target_avoidability_by_braking_episode =
-                    last_avoidable_time_by_braking(env, target_agent_idx, other_idx);
+                env->target_last_avoidable_braking_seconds_before_collision == AVOIDABLE_BRAKING_TIME_UNSET) {
+                env->target_last_avoidable_braking_seconds_before_collision =
+                    last_avoidable_braking_seconds_before_collision(env, target_agent_idx, other_idx);
                 FirstTimeDetectedResult first_time_detected =
                     compute_first_time_detected(env, target_agent_idx, other_idx);
                 env->target_first_time_detected_ttc_episode = first_time_detected.ttc_seconds_before_collision;
@@ -6398,14 +6399,15 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         collision_reward *= responsibility;
     }
     bonus += collision_reward;
-    if (env->target_avoidability_by_braking_episode > 0.0f && env->target_first_time_detected_episode > 0.0f &&
-        env->target_first_time_detected_episode >= env->target_avoidability_by_braking_episode) {
+    if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f &&
+        env->target_first_time_detected_episode > 0.0f &&
+        env->target_first_time_detected_episode >= env->target_last_avoidable_braking_seconds_before_collision) {
         bonus += env->adv_target_failure_reward;
     }
     if (env->adv_target_avoidability_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
-        env->target_avoidability_by_braking_episode > 0.0f) {
+        env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
         bonus += env->adv_target_avoidability_reward *
-                 expf(-env->target_avoidability_by_braking_episode / env->adv_target_time_reward_tau);
+                 expf(-env->target_last_avoidable_braking_seconds_before_collision / env->adv_target_time_reward_tau);
     }
     if (env->adv_target_detection_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
         env->target_first_time_detected_episode > 0.0f) {
@@ -6437,7 +6439,7 @@ void c_reset(Drive *env) {
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].trajectory_hist_count = 0;
     }
-    env->target_avoidability_by_braking_episode = TARGET_AVOIDABILITY_UNSET;
+    env->target_last_avoidable_braking_seconds_before_collision = AVOIDABLE_BRAKING_TIME_UNSET;
     env->target_first_time_detected_ttc_episode = FIRST_DETECTED_NOT_DETECTED;
     env->target_first_time_detected_lat_rss_episode = FIRST_DETECTED_NOT_DETECTED;
     env->target_first_time_detected_episode = FIRST_DETECTED_NOT_DETECTED;
