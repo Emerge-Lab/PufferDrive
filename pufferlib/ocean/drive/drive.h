@@ -2017,6 +2017,14 @@ static int roll_goals(Drive *env, Agent *agent) {
     int walk_route_length = 0;
     int walk_start_idx = seed_lane_idx;
     if (env->goal_source == GOAL_SOURCE_ROUTE && agent->route != NULL) {
+        int reached_lane_idx = agent->list_goal_lane[agent->current_goal_idx - 1];
+        for (int route_idx = agent->current_route_idx; route_idx < agent->route_length; route_idx++) {
+            if (agent->route[route_idx] != reached_lane_idx) {
+                continue;
+            }
+            agent->current_route_idx = route_idx;
+            break;
+        }
         for (int route_idx = agent->current_route_idx; route_idx < agent->route_length; route_idx++) {
             if (agent->route[route_idx] == seed_lane_idx) {
                 walk_route = agent->route;
