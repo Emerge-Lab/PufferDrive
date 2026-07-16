@@ -1728,8 +1728,8 @@ def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
 
 
 def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
-    """One full-budget env per (map, seed) pair, so each episode reproduces exactly."""
-    max_agents_per_env = int(args["env"]["max_agents_per_env"])
+    """Split the (map, seed) pairs across workers; each worker cycles through its
+    pairs in fit-aware batches (num_agents from config bounds a batch)."""
     per, remainder = divmod(len(pairs), num_workers)
     worker_env_kwargs = []
     start = 0
@@ -1745,12 +1745,12 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
         env_kwargs["num_eval_scenarios"] = count
         env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in chunk]
         env_kwargs["eval_scenario_seeds"] = [seed for _, seed in chunk]
-        env_kwargs["num_agents"] = count * max_agents_per_env
         worker_env_kwargs.append(env_kwargs)
-    return worker_env_kwargs, scenario_length
+    max_pairs_per_worker = per + (1 if remainder else 0)
+    return worker_env_kwargs, max_pairs_per_worker * scenario_length
 
 
-def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, policy=None):
+def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, expected_episodes, policy=None):
     """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
     num_workers = len(worker_env_kwargs)
     package = args["package"]
@@ -1790,6 +1790,8 @@ def _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, poli
                 for item in worker_items
                 if isinstance(item, dict) and item.get("summary_type") == "completed_episode"
             )
+        if len(episode_summaries) >= expected_episodes:
+            break
 
     vecenv.close()
     return episode_summaries
@@ -1830,7 +1832,7 @@ def eval(env_name, args=None, policy=None):
         out_subdir, desc = "eval", "Evaluating scenarios"
         print(f"Distributing {num_scenarios} scenarios across {num_workers} workers")
 
-    episode_summaries = _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, policy)
+    episode_summaries = _run_eval_rollout(args, env_name, worker_env_kwargs, total_steps, desc, num_scenarios, policy)
 
     if args.get("load_model_path"):
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))

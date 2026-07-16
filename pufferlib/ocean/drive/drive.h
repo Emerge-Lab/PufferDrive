@@ -3513,8 +3513,8 @@ void set_active_agents(Drive *env) {
 
     // In REPLAY mode, determine which agents to control
     bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
-    // In log-replay mode, no cap on actors
-    int max_agents = is_log_replay ? env->num_total_agents : env->num_max_agents;
+    // Eval and log-replay keep the whole scene; training stays capped at num_max_agents.
+    int max_agents = (env->eval_mode || is_log_replay) ? env->num_total_agents : env->num_max_agents;
 
     int *active_agent_indices = (int *) malloc(max_agents * sizeof(int));
     int *static_agent_indices = (int *) malloc(max_agents * sizeof(int));

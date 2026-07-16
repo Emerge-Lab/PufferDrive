@@ -1894,6 +1894,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->simulation_mode = simulation_mode;
         env->init_step = init_step;
         env->num_max_agents = max_agents_per_env;
+        env->eval_mode = eval_mode;
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
 
@@ -1920,12 +1921,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             continue;
         }
 
-        // Store map_id
-        PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
-        // Store agent offset
-        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
-        total_agent_count += env->active_agent_count;
-        env_count++;
+        // In eval, keep whole scenes: a scene that would overflow the buffer is
+        // left for the next batch (the map cursor stays on it). Training keeps
+        // its greedy packing (fits is always true when eval_mode is 0).
+        int fits = !(eval_mode && env_count > 0 && total_agent_count + env->active_agent_count > num_agents);
+        if (fits) {
+            PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
+            PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
+            total_agent_count += env->active_agent_count;
+            env_count++;
+        }
         for (int j = 0; j < env->num_total_agents; j++) {
             free_agent(&env->agents[j]);
         }
@@ -1942,6 +1947,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);
         free(env);
+        if (!fits) {
+            break;
+        }
     }
 
     if (total_agent_count >= num_agents) {

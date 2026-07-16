@@ -568,6 +568,10 @@ class Drive(pufferlib.PufferEnv):
                 self._eval_exhausted = True
                 return (self.observations, self.rewards, self.terminals, self.truncations, info)
             binding.vec_close(self.c_envs)
+            # Pairs already replayed this sweep; slice the rest so a deferred
+            # scene resumes exactly where the previous batch stopped.
+            pair_start = self.map_cursor - self.map_window_start
+            remaining_map_indices = self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
             agent_offsets, map_ids, num_envs = binding.shared(
                 num_agents=self.num_agents,
                 num_maps=self.num_maps,
@@ -585,6 +589,7 @@ class Drive(pufferlib.PufferEnv):
                 min_agents_per_env=self.min_agents_per_env,
                 max_agents_per_env=self.max_agents_per_env,
                 num_eval_scenarios=self.scenarios_remaining,
+                eval_map_indices=remaining_map_indices,
                 goal_radius=self.goal_radius,
             )
             self.map_cursor = self.map_cursor + num_envs
@@ -592,6 +597,11 @@ class Drive(pufferlib.PufferEnv):
             for i in range(num_envs):
                 cur = agent_offsets[i]
                 nxt = agent_offsets[i + 1]
+                env_seed = (
+                    self.eval_scenario_seeds[pair_start + i]
+                    if self.eval_scenario_seeds is not None
+                    else self.random_seed
+                )
                 env_id = binding.env_init(
                     self.observations[cur:nxt],
                     self.actions[cur:nxt],
@@ -599,13 +609,17 @@ class Drive(pufferlib.PufferEnv):
                     self.terminals[cur:nxt],
                     self.truncations[cur:nxt],
                     self.masks[cur:nxt],
-                    self.random_seed,
+                    env_seed,
                     **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
                 )
                 env_ids.append(env_id)
             self.c_envs = binding.vectorize(*env_ids)
 
             binding.vec_reset(self.c_envs, self.random_seed)
+            if self.eval_mode:
+                # The initial batch is reset by both __init__ and the caller's reset();
+                # a resampled eval batch must match that to reproduce episodes exactly.
+                binding.vec_reset(self.c_envs, self.random_seed)
             # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
             self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
