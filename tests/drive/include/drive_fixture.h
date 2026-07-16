@@ -51,6 +51,7 @@ static inline Drive drive_test_env_config(
     int use_map_cache) {
     Drive env = {0};
     env.render_mode = RENDER_WINDOW;
+    snprintf(env.resource_root, sizeof(env.resource_root), "%s", DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive");
     env.action_type = 0;
     env.dynamics_model = CLASSIC;
     env.reward_goal = 1.0f;

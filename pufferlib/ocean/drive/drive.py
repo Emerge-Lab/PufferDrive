@@ -7,6 +7,7 @@ import gymnasium
 import json
 import struct
 import os
+from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -448,6 +449,10 @@ class Drive(pufferlib.PufferEnv):
             render_mode_flag = 0
         return {
             "render_mode": render_mode_flag,
+            # Absolute directory holding render assets (.glb models), so the C
+            # renderer loads them regardless of the process CWD. Derived from
+            # the installed package location, not a config knob.
+            "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,

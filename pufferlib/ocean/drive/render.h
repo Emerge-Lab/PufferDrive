@@ -236,6 +236,16 @@ static int g_xvfb_display_num = 0;
 // is resized instead. Matches 3.0 drive.h g_glfw_ready pattern.
 static int g_glfw_ready = 0;
 
+static Model load_drive_model(Drive *env, const char *filename) {
+    char model_path[sizeof(env->resource_root) + 64];
+    snprintf(model_path, sizeof(model_path), "%s/%s", env->resource_root, filename);
+    Model model = LoadModel(model_path);
+    if (model.meshCount == 0) {
+        RAISE_FILE_ERROR(model_path);
+    }
+    return model;
+}
+
 Client *make_client(Drive *env) {
     Client *client = (Client *) calloc(1, sizeof(Client));
     // Fixed 1920x1080 pbuffer for headless (roughly 3x the pixel area of
@@ -348,16 +358,18 @@ Client *make_client(Drive *env) {
         client->egl_mode = 1;
     }
 #endif
-    client->cars[0] = LoadModel("pufferlib/resources/drive/RedCar.glb");
-    client->cars[1] = LoadModel("pufferlib/resources/drive/WhiteCar.glb");
-    client->cars[2] = LoadModel("pufferlib/resources/drive/BlueCar.glb");
-    client->cars[3] = LoadModel("pufferlib/resources/drive/YellowCar.glb");
-    client->cars[4] = LoadModel("pufferlib/resources/drive/GreenCar.glb");
-    client->cars[5] = LoadModel("pufferlib/resources/drive/GreyCar.glb");
-    client->cyclist = LoadModel("pufferlib/resources/drive/cyclist.glb");
-    client->pedestrian = LoadModel("pufferlib/resources/drive/pedestrian.glb");
+    client->cars[0] = load_drive_model(env, "RedCar.glb");
+    client->cars[1] = load_drive_model(env, "WhiteCar.glb");
+    client->cars[2] = load_drive_model(env, "BlueCar.glb");
+    client->cars[3] = load_drive_model(env, "YellowCar.glb");
+    client->cars[4] = load_drive_model(env, "GreenCar.glb");
+    client->cars[5] = load_drive_model(env, "GreyCar.glb");
+    client->cyclist = load_drive_model(env, "cyclist.glb");
+    client->pedestrian = load_drive_model(env, "pedestrian.glb");
     int animCountCyc = 0;
-    client->cycle_anim = LoadModelAnimations("pufferlib/resources/drive/cyclist.glb", &animCountCyc);
+    char cyclist_anim_path[sizeof(env->resource_root) + 64];
+    snprintf(cyclist_anim_path, sizeof(cyclist_anim_path), "%s/cyclist.glb", env->resource_root);
+    client->cycle_anim = LoadModelAnimations(cyclist_anim_path, &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
