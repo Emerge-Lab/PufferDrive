@@ -3860,6 +3860,16 @@ void init(Drive *env) {
                 agent->current_goal_z = agent->list_goal_z[0];
             }
         }
+    } else if (env->goal_source == GOAL_SOURCE_MAP) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            generate_new_goals_from_map(env, agent);
+        }
+    } else if (env->goal_source == GOAL_SOURCE_ROUTE) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            generate_new_goals_from_route(env, agent);
+        }
     }
 }
 
