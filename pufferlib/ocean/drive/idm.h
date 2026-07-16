@@ -544,10 +544,10 @@ static int idm_refresh_route_at_lane_end(Drive *env, int agent_idx, int lane_idx
         return 0;
     }
 
-    if (!compute_new_route(env, agent_idx, lane_idx)) {
+    if (!compute_new_route(env, agent, lane_idx)) {
         return 0;
     }
-    compute_goals(env, agent_idx);
+    generate_new_goals_from_route(env, agent);
     return 1;
 }
 

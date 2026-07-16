@@ -84,8 +84,9 @@ class Drive(pufferlib.PufferEnv):
         non_sdc_controller="policy",
         non_vehicle_controller="auto",
         map_dir=None,
-        target_type="static",
-        goal_on_lane=True,
+        goal_regen_mode="finite",
+        goal_source="route",
+        obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
@@ -144,17 +145,24 @@ class Drive(pufferlib.PufferEnv):
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
-        if num_goals > binding.MAX_GOALS:
-            num_goals = binding.MAX_GOALS
+        if not 1 <= num_goals <= binding.MAX_GOALS:
+            raise ValueError(f"num_goals must be in [1, {binding.MAX_GOALS}]. Got: {num_goals}")
         self.num_goals = num_goals
-        self.target_type_str = target_type
-        if target_type == "static":
-            self.target_type = binding.TARGET_STATIC
-        elif target_type == "dynamic":
-            self.target_type = binding.TARGET_DYNAMIC
+        if goal_regen_mode == "finite":
+            self.goal_regen_mode = binding.GOAL_REGEN_FINITE
+        elif goal_regen_mode == "rolling":
+            self.goal_regen_mode = binding.GOAL_REGEN_ROLLING
         else:
-            raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
-        self.goal_on_lane = int(bool(goal_on_lane))
+            raise ValueError(f"goal_regen_mode must be 'finite' or 'rolling'. Got: {goal_regen_mode}")
+        if goal_source == "route":
+            self.goal_source = binding.GOAL_SOURCE_ROUTE
+        elif goal_source == "map":
+            self.goal_source = binding.GOAL_SOURCE_MAP
+        elif goal_source == "gt":
+            self.goal_source = binding.GOAL_SOURCE_GT
+        else:
+            raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
+        self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -228,25 +236,24 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration = int(phantom_braking_duration)
         self.partner_features = binding.PARTNER_FEATURES
-        self.road_features = binding.ROAD_FEATURES
+        self.lane_features = binding.LANE_FEATURES
+        self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
-        # Target features based on target_type
-        if target_type == "static":
-            self.target_features = binding.STATIC_TARGET_FEATURES
-        else:
-            self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.target_dim = self.num_goals * self.target_features
+        # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
+        self.goal_features = binding.GOAL_FEATURES
+        self.goal_dim = self.num_goals * self.goal_features
 
+        # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
-            + self.target_dim
+            + self.goal_dim
             + self.obs_slots_partners_n * self.partner_features
-            + self.obs_slots_lane_kept * self.road_features
-            + self.obs_slots_boundary_kept * self.road_features
+            + self.obs_slots_lane_kept * self.lane_features
+            + self.obs_slots_boundary_kept * self.boundary_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
             + self.obs_valid_count_features
         )
@@ -279,6 +286,11 @@ class Drive(pufferlib.PufferEnv):
             self.simulation_mode = 1
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
+
+        if self.goal_source == binding.GOAL_SOURCE_GT and self.simulation_mode != 1:
+            raise ValueError(
+                "goal_source 'gt' is only supported in replay simulation_mode (it reads the logged ground-truth trajectory)."
+            )
 
         if self.init_step_spread:
             if self.simulation_mode != 1:
@@ -467,8 +479,9 @@ class Drive(pufferlib.PufferEnv):
             "min_goal_spacing": self.min_goal_spacing,
             "max_goal_spacing": self.max_goal_spacing,
             "num_goals": self.num_goals,
-            "target_type": self.target_type,
-            "goal_on_lane": self.goal_on_lane,
+            "goal_regen_mode": self.goal_regen_mode,
+            "goal_source": self.goal_source,
+            "obs_goal_lane_distance": self.obs_goal_lane_distance,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,

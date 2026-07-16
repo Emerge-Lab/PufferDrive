@@ -30,7 +30,7 @@ env.use_map_cache: 1
 # 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
 # Town10HD map diameter (~260m) so goals can land anywhere on the network.
 env.num_goals: 1
-env.goal_on_lane: False
+env.goal_source: "map"
 env.min_goal_spacing: 6.0
 env.max_goal_spacing: 500.0
 

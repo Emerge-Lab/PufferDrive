@@ -32,7 +32,9 @@ typedef struct {
     int traffic_light_behavior;
     int use_map_cache;
     float dt;
-    int target_type;
+    int goal_regen_mode;
+    int goal_source;
+    int obs_goal_lane_distance;
     int scenario_length;
     int termination_mode;
     int init_step;
@@ -105,14 +107,31 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->traffic_light_behavior = atoi(value);
     } else if (MATCH("env", "use_map_cache")) {
         env_config->use_map_cache = atoi(value);
-    } else if (MATCH("env", "target_type")) {
-        if (strcmp(value, "\"static\"") == 0 || strcmp(value, "static") == 0) {
-            env_config->target_type = 0; // TARGET_STATIC
-        } else if (strcmp(value, "\"dynamic\"") == 0 || strcmp(value, "dynamic") == 0) {
-            env_config->target_type = 1; // TARGET_DYNAMIC
+    } else if (MATCH("env", "goal_regen_mode")) {
+        if (strcmp(value, "\"finite\"") == 0 || strcmp(value, "finite") == 0) {
+            env_config->goal_regen_mode = 0; // GOAL_REGEN_FINITE
+        } else if (strcmp(value, "\"rolling\"") == 0 || strcmp(value, "rolling") == 0) {
+            env_config->goal_regen_mode = 1; // GOAL_REGEN_ROLLING
         } else {
-            printf("Warning: Unknown target_type value '%s', defaulting to static\n", value);
-            env_config->target_type = 0;
+            printf("Warning: Unknown goal_regen_mode value '%s', defaulting to finite\n", value);
+            env_config->goal_regen_mode = 0;
+        }
+    } else if (MATCH("env", "goal_source")) {
+        if (strcmp(value, "\"route\"") == 0 || strcmp(value, "route") == 0) {
+            env_config->goal_source = 0; // GOAL_SOURCE_ROUTE
+        } else if (strcmp(value, "\"map\"") == 0 || strcmp(value, "map") == 0) {
+            env_config->goal_source = 1; // GOAL_SOURCE_MAP
+        } else if (strcmp(value, "\"gt\"") == 0 || strcmp(value, "gt") == 0) {
+            env_config->goal_source = 2; // GOAL_SOURCE_GT
+        } else {
+            printf("Warning: Unknown goal_source value '%s', defaulting to route\n", value);
+            env_config->goal_source = 0;
+        }
+    } else if (MATCH("env", "obs_goal_lane_distance")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->obs_goal_lane_distance = 1;
+        } else {
+            env_config->obs_goal_lane_distance = 0;
         }
     } else if (MATCH("env", "reward_collision")) {
         env_config->reward_collision = atof(value);

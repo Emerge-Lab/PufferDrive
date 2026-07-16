@@ -1377,8 +1377,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         KEYS_OF_INTEREST = {
             "action_type",
             "dynamics_model",
-            "target_type",
-            "num_target_waypoints",
+            "goal_source",
+            "goal_regen_mode",
+            "num_goals",
+            "min_goal_spacing",
+            "max_goal_spacing",
+            "obs_goal_lane_distance",
             "reward_conditioning",
             "reward_randomization",
             "trajectory_prediction_length",
@@ -1589,10 +1593,12 @@ _ARCH_ENV_KEYS = (
     "traffic_control_scope",
     "reward_conditioning",
     # target / goal representation
-    "target_type",
-    "num_target_waypoints",
-    "min_waypoint_spacing",
-    "max_waypoint_spacing",
+    "goal_source",
+    "goal_regen_mode",
+    "num_goals",
+    "min_goal_spacing",
+    "max_goal_spacing",
+    "obs_goal_lane_distance",
     # observation normalization scales + spatial extent — the policy was
     # trained against these, so wrong values feed it mis-scaled / clipped obs.
     "obs_norm_xy_offset_m",

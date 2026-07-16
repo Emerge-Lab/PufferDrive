@@ -775,20 +775,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
-            tmp = PyLong_FromLong(a->closest_path_idx_wp);
-            if (!tmp) {
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            if (PyDict_SetItemString(agent, "closest_path_idx_wp", tmp) < 0) {
-                Py_DECREF(tmp);
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            Py_DECREF(tmp);
-
             /* Goal position */
             pf = PyFloat_FromDouble((double) a->current_goal_x);
             if (!pf) {
@@ -910,21 +896,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 return NULL;
             }
             if (PyDict_SetItemString(agent, "reached_goal_this_episode", tmp) < 0) {
-                Py_DECREF(tmp);
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            Py_DECREF(tmp);
-
-            /* Debug metrics */
-            tmp = PyLong_FromLong(a->num_waypoints_reached);
-            if (!tmp) {
-                Py_DECREF(agent);
-                Py_DECREF(agents_list);
-                return NULL;
-            }
-            if (PyDict_SetItemString(agent, "num_waypoints_reached", tmp) < 0) {
                 Py_DECREF(tmp);
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1109,124 +1080,6 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         Py_DECREF(agents_list);
     } else {
         if (PyDict_SetItemString(dict, "agents", Py_None) < 0) {
-            return NULL;
-        }
-    }
-
-    /* SDC Paths */
-    if (env->agents && env->active_agent_count > 0) {
-        PyObject *sdc_list = PyList_New(env->active_agent_count);
-        if (!sdc_list) {
-            return NULL;
-        }
-
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *a = &env->agents[env->active_agent_indices[i]];
-            if (a->path) {
-                struct Path *path = a->path;
-                PyObject *path_dict = PyDict_New();
-                if (!path_dict) {
-                    Py_DECREF(sdc_list);
-                    return NULL;
-                }
-
-                PyObject *tmp_val = PyLong_FromLong(path->num_waypoints);
-                if (!tmp_val) {
-                    Py_DECREF(path_dict);
-                    Py_DECREF(sdc_list);
-                    return NULL;
-                }
-                if (PyDict_SetItemString(path_dict, "num_waypoints", tmp_val) < 0) {
-                    Py_DECREF(tmp_val);
-                    Py_DECREF(path_dict);
-                    Py_DECREF(sdc_list);
-                    return NULL;
-                }
-                Py_DECREF(tmp_val);
-
-                PyObject *wp_list = PyList_New(path->num_waypoints);
-                if (!wp_list) {
-                    Py_DECREF(path_dict);
-                    Py_DECREF(sdc_list);
-                    return NULL;
-                }
-
-                for (int j = 0; j < path->num_waypoints; j++) {
-                    struct Waypoint *wp = &path->waypoints[j];
-                    PyObject *wp_dict = PyDict_New();
-                    if (!wp_dict) {
-                        Py_DECREF(wp_list);
-                        Py_DECREF(path_dict);
-                        Py_DECREF(sdc_list);
-                        return NULL;
-                    }
-
-#define SET_WAYPOINT_FLOAT(key, val)                                                                                   \
-    tmp_val = PyFloat_FromDouble((double) val);                                                                        \
-    if (!tmp_val) {                                                                                                    \
-        Py_DECREF(wp_dict);                                                                                            \
-        Py_DECREF(wp_list);                                                                                            \
-        Py_DECREF(path_dict);                                                                                          \
-        Py_DECREF(sdc_list);                                                                                           \
-        return NULL;                                                                                                   \
-    }                                                                                                                  \
-    if (PyDict_SetItemString(wp_dict, key, tmp_val) < 0) {                                                             \
-        Py_DECREF(tmp_val);                                                                                            \
-        Py_DECREF(wp_dict);                                                                                            \
-        Py_DECREF(wp_list);                                                                                            \
-        Py_DECREF(path_dict);                                                                                          \
-        Py_DECREF(sdc_list);                                                                                           \
-        return NULL;                                                                                                   \
-    }                                                                                                                  \
-    Py_DECREF(tmp_val)
-
-                    SET_WAYPOINT_FLOAT("s", wp->s);
-                    SET_WAYPOINT_FLOAT("x", wp->x);
-                    SET_WAYPOINT_FLOAT("y", wp->y);
-                    SET_WAYPOINT_FLOAT("heading", wp->heading);
-
-                    tmp_val = PyLong_FromLong(wp->lane_idx);
-                    if (!tmp_val) {
-                        Py_DECREF(wp_dict);
-                        Py_DECREF(wp_list);
-                        Py_DECREF(path_dict);
-                        Py_DECREF(sdc_list);
-                        return NULL;
-                    }
-                    if (PyDict_SetItemString(wp_dict, "lane_id", tmp_val) < 0) {
-                        Py_DECREF(tmp_val);
-                        Py_DECREF(wp_dict);
-                        Py_DECREF(wp_list);
-                        Py_DECREF(path_dict);
-                        Py_DECREF(sdc_list);
-                        return NULL;
-                    }
-                    Py_DECREF(tmp_val);
-
-                    PyList_SetItem(wp_list, j, wp_dict);
-                }
-
-                if (PyDict_SetItemString(path_dict, "waypoints", wp_list) < 0) {
-                    Py_DECREF(wp_list);
-                    Py_DECREF(path_dict);
-                    Py_DECREF(sdc_list);
-                    return NULL;
-                }
-                Py_DECREF(wp_list);
-                PyList_SetItem(sdc_list, i, path_dict);
-            } else {
-                Py_INCREF(Py_None);
-                PyList_SetItem(sdc_list, i, Py_None);
-            }
-        }
-
-        if (PyDict_SetItemString(dict, "sdc_paths", sdc_list) < 0) {
-            Py_DECREF(sdc_list);
-            return NULL;
-        }
-        Py_DECREF(sdc_list);
-    } else {
-        if (PyDict_SetItemString(dict, "sdc_paths", Py_None) < 0) {
             return NULL;
         }
     }
@@ -1968,11 +1821,13 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
     env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
     env->num_goals = (int) unpack(kwargs, "num_goals");
-    if (env->num_goals > MAX_GOALS) {
-        env->num_goals = MAX_GOALS;
+    if (env->num_goals < 1 || env->num_goals > MAX_GOALS) {
+        PyErr_Format(PyExc_ValueError, "num_goals must be in [1, %d]. Got: %d", MAX_GOALS, env->num_goals);
+        return -1;
     }
-    env->target_type = (int) unpack(kwargs, "target_type");
-    env->goal_on_lane = (int) unpack(kwargs, "goal_on_lane");
+    env->goal_regen_mode = (int) unpack(kwargs, "goal_regen_mode");
+    env->goal_source = (int) unpack(kwargs, "goal_source");
+    env->obs_goal_lane_distance = (int) unpack(kwargs, "obs_goal_lane_distance");
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
