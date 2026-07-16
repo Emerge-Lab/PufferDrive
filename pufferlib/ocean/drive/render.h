@@ -236,6 +236,16 @@ static int g_xvfb_display_num = 0;
 // is resized instead. Matches 3.0 drive.h g_glfw_ready pattern.
 static int g_glfw_ready = 0;
 
+static Model load_drive_model(Drive *env, const char *filename) {
+    char model_path[sizeof(env->resource_root) + 64];
+    snprintf(model_path, sizeof(model_path), "%s/%s", env->resource_root, filename);
+    Model model = LoadModel(model_path);
+    if (model.meshCount == 0) {
+        RAISE_FILE_ERROR(model_path);
+    }
+    return model;
+}
+
 Client *make_client(Drive *env) {
     Client *client = (Client *) calloc(1, sizeof(Client));
     // Fixed 1920x1080 pbuffer for headless (roughly 3x the pixel area of
@@ -348,16 +358,18 @@ Client *make_client(Drive *env) {
         client->egl_mode = 1;
     }
 #endif
-    client->cars[0] = LoadModel("pufferlib/resources/drive/RedCar.glb");
-    client->cars[1] = LoadModel("pufferlib/resources/drive/WhiteCar.glb");
-    client->cars[2] = LoadModel("pufferlib/resources/drive/BlueCar.glb");
-    client->cars[3] = LoadModel("pufferlib/resources/drive/YellowCar.glb");
-    client->cars[4] = LoadModel("pufferlib/resources/drive/GreenCar.glb");
-    client->cars[5] = LoadModel("pufferlib/resources/drive/GreyCar.glb");
-    client->cyclist = LoadModel("pufferlib/resources/drive/cyclist.glb");
-    client->pedestrian = LoadModel("pufferlib/resources/drive/pedestrian.glb");
+    client->cars[0] = load_drive_model(env, "RedCar.glb");
+    client->cars[1] = load_drive_model(env, "WhiteCar.glb");
+    client->cars[2] = load_drive_model(env, "BlueCar.glb");
+    client->cars[3] = load_drive_model(env, "YellowCar.glb");
+    client->cars[4] = load_drive_model(env, "GreenCar.glb");
+    client->cars[5] = load_drive_model(env, "GreyCar.glb");
+    client->cyclist = load_drive_model(env, "cyclist.glb");
+    client->pedestrian = load_drive_model(env, "pedestrian.glb");
     int animCountCyc = 0;
-    client->cycle_anim = LoadModelAnimations("pufferlib/resources/drive/cyclist.glb", &animCountCyc);
+    char cyclist_anim_path[sizeof(env->resource_root) + 64];
+    snprintf(cyclist_anim_path, sizeof(cyclist_anim_path), "%s/cyclist.glb", env->resource_root);
+    client->cycle_anim = LoadModelAnimations(cyclist_anim_path, &animCountCyc);
     for (int i = 0; i < MAX_AGENTS; i++) {
         client->car_assignments[i] = (rand() % 4) + 1;
     }
@@ -723,8 +735,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
 
     int ego_dim = EGO_FEATURES;
     int num_reward_coefs = env->reward_conditioning ? NUM_REWARD_COEFS : 0;
-    int target_features = (env->target_type == TARGET_STATIC) ? env->num_target_waypoints * STATIC_TARGET_FEATURES
-                                                              : env->num_target_waypoints * DYNAMIC_TARGET_FEATURES;
+    int target_count = env->num_goals;
+    int goal_dim = target_count * GOAL_FEATURES;
     int max_obs = compute_observation_size(env);
     float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
     float *agent_obs = &observations[agent_index][0];
@@ -736,35 +748,28 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float px = env->agents[active_idx].sim_x;
     float py = env->agents[active_idx].sim_y;
     float pz = env->agents[active_idx].sim_z;
-    // draw goal (first target waypoint, in ego frame)
-    if (env->num_target_waypoints > 0) {
+    // draw goal (first goal in the window, in ego frame)
+    if (target_count > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
-        float goal_x = agent_obs[goal_obs_idx] * env->obs_norm_goal_offset_m;
-        float goal_y = agent_obs[goal_obs_idx + 1] * env->obs_norm_goal_offset_m;
-        if (mode == 0) {
-            DrawSphere((Vector3) {goal_x, goal_y, 1}, 0.5f, LIGHTGREEN);
-            DrawCircle3D(
-                (Vector3) {goal_x, goal_y, 0.1f},
-                env->goal_radius,
-                (Vector3) {0, 0, 1},
-                90.0f,
-                Fade(LIGHTGREEN, 0.3f));
-        }
-
+        float target_scale = env->obs_norm_goal_offset_m;
+        float goal_x = agent_obs[goal_obs_idx] * target_scale;
+        float goal_y = agent_obs[goal_obs_idx + 1] * target_scale;
+        float draw_x = goal_x;
+        float draw_y = goal_y;
         if (mode == 1) {
-            float goal_x_world = px + (goal_x * heading_self_x - goal_y * heading_self_y);
-            float goal_y_world = py + (goal_x * heading_self_y + goal_y * heading_self_x);
-            DrawSphere((Vector3) {goal_x_world, goal_y_world, 1}, 0.5f, LIGHTGREEN);
-            DrawCircle3D(
-                (Vector3) {goal_x_world, goal_y_world, 0.1f},
-                env->goal_radius,
-                (Vector3) {0, 0, 1},
-                90.0f,
-                Fade(LIGHTGREEN, 0.3f));
+            draw_x = px + (goal_x * heading_self_x - goal_y * heading_self_y);
+            draw_y = py + (goal_x * heading_self_y + goal_y * heading_self_x);
         }
+        DrawSphere((Vector3) {draw_x, draw_y, 1}, 0.5f, LIGHTGREEN);
+        DrawCircle3D(
+            (Vector3) {draw_x, draw_y, 0.1f},
+            env->goal_radius,
+            (Vector3) {0, 0, 1},
+            90.0f,
+            Fade(LIGHTGREEN, 0.3f));
     }
     // First draw other agent observations
-    int obs_idx = ego_dim + num_reward_coefs + target_features; // Start after ego, conditioning, and target obs
+    int obs_idx = ego_dim + num_reward_coefs + goal_dim; // Start after ego, conditioning, and target obs
     for (int j = 0; j < env->obs_slots_partners_n; j++) {
         bool is_empty = true;
         for (int k = 0; k < PARTNER_FEATURES; k++) {
@@ -904,9 +909,9 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;
     for (int k = 0; k < env->obs_slots_lane_kept; k++) {
-        int entity_idx = lane_obs_start + k * ROAD_FEATURES;
+        int entity_idx = lane_obs_start + k * LANE_FEATURES;
         bool is_empty = true;
-        for (int j = 0; j < ROAD_FEATURES; j++) {
+        for (int j = 0; j < LANE_FEATURES; j++) {
             if (agent_obs[entity_idx + j] != 0.0f) {
                 is_empty = false;
                 break;
@@ -958,11 +963,11 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         }
     }
     // Draw boundary/edge segment observations in red (immediately after lane obs)
-    int boundary_obs_start = lane_obs_start + env->obs_slots_lane_kept * ROAD_FEATURES;
+    int boundary_obs_start = lane_obs_start + env->obs_slots_lane_kept * LANE_FEATURES;
     for (int k = 0; k < env->obs_slots_boundary_kept; k++) {
-        int entity_idx = boundary_obs_start + k * ROAD_FEATURES;
+        int entity_idx = boundary_obs_start + k * BOUNDARY_FEATURES;
         bool is_empty = true;
-        for (int j = 0; j < ROAD_FEATURES; j++) {
+        for (int j = 0; j < BOUNDARY_FEATURES; j++) {
             if (agent_obs[entity_idx + j] != 0.0f) {
                 is_empty = false;
                 break;
@@ -1339,17 +1344,14 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         }
         if (!IsKeyDown(KEY_LEFT_CONTROL) && obs_only == 0) {
             // Draw all target waypoints: brightest (first) to darkest (last)
-            int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS) {
-                num_wp = MAX_TARGET_WAYPOINTS;
-            }
+            int num_wp = env->num_goals;
             for (int wp = 0; wp < num_wp; wp++) {
                 if (wp < agent->current_goal_idx) {
                     continue; // already reached
                 }
-                float wx = agent->goal_positions_x[wp];
-                float wy = agent->goal_positions_y[wp];
-                float wz = agent->goal_positions_z[wp];
+                float wx = agent->list_goal_x[wp];
+                float wy = agent->list_goal_y[wp];
+                float wz = agent->list_goal_z[wp];
                 // Brightness: first=1.0, last=0.3
                 float alpha = 1.0f - 0.7f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
                 float radius = 1.5f - 0.5f * (float) wp / (float) (num_wp > 1 ? num_wp - 1 : 1);
