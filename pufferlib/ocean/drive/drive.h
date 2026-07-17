@@ -139,7 +139,7 @@
 // Observation feature counts
 #define EGO_FEATURES 10
 #define LANE_FEATURES 9
-#define BOUNDARY_FEATURES 7
+#define BOUNDARY_FEATURES 9
 #define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
@@ -4815,6 +4815,10 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             }
             segment_dest[feature_base + 7] = goal_dist_abs;
             segment_dest[feature_base + 8] = goal_dist_rel;
+        } else {
+            // NOTE: Remove this with next model
+            segment_dest[feature_base + 7] = 0.0f;
+            segment_dest[feature_base + 8] = 0.0f;
         }
     }
 
