@@ -369,7 +369,9 @@ class Drive(pufferlib.PufferEnv):
         self.capture_replay_always_keep_first = bool(capture_replay_always_keep_first)
         self.capture_compact_replay = bool(capture_compact_replay)
         self.capture_compact_replay_failures_only = bool(capture_compact_replay_failures_only)
-        self.emit_completed_episodes = bool(emit_completed_episodes)
+        # Compact capture consumes completed summaries every step so the C side only
+        # needs one preallocated trace handoff buffer per environment.
+        self.emit_completed_episodes = bool(emit_completed_episodes or capture_compact_replay)
         self.enable_map_cache = bool(enable_map_cache)
         self._replay_buffers = []
         self._compact_replay_buffers = []
@@ -620,6 +622,7 @@ class Drive(pufferlib.PufferEnv):
             "metadata": self._build_compact_replay_metadata(env_idx, scenario),
             "agent_capacity": len(agents),
             "traffic_capacity": len(traffic_elements),
+            "episode_timesteps": [],
             "agent_frames": {
                 "valid": [],
                 "id": [],
@@ -633,6 +636,7 @@ class Drive(pufferlib.PufferEnv):
                 "heading": [],
                 "length": [],
                 "width": [],
+                "height": [],
                 "vx": [],
                 "vy": [],
             },
@@ -663,6 +667,7 @@ class Drive(pufferlib.PufferEnv):
         heading = np.zeros(capacity, dtype=np.float32)
         length = np.zeros(capacity, dtype=np.float32)
         width = np.zeros(capacity, dtype=np.float32)
+        height = np.zeros(capacity, dtype=np.float32)
         vx = np.zeros(capacity, dtype=np.float32)
         vy = np.zeros(capacity, dtype=np.float32)
         active_indices = set(scenario.get("active_agent_indices", []))
@@ -683,6 +688,7 @@ class Drive(pufferlib.PufferEnv):
             heading[idx] = np.float32(agent.get("sim_heading", 0.0))
             length[idx] = np.float32(agent.get("sim_length", 0.0))
             width[idx] = np.float32(agent.get("sim_width", 0.0))
+            height[idx] = np.float32(agent.get("sim_height", 0.0))
             vx[idx] = np.float32(agent.get("sim_vx", 0.0))
             vy[idx] = np.float32(agent.get("sim_vy", 0.0))
         return {
@@ -698,6 +704,7 @@ class Drive(pufferlib.PufferEnv):
             "heading": heading,
             "length": length,
             "width": width,
+            "height": height,
             "vx": vx,
             "vy": vy,
         }
@@ -737,6 +744,7 @@ class Drive(pufferlib.PufferEnv):
         for env_idx, scenario in enumerate(scenarios):
             buffer = self._compact_replay_buffers[env_idx]
             episode_timestep = int(scenario.get("episode_timestep", self.tick) or 0)
+            buffer["episode_timesteps"].append(episode_timestep)
             agent_frame = self._extract_compact_agents_frame(scenario, buffer["agent_capacity"])
             traffic_frame = self._extract_compact_traffic_frame(scenario, episode_timestep, buffer["traffic_capacity"])
             for key, value in agent_frame.items():
@@ -763,7 +771,7 @@ class Drive(pufferlib.PufferEnv):
             stacked[key] = np.stack(frames, axis=0)
         return stacked
 
-    def _build_compact_replay_bundle(self, env_slot, summary):
+    def _build_compact_replay_bundle(self, env_slot, summary, avoidability_debug=None):
         if env_slot is None or env_slot < 0 or env_slot >= len(self._compact_replay_buffers):
             return None
 
@@ -785,11 +793,14 @@ class Drive(pufferlib.PufferEnv):
             }
         )
         bundle = {
-            "schema_version": 3,
+            "schema_version": 4,
             "metadata": metadata,
             "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
             "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),
+            "episode_timesteps": np.asarray(buffer["episode_timesteps"], dtype=np.int32),
         }
+        if avoidability_debug:
+            bundle["avoidability_debug"] = avoidability_debug
         return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
 
     def _normalize_log_summaries(self, log_payload):
@@ -933,6 +944,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
             "compute_eval_metrics": self.compute_eval_metrics,
+            "capture_avoidability_debug": self.capture_compact_replay,
             "eval_mode": self.eval_mode,
             "max_goal_position": self.max_goal_position,
             "max_position": self.max_position,
@@ -1006,12 +1018,13 @@ class Drive(pufferlib.PufferEnv):
                     for summary in completed_episodes:
                         if isinstance(summary, dict):
                             tagged_summary = dict(summary)
+                            avoidability_debug = tagged_summary.pop("avoidability_debug", None)
                             env_slot = tagged_summary.get("env_slot")
                             if env_slot is not None:
                                 tagged_summary["env_slot"] = int(env_slot)
                             if self.capture_compact_replay:
                                 compact_replay_bundle = self._build_compact_replay_bundle(
-                                    tagged_summary.get("env_slot"), tagged_summary
+                                    tagged_summary.get("env_slot"), tagged_summary, avoidability_debug
                                 )
                                 if compact_replay_bundle is not None:
                                     tagged_summary["compact_replay_bundle"] = compact_replay_bundle
@@ -1025,12 +1038,13 @@ class Drive(pufferlib.PufferEnv):
                         info.append(tagged_summaries)
                 elif isinstance(completed_episodes, dict):
                     tagged_summary = dict(completed_episodes)
+                    avoidability_debug = tagged_summary.pop("avoidability_debug", None)
                     env_slot = tagged_summary.get("env_slot")
                     if env_slot is not None:
                         tagged_summary["env_slot"] = int(env_slot)
                     if self.capture_compact_replay:
                         compact_replay_bundle = self._build_compact_replay_bundle(
-                            tagged_summary.get("env_slot"), tagged_summary
+                            tagged_summary.get("env_slot"), tagged_summary, avoidability_debug
                         )
                         if compact_replay_bundle is not None:
                             tagged_summary["compact_replay_bundle"] = compact_replay_bundle

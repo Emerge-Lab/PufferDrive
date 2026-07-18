@@ -1575,6 +1575,110 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         return -1;
     }
 
+    if (summary->avoidability_debug != NULL && summary->avoidability_debug->valid) {
+        AvoidabilityDebug *debug = summary->avoidability_debug;
+        PyObject *trace = PyDict_New();
+        PyObject *collision =
+            Py_BuildValue("{s:i,s:i,s:i}", "target_agent_index", debug->target_agent_index, "collision_adversary_index",
+                          debug->collision_adversary_index, "collision_timestep", debug->collision_timestep);
+        PyObject *constants = Py_BuildValue(
+            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
+            debug->braking_deceleration, "reaction_time_seconds", debug->reaction_time_seconds, "max_extension_steps",
+            debug->max_extension_steps, "max_rollout_steps", debug->max_rollout_steps, "ttc_margin_seconds",
+            debug->ttc_margin_seconds, "ttc_max_projection_steps", debug->ttc_max_projection_steps,
+            "lateral_rss_base_distance", debug->lateral_rss_base_distance, "lateral_rss_acceleration_denominator",
+            debug->lateral_rss_acceleration_denominator, "lateral_rss_max_distance", debug->lateral_rss_max_distance);
+        PyObject *detection_times = Py_BuildValue(
+            "{s:f,s:f,s:f,s:f}", "ttc_seconds_before_collision", debug->ttc_detection_seconds_before_collision,
+            "lateral_rss_seconds_before_collision", debug->lateral_rss_detection_seconds_before_collision,
+            "combined_seconds_before_collision", debug->combined_detection_seconds_before_collision,
+            "target_last_avoidable_braking_seconds_before_collision",
+            debug->last_avoidable_braking_seconds_before_collision);
+
+#define SNAPSHOT_DICT(snapshot)                                                                                        \
+    Py_BuildValue("{s:i,s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i}", "valid", (snapshot).valid, "index", \
+                  (snapshot).index, "id", (snapshot).id, "type", (snapshot).type, "x", (snapshot).x, "y",              \
+                  (snapshot).y, "z", (snapshot).z, "heading", (snapshot).heading, "length", (snapshot).length,         \
+                  "width", (snapshot).width, "height", (snapshot).height, "vx", (snapshot).vx, "vy", (snapshot).vy,    \
+                  "active", (snapshot).active, "stopped", (snapshot).stopped)
+
+        PyObject *target_snapshot = SNAPSHOT_DICT(debug->target_at_collision);
+        PyObject *adversary_snapshot = SNAPSHOT_DICT(debug->adversary_at_collision);
+        if (collision != NULL && target_snapshot != NULL && adversary_snapshot != NULL) {
+            PyDict_SetItemString(collision, "target", target_snapshot);
+            PyDict_SetItemString(collision, "adversary", adversary_snapshot);
+        }
+        Py_XDECREF(target_snapshot);
+        Py_XDECREF(adversary_snapshot);
+
+        const char *candidate_keys[] = {
+            "steps_back",
+            "avoided",
+            "collision_with_original_adversary",
+            "at_fault_collision_with_other_adversary",
+            "blocking_agent_index",
+            "blocking_rollout_step",
+            "blocking_agent",
+            "ignored_overlap_agent_index",
+            "ignored_overlap_rollout_step",
+            "ignored_overlap_agent",
+        };
+        PyObject *candidate_arrays = PyDict_New();
+        PyObject *candidate_lists[10] = {0};
+        int trace_ok = trace != NULL && collision != NULL && constants != NULL && detection_times != NULL &&
+                       candidate_arrays != NULL;
+        for (int j = 0; j < 10 && trace_ok; j++) {
+            candidate_lists[j] = PyList_New(0);
+            if (candidate_lists[j] == NULL ||
+                PyDict_SetItemString(candidate_arrays, candidate_keys[j], candidate_lists[j]) < 0) {
+                trace_ok = 0;
+            }
+        }
+        for (int i = 0; i < debug->candidate_count && trace_ok; i++) {
+            AvoidabilityCandidateDebug *candidate = &debug->candidates[i];
+            PyObject *values[10] = {
+                PyLong_FromLong(candidate->steps_back),
+                PyBool_FromLong(candidate->avoided),
+                PyBool_FromLong(candidate->collision_with_original_adversary),
+                PyBool_FromLong(candidate->at_fault_collision_with_other_adversary),
+                PyLong_FromLong(candidate->blocking_agent_index),
+                PyLong_FromLong(candidate->blocking_rollout_step),
+                SNAPSHOT_DICT(candidate->blocking_agent),
+                PyLong_FromLong(candidate->ignored_overlap_agent_index),
+                PyLong_FromLong(candidate->ignored_overlap_rollout_step),
+                SNAPSHOT_DICT(candidate->ignored_overlap_agent),
+            };
+            for (int j = 0; j < 10; j++) {
+                if (values[j] == NULL || PyList_Append(candidate_lists[j], values[j]) < 0) {
+                    trace_ok = 0;
+                }
+                Py_XDECREF(values[j]);
+            }
+        }
+#undef SNAPSHOT_DICT
+
+        if (trace_ok && PyDict_SetItemString(trace, "collision", collision) == 0 &&
+            PyDict_SetItemString(trace, "constants", constants) == 0 &&
+            PyDict_SetItemString(trace, "detection_times", detection_times) == 0 &&
+            PyDict_SetItemString(trace, "candidate_arrays", candidate_arrays) == 0 &&
+            PyDict_SetItemString(dict, "avoidability_debug", trace) == 0) {
+            // Added successfully.
+        } else if (trace_ok) {
+            trace_ok = 0;
+        }
+        for (int j = 0; j < 10; j++) {
+            Py_XDECREF(candidate_lists[j]);
+        }
+        Py_XDECREF(candidate_arrays);
+        Py_XDECREF(collision);
+        Py_XDECREF(constants);
+        Py_XDECREF(detection_times);
+        Py_XDECREF(trace);
+        if (!trace_ok) {
+            return -1;
+        }
+    }
+
     assign_to_dict(dict, "n", summary->n);
     assign_to_dict(dict, "target_n", summary->target_n);
     assign_to_dict(dict, "active_agent_count", summary->active_agent_count);
@@ -1929,6 +2033,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool)unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool)unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool)unpack(kwargs, "compute_eval_metrics");
+    env->capture_avoidability_debug = (bool)unpack(kwargs, "capture_avoidability_debug");
     env->eval_mode = (int)unpack(kwargs, "eval_mode");
     env->max_goal_position = (float)unpack(kwargs, "max_goal_position");
     env->max_position = (float)unpack(kwargs, "max_position");

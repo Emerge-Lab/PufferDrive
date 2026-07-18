@@ -17,10 +17,10 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version != 3:
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=3.")
+    if schema_version != 4:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=4.")
 
-    required_top_level = ("metadata", "agent_arrays", "traffic_arrays")
+    required_top_level = ("metadata", "agent_arrays", "traffic_arrays", "episode_timesteps")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
     if missing_top_level:
         raise ValueError(f"Compact replay is missing required fields: {', '.join(missing_top_level)}")
@@ -113,6 +113,7 @@ def _materialize_agent_frames(replay_bundle):
                     "heading": float(agent_arrays["heading"][frame_idx, slot_idx]),
                     "length": float(agent_arrays["length"][frame_idx, slot_idx]),
                     "width": float(agent_arrays["width"][frame_idx, slot_idx]),
+                    "height": float(agent_arrays["height"][frame_idx, slot_idx]),
                     "vx": float(agent_arrays["vx"][frame_idx, slot_idx]),
                     "vy": float(agent_arrays["vy"][frame_idx, slot_idx]),
                 }
