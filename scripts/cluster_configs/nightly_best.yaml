@@ -13,10 +13,10 @@ env.num_agents: 4096
 env.min_agents_per_env: 1
 env.max_agents_per_env: 120
 env.use_map_cache: 1
-env.scenario_length: 1280
+env.scenario_length: 2560
 # 0 disables periodic scenario resampling — every sub-env keeps the same map
 # for the full run instead of swapping every 38400 steps.
-env.resample_frequency: 128000
+env.resample_frequency: 256000
 env.termination_mode: 1
 env.inactive_agent_threshold: 0.4
 env.dynamics_model: jerk
@@ -24,43 +24,44 @@ env.dt: 0.3
 
 # Goal setup — three sequential goals, route-based placement [20, 60m]
 env.goal_regen_mode: finite
-env.goal_source: route
-env.obs_goal_lane_distance: False
+env.goal_source: map
+env.obs_goal_lane_distance: True
 env.num_goals: 3
 env.min_goal_spacing: 20.0
-env.max_goal_spacing: 60.0
+env.max_goal_spacing: 200.0
 env.goal_radius: 2.0
 env.goal_speed: 1000.0
 
 # Observation shaping
-env.obs_slots_lane_n: 60
-env.obs_slots_boundary_n: 40
+env.obs_slots_lane_n: 70
+env.obs_slots_boundary_n: 50
 env.obs_slots_partners_n: 12
 env.obs_slots_traffic_controls_n: 4
-env.obs_range_partner_m: 150.0
-env.obs_range_road_front_m: 150.0
-env.obs_range_road_behind_m: 40.0
+env.obs_range_partner_m: 200.0
+env.obs_range_road_front_m: 200.0
+env.obs_range_road_behind_m: 60.0
 env.obs_range_road_side_m: 50.0
-env.obs_range_traffic_control_m: 150.0
-env.obs_norm_xy_offset_m: 150.0
+env.obs_range_traffic_control_m: 200.0
+env.obs_norm_xy_offset_m: 200.0
 env.obs_norm_goal_offset_m: 200.0
 env.obs_norm_road_seg_length_m: 10.0
 env.obs_norm_road_seg_width_m: 5.0
 env.obs_norm_veh_length_m: 10.0
 env.obs_norm_veh_width_m: 5.0
-env.obs_dropout_lane: 0.2
-env.obs_dropout_boundary: 0.3
+env.obs_dropout_lane: 0.3
+env.obs_dropout_boundary: 0.4
+env.obs_lane_stride: 2
 
 # Perturbations (on during training; eval's clean macro zeros these)
-env.partner_blindness_prob: 0.0
-env.partner_blindness_trigger_prob: 0.0
-env.phantom_braking_prob: 0.0
-env.phantom_braking_trigger_prob: 0.0
+env.partner_blindness_prob: 0.03
+env.partner_blindness_trigger_prob: 0.05
+env.phantom_braking_prob: 0.02
+env.phantom_braking_trigger_prob: 0.03
 env.phantom_braking_duration: 10
 
 # Reward shaping (conditioning + randomization on)
-env.reward_conditioning: false
-env.reward_randomization: false
+env.reward_conditioning: true
+env.reward_randomization: true
 env.reward_goal: 0.5
 env.reward_collision: 1.5
 env.reward_offroad: 1.5
@@ -76,11 +77,11 @@ env.reward_overspeed: 0.05
 
 # Policy — 3x1024 backbone, split actor/critic
 policy.ego_input_size: 128
-policy.partner_input_size: 128
-policy.lane_input_size: 128
-policy.boundary_input_size: 128
+policy.partner_input_size: 256
+policy.lane_input_size: 256
+policy.boundary_input_size: 256
 policy.traffic_control_input_size: 128
-policy.context_input_size: 64
+policy.context_input_size: 128
 policy.encoder_activation: relu
 policy.encoder_layer_norm: true
 policy.mask_padded_features: false
@@ -88,11 +89,11 @@ policy.backbone_activation: gelu
 policy.backbone_hidden_size: 1024
 policy.backbone_num_layers: 3
 policy.backbone_layer_norm: false
-policy.actor_hidden_size: 512
-policy.actor_num_layers: 0
+policy.actor_hidden_size: 256
+policy.actor_num_layers: 1
 policy.backbone_num_layers: 3
-policy.critic_hidden_size: 512
-policy.critic_num_layers: 0
+policy.critic_hidden_size: 256
+policy.critic_num_layers: 1
 policy.shared_network: false
 
 # Training — large minibatch, compiled bfloat16

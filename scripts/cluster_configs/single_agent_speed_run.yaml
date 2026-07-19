@@ -24,15 +24,77 @@ env.min_agents_per_env: 1
 env.max_agents_per_env: 1
 env.num_agents: 1024
 env.use_map_cache: 1
+env.scenario_length: 2560
 
 # Single goal placed at a random drivable point on the map whose Euclidean
 # distance from the agent lies in [min_goal_spacing, max_goal_spacing].
 # 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
 # Town10HD map diameter (~260m) so goals can land anywhere on the network.
 env.num_goals: 1
-env.goal_source: "map"
-env.min_goal_spacing: 6.0
-env.max_goal_spacing: 500.0
+env.goal_source: map
+env.obs_goal_lane_distance: True
+env.min_goal_spacing: 20.0
+env.max_goal_spacing: 200.0
+env.resample_frequency: 256000
+env.goal_radius: 2.0
+env.goal_speed: 1000.0
+
+# Observation shaping
+env.obs_slots_lane_n: 70
+env.obs_slots_boundary_n: 50
+env.obs_slots_partners_n: 12
+env.obs_slots_traffic_controls_n: 4
+env.obs_range_partner_m: 200.0
+env.obs_range_road_front_m: 200.0
+env.obs_range_road_behind_m: 60.0
+env.obs_range_road_side_m: 50.0
+env.obs_range_traffic_control_m: 200.0
+env.obs_norm_xy_offset_m: 200.0
+env.obs_norm_goal_offset_m: 200.0
+env.obs_norm_road_seg_length_m: 10.0
+env.obs_norm_road_seg_width_m: 5.0
+env.obs_norm_veh_length_m: 10.0
+env.obs_norm_veh_width_m: 5.0
+env.obs_dropout_lane: 0.3
+env.obs_dropout_boundary: 0.4
+env.obs_lane_stride: 2
+
+# Reward shaping (conditioning + randomization on)
+env.reward_conditioning: true
+env.reward_randomization: true
+env.reward_goal: 0.5
+env.reward_collision: 1.5
+env.reward_offroad: 1.5
+env.reward_stop_line: 1.0
+env.reward_comfort: 0.05
+env.reward_lane_align: 0.025
+env.reward_vel_align: 1.0
+env.reward_lane_center: 0.005
+env.reward_velocity: 0.0025
+env.reward_reverse: 0.005
+env.reward_timestep: 2.5e-05
+env.reward_overspeed: 0.05
+
+# Policy — 3x1024 backbone, split actor/critic
+policy.ego_input_size: 128
+policy.partner_input_size: 256
+policy.lane_input_size: 256
+policy.boundary_input_size: 256
+policy.traffic_control_input_size: 128
+policy.context_input_size: 128
+policy.encoder_activation: relu
+policy.encoder_layer_norm: true
+policy.mask_padded_features: false
+policy.backbone_activation: gelu
+policy.backbone_hidden_size: 1024
+policy.backbone_num_layers: 3
+policy.backbone_layer_norm: false
+policy.actor_hidden_size: 256
+policy.actor_num_layers: 1
+policy.backbone_num_layers: 3
+policy.critic_hidden_size: 256
+policy.critic_num_layers: 1
+policy.shared_network: false
 
 # Traffic lights fully off: not observed, not scored, no reward penalty.
 env.traffic_light_behavior: 0
@@ -40,6 +102,13 @@ env.obs_slots_traffic_controls_n: 0
 
 # Training
 train.total_timesteps: 1_000_000_000
+train.minibatch_size: 128000
+train.max_minibatch_size: 128000
+train.update_epochs: 3
+train.compile: true
+train.precision: bfloat16
+train.normalize_rewards: false
+train.checkpoint_interval: 500
 
 # Disable nuPlan-based evaluators. validation_gigaflow stays on but is
 # reconfigured to triage_html (CPU-only scene playback + per-episode metrics
