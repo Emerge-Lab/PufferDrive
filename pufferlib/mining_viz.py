@@ -214,6 +214,8 @@ def _build_render_payload(replay_bundle):
         "bounds": _compute_bounds(map_static, materialized_bundle),
         "agent_frames": materialized_bundle.get("agent_frames", []),
         "traffic_frames": materialized_bundle.get("traffic_frames", []),
+        "episode_timesteps": [int(value) for value in replay_bundle.get("episode_timesteps", [])],
+        "avoidability_debug": replay_bundle.get("avoidability_debug"),
     }
 
 
@@ -290,6 +292,51 @@ HTML_TEMPLATE = """<!doctype html>
       margin-top: 0;
       margin-bottom: 12px;
     }
+    .mode-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      background: rgba(31,41,51,0.06);
+    }
+    .mode-toggle button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 650;
+    }
+    .mode-toggle button.active {
+      background: white;
+      color: var(--accent);
+      box-shadow: 0 2px 8px rgba(31,41,51,0.12);
+    }
+    .mode-toggle button:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+    .observed-controls, .avoidability-controls { display: grid; gap: 12px; }
+    .avoidability-controls[hidden], .observed-controls[hidden] { display: none; }
+    .avoidability-result {
+      padding: 11px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(39,174,96,0.18);
+      background: rgba(39,174,96,0.08);
+      color: #226a47;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .avoidability-result.failed {
+      border-color: rgba(214,69,69,0.18);
+      background: rgba(214,69,69,0.08);
+      color: #8f2d2d;
+    }
+    .avoidability-result.reference {
+      border-color: rgba(18,97,160,0.18);
+      background: rgba(18,97,160,0.07);
+      color: #0f4c81;
+    }
+    .avoidability-result strong { display: block; margin-bottom: 3px; }
     .nav {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -449,15 +496,32 @@ HTML_TEMPLATE = """<!doctype html>
         <span class="meta-value" id="meta-adv-drive-weight">n/a</span>
       </div>
       <div class="controls">
-        <div class="controls-row">
-          <button id="play-toggle" type="button">Play</button>
-          <input id="frame-slider" type="range" min="0" max="0" value="0">
-          <span id="frame-label">0 / 0</span>
+        <div class="mode-toggle" aria-label="Replay mode">
+          <button id="observed-mode" class="active" type="button">Observed</button>
+          <button id="avoidability-mode" type="button">Avoidability</button>
         </div>
-        <div class="controls-row">
-          <span>Speed</span>
-          <input id="speed-slider" type="range" min="1" max="12" value="6">
-          <span id="speed-label">1.0x</span>
+        <div id="observed-controls" class="observed-controls">
+          <div class="controls-row">
+            <button id="play-toggle" type="button">Play</button>
+            <input id="frame-slider" type="range" min="0" max="0" value="0">
+            <span id="frame-label">0 / 0</span>
+          </div>
+          <div class="controls-row">
+            <span>Speed</span>
+            <input id="speed-slider" type="range" min="1" max="12" value="6">
+            <span id="speed-label">1.0x</span>
+          </div>
+        </div>
+        <div id="avoidability-controls" class="avoidability-controls" hidden>
+          <span class="meta-label">Reaction start</span>
+          <div class="controls-row">
+            <span>0.0s</span>
+            <input id="reaction-slider" type="range" min="0" max="0" value="0" step="1">
+            <span id="reaction-label">collision</span>
+          </div>
+          <div id="avoidability-result" class="avoidability-result reference">
+            <strong>Observed collision</strong>
+          </div>
         </div>
       </div>
       <div class="nav">
@@ -473,6 +537,8 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">Did Target Run Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
         <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
+        <div class="meta-item"><span class="meta-label">first_t_detect</span><span class="meta-value" id="meta-first-t-detect"></span></div>
+        <div class="meta-item"><span class="meta-label">last_t_brake</span><span class="meta-value" id="meta-last-t-brake"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
         <div class="meta-item"><span class="meta-label">Episode</span><span class="meta-value" id="meta-episode"></span></div>
@@ -493,6 +559,12 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="legend-row"><span class="swatch" style="background: var(--inactive)"></span>Inactive / static</div>
         <div class="legend-row"><span class="swatch" style="background: var(--stopped)"></span>Stopped / crashed</div>
         <div class="legend-row"><span class="swatch" style="background: #05a3c7"></span>Velocity vector</div>
+        <div class="legend-row"><span class="swatch" style="background: #f59e0b"></span>Target reaction (constant speed)</div>
+        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target maximum braking</div>
+        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary projected trajectory</div>
+        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target at shared stop sample (avoided)</div>
+        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary at shared stop sample (avoided)</div>
+        <div class="legend-row"><span class="swatch" style="background: #111827"></span>Impact poses (rejected candidate)</div>
       </div>
     </aside>
     <main class="panel viewer">
@@ -531,12 +603,24 @@ HTML_TEMPLATE = """<!doctype html>
     const focusTargetButton = document.getElementById('focus-target');
     const resetViewButton = document.getElementById('reset-view');
     const velocityToggleButton = document.getElementById('velocity-toggle');
+    const observedModeButton = document.getElementById('observed-mode');
+    const avoidabilityModeButton = document.getElementById('avoidability-mode');
+    const observedControls = document.getElementById('observed-controls');
+    const avoidabilityControls = document.getElementById('avoidability-controls');
+    const reactionSlider = document.getElementById('reaction-slider');
+    const reactionLabel = document.getElementById('reaction-label');
+    const avoidabilityResult = document.getElementById('avoidability-result');
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
     const navigation = DATA.navigation || {};
     const frames = DATA.agent_frames || [];
     const trafficFrames = DATA.traffic_frames || [];
+    const episodeTimesteps = DATA.episode_timesteps || [];
+    const avoidability = DATA.avoidability_debug || null;
+    const candidates = (avoidability && avoidability.candidate_arrays) || {};
+    const candidateSteps = candidates.steps_back || [];
+    const hasAvoidability = !!(avoidability && avoidability.collision && candidateSteps.length);
     const roadElements = (DATA.map && DATA.map.road_elements) || [];
     const bounds = DATA.bounds || [-100, -100, 100, 100];
 
@@ -550,6 +634,9 @@ HTML_TEMPLATE = """<!doctype html>
     let followTarget = false;
     let selectedAgentId = null;
     let showVelocityVectors = true;
+    let replayMode = 'observed';
+    let reactionSelection = 0;
+    let observedFrameIndex = 0;
 
     function summaryValue(key, fallback=null) {
       if (summary[key] != null) return summary[key];
@@ -633,6 +720,11 @@ HTML_TEMPLATE = """<!doctype html>
       return num.toFixed(digits);
     }
 
+    function formatSeconds(value) {
+      const num = Number(value);
+      return Number.isFinite(num) && num >= 0 ? `${num.toFixed(2)} s` : 'n/a';
+    }
+
     function advDriveWeightValue() {
       return summaryValue('adv_reward_weight_drive', null);
     }
@@ -665,6 +757,13 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
       document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
       document.getElementById('meta-collision-responsibility').innerText = formatMetric(summaryValue('target_collision_responsibility', 0));
+      const detectionTimes = (avoidability && avoidability.detection_times) || {};
+      document.getElementById('meta-first-t-detect').innerText = formatSeconds(
+        detectionTimes.combined_seconds_before_collision
+      );
+      document.getElementById('meta-last-t-brake').innerText = formatSeconds(
+        detectionTimes.target_last_avoidable_braking_seconds_before_collision
+      );
       document.getElementById('meta-made-progress').innerText = Number(summaryValue('did_target_make_progress', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-at-fault').innerText = Number(summaryValue('did_target_have_at_fault_collision', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-goals').innerText = String(summaryValue('target_num_goals_reached', 0));
@@ -752,6 +851,305 @@ HTML_TEMPLATE = """<!doctype html>
       return (frame || []).find(agent => agent.id === id);
     }
 
+    function nearestFrameAtOrBefore(timestep) {
+      let bestIndex = 0;
+      for (let i = 0; i < episodeTimesteps.length; i++) {
+        if (Number(episodeTimesteps[i]) > Number(timestep)) break;
+        bestIndex = i;
+      }
+      return Math.min(bestIndex, Math.max(frames.length - 1, 0));
+    }
+
+    function agentFromSnapshot(snapshot, isTarget) {
+      if (!snapshot || !snapshot.valid) return null;
+      return {
+        id: Number(snapshot.id),
+        type: Number(snapshot.type),
+        is_target: !!isTarget,
+        active: !!snapshot.active,
+        stopped: !!snapshot.stopped,
+        x: Number(snapshot.x),
+        y: Number(snapshot.y),
+        z: Number(snapshot.z),
+        heading: Number(snapshot.heading),
+        length: Number(snapshot.length),
+        width: Number(snapshot.width),
+        height: Number(snapshot.height),
+        vx: Number(snapshot.vx),
+        vy: Number(snapshot.vy),
+      };
+    }
+
+    function collisionReferenceFrame() {
+      const collision = avoidability.collision;
+      const base = [...(frames[nearestFrameAtOrBefore(collision.collision_timestep)] || [])];
+      const snapshots = [agentFromSnapshot(collision.target, true), agentFromSnapshot(collision.adversary, false)];
+      for (const snapshot of snapshots) {
+        if (!snapshot) continue;
+        const existingIndex = base.findIndex(agent => Number(agent.id) === Number(snapshot.id));
+        if (existingIndex >= 0) base[existingIndex] = snapshot;
+        else base.push(snapshot);
+      }
+      return base;
+    }
+
+    function currentDisplayFrame() {
+      if (replayMode === 'avoidability' && reactionSelection === 0) return collisionReferenceFrame();
+      return frames[frameIndex] || [];
+    }
+
+    function observedAgentRail(agentId, startTimestep, collisionTimestep, collisionSnapshot) {
+      const points = [];
+      for (let i = 0; i < frames.length; i++) {
+        const timestep = Number(episodeTimesteps[i]);
+        if (timestep < startTimestep || timestep >= collisionTimestep) continue;
+        const agent = findAgentById(frames[i], agentId);
+        if (agent) points.push({x: Number(agent.x), y: Number(agent.y), heading: Number(agent.heading || 0)});
+      }
+      if (collisionSnapshot && collisionSnapshot.valid) {
+        points.push({
+          x: Number(collisionSnapshot.x),
+          y: Number(collisionSnapshot.y),
+          heading: Number(collisionSnapshot.heading || 0),
+        });
+      }
+      return points;
+    }
+
+    function sampleRail(points, distance) {
+      if (!points.length) return null;
+      if (points.length === 1) {
+        const heading = Number(points[0].heading || 0);
+        return {
+          x: points[0].x + distance * Math.cos(heading),
+          y: points[0].y + distance * Math.sin(heading),
+          heading,
+        };
+      }
+      let traveled = 0;
+      for (let i = 0; i < points.length - 1; i++) {
+        const dx = points[i + 1].x - points[i].x;
+        const dy = points[i + 1].y - points[i].y;
+        const segmentLength = Math.hypot(dx, dy);
+        if (traveled + segmentLength >= distance) {
+          const ratio = segmentLength > 1e-6 ? Math.max(0, Math.min(1, (distance - traveled) / segmentLength)) : 0;
+          return {
+            x: points[i].x + ratio * dx,
+            y: points[i].y + ratio * dy,
+            heading: segmentLength > 1e-6 ? Math.atan2(dy, dx) : Number(points[i].heading || 0),
+          };
+        }
+        traveled += segmentLength;
+      }
+      const last = points.length - 1;
+      const dx = points[last].x - points[last - 1].x;
+      const dy = points[last].y - points[last - 1].y;
+      const segmentLength = Math.hypot(dx, dy);
+      const heading = segmentLength > 1e-6 ? Math.atan2(dy, dx) : Number(points[last].heading || 0);
+      const overshoot = Math.max(0, distance - traveled);
+      return {
+        x: points[last].x + overshoot * Math.cos(heading),
+        y: points[last].y + overshoot * Math.sin(heading),
+        heading,
+      };
+    }
+
+    function appendDistinct(points, point) {
+      if (!point) return;
+      const previous = points[points.length - 1];
+      if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) > 1e-6) points.push(point);
+    }
+
+    function firstRolloutSampleAtOrAfter(time, dt) {
+      return Math.ceil(Math.max(0, time) / dt - 1e-9) * dt;
+    }
+
+    function selectedCounterfactualTrajectories() {
+      if (replayMode !== 'avoidability' || reactionSelection === 0 || !hasAvoidability) return null;
+      const candidateIndex = reactionSelection - 1;
+      const stepsBack = Number(candidateValue('steps_back', candidateIndex, 0));
+      const collision = avoidability.collision;
+      const constants = avoidability.constants || {};
+      const dt = Number(constants.dt || 0.1);
+      const deceleration = Number(constants.braking_deceleration || 5.0);
+      const reactionTime = Number(constants.reaction_time_seconds || 1.0);
+      const maxRolloutSteps = Number(constants.max_rollout_steps || 91);
+      const collisionTimestep = Number(collision.collision_timestep);
+      const startTimestep = collisionTimestep - stepsBack;
+      const targetId = Number(collision.target_agent_index);
+      const adversaryId = Number(collision.collision_adversary_index);
+      const startFrame = frames[nearestFrameAtOrBefore(startTimestep)] || [];
+      const targetAtStart = findAgentById(startFrame, targetId);
+      if (!targetAtStart) return null;
+
+      const targetRail = observedAgentRail(targetId, startTimestep, collisionTimestep, collision.target);
+      const initialSpeed = speedOfAgent(targetAtStart);
+      const stopTime = initialSpeed <= 0 ? 0 : reactionTime + initialSpeed / Math.max(deceleration, 1e-6);
+      const targetStopSampleTime = firstRolloutSampleAtOrAfter(stopTime, dt);
+      const reaction = [];
+      const braking = [];
+      const targetPointAt = tau => {
+        const brakingTime = Math.max(0, tau - reactionTime);
+        const distance = initialSpeed * tau - 0.5 * deceleration * brakingTime * brakingTime;
+        return sampleRail(targetRail, Math.max(0, distance));
+      };
+      for (let rolloutStep = 0; rolloutStep < maxRolloutSteps; rolloutStep++) {
+        const tau = rolloutStep * dt;
+        if (tau >= stopTime) break;
+        const point = targetPointAt(tau);
+        if (tau <= reactionTime + 1e-6) appendDistinct(reaction, point);
+        if (tau >= reactionTime - 1e-6) appendDistinct(braking, point);
+      }
+      const targetStop = targetPointAt(stopTime);
+      appendDistinct(braking, targetStop);
+      const brakingStart = stopTime > reactionTime ? targetPointAt(reactionTime) : null;
+
+      const adversary = collision.adversary;
+      const observedCollisionTime = stepsBack * dt;
+      const adversaryTrajectory = [];
+      for (let i = 0; i < frames.length; i++) {
+        const timestep = Number(episodeTimesteps[i]);
+        const relativeTime = (timestep - startTimestep) * dt;
+        if (timestep < startTimestep || timestep >= collisionTimestep || relativeTime > targetStopSampleTime + 1e-6) {
+          continue;
+        }
+        const agent = findAgentById(frames[i], adversaryId);
+        if (agent) {
+          appendDistinct(adversaryTrajectory, {
+            x: Number(agent.x),
+            y: Number(agent.y),
+            heading: Number(agent.heading || 0),
+          });
+        }
+      }
+      if (targetStopSampleTime >= observedCollisionTime - 1e-6) {
+        appendDistinct(adversaryTrajectory, {
+          x: Number(adversary.x),
+          y: Number(adversary.y),
+          heading: Number(adversary.heading || 0),
+        });
+        const heading = Number(adversary.heading || 0);
+        const signedSpeed = Number(adversary.vx || 0) * Math.cos(heading) + Number(adversary.vy || 0) * Math.sin(heading);
+        const adversaryStopTime = Math.abs(signedSpeed) / Math.max(deceleration, 1e-6);
+        const postCollisionDuration = Math.max(0, targetStopSampleTime - observedCollisionTime);
+        const postCollisionSteps = Math.round(postCollisionDuration / dt);
+        for (let extensionStep = 1; extensionStep <= postCollisionSteps; extensionStep++) {
+          const time = Math.min(extensionStep * dt, adversaryStopTime);
+          const distance = signedSpeed === 0
+            ? 0
+            : signedSpeed * time - Math.sign(signedSpeed) * 0.5 * deceleration * time * time;
+          appendDistinct(adversaryTrajectory, {
+            x: Number(adversary.x) + distance * Math.cos(heading),
+            y: Number(adversary.y) + distance * Math.sin(heading),
+            heading,
+          });
+        }
+      }
+      const adversaryAtTargetStop = adversaryTrajectory[adversaryTrajectory.length - 1] || null;
+
+      const blockingRolloutStep = Number(candidateValue('blocking_rollout_step', candidateIndex, -1));
+      const blockingSnapshot = candidateValue('blocking_agent', candidateIndex, null);
+      let impact = null;
+      if (blockingRolloutStep >= 0 && blockingSnapshot && blockingSnapshot.valid) {
+        const impactTime = blockingRolloutStep * dt;
+        const targetImpact = targetPointAt(impactTime);
+        targetImpact.speed = Math.max(0, initialSpeed - deceleration * Math.max(0, impactTime - reactionTime));
+        impact = {
+          time: impactTime,
+          target: targetImpact,
+          blocker: {
+            x: Number(blockingSnapshot.x),
+            y: Number(blockingSnapshot.y),
+            heading: Number(blockingSnapshot.heading || 0),
+          },
+          blockerDimensions: {
+            length: Number(blockingSnapshot.length),
+            width: Number(blockingSnapshot.width),
+          },
+          blockerId: Number(blockingSnapshot.index),
+          blockerIsOriginal: Number(blockingSnapshot.index) === adversaryId,
+        };
+      }
+
+      return {
+        reaction,
+        braking,
+        adversaryTrajectory,
+        adversaryAtTargetStop,
+        targetStop,
+        brakingStart,
+        reactionTime,
+        targetStopSampleTime,
+        impact,
+        targetDimensions: {length: Number(collision.target.length), width: Number(collision.target.width)},
+        adversaryDimensions: {length: Number(adversary.length), width: Number(adversary.width)},
+      };
+    }
+
+    function candidateValue(key, index, fallback=null) {
+      const values = candidates[key] || [];
+      return values[index] == null ? fallback : values[index];
+    }
+
+    function updateAvoidabilitySelection() {
+      reactionSelection = Number(reactionSlider.value || 0);
+      if (reactionSelection === 0) {
+        const collision = avoidability.collision;
+        frameIndex = nearestFrameAtOrBefore(collision.collision_timestep);
+        reactionLabel.innerText = 'collision';
+        avoidabilityResult.className = 'avoidability-result reference';
+        avoidabilityResult.innerHTML = '<strong>Observed collision · 0.0s</strong>';
+        draw();
+        return;
+      }
+
+      const candidateIndex = reactionSelection - 1;
+      const stepsBack = Number(candidateValue('steps_back', candidateIndex, 0));
+      const dt = Number((avoidability.constants || {}).dt || 0.1);
+      const leadSeconds = stepsBack * dt;
+      const collisionTimestep = Number(avoidability.collision.collision_timestep);
+      frameIndex = nearestFrameAtOrBefore(collisionTimestep - stepsBack);
+      reactionLabel.innerText = `${leadSeconds.toFixed(1)}s`;
+
+      const avoided = !!candidateValue('avoided', candidateIndex, false);
+      const originalBlock = !!candidateValue('collision_with_original_adversary', candidateIndex, false);
+      const secondaryBlock = !!candidateValue('at_fault_collision_with_other_adversary', candidateIndex, false);
+      let title = 'Avoided';
+      if (originalBlock) {
+        title = 'Rejected · original adversary';
+      } else if (secondaryBlock) {
+        title = 'Rejected · secondary blocker';
+      } else if (!avoided) {
+        title = 'Rejected';
+      }
+      avoidabilityResult.className = avoided ? 'avoidability-result' : 'avoidability-result failed';
+      avoidabilityResult.innerHTML = `<strong>${title} · ${leadSeconds.toFixed(1)}s before collision</strong>`;
+      draw();
+    }
+
+    function setReplayMode(mode) {
+      if (mode === 'avoidability' && !hasAvoidability) return;
+      if (mode === replayMode) return;
+      if (mode === 'avoidability') {
+        observedFrameIndex = frameIndex;
+        playing = false;
+        playToggle.innerText = 'Play';
+      } else {
+        frameIndex = observedFrameIndex;
+      }
+      replayMode = mode;
+      observedModeButton.classList.toggle('active', mode === 'observed');
+      avoidabilityModeButton.classList.toggle('active', mode === 'avoidability');
+      observedControls.hidden = mode !== 'observed';
+      avoidabilityControls.hidden = mode !== 'avoidability';
+      if (mode === 'avoidability') {
+        reactionSlider.value = candidateSteps.length;
+        updateAvoidabilitySelection();
+      } else {
+        draw();
+      }
+    }
+
     function isAgentBraking(agent) {
       if (frameIndex <= 0) return speedOfAgent(agent) < 0.1;
       const prev = findAgentById(frames[frameIndex - 1], agent.id);
@@ -760,7 +1158,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     function updateFocusedAgentTelemetry() {
-      const agent = selectedAgentId == null ? null : findAgentById(frames[frameIndex], selectedAgentId);
+      const agent = selectedAgentId == null ? null : findAgentById(currentDisplayFrame(), selectedAgentId);
       document.getElementById('focus-agent').innerText = agent ? String(agent.id) : 'none';
       if (!agent) {
         document.getElementById('focus-speed').innerText = 'n/a';
@@ -785,7 +1183,7 @@ HTML_TEMPLATE = """<!doctype html>
       followTarget = !!enabled;
       focusTargetButton.innerText = followTarget ? 'Unlock Target' : 'Focus Target';
       if (followTarget) {
-        const target = findTarget(frames[frameIndex]);
+        const target = findTarget(currentDisplayFrame());
         if (target) {
           selectedAgentId = target.id;
           camera.x = target.x;
@@ -848,6 +1246,165 @@ HTML_TEMPLATE = """<!doctype html>
         ctx.globalAlpha = 0.9;
         ctx.stroke();
         ctx.globalAlpha = 1.0;
+      }
+    }
+
+    function drawTrajectoryLine(points, color, width, dash=[]) {
+      if (!points || points.length < 2) return;
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i++) {
+        const point = worldToCanvas(points[i].x, points[i].y);
+        if (i === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.setLineDash(dash);
+      ctx.globalAlpha = 0.92;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawStopPose(point, dimensions, color, label, labelOffsetY=0) {
+      if (!point) return;
+      const canvasPoint = worldToCanvas(point.x, point.y);
+      const length = Math.max(Number(dimensions.length || 0) * canvasPoint.scale, 6);
+      const width = Math.max(Number(dimensions.width || 0) * canvasPoint.scale, 4);
+      ctx.save();
+      ctx.translate(canvasPoint.x, canvasPoint.y);
+      ctx.rotate(-Number(point.heading || 0));
+      ctx.fillStyle = `${color}22`;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      ctx.strokeRect(-length / 2, -width / 2, length, width);
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(canvasPoint.x, canvasPoint.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(canvasPoint.x - 3, canvasPoint.y);
+      ctx.lineTo(canvasPoint.x + 3, canvasPoint.y);
+      ctx.moveTo(canvasPoint.x, canvasPoint.y - 3);
+      ctx.lineTo(canvasPoint.x, canvasPoint.y + 3);
+      ctx.stroke();
+      ctx.font = '600 11px ui-sans-serif, sans-serif';
+      const textWidth = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillRect(canvasPoint.x + 9, canvasPoint.y - 11 + labelOffsetY, textWidth + 8, 17);
+      ctx.fillStyle = color;
+      ctx.fillText(label, canvasPoint.x + 13, canvasPoint.y + 1 + labelOffsetY);
+      ctx.restore();
+    }
+
+    function drawImpactPose(point, dimensions, color, label, labelOffsetY=0, dash=[]) {
+      if (!point) return;
+      const canvasPoint = worldToCanvas(point.x, point.y);
+      const length = Math.max(Number(dimensions.length || 0) * canvasPoint.scale, 6);
+      const width = Math.max(Number(dimensions.width || 0) * canvasPoint.scale, 4);
+      ctx.save();
+      ctx.translate(canvasPoint.x, canvasPoint.y);
+      ctx.rotate(-Number(point.heading || 0));
+      ctx.fillStyle = `${color}30`;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.setLineDash(dash);
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      ctx.strokeRect(-length / 2, -width / 2, length, width);
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = '700 11px ui-sans-serif, sans-serif';
+      const textWidth = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.fillRect(canvasPoint.x + 9, canvasPoint.y - 11 + labelOffsetY, textWidth + 8, 17);
+      ctx.fillStyle = color;
+      ctx.fillText(label, canvasPoint.x + 13, canvasPoint.y + 1 + labelOffsetY);
+      ctx.restore();
+    }
+
+    function drawBrakingStart(point, reactionTime) {
+      if (!point) return;
+      const canvasPoint = worldToCanvas(point.x, point.y);
+      const label = `braking starts · t=${reactionTime.toFixed(2)}s`;
+      ctx.save();
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(canvasPoint.x, canvasPoint.y, 7, Math.PI / 2, Math.PI * 1.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(canvasPoint.x, canvasPoint.y, 7, -Math.PI / 2, Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(canvasPoint.x, canvasPoint.y, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.font = '700 11px ui-sans-serif, sans-serif';
+      const textWidth = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.fillRect(canvasPoint.x + 10, canvasPoint.y - 25, textWidth + 8, 17);
+      ctx.fillStyle = '#9f321f';
+      ctx.fillText(label, canvasPoint.x + 14, canvasPoint.y - 13);
+      ctx.restore();
+    }
+
+    function drawAvoidabilityTrajectories() {
+      const trajectories = selectedCounterfactualTrajectories();
+      if (!trajectories) return;
+      drawTrajectoryLine(trajectories.adversaryTrajectory, '#0891b2', 2.6, [6, 5]);
+      drawTrajectoryLine(trajectories.reaction, '#f59e0b', 3.4, [8, 5]);
+      drawTrajectoryLine(trajectories.braking, '#dc2626', 3.8);
+      drawBrakingStart(trajectories.brakingStart, trajectories.reactionTime);
+      if (trajectories.impact) {
+        const blockerColor = trajectories.impact.blockerIsOriginal ? '#0891b2' : '#111827';
+        const blockerLabel = trajectories.impact.blockerIsOriginal
+          ? `adversary at impact · t=${trajectories.impact.time.toFixed(2)}s`
+          : `blocking agent ${trajectories.impact.blockerId} at impact · t=${trajectories.impact.time.toFixed(2)}s`;
+        drawImpactPose(
+          trajectories.impact.blocker,
+          trajectories.impact.blockerDimensions,
+          blockerColor,
+          blockerLabel,
+          29,
+          [4, 3]
+        );
+        drawImpactPose(
+          trajectories.impact.target,
+          trajectories.targetDimensions,
+          '#ef4444',
+          `impact target · ${trajectories.impact.target.speed.toFixed(2)} m/s`,
+          -29
+        );
+      } else {
+        drawStopPose(
+          trajectories.targetStop,
+          trajectories.targetDimensions,
+          '#dc2626',
+          `target stop sample · 0.0 m/s · t=${trajectories.targetStopSampleTime.toFixed(2)}s`,
+          -17
+        );
+        drawImpactPose(
+          trajectories.adversaryAtTargetStop,
+          trajectories.adversaryDimensions,
+          '#0891b2',
+          `adversary at target stop sample · t=${trajectories.targetStopSampleTime.toFixed(2)}s`,
+          17,
+          [7, 4]
+        );
       }
     }
 
@@ -914,14 +1471,16 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.rect(-length / 2, -width / 2, length, width);
+      if (replayMode === 'avoidability') ctx.globalAlpha = 0.2;
       ctx.fill();
+      ctx.globalAlpha = 1.0;
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(length / 2, 0);
       ctx.lineTo(length / 2 - Math.max(width * 0.9, 6), width * 0.32);
       ctx.lineTo(length / 2 - Math.max(width * 0.9, 6), -width * 0.32);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillStyle = replayMode === 'avoidability' ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.75)';
       ctx.fill();
       if (isAgentBraking(agent)) {
         ctx.fillStyle = 'rgba(255,0,0,0.92)';
@@ -958,7 +1517,7 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
       hitAgents = [];
       if (followTarget) {
-        const target = findTarget(frames[frameIndex]);
+        const target = findTarget(currentDisplayFrame());
         if (target) {
           camera.x = target.x;
           camera.y = target.y;
@@ -966,11 +1525,14 @@ HTML_TEMPLATE = """<!doctype html>
       }
       drawRoads();
       drawTraffic(trafficFrames[frameIndex] || []);
-      const frame = frames[frameIndex] || [];
+      drawAvoidabilityTrajectories();
+      const frame = currentDisplayFrame();
       for (const agent of frame) drawAgent(agent);
       updateFocusedAgentTelemetry();
-      frameLabel.innerText = `${frameIndex + 1} / ${Math.max(frames.length, 1)}`;
-      slider.value = frameIndex;
+      if (replayMode === 'observed') {
+        frameLabel.innerText = `${frameIndex + 1} / ${Math.max(frames.length, 1)}`;
+        slider.value = frameIndex;
+      }
     }
 
     function tick(ts) {
@@ -979,6 +1541,7 @@ HTML_TEMPLATE = """<!doctype html>
       const frameDuration = 1000 / (10 * speed);
       if (ts - lastTimestamp >= frameDuration) {
         frameIndex = (frameIndex + 1) % Math.max(frames.length, 1);
+        observedFrameIndex = frameIndex;
         lastTimestamp = ts;
         draw();
       }
@@ -988,8 +1551,12 @@ HTML_TEMPLATE = """<!doctype html>
     slider.max = Math.max(frames.length - 1, 0);
     slider.addEventListener('input', (e) => {
       frameIndex = Number(e.target.value || 0);
+      observedFrameIndex = frameIndex;
       draw();
     });
+    reactionSlider.addEventListener('input', updateAvoidabilitySelection);
+    observedModeButton.addEventListener('click', () => setReplayMode('observed'));
+    avoidabilityModeButton.addEventListener('click', () => setReplayMode('avoidability'));
     playToggle.addEventListener('click', () => {
       playing = !playing;
       playToggle.innerText = playing ? 'Pause' : 'Play';
@@ -1054,6 +1621,9 @@ HTML_TEMPLATE = """<!doctype html>
 
     setMeta();
     camera = createDefaultCamera();
+    avoidabilityModeButton.disabled = !hasAvoidability;
+    avoidabilityModeButton.title = hasAvoidability ? 'Inspect C-recorded braking candidates' : 'No collision avoidability trace';
+    reactionSlider.max = candidateSteps.length;
     speedLabel.innerText = `${speed.toFixed(1)}x`;
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
