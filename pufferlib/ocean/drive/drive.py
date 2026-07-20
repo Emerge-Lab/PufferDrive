@@ -1,4 +1,6 @@
 import argparse
+import pickle
+import zlib
 from pathlib import Path
 import numpy as np
 import gymnasium
@@ -46,6 +48,8 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior=0,
         traffic_light_behavior=0,
         use_map_cache=0,
+        capture_replay=False,
+        replay_worker_idx=0,
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -153,6 +157,9 @@ class Drive(pufferlib.PufferEnv):
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
+        self.capture_replay = bool(capture_replay)
+        self.replay_worker_idx = int(replay_worker_idx)
+        self._replay_buffers = []
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -423,6 +430,8 @@ class Drive(pufferlib.PufferEnv):
 
         self.c_envs = binding.vectorize(*env_ids)
         binding.vec_reset(self.c_envs, self.random_seed)
+        if self.capture_replay:
+            self._initialize_replay_buffers()
 
     def _env_init_kwargs(self, map_file, max_agents):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
@@ -532,6 +541,8 @@ class Drive(pufferlib.PufferEnv):
         binding.vec_reset(self.c_envs, seed)
         self.tick = 0
         self.truncations[:] = 0
+        if self.capture_replay:
+            self._initialize_replay_buffers()
         return self.observations, []
 
     def step(self, actions):
@@ -540,6 +551,8 @@ class Drive(pufferlib.PufferEnv):
             self.terminals[:] = 0
             self.truncations[:] = 0
             return (self.observations, self.rewards, self.terminals, self.truncations, [])
+        if self.capture_replay:
+            self._capture_replay_step()
         self.actions[:] = actions
         binding.vec_step(self.c_envs)
         self.tick += 1
@@ -557,6 +570,8 @@ class Drive(pufferlib.PufferEnv):
             if self.eval_mode:
                 for summary in binding.vec_per_episode_log(self.c_envs):
                     summary["summary_type"] = "completed_episode"
+                    if self.capture_replay:
+                        summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
                     info.append(summary)
             # Eval walks a fixed map window; each batch handles whatever scenarios
             # remain between the cursor and the end of this worker's window.
@@ -592,6 +607,9 @@ class Drive(pufferlib.PufferEnv):
                 eval_map_indices=remaining_map_indices,
                 goal_radius=self.goal_radius,
             )
+            self.agent_offsets = agent_offsets
+            self.map_ids = map_ids
+            self.num_envs = num_envs
             self.map_cursor = self.map_cursor + num_envs
             env_ids = []
             for i in range(num_envs):
@@ -620,9 +638,149 @@ class Drive(pufferlib.PufferEnv):
                 # The initial batch is reset by both __init__ and the caller's reset();
                 # a resampled eval batch must match that to reproduce episodes exactly.
                 binding.vec_reset(self.c_envs, self.random_seed)
+            if self.capture_replay:
+                self._initialize_replay_buffers()
             # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
             self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def _normalize_scenarios(self, state):
+        if isinstance(state, list):
+            return state
+        if isinstance(state, dict):
+            return [state]
+        raise RuntimeError(f"Unexpected Drive state type for replay capture: {type(state).__name__}")
+
+    def _create_replay_buffer(self, scenario, active_agent_offset):
+        map_path = scenario.get("map_name")
+        if not isinstance(map_path, str) or not map_path:
+            raise RuntimeError("Replay capture requires a non-empty scenario map_name")
+        active_agent_count = int(scenario["active_agent_count"])
+        return {
+            "metadata": {
+                "map_name": os.path.basename(map_path).split(".")[0],
+                "map_path": map_path,
+                "scenario_id": scenario.get("scenario_id"),
+                "target_type": self.target_type_str,
+                "dynamics_model": self.dynamics_model,
+                "worker_idx": self.replay_worker_idx,
+                "active_agent_offset": active_agent_offset,
+                "active_agent_count": active_agent_count,
+            },
+            "scenario": scenario,
+            "agent_capacity": len(scenario["agents"] or []),
+            "traffic_capacity": len(scenario["traffic_elements"] or []),
+            "frames": {key: [] for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32", "traffic_i16")},
+        }
+
+    def _initialize_replay_buffers(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        active_agent_offset = 0
+        self._replay_buffers = []
+        for scenario in scenarios:
+            self._replay_buffers.append(self._create_replay_buffer(scenario, active_agent_offset))
+            active_agent_offset += int(scenario["active_agent_count"])
+
+    def _extract_replay_frame(self, scenario, buffer):
+        agent_capacity = buffer["agent_capacity"]
+        traffic_capacity = max(buffer["traffic_capacity"], 1)
+        frame = {
+            "agent_f32": np.zeros((agent_capacity, binding.AGENT_F32_FIELDS), dtype=np.float32),
+            "agent_i32": np.zeros((agent_capacity, binding.AGENT_I32_FIELDS), dtype=np.int32),
+            "metrics_f32": np.zeros((agent_capacity, binding.METRICS_F32_FIELDS), dtype=np.float32),
+            "puffer_f32": np.zeros((agent_capacity, binding.SCORE_F32_FIELDS), dtype=np.float32),
+            "traffic_i16": np.zeros((traffic_capacity, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
+        }
+        active_indices = {
+            agent_idx: active_idx for active_idx, agent_idx in enumerate(scenario["active_agent_indices"])
+        }
+        puffer_keys = (
+            "score",
+            "no_at_fault",
+            "no_offroad",
+            "no_red_light",
+            "making_progress",
+            "direction_score",
+            "ttc_puffer_rate",
+            "progress_ratio",
+            "speed_limit_compliance",
+            "comfort_score",
+            "multi_lane_score",
+            "multiplier",
+            "weighted_average",
+            "wrong_way_distance",
+            "speed_violation_sum",
+        )
+        for agent_idx, agent in enumerate(scenario["agents"] or []):
+            frame["agent_f32"][agent_idx] = (
+                agent["sim_x"],
+                agent["sim_y"],
+                agent["sim_z"],
+                agent["sim_heading"],
+                agent["sim_length"],
+                agent["sim_width"],
+                agent["sim_speed"],
+                agent["sim_steering"],
+                agent["accel_long"],
+                agent["accel_lat"],
+                agent["jerk_long"],
+                agent["jerk_lat"],
+            )
+            active_idx = active_indices.get(agent_idx, -1)
+            frame["agent_i32"][agent_idx] = (
+                agent["id"],
+                agent["type"],
+                agent["sim_valid"],
+                agent["active_agent"],
+                agent["stopped"],
+                int(not agent["sim_valid"]),
+                agent["current_lane_idx"],
+                active_idx,
+            )
+            frame["metrics_f32"][agent_idx] = np.asarray(agent["metrics_array"], dtype=np.float32)
+            puffer_metrics = agent.get("puffer_metrics")
+            if puffer_metrics is not None:
+                frame["puffer_f32"][agent_idx] = tuple(puffer_metrics[key] for key in puffer_keys)
+        episode_timestep = int(scenario["episode_timestep"])
+        for traffic_idx, traffic in enumerate(scenario["traffic_elements"] or []):
+            states = traffic["states"] or []
+            state = states[episode_timestep] if episode_timestep < len(states) else 0
+            frame["traffic_i16"][traffic_idx] = (1, traffic["type"], state)
+        return frame
+
+    def _capture_replay_step(self):
+        scenarios = self._normalize_scenarios(self.get_state())
+        if len(scenarios) != len(self._replay_buffers):
+            raise RuntimeError("Replay environment count changed without reinitializing capture buffers")
+        for scenario, buffer in zip(scenarios, self._replay_buffers):
+            frame = self._extract_replay_frame(scenario, buffer)
+            for key, value in frame.items():
+                buffer["frames"][key].append(value)
+
+    def _build_replay_environment_bundle(self, summary):
+        env_slot = int(summary["env_slot"])
+        if env_slot < 0 or env_slot >= len(self._replay_buffers):
+            raise RuntimeError(f"Replay summary has invalid env_slot={env_slot}")
+        buffer = self._replay_buffers[env_slot]
+        episode_length = int(summary["episode_length"])
+        captured_frame_count = len(buffer["frames"]["agent_f32"])
+        if episode_length <= 0 or episode_length > captured_frame_count:
+            raise RuntimeError(
+                f"Replay episode_length={episode_length} is incompatible with "
+                f"captured_frame_count={captured_frame_count} for env_slot={env_slot}"
+            )
+        metadata = dict(buffer["metadata"])
+        metadata["episode_length"] = episode_length
+        replay_environment_bundle = {
+            "schema": "interactive_replay_environment_v1",
+            "metadata": metadata,
+            "scenario": buffer["scenario"],
+            "frames": {key: np.stack(frames[:episode_length], axis=0) for key, frames in buffer["frames"].items()},
+        }
+        return zlib.compress(
+            pickle.dumps(replay_environment_bundle, protocol=pickle.HIGHEST_PROTOCOL),
+            level=3,
+        )
 
     def get_global_agent_state(self):
         """Get current global state of all active agents.

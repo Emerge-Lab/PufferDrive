@@ -842,6 +842,12 @@ def plot_observation(
     return _img_from_fig(fig)
 
 
+# Bound untrusted zlib expansion and JSON parsing before chunk-level validation.
+MAX_REPLAY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_REPLAY_HEADER_BYTES = 16 * 1024 * 1024
+REPLAY_SCHEMA = "interactive_replay_v1"
+
+
 def _pack_replay_binary(header, chunks):
     packed = {}
     blob_parts = []
@@ -869,10 +875,10 @@ def _pack_replay_binary(header, chunks):
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
     payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
-    return base64.b64encode(zlib.compress(payload, level=3)).decode("ascii")
+    return zlib.compress(payload, level=3)
 
 
-def generate_interactive_replay(scenario, replay, filename="replay.html"):
+def encode_interactive_replay(scenario, replay):
     road_points = []
     road_lengths = []
     road_types = []
@@ -942,6 +948,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             chunks[pool_name] = replay[pool_name].astype(np.int16, copy=False)
 
     metadata = {
+        "schema": REPLAY_SCHEMA,
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
         "target_type": scenario.get("target_type", env_cfg.get("target_type", "static")),
@@ -971,7 +978,11 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
     }
-    payload = _pack_replay_binary(metadata, chunks)
+    return _pack_replay_binary(metadata, chunks)
+
+
+def _render_interactive_replay_payload(compressed_payload, filename):
+    payload = base64.b64encode(compressed_payload).decode("ascii")
 
     html_template = """
 <!DOCTYPE html>
@@ -1314,6 +1325,93 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
     )
     with open(filename, "w") as f:
         f.write(final_html)
+
+
+def validate_interactive_replay(compressed_payload):
+    if not isinstance(compressed_payload, bytes) or not compressed_payload:
+        raise ValueError("Interactive replay payload must be non-empty bytes")
+    decompressor = zlib.decompressobj()
+    payload = decompressor.decompress(compressed_payload, MAX_REPLAY_UNCOMPRESSED_BYTES + 1)
+    if len(payload) > MAX_REPLAY_UNCOMPRESSED_BYTES or decompressor.unconsumed_tail:
+        raise ValueError("Interactive replay exceeds the maximum uncompressed size")
+    payload += decompressor.flush(MAX_REPLAY_UNCOMPRESSED_BYTES + 1 - len(payload))
+    if not decompressor.eof or decompressor.unused_data:
+        raise ValueError("Interactive replay is truncated or contains trailing compressed data")
+    if len(payload) < 4:
+        raise ValueError("Interactive replay is missing its header length")
+    header_size = struct.unpack_from("<I", payload, 0)[0]
+    if header_size <= 0 or header_size > MAX_REPLAY_HEADER_BYTES or 4 + header_size > len(payload):
+        raise ValueError(f"Interactive replay has invalid header size: {header_size}")
+    try:
+        header = json.loads(payload[4 : 4 + header_size])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Interactive replay has an invalid JSON header") from exc
+    if header.get("schema") != REPLAY_SCHEMA:
+        raise ValueError(f"Unsupported interactive replay schema: {header.get('schema')!r}")
+    chunks = header.get("chunks")
+    if not isinstance(chunks, dict):
+        raise ValueError("Interactive replay header is missing chunks")
+    required_chunks = {
+        "road_points",
+        "road_lengths",
+        "road_types",
+        "traffic_stop_lines",
+        "traffic_types",
+        "agent_f32",
+        "agent_i32",
+        "metrics_f32",
+        "puffer_f32",
+        "traffic_i16",
+        "obs",
+        "raw_action",
+        "clipped_action",
+        "value",
+        "entropy",
+    }
+    missing_chunks = required_chunks - chunks.keys()
+    if missing_chunks:
+        raise ValueError(f"Interactive replay is missing chunks: {', '.join(sorted(missing_chunks))}")
+    dtype_sizes = {"float32": 4, "int32": 4, "int16": 2, "uint8": 1}
+    data_start = 4 + header_size
+    data_start += (-data_start) % 4
+    expected_end = 0
+    for name, chunk in chunks.items():
+        if not isinstance(chunk, dict) or chunk.get("dtype") not in dtype_sizes:
+            raise ValueError(f"Interactive replay chunk {name!r} has an invalid dtype")
+        shape = chunk.get("shape")
+        offset = chunk.get("offset")
+        byte_count = chunk.get("nbytes")
+        if (
+            not isinstance(shape, list)
+            or not shape
+            or any(not isinstance(size, int) or size < 0 for size in shape)
+            or not isinstance(offset, int)
+            or offset < 0
+            or offset % 4
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+        ):
+            raise ValueError(f"Interactive replay chunk {name!r} has invalid shape or bounds")
+        expected_bytes = int(np.prod(shape, dtype=np.int64)) * dtype_sizes[chunk["dtype"]]
+        if expected_bytes != byte_count or data_start + offset + byte_count > len(payload):
+            raise ValueError(f"Interactive replay chunk {name!r} has inconsistent byte bounds")
+        expected_end = max(expected_end, offset + byte_count + (-(offset + byte_count)) % 4)
+    if data_start + expected_end != len(payload):
+        raise ValueError("Interactive replay contains missing or trailing binary data")
+    return header
+
+
+def save_interactive_replay_zlib(scenario, replay, filename):
+    compressed_payload = encode_interactive_replay(scenario, replay)
+    with open(filename, "wb") as replay_file:
+        replay_file.write(compressed_payload)
+    return compressed_payload
+
+
+def generate_interactive_replay(scenario, replay, filename="replay.html"):
+    compressed_payload = encode_interactive_replay(scenario, replay)
+    _render_interactive_replay_payload(compressed_payload, filename)
+    return compressed_payload
 
 
 def build_gallery_index(folder_path=".", file_metrics=None):

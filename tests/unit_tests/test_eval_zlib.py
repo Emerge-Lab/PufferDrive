@@ -58,6 +58,44 @@ class _CompletedReplayVec:
         pass
 
 
+def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: _CompletedReplayVec())
+
+    def fake_save(scenario, replay, path):
+        assert replay["obs"].shape == (1, 1, 1)
+        assert replay["raw_action"].shape == (1, 1, 1)
+        assert replay["clipped_action"].shape == (1, 1, 1)
+        assert replay["value"].shape == (1, 1)
+        assert replay["entropy"].shape == (1, 1)
+        assert replay["policy_probs"].shape == (1, 1, 1)
+        with open(path, "wb") as replay_file:
+            replay_file.write(b"standard replay")
+
+    monkeypatch.setattr(pufferlib.viz, "save_interactive_replay_zlib", fake_save)
+    args = {
+        "package": "ocean",
+        "env": {},
+        "train": {"seed": 42, "device": "cpu"},
+    }
+
+    summaries = pufferl._run_eval_rollout(
+        args=args,
+        env_name="puffer_drive",
+        worker_env_kwargs=[{}],
+        total_steps=1,
+        desc="test replay",
+        expected_episodes=1,
+        policy=_ZeroPolicy(),
+        replay_output_dir=tmp_path,
+    )
+
+    replay_path = tmp_path / "episode_000000.replay.zlib"
+    assert replay_path.read_bytes() == b"standard replay"
+    assert summaries[0]["has_replay"] == 1
+    assert summaries[0]["replay_path"] == str(replay_path.resolve())
+    assert "replay_environment_bundle" not in summaries[0]
+
+
 def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypatch):
     vecenv = _CompletedReplayVec()
     policy = _RecordingPolicy()

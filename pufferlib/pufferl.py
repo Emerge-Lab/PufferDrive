@@ -5,7 +5,9 @@
 import contextlib
 import copy
 import numbers
+import pickle
 import warnings
+import zlib
 
 import pandas as pd
 
@@ -57,6 +59,7 @@ from rich.table import Table
 from rich.console import Console
 from rich_argparse import RichHelpFormatter
 from tqdm import tqdm
+
 
 rich.traceback.install(show_locals=False)
 
@@ -1720,6 +1723,8 @@ def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
         env_kwargs["starting_map"] = map_cursor
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
+        env_kwargs["capture_replay"] = bool(args.get("save_zlib"))
+        env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
         map_cursor += worker_num_scenarios
     max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
@@ -1743,13 +1748,23 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
         env_kwargs["num_eval_scenarios"] = count
         env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in chunk]
         env_kwargs["eval_scenario_seeds"] = [seed for _, seed in chunk]
+        env_kwargs["capture_replay"] = bool(args.get("save_zlib"))
+        env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
     max_pairs_per_worker = per + (1 if remainder else 0)
     return worker_env_kwargs, max_pairs_per_worker * scenario_length
 
 
 def _run_eval_rollout(
-    args, env_name, worker_env_kwargs, total_steps, desc, expected_episodes, policy=None, expected_agents_per_batch=None
+    args,
+    env_name,
+    worker_env_kwargs,
+    total_steps,
+    desc,
+    expected_episodes,
+    policy=None,
+    expected_agents_per_batch=None,
+    replay_output_dir=None,
 ):
     """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -1787,6 +1802,9 @@ def _run_eval_rollout(
     device = torch_device(args["train"]["device"])
 
     episode_summaries = []
+    capture_replay = replay_output_dir is not None
+    if replay_output_dir is not None:
+        os.makedirs(replay_output_dir, exist_ok=True)
     obs, _ = vecenv.reset(args["train"]["seed"] or 42)
     padding_agent_count = policy_agents_per_batch - agents_per_batch
     policy_obs_tensor = None
@@ -1796,27 +1814,126 @@ def _run_eval_rollout(
             dtype=torch.as_tensor(obs).dtype,
             device=device,
         )
-    for _ in tqdm(range(total_steps), desc=desc):
+    agents_per_worker = agents_per_batch // num_workers
+    capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
+    replay_history = defaultdict(list)
+    pool_method = getattr(policy, "pool_slot_counts", None)
+    if pool_method is None and getattr(policy, "policy", None) is not None:
+        pool_method = getattr(policy.policy, "pool_slot_counts", None)
+
+    for rollout_step in tqdm(range(total_steps), desc=desc):
         with torch.no_grad():
             environment_obs_tensor = torch.as_tensor(obs, device=device)
             if padding_agent_count:
                 policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
             else:
                 policy_obs_tensor = environment_obs_tensor
-            logits, _ = policy.forward_eval(policy_obs_tensor)
-            action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-            action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+            logits, value = policy.forward_eval(policy_obs_tensor)
+            action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+            raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+            action = raw_action
         if isinstance(logits, torch.distributions.Normal):
             action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+        if capture_replay:
+            if value is None:
+                vecenv.close()
+                raise RuntimeError("Standard replay capture requires policy value outputs")
+            replay_history["obs"].append(np.asarray(obs, dtype=np.float32).copy())
+            replay_history["raw_action"].append(np.asarray(raw_action, dtype=np.float32).copy())
+            replay_history["clipped_action"].append(np.asarray(action, dtype=np.float32).copy())
+            replay_history["value"].append(
+                value[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
+            )
+            replay_history["entropy"].append(
+                entropy[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
+            )
+            if isinstance(logits, torch.distributions.Normal):
+                replay_history["policy_mean"].append(
+                    logits.loc[:agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=True)
+                )
+                replay_history["policy_std"].append(
+                    logits.scale[:agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=True)
+                )
+                replay_history["policy_log_prob"].append(
+                    logprob[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
+                )
+            else:
+                discrete_logits = (
+                    logits if isinstance(logits, torch.Tensor) else logits[0] if len(logits) == 1 else None
+                )
+                if discrete_logits is None:
+                    vecenv.close()
+                    raise RuntimeError("Standard replay capture supports one discrete policy head")
+                replay_history["policy_probs"].append(
+                    torch.softmax(discrete_logits[:agents_per_batch], dim=-1)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32, copy=True)
+                )
+            if pool_method is not None:
+                pool_outputs = pool_method(policy_obs_tensor)
+                for pool_name, pool_values in pool_outputs.items():
+                    replay_history[pool_name].append(
+                        pool_values[:agents_per_batch].detach().cpu().numpy().astype(np.int16, copy=True)
+                    )
+
         obs, _, _, _, infos = vecenv.step(action)
         for worker_info in infos:
             worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
             for item in worker_items:
                 if isinstance(item, dict) and item.get("summary_type") == "completed_episode":
+                    replay_environment_bytes = item.pop("replay_environment_bundle", None)
+                    if replay_output_dir is not None:
+                        if not isinstance(replay_environment_bytes, bytes):
+                            vecenv.close()
+                            raise RuntimeError(
+                                "Replay capture was requested, but a completed episode did not include environment bytes"
+                            )
+                        replay_environment = pickle.loads(zlib.decompress(replay_environment_bytes))
+                        if replay_environment.get("schema") != "interactive_replay_environment_v1":
+                            vecenv.close()
+                            raise RuntimeError("Replay environment bundle has an unsupported schema")
+                        metadata = replay_environment["metadata"]
+                        episode_length = int(metadata["episode_length"])
+                        worker_idx = int(metadata["worker_idx"])
+                        active_agent_offset = int(metadata["active_agent_offset"])
+                        active_agent_count = int(metadata["active_agent_count"])
+                        global_agent_start = worker_idx * agents_per_worker + active_agent_offset
+                        global_agent_end = global_agent_start + active_agent_count
+                        if (
+                            worker_idx < 0
+                            or worker_idx >= num_workers
+                            or active_agent_offset < 0
+                            or active_agent_count <= 0
+                            or global_agent_end > agents_per_batch
+                            or episode_length > len(replay_history["obs"])
+                        ):
+                            vecenv.close()
+                            raise RuntimeError("Replay environment metadata is incompatible with the policy history")
+                        replay = {"env": dict(args["env"]), **replay_environment["frames"]}
+                        for key, frames in replay_history.items():
+                            if not frames:
+                                continue
+                            replay[key] = np.stack(frames[:episode_length], axis=0)[
+                                :, global_agent_start:global_agent_end
+                            ]
+                        replay_path = os.path.abspath(
+                            os.path.join(
+                                replay_output_dir,
+                                f"episode_{len(episode_summaries):06d}.replay.zlib",
+                            )
+                        )
+                        pufferlib.viz.save_interactive_replay_zlib(replay_environment["scenario"], replay, replay_path)
+                        item["has_replay"] = 1
+                        item["replay_path"] = replay_path
                     item["agents_per_batch"] = policy_agents_per_batch
                     episode_summaries.append(item)
         if len(episode_summaries) >= expected_episodes:
             break
+        if capture_replay and (rollout_step + 1) % capture_batch_steps == 0:
+            replay_history = defaultdict(list)
 
     vecenv.close()
     return episode_summaries
@@ -1870,15 +1987,24 @@ def eval(env_name, args=None, policy=None):
         out_subdir, desc = "eval", "Evaluating scenarios"
         print(f"Distributing {num_scenarios} scenarios across {num_workers} workers")
 
-    episode_summaries = _run_eval_rollout(
-        args, env_name, worker_env_kwargs, total_steps, desc, num_scenarios, policy, expected_agents_per_batch
-    )
-
     if args.get("load_model_path"):
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))
         out_dir = os.path.join(run_dir, out_subdir)
     else:
         out_dir = os.path.join("eval_results", env_name, out_subdir)
+    replay_output_dir = os.path.join(out_dir, "replays") if args.get("save_zlib") else None
+    episode_summaries = _run_eval_rollout(
+        args,
+        env_name,
+        worker_env_kwargs,
+        total_steps,
+        desc,
+        num_scenarios,
+        policy,
+        expected_agents_per_batch,
+        replay_output_dir,
+    )
+
     _write_eval_reports(episode_summaries, out_dir, num_scenarios)
     print(
         f"{desc} complete: {len(episode_summaries)} episodes from {num_scenarios} scenarios across {num_workers} workers."
@@ -1996,6 +2122,11 @@ def load_config(env_name, config_dir=None):
     )
     parser.add_argument(
         "--replay-filter", type=str, default=None, help="Pandas query on the replay CSV columns to select rows"
+    )
+    parser.add_argument(
+        "--save-zlib",
+        action="store_true",
+        help="Save one full interactive observation replay zlib for every completed evaluation scenario",
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
