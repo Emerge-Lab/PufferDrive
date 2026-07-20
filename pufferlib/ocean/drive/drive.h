@@ -82,6 +82,7 @@
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 
 // Collision and distance thresholds
+#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 #define MAX_CHECKED_LANES 32
@@ -4555,9 +4556,10 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
+    float perceived_margin = env->eval_mode ? 2.0f * EVAL_PERCEIVED_SIZE_MARGIN_M : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
-    obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
-    obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
+    obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
+    obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
     obs[obs_idx++] = ego->accel_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->accel_lat / ACCEL_LAT_LIMIT[1];
