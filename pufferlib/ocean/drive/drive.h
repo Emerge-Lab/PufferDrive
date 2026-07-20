@@ -82,6 +82,7 @@
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 
 // Collision and distance thresholds
+#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 #define MAX_CHECKED_LANES 32
@@ -123,21 +124,28 @@
 #define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25)
 
-// TARGET_TYPE modes (controls what target info is in observations)
-#define TARGET_STATIC 0
-#define TARGET_DYNAMIC 1
+// GOAL_REGEN modes
+#define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
+#define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier
+// GOAL_SOURCE modes
+#define GOAL_SOURCE_ROUTE 0               // seed from the agent's own forward route
+#define GOAL_SOURCE_MAP 1                 // seed from a uniformly sampled map lane
+#define GOAL_SOURCE_GT 2                  // seed directly from the logged ground-truth trajectory
+#define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
+#define MAX_ROUTE_LENGTH 64
+#define ROUTE_TARGET_DISTANCE 1000.0f
+#define ROUTE_EXIT_MAX_CANDIDATES 5
+#define GT_GOAL_RADIUS_M 6.0f
 
 // Observation feature counts
 #define EGO_FEATURES 10
-#define ROAD_FEATURES 7
+#define LANE_FEATURES 9
+#define BOUNDARY_FEATURES 9
 #define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
-#define STATIC_TARGET_FEATURES 3
-#define DYNAMIC_TARGET_FEATURES 5
+#define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4
 
-// GIGAFLOW specific
-#define MAX_ROUTE_LENGTH 64
 // Traffic light generation
 #define TL_DEFAULT_RED_DURATION 2.0f
 #define TL_DEFAULT_YELLOW_DURATION 3.0f
@@ -231,7 +239,6 @@ struct Log {
     float offroad_rate;
     float collision_rate;
     float red_light_violation_rate;
-    float num_waypoints_reached;
     float num_goals_reached;
     float comfort_violation_count;
     float comfort_violation_timestep_count;
@@ -267,6 +274,7 @@ struct Log {
     float ttc_puffer_rate;
     float multiplier;
     float weighted_average;
+    float reached_goal_gt;
     float reward_collision;
     float reward_offroad;
     float reward_red_light;
@@ -390,12 +398,13 @@ struct Drive {
     float spawn_initial_speed;
     float goal_radius;
     float goal_speed;
-    float min_waypoint_spacing;
-    float max_waypoint_spacing;
-    int num_target_waypoints;
+    float min_goal_spacing;
+    float max_goal_spacing;
+    int num_goals;
     int logs_capacity;
-    int target_type;
-    int goal_on_lane;
+    int goal_regen_mode;
+    int goal_source;
+    int obs_goal_lane_distance;
     char *ini_file;
     int collision_behavior;           // 0 = none, 1=stop, 2 = remove
     int offroad_behavior;             // 0 = none, 1=stop, 2 = remove
@@ -410,6 +419,8 @@ struct Drive {
     // second overwriting the first. Set via vec_set_video_suffix BEFORE
     // the first c_render of a rollout (make_client reads it when forking ffmpeg).
     char video_suffix[64];
+    // Absolute directory holding render assets (.glb models).
+    char resource_root[512];
     int log_length;
     float log_dt;
     int num_objects_of_interest;
@@ -424,6 +435,7 @@ struct Drive {
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
+    int terminate_on_goal;
     int reward_conditioning;
     int reward_randomization;
     int compute_eval_metrics;
@@ -573,16 +585,14 @@ static void reset_agent_state(Agent *agent) {
     agent->removed = 0;
     agent->current_lane_idx = -1;
     agent->previous_lane_idx = -1;
-    agent->current_route_index = 0;
+    agent->current_route_idx = 0;
     agent->accel_long = 0.0f;
     agent->accel_lat = 0.0f;
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
-    agent->path_progression = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
-    agent->closest_path_idx_wp = 0;
     agent->phantom_braking_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
@@ -1117,15 +1127,15 @@ int load_map_binary(const char *filename, Drive *drive) {
             return -1;
         }
 
-        if (fread(&agent->goal_position_x, sizeof(float), 1, file) != 1) {
+        if (fread(&agent->gt_goal_x, sizeof(float), 1, file) != 1) {
             fclose(file);
             return -1;
         }
-        if (fread(&agent->goal_position_y, sizeof(float), 1, file) != 1) {
+        if (fread(&agent->gt_goal_y, sizeof(float), 1, file) != 1) {
             fclose(file);
             return -1;
         }
-        if (fread(&agent->goal_position_z, sizeof(float), 1, file) != 1) {
+        if (fread(&agent->gt_goal_z, sizeof(float), 1, file) != 1) {
             fclose(file);
             return -1;
         }
@@ -1314,6 +1324,7 @@ int load_map_binary(const char *filename, Drive *drive) {
     drive->lane_graph.n_lanes = n_lanes_graph;
     drive->lane_graph.lane_ids = NULL;
     drive->lane_graph.distances = NULL;
+    drive->lane_graph.lane_to_graph_idx = NULL;
     if (n_lanes_graph > 0) {
         drive->lane_graph.lane_ids = (int *) malloc(n_lanes_graph * sizeof(int));
         if (fread(drive->lane_graph.lane_ids, sizeof(int), n_lanes_graph, file) != (size_t) n_lanes_graph) {
@@ -1325,6 +1336,22 @@ int load_map_binary(const char *filename, Drive *drive) {
             != (size_t) (n_lanes_graph * n_lanes_graph)) {
             fclose(file);
             return -1;
+        }
+
+        // Build reverse lookup road-element idx -> graph idx
+        int num_roads = drive->num_road_elements;
+        drive->lane_graph.lane_to_graph_idx = (int *) malloc(num_roads * sizeof(int));
+        for (int r = 0; r < num_roads; r++) {
+            drive->lane_graph.lane_to_graph_idx[r] = -1;
+        }
+        for (int g = 0; g < n_lanes_graph; g++) {
+            int lane_idx = drive->lane_graph.lane_ids[g];
+            if (lane_idx < 0 || lane_idx >= num_roads) {
+                printf("[ERROR] -> lane_graph lane_id %d out of range [0,%d).\n", lane_idx, num_roads);
+                fclose(file);
+                return -1;
+            }
+            drive->lane_graph.lane_to_graph_idx[lane_idx] = g;
         }
     }
 
@@ -1385,106 +1412,62 @@ int load_map_binary(const char *filename, Drive *drive) {
 // Road Utility Functions
 // ========================================
 
-// Compute the remaining distance on a lane from a given position to the end of the lane
-static float compute_remaining_lane_distance(RoadMapElement *lane, float pos_x, float pos_y) {
-    // Find the closest segment to the position
-    int closest_seg = 0;
-    float closest_t = 0.0f;
-    float min_dist_sq = 1e30f;
+static float compute_lane_progress(
+    RoadMapElement *lane,
+    float pos_x,
+    float pos_y,
+    float cos_heading,
+    float sin_heading,
+    bool align_heading,
+    float *out_dist_sq) {
+    // Arc-length progress (s, meters) of a world position along a lane polyline,
+    // via closest-point projection onto its segments. Pass 0 only considers
+    // segments pointing the same way as the heading (self-intersecting lanes);
+    // pass 1 drops that filter as fallback if pass 0 matched nothing.
+    float best_progress = 0.0f;
+    float best_dist_sq = 1e30f;
 
-    for (int i = 0; i < lane->segment_size - 1; i++) {
-        float x0 = lane->x[i];
-        float y0 = lane->y[i];
-        float x1 = lane->x[i + 1];
-        float y1 = lane->y[i + 1];
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < lane->segment_size - 1; i++) {
+            float x0 = lane->x[i];
+            float y0 = lane->y[i];
+            float x1 = lane->x[i + 1];
+            float y1 = lane->y[i + 1];
+            float dx = x1 - x0;
+            float dy = y1 - y0;
+            float seg_len_sq = dx * dx + dy * dy;
+            float seg_s = lane->cum_lengths[i + 1] - lane->cum_lengths[i];
 
-        float dx = x1 - x0;
-        float dy = y1 - y0;
-        float seg_len_sq = dx * dx + dy * dy;
+            // Skip degenerate (zero-length) segments
+            if (seg_len_sq <= 1e-6f || seg_s <= 1e-6f) {
+                continue;
+            }
+            // Pass 0: reject segments facing away from the agent heading
+            if (align_heading && pass == 0 && dx * cos_heading + dy * sin_heading < 0.0f) {
+                continue;
+            }
 
-        float t = 0.0f;
-        if (seg_len_sq > 1e-6f) {
-            t = ((pos_x - x0) * dx + (pos_y - y0) * dy) / seg_len_sq;
+            // Project position onto segment, clamped to its endpoints
+            float t = ((pos_x - x0) * dx + (pos_y - y0) * dy) / seg_len_sq;
             t = fmaxf(0.0f, fminf(1.0f, t));
+            float proj_x = x0 + t * dx;
+            float proj_y = y0 + t * dy;
+            float dist_sq = (pos_x - proj_x) * (pos_x - proj_x) + (pos_y - proj_y) * (pos_y - proj_y);
+            if (dist_sq < best_dist_sq) {
+                best_dist_sq = dist_sq;
+                best_progress = lane->cum_lengths[i] + t * seg_s;
+            }
         }
-
-        float proj_x = x0 + t * dx;
-        float proj_y = y0 + t * dy;
-        float dist_sq = (pos_x - proj_x) * (pos_x - proj_x) + (pos_y - proj_y) * (pos_y - proj_y);
-
-        if (dist_sq < min_dist_sq) {
-            min_dist_sq = dist_sq;
-            closest_seg = i;
-            closest_t = t;
-        }
-    }
-
-    float progress = lane->cum_lengths[closest_seg]
-        + closest_t * (lane->cum_lengths[closest_seg + 1] - lane->cum_lengths[closest_seg]);
-    return fmaxf(0.0f, lane->length - progress);
-}
-
-static float compute_lane_end_distance_sq(RoadMapElement *lane, float origin_x, float origin_y) {
-    if (lane->segment_size <= 0) {
-        return 0.0f;
-    }
-
-    int last_idx = lane->segment_size - 1;
-    float dx = lane->x[last_idx] - origin_x;
-    float dy = lane->y[last_idx] - origin_y;
-    return dx * dx + dy * dy;
-}
-
-static float compute_progression(Agent *agent) {
-    int num_wp = agent->path->num_waypoints;
-    if (num_wp < 2) {
-        return agent->path->waypoints[0].s;
-    }
-
-    int idx = agent->closest_path_idx_wp;
-    if (idx >= num_wp) {
-        idx = num_wp - 1;
-    }
-
-    // closest_path_idx_wp is the closest waypoint IN FRONT of the agent,
-    // so the agent is on the segment ending at that waypoint (idx-1 to idx).
-    // Also check the next segment (idx to idx+1) in case agent is at the waypoint.
-    int start_seg = (idx > 0) ? (idx - 1) : 0;
-    int end_seg = (idx < num_wp - 1) ? (idx + 1) : (num_wp - 1);
-
-    float min_dist_sq = 1e18f;
-    float best_s = agent->path->waypoints[0].s;
-
-    for (int i = start_seg; i < end_seg; ++i) {
-        const struct Waypoint wp_a = agent->path->waypoints[i];
-        const struct Waypoint wp_b = agent->path->waypoints[i + 1];
-
-        const float seg_dx = wp_b.x - wp_a.x;
-        const float seg_dy = wp_b.y - wp_a.y;
-        const float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-
-        float t;
-        if (seg_len_sq < 1e-6f) {
-            t = 0.0f;
-        } else {
-            const float agent_dx = agent->sim_x - wp_a.x;
-            const float agent_dy = agent->sim_y - wp_a.y;
-            t = (agent_dx * seg_dx + agent_dy * seg_dy) / seg_len_sq;
-        }
-
-        const float clamped_t = fmaxf(0.0f, fminf(1.0f, t));
-        const float closest_x = wp_a.x + clamped_t * seg_dx;
-        const float closest_y = wp_a.y + clamped_t * seg_dy;
-        const float dist_sq = (agent->sim_x - closest_x) * (agent->sim_x - closest_x)
-            + (agent->sim_y - closest_y) * (agent->sim_y - closest_y);
-
-        if (dist_sq < min_dist_sq) {
-            min_dist_sq = dist_sq;
-            best_s = wp_a.s + clamped_t * (wp_b.s - wp_a.s);
+        // Second pass only needed when heading filter rejected every segment
+        if (!align_heading || best_dist_sq < 1e30f) {
+            break;
         }
     }
 
-    return best_s;
+    if (out_dist_sq != NULL) {
+        *out_dist_sq = best_dist_sq;
+    }
+    return best_progress;
 }
 
 static DepthPoint compute_z_distance_to_road_segment(const Agent *agent, const RoadMapElement *lane, int geometry_idx) {
@@ -1553,580 +1536,542 @@ static void update_agent_z(Drive *env, Agent *agent) {
     agent->sim_z = sum_z / check_count;
 }
 
+static int pick_random_exit_lane(RoadMapElement *road_elements, int lane_idx, const int *route, int route_length) {
+    RoadMapElement *lane = &road_elements[lane_idx];
+    int exits[ROUTE_EXIT_MAX_CANDIDATES];
+    int fresh_exits[ROUTE_EXIT_MAX_CANDIDATES]; // exits not already visited in `route`
+    int num_exits = 0;
+    int num_fresh_exits = 0;
+    for (int e = 0; e < lane->num_exits; e++) {
+        int ex = lane->exit_lanes[e];
+        if (ex == -1) {
+            continue;
+        }
+        exits[num_exits++] = ex;
+        bool in_route = false;
+        for (int r = 0; r < route_length; r++) {
+            if (route[r] == ex) {
+                in_route = true;
+                break;
+            }
+        }
+        if (!in_route) {
+            fresh_exits[num_fresh_exits++] = ex;
+        }
+        if (num_exits >= ROUTE_EXIT_MAX_CANDIDATES) {
+            break;
+        }
+    }
+
+    if (num_exits == 0) {
+        return -1; // dead-end lane: expected (caller ends the walk / route)
+    }
+    // Prefer an exit not yet in the route to avoid looping; fall back to any exit when all are visited.
+    if (num_fresh_exits > 0) {
+        return fresh_exits[rand() % num_fresh_exits];
+    }
+    return exits[rand() % num_exits];
+}
+
 // ========================================
 // Route/Path/Goal Functions
 // ========================================
 
-static int get_closest_waypoint_index_on_path(Drive *env, int agent_idx) {
-    const float MAX_DIST_SQ = 10000.0f;
-    const float MAX_ANGLE_DIFF = M_PI_2; // 90 degrees
-    const int WINDOW_FORWARD = 20;       // 40m ahead (20 * 2m waypoint spacing)
-    const int WINDOW_BACKWARD = 10;      // 20m behind
+static bool route_point_at_distance(
+    Drive *env,
+    const int *route,
+    int route_length,
+    int start_cursor_idx,
+    float start_s_on_lane,
+    float distance_meters,
+    float *out_x,
+    float *out_y,
+    float *out_z,
+    int *out_lane_idx,
+    int *out_cursor_idx,
+    float *out_s_on_lane) {
+    // Walk `distance_meters` forward from cursor `start_cursor_idx` (at arc-length start_s_on_lane) and return
+    // the point there. The cursor's meaning depends on mode:
+    //   route mode (route != NULL): start_cursor_idx indexes route[]; seed lane = route[start_cursor_idx].
+    //   free-roam  (route == NULL): start_cursor_idx is a lane index; the walk follows random forward exits.
+    // out_lane_idx is always the actual landed lane in road_elements. out_cursor_idx is the landed cursor to
+    // feed back as the next start_cursor_idx (route index in route mode, lane index in free-roam) so callers
+    // chain goals without rescanning. Returns false when an explicit route is exhausted (cursor ==
+    // route_length) or a free-roam walk dead-ends.
 
-    Agent *agent = &env->agents[agent_idx];
-    if (agent->path == NULL || agent->path->num_waypoints == 0) {
-        return 0;
+    // Seed the walk: explicit route reads its first lane from the route array; free-roam walks the lane graph
+    // directly and is bounded by MAX_ROUTE_LENGTH hops.
+    int current_lane_idx, max_lane_hops;
+    if (route != NULL) {
+        current_lane_idx = route[start_cursor_idx];
+        max_lane_hops = route_length;
+    } else {
+        current_lane_idx = start_cursor_idx;
+        max_lane_hops = MAX_ROUTE_LENGTH;
     }
+    int cursor_idx = start_cursor_idx; // route index (route mode) or lane index (free-roam) of current lane
+    float remaining_distance_meters = distance_meters;
+    float s_on_lane = start_s_on_lane;
 
-    int num_wp = agent->path->num_waypoints;
-    int prev_idx = agent->closest_path_idx_wp;
-    if (prev_idx >= num_wp) {
-        prev_idx = 0;
-    }
+    for (int lane_hop = 0; lane_hop < max_lane_hops; lane_hop++) {
+        RoadMapElement *lane = &env->road_elements[current_lane_idx];
+        float lane_remaining_meters = lane->length - s_on_lane;
 
-    float heading_x = cosf(agent->sim_heading);
-    float heading_y = sinf(agent->sim_heading);
-
-    int best_idx = 0;
-    float min_dist_sq = MAX_DIST_SQ;
-
-    // Try windowed search first, fallback to full search if no candidate found
-    int start_idx = fmaxf(0, prev_idx - WINDOW_BACKWARD);
-    int end_idx = fminf(num_wp, prev_idx + WINDOW_FORWARD);
-
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = start_idx; i < end_idx; i++) {
-            float dx = agent->path->waypoints[i].x - agent->sim_x;
-            float dy = agent->path->waypoints[i].y - agent->sim_y;
-
-            // Skip waypoints behind agent
-            if (dx * heading_x + dy * heading_y <= 0) {
-                continue;
+        // Target falls on this lane: interpolate the exact point between the two bounding polyline vertices.
+        if (remaining_distance_meters <= lane_remaining_meters) {
+            float target_s_meters = s_on_lane + remaining_distance_meters;
+            int end_vertex_idx = lane->segment_size - 1;
+            for (int vertex_idx = 1; vertex_idx < lane->segment_size; vertex_idx++) {
+                if (lane->cum_lengths[vertex_idx] >= target_s_meters) {
+                    end_vertex_idx = vertex_idx;
+                    break;
+                }
             }
-
-            // Skip waypoints with heading too different from agent
-            float angle_diff = agent->sim_heading - agent->path->waypoints[i].heading;
-            angle_diff = atan2f(sinf(angle_diff), cosf(angle_diff));
-
-            if (fabsf(angle_diff) > MAX_ANGLE_DIFF) {
-                continue;
-            }
-
-            float dist_sq = dx * dx + dy * dy;
-            if (dist_sq < min_dist_sq) {
-                min_dist_sq = dist_sq;
-                best_idx = i;
-            }
+            int start_vertex_idx = end_vertex_idx - 1;
+            float start_vertex_s_meters = lane->cum_lengths[start_vertex_idx];
+            float end_vertex_s_meters = lane->cum_lengths[end_vertex_idx];
+            float segment_span_meters = end_vertex_s_meters - start_vertex_s_meters;
+            float interp_frac = clip((target_s_meters - start_vertex_s_meters) / segment_span_meters, 0.0f, 1.0f);
+            // Interpolate the 3D point along the lane segment.
+            *out_x = lane->x[start_vertex_idx] + interp_frac * (lane->x[end_vertex_idx] - lane->x[start_vertex_idx]);
+            *out_y = lane->y[start_vertex_idx] + interp_frac * (lane->y[end_vertex_idx] - lane->y[start_vertex_idx]);
+            *out_z = lane->z[start_vertex_idx] + interp_frac * (lane->z[end_vertex_idx] - lane->z[start_vertex_idx]);
+            *out_lane_idx = current_lane_idx;                                  // actual landed lane in road_elements
+            *out_cursor_idx = (route != NULL) ? cursor_idx : current_lane_idx; // next start_cursor_idx
+            *out_s_on_lane = target_s_meters;
+            return true;
         }
 
-        // If found in windowed search, done
-        if (min_dist_sq < MAX_DIST_SQ) {
+        // Target is past this lane: consume the rest of it and advance to the next lane.
+        remaining_distance_meters -= lane_remaining_meters;
+        if (route != NULL) {
+            cursor_idx++;
+            if (cursor_idx >= route_length) {
+                return false; // route exhausted: expected, caller extends/back-aligns goals
+            }
+            current_lane_idx = route[cursor_idx];
+        } else {
+            current_lane_idx = pick_random_exit_lane(env->road_elements, current_lane_idx, NULL, 0);
+            if (current_lane_idx == -1) {
+                return false; // dead-end: no outgoing lane to continue the free-roam walk
+            }
+        }
+        s_on_lane = 0.0f; // new lane: start measuring arc-length from its beginning
+    }
+    printf("[ERROR] -> route_point_at_distance: walk did not reach target within %d lanes\n", max_lane_hops);
+    return false;
+}
+
+static int chain_goals(
+    Drive *env,
+    const int *route,
+    int route_length,
+    int start_lane_idx,
+    float start_s_on_lane,
+    const float *goal_spacings_meters,
+    int requested_goal_count,
+    float *out_goal_x,
+    float *out_goal_y,
+    float *out_goal_z,
+    int *out_goal_lane) {
+    // Chains up to `requested_goal_count` goals forward from (start_lane_idx, start_s_on_lane), advancing
+    // goal_spacings_meters[i] each step. route == NULL -> random map walk seeded from lane start_lane_idx.
+    // Stops early on route exhaustion / dead-end; returns the number actually written into the out arrays.
+    int placed_goal_count = 0;
+    int carry_idx = start_lane_idx; // route index (route mode) or lane index (map mode) of the last landing
+    float s_on_lane = start_s_on_lane;
+    for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
+        // carry_idx and s_on_lane are carried forward so each goal starts where the previous one landed.
+        float goal_x, goal_y, goal_z;
+        int goal_lane;
+        int next_cursor_idx;
+        if (!route_point_at_distance(
+                env,
+                route,
+                route_length,
+                carry_idx,
+                s_on_lane,
+                goal_spacings_meters[goal_idx],
+                &goal_x,
+                &goal_y,
+                &goal_z,
+                &goal_lane,
+                &next_cursor_idx,
+                &s_on_lane)) {
             break;
         }
-
-        // Fallback: full search
-        start_idx = 0;
-        end_idx = num_wp;
+        out_goal_x[placed_goal_count] = goal_x;
+        out_goal_y[placed_goal_count] = goal_y;
+        out_goal_z[placed_goal_count] = goal_z;
+        out_goal_lane[placed_goal_count] = goal_lane;
+        placed_goal_count++;
+        // Cursor is route index (route mode) or landed lane (free-roam); carry it to start the next goal.
+        carry_idx = next_cursor_idx;
     }
-
-    return best_idx;
+    return placed_goal_count;
 }
 
-static inline void initialize_agent_progression(Drive *env, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    if (agent->path == NULL || agent->path->num_waypoints == 0) {
-        agent->closest_path_idx_wp = 0;
-        agent->path_progression = 0.0f;
-        agent->distance_since_spawn = 0.0f;
-        agent->seconds_stopped = 0.0f;
-        return;
-    }
-
-    agent->closest_path_idx_wp = get_closest_waypoint_index_on_path(env, agent_idx);
-    float baseline_progression = compute_progression(agent);
-    agent->path_progression = baseline_progression;
-    agent->distance_since_spawn = 0.0f;
-    agent->seconds_stopped = 0.0f;
-}
-
-static void build_path(Drive *env, int agent_idx) {
-    // NOTE: This function assumes the agent's route is already set.
-    // It interpolates waypoints along the route lanes at fixed spacing.
-    // It is a mid-level representation between route and low-level goals waypoints.
-
-    float waypoints_spacing = env->min_waypoint_spacing;
-
-    Agent *agent = &env->agents[agent_idx];
-
-    if (agent->path != NULL) {
-        free(agent->path);
-    }
-    agent->path = (struct Path *) malloc(sizeof(struct Path));
-
-    int wp_count = 0;
-    float prev_x, prev_y, prev_z, prev_s;
-
-    // Interpolate waypoints along route lanes
-    for (int route_idx = 0; route_idx < agent->route_length && wp_count < MAX_NUM_WP_PATH; route_idx++) {
-        int lane_idx = agent->route[route_idx];
-        RoadMapElement *lane = &env->road_elements[lane_idx];
-
-        for (int i = 0; i < lane->segment_size && wp_count < MAX_NUM_WP_PATH; i++) {
-            float curr_x = lane->x[i];
-            float curr_y = lane->y[i];
-            float curr_z = lane->z[i];
-
-            // First point: add directly
-            if (wp_count == 0) {
-                agent->path->waypoints[0]
-                    = (struct Waypoint) {.x = curr_x, .y = curr_y, .z = curr_z, .s = 0.0f, .lane_idx = lane_idx};
-                prev_x = curr_x;
-                prev_y = curr_y;
-                prev_z = curr_z;
-                prev_s = 0.0f;
-                wp_count++;
-                continue;
-            }
-
-            float dx = curr_x - prev_x;
-            float dy = curr_y - prev_y;
-            float dz = curr_z - prev_z;
-            float seg_len = sqrtf(dx * dx + dy * dy + dz * dz);
-            if (seg_len < 1e-6f) {
-                prev_x = curr_x;
-                prev_y = curr_y;
-                prev_z = curr_z;
-                continue;
-            }
-
-            float curr_s = prev_s + seg_len;
-
-            // Interpolate waypoints within this segment
-            float target_s = (float) wp_count * waypoints_spacing;
-            while (target_s < curr_s && wp_count < MAX_NUM_WP_PATH) {
-                float t = (target_s - prev_s) / seg_len;
-                agent->path->waypoints[wp_count] = (struct Waypoint) {
-                    .x = prev_x + t * dx,
-                    .y = prev_y + t * dy,
-                    .z = prev_z + t * dz,
-                    .s = target_s,
-                    .lane_idx = lane_idx,
-                };
-                wp_count++;
-                target_s = (float) wp_count * waypoints_spacing;
-            }
-
-            prev_x = curr_x;
-            prev_y = curr_y;
-            prev_z = curr_z;
-            prev_s = curr_s;
+static void commit_goals(
+    Drive *env,
+    Agent *agent,
+    const float *goal_x,
+    const float *goal_y,
+    const float *goal_z,
+    const int *goal_lane,
+    int valid_goal_count,
+    int start_slot_idx) {
+    // Writes `valid_goal_count` placed goals into the agent's goal list starting at slot start_slot_idx
+    // (front-aligned: start_slot_idx 0; back-aligned: start_slot_idx = num_goals - valid_goal_count).
+    // Unused slots are zeroed with lane = -1. The obs window is [current_goal_idx, goal_count).
+    for (int slot_idx = 0; slot_idx < env->num_goals; slot_idx++) {
+        int source_idx = slot_idx - start_slot_idx; // index into the placed-goal arrays for this slot
+        if (source_idx >= 0 && source_idx < valid_goal_count) {
+            agent->list_goal_x[slot_idx] = goal_x[source_idx];
+            agent->list_goal_y[slot_idx] = goal_y[source_idx];
+            agent->list_goal_z[slot_idx] = goal_z[source_idx];
+            agent->list_goal_lane[slot_idx] = goal_lane[source_idx];
+        } else {
+            agent->list_goal_x[slot_idx] = 0.0f;
+            agent->list_goal_y[slot_idx] = 0.0f;
+            agent->list_goal_z[slot_idx] = 0.0f;
+            agent->list_goal_lane[slot_idx] = -1;
         }
     }
-
-    agent->path->num_waypoints = wp_count;
-    if (wp_count < 2) {
-        return;
-    }
-
-    // Compute heading (tangent angle) and cache trig values
-    for (int i = 0; i < wp_count - 1; i++) {
-        float dx = agent->path->waypoints[i + 1].x - agent->path->waypoints[i].x;
-        float dy = agent->path->waypoints[i + 1].y - agent->path->waypoints[i].y;
-        float heading = atan2f(dy, dx);
-        agent->path->waypoints[i].heading = heading;
-        agent->path->waypoints[i].cos_heading = cosf(heading);
-        agent->path->waypoints[i].sin_heading = sinf(heading);
-    }
-    // Last waypoint copies from second-to-last
-    agent->path->waypoints[wp_count - 1].heading = agent->path->waypoints[wp_count - 2].heading;
-    agent->path->waypoints[wp_count - 1].cos_heading = agent->path->waypoints[wp_count - 2].cos_heading;
-    agent->path->waypoints[wp_count - 1].sin_heading = agent->path->waypoints[wp_count - 2].sin_heading;
+    agent->goal_count = start_slot_idx + valid_goal_count;
+    agent->current_goal_idx = start_slot_idx;
+    agent->current_goal_x = agent->list_goal_x[start_slot_idx];
+    agent->current_goal_y = agent->list_goal_y[start_slot_idx];
+    agent->current_goal_z = agent->list_goal_z[start_slot_idx];
 }
 
-// Generate a route by random walk through lane graph until target distance is reached
-static int generate_random_route(
-    Drive *env,
-    int start_lane_idx,
-    float target_distance,
-    int *route,
-    int max_route_length,
-    float agent_x,
-    float agent_y) {
-    // NOTE: This function performs a random walk through the lane connectivity graph,starting from start_lane_idx,
-    // until the accumulated distance exceeds target_distance or max_route_length is reached.
-    // Cycles are avoided by tracking visited lanes and trying to increase distance.
-
+static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
+    RoadMapElement *road_elements = env->road_elements;
+    int candidate_route[MAX_ROUTE_LENGTH];
+    float route_distance_meters = 0.0f;
     int route_length = 0;
-    float accumulated_distance = 0.0f;
-    int current_lane_idx = start_lane_idx;
-    float start_x = agent_x;
-    float start_y = agent_y;
+    candidate_route[route_length++] = current_lane_idx;
 
-    // Track visited lanes to avoid loops
-    int visited_ids[MAX_ROUTE_LENGTH];
-    int visited_count = 0;
+    // First lane only contributes the arc-length still ahead of the agent, not its full length.
+    RoadMapElement *current_lane = &road_elements[current_lane_idx];
+    route_distance_meters += current_lane->length
+        - compute_lane_progress(current_lane,
+                                agent->sim_x,
+                                agent->sim_y,
+                                agent->cos_heading,
+                                agent->sin_heading,
+                                true,
+                                NULL);
 
-    // Add start lane to route
-    route[route_length++] = current_lane_idx;
-    visited_ids[visited_count++] = current_lane_idx;
-
-    RoadMapElement *current_lane = &env->road_elements[current_lane_idx];
-    // Use remaining distance from agent position instead of full lane length
-    accumulated_distance += compute_remaining_lane_distance(current_lane, agent_x, agent_y);
-    float max_end_distance_sq = compute_lane_end_distance_sq(current_lane, start_x, start_y);
-
-    // Random walk through lane graph
-    while (accumulated_distance < target_distance && route_length < max_route_length) {
+    // Random walk through the lane graph, appending exit lanes until we cover the target distance.
+    while (route_distance_meters < ROUTE_TARGET_DISTANCE && route_length < MAX_ROUTE_LENGTH) {
         if (current_lane_idx == -1) {
             break;
         }
-
-        current_lane = &env->road_elements[current_lane_idx];
-
-        // Collect valid (unvisited, drivable) exit lanes
-        int valid_exits[8];
-        float valid_exit_dist_sq[8];
-        int num_valid_exits = 0;
-
-        int progressing_exits[8];
-        float progressing_dist_sq[8];
-        int num_progressing_exits = 0;
-
-        for (int e = 0; e < current_lane->num_exits && num_valid_exits < 8; e++) {
-            int exit_lane_idx = current_lane->exit_lanes[e];
-
-            // Check if already visited
-            int already_visited = 0;
-            for (int v = 0; v < visited_count; v++) {
-                if (visited_ids[v] == exit_lane_idx) {
-                    already_visited = 1;
-                    break;
-                }
-            }
-            if (already_visited) {
-                continue;
-            }
-
-            // Check if exit lane is drivable
-            if (exit_lane_idx == -1) {
-                continue;
-            }
-
-            // NOTE: Dummy logic to prevent cycle, can be improved with better graph traversal
-            float exit_end_distance_sq
-                = compute_lane_end_distance_sq(&env->road_elements[exit_lane_idx], start_x, start_y);
-            valid_exits[num_valid_exits] = exit_lane_idx;
-            valid_exit_dist_sq[num_valid_exits] = exit_end_distance_sq;
-            num_valid_exits++;
-
-            if (exit_end_distance_sq > max_end_distance_sq) {
-                progressing_exits[num_progressing_exits] = exit_lane_idx;
-                progressing_dist_sq[num_progressing_exits] = exit_end_distance_sq;
-                num_progressing_exits++;
-            }
+        current_lane = &road_elements[current_lane_idx];
+        int chosen_exit_lane_idx
+            = pick_random_exit_lane(road_elements, current_lane_idx, candidate_route, route_length);
+        if (chosen_exit_lane_idx == -1) {
+            break; // dead-end lane: stop here, the route is as long as the graph allows
         }
-
-        // If no valid exits, we've reached a dead end
-        if (num_valid_exits == 0) {
-            break;
-        }
-
-        // Pick a progressing exit lane if possible, otherwise pick the farthest available
-        int chosen_exit_idx;
-        float chosen_exit_dist_sq;
-        if (num_progressing_exits > 0) {
-            int chosen_idx = rand() % num_progressing_exits;
-            chosen_exit_idx = progressing_exits[chosen_idx];
-            chosen_exit_dist_sq = progressing_dist_sq[chosen_idx];
-        } else {
-            int best_idx = 0;
-            float best_dist_sq = valid_exit_dist_sq[0];
-            for (int i = 1; i < num_valid_exits; i++) {
-                if (valid_exit_dist_sq[i] > best_dist_sq) {
-                    best_dist_sq = valid_exit_dist_sq[i];
-                    best_idx = i;
-                }
-            }
-            chosen_exit_idx = valid_exits[best_idx];
-            chosen_exit_dist_sq = valid_exit_dist_sq[best_idx];
-        }
-
-        if (chosen_exit_idx == -1) {
-            break;
-        }
-
-        // Add to route
-        route[route_length++] = chosen_exit_idx;
-        visited_ids[visited_count++] = chosen_exit_idx;
-
-        // Accumulate distance
-        RoadMapElement *exit_lane = &env->road_elements[chosen_exit_idx];
-        accumulated_distance += exit_lane->length;
-        if (chosen_exit_dist_sq > max_end_distance_sq) {
-            max_end_distance_sq = chosen_exit_dist_sq;
-        }
-
-        // Move to next lane
-        current_lane_idx = chosen_exit_idx;
+        candidate_route[route_length++] = chosen_exit_lane_idx;
+        route_distance_meters += road_elements[chosen_exit_lane_idx].length;
+        current_lane_idx = chosen_exit_lane_idx;
     }
-
-    return route_length;
-}
-
-// NOTE: Only works for closed maps with infinite looping routes
-static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
-    Agent *agent = &env->agents[agent_idx];
-
-    // Generate route by random walk through lane graph
-    // Use agent's current position to compute remaining distance on start lane
-    int num_target_waypoints = env->num_target_waypoints;
-    float min_route_distance;
-    // NOTE: make both multipliers config values and tune from a metric (route regenerations per 1k env steps).
-    if (env->target_type == TARGET_STATIC) {
-        min_route_distance = env->max_waypoint_spacing * num_target_waypoints * 2.0f;
-    } else {
-        min_route_distance = env->min_waypoint_spacing * num_target_waypoints * 20.0f;
-    }
-
-    int temp_route[MAX_ROUTE_LENGTH];
-    int route_length = generate_random_route(
-        env,
-        current_lane_idx,
-        min_route_distance,
-        temp_route,
-        MAX_ROUTE_LENGTH,
-        agent->sim_x,
-        agent->sim_y);
 
     if (route_length == 0) {
-        printf("[GIGAFLOW WARNING] -> Failed to generate route for agent %d\n", agent_idx);
-        agent->removed = 1;
-        return 0;
+        return false;
     }
 
-    // Free old route and allocate new one
+    // Replace any previously owned route buffer with the freshly walked one.
     if (agent->route != NULL) {
         free(agent->route);
     }
-
     agent->route_length = route_length;
     agent->route = (int *) malloc(route_length * sizeof(int));
-
     for (int i = 0; i < route_length; i++) {
-        agent->route[i] = temp_route[i];
+        agent->route[i] = candidate_route[i];
     }
+    agent->current_route_idx = 0;
 
-    agent->current_route_index = 0;
-
-    // Update path
-    build_path(env, agent_idx);
-    agent->closest_path_idx_wp = 0; // Reset before search (old index invalid on new path)
-    agent->closest_path_idx_wp = get_closest_waypoint_index_on_path(env, agent_idx);
-    agent->path_progression = compute_progression(agent);
-
-    return 1; // Success
+    return true;
 }
 
-// Pick a random drivable point on the map whose Euclidean distance from
-// (ref_x, ref_y) lies in [min_dist, max_dist]. Returns 1 on success.
-static int pick_random_drivable_position(
-    Drive *env,
-    float ref_x,
-    float ref_y,
-    float min_dist,
-    float max_dist,
-    float *out_x,
-    float *out_y,
-    float *out_z) {
-    GridMap *gm = env->grid_map;
-    float cell = GRID_CELL_SIZE;
-    float half_diag = 0.5f * cell * (float) M_SQRT2;
-    float min_d2 = min_dist * min_dist;
-    float max_d2 = max_dist * max_dist;
-    float cell_filter = max_dist + half_diag;
-    float cell_filter2 = cell_filter * cell_filter;
-
-    int ref_cx = (int) ((ref_x - gm->top_left_x) / cell);
-    int ref_cy = (int) ((ref_y - gm->bottom_right_y) / cell);
-    int half_extent = (int) ceilf(cell_filter / cell);
-
-    int x_lo = ref_cx - half_extent;
-    int y_lo = ref_cy - half_extent;
-    int x_hi = ref_cx + half_extent;
-    int y_hi = ref_cy + half_extent;
-    if (x_lo < 0) {
-        x_lo = 0;
-    }
-    if (y_lo < 0) {
-        y_lo = 0;
-    }
-    if (x_hi >= gm->grid_cols) {
-        x_hi = gm->grid_cols - 1;
-    }
-    if (y_hi >= gm->grid_rows) {
-        y_hi = gm->grid_rows - 1;
+static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
+    // Places num_goals goals along the agent's route by native lane arc-length.
+    // Replay follows the loaded route to its end; gigaflow route source random-walks a fresh route
+    // when the current one runs out.
+    if (agent->route == NULL || agent->route_length <= 0) {
+        invalidate_agent(agent);
+        agent->removed = 1;
+        return false;
     }
 
-    int n_cand = 0;
-    float pick_x = 0.0f, pick_y = 0.0f, pick_z = 0.0f;
-    for (int gy = y_lo; gy <= y_hi; gy++) {
-        float cy = gm->bottom_right_y + (gy + 0.5f) * cell;
-        for (int gx = x_lo; gx <= x_hi; gx++) {
-            float cx = gm->top_left_x + (gx + 0.5f) * cell;
-            float dcx = cx - ref_x;
-            float dcy = cy - ref_y;
-            if (dcx * dcx + dcy * dcy > cell_filter2) {
-                continue;
-            }
-            int gi = gy * gm->grid_cols + gx;
-            for (int i = 0; i < gm->cell_entities_count[gi]; i++) {
-                GridMapEntity e = gm->cells[gi][i];
-                RoadMapElement *lane = &env->road_elements[e.entity_idx];
-                if (!is_drivable_road_lane(lane->type)) {
-                    continue;
-                }
-                // The grid stores polyline SEGMENTS (start vertex = geometry_idx).
-                // Sample a uniform point along the segment so candidate positions
-                // are continuous along the road rather than quantized to vertices.
-                int k = e.geometry_idx;
-                if (k + 1 >= lane->segment_size) {
-                    continue;
-                }
-                float t = (float) rand() / (float) RAND_MAX;
-                float ex = lane->x[k] + t * (lane->x[k + 1] - lane->x[k]);
-                float ey = lane->y[k] + t * (lane->y[k + 1] - lane->y[k]);
-                float ez = lane->z[k] + t * (lane->z[k + 1] - lane->z[k]);
-                float edx = ex - ref_x;
-                float edy = ey - ref_y;
-                float ed2 = edx * edx + edy * edy;
-                if (ed2 < min_d2 || ed2 > max_d2) {
-                    continue;
-                }
-                n_cand++;
-                if (rand() % n_cand == 0) {
-                    pick_x = ex;
-                    pick_y = ey;
-                    pick_z = ez;
-                }
-            }
+    // Localize the agent on its route by actual position: from the last known slot forward, pick the route
+    // slot whose lane the agent is physically closest to, and take its arc-length on that lane as the base.
+    // current_lane_idx (nearest lane by distance+heading) is frequently off-route, so matching by lane index
+    // could leave the base on a stale earlier slot and place goals behind the agent; projecting the position
+    // guarantees base_s_on_lane is the agent's true progress and every chained goal sits ahead of it.
+    int base_route_idx = agent->current_route_idx;
+    if (base_route_idx < 0 || base_route_idx >= agent->route_length) {
+        base_route_idx = 0;
+    }
+    float base_s_on_lane = 0.0f;
+    float best_dist_sq = 1e30f;
+    for (int route_idx = base_route_idx; route_idx < agent->route_length; route_idx++) {
+        float lane_dist_sq;
+        float lane_progress = compute_lane_progress(
+            &env->road_elements[agent->route[route_idx]],
+            agent->sim_x,
+            agent->sim_y,
+            agent->cos_heading,
+            agent->sin_heading,
+            true,
+            &lane_dist_sq);
+        if (lane_dist_sq < best_dist_sq) {
+            best_dist_sq = lane_dist_sq;
+            base_route_idx = route_idx;
+            base_s_on_lane = lane_progress;
         }
     }
+    agent->current_route_idx = base_route_idx;
 
-    if (n_cand == 0) {
+    // Remaining route distance from the agent's base to the route end (rest of the base lane + every later lane).
+    float route_remaining_meters = env->road_elements[agent->route[base_route_idx]].length - base_s_on_lane;
+    for (int route_idx = base_route_idx + 1; route_idx < agent->route_length; route_idx++) {
+        route_remaining_meters += env->road_elements[agent->route[route_idx]].length;
+    }
+
+    // Replay: once the agent is essentially at the end of its logged route, retire it.
+    if (env->simulation_mode == SIMULATION_REPLAY && route_remaining_meters <= env->goal_radius) {
+        invalidate_agent(agent);
+        agent->removed = 1;
+        return false;
+    }
+
+    // Sample a spacing per goal, then walk the route placing goals at those forward distances.
+    float goal_spacings_meters[MAX_GOALS];
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        goal_spacings_meters[goal_idx] = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
+    }
+
+    float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
+    int goal_lane[MAX_GOALS];
+    int placed_goal_count = chain_goals(
+        env,
+        agent->route,
+        agent->route_length,
+        base_route_idx,
+        base_s_on_lane,
+        goal_spacings_meters,
+        env->num_goals,
+        goal_x,
+        goal_y,
+        goal_z,
+        goal_lane);
+
+    // Common case: the route was long enough to hold every goal, front-aligned at slot 0.
+    if (placed_goal_count == env->num_goals) {
+        commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+        return true;
+    }
+
+    // Route exhausted before all goals fit.
+    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+        // Free-roam route source: random-walk a fresh route from the current lane, then retry once.
+        int start_lane_idx = (agent->current_lane_idx != -1) ? agent->current_lane_idx : agent->route[base_route_idx];
+        if (!compute_new_route(env, agent, start_lane_idx)) {
+            invalidate_agent(agent);
+            agent->removed = 1;
+            printf(
+                "[GIGAFLOW WARNING] -> Failed to compute new route for agent %d. Removing from simulation.\n",
+                agent->id);
+            return false;
+        }
+        agent->current_route_idx = 0;
+        float new_base_s_on_lane = compute_lane_progress(
+            &env->road_elements[agent->route[0]],
+            agent->sim_x,
+            agent->sim_y,
+            agent->cos_heading,
+            agent->sin_heading,
+            true,
+            NULL);
+        placed_goal_count = chain_goals(
+            env,
+            agent->route,
+            agent->route_length,
+            0,
+            new_base_s_on_lane,
+            goal_spacings_meters,
+            env->num_goals,
+            goal_x,
+            goal_y,
+            goal_z,
+            goal_lane);
+        if (placed_goal_count < env->num_goals) {
+            invalidate_agent(agent);
+            agent->removed = 1;
+            printf(
+                "[GIGAFLOW ERROR] -> New route for agent %d is too short for goal generation. Removing from "
+                "simulation.\n",
+                agent->id);
+            return false;
+        }
+        commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+        return true;
+    }
+
+    // Replay: back-align the placed goals and pin the route endpoint (last vertex of the last lane) as the
+    // final goal, so the agent's last target is exactly where its logged trajectory ends.
+    int last_lane_idx = agent->route[agent->route_length - 1];
+    RoadMapElement *last_lane = &env->road_elements[last_lane_idx];
+    int last_vertex_idx = last_lane->segment_size - 1;
+    goal_x[placed_goal_count] = last_lane->x[last_vertex_idx];
+    goal_y[placed_goal_count] = last_lane->y[last_vertex_idx];
+    goal_z[placed_goal_count] = last_lane->z[last_vertex_idx];
+    goal_lane[placed_goal_count] = last_lane_idx;
+    int valid_goal_count = placed_goal_count + 1;
+    commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, valid_goal_count, env->num_goals - valid_goal_count);
+    return true;
+}
+
+static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
+    // Map goal source: seed from a uniform map lane, then chain 1..num_goals goals forward
+    // via a route-free random lane-walk. No route is stored; the agent navigates by the GPS lane-distance feature,
+    // not by following a path.
+
+    // Pick a uniform drivable grid cell, then collect every drivable lane entity inside it.
+    int drivable_cell_list_idx = rand() % env->grid_map->num_drivable_grid_cell;
+    int grid_cell_idx = env->grid_map->grid_index_drivable[drivable_cell_list_idx];
+    GridMapEntity drivable_lane_candidates[MAX_ENTITIES_PER_CELL];
+    int candidate_count = 0;
+    for (int entity_idx = 0; entity_idx < env->grid_map->cell_entities_count[grid_cell_idx]; entity_idx++) {
+        GridMapEntity entity = env->grid_map->cells[grid_cell_idx][entity_idx];
+        if (is_drivable_road_lane(env->road_elements[entity.entity_idx].type)) {
+            drivable_lane_candidates[candidate_count++] = entity;
+        }
+    }
+    if (candidate_count == 0) {
+        return false; // cell held no drivable lane: caller retries with another cell
+    }
+
+    // Seed pose: a uniformly chosen drivable lane and the polyline vertex that landed in this cell.
+    GridMapEntity seed_entity = drivable_lane_candidates[rand() % candidate_count];
+    int seed_lane_idx = seed_entity.entity_idx;
+    RoadMapElement *seed_lane = &env->road_elements[seed_lane_idx];
+    float seed_x = seed_lane->x[seed_entity.geometry_idx];
+    float seed_y = seed_lane->y[seed_entity.geometry_idx];
+    float seed_heading = seed_lane->headings[seed_entity.geometry_idx];
+    float seed_s_on_lane
+        = compute_lane_progress(seed_lane, seed_x, seed_y, cosf(seed_heading), sinf(seed_heading), true, NULL);
+
+    // Random goal count in [1, num_goals], each at its own sampled forward spacing.
+    int requested_goal_count = 1 + rand() % env->num_goals;
+    float goal_spacings_meters[MAX_GOALS];
+    for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
+        goal_spacings_meters[goal_idx] = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
+    }
+    float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
+    int goal_lane[MAX_GOALS];
+    int placed_goal_count = chain_goals(
+        env,
+        NULL,
+        0,
+        seed_lane_idx,
+        seed_s_on_lane,
+        goal_spacings_meters,
+        requested_goal_count,
+        goal_x,
+        goal_y,
+        goal_z,
+        goal_lane);
+    if (placed_goal_count == 0) {
+        return false;
+    }
+    commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
+    return true;
+}
+
+static int roll_goals(Drive *env, Agent *agent) {
+    // Rolling target type: drop the reached goal, slide the window left, and append one new goal at the
+    // frontier by walking forward from the previous last goal (along the route for route source, else
+    // free-roam). Keeps current_goal_idx at 0 so the
+    // obs always shows goal_count goals ahead. Returns 0 if the walk dead-ends (caller falls back to regen).
+    // Seed the new frontier goal from the current last goal's lane and arc-length position.
+    int last_goal_idx = agent->goal_count - 1;
+    int seed_lane_idx = agent->list_goal_lane[last_goal_idx];
+    if (seed_lane_idx < 0) {
         return 0;
     }
-    *out_x = pick_x;
-    *out_y = pick_y;
-    *out_z = pick_z;
-    return 1;
-}
+    float seed_s_on_lane = compute_lane_progress(
+        &env->road_elements[seed_lane_idx],
+        agent->list_goal_x[last_goal_idx],
+        agent->list_goal_y[last_goal_idx],
+        0.0f,
+        0.0f,
+        false,
+        NULL);
 
-static void compute_goals(Drive *env, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-
-    // goal_on_lane=False: place each goal at a random drivable point whose
-    // Euclidean distance from the previous anchor (agent for goal 0, previous
-    // goal for subsequent ones) lies in [min_waypoint_spacing,
-    // max_waypoint_spacing].
-    if (!env->goal_on_lane) {
-        int num_target_waypoints = env->num_target_waypoints;
-        if (num_target_waypoints <= 0 || num_target_waypoints > MAX_TARGET_WAYPOINTS) {
-            num_target_waypoints = MAX_TARGET_WAYPOINTS;
-        }
-        float ref_x = agent->sim_x;
-        float ref_y = agent->sim_y;
-        for (int i = 0; i < num_target_waypoints; i++) {
-            float gx, gy, gz;
-            if (!pick_random_drivable_position(
-                    env,
-                    ref_x,
-                    ref_y,
-                    env->min_waypoint_spacing,
-                    env->max_waypoint_spacing,
-                    &gx,
-                    &gy,
-                    &gz)) {
-                printf("[GIGAFLOW WARNING] -> pick_random_drivable_position failed for agent %d\n", agent_idx);
-                agent->removed = 1;
-                return;
-            }
-            agent->goal_positions_x[i] = gx;
-            agent->goal_positions_y[i] = gy;
-            agent->goal_positions_z[i] = gz;
-            ref_x = gx;
-            ref_y = gy;
-        }
-        agent->current_goal_idx = 0;
-        agent->goal_position_x = agent->goal_positions_x[0];
-        agent->goal_position_y = agent->goal_positions_y[0];
-        agent->goal_position_z = agent->goal_positions_z[0];
-        return;
-    }
-
-    struct Path *path = agent->path;
-
-    // Validate path exists
-    if (path == NULL || path->num_waypoints == 0) {
-        printf("[GIGAFLOW WARNING] -> Agent %d has no valid path\n", agent_idx);
-        agent->removed = 1;
-        return;
-    }
-
-    int num_target_waypoints = env->num_target_waypoints;
-
-    float goal_spacings[MAX_TARGET_WAYPOINTS];
-
-    // Iterative replacement for former recursion (bounded at 4 retries)
-    for (int iter = 0; iter <= 4; iter++) {
-        float total_spacing = 0.0f;
-        for (int i = 0; i < num_target_waypoints; i++) {
-            goal_spacings[i] = random_uniform(env->min_waypoint_spacing, env->max_waypoint_spacing);
-            total_spacing += goal_spacings[i];
-        }
-
-        // On iter 3, reset to path start to escape a short-path cycle
-        int base_idx = (iter == 3) ? 0 : get_closest_waypoint_index_on_path(env, agent_idx);
-        float base_s = path->waypoints[base_idx].s;
-        float needed_s = base_s + total_spacing;
-        float path_end_s = path->waypoints[path->num_waypoints - 1].s;
-
-        // If we reached the end of the current path, compute a new route and retry.
-        // Bounded by iter <= 4 to prevent infinite loops on degenerate maps.
-        if (needed_s >= path_end_s) {
-            if (env->simulation_mode == SIMULATION_GIGAFLOW) {
-                if (iter > 3) {
-                    printf("[GIGAFLOW WARNING] -> Max iterations in compute_goals for agent %d\n", agent_idx);
-                    agent->removed = 1;
-                    return;
-                }
-                int route_ok = compute_new_route(env, agent_idx, path->waypoints[base_idx].lane_idx);
-                if (route_ok == 0) {
-                    agent->removed = 1;
-                    return;
-                }
-                path = agent->path;
+    // Follow the agent's route when goals come from a route source, otherwise free-roam. Falls back to
+    // free-roam if the seed lane isn't on the route; on route exhaustion the caller regenerates a route.
+    const int *walk_route = NULL;
+    int walk_route_length = 0;
+    int walk_start_idx = seed_lane_idx;
+    if (env->goal_source == GOAL_SOURCE_ROUTE && agent->route != NULL) {
+        int reached_lane_idx = agent->list_goal_lane[agent->current_goal_idx - 1];
+        for (int route_idx = agent->current_route_idx; route_idx < agent->route_length; route_idx++) {
+            if (agent->route[route_idx] != reached_lane_idx) {
                 continue;
             }
+            agent->current_route_idx = route_idx;
+            break;
         }
-
-        // Place N goals along the path at random spacing intervals from current position
-        float cumulative_spacing = 0.0f;
-        for (int i = 0; i < num_target_waypoints; i++) {
-            cumulative_spacing += goal_spacings[i];
-            float target_s = base_s + cumulative_spacing;
-            // Find waypoint at or past target_s
-            int wp_idx = path->num_waypoints - 1;
-            for (int j = base_idx + 1; j < path->num_waypoints; j++) {
-                if (path->waypoints[j].s >= target_s) {
-                    wp_idx = j;
-                    break;
-                }
+        for (int route_idx = agent->current_route_idx; route_idx < agent->route_length; route_idx++) {
+            if (agent->route[route_idx] == seed_lane_idx) {
+                walk_route = agent->route;
+                walk_route_length = agent->route_length;
+                walk_start_idx = route_idx;
+                break;
             }
-            agent->goal_positions_x[i] = path->waypoints[wp_idx].x;
-            agent->goal_positions_y[i] = path->waypoints[wp_idx].y;
-            agent->goal_positions_z[i] = path->waypoints[wp_idx].z;
         }
-
-        // Reset goal index and update alias
-        agent->current_goal_idx = 0;
-        agent->goal_position_x = agent->goal_positions_x[0];
-        agent->goal_position_y = agent->goal_positions_y[0];
-        agent->goal_position_z = agent->goal_positions_z[0];
-        return;
     }
 
-    printf("[GIGAFLOW ERROR] -> Failed to compute goals for agent %d after multiple attempts\n", agent_idx);
-    agent->removed = 1;
+    // Walk one spacing forward to find the appended goal before touching the window.
+    float spacing_meters = random_uniform(env->min_goal_spacing, env->max_goal_spacing);
+    float next_x, next_y, next_z, next_s_on_lane;
+    int next_lane_idx, next_cursor_idx; // next_cursor_idx unused: single-step append, no chaining
+    if (!route_point_at_distance(
+            env,
+            walk_route,
+            walk_route_length,
+            walk_start_idx,
+            seed_s_on_lane,
+            spacing_meters,
+            &next_x,
+            &next_y,
+            &next_z,
+            &next_lane_idx,
+            &next_cursor_idx,
+            &next_s_on_lane)) {
+        return 0;
+    }
+
+    // Slide the window left by one (drop the reached goal) and append the new goal at the frontier.
+    for (int goal_idx = 0; goal_idx < last_goal_idx; goal_idx++) {
+        agent->list_goal_x[goal_idx] = agent->list_goal_x[goal_idx + 1];
+        agent->list_goal_y[goal_idx] = agent->list_goal_y[goal_idx + 1];
+        agent->list_goal_z[goal_idx] = agent->list_goal_z[goal_idx + 1];
+        agent->list_goal_lane[goal_idx] = agent->list_goal_lane[goal_idx + 1];
+    }
+    agent->list_goal_x[last_goal_idx] = next_x;
+    agent->list_goal_y[last_goal_idx] = next_y;
+    agent->list_goal_z[last_goal_idx] = next_z;
+    agent->list_goal_lane[last_goal_idx] = next_lane_idx;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
+    return 1;
 }
 
 // ========================================
@@ -2848,17 +2793,13 @@ static void add_log(Drive *env) {
         int total_infractions = (offroad || collided || red_light_violations) ? 1 : 0;
         float avg_speed_per_agent = env->logs[i].avg_speed_per_agent;
         env->log.avg_speed_per_agent += avg_speed_per_agent / safe_timestep;
-        int num_waypoints_reached = env->logs[i].num_waypoints_reached;
-        env->log.num_waypoints_reached += num_waypoints_reached;
         int num_goals_reached = env->logs[i].num_goals_reached;
         env->log.num_goals_reached += num_goals_reached;
-        // Score: 1 per agent that reached all 3 target waypoints without
-        // being removed/stopped. Was hardcoded to >=4, unreachable given
-        // num_target_waypoints=3 in the ini, so score was always 0.
-        if (num_goals_reached >= 3 && !agent->removed && !agent->stopped) {
+        // Score: 1 per agent that reached its full goal set without being removed/stopped.
+        if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
             env->log.score += 1.0f;
         }
-        if (!offroad && !collided && !red_light_violations && num_waypoints_reached < 1) {
+        if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
             env->log.dnf_rate += 1.0f;
         }
         env->log.total_distance_travelled += agent->distance_since_spawn;
@@ -2970,20 +2911,19 @@ static void add_log(Drive *env) {
             int offroad = env->logs[i].offroad_rate;
             int red_light = env->logs[i].red_light_violation_rate;
             int num_goals = env->logs[i].num_goals_reached;
-            int num_waypoints = env->logs[i].num_waypoints_reached;
             s->episode_length += env->logs[i].episode_length;
             s->episode_return += env->logs[i].episode_return;
             s->collision_rate += collided;
             s->offroad_rate += offroad;
             s->red_light_violation_rate += red_light;
             s->num_goals_reached += num_goals;
-            if (num_goals >= 3 && !agent_i->removed && !agent_i->stopped) {
+            if (num_goals >= env->num_goals && !agent_i->removed && !agent_i->stopped) {
                 s->score += 1.0f;
             }
             // Mirror the aggregate Log DNF predicate (see drive.h:2577):
             // the agent stayed clean of infractions but never reached even
             // one waypoint — i.e. wandered without making progress.
-            if (!offroad && !collided && !red_light && num_waypoints < 1) {
+            if (!offroad && !collided && !red_light && num_goals < 1) {
                 s->dnf_rate += 1.0f;
             }
             s->total_distance_travelled += agent_i->distance_since_spawn;
@@ -3362,14 +3302,23 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
-    // Compute initial route
-    if (!compute_new_route(env, agent_idx, start_lane_idx)) {
+    if (env->goal_source == GOAL_SOURCE_MAP) {
+        if (!generate_new_goals_from_map(env, agent)) {
+            printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
+            return false;
+        }
+        return true;
+    }
+
+    if (!compute_new_route(env, agent, start_lane_idx)) {
         printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
         return false; // Failed to compute new goal
     }
 
     // Compute initial goal
-    compute_goals(env, agent_idx);
+    if (!generate_new_goals_from_route(env, agent)) {
+        return false;
+    }
 
     return true;
 }
@@ -3479,10 +3428,10 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     }
 
     // In REPLAY mode without route data, control agents spawning far enough from their goal
-    if (env->simulation_mode == SIMULATION_REPLAY && agent->route_length == 0) {
-        float dx = agent->goal_position_x - agent->log_trajectory_x[env->init_step];
-        float dy = agent->goal_position_y - agent->log_trajectory_y[env->init_step];
-        float dz = agent->goal_position_z - agent->log_trajectory_z[env->init_step];
+    if (env->goal_source == GOAL_SOURCE_GT && agent->route_length == 0) {
+        float dx = agent->gt_goal_x - agent->log_trajectory_x[env->init_step];
+        float dy = agent->gt_goal_y - agent->log_trajectory_y[env->init_step];
+        float dz = agent->gt_goal_z - agent->log_trajectory_z[env->init_step];
         return sqrtf(dx * dx + dy * dy + dz * dz) > env->goal_radius;
     }
 
@@ -3889,12 +3838,12 @@ void init(Drive *env) {
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
-    if (env->simulation_mode == SIMULATION_REPLAY) {
+    if (env->goal_source == GOAL_SOURCE_GT) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
             Agent *agent = &env->agents[agent_idx];
-            // For replay mode, always place waypoints along the logged
-            // trajectory. Route-based compute_goals can produce goals that
+            // For replay mode, always place goals along the logged
+            // trajectory. Route-based goal generation can produce goals that
             // diverge from the actual path the SDC should follow.
             {
                 int start = env->init_step > 0 ? env->init_step : 0;
@@ -3902,24 +3851,33 @@ void init(Drive *env) {
                 if (remaining < 1) {
                     remaining = 1;
                 }
-                int num_wp = env->num_target_waypoints;
-                if (num_wp > MAX_TARGET_WAYPOINTS) {
-                    num_wp = MAX_TARGET_WAYPOINTS;
-                }
+                int num_wp = env->num_goals;
                 for (int g = 0; g < num_wp; g++) {
                     int t = start + (g + 1) * remaining / num_wp;
                     if (t >= agent->trajectory_size) {
                         t = agent->trajectory_size - 1;
                     }
-                    agent->goal_positions_x[g] = agent->log_trajectory_x[t];
-                    agent->goal_positions_y[g] = agent->log_trajectory_y[t];
-                    agent->goal_positions_z[g] = agent->log_trajectory_z[t];
+                    agent->list_goal_x[g] = agent->log_trajectory_x[t];
+                    agent->list_goal_y[g] = agent->log_trajectory_y[t];
+                    agent->list_goal_z[g] = agent->log_trajectory_z[t];
+                    agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
                 }
+                agent->goal_count = num_wp;
                 agent->current_goal_idx = 0;
-                agent->goal_position_x = agent->goal_positions_x[0];
-                agent->goal_position_y = agent->goal_positions_y[0];
-                agent->goal_position_z = agent->goal_positions_z[0];
+                agent->current_goal_x = agent->list_goal_x[0];
+                agent->current_goal_y = agent->list_goal_y[0];
+                agent->current_goal_z = agent->list_goal_z[0];
             }
+        }
+    } else if (env->goal_source == GOAL_SOURCE_MAP) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            generate_new_goals_from_map(env, agent);
+        }
+    } else if (env->goal_source == GOAL_SOURCE_ROUTE) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            generate_new_goals_from_route(env, agent);
         }
     }
 }
@@ -3975,13 +3933,10 @@ void c_close(Drive *env) {
 }
 
 static int compute_observation_size(Drive *env) {
-    int target_features = (env->target_type == TARGET_STATIC) ? STATIC_TARGET_FEATURES
-        : (env->target_type == TARGET_DYNAMIC)                ? DYNAMIC_TARGET_FEATURES
-                                                              : 0;
-    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n
-        + ROAD_FEATURES * (env->obs_slots_lane_kept + env->obs_slots_boundary_kept)
+    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
+        + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
-        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_target_waypoints * target_features;
+        + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
 }
 
 void allocate(Drive *env) {
@@ -4105,19 +4060,19 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // Noise & Robustness Functions
 // ========================================
 
-static void subsample_road_observation_rows(float *buffer, int collected_count, int keep_count) {
+static void subsample_road_observation_rows(float *buffer, int collected_count, int keep_count, int feature_count) {
     if (keep_count <= 0 || collected_count <= keep_count) {
         return;
     }
-    float tmp[ROAD_FEATURES];
+    float tmp[feature_count];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
         int swap_idx = (remaining > 1) ? sample_idx + (rand() % remaining) : sample_idx;
         if (swap_idx == sample_idx) {
             continue;
         }
-        float *a = &buffer[sample_idx * ROAD_FEATURES];
-        float *b = &buffer[swap_idx * ROAD_FEATURES];
+        float *a = &buffer[sample_idx * feature_count];
+        float *b = &buffer[swap_idx * feature_count];
         memcpy(tmp, a, sizeof(tmp));
         memcpy(a, b, sizeof(tmp));
         memcpy(b, tmp, sizeof(tmp));
@@ -4341,7 +4296,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
     }
 
-    agent->closest_path_idx_wp = get_closest_waypoint_index_on_path(env, agent_idx);
     agent->distance_since_spawn += agent->sim_speed * env->dt;
     agent_log->avg_speed_per_agent += agent->sim_speed;
 
@@ -4411,22 +4365,36 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Goal reaching: swept check against the step's motion segment (prev -> sim),
     // so a high dt cannot jump over the goal disc between two states.
     float distance_to_goal = compute_point_to_segment_distance(
-        agent->goal_position_x,
-        agent->goal_position_y,
+        agent->current_goal_x,
+        agent->current_goal_y,
         agent->prev_x,
         agent->prev_y,
         agent->sim_x,
         agent->sim_y);
-    float goal_z_dist = fabsf(agent->sim_z - agent->goal_position_z);
-    // Guard against incrementing past num_target_waypoints: replay mode leaves current_goal_idx
-    // saturated at num_target_waypoints, and the reached-goal condition must not fire again.
-    if (agent->current_goal_idx < env->num_target_waypoints
-        && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER) {
+    float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
+    if (agent->current_goal_idx < env->num_goals && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
+        && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
+        agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
+        if (agent->current_goal_idx < env->num_goals) {
+            agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
+            agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
+            agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+        }
     }
 
-    return;
+    float distance_to_goal_gt = compute_point_to_segment_distance(
+        agent->gt_goal_x,
+        agent->gt_goal_y,
+        agent->prev_x,
+        agent->prev_y,
+        agent->sim_x,
+        agent->sim_y);
+    float goal_gt_z_dist = fabsf(agent->sim_z - agent->gt_goal_z);
+    if (distance_to_goal_gt < GT_GOAL_RADIUS_M && goal_gt_z_dist < Z_BUFFER) {
+        agent_log->reached_goal_gt = 1.0f;
+    }
 }
 
 static void compute_rewards(Drive *env, int i) {
@@ -4462,16 +4430,10 @@ static void compute_rewards(Drive *env, int i) {
 
     // Goal reward
     if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-        float weight = 1.0f;
-        if (env->simulation_mode == SIMULATION_GIGAFLOW) {
-            if (agent->current_goal_idx == env->num_target_waypoints
-                && agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED]) {
-                weight = 0.0f;
-            }
-        }
-        float reward_goal = env->reward_goal * weight;
+        bool final_waypoint = (agent->current_goal_idx == agent->goal_count);
+        bool speeding = (agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED]);
+        float reward_goal = (final_waypoint && speeding) ? 0.0f : env->reward_goal;
         env->rewards[i] += reward_goal;
-        agent_log->num_waypoints_reached += 1;
         agent_log->reward_goal += reward_goal;
     }
 
@@ -4594,9 +4556,10 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
+    float perceived_margin = env->eval_mode ? 2.0f * EVAL_PERCEIVED_SIZE_MARGIN_M : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
-    obs[obs_idx++] = ego->sim_width / env->obs_norm_veh_width_m;
-    obs[obs_idx++] = ego->sim_length / env->obs_norm_veh_length_m;
+    obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
+    obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
     obs[obs_idx++] = ego->accel_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->accel_lat / ACCEL_LAT_LIMIT[1];
@@ -4619,54 +4582,26 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
         }
     }
 
-    if (env->target_type == TARGET_STATIC) {
-        for (int wp_idx = 0; wp_idx < env->num_target_waypoints; wp_idx++) {
-            if (wp_idx < ego->current_goal_idx) {
-                obs[obs_idx++] = 0.0f;
-                obs[obs_idx++] = 0.0f;
-                obs[obs_idx++] = 0.0f;
-                continue;
-            }
-            float rel_goal_x, rel_goal_y;
-            project_point_to_ego_frame(
-                ego,
-                ego->goal_positions_x[wp_idx],
-                ego->goal_positions_y[wp_idx],
-                &rel_goal_x,
-                &rel_goal_y);
-            obs[obs_idx++] = rel_goal_x / env->obs_norm_goal_offset_m;
-            obs[obs_idx++] = rel_goal_y / env->obs_norm_goal_offset_m;
-            obs[obs_idx++] = (ego->goal_positions_z[wp_idx] - ego->sim_z) / Z_BUFFER;
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        if (goal_idx < ego->current_goal_idx || goal_idx >= ego->goal_count) {
+            obs[obs_idx++] = 0.0f;
+            obs[obs_idx++] = 0.0f;
+            obs[obs_idx++] = 0.0f;
+            continue;
         }
-        return obs_idx;
+        float rel_goal_x, rel_goal_y;
+        project_point_to_ego_frame(
+            ego,
+            ego->list_goal_x[goal_idx],
+            ego->list_goal_y[goal_idx],
+            &rel_goal_x,
+            &rel_goal_y);
+        obs[obs_idx++] = rel_goal_x / env->obs_norm_goal_offset_m;
+        obs[obs_idx++] = rel_goal_y / env->obs_norm_goal_offset_m;
+        obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / Z_BUFFER;
     }
 
-    if (env->target_type == TARGET_DYNAMIC && ego->path != NULL && ego->path->num_waypoints > 0) {
-        for (int wp_idx = 0; wp_idx < env->num_target_waypoints; wp_idx++) {
-            int clamped_wp_idx = fmin(ego->closest_path_idx_wp + wp_idx, ego->path->num_waypoints - 1);
-            if (clamped_wp_idx < 0) {
-                clamped_wp_idx = 0;
-            }
-            struct Waypoint *waypoint = &ego->path->waypoints[clamped_wp_idx];
-            float rel_wp_x, rel_wp_y, rel_heading_x, rel_heading_y;
-            float rel_wp_z = waypoint->z - ego->sim_z;
-            project_point_to_ego_frame(ego, waypoint->x, waypoint->y, &rel_wp_x, &rel_wp_y);
-            project_vector_to_ego_frame(
-                ego,
-                waypoint->cos_heading,
-                waypoint->sin_heading,
-                &rel_heading_x,
-                &rel_heading_y);
-            obs[obs_idx++] = rel_wp_x / env->obs_norm_xy_offset_m;
-            obs[obs_idx++] = rel_wp_y / env->obs_norm_xy_offset_m;
-            obs[obs_idx++] = rel_wp_z / Z_BUFFER;
-            obs[obs_idx++] = rel_heading_x;
-            obs[obs_idx++] = rel_heading_y;
-        }
-        return obs_idx;
-    }
-
-    return obs_idx + DYNAMIC_TARGET_FEATURES * env->num_target_waypoints;
+    return obs_idx;
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
@@ -4764,12 +4699,35 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
     }
 
-    int lane_obs_idx = obs_idx;
-    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * ROAD_FEATURES;
-    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * ROAD_FEATURES;
+    // GPS lane-distance features
+    int goal_graph_idx = -1;
+    if (env->obs_goal_lane_distance && env->lane_graph.lane_to_graph_idx != NULL
+        && ego->current_goal_idx < ego->goal_count) {
+        int goal_lane = ego->list_goal_lane[ego->current_goal_idx];
+        if (goal_lane >= 0 && goal_lane < env->num_road_elements) {
+            goal_graph_idx = env->lane_graph.lane_to_graph_idx[goal_lane];
+        }
+    }
+    // Ego's own lane->goal distance: reference for the relative column (delta vs ego lane).
+    float ego_dist_to_goal_m = -1.0f; // <0 = no valid reference -> relative column stays 0
+    if (goal_graph_idx >= 0) {        // implies obs_goal_lane_distance and a non-NULL lane_to_graph_idx
+        int ego_lane = ego->current_lane_idx;
+        if (ego_lane >= 0 && ego_lane < env->num_road_elements) {
+            int ego_graph_idx = env->lane_graph.lane_to_graph_idx[ego_lane];
+            if (ego_graph_idx >= 0) {
+                float d = env->lane_graph.distances[ego_graph_idx * env->lane_graph.n_lanes + goal_graph_idx];
+                // Map binaries store unreachable pairs as a negative sentinel or NaN; both clamp to max.
+                ego_dist_to_goal_m = (!isfinite(d) || d < 0.0f) ? LANE_GRAPH_DISTANCE_NORM_M : d;
+            }
+        }
+    }
 
-    float lanes_buffer[env->obs_slots_lane_n * ROAD_FEATURES];
-    float boundaries_buffer[env->obs_slots_boundary_n * ROAD_FEATURES];
+    int lane_obs_idx = obs_idx;
+    int boundary_obs_idx = lane_obs_idx + env->obs_slots_lane_kept * LANE_FEATURES;
+    obs_idx = boundary_obs_idx + env->obs_slots_boundary_kept * BOUNDARY_FEATURES;
+
+    float lanes_buffer[env->obs_slots_lane_n * LANE_FEATURES];
+    float boundaries_buffer[env->obs_slots_boundary_n * BOUNDARY_FEATURES];
     float *lane_obs_dest = env->road_dropout_enabled ? lanes_buffer : &obs[lane_obs_idx];
     float *boundary_obs_dest = env->road_dropout_enabled ? boundaries_buffer : &obs[boundary_obs_idx];
     int lanes_found = 0;
@@ -4831,10 +4789,11 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float *segment_dest = is_lane ? lane_obs_dest : boundary_obs_dest;
         int *segment_count = is_lane ? &lanes_found : &boundaries_found;
         int segment_cap = is_lane ? env->obs_slots_lane_n : env->obs_slots_boundary_n;
+        int segment_features = is_lane ? LANE_FEATURES : BOUNDARY_FEATURES;
         if (*segment_count >= segment_cap) {
             continue;
         }
-        int feature_base = (*segment_count)++ * ROAD_FEATURES;
+        int feature_base = (*segment_count)++ * segment_features;
         segment_dest[feature_base] = rel_x / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 2] = rel_z / Z_BUFFER;
@@ -4842,6 +4801,27 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
         segment_dest[feature_base + 5] = rel_seg_dir_x;
         segment_dest[feature_base + 6] = rel_seg_dir_y;
+        // Goal-distance features: absolute and relative to ego's lane->goal distance.
+        if (is_lane) {
+            float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
+            if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
+                int lane_graph_idx = env->lane_graph.lane_to_graph_idx[entity_idx];
+                if (lane_graph_idx >= 0) {
+                    float d = env->lane_graph.distances[lane_graph_idx * env->lane_graph.n_lanes + goal_graph_idx];
+                    float d_m = (!isfinite(d) || d < 0.0f) ? LANE_GRAPH_DISTANCE_NORM_M : d; // unreachable/NaN -> max
+                    goal_dist_abs = clip(d_m / LANE_GRAPH_DISTANCE_NORM_M, 0.0f, 1.0f);
+                    if (ego_dist_to_goal_m >= 0.0f) {
+                        goal_dist_rel = clip((d_m - ego_dist_to_goal_m) / LANE_GRAPH_DISTANCE_NORM_M, -1.0f, 1.0f);
+                    }
+                }
+            }
+            segment_dest[feature_base + 7] = goal_dist_abs;
+            segment_dest[feature_base + 8] = goal_dist_rel;
+        } else {
+            // NOTE: Remove this with next model
+            segment_dest[feature_base + 7] = 0.0f;
+            segment_dest[feature_base + 8] = 0.0f;
+        }
     }
 
     if (env->road_dropout_enabled) {
@@ -4850,31 +4830,31 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(lanes_buffer, lanes_found, lanes_to_copy);
-        subsample_road_observation_rows(boundaries_buffer, boundaries_found, boundaries_to_copy);
-        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * ROAD_FEATURES * sizeof(float));
+        subsample_road_observation_rows(lanes_buffer, lanes_found, lanes_to_copy, LANE_FEATURES);
+        subsample_road_observation_rows(boundaries_buffer, boundaries_found, boundaries_to_copy, BOUNDARY_FEATURES);
+        memcpy(&obs[lane_obs_idx], lanes_buffer, lanes_to_copy * LANE_FEATURES * sizeof(float));
         memset(
-            &obs[lane_obs_idx + lanes_to_copy * ROAD_FEATURES],
+            &obs[lane_obs_idx + lanes_to_copy * LANE_FEATURES],
             0,
-            (env->obs_slots_lane_kept - lanes_to_copy) * ROAD_FEATURES * sizeof(float));
-        memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * ROAD_FEATURES * sizeof(float));
+            (env->obs_slots_lane_kept - lanes_to_copy) * LANE_FEATURES * sizeof(float));
+        memcpy(&obs[boundary_obs_idx], boundaries_buffer, boundaries_to_copy * BOUNDARY_FEATURES * sizeof(float));
         memset(
-            &obs[boundary_obs_idx + boundaries_to_copy * ROAD_FEATURES],
+            &obs[boundary_obs_idx + boundaries_to_copy * BOUNDARY_FEATURES],
             0,
-            (env->obs_slots_boundary_kept - boundaries_to_copy) * ROAD_FEATURES * sizeof(float));
+            (env->obs_slots_boundary_kept - boundaries_to_copy) * BOUNDARY_FEATURES * sizeof(float));
         return obs_idx;
     }
 
     *lane_count = lanes_found;
     *boundary_count = boundaries_found;
     memset(
-        &obs[lane_obs_idx + lanes_found * ROAD_FEATURES],
+        &obs[lane_obs_idx + lanes_found * LANE_FEATURES],
         0,
-        (env->obs_slots_lane_kept - lanes_found) * ROAD_FEATURES * sizeof(float));
+        (env->obs_slots_lane_kept - lanes_found) * LANE_FEATURES * sizeof(float));
     memset(
-        &obs[boundary_obs_idx + boundaries_found * ROAD_FEATURES],
+        &obs[boundary_obs_idx + boundaries_found * BOUNDARY_FEATURES],
         0,
-        (env->obs_slots_boundary_kept - boundaries_found) * ROAD_FEATURES * sizeof(float));
+        (env->obs_slots_boundary_kept - boundaries_found) * BOUNDARY_FEATURES * sizeof(float));
     return obs_idx;
 }
 
@@ -5238,7 +5218,6 @@ void c_reset(Drive *env) {
             env->logs[x] = (Log) {0};
             int agent_idx = env->active_agent_indices[x];
             sample_erratic_flags(env, &env->agents[agent_idx]);
-            initialize_agent_progression(env, agent_idx);
             compute_metrics(env, agent_idx, x);
         }
         compute_observations(env);
@@ -5283,7 +5262,6 @@ void c_reset(Drive *env) {
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
-            initialize_agent_progression(env, agent_idx);
             compute_metrics(env, agent_idx, x);
         }
         compute_observations(env);
@@ -5302,34 +5280,31 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        if (env->simulation_mode == SIMULATION_REPLAY) {
+        if (env->goal_source == GOAL_SOURCE_GT) {
             int start = env->init_step > 0 ? env->init_step : 0;
             int remaining = agent->trajectory_size - 1 - start;
             if (remaining < 1) {
                 remaining = 1;
             }
-            int num_wp = env->num_target_waypoints;
-            if (num_wp > MAX_TARGET_WAYPOINTS) {
-                num_wp = MAX_TARGET_WAYPOINTS;
-            }
+            int num_wp = env->num_goals;
             for (int g = 0; g < num_wp; g++) {
                 int t = start + (g + 1) * remaining / num_wp;
                 if (t >= agent->trajectory_size) {
                     t = agent->trajectory_size - 1;
                 }
-                agent->goal_positions_x[g] = agent->log_trajectory_x[t];
-                agent->goal_positions_y[g] = agent->log_trajectory_y[t];
-                agent->goal_positions_z[g] = agent->log_trajectory_z[t];
+                agent->list_goal_x[g] = agent->log_trajectory_x[t];
+                agent->list_goal_y[g] = agent->log_trajectory_y[t];
+                agent->list_goal_z[g] = agent->log_trajectory_z[t];
+                agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
             }
+            agent->goal_count = num_wp;
             agent->current_goal_idx = 0;
-            agent->goal_position_x = agent->goal_positions_x[0];
-            agent->goal_position_y = agent->goal_positions_y[0];
-            agent->goal_position_z = agent->goal_positions_z[0];
+            agent->current_goal_x = agent->list_goal_x[0];
+            agent->current_goal_y = agent->list_goal_y[0];
+            agent->current_goal_z = agent->list_goal_z[0];
         } else {
-            build_path(env, agent_idx);
-            compute_goals(env, agent_idx);
+            generate_new_goals_from_route(env, agent);
         }
-        initialize_agent_progression(env, agent_idx);
         compute_metrics(env, agent_idx, x);
     }
     compute_observations(env);
@@ -5427,6 +5402,16 @@ void c_step(Drive *env) {
         }
     }
 
+    if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_REPLAY
+        && env->control_mode == CONTROL_SDC_ONLY) {
+        for (int i = 0; i < env->active_agent_count; i++) {
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
+                early_reset = 1;
+            }
+        }
+    }
+
     if (env->timestep == env->scenario_length || early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
             env->truncations[i] = 1;
@@ -5443,23 +5428,38 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
-        if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-            if (agent->current_goal_idx == env->num_target_waypoints) {
-                // Last goal reached
-                env->logs[i].num_goals_reached += 1;
-                if (env->simulation_mode == SIMULATION_REPLAY) {
-                    // Replay mode: leave current_goal_idx saturated so the
-                    // reached-goal condition won't fire again. Re-generating
-                    // route-based goals on WOMD maps fails (removed=1).
-                } else {
-                    compute_goals(env, agent_idx);
-                }
-            } else {
-                // Advance alias to next goal
-                agent->goal_position_x = agent->goal_positions_x[agent->current_goal_idx];
-                agent->goal_position_y = agent->goal_positions_y[agent->current_goal_idx];
-                agent->goal_position_z = agent->goal_positions_z[agent->current_goal_idx];
-            }
+        if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
+            continue;
+        }
+        if (env->goal_source == GOAL_SOURCE_GT) {
+            // Replay mode: leave current_goal_idx saturated so the
+            // reached-goal condition won't fire again. Re-generating
+            // route-based goals on WOMD maps fails (removed=1).
+            continue;
+        }
+        // Rolling slides the window forward by one goal; finite advances the alias to the next goal in the set.
+        // Both fall back to a full regen: rolling on dead-end, finite when exhausted.
+        bool regen;
+        if (env->goal_regen_mode == GOAL_REGEN_ROLLING) {
+            regen = !roll_goals(env, agent);
+        } else if (agent->current_goal_idx == agent->goal_count) {
+            regen = true;
+        } else {
+            agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
+            agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
+            agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+            continue;
+        }
+        if (!regen) {
+            continue;
+        }
+        // On regen failure remove the agent (route helper self-invalidates; the extra call is idempotent),
+        // otherwise a stale current_goal_idx >= goal_count leaves an empty goal window and the agent freezes.
+        bool regen_ok = (env->goal_source == GOAL_SOURCE_MAP) ? generate_new_goals_from_map(env, agent)
+                                                              : generate_new_goals_from_route(env, agent);
+        if (!regen_ok) {
+            invalidate_agent(agent);
+            agent->removed = 1;
         }
     }
 }

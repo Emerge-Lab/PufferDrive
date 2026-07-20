@@ -12,7 +12,7 @@ Example usage:
     python scripts/submit_cluster.py \
         --save_dir /path/to/experiments \
         --compute_config scripts/cluster_configs/nyu_greene.yaml \
-        --args learning_rate=1e-4:3e-4:1e-3
+        --args train.learning_rate=1e-4:3e-4:1e-3
 
     # Override compute settings
     python scripts/submit_cluster.py \
@@ -173,9 +173,6 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         "wandb_group",
         "wandb_name",
     }
-    # Boolean flags that don't take values (store_true)
-    boolean_flags = {"wandb", "neptune"}
-
     for main_args in all_main_args:
         cmd = []
         name_entries = []
@@ -184,17 +181,10 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
         for key, val in main_args.items():
-            # Convert underscores to dashes for CLI compatibility
-            cli_key = key.replace("_", "-")
-
-            # Handle boolean flags that don't take values
-            if key in boolean_flags:
-                if val in (True, "True", "true", "1"):
-                    cmd.append(f"--{cli_key}")
-                # Skip if False - don't add the flag at all
-            else:
-                cmd.append(f"--{cli_key}")
-                cmd.append(str(val))
+            # Hydra override syntax: dotted.key=value, booleans lowercase
+            if isinstance(val, bool):
+                val = str(val).lower()
+            cmd.append(f"{key}={val}")
 
             if key in overrides and key not in name_skip_keys:
                 display_key = key.split(".")[-1] if "." in key else key
@@ -219,16 +209,68 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
         # Wandb overrides: explicit flags take priority, then prefix for name
         wandb_name = args.wandb_name or args.prefix
         if wandb_name is not None:
-            cmd.extend(["--tag", wandb_name])
+            cmd.append(f"tag={wandb_name}")
         if args.wandb_group is not None:
-            cmd.extend(["--wandb-group", args.wandb_group])
+            cmd.append(f"wandb_group={args.wandb_group}")
         if args.wandb_project is not None:
-            cmd.extend(["--wandb-project", args.wandb_project])
+            cmd.append(f"wandb_project={args.wandb_project}")
 
         save_dir = os.path.join(args.save_dir, job_name)
         name2commands[job_name] = (cmd, save_dir)
 
     return name2commands
+
+
+def isolate_code(project_root: str, save_dir: str) -> str:
+    """Snapshot the code tree into save_dir/code (or code_vN if taken).
+
+    Top-level entries are symlinked (instant, avoids deep-copying data/),
+    except ancestors of the snapshot itself.
+
+    Runs on the login node at submission time, so the snapshot reflects the
+    code as it was when the job was submitted, not when it left the queue.
+    """
+    import os
+    import shutil
+    from pathlib import Path
+
+    isolated_root = os.path.join(save_dir, "code")
+    if os.path.exists(isolated_root):
+        version = 1
+        while os.path.exists(f"{isolated_root}_v{version}"):
+            version += 1
+        isolated_root = f"{isolated_root}_v{version}"
+    os.makedirs(isolated_root, exist_ok=True)
+    isolated_root_real = Path(isolated_root).resolve()
+    for entry in os.listdir(project_root):
+        src = os.path.join(project_root, entry)
+        dst = os.path.join(isolated_root, entry)
+        # Do not symlink ancestors to avoid infinite recursion
+        if isolated_root_real.is_relative_to(Path(src).resolve()):
+            continue
+        if os.path.exists(dst) or os.path.islink(dst):
+            if os.path.isdir(dst) and not os.path.islink(dst):
+                shutil.rmtree(dst)
+            else:
+                os.remove(dst)
+        os.symlink(src, dst)
+    pufferlib_dst = os.path.join(isolated_root, "pufferlib")
+    if os.path.islink(pufferlib_dst):
+        os.remove(pufferlib_dst)
+    elif os.path.isdir(pufferlib_dst):
+        shutil.rmtree(pufferlib_dst)
+    pufferlib_src = os.path.join(project_root, "pufferlib")
+    shutil.copytree(
+        pufferlib_src,
+        pufferlib_dst,
+        symlinks=False,
+        ignore=shutil.ignore_patterns("resources"),
+    )
+    resources_src = os.path.join(pufferlib_src, "resources")
+    resources_dst = os.path.join(pufferlib_dst, "resources")
+    if os.path.isdir(resources_src):
+        os.symlink(resources_src, resources_dst)
+    return isolated_root
 
 
 def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
@@ -281,53 +323,11 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
 
     def launch_training(args, from_config, cmd, save_dir, project_root, container_config=None):
         """Runs inside the SLURM allocation."""
-        import glob
         import os
-        import shutil
         import subprocess
-        import sys
         import submitit
 
-        # Code isolation: symlink top-level entries, hard copy pufferlib/ source
-        isolated_root = os.path.join(save_dir, "code")
-        if os.path.exists(isolated_root):
-            version = 1
-            while os.path.exists(f"{isolated_root}_v{version}"):
-                version += 1
-            isolated_root = f"{isolated_root}_v{version}"
-        os.makedirs(isolated_root, exist_ok=True)
-        # Symlink each top-level entry (instant, avoids deep-copying data/)
-        for entry in os.listdir(project_root):
-            src = os.path.join(project_root, entry)
-            dst = os.path.join(isolated_root, entry)
-            if os.path.exists(dst) or os.path.islink(dst):
-                if os.path.isdir(dst) and not os.path.islink(dst):
-                    shutil.rmtree(dst)
-                else:
-                    os.remove(dst)
-            os.symlink(src, dst)
-        # Hard copy pufferlib/ so branch switches don't break running jobs.
-        # We symlink resources/ (3.7GB of maps/models) to avoid slow copies,
-        # but hard copy everything else (source code, .so files).
-        pufferlib_dst = os.path.join(isolated_root, "pufferlib")
-        if os.path.islink(pufferlib_dst):
-            os.remove(pufferlib_dst)
-        elif os.path.isdir(pufferlib_dst):
-            shutil.rmtree(pufferlib_dst)
-        pufferlib_src = os.path.join(project_root, "pufferlib")
-        shutil.copytree(
-            pufferlib_src,
-            pufferlib_dst,
-            symlinks=False,
-            ignore=shutil.ignore_patterns("resources"),
-        )
-        # Symlink resources/ (large static data, safe to share)
-        resources_src = os.path.join(pufferlib_src, "resources")
-        resources_dst = os.path.join(pufferlib_dst, "resources")
-        if os.path.isdir(resources_src):
-            os.symlink(resources_src, resources_dst)
-        project_root = isolated_root
-
+        # project_root is the code snapshot taken by isolate_code at submission time.
         # Change to project directory and set up environment
         os.chdir(project_root)
         os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
@@ -366,7 +366,7 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
             ] + main_parts
 
         # Add save_dir to command
-        full_cmd = base_cmd + cmd + ["--train.data-dir", save_dir]
+        full_cmd = base_cmd + cmd + [f"train.data_dir={save_dir}"]
 
         # If heartbeat is enabled, wrap the training command in a brace group that:
         #   1. backgrounds python scripts/gpu_heartbeat.py
@@ -444,7 +444,11 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
         print(f">>> Container mode enabled: {container_config['image']}")
 
     if not dry:
-        job = executor.submit(launch_training, args, from_config, command, save_dir, project_root, container_config)
+        # Snapshot the code now so edits made while the job waits in the queue
+        # don't leak into the run.
+        isolated_root = isolate_code(project_root, save_dir)
+        print(f">>> Code snapshot: {isolated_root}")
+        job = executor.submit(launch_training, args, from_config, command, save_dir, isolated_root, container_config)
         print(f"Submitted job {job.job_id}: {job_name}")
         return job
     else:

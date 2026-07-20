@@ -116,9 +116,9 @@ TRACKED_AGENT = 0  # agent index to track in detail
 obs_dim = obs.shape[1]
 
 dyn_model = config["env"]["dynamics_model"]
-tgt_type = config["env"]["target_type"]
+tgt_type = config["env"]["goal_regen_mode"]
 rew_cond = config["env"].get("reward_conditioning", False)
-n_tgt_wp = config["env"].get("num_target_waypoints", 3)
+n_tgt_wp = config["env"].get("num_goals", 3)
 
 
 def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
@@ -190,9 +190,9 @@ sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_A
 print(dyn_model, tgt_type, rew_cond, n_tgt_wp)
 img = plot_observation(
     sample_obs,
-    target_type=tgt_type,
+    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -227,9 +227,9 @@ ego_features_over_time = []
 for t in range(HORIZON):
     ego, *_ = unpack_obs(
         buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0],
-        target_type=tgt_type,
+        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
-        num_target_waypoints=n_tgt_wp,
+        num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
         obs_slots_lane_n=env.obs_slots_lane_n,
         obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -277,9 +277,9 @@ sample_t = min(50, HORIZON - 1)
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    target_type=tgt_type,
+    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -336,11 +336,8 @@ if cond_obs is not None:
         print(f"  [{i:>2d}] {label:>16s} = {val:.4f}")
 
 # --- Target waypoints ---
-tgt_feat = binding.STATIC_TARGET_FEATURES if tgt_type == "static" else binding.DYNAMIC_TARGET_FEATURES
-if tgt_type == "static":
-    tgt_labels = ["rel_x", "rel_y", "rel_z"]
-else:
-    tgt_labels = ["rel_x", "rel_y", "rel_z", "heading_cos", "heading_sin"]
+tgt_feat = binding.GOAL_FEATURES
+tgt_labels = ["rel_x", "rel_y", "rel_z"]
 
 print(f"\n--- Target waypoints (n={n_tgt_wp}, type={tgt_type}) ---")
 for wp in range(target.shape[0]):
@@ -390,11 +387,11 @@ all_obs = buf_stoch["obs"][sample_t]  # (N, obs_dim)
 
 ego_dim = binding.EGO_FEATURES
 cond_dim = binding.NUM_REWARD_COEFS if rew_cond else 0
-tgt_feat = binding.STATIC_TARGET_FEATURES if tgt_type == "static" else binding.DYNAMIC_TARGET_FEATURES
+tgt_feat = binding.GOAL_FEATURES
 tgt_dim = n_tgt_wp * tgt_feat
 partner_dim = env.obs_slots_partners_n * env.partner_features
-lane_dim = env.obs_slots_lane_kept * env.road_features
-boundary_dim = env.obs_slots_boundary_kept * env.road_features
+lane_dim = env.obs_slots_lane_kept * env.lane_features
+boundary_dim = env.obs_slots_boundary_kept * env.boundary_features
 traffic_dim = env.obs_slots_traffic_controls_n * env.traffic_control_features
 
 # Slice indices
@@ -468,9 +465,9 @@ def unpack_all_timesteps(bufs, agent_idx):
         ob = bufs["obs"][t : t + 1, agent_idx : agent_idx + 1][0]
         ego, tgt, part, lane, bnd, tfc = unpack_obs(
             ob,
-            target_type=tgt_type,
+            goal_regen_mode=tgt_type,
             reward_conditioning=rew_cond,
-            num_target_waypoints=n_tgt_wp,
+            num_goals=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
             obs_slots_lane_n=env.obs_slots_lane_n,
             obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -546,9 +543,9 @@ for t in range(HORIZON):
     ob = buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
     _, _, part, _, _, _ = unpack_obs(
         ob,
-        target_type=tgt_type,
+        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
-        num_target_waypoints=n_tgt_wp,
+        num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
         obs_slots_lane_n=env.obs_slots_lane_n,
         obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -574,9 +571,9 @@ plt.show()
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    target_type=tgt_type,
+    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
-    num_target_waypoints=n_tgt_wp,
+    num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -599,7 +596,7 @@ ax.annotate("EGO", (0, 0), fontsize=9, ha="center", va="center", color="white", 
 for i in range(lanes.shape[0]):
     if np.allclose(lanes[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = lanes[i]
+    rx, ry, rz, length, _, dc, ds = lanes[i][:7]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
@@ -621,7 +618,7 @@ ax.scatter(
 for i in range(boundaries.shape[0]):
     if np.allclose(boundaries[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = boundaries[i]
+    rx, ry, rz, length, _, dc, ds = boundaries[i][:7]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
@@ -798,7 +795,7 @@ pf = env.partner_features
 # Compute slices
 _ego_d = binding.EGO_FEATURES
 _cond_d = binding.NUM_REWARD_COEFS if rew_cond else 0
-_tgt_f = binding.STATIC_TARGET_FEATURES if tgt_type == "static" else binding.DYNAMIC_TARGET_FEATURES
+_tgt_f = binding.GOAL_FEATURES
 _tgt_d = n_tgt_wp * _tgt_f
 _p_start = _ego_d + _cond_d + _tgt_d
 _p_end = _p_start + obs_slots_partners_n * pf
@@ -867,17 +864,18 @@ plt.show()
 # %%
 # Road per-feature distributions (lanes + boundaries)
 road_labels = ["rel_x", "rel_y", "rel_z", "seg_length", "seg_width", "dir_cos", "dir_sin"]
-rf = env.road_features
+lf = env.lane_features
+bf = env.boundary_features
 max_lanes = env.obs_slots_lane_kept
 max_bounds = env.obs_slots_boundary_kept
 
 _l_start = _p_end
-_l_end = _l_start + max_lanes * rf
+_l_end = _l_start + max_lanes * lf
 _b_start = _l_end
-_b_end = _b_start + max_bounds * rf
+_b_end = _b_start + max_bounds * bf
 
-all_lanes = buf_stoch["obs"][:, :, _l_start:_l_end].reshape(-1, max_lanes, rf)
-all_bounds = buf_stoch["obs"][:, :, _b_start:_b_end].reshape(-1, max_bounds, rf)
+all_lanes = buf_stoch["obs"][:, :, _l_start:_l_end].reshape(-1, max_lanes, lf)
+all_bounds = buf_stoch["obs"][:, :, _b_start:_b_end].reshape(-1, max_bounds, bf)
 
 vis_lanes = all_lanes[np.any(all_lanes != 0, axis=2)]
 vis_bounds = all_bounds[np.any(all_bounds != 0, axis=2)]
@@ -940,10 +938,7 @@ _tgt_start = _ego_d + _cond_d
 _tgt_end = _tgt_start + _tgt_d
 all_target = buf_stoch["obs"][:, :, _tgt_start:_tgt_end].reshape(-1, n_tgt_wp, _tgt_f)
 
-if tgt_type == "static":
-    tgt_flabels = ["rel_x", "rel_y", "rel_z"]
-else:
-    tgt_flabels = ["rel_x", "rel_y", "rel_z", "heading_cos", "heading_sin"]
+tgt_flabels = ["rel_x", "rel_y", "rel_z"]
 
 fig, axes = plt.subplots(1, n_tgt_wp + 1, figsize=(5 * (n_tgt_wp + 1), 4))
 
@@ -982,8 +977,8 @@ plt.show()
 layer_names = ["partners", "lanes", "boundaries"]
 layer_slices = [
     (_p_start, _p_end, env.obs_slots_partners_n, env.partner_features),
-    (_l_start, _l_end, env.obs_slots_lane_kept, env.road_features),
-    (_b_start, _b_end, env.obs_slots_boundary_kept, env.road_features),
+    (_l_start, _l_end, env.obs_slots_lane_kept, env.lane_features),
+    (_b_start, _b_end, env.obs_slots_boundary_kept, env.boundary_features),
 ]
 
 fig, axes = plt.subplots(1, 3, figsize=(20, 5))
@@ -1348,9 +1343,11 @@ B = obs_batch.shape[0]
 # Encoder inventory: (name, module, raw_in_features, n_slots, is_set)
 enc_inventory = [("ego", bb.ego_encoder, ego_dim, 1, False)]
 if bb.obs_slots_lane_kept > 0:
-    enc_inventory.append(("lane", bb.lane_encoder, bb.road_features_count, bb.obs_slots_lane_kept, True))
+    enc_inventory.append(("lane", bb.lane_encoder, bb.lane_features_count, bb.obs_slots_lane_kept, True))
 if bb.obs_slots_boundary_kept > 0:
-    enc_inventory.append(("boundary", bb.boundary_encoder, bb.road_features_count, bb.obs_slots_boundary_kept, True))
+    enc_inventory.append(
+        ("boundary", bb.boundary_encoder, bb.boundary_features_count, bb.obs_slots_boundary_kept, True)
+    )
 if bb.obs_slots_partners_n > 0:
     enc_inventory.append(("partner", bb.partner_encoder, bb.partner_features_count, bb.obs_slots_partners_n, True))
 if bb.obs_slots_traffic_controls_n > 0:
@@ -1400,16 +1397,16 @@ for h in handles:
 
 # Reconstruct slot slices (same order as DriveBackbone.forward) + pad masks
 partner_dim = bb.obs_slots_partners_n * bb.partner_features_count
-lane_dim = bb.obs_slots_lane_kept * bb.road_features_count
-boundary_dim = bb.obs_slots_boundary_kept * bb.road_features_count
+lane_dim = bb.obs_slots_lane_kept * bb.lane_features_count
+boundary_dim = bb.obs_slots_boundary_kept * bb.boundary_features_count
 traffic_dim = bb.obs_slots_traffic_controls_n * bb.traffic_control_features_count
 _s = ego_dim + bb.context_dim
 sl = {}
 sl["partner"] = (_s, _s + partner_dim, bb.obs_slots_partners_n, bb.partner_features_count)
 _s += partner_dim
-sl["lane"] = (_s, _s + lane_dim, bb.obs_slots_lane_kept, bb.road_features_count)
+sl["lane"] = (_s, _s + lane_dim, bb.obs_slots_lane_kept, bb.lane_features_count)
 _s += lane_dim
-sl["boundary"] = (_s, _s + boundary_dim, bb.obs_slots_boundary_kept, bb.road_features_count)
+sl["boundary"] = (_s, _s + boundary_dim, bb.obs_slots_boundary_kept, bb.boundary_features_count)
 _s += boundary_dim
 sl["traffic"] = (_s, _s + traffic_dim, bb.obs_slots_traffic_controls_n, bb.traffic_control_features_count)
 _s += traffic_dim
