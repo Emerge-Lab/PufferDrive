@@ -1768,14 +1768,17 @@ def _run_eval_rollout(
     )
 
     agents_per_batch = vecenv.agents_per_batch
-    if expected_agents_per_batch is not None and agents_per_batch != expected_agents_per_batch:
+    policy_agents_per_batch = expected_agents_per_batch or agents_per_batch
+    if agents_per_batch > policy_agents_per_batch:
         vecenv.close()
         raise pufferlib.APIUsageError(
-            f"Replay agents_per_batch={agents_per_batch} but the CSV was produced with "
-            f"{expected_agents_per_batch}. The policy forward pass runs at this batch shape, and "
-            "GPU floating-point reductions are shape-dependent, so a different shape can flip actions "
-            "and diverge the trajectory. Re-run with matching num_agents and worker count so that "
-            f"num_agents * num_workers == {expected_agents_per_batch}."
+            f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
+            f"CSV policy batch of {policy_agents_per_batch}. Reduce num_agents or the replay worker count."
+        )
+    if agents_per_batch < policy_agents_per_batch:
+        print(
+            f"Padding policy inference from {agents_per_batch} to "
+            f"{policy_agents_per_batch} agents to preserve the recorded batch shape"
         )
 
     torch.manual_seed(args["train"]["seed"] or 42)
@@ -1785,12 +1788,24 @@ def _run_eval_rollout(
 
     episode_summaries = []
     obs, _ = vecenv.reset(args["train"]["seed"] or 42)
+    padding_agent_count = policy_agents_per_batch - agents_per_batch
+    policy_obs_tensor = None
+    if padding_agent_count:
+        policy_obs_tensor = torch.zeros(
+            (policy_agents_per_batch, *obs.shape[1:]),
+            dtype=torch.as_tensor(obs).dtype,
+            device=device,
+        )
     for _ in tqdm(range(total_steps), desc=desc):
         with torch.no_grad():
-            obs_tensor = torch.as_tensor(obs).to(device)
-            logits, _ = policy.forward_eval(obs_tensor)
+            environment_obs_tensor = torch.as_tensor(obs, device=device)
+            if padding_agent_count:
+                policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+            else:
+                policy_obs_tensor = environment_obs_tensor
+            logits, _ = policy.forward_eval(policy_obs_tensor)
             action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-            action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+            action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
         if isinstance(logits, torch.distributions.Normal):
             action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
         obs, _, _, _, infos = vecenv.step(action)
@@ -1798,7 +1813,7 @@ def _run_eval_rollout(
             worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
             for item in worker_items:
                 if isinstance(item, dict) and item.get("summary_type") == "completed_episode":
-                    item["agents_per_batch"] = agents_per_batch
+                    item["agents_per_batch"] = policy_agents_per_batch
                     episode_summaries.append(item)
         if len(episode_summaries) >= expected_episodes:
             break
@@ -1832,7 +1847,16 @@ def eval(env_name, args=None, policy=None):
             raise pufferlib.APIUsageError("Replay selection is empty")
         if "agents_per_batch" in selected.columns:
             logged = selected["agents_per_batch"].unique()
-            expected_agents_per_batch = int(logged[0]) if len(logged) == 1 else None
+            if (
+                len(logged) != 1
+                or not isinstance(logged[0], numbers.Real)
+                or not np.isfinite(logged[0])
+                or int(logged[0]) != logged[0]
+            ):
+                raise pufferlib.APIUsageError("Replay selection must contain exactly one valid agents_per_batch value")
+            expected_agents_per_batch = int(logged[0])
+            if expected_agents_per_batch <= 0:
+                raise pufferlib.APIUsageError("Replay agents_per_batch must be positive")
         num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
         worker_env_kwargs, total_steps = _replay_worker_kwargs(args, pairs, num_workers, scenario_length)
         out_subdir, desc = "replay", "Replaying scenarios"
