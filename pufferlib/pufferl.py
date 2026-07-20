@@ -1821,7 +1821,8 @@ def _run_eval_rollout(
     if pool_method is None and getattr(policy, "policy", None) is not None:
         pool_method = getattr(policy.policy, "pool_slot_counts", None)
 
-    for rollout_step in tqdm(range(total_steps), desc=desc):
+    scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
+    for rollout_step in range(total_steps):
         with torch.no_grad():
             environment_obs_tensor = torch.as_tensor(obs, device=device)
             if padding_agent_count:
@@ -1930,11 +1931,14 @@ def _run_eval_rollout(
                         item["replay_path"] = replay_path
                     item["agents_per_batch"] = policy_agents_per_batch
                     episode_summaries.append(item)
+                    if len(episode_summaries) <= expected_episodes:
+                        scenario_progress.update(1)
         if len(episode_summaries) >= expected_episodes:
             break
         if capture_replay and (rollout_step + 1) % capture_batch_steps == 0:
             replay_history = defaultdict(list)
 
+    scenario_progress.close()
     vecenv.close()
     return episode_summaries
 
