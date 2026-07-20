@@ -1582,15 +1582,16 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
             Py_BuildValue("{s:i,s:i,s:i}", "target_agent_index", debug->target_agent_index, "collision_adversary_index",
                           debug->collision_adversary_index, "collision_timestep", debug->collision_timestep);
         PyObject *constants = Py_BuildValue(
-            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
+            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
             debug->braking_deceleration, "reaction_time_seconds", debug->reaction_time_seconds, "max_extension_steps",
             debug->max_extension_steps, "max_rollout_steps", debug->max_rollout_steps, "ttc_margin_seconds",
             debug->ttc_margin_seconds, "ttc_max_projection_steps", debug->ttc_max_projection_steps,
-            "lateral_rss_base_distance", debug->lateral_rss_base_distance, "lateral_rss_acceleration_denominator",
-            debug->lateral_rss_acceleration_denominator, "lateral_rss_max_distance", debug->lateral_rss_max_distance);
+            "lateral_buffer_base_distance", debug->lateral_buffer_base_distance, "lateral_buffer_response_time_seconds",
+            debug->lateral_buffer_response_time_seconds, "lateral_buffer_deceleration",
+            debug->lateral_buffer_deceleration, "lateral_buffer_max_distance", debug->lateral_buffer_max_distance);
         PyObject *detection_times = Py_BuildValue(
             "{s:f,s:f,s:f,s:f}", "ttc_seconds_before_collision", debug->ttc_detection_seconds_before_collision,
-            "lateral_rss_seconds_before_collision", debug->lateral_rss_detection_seconds_before_collision,
+            "lateral_buffer_seconds_before_collision", debug->lateral_buffer_detection_seconds_before_collision,
             "combined_seconds_before_collision", debug->combined_detection_seconds_before_collision,
             "target_last_avoidable_braking_seconds_before_collision",
             debug->last_avoidable_braking_seconds_before_collision);

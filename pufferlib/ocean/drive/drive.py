@@ -793,7 +793,7 @@ class Drive(pufferlib.PufferEnv):
             }
         )
         bundle = {
-            "schema_version": 4,
+            "schema_version": 5,
             "metadata": metadata,
             "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
             "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),

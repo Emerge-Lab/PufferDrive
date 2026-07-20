@@ -17,8 +17,8 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version != 4:
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=4.")
+    if schema_version != 5:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=5.")
 
     required_top_level = ("metadata", "agent_arrays", "traffic_arrays", "episode_timesteps")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
@@ -337,6 +337,44 @@ HTML_TEMPLATE = """<!doctype html>
       color: #0f4c81;
     }
     .avoidability-result strong { display: block; margin-bottom: 3px; }
+    .detector-toggles { display: flex; gap: 8px; }
+    .detector-toggle {
+      flex: 1;
+      color: var(--muted);
+      background: rgba(31,41,51,0.04);
+    }
+    .detector-toggle.active {
+      color: var(--accent);
+      border-color: rgba(18,97,160,0.35);
+      background: rgba(18,97,160,0.09);
+      font-weight: 700;
+    }
+    .detector-hud {
+      position: absolute;
+      z-index: 3;
+      top: 72px;
+      right: 30px;
+      display: grid;
+      gap: 7px;
+      justify-items: end;
+      pointer-events: none;
+    }
+    .detector-hud[hidden] { display: none; }
+    .detector-badge {
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(22,163,74,0.3);
+      background: rgba(240,253,244,0.94);
+      color: #166534;
+      font-size: 12px;
+      font-weight: 750;
+      box-shadow: 0 3px 12px rgba(31,41,51,0.1);
+    }
+    .detector-badge.danger {
+      border-color: rgba(220,38,38,0.35);
+      background: rgba(254,242,242,0.95);
+      color: #991b1b;
+    }
     .nav {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -522,6 +560,10 @@ HTML_TEMPLATE = """<!doctype html>
           <div id="avoidability-result" class="avoidability-result reference">
             <strong>Observed collision</strong>
           </div>
+          <div class="detector-toggles">
+            <button id="buffer-toggle" class="detector-toggle active" type="button" aria-pressed="true">Safety buffer</button>
+            <button id="ttc-toggle" class="detector-toggle active" type="button" aria-pressed="true">TTC</button>
+          </div>
         </div>
       </div>
       <div class="nav">
@@ -579,6 +621,10 @@ HTML_TEMPLATE = """<!doctype html>
           <div id="status-pill" class="pill">Target failed</div>
         </div>
       </div>
+      <div id="detector-hud" class="detector-hud" hidden>
+        <div id="buffer-badge" class="detector-badge"></div>
+        <div id="ttc-badge" class="detector-badge"></div>
+      </div>
       <canvas id="scene"></canvas>
     </main>
     <aside class="panel episode-list">
@@ -610,6 +656,11 @@ HTML_TEMPLATE = """<!doctype html>
     const reactionSlider = document.getElementById('reaction-slider');
     const reactionLabel = document.getElementById('reaction-label');
     const avoidabilityResult = document.getElementById('avoidability-result');
+    const bufferToggle = document.getElementById('buffer-toggle');
+    const ttcToggle = document.getElementById('ttc-toggle');
+    const detectorHud = document.getElementById('detector-hud');
+    const bufferBadge = document.getElementById('buffer-badge');
+    const ttcBadge = document.getElementById('ttc-badge');
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
@@ -637,6 +688,9 @@ HTML_TEMPLATE = """<!doctype html>
     let replayMode = 'observed';
     let reactionSelection = 0;
     let observedFrameIndex = 0;
+    let showLateralBuffer = true;
+    let showTTC = true;
+
 
     function summaryValue(key, fallback=null) {
       if (summary[key] != null) return summary[key];
@@ -1091,6 +1145,135 @@ HTML_TEMPLATE = """<!doctype html>
       return values[index] == null ? fallback : values[index];
     }
 
+    function detectorPair() {
+      if (!hasAvoidability || replayMode !== 'avoidability') return null;
+      const frame = currentDisplayFrame();
+      const collision = avoidability.collision;
+      const target = findAgentById(frame, Number(collision.target_agent_index));
+      const adversary = findAgentById(frame, Number(collision.collision_adversary_index));
+      return target && adversary ? {target, adversary} : null;
+    }
+
+    function obbCorners(agent) {
+      const heading = Number(agent.heading || 0);
+      const forwardX = Math.cos(heading), forwardY = Math.sin(heading);
+      const leftX = -forwardY, leftY = forwardX;
+      const halfLength = Number(agent.length || 0) / 2;
+      const halfWidth = Number(agent.width || 0) / 2;
+      return [
+        [agent.x + halfLength * forwardX + halfWidth * leftX, agent.y + halfLength * forwardY + halfWidth * leftY],
+        [agent.x + halfLength * forwardX - halfWidth * leftX, agent.y + halfLength * forwardY - halfWidth * leftY],
+        [agent.x - halfLength * forwardX - halfWidth * leftX, agent.y - halfLength * forwardY - halfWidth * leftY],
+        [agent.x - halfLength * forwardX + halfWidth * leftX, agent.y - halfLength * forwardY + halfWidth * leftY],
+      ];
+    }
+
+    function obbOverlap(agentA, agentB) {
+      const cornersA = obbCorners(agentA);
+      const cornersB = obbCorners(agentB);
+      const headings = [Number(agentA.heading || 0), Number(agentB.heading || 0)];
+      const axes = [];
+      for (const heading of headings) {
+        axes.push([Math.cos(heading), Math.sin(heading)]);
+        axes.push([-Math.sin(heading), Math.cos(heading)]);
+      }
+      for (const [axisX, axisY] of axes) {
+        const projectionsA = cornersA.map(([x, y]) => x * axisX + y * axisY);
+        const projectionsB = cornersB.map(([x, y]) => x * axisX + y * axisY);
+        const minA = Math.min(...projectionsA), maxA = Math.max(...projectionsA);
+        const minB = Math.min(...projectionsB), maxB = Math.max(...projectionsB);
+        if (maxA < minB || minA > maxB) return false;
+      }
+      return true;
+    }
+
+    function verticalOverlap(agentA, agentB) {
+      const bottomA = Number(agentA.z || 0), topA = bottomA + Number(agentA.height || 0);
+      const bottomB = Number(agentB.z || 0), topB = bottomB + Number(agentB.height || 0);
+      return !(topA < bottomB || topB < bottomA);
+    }
+
+    function projectedPose(agent, time) {
+      return {
+        ...agent,
+        x: Number(agent.x) + Number(agent.vx || 0) * time,
+        y: Number(agent.y) + Number(agent.vy || 0) * time,
+      };
+    }
+
+    function computeTTCOverlay(pair) {
+      const constants = avoidability.constants || {};
+      const dt = Number(constants.dt || 0.1);
+      const deceleration = Number(constants.braking_deceleration || 5.0);
+      const reactionTime = Number(constants.reaction_time_seconds || 1.0);
+      const margin = Number(constants.ttc_margin_seconds || 0.1);
+      const maxSteps = Number(constants.ttc_max_projection_steps || 92);
+      const threshold = reactionTime + speedOfAgent(pair.target) / Math.max(deceleration, 1e-6) + margin;
+      const expandedTarget = computeLateralBuffer(pair).expandedTarget;
+      const targetPath = [];
+      const adversaryPath = [];
+      let targetPose = expandedTarget;
+      let adversaryPose = pair.adversary;
+      let contactTime = null;
+      for (let futureStep = 0; futureStep < maxSteps; futureStep++) {
+        const futureTime = futureStep * dt;
+        if (futureTime >= threshold) break;
+        targetPose = projectedPose(expandedTarget, futureTime);
+        adversaryPose = projectedPose(pair.adversary, futureTime);
+        targetPath.push({x: targetPose.x, y: targetPose.y});
+        adversaryPath.push({x: adversaryPose.x, y: adversaryPose.y});
+        if (verticalOverlap(targetPose, adversaryPose) && obbOverlap(targetPose, adversaryPose)) {
+          contactTime = futureTime;
+          break;
+        }
+      }
+      return {
+        dangerous: contactTime != null && contactTime < threshold,
+        contactTime,
+        threshold,
+        targetPath,
+        adversaryPath,
+        targetPose,
+        adversaryPose,
+      };
+    }
+
+    function computeLateralBuffer(pair) {
+      const constants = avoidability.constants || {};
+      const heading = Number(pair.target.heading || 0);
+      const leftX = -Math.sin(heading), leftY = Math.cos(heading);
+      const relX = Number(pair.adversary.x) - Number(pair.target.x);
+      const relY = Number(pair.adversary.y) - Number(pair.target.y);
+      const signedDistance = relX * leftX + relY * leftY;
+      const relativeVX = Number(pair.adversary.vx || 0) - Number(pair.target.vx || 0);
+      const relativeVY = Number(pair.adversary.vy || 0) - Number(pair.target.vy || 0);
+      const relativeLateralVelocity = relativeVX * leftX + relativeVY * leftY;
+      let intrusionSpeed = 0;
+      if (Math.abs(signedDistance) > 1e-6) {
+        intrusionSpeed = Math.max(0, relativeLateralVelocity * (-Math.sign(signedDistance)));
+      }
+
+      const base = Number(constants.lateral_buffer_base_distance || 0.2);
+      const response = Number(constants.lateral_buffer_response_time_seconds || 0);
+      const deceleration = Number(constants.lateral_buffer_deceleration || 0.8);
+      const maximum = Number(constants.lateral_buffer_max_distance || 2.0);
+      const buffer = Math.min(
+        maximum,
+        base + intrusionSpeed * response + intrusionSpeed * intrusionSpeed / (2 * Math.max(deceleration, 1e-6))
+      );
+      const expandedTarget = {
+        ...pair.target,
+        width: Number(pair.target.width || 0) + 2 * buffer,
+      };
+      const dangerous = verticalOverlap(expandedTarget, pair.adversary) && obbOverlap(expandedTarget, pair.adversary);
+      return {
+        dangerous,
+        buffer,
+        intrusionSpeed,
+        expandedTarget,
+      };
+    }
+
     function updateAvoidabilitySelection() {
       reactionSelection = Number(reactionSlider.value || 0);
       if (reactionSelection === 0) {
@@ -1247,6 +1430,54 @@ HTML_TEMPLATE = """<!doctype html>
         ctx.stroke();
         ctx.globalAlpha = 1.0;
       }
+    }
+
+    function drawDetectorPose(agent, color, dash=[]) {
+      if (!agent) return;
+      const center = worldToCanvas(agent.x, agent.y);
+      const length = Math.max(Number(agent.length || 0) * center.scale, 6);
+      const width = Math.max(Number(agent.width || 0) * center.scale, 4);
+      ctx.save();
+      ctx.translate(center.x, center.y);
+      ctx.rotate(-Number(agent.heading || 0));
+      ctx.fillStyle = `${color}18`;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash(dash);
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      ctx.strokeRect(-length / 2, -width / 2, length, width);
+      ctx.restore();
+    }
+
+    function drawLateralBufferOverlay(bufferResult) {
+      const color = bufferResult.dangerous ? '#dc2626' : '#16a34a';
+      drawDetectorPose(bufferResult.expandedTarget, color, [7, 4]);
+      const detectionTimes = avoidability.detection_times || {};
+      const firstDetection = detectionTimes.lateral_buffer_seconds_before_collision;
+      bufferBadge.className = bufferResult.dangerous ? 'detector-badge danger' : 'detector-badge';
+      bufferBadge.innerText = `BUFFER ${bufferResult.dangerous ? 'DANGER' : 'SAFE'} · b=${bufferResult.buffer.toFixed(2)}m/side · intrusion=${bufferResult.intrusionSpeed.toFixed(2)}m/s · first=${formatSeconds(firstDetection)}`;
+    }
+
+    function drawTTCOverlay(ttc) {
+      const color = ttc.dangerous ? '#e11d48' : '#16a34a';
+      drawTrajectoryLine(ttc.targetPath, color, 2.2, [3, 4]);
+      drawTrajectoryLine(ttc.adversaryPath, color, 2.2, [8, 4]);
+      drawDetectorPose(ttc.targetPose, color);
+      drawDetectorPose(ttc.adversaryPose, color, [6, 4]);
+      ttcBadge.className = ttc.dangerous ? 'detector-badge danger' : 'detector-badge';
+      const value = ttc.contactTime == null ? '∞' : `${ttc.contactTime.toFixed(2)}s`;
+      ttcBadge.innerText = `TTC ${ttc.dangerous ? 'DANGER' : 'SAFE'} · contact=${value} · threshold=${ttc.threshold.toFixed(2)}s`;
+    }
+
+    function drawDetectorOverlays() {
+      const pair = detectorPair();
+      const visible = !!pair && (showLateralBuffer || showTTC);
+      detectorHud.hidden = !visible;
+      bufferBadge.hidden = !showLateralBuffer;
+      ttcBadge.hidden = !showTTC;
+      if (!pair) return;
+      if (showLateralBuffer) drawLateralBufferOverlay(computeLateralBuffer(pair));
+      if (showTTC) drawTTCOverlay(computeTTCOverlay(pair));
     }
 
     function drawTrajectoryLine(points, color, width, dash=[]) {
@@ -1525,6 +1756,7 @@ HTML_TEMPLATE = """<!doctype html>
       }
       drawRoads();
       drawTraffic(trafficFrames[frameIndex] || []);
+      drawDetectorOverlays();
       drawAvoidabilityTrajectories();
       const frame = currentDisplayFrame();
       for (const agent of frame) drawAgent(agent);
@@ -1557,6 +1789,18 @@ HTML_TEMPLATE = """<!doctype html>
     reactionSlider.addEventListener('input', updateAvoidabilitySelection);
     observedModeButton.addEventListener('click', () => setReplayMode('observed'));
     avoidabilityModeButton.addEventListener('click', () => setReplayMode('avoidability'));
+    bufferToggle.addEventListener('click', () => {
+      showLateralBuffer = !showLateralBuffer;
+      bufferToggle.classList.toggle('active', showLateralBuffer);
+      bufferToggle.setAttribute('aria-pressed', String(showLateralBuffer));
+      draw();
+    });
+    ttcToggle.addEventListener('click', () => {
+      showTTC = !showTTC;
+      ttcToggle.classList.toggle('active', showTTC);
+      ttcToggle.setAttribute('aria-pressed', String(showTTC));
+      draw();
+    });
     playToggle.addEventListener('click', () => {
       playing = !playing;
       playToggle.innerText = playing ? 'Pause' : 'Play';
