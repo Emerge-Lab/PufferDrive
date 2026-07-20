@@ -1408,6 +1408,13 @@ def save_interactive_replay_zlib(scenario, replay, filename):
     return compressed_payload
 
 
+def render_interactive_replay_zlib(replay_path, filename):
+    with open(replay_path, "rb") as replay_file:
+        compressed_payload = replay_file.read()
+    validate_interactive_replay(compressed_payload)
+    _render_interactive_replay_payload(compressed_payload, filename)
+
+
 def generate_interactive_replay(scenario, replay, filename="replay.html"):
     compressed_payload = encode_interactive_replay(scenario, replay)
     _render_interactive_replay_payload(compressed_payload, filename)

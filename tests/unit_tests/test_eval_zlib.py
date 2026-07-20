@@ -96,6 +96,44 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
     assert "replay_environment_bundle" not in summaries[0]
 
 
+def test_direct_eval_save_html_enables_zlib_capture_and_save_zlib_alone_does_not_render(monkeypatch):
+    def fake_rollout(args, env_name, worker_env_kwargs, *unused_args):
+        assert args["save_zlib"] is True
+        assert worker_env_kwargs[0]["capture_replay"] is True
+        return []
+
+    render_calls = []
+    monkeypatch.setattr(pufferl, "_run_eval_rollout", fake_rollout)
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *args: None)
+    monkeypatch.setattr(pufferl, "_render_eval_replays", lambda summaries, out_dir: render_calls.append(out_dir))
+    args = {
+        "package": "ocean",
+        "train": {"use_rnn": False},
+        "env": {
+            "scenario_length": 128,
+            "num_agents": 1,
+        },
+        "vec": {"num_envs": 1},
+        "num_scenarios": 1,
+        "save_html": True,
+        "save_zlib": False,
+        "replay_csv": None,
+        "replay_filter": None,
+        "replay_rows": None,
+        "load_model_path": None,
+    }
+
+    pufferl.eval("puffer_drive", args=args)
+
+    assert render_calls == ["eval_results/puffer_drive/eval"]
+
+    args["save_html"] = False
+    render_calls.clear()
+    pufferl.eval("puffer_drive", args=args)
+
+    assert render_calls == []
+
+
 def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypatch):
     vecenv = _CompletedReplayVec()
     policy = _RecordingPolicy()
@@ -140,3 +178,44 @@ def test_replay_worker_kwargs_balances_without_fillers():
     assert total_steps == 256
     assert [kwargs["num_eval_scenarios"] for kwargs in worker_kwargs] == [2, 1, 1, 1]
     assert [map_idx for kwargs in worker_kwargs for map_idx in kwargs["eval_map_indices"]] == list(range(5))
+
+
+def test_render_eval_replays_writes_pages_with_navigation_and_index(monkeypatch, tmp_path):
+    replay_dir = tmp_path / "replays"
+    replay_dir.mkdir()
+    replay_paths = [replay_dir / f"episode_{episode_id:06d}.replay.zlib" for episode_id in range(2)]
+    for replay_path in replay_paths:
+        replay_path.write_bytes(b"replay")
+
+    render_calls = []
+
+    def fake_render(replay_path, output_path):
+        render_calls.append((replay_path, output_path))
+        with open(output_path, "w") as html_file:
+            html_file.write("rendered")
+
+    def fake_index(output_path, file_metrics):
+        assert sorted(file_metrics) == ["episode_000000.html", "episode_000001.html"]
+        with open(os.path.join(output_path, "index.html"), "w") as html_file:
+            html_file.write("index")
+
+    monkeypatch.setattr(pufferlib.viz, "render_interactive_replay_zlib", fake_render)
+    monkeypatch.setattr(pufferlib.viz, "build_gallery_index", fake_index)
+    summaries = [
+        {
+            "map_name": f"map_{episode_id}",
+            "scenario_id": f"scenario_{episode_id}",
+            "has_replay": 1,
+            "replay_path": str(replay_path),
+        }
+        for episode_id, replay_path in enumerate(replay_paths)
+    ]
+
+    render_dir = pufferl._render_eval_replays(summaries, str(tmp_path))
+
+    assert render_dir == str(tmp_path / "rendered_replays")
+    assert (tmp_path / "rendered_replays" / "episode_000000.html").read_text() == "rendered"
+    assert (tmp_path / "rendered_replays" / "episode_000001.html").read_text() == "rendered"
+    assert (tmp_path / "rendered_replays" / "index.html").read_text() == "index"
+    assert render_calls[0][0] == str(replay_paths[0])
+    assert render_calls[1][0] == str(replay_paths[1])

@@ -46,7 +46,7 @@ def _standard_replay():
     }
 
 
-def test_standard_replay_zlib_round_trip(tmp_path):
+def test_standard_replay_zlib_round_trip_and_html_render(tmp_path):
     scenario = {
         "map_name": "test_map.bin",
         "scenario_id": "scenario_1",
@@ -55,13 +55,16 @@ def test_standard_replay_zlib_round_trip(tmp_path):
         "traffic_elements": [],
     }
     replay_path = tmp_path / "episode.replay.zlib"
+    html_path = tmp_path / "episode.html"
 
     compressed_payload = viz.save_interactive_replay_zlib(scenario, _standard_replay(), replay_path)
     header = viz.validate_interactive_replay(compressed_payload)
+    viz.render_interactive_replay_zlib(replay_path, html_path)
 
     assert header["schema"] == viz.REPLAY_SCHEMA
     assert header["frames"] == 2
     assert replay_path.read_bytes() == compressed_payload
+    assert "__B64_PAYLOAD__" not in html_path.read_text()
 
 
 def test_standard_replay_zlib_rejects_trailing_compressed_data():

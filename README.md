@@ -112,6 +112,19 @@ puffer eval puffer_drive --eval_simulation gigaflow \
   --num_scenarios 10 --render 1 --render-backend obs_html
 ```
 
+Direct eval can persist the same full observation replay used by the interactive viewer:
+
+```bash
+# Save one full replay payload per completed scenario
+puffer eval puffer_drive --load-model-path path/to/model.pt --save-zlib
+
+# Save those zlibs, render standard interactive pages, and build a sortable gallery
+puffer eval puffer_drive --load-model-path path/to/model.pt --save-html
+```
+
+`--save-html` implies `--save-zlib`. Outputs are written under the eval run's
+`replays/` and `rendered_replays/` directories.
+
 **For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
 
 ## Failure mining

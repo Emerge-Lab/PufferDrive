@@ -806,7 +806,9 @@ def render_compact_replay_html(replay_path, output_path, render_context=None):
     replay_bundle = load_compact_replay(replay_path)
     payload = _build_render_payload(replay_bundle)
     render_context = render_context or {}
-    payload["metadata"]["episode_id"] = payload["metadata"].get("episode_id", Path(output_path).stem)
+    payload["metadata"]["episode_id"] = payload["metadata"].get(
+        "episode_id", render_context.get("episode_id", Path(output_path).stem)
+    )
     payload["navigation"] = render_context.get("navigation", {})
     payload["summary"] = _format_summary_for_render(render_context.get("summary", {}))
     title = f"{payload['metadata'].get('map_name', 'Replay')} | {payload['metadata'].get('scenario_id', 'episode')}"

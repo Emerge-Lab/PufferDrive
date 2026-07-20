@@ -1951,6 +1951,8 @@ def eval(env_name, args=None, policy=None):
 
     if args["train"]["use_rnn"]:
         raise pufferlib.APIUsageError("Multiprocessed eval does not support RNN policies yet")
+    if args.get("save_html"):
+        args["save_zlib"] = True
 
     scenario_length = int(args["env"]["scenario_length"])
 
@@ -2006,6 +2008,8 @@ def eval(env_name, args=None, policy=None):
     )
 
     _write_eval_reports(episode_summaries, out_dir, num_scenarios)
+    if args.get("save_html"):
+        _render_eval_replays(episode_summaries, out_dir)
     print(
         f"{desc} complete: {len(episode_summaries)} episodes from {num_scenarios} scenarios across {num_workers} workers."
     )
@@ -2043,6 +2047,29 @@ def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
 
     print(f"Wrote {len(df)} per-episode rows to {csv_path}")
     print(f"Wrote metric averages to {json_path}")
+
+
+def _render_eval_replays(episode_summaries, out_dir):
+    """Render captured eval replays as navigable HTML pages plus an index."""
+    render_dir = os.path.join(out_dir, "rendered_replays")
+    os.makedirs(render_dir, exist_ok=True)
+
+    file_metrics = {}
+    for episode_id, summary in enumerate(tqdm(episode_summaries, desc="Rendering replay HTML")):
+        replay_path = summary.get("replay_path")
+        if not replay_path or not os.path.isfile(replay_path):
+            raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
+        html_filename = f"episode_{episode_id:06d}.html"
+        output_path = os.path.join(render_dir, html_filename)
+        pufferlib.viz.render_interactive_replay_zlib(replay_path, output_path)
+        file_metrics[html_filename] = {
+            key: value for key, value in summary.items() if isinstance(value, numbers.Real) and np.isfinite(value)
+        }
+
+    pufferlib.viz.build_gallery_index(render_dir, file_metrics=file_metrics)
+    print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
+    print(f"Wrote replay index to {os.path.join(render_dir, 'index.html')}")
+    return render_dir
 
 
 def load_env(env_name, args):
@@ -2127,6 +2154,11 @@ def load_config(env_name, config_dir=None):
         "--save-zlib",
         action="store_true",
         help="Save one full interactive observation replay zlib for every completed evaluation scenario",
+    )
+    parser.add_argument(
+        "--save-html",
+        action="store_true",
+        help="Save full replay zlibs and render them with the standard interactive HTML viewer",
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
