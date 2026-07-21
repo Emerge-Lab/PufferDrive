@@ -26,6 +26,7 @@ import subprocess
 import argparse
 import importlib
 import configparser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -1887,6 +1888,7 @@ def _run_eval_rollout(
                     )
 
         obs, _, _, _, infos = vecenv.step(action)
+        replays_to_write = []
         for worker_info in infos:
             worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
             for item in worker_items:
@@ -1923,18 +1925,33 @@ def _run_eval_rollout(
                         for key, frames in replay_history.items():
                             if not frames:
                                 continue
-                            replay[key] = np.stack(frames[:episode_length], axis=0)[
-                                :, global_agent_start:global_agent_end
+                            scenario_agent_frames = [
+                                frame[global_agent_start:global_agent_end] for frame in frames[:episode_length]
                             ]
+                            replay[key] = np.stack(scenario_agent_frames, axis=0)
                         replay_stem = _eval_replay_stem(item, len(episode_summaries))
                         replay_path = os.path.abspath(os.path.join(replay_output_dir, f"{replay_stem}.replay.zlib"))
-                        pufferlib.viz.save_interactive_replay_zlib(replay_environment["scenario"], replay, replay_path)
+                        replays_to_write.append((replay_environment["scenario"], replay, replay_path))
                         item["has_replay"] = 1
                         item["replay_path"] = replay_path
                     item["agents_per_batch"] = policy_agents_per_batch
                     episode_summaries.append(item)
                     if len(episode_summaries) <= expected_episodes:
                         scenario_progress.update(1)
+
+        if replays_to_write:
+            scenarios, replays, replay_paths = zip(*replays_to_write)
+            scenario_progress.set_postfix_str(f"writing {len(replays_to_write)} replays")
+            with ThreadPoolExecutor(max_workers=min(num_workers, len(replays_to_write))) as replay_writer:
+                for _ in replay_writer.map(
+                    pufferlib.viz.save_interactive_replay_zlib,
+                    scenarios,
+                    replays,
+                    replay_paths,
+                ):
+                    pass
+            scenario_progress.set_postfix_str("")
+
         if len(episode_summaries) >= expected_episodes:
             break
         if capture_replay and (rollout_step + 1) % capture_batch_steps == 0:
@@ -2053,7 +2070,9 @@ def _render_eval_replays(episode_summaries, out_dir):
     os.makedirs(render_dir, exist_ok=True)
 
     file_metrics = {}
-    for episode_id, summary in enumerate(tqdm(episode_summaries, desc="Rendering replay HTML")):
+    replay_paths = []
+    output_paths = []
+    for episode_id, summary in enumerate(episode_summaries):
         replay_path = summary.get("replay_path")
         if not replay_path or not os.path.isfile(replay_path):
             raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
@@ -2063,10 +2082,22 @@ def _render_eval_replays(episode_summaries, out_dir):
             raise RuntimeError(f"Cannot render episode {episode_id}: unexpected replay filename: {replay_filename}")
         html_filename = f"{replay_filename[: -len(replay_suffix)]}.html"
         output_path = os.path.join(render_dir, html_filename)
-        pufferlib.viz.render_interactive_replay_zlib(replay_path, output_path)
+        replay_paths.append(replay_path)
+        output_paths.append(output_path)
         file_metrics[html_filename] = {
             key: value for key, value in summary.items() if isinstance(value, numbers.Real) and np.isfinite(value)
         }
+
+    if replay_paths:
+        html_renderer_count = min(os.cpu_count() or 1, len(replay_paths))
+        with ThreadPoolExecutor(max_workers=html_renderer_count) as html_renderer:
+            rendered_replays = html_renderer.map(
+                pufferlib.viz.render_interactive_replay_zlib,
+                replay_paths,
+                output_paths,
+            )
+            for _ in tqdm(rendered_replays, total=len(replay_paths), desc="Rendering replay HTML"):
+                pass
 
     pufferlib.viz.build_gallery_index(render_dir, file_metrics=file_metrics)
     print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
