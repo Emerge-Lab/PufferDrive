@@ -76,8 +76,8 @@ with torch.no_grad():
     logits_list, value = policy(obs_tensor)
 
 # Sample actions
-action, logprob, ent = sample_logits(logits_list)
-action_det, _, _ = sample_logits(logits_list, deterministic=True)
+action, logprob, ent, _ = sample_logits(logits_list)
+action_det, _, _, _ = sample_logits(logits_list, deterministic=True) # TODO
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
 print(f"Entropy: mean={ent.mean():.4f}, std={ent.std():.4f}")
@@ -143,7 +143,7 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         obs_t = torch.FloatTensor(obs).to(device)
         with torch.no_grad():
             logits_list, val = policy(obs_t)
-            act, logp, entr = sample_logits(logits_list, deterministic=deterministic)
+            act, logp, entr, _ = sample_logits(logits_list, deterministic=deterministic)
 
         buffers["obs"][t] = obs
         buffers["actions"][t] = act.cpu().numpy().reshape(N) if act.dim() > 1 else act.cpu().numpy()
