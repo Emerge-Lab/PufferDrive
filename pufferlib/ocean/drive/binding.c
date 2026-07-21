@@ -1582,19 +1582,36 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
             Py_BuildValue("{s:i,s:i,s:i}", "target_agent_index", debug->target_agent_index, "collision_adversary_index",
                           debug->collision_adversary_index, "collision_timestep", debug->collision_timestep);
         PyObject *constants = Py_BuildValue(
-            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
+            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
             debug->braking_deceleration, "reaction_time_seconds", debug->reaction_time_seconds, "max_extension_steps",
             debug->max_extension_steps, "max_rollout_steps", debug->max_rollout_steps, "ttc_margin_seconds",
             debug->ttc_margin_seconds, "ttc_max_projection_steps", debug->ttc_max_projection_steps,
             "lateral_buffer_base_distance", debug->lateral_buffer_base_distance, "lateral_buffer_response_time_seconds",
             debug->lateral_buffer_response_time_seconds, "lateral_buffer_deceleration",
-            debug->lateral_buffer_deceleration, "lateral_buffer_max_distance", debug->lateral_buffer_max_distance);
-        PyObject *detection_times = Py_BuildValue(
-            "{s:f,s:f,s:f,s:f}", "ttc_seconds_before_collision", debug->ttc_detection_seconds_before_collision,
-            "lateral_buffer_seconds_before_collision", debug->lateral_buffer_detection_seconds_before_collision,
-            "combined_seconds_before_collision", debug->combined_detection_seconds_before_collision,
-            "target_last_avoidable_braking_seconds_before_collision",
-            debug->last_avoidable_braking_seconds_before_collision);
+            debug->lateral_buffer_deceleration, "lateral_buffer_max_distance", debug->lateral_buffer_max_distance,
+            "route_sample_spacing", debug->route_sample_spacing);
+        PyObject *detection_times =
+            Py_BuildValue("{s:f,s:f,s:f,s:f,s:f,s:f,s:f}", "straight_ttc_seconds_before_collision",
+                          debug->straight_ttc_detection_seconds_before_collision, "route_ttc_seconds_before_collision",
+                          debug->route_ttc_detection_seconds_before_collision, "effective_ttc_seconds_before_collision",
+                          debug->effective_ttc_detection_seconds_before_collision, "ttc_seconds_before_collision",
+                          debug->ttc_detection_seconds_before_collision, "lateral_buffer_seconds_before_collision",
+                          debug->lateral_buffer_detection_seconds_before_collision, "combined_seconds_before_collision",
+                          debug->combined_detection_seconds_before_collision,
+                          "target_last_avoidable_braking_seconds_before_collision",
+                          debug->last_avoidable_braking_seconds_before_collision);
+        PyObject *target_route = PyList_New(debug->target_route_length);
+        if (target_route != NULL) {
+            for (int i = 0; i < debug->target_route_length; i++) {
+                PyObject *lane_index = PyLong_FromLong(debug->target_route[i]);
+                if (lane_index == NULL || PyList_SetItem(target_route, i, lane_index) < 0) {
+                    Py_XDECREF(lane_index);
+                    Py_CLEAR(target_route);
+                    break;
+                }
+            }
+        }
+        PyObject *target_route_length = PyLong_FromLong(debug->target_route_length);
 
 #define SNAPSHOT_DICT(snapshot)                                                                                        \
     Py_BuildValue("{s:i,s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i}", "valid", (snapshot).valid, "index", \
@@ -1627,7 +1644,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         PyObject *candidate_arrays = PyDict_New();
         PyObject *candidate_lists[10] = {0};
         int trace_ok = trace != NULL && collision != NULL && constants != NULL && detection_times != NULL &&
-                       candidate_arrays != NULL;
+                       target_route != NULL && target_route_length != NULL && candidate_arrays != NULL;
         for (int j = 0; j < 10 && trace_ok; j++) {
             candidate_lists[j] = PyList_New(0);
             if (candidate_lists[j] == NULL ||
@@ -1661,6 +1678,8 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         if (trace_ok && PyDict_SetItemString(trace, "collision", collision) == 0 &&
             PyDict_SetItemString(trace, "constants", constants) == 0 &&
             PyDict_SetItemString(trace, "detection_times", detection_times) == 0 &&
+            PyDict_SetItemString(trace, "target_route_lane_indices", target_route) == 0 &&
+            PyDict_SetItemString(trace, "target_route_length", target_route_length) == 0 &&
             PyDict_SetItemString(trace, "candidate_arrays", candidate_arrays) == 0 &&
             PyDict_SetItemString(dict, "avoidability_debug", trace) == 0) {
             // Added successfully.
@@ -1674,6 +1693,8 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         Py_XDECREF(collision);
         Py_XDECREF(constants);
         Py_XDECREF(detection_times);
+        Py_XDECREF(target_route);
+        Py_XDECREF(target_route_length);
         Py_XDECREF(trace);
         if (!trace_ok) {
             return -1;

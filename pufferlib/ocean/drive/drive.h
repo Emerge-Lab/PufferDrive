@@ -85,6 +85,7 @@
 // Covers the largest TTC danger threshold at dt=0.1:
 // reaction + MAX_SPEED / TARGET_AVOIDABILITY_BRAKE_DECEL + margin = 1 + 40 / 5 + 0.1 = 9.1s.
 #define FIRST_DETECTED_TTC_MAX_STEPS 92
+#define FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS 1.0f
 #define FIRST_DETECTED_LAT_BUFFER_BASE_METERS 0.2f
 #define FIRST_DETECTED_LAT_BUFFER_RESPONSE_TIME_SECONDS 0.0f
 #define FIRST_DETECTED_LAT_BUFFER_DECEL_MPS2 0.8f
@@ -247,6 +248,12 @@ typedef struct {
     float lateral_buffer_response_time_seconds;
     float lateral_buffer_deceleration;
     float lateral_buffer_max_distance;
+    float route_sample_spacing;
+    int target_route_length;
+    int target_route[MAX_ROUTE_LENGTH];
+    float straight_ttc_detection_seconds_before_collision;
+    float route_ttc_detection_seconds_before_collision;
+    float effective_ttc_detection_seconds_before_collision;
     float ttc_detection_seconds_before_collision;
     float lateral_buffer_detection_seconds_before_collision;
     float combined_detection_seconds_before_collision;
@@ -3315,6 +3322,9 @@ static void target_brake_path_sample(Agent *target, int idx_start, float s, floa
 
 static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back);
 static bool is_agent_at_fault_collision(const Agent *agent, const Agent *other);
+static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent *adversary,
+                                    float danger_threshold_seconds, float *out_route_gap,
+                                    float *out_adversary_route_speed, float *out_closing_speed);
 
 // Replay all adversaries while the target reacts at constant speed starting `steps_back`
 // before the observed collision, then brakes. The observed collision adversary brakes after
@@ -3463,6 +3473,16 @@ static float last_avoidable_braking_seconds_before_collision(Drive *env, int tar
         debug->lateral_buffer_response_time_seconds = FIRST_DETECTED_LAT_BUFFER_RESPONSE_TIME_SECONDS;
         debug->lateral_buffer_deceleration = FIRST_DETECTED_LAT_BUFFER_DECEL_MPS2;
         debug->lateral_buffer_max_distance = FIRST_DETECTED_LAT_BUFFER_MAX_METERS;
+        debug->route_sample_spacing = FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS;
+        debug->target_route_length =
+            target->route != NULL ? (target->route_length < MAX_ROUTE_LENGTH ? target->route_length : MAX_ROUTE_LENGTH)
+                                  : 0;
+        for (int route_idx = 0; route_idx < debug->target_route_length; route_idx++) {
+            debug->target_route[route_idx] = target->route[route_idx];
+        }
+        debug->straight_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
+        debug->route_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
+        debug->effective_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
         debug->ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
         debug->lateral_buffer_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
         debug->combined_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
@@ -3487,6 +3507,8 @@ static float last_avoidable_braking_seconds_before_collision(Drive *env, int tar
 }
 
 typedef struct {
+    float straight_ttc_seconds_before_collision;
+    float route_ttc_seconds_before_collision;
     float ttc_seconds_before_collision;
     float lateral_buffer_seconds_before_collision;
     float combined_seconds_before_collision;
@@ -3572,9 +3594,8 @@ static FirstTimeDetectedResult compute_first_time_detected(Drive *env, int targe
                             ? target->trajectory_hist_count
                             : adversary->trajectory_hist_count;
     FirstTimeDetectedResult result = {
-        FIRST_DETECTED_NOT_DETECTED,
-        FIRST_DETECTED_NOT_DETECTED,
-        FIRST_DETECTED_NOT_DETECTED,
+        FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED,
+        FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED,
     };
 
     for (int steps_back = history_count; steps_back >= 1; steps_back--) {
@@ -3582,13 +3603,27 @@ static FirstTimeDetectedResult compute_first_time_detected(Drive *env, int targe
         Agent target_sample = trajectory_history_agent_sample(target, steps_back);
         Agent adversary_sample = trajectory_history_agent_sample(adversary, steps_back);
 
-        if (result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED) {
+        if (result.straight_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED ||
+            result.route_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED ||
+            result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED) {
             float ttc_danger_threshold_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS +
                                                  target_sample.sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL +
                                                  FIRST_DETECTED_TTC_MARGIN_SECONDS;
-            float ttc_seconds = pairwise_obb_ttc_constant_velocity(&target_sample, &adversary_sample, env->dt,
-                                                                   ttc_danger_threshold_seconds);
-            if (ttc_seconds < ttc_danger_threshold_seconds) {
+            float straight_ttc = pairwise_obb_ttc_constant_velocity(&target_sample, &adversary_sample, env->dt,
+                                                                    ttc_danger_threshold_seconds);
+            float route_ttc = pairwise_obb_ttc_route(env, &target_sample, &adversary_sample,
+                                                     ttc_danger_threshold_seconds, NULL, NULL, NULL);
+            float ttc_seconds = fminf(straight_ttc, route_ttc);
+            if (result.straight_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
+                straight_ttc < ttc_danger_threshold_seconds) {
+                result.straight_ttc_seconds_before_collision = seconds_before_collision;
+            }
+            if (result.route_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
+                route_ttc < ttc_danger_threshold_seconds) {
+                result.route_ttc_seconds_before_collision = seconds_before_collision;
+            }
+            if (result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
+                ttc_seconds < ttc_danger_threshold_seconds) {
                 result.ttc_seconds_before_collision = seconds_before_collision;
             }
         }
@@ -3599,6 +3634,8 @@ static FirstTimeDetectedResult compute_first_time_detected(Drive *env, int targe
         }
 
         if (result.ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
+            result.straight_ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
+            result.route_ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
             result.lateral_buffer_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED) {
             break;
         }
@@ -5509,6 +5546,12 @@ static void compute_metrics(Drive *env, int agent_idx) {
                     first_time_detected.lateral_buffer_seconds_before_collision;
                 env->target_first_time_detected_episode = first_time_detected.combined_seconds_before_collision;
                 if (env->avoidability_debug != NULL && env->avoidability_debug->valid) {
+                    env->avoidability_debug->straight_ttc_detection_seconds_before_collision =
+                        first_time_detected.straight_ttc_seconds_before_collision;
+                    env->avoidability_debug->route_ttc_detection_seconds_before_collision =
+                        first_time_detected.route_ttc_seconds_before_collision;
+                    env->avoidability_debug->effective_ttc_detection_seconds_before_collision =
+                        first_time_detected.ttc_seconds_before_collision;
                     env->avoidability_debug->ttc_detection_seconds_before_collision =
                         first_time_detected.ttc_seconds_before_collision;
                     env->avoidability_debug->lateral_buffer_detection_seconds_before_collision =
@@ -6548,6 +6591,94 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 #include "idm.h"
 #include "pdm.h"
+
+// Route-aware TTC for one target/adversary pair. The target is swept along the
+// collision-time route centerline while the adversary box stays at its observed pose.
+static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent *adversary,
+                                    float danger_threshold_seconds, float *out_route_gap,
+                                    float *out_adversary_route_speed, float *out_closing_speed) {
+    if (out_route_gap != NULL)
+        *out_route_gap = INFINITY;
+    if (out_adversary_route_speed != NULL)
+        *out_adversary_route_speed = 0.0f;
+    if (out_closing_speed != NULL)
+        *out_closing_speed = 0.0f;
+
+    float target_speed = fmaxf(0.0f, target->sim_speed);
+    float max_distance = target_speed * danger_threshold_seconds;
+    if (target_speed <= 0.0f || max_distance <= 0.0f || target->route == NULL || target->route_length <= 0) {
+        return INFINITY;
+    }
+
+    Agent projection_agent = *target;
+    // Historical samples retain the collision-time route index. Force the IDM
+    // projector's full-route fallback so the historical pose chooses its true lane.
+    projection_agent.current_route_index = target->route_length + 1;
+    IDMLaneProjection projection = idm_project_to_route_lanes(env, &projection_agent);
+    if (!projection.valid) {
+        return INFINITY;
+    }
+
+    Agent swept_target = *target;
+    Agent stationary_adversary = *adversary;
+    swept_target.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
+    float next_sample = 0.0f;
+    float traveled = 0.0f;
+
+    for (int route_idx = projection.route_idx; route_idx < target->route_length; route_idx++) {
+        int lane_idx = target->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements)
+            return INFINITY;
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_length < 2)
+            return INFINITY;
+        int start_seg = route_idx == projection.route_idx ? projection.segment_idx : 0;
+
+        for (int seg_idx = start_seg; seg_idx < lane->segment_length - 1; seg_idx++) {
+            float dx = lane->x[seg_idx + 1] - lane->x[seg_idx];
+            float dy = lane->y[seg_idx + 1] - lane->y[seg_idx];
+            float dz = lane->z[seg_idx + 1] - lane->z[seg_idx];
+            float seg_len = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (seg_len <= 1e-6f)
+                continue;
+            float seg_start_t =
+                route_idx == projection.route_idx && seg_idx == projection.segment_idx ? projection.t : 0.0f;
+            float usable_len = (1.0f - seg_start_t) * seg_len;
+
+            while (next_sample <= max_distance && next_sample <= traveled + usable_len + 1e-5f) {
+                float local_distance = fmaxf(0.0f, next_sample - traveled);
+                float t = seg_start_t + local_distance / seg_len;
+                t = clip(t, seg_start_t, 1.0f);
+                swept_target.sim_x = lane->x[seg_idx] + t * dx;
+                swept_target.sim_y = lane->y[seg_idx] + t * dy;
+                swept_target.sim_z = lane->z[seg_idx] + t * dz;
+                swept_target.sim_heading = atan2f(dy, dx);
+                swept_target.cos_heading = cosf(swept_target.sim_heading);
+                swept_target.sin_heading = sinf(swept_target.sim_heading);
+
+                if (check_z_collision_possibility(&swept_target, &stationary_adversary) &&
+                    check_obb_collision(&swept_target, &stationary_adversary)) {
+                    float tangent_x = dx / seg_len;
+                    float tangent_y = dy / seg_len;
+                    float adversary_speed = fmaxf(0.0f, adversary->sim_vx * tangent_x + adversary->sim_vy * tangent_y);
+                    float closing_speed = target_speed - adversary_speed;
+                    if (out_route_gap != NULL)
+                        *out_route_gap = next_sample;
+                    if (out_adversary_route_speed != NULL)
+                        *out_adversary_route_speed = adversary_speed;
+                    if (out_closing_speed != NULL)
+                        *out_closing_speed = closing_speed;
+                    return closing_speed > 0.0f ? next_sample / closing_speed : INFINITY;
+                }
+                next_sample += FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS;
+            }
+            traveled += usable_len;
+            if (next_sample > max_distance)
+                return INFINITY;
+        }
+    }
+    return INFINITY;
+}
 
 static void move_agent_with_controller(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];

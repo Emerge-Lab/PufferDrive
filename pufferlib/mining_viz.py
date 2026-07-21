@@ -17,8 +17,8 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version != 5:
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=5.")
+    if schema_version != 6:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=6.")
 
     required_top_level = ("metadata", "agent_arrays", "traffic_arrays", "episode_timesteps")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
@@ -1201,6 +1201,95 @@ HTML_TEMPLATE = """<!doctype html>
       };
     }
 
+    function projectTargetToCapturedRoute(target) {
+      const route = (avoidability && avoidability.target_route_lane_indices) || [];
+      let best = null;
+      for (let routeIndex = 0; routeIndex < route.length; routeIndex++) {
+        const lane = roadElements[Number(route[routeIndex])];
+        const xs = (lane && lane.x) || [], ys = (lane && lane.y) || [], zs = (lane && lane.z) || [];
+        for (let segmentIndex = 0; segmentIndex + 1 < xs.length && segmentIndex + 1 < ys.length; segmentIndex++) {
+          const x0 = Number(xs[segmentIndex]), y0 = Number(ys[segmentIndex]);
+          const z0 = Number(zs[segmentIndex] || 0);
+          const dx = Number(xs[segmentIndex + 1]) - x0;
+          const dy = Number(ys[segmentIndex + 1]) - y0;
+          const dz = Number(zs[segmentIndex + 1] || 0) - z0;
+          const lengthSquared = dx * dx + dy * dy + dz * dz;
+          if (lengthSquared < 1e-6) continue;
+          const t = Math.max(0, Math.min(1,
+            ((Number(target.x) - x0) * dx + (Number(target.y) - y0) * dy +
+             (Number(target.z || 0) - z0) * dz) / lengthSquared));
+          const ex = Number(target.x) - (x0 + t * dx);
+          const ey = Number(target.y) - (y0 + t * dy);
+          const ez = Number(target.z || 0) - (z0 + t * dz);
+          const distanceSquared = ex * ex + ey * ey + ez * ez;
+          if (!best || distanceSquared < best.distanceSquared) {
+            best = {routeIndex, segmentIndex, t, distanceSquared};
+          }
+        }
+      }
+      return best;
+    }
+
+    function computeRouteTTC(pair, threshold, expandedTarget) {
+      const route = (avoidability && avoidability.target_route_lane_indices) || [];
+      const projection = route.length ? projectTargetToCapturedRoute(pair.target) : null;
+      const spacing = Number((avoidability.constants || {}).route_sample_spacing || 1.0);
+      const targetSpeed = speedOfAgent(pair.target);
+      const maximumDistance = targetSpeed * threshold;
+      const routePath = [];
+      const none = {
+        ttc: null, routeGap: null, adversaryRouteSpeed: null, closingSpeed: null,
+        routePath, targetPose: null, adversaryPose: pair.adversary,
+      };
+      if (!projection || targetSpeed <= 0 || maximumDistance <= 0 || spacing <= 0) return none;
+
+      let nextSample = 0;
+      let traveled = 0;
+      for (let routeIndex = projection.routeIndex; routeIndex < route.length; routeIndex++) {
+        const lane = roadElements[Number(route[routeIndex])];
+        const xs = (lane && lane.x) || [], ys = (lane && lane.y) || [], zs = (lane && lane.z) || [];
+        if (xs.length < 2 || ys.length < 2) return none;
+        const firstSegment = routeIndex === projection.routeIndex ? projection.segmentIndex : 0;
+        for (let segmentIndex = firstSegment; segmentIndex + 1 < xs.length; segmentIndex++) {
+          const x0 = Number(xs[segmentIndex]), y0 = Number(ys[segmentIndex]);
+          const z0 = Number(zs[segmentIndex] || 0);
+          const dx = Number(xs[segmentIndex + 1]) - x0;
+          const dy = Number(ys[segmentIndex + 1]) - y0;
+          const dz = Number(zs[segmentIndex + 1] || 0) - z0;
+          const segmentLength = Math.hypot(dx, dy, dz);
+          if (segmentLength <= 1e-6) continue;
+          const segmentStartT = routeIndex === projection.routeIndex && segmentIndex === projection.segmentIndex
+            ? projection.t : 0;
+          const usableLength = (1 - segmentStartT) * segmentLength;
+          while (nextSample <= maximumDistance && nextSample <= traveled + usableLength + 1e-5) {
+            const localDistance = Math.max(0, nextSample - traveled);
+            const t = Math.max(segmentStartT, Math.min(1, segmentStartT + localDistance / segmentLength));
+            const heading = Math.atan2(dy, dx);
+            const targetPose = {
+              ...expandedTarget,
+              x: x0 + t * dx, y: y0 + t * dy, z: z0 + t * dz, heading,
+            };
+            routePath.push({x: targetPose.x, y: targetPose.y});
+            if (verticalOverlap(targetPose, pair.adversary) && obbOverlap(targetPose, pair.adversary)) {
+              const tangentX = dx / segmentLength, tangentY = dy / segmentLength;
+              const adversaryRouteSpeed = Math.max(0,
+                Number(pair.adversary.vx || 0) * tangentX + Number(pair.adversary.vy || 0) * tangentY);
+              const closingSpeed = targetSpeed - adversaryRouteSpeed;
+              return {
+                ttc: closingSpeed > 0 ? nextSample / closingSpeed : null,
+                routeGap: nextSample, adversaryRouteSpeed, closingSpeed,
+                routePath, targetPose, adversaryPose: pair.adversary,
+              };
+            }
+            nextSample += spacing;
+          }
+          traveled += usableLength;
+          if (nextSample > maximumDistance) return none;
+        }
+      }
+      return none;
+    }
+
     function computeTTCOverlay(pair) {
       const constants = avoidability.constants || {};
       const dt = Number(constants.dt || 0.1);
@@ -1227,14 +1316,26 @@ HTML_TEMPLATE = """<!doctype html>
           break;
         }
       }
+      const route = computeRouteTTC(pair, threshold, expandedTarget);
+      const straightTTC = contactTime;
+      const routeTTC = route.ttc;
+      const finiteStraight = straightTTC == null ? Infinity : straightTTC;
+      const finiteRoute = routeTTC == null ? Infinity : routeTTC;
+      const effectiveTTC = Math.min(finiteStraight, finiteRoute);
+      const winner = !Number.isFinite(effectiveTTC) ? 'none' : finiteRoute < finiteStraight ? 'route' : 'straight';
       return {
-        dangerous: contactTime != null && contactTime < threshold,
-        contactTime,
+        dangerous: effectiveTTC < threshold,
+        contactTime: Number.isFinite(effectiveTTC) ? effectiveTTC : null,
+        straightTTC,
+        routeTTC,
+        effectiveTTC: Number.isFinite(effectiveTTC) ? effectiveTTC : null,
+        winner,
         threshold,
         targetPath,
         adversaryPath,
         targetPose,
         adversaryPose,
+        route,
       };
     }
 
@@ -1464,9 +1565,18 @@ HTML_TEMPLATE = """<!doctype html>
       drawTrajectoryLine(ttc.adversaryPath, color, 2.2, [8, 4]);
       drawDetectorPose(ttc.targetPose, color);
       drawDetectorPose(ttc.adversaryPose, color, [6, 4]);
+      drawTrajectoryLine(ttc.route.routePath, '#7c3aed', 3.0);
+      if (ttc.route.targetPose) drawDetectorPose(ttc.route.targetPose, '#7c3aed');
+      if (ttc.route.targetPose) drawDetectorPose(ttc.route.adversaryPose, '#7c3aed', [6, 4]);
       ttcBadge.className = ttc.dangerous ? 'detector-badge danger' : 'detector-badge';
-      const value = ttc.contactTime == null ? '∞' : `${ttc.contactTime.toFixed(2)}s`;
-      ttcBadge.innerText = `TTC ${ttc.dangerous ? 'DANGER' : 'SAFE'} · contact=${value} · threshold=${ttc.threshold.toFixed(2)}s`;
+      const seconds = value => value == null ? '∞' : `${value.toFixed(2)}s`;
+      const meters = value => value == null ? 'n/a' : `${value.toFixed(2)}m`;
+      const speed = value => value == null ? 'n/a' : `${value.toFixed(2)}m/s`;
+      ttcBadge.innerText = `TTC ${ttc.dangerous ? 'DANGER' : 'SAFE'} · straight=${seconds(ttc.straightTTC)}` +
+        ` · route=${seconds(ttc.routeTTC)} · effective=${seconds(ttc.effectiveTTC)}` +
+        ` · threshold=${ttc.threshold.toFixed(2)}s · gap=${meters(ttc.route.routeGap)}` +
+        ` · leader=${speed(ttc.route.adversaryRouteSpeed)} · closing=${speed(ttc.route.closingSpeed)}` +
+        ` · source=${ttc.winner}`;
     }
 
     function drawDetectorOverlays() {
