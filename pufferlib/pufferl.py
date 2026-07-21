@@ -128,8 +128,15 @@ class PuffeRL:
 
         # Vecenv info
         vecenv.async_reset(seed)
+
+        self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
-        atn_space = vecenv.single_action_space
+        if self.env_continuous and not policy.is_continuous:
+            action_shape = (len(policy.atn_dim),)
+            action_dtype = torch.int32
+        else:
+            action_shape = vecenv.single_action_space
+            action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
@@ -171,9 +178,9 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
-            *atn_space.shape,
+            *action_shape,
             device=device,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+            dtype=action_dtype,
         )
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
@@ -399,7 +406,8 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=False, 
+                                                                                  env_continuous=self.env_continuous, policy=self.policy)
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -441,10 +449,7 @@ class PuffeRL:
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
-
-                action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
+                
 
             profile("eval_misc", epoch)
             for i in info:
@@ -457,7 +462,15 @@ class PuffeRL:
                         self.stats[k].append(v)
 
             profile("env", epoch)
-            self.vecenv.send(action)
+
+            if self.env_continuous and not self.policy.is_continuous: # TODO check with trajectory
+                cont_action = cont_action.cpu().numpy()
+                self.vecenv.send(cont_action.squeeze(0))
+            else:
+                action = action.cpu().numpy()
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
+                self.vecenv.send(action)
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
@@ -560,7 +573,7 @@ class PuffeRL:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
         newvalue = newvalue.float()
-        _, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+        _, newlogprob, entropy, _ = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
         newlogprob = newlogprob.float().view_as(mb_logprobs)
         newvalue = newvalue.view_as(mb_returns)
@@ -572,6 +585,7 @@ class PuffeRL:
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+        # TODO fix multi-gpu bug
         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
         if adv_weights is not None:
             mb_adv = adv_weights * mb_adv
@@ -1830,17 +1844,23 @@ def mine_failures(env_name, args=None):
     obs_arr, *_ = vecenv.recv()
     pbar_total = num_episodes
     pbar_done = 0
+    env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
     print(f"[mine_failures] target episodes={num_episodes} output={output_dir} score_threshold={score_threshold}")
     while pbar_done < num_episodes:
         with torch.no_grad():
             o_t = torch.as_tensor(obs_arr).to(device)
             state = {"reward": None, "done": None, "env_id": None, "mask": None}
             logits, _ = policy.forward_eval(o_t, state)
-            action, _, _ = pufferlib.pytorch.sample_logits(logits)
+            action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=False, env_continuous=env_continuous, policy=policy)
             action = action.cpu().numpy()
             if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
                 action = action.reshape(-1, *vecenv.single_action_space.shape)
-        vecenv.send(action)
+
+        if env_continuous and not policy.is_continuous: # TODO check with trajectory
+            cont_action = cont_action.cpu().numpy()
+            vecenv.send(cont_action.squeeze(0))
+        else:
+            vecenv.send(action)
         obs_arr, _, _, _, infos, *_ = vecenv.recv()
         for info in infos:
             if not isinstance(info, dict):

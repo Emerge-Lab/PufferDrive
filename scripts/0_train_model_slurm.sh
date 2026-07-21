@@ -4,11 +4,11 @@
 #SBATCH --nodes 1
 #SBATCH --time 2-00:00
 #SBATCH --gres gpu:8
-#SBATCH --mem 1024G
-#SBATCH --cpus-per-task 224
-#SBATCH --output /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.out
-#SBATCH --error /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.err
-#SBATCH --partition kyutai
+#SBATCH --mem=1007G
+#SBATCH --cpus-per-task 144
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_008_longrun_300B/log_%a_%A.err
+#SBATCH --partition dev
 
 # print info about current job
 echo "START TIME: $(date)"

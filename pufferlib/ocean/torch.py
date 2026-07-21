@@ -325,8 +325,35 @@ class Drive(nn.Module):
         backbone_layer_norm: bool,
         shared_network: bool,
         mask_padded_features: bool,
+        action_type: str,
     ):
         super().__init__()
+        
+        self.register_buffer("JERK_LONG", torch.tensor((-15.0, -4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False), persistent=False)
+        self.register_buffer("JERK_LAT", torch.tensor((-4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False), persistent=False)
+
+        self.register_buffer("ACCELERATION_VALUES", torch.tensor((-4.0000, -2.6670, -1.3330, -0.0000, 1.3330, 2.6670, 4.0000), dtype=torch.float32, requires_grad=False), persistent=False)
+        self.register_buffer("STEERING_VALUES", torch.tensor((-0.667, -0.500, -0.333, -0.167, 0.000, 0.167, 0.333, 0.500, 0.667), dtype=torch.float32, requires_grad=False), persistent=False)
+
+        if env.dynamics_model == "jerk":
+            action_long, action_lat = self.JERK_LONG, self.JERK_LAT
+        elif env.dynamics_model == "classic":
+            action_long, action_lat = self.ACCELERATION_VALUES, self.STEERING_VALUES
+        else:
+            raise ValueError(f"Unsupported dynamics model: {env.dynamics_model}")
+
+        # Precompute the [-1, 1] continuous action per discrete choice by inverting the
+        # sim's continuous scaling (drive.h). Constant → done once. Longitudinal is
+        # asymmetric (braking / |t[0]|, accel / t[-1]); lateral symmetric. The symmetric
+        # classic table collapses both branches to / t[-1].
+        long_norm = torch.where(
+            action_long < 0.0,
+            action_long / -action_long[0],
+            action_long / action_long[-1],
+        )
+        lat_norm = action_lat / action_lat[-1]
+        self.register_buffer("action_long_norm", long_norm, persistent=False)
+        self.register_buffer("action_lat_norm", lat_norm, persistent=False)
 
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
@@ -362,11 +389,11 @@ class Drive(nn.Module):
             self.critic_backbone = DriveBackbone(**backbone_args)
 
         # Setup action and value heads
-        self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+        self.is_continuous = action_type == "continuous" # TODO Check if what the `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk" features do and if they are considered continuous.
         if self.is_continuous:
             self.atn_dim = (env.single_action_space.shape[0],) * 2
         else:
-            self.atn_dim = env.single_action_space.nvec.tolist()
+            self.atn_dim = [self.action_long_norm.numel() * self.action_lat_norm.numel()]
 
         # n-layer MLP for actor head (num_layers = number of hidden layers)
         backbone_out_dim = self.actor_backbone.out_dim
@@ -449,3 +476,13 @@ class Drive(nn.Module):
         value = self.critic_head(hidden)
 
         return action, value
+    
+    def discrete_actions_to_continuous(self, actions):
+        actions = actions.long()
+        num_lat = self.action_lat_norm.numel()
+        long_val = self.action_long_norm[actions // num_lat]
+        lat_val  = self.action_lat_norm[actions % num_lat]
+
+        return torch.stack([long_val, lat_val], dim=-1)
+    
+

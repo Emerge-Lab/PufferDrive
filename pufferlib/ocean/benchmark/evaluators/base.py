@@ -150,16 +150,22 @@ class Evaluator:
         stall_limit = 3 * scenario_length if scenario_length else 0
         last_progress = 0
         stall_steps = 0
+        env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         while not self._should_stop(args, infos_collected, steps):
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
-                action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-            if isinstance(logits, torch.distributions.Normal):
-                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=True, env_continuous=env_continuous, policy=policy)
 
-            obs, _, terminals, truncations, infos = vecenv.step(action)
+            if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
+                obs, _, terminals, truncations, infos = vecenv.step(cont_action)
+            else:
+                action = action.cpu().numpy().reshape(vecenv.action_space.shape)
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+                obs, _, terminals, truncations, infos = vecenv.step(action)
+
             for d in self._flatten_infos(infos):
                 if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
                     self._episode_rows.append(d)
@@ -512,17 +518,21 @@ class Evaluator:
             if state:
                 state["lstm_h"].zero_()
                 state["lstm_c"].zero_()
-
+            env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
             for _ in range(max_steps * num_scenarios):
                 with torch.no_grad():
                     ob_t = torch.as_tensor(ob).to(device)
                     logits, _ = policy.forward_eval(ob_t, state)
-                    action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-                    action = action.cpu().numpy().reshape(vec.action_space.shape)
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, vec.action_space.low, vec.action_space.high)
+                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
 
-                ob, _, terminals, truncations, infos = vec.step(action)
+                if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                    cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
+                    ob, _, terminals, truncations, infos = vec.step(cont_action)
+                else:
+                    action = action.cpu().numpy().reshape(vec.action_space.shape)
+                    if isinstance(logits, torch.distributions.Normal):
+                        action = np.clip(action, vec.action_space.low, vec.action_space.high)
+                    ob, _, terminals, truncations, infos = vec.step(action)
 
                 if state:
                     done = np.asarray(terminals).astype(bool) | np.asarray(truncations).astype(bool)
@@ -620,6 +630,7 @@ class Evaluator:
         )
         try:
             state = self._init_lstm_state(vec.observation_space.shape[0], policy, device, args)
+            env_continuous = isinstance(vec.single_action_space, pufferlib.spaces.Box)
             while scenarios_done < num_scenarios:
                 ob, _ = vec.reset()
                 scenarios = vec.get_state()
@@ -677,7 +688,7 @@ class Evaluator:
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, value = policy.forward_eval(ob_t, state)
                         pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
-                        action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
                         raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
                     pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
                     if pool_hist is None and pool_outputs:
@@ -748,7 +759,13 @@ class Evaluator:
                                 np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
                             )
                         start_obs_index = end_obs_index
-                    ob, _, _, _, step_infos = vec.step(clipped_action)
+
+                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                        cont_action = cont_action.cpu().numpy().reshape(vec.action_space.shape)
+                        ob, _, _, _, step_infos = vec.step(cont_action)
+                    else:
+                        ob, _, _, _, step_infos = vec.step(clipped_action)
+                    
                     for d in self._flatten_infos(step_infos):
                         if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
                             batch_summary = d
@@ -838,6 +855,7 @@ class Evaluator:
         # The trailing `.mp4` is exact, so e.g. `*_epoch7_step12_bev.mp4`
         # matches bev files but not the bare sim_state ones.
         view_glob = f"*{view_suffix}.mp4"
+        env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         try:
             state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
@@ -856,11 +874,17 @@ class Evaluator:
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
+
+                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                        cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
+                        ob, _, _, _, _ = vecenv.step(cont_action)
+                    else:
                         action = action.cpu().numpy().reshape(vecenv.action_space.shape)
-                    if isinstance(logits, torch.distributions.Normal):
-                        action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-                    ob, _, _, _, _ = vecenv.step(action)
+                        if isinstance(logits, torch.distributions.Normal):
+                            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+                        ob, _, _, _, _ = vecenv.step(action)
+
                     for e in range(to_render):
                         target_env.render(env_idx=e, view_mode=view_idx)
                 for e in range(to_render):

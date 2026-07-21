@@ -187,7 +187,7 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None, deterministic=False):
+def sample_logits(logits, action=None, deterministic=False, env_continuous=None, policy=None): # TODO discrete continuous
     is_discrete = isinstance(logits, torch.Tensor)
     if isinstance(logits, torch.distributions.Normal):
         batch = logits.loc.shape[0]
@@ -198,7 +198,7 @@ def sample_logits(logits, action=None, deterministic=False):
 
         log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
         logits_entropy = logits.entropy().view(batch, -1).sum(1)
-        return action, log_probs, logits_entropy
+        return action, log_probs, logits_entropy, None
     elif is_discrete:
         logits = logits.unsqueeze(0)
     # TODO: Double check this
@@ -211,9 +211,10 @@ def sample_logits(logits, action=None, deterministic=False):
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     probs = logits_to_probs(logits)
 
+    # TODO this jumps in here and makes the action determinisitc
     if action is None:
         if deterministic:
-            action = torch.argmax(probs, -1)
+            action = torch.argmax(probs, -1) # TODO weighted average
         else:
             probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
             action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
@@ -226,7 +227,15 @@ def sample_logits(logits, action=None, deterministic=False):
     logprob = log_prob(normalized_logits, action)
     logits_entropy = entropy(normalized_logits).sum(0)
 
-    if is_discrete:
-        return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0)
+    if env_continuous and not policy.is_continuous:
+        cont_actions = policy.discrete_actions_to_continuous(action)
 
-    return action.T, logprob.sum(0), logits_entropy
+        if is_discrete:
+            return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), cont_actions.squeeze(0)
+
+        return action.T, logprob.sum(0), logits_entropy, cont_actions
+
+    if is_discrete:
+        return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), None
+
+    return action.T, logprob.sum(0), logits_entropy, None
