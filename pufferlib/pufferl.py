@@ -1860,9 +1860,6 @@ def _run_eval_rollout(
             action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
         if capture_replay:
-            if value is None:
-                vecenv.close()
-                raise RuntimeError("Standard replay capture requires policy value outputs")
             if capture_observations:
                 replay_history["obs"].append(np.asarray(obs, dtype=np.float32).copy())
             replay_history["raw_action"].append(np.asarray(raw_action, dtype=np.float32).copy())
@@ -1884,12 +1881,7 @@ def _run_eval_rollout(
                     logprob[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
                 )
             else:
-                discrete_logits = (
-                    logits if isinstance(logits, torch.Tensor) else logits[0] if len(logits) == 1 else None
-                )
-                if discrete_logits is None:
-                    vecenv.close()
-                    raise RuntimeError("Standard replay capture supports one discrete policy head")
+                discrete_logits = logits if isinstance(logits, torch.Tensor) else logits[0]
                 replay_history["policy_probs"].append(
                     torch.softmax(discrete_logits[:agents_per_batch], dim=-1)
                     .detach()

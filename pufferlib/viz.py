@@ -845,7 +845,6 @@ def plot_observation(
 # Bound untrusted zlib expansion and JSON parsing before chunk-level validation.
 MAX_REPLAY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REPLAY_HEADER_BYTES = 16 * 1024 * 1024
-REPLAY_SCHEMA = "interactive_replay_v1"
 
 
 def _pack_replay_binary(header, chunks):
@@ -949,7 +948,6 @@ def encode_interactive_replay(scenario, replay):
             chunks[pool_name] = replay[pool_name].astype(np.int16, copy=False)
 
     metadata = {
-        "schema": REPLAY_SCHEMA,
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
         "target_type": scenario.get("target_type", env_cfg.get("target_type", "static")),
@@ -1348,8 +1346,6 @@ def validate_interactive_replay(compressed_payload):
         header = json.loads(payload[4 : 4 + header_size])
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Interactive replay has an invalid JSON header") from exc
-    if header.get("schema") != REPLAY_SCHEMA:
-        raise ValueError(f"Unsupported interactive replay schema: {header.get('schema')!r}")
     chunks = header.get("chunks")
     if not isinstance(chunks, dict):
         raise ValueError("Interactive replay header is missing chunks")
