@@ -67,7 +67,7 @@ DEFAULT_ENV_KWARGS = {
     "resample_frequency": 0,
     "reward_conditioning": True,
     "reward_randomization": False,
-    "target_type": "static",
+    "goal_regen_mode": "finite",
     "map_dir": MAP_DIR,
     "collision_behavior": 1,
     "offroad_behavior": 1,

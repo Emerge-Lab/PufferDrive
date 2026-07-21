@@ -96,8 +96,8 @@ encoders = [
     ("ego", env.ego_features, 1, "direct", INPUT_SIZE),
     ("context", context_dim, 1, "direct", INPUT_SIZE) if context_dim > 0 else None,
     ("partner", env.partner_features, env.obs_slots_partners_n, "max-pool", INPUT_SIZE),
-    ("lane", env.road_features, env.obs_slots_lane_kept, "max-pool", INPUT_SIZE),
-    ("boundary", env.road_features, env.obs_slots_boundary_kept, "max-pool", INPUT_SIZE),
+    ("lane", env.lane_features, env.obs_slots_lane_kept, "max-pool", INPUT_SIZE),
+    ("boundary", env.boundary_features, env.obs_slots_boundary_kept, "max-pool", INPUT_SIZE),
     (
         "traffic_ctrl",
         env.traffic_control_features - 2 + binding.NUM_TRAFFIC_CONTROL_TYPES + binding.NUM_TRAFFIC_CONTROL_STATES,
@@ -258,8 +258,8 @@ backbone = policy.actor_backbone
 slide_idx = env.ego_features
 context_dim = backbone.context_dim
 partner_dim = env.obs_slots_partners_n * env.partner_features
-lane_dim = env.obs_slots_lane_kept * env.road_features
-boundary_dim = env.obs_slots_boundary_kept * env.road_features
+lane_dim = env.obs_slots_lane_kept * env.lane_features
+boundary_dim = env.obs_slots_boundary_kept * env.boundary_features
 traffic_dim = env.obs_slots_traffic_controls_n * env.traffic_control_features
 
 # Slicing
@@ -306,11 +306,11 @@ with torch.no_grad():
     p_enc, _ = backbone.partner_encoder(p_reshaped).max(dim=1)
     print(f"  partner_encoder: {partner_obs.shape} -> view {p_reshaped.shape} -> encode -> max-pool -> {p_enc.shape}")
 
-    l_reshaped = lane_obs.view(-1, env.obs_slots_lane_kept, env.road_features)
+    l_reshaped = lane_obs.view(-1, env.obs_slots_lane_kept, env.lane_features)
     l_enc, _ = backbone.lane_encoder(l_reshaped).max(dim=1)
     print(f"  lane_encoder:    {lane_obs.shape} -> view {l_reshaped.shape} -> encode -> max-pool -> {l_enc.shape}")
 
-    b_reshaped = boundary_obs.view(-1, env.obs_slots_boundary_kept, env.road_features)
+    b_reshaped = boundary_obs.view(-1, env.obs_slots_boundary_kept, env.boundary_features)
     b_enc, _ = backbone.boundary_encoder(b_reshaped).max(dim=1)
     print(f"  bound_encoder:   {boundary_obs.shape} -> view {b_reshaped.shape} -> encode -> max-pool -> {b_enc.shape}")
 
@@ -392,11 +392,11 @@ with torch.no_grad():
     activations["partner"], _ = backbone.partner_encoder(p_obs).max(dim=1)
     slide += partner_dim
 
-    l_obs = obs_tensor[:, slide : slide + lane_dim].view(-1, env.obs_slots_lane_kept, env.road_features)
+    l_obs = obs_tensor[:, slide : slide + lane_dim].view(-1, env.obs_slots_lane_kept, env.lane_features)
     activations["lane"], _ = backbone.lane_encoder(l_obs).max(dim=1)
     slide += lane_dim
 
-    b_obs = obs_tensor[:, slide : slide + boundary_dim].view(-1, env.obs_slots_boundary_kept, env.road_features)
+    b_obs = obs_tensor[:, slide : slide + boundary_dim].view(-1, env.obs_slots_boundary_kept, env.boundary_features)
     activations["boundary"], _ = backbone.boundary_encoder(b_obs).max(dim=1)
     slide += boundary_dim
 
@@ -608,9 +608,9 @@ if context_dim > 0:
     slide += context_dim
 segments.append(("partners", slide, slide + partner_dim, env.obs_slots_partners_n, env.partner_features))
 slide += partner_dim
-segments.append(("lanes", slide, slide + lane_dim, env.obs_slots_lane_kept, env.road_features))
+segments.append(("lanes", slide, slide + lane_dim, env.obs_slots_lane_kept, env.lane_features))
 slide += lane_dim
-segments.append(("boundaries", slide, slide + boundary_dim, env.obs_slots_boundary_kept, env.road_features))
+segments.append(("boundaries", slide, slide + boundary_dim, env.obs_slots_boundary_kept, env.boundary_features))
 slide += boundary_dim
 segments.append(("traffic", slide, slide + traffic_dim, env.obs_slots_traffic_controls_n, env.traffic_control_features))
 

@@ -21,6 +21,7 @@ UNIT_SRCS := \
 	test_error.c \
 	test_drive_geometry.c \
 	test_drive_observations_rewards.c \
+	test_drive_goals.c \
 	test_drive_metrics.c \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \

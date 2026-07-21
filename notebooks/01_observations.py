@@ -61,9 +61,9 @@ plt.show()
 # %%
 ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs[:1],
-    target_type=env.target_type,
+    goal_regen_mode=env.goal_regen_mode,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -110,10 +110,8 @@ coefs_manual = o[idx : idx + env.num_reward_coefs]
 idx += env.num_reward_coefs
 
 # Target
-target_manual = o[idx : idx + env.num_target_waypoints * env.target_features].reshape(
-    env.num_target_waypoints, env.target_features
-)
-idx += env.num_target_waypoints * env.target_features
+target_manual = o[idx : idx + env.num_goals * env.goal_features].reshape(env.num_goals, env.goal_features)
+idx += env.num_goals * env.goal_features
 assert np.allclose(target_manual, target), "target mismatch"
 
 # Partners
@@ -124,17 +122,17 @@ idx += env.obs_slots_partners_n * env.partner_features
 assert np.allclose(partners_manual, partners), "partners mismatch"
 
 # Lanes
-lanes_manual = o[idx : idx + env.obs_slots_lane_kept * env.road_features].reshape(
-    env.obs_slots_lane_kept, env.road_features
+lanes_manual = o[idx : idx + env.obs_slots_lane_kept * env.lane_features].reshape(
+    env.obs_slots_lane_kept, env.lane_features
 )
-idx += env.obs_slots_lane_kept * env.road_features
+idx += env.obs_slots_lane_kept * env.lane_features
 assert np.allclose(lanes_manual, lanes), "lanes mismatch"
 
 # Boundaries
-bounds_manual = o[idx : idx + env.obs_slots_boundary_kept * env.road_features].reshape(
-    env.obs_slots_boundary_kept, env.road_features
+bounds_manual = o[idx : idx + env.obs_slots_boundary_kept * env.boundary_features].reshape(
+    env.obs_slots_boundary_kept, env.boundary_features
 )
-idx += env.obs_slots_boundary_kept * env.road_features
+idx += env.obs_slots_boundary_kept * env.boundary_features
 assert np.allclose(bounds_manual, boundaries), "boundaries mismatch"
 
 # Traffic
@@ -219,7 +217,7 @@ plt.show()
 # ## Lane / boundary segments
 
 # %%
-road_labels = ["rel_x", "rel_y", "rel_z", "length", "width", "dir_cos", "dir_sin"]
+road_labels = ["rel_x", "rel_y", "rel_z", "length", "width", "dir_cos", "dir_sin", "goal_dist_abs", "goal_dist_rel"]
 
 lane_active = ~np.all(lanes == 0, axis=1)
 bound_active = ~np.all(boundaries == 0, axis=1)
@@ -231,18 +229,20 @@ fig, ax = plt.subplots(figsize=(10, 10))
 
 # Mirror the canonical road rendering in pufferlib.viz.plot_observation
 for seg in lanes[lane_active]:
-    x, y, z, length, width, dc, ds = seg
-    ax.scatter(x, y, color="lightgrey", s=10, zorder=1)
+    x, y, z, length, width, dc, ds = seg[:7]
+    # seg[7] = goal_dist_abs (0 near goal lane -> 1 far); green->red colormap
+    color = plt.cm.RdYlGn_r(float(seg[7])) if env.obs_goal_lane_distance else "lightgrey"
+    ax.scatter(x, y, color=color, s=10, zorder=1)
     ax.plot(
         [x + dc * length / 2, x - dc * length / 2],
         [y + ds * length / 2, y - ds * length / 2],
-        color="lightgrey",
+        color=color,
         linewidth=1,
         zorder=1,
     )
 
 for seg in boundaries[bound_active]:
-    x, y, z, length, width, dc, ds = seg
+    x, y, z, length, width, dc, ds = seg[:7]
     ax.scatter(x, y, color="black", s=10, zorder=1)
     ax.plot(
         [x + dc * length / 2, x - dc * length / 2],
@@ -276,9 +276,9 @@ plt.show()
 # %%
 img = plot_observation(
     obs[:1],
-    target_type=env.target_type,
+    goal_regen_mode=env.goal_regen_mode,
     reward_conditioning=env.reward_conditioning,
-    num_target_waypoints=env.num_target_waypoints,
+    num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
     obs_slots_lane_n=env.obs_slots_lane_n,
     obs_slots_boundary_n=env.obs_slots_boundary_n,
@@ -287,6 +287,7 @@ img = plot_observation(
     obs_dropout_boundary=env.obs_dropout_boundary,
     obs_lane_stride=env.obs_lane_stride,
     obs_boundary_stride=env.obs_boundary_stride,
+    obs_goal_lane_distance=env.obs_goal_lane_distance,
 )
 fig, ax = plt.subplots(figsize=(10, 10))
 ax.imshow(img)
@@ -363,7 +364,7 @@ first_target_y = obs[:, target_start + 1]
 target_dists = np.sqrt(first_target_x**2 + first_target_y**2)
 
 # Count active partners per agent
-partner_start = env.ego_features + env.num_reward_coefs + env.num_target_waypoints * env.target_features
+partner_start = env.ego_features + env.num_reward_coefs + env.num_goals * env.goal_features
 partner_end = partner_start + env.obs_slots_partners_n * env.partner_features
 all_partners = obs[:, partner_start:partner_end].reshape(-1, env.obs_slots_partners_n, env.partner_features)
 partner_counts = (~np.all(all_partners == 0, axis=2)).sum(axis=1)

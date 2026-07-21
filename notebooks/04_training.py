@@ -116,8 +116,8 @@ if context_dim > 0:
     print(f"context_obs: shape={context_obs.shape}, NaN={torch.isnan(context_obs).sum().item()}")
 
 partner_dim = env.obs_slots_partners_n * env.partner_features
-lane_dim = env.obs_slots_lane_kept * env.road_features
-boundary_dim = env.obs_slots_boundary_kept * env.road_features
+lane_dim = env.obs_slots_lane_kept * env.lane_features
+boundary_dim = env.obs_slots_boundary_kept * env.boundary_features
 
 partner_obs = x[:, slide_idx : slide_idx + partner_dim]
 slide_idx += partner_dim
@@ -131,10 +131,10 @@ with torch.no_grad():
     partner_enc, _ = backbone.partner_encoder(partner_obs.view(-1, env.obs_slots_partners_n, env.partner_features)).max(
         dim=1
     )
-    lane_enc, _ = backbone.lane_encoder(lane_obs.view(-1, env.obs_slots_lane_kept, env.road_features)).max(dim=1)
-    bound_enc, _ = backbone.boundary_encoder(boundary_obs.view(-1, env.obs_slots_boundary_kept, env.road_features)).max(
-        dim=1
-    )
+    lane_enc, _ = backbone.lane_encoder(lane_obs.view(-1, env.obs_slots_lane_kept, env.lane_features)).max(dim=1)
+    bound_enc, _ = backbone.boundary_encoder(
+        boundary_obs.view(-1, env.obs_slots_boundary_kept, env.boundary_features)
+    ).max(dim=1)
 
 for name, enc in [("ego", ego_enc), ("partner", partner_enc), ("lane", lane_enc), ("boundary", bound_enc)]:
     print(
