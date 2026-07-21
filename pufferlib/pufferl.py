@@ -1,4 +1,4 @@
-## puffer [train | eval | sweep] [env_name] [optional args] -- See https://puffer.ai for full detail0
+## puffer [train | eval | sweep] [env_name] [optional args] -- See https://puffer.ai for full details
 # This is the same as python -m pufferlib.pufferl [train | eval | sweep] [env_name] [optional args]
 # Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_nmmo3
 
@@ -39,6 +39,7 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
+import pufferlib.benchmark
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -1698,19 +1699,6 @@ def _resolve_map_indices(map_dir, map_names):
     return indices
 
 
-def _select_replay_rows(args):
-    """Read the replay CSV and keep the rows selected by --replay-filter/--replay-rows."""
-    df = pd.read_csv(args["replay_csv"])
-    if args.get("replay_filter"):
-        df = df.query(args["replay_filter"])
-    if args.get("replay_rows"):
-        positions = [int(r) for r in str(args["replay_rows"]).split(",")]
-        df = df.iloc[positions]
-    if "map_name" not in df.columns or "seed" not in df.columns:
-        raise pufferlib.APIUsageError("Replay CSV must contain 'map_name' and 'seed' columns")
-    return df
-
-
 def _eval_replay_stem(summary, episode_id):
     """Build a safe, unique replay stem from externally supplied scenario metadata."""
 
@@ -1731,7 +1719,7 @@ def _eval_replay_stem(summary, episode_id):
     return "__".join(parts)
 
 
-def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
+def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
@@ -1743,7 +1731,7 @@ def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
         env_kwargs["starting_map"] = map_cursor
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
-        env_kwargs["capture_replay"] = bool(args.get("save_zlib"))
+        env_kwargs["capture_replay"] = bool(capture_replay)
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
         map_cursor += worker_num_scenarios
@@ -1751,7 +1739,7 @@ def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
     return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
 
-def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
+def _replay_worker_kwargs(args, pairs, num_workers, scenario_length, capture_replay=False):
     """Split the (map, seed) pairs across workers; each worker cycles through its
     pairs in fit-aware batches (num_agents from config bounds a batch)."""
     per, remainder = divmod(len(pairs), num_workers)
@@ -1768,7 +1756,7 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length):
         env_kwargs["num_eval_scenarios"] = count
         env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in chunk]
         env_kwargs["eval_scenario_seeds"] = [seed for _, seed in chunk]
-        env_kwargs["capture_replay"] = bool(args.get("save_zlib"))
+        env_kwargs["capture_replay"] = bool(capture_replay)
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
     max_pairs_per_worker = per + (1 if remainder else 0)
@@ -1785,6 +1773,7 @@ def _run_eval_rollout(
     policy=None,
     expected_agents_per_batch=None,
     replay_output_dir=None,
+    capture_observations=False,
 ):
     """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -1816,7 +1805,8 @@ def _run_eval_rollout(
             f"{policy_agents_per_batch} agents to preserve the recorded batch shape"
         )
 
-    torch.manual_seed(args["train"]["seed"] or 42)
+    rollout_seed = 42 if args["train"]["seed"] is None else int(args["train"]["seed"])
+    torch.manual_seed(rollout_seed)
     policy = policy or load_policy(args, vecenv, env_name)
     policy.eval()
     device = torch_device(args["train"]["device"])
@@ -1825,7 +1815,7 @@ def _run_eval_rollout(
     capture_replay = replay_output_dir is not None
     if replay_output_dir is not None:
         os.makedirs(replay_output_dir, exist_ok=True)
-    obs, _ = vecenv.reset(args["train"]["seed"] or 42)
+    obs, _ = vecenv.reset(rollout_seed)
     padding_agent_count = policy_agents_per_batch - agents_per_batch
     policy_obs_tensor = None
     if padding_agent_count:
@@ -1837,7 +1827,7 @@ def _run_eval_rollout(
     agents_per_worker = agents_per_batch // num_workers
     capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
     replay_history = defaultdict(list)
-    capture_observations = bool(args.get("render_obs"))
+    capture_observations = bool(capture_observations)
     pool_method = None
     if capture_observations:
         pool_method = getattr(policy, "pool_slot_counts", None)
@@ -1956,79 +1946,71 @@ def _run_eval_rollout(
 
 
 def eval(env_name, args=None, policy=None):
-    """Evaluate (or replay) a fixed set of scenarios in parallel and write per-episode reports.
-
-    Without --replay-csv, ``num_scenarios`` scenarios are split into disjoint contiguous
-    windows, one per worker. With --replay-csv, the selected (map, seed) pairs from a prior
-    eval are re-run exactly, one full-budget env per pair, so a subset reproduces bit-for-bit
-    under any worker count. Works for both replay and gigaflow simulation modes.
-    """
+    """Run catalog-defined evaluation suites and optionally render failures."""
     args = args or load_config(env_name)
+    eval_config = args.get("eval", {})
+    catalog_path = eval_config.get("catalog")
+    evaluation_config_path = eval_config.get("evaluation_config")
+    selected_datasets = eval_config.get("datasets")
+    if selected_datasets is None or not selected_datasets.strip():
+        raise pufferlib.APIUsageError("--eval.datasets is required; select one or more benchmark datasets")
+    suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
+    evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
+    base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
+    if base_args["train"]["use_rnn"]:
+        raise pufferlib.APIUsageError("Multiprocessed evaluation does not support RNN policies yet")
 
-    if args["train"]["use_rnn"]:
-        raise pufferlib.APIUsageError("Multiprocessed eval does not support RNN policies yet")
-    if args.get("save_html"):
-        args["save_zlib"] = True
+    run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+    eval_output_dir = os.path.join(run_dir, "eval")
+    all_suite_summaries = {}
+    for suite in suites:
+        run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
+        suite_output_dir = os.path.join(eval_output_dir, suite["name"])
+        os.makedirs(suite_output_dir, exist_ok=True)
+        _write_resolved_benchmark_config(
+            run_args,
+            suite,
+            catalog_path,
+            evaluation_config_path,
+            checkpoint_config_path,
+            os.path.join(suite_output_dir, "resolved_benchmark.yaml"),
+        )
 
-    scenario_length = int(args["env"]["scenario_length"])
+        suite_seed = int(suite["seed"])
+        np.random.seed(suite_seed)
+        torch.manual_seed(suite_seed)
+        num_scenarios = int(suite["num_scenarios"])
+        num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
+        worker_env_kwargs, total_steps = _forward_worker_kwargs(
+            run_args,
+            num_scenarios,
+            num_workers,
+            int(run_args["env"]["scenario_length"]),
+        )
+        print(f"Evaluation {suite['name']}: {num_scenarios} scenarios across {num_workers} workers")
+        summaries = _run_eval_rollout(
+            run_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            f"Evaluating {suite['name']}",
+            num_scenarios,
+            policy=policy,
+        )
+        _write_eval_reports(summaries, suite_output_dir, num_scenarios)
+        all_suite_summaries[suite["name"]] = summaries
 
-    expected_agents_per_batch = None
-    if args.get("replay_csv"):
-        selected = _select_replay_rows(args)
-        map_indices = _resolve_map_indices(args["env"]["map_dir"], selected["map_name"].tolist())
-        pairs = list(zip(map_indices, (int(s) for s in selected["seed"].tolist())))
-        num_scenarios = len(pairs)
-        if num_scenarios < 1:
-            raise pufferlib.APIUsageError("Replay selection is empty")
-        if "agents_per_batch" in selected.columns:
-            logged = selected["agents_per_batch"].unique()
-            if (
-                len(logged) != 1
-                or not isinstance(logged[0], numbers.Real)
-                or not np.isfinite(logged[0])
-                or int(logged[0]) != logged[0]
-            ):
-                raise pufferlib.APIUsageError("Replay selection must contain exactly one valid agents_per_batch value")
-            expected_agents_per_batch = int(logged[0])
-            if expected_agents_per_batch <= 0:
-                raise pufferlib.APIUsageError("Replay agents_per_batch must be positive")
-        num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
-        worker_env_kwargs, total_steps = _replay_worker_kwargs(args, pairs, num_workers, scenario_length)
-        out_subdir, desc = "replay", "Replaying scenarios"
-        print(f"Replaying {num_scenarios} scenarios across {num_workers} workers")
-    else:
-        num_scenarios = int(args["num_scenarios"])
-        if num_scenarios < 1:
-            raise pufferlib.APIUsageError(f"num_scenarios must be >= 1. Got: {num_scenarios}")
-        num_workers = min(int(args["vec"]["num_envs"]), num_scenarios)
-        worker_env_kwargs, total_steps = _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length)
-        out_subdir, desc = "eval", "Evaluating scenarios"
-        print(f"Distributing {num_scenarios} scenarios across {num_workers} workers")
-
-    if args.get("load_model_path"):
-        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(args["load_model_path"])))
-        out_dir = os.path.join(run_dir, out_subdir)
-    else:
-        out_dir = os.path.join("eval_results", env_name, out_subdir)
-    replay_output_dir = os.path.join(out_dir, "replays") if args.get("save_zlib") else None
-    episode_summaries = _run_eval_rollout(
-        args,
-        env_name,
-        worker_env_kwargs,
-        total_steps,
-        desc,
-        num_scenarios,
-        policy,
-        expected_agents_per_batch,
-        replay_output_dir,
-    )
-
-    _write_eval_reports(episode_summaries, out_dir, num_scenarios)
-    if args.get("save_html"):
-        _render_eval_replays(episode_summaries, out_dir)
-    print(
-        f"{desc} complete: {len(episode_summaries)} episodes from {num_scenarios} scenarios across {num_workers} workers."
-    )
+        if bool(eval_config.get("render_failures")):
+            _render_eval_failures(
+                env_name,
+                run_args,
+                suite,
+                os.path.join(suite_output_dir, "episode_metrics.csv"),
+                suite_output_dir,
+                policy,
+                bool(eval_config.get("render_obs")),
+            )
+    return all_suite_summaries
 
 
 def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
@@ -2090,6 +2072,74 @@ def _render_eval_replays(episode_summaries, out_dir):
     print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
     print(f"Wrote replay index to {os.path.join(render_dir, 'index.html')}")
     return render_dir
+
+
+def _write_resolved_benchmark_config(
+    args, suite, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
+):
+    import json
+
+    resolved = {
+        "benchmark_catalog": os.path.abspath(catalog_path),
+        "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
+        "checkpoint_config": os.path.abspath(checkpoint_config_path),
+        "suite": suite,
+        "args": json.loads(json.dumps(args)),
+    }
+    with open(output_path, "w") as output_file:
+        yaml.safe_dump(resolved, output_file, sort_keys=False)
+
+
+def _selected_agents_per_batch(selected_rows):
+    if "agents_per_batch" not in selected_rows.columns:
+        raise pufferlib.APIUsageError("Benchmark failure rendering requires agents_per_batch in the metrics CSV")
+    values = pd.to_numeric(selected_rows["agents_per_batch"], errors="coerce").unique()
+    if len(values) != 1 or not np.isfinite(values[0]) or int(values[0]) != values[0] or values[0] <= 0:
+        raise pufferlib.APIUsageError(
+            "Benchmark failure rows must contain exactly one positive integer agents_per_batch value"
+        )
+    return int(values[0])
+
+
+def _render_eval_failures(env_name, run_args, suite, metrics_path, suite_output_dir, policy, render_obs):
+    selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path)
+    failures_dir = os.path.join(suite_output_dir, "failures")
+    os.makedirs(failures_dir, exist_ok=True)
+    selected_path = os.path.join(failures_dir, "selected_failures.csv")
+    selected_rows.to_csv(selected_path, index=False)
+    if selected_rows.empty:
+        print(f"No failures matched for benchmark {suite['name']}; wrote {selected_path}")
+        return []
+
+    map_indices = _resolve_map_indices(run_args["env"]["map_dir"], selected_rows["map_name"].tolist())
+    seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
+    pairs = list(zip(map_indices, seeds))
+    failure_args = copy.deepcopy(run_args)
+    num_workers = min(int(failure_args["vec"]["num_envs"]), len(pairs))
+    failure_args["vec"]["num_envs"] = num_workers
+    worker_env_kwargs, total_steps = _replay_worker_kwargs(
+        failure_args,
+        pairs,
+        num_workers,
+        int(failure_args["env"]["scenario_length"]),
+        capture_replay=True,
+    )
+    replay_output_dir = os.path.join(failures_dir, "replays")
+    summaries = _run_eval_rollout(
+        failure_args,
+        env_name,
+        worker_env_kwargs,
+        total_steps,
+        f"Rendering {suite['name']} failures",
+        len(pairs),
+        policy=policy,
+        expected_agents_per_batch=_selected_agents_per_batch(selected_rows),
+        replay_output_dir=replay_output_dir,
+        capture_observations=render_obs,
+    )
+    _write_eval_reports(summaries, failures_dir, len(pairs))
+    _render_eval_replays(summaries, failures_dir)
+    return summaries
 
 
 def load_env(env_name, args):
@@ -2154,39 +2204,15 @@ def load_config(env_name, config_dir=None):
         "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
     )
     parser.add_argument(
+        "--eval.datasets",
+        type=str,
+        default=None,
+        help="Comma-separated benchmark datasets to evaluate (required for eval)",
+    )
+    parser.add_argument(
         "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
     )
     parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--num_scenarios", type=int, default=3, help="Number of scenarios to eval")
-    parser.add_argument(
-        "--replay-csv", type=str, default=None, help="Replay scenarios from a prior eval's episode_metrics.csv"
-    )
-    parser.add_argument(
-        "--replay-rows",
-        type=str,
-        default=None,
-        help="Comma-separated row positions to replay from --replay-csv (default: all)",
-    )
-    parser.add_argument(
-        "--replay-filter", type=str, default=None, help="Pandas query on the replay CSV columns to select rows"
-    )
-    parser.add_argument(
-        "--save-zlib",
-        action="store_true",
-        help="Save one interactive replay zlib for every completed evaluation scenario",
-    )
-    parser.add_argument(
-        "--save-html",
-        action="store_true",
-        help="Save replay zlibs and render them with the standard interactive HTML viewer",
-    )
-    parser.add_argument(
-        "--render-obs",
-        type=int,
-        choices=[0, 1],
-        default=0,
-        help="Include per-agent observations in saved eval replays and HTML (default: 0)",
-    )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
     parser.add_argument("--save-frames", type=int, default=0)
@@ -2208,9 +2234,6 @@ def load_config(env_name, config_dir=None):
     parser.add_argument("--tb", action="store_true", help="Use tensorboard for logging")
     parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
     parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
-    parser.add_argument(
-        "--eval_simulation", type=str, default=None, help="Simulation mode for evaluation - gigaflow/replay"
-    )
     args = parser.parse_known_args()[0]
 
     if config_dir is None:

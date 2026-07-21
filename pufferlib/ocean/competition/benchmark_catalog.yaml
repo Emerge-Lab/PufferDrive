@@ -1,0 +1,44 @@
+seed: 42
+
+benchmarks:
+  - name: carla
+    mode: gigaflow
+    num_scenarios: 150
+    num_maps: 8
+    max_agents_per_env: 50
+    scenario_length: 250
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/carla
+
+  - name: womd_multi
+    mode: replay
+    num_scenarios: 100
+    scenario_length: 91
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/womd
+
+  - name: womd_single
+    mode: replay
+    num_scenarios: 100
+    scenario_length: 91
+    control_mode: control_sdc_only
+    paths:
+      local: pufferlib/resources/drive/binaries/womd
+
+  - name: nuplan_multi
+    mode: replay
+    num_scenarios: 100
+    scenario_length: 91
+    control_mode: control_vehicles
+    paths:
+      local: pufferlib/resources/drive/binaries/nuplan
+
+  - name: nuplan_single
+    mode: replay
+    num_scenarios: 100
+    scenario_length: 91
+    control_mode: control_sdc_only
+    paths:
+      local: pufferlib/resources/drive/binaries/nuplan

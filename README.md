@@ -92,45 +92,23 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 
 ## Eval
 
-All evaluation runs through the unified `Evaluator`/`EvalManager` pipeline.
-`[eval.<name>]` sections in `drive.ini` define each evaluator; the same ones
-run inline during training and standalone here.
+The eval command loads one or more named suites from the YAML catalog and
+writes per-episode metrics for each suite. Dataset selection is mandatory; eval
+does not choose a dataset implicitly.
 
 ```bash
-# Run a named evaluator on a checkpoint (config from [eval.<name>])
-puffer eval puffer_drive --evaluator validation_gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
-
-# Ad-hoc: pick by simulation + override scale from the CLI
-puffer eval puffer_drive --eval_simulation replay \
+# Run the CARLA YAML benchmark and render only episodes with infractions
+puffer eval puffer_drive \
   --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 250 --render 1
-
-# Render the agent's observations (interactive HTML)
-puffer eval puffer_drive --eval_simulation gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 10 --render 1 --render-backend obs_html
+  --eval.datasets carla \
+  --eval.render-failures 1 \
+  --eval.render-obs 0
 ```
 
-Direct eval can persist the replay used by the interactive viewer:
-
-```bash
-# Save one full replay payload per completed scenario
-puffer eval puffer_drive --load-model-path path/to/model.pt --save-zlib
-
-# Save those zlibs, render standard interactive pages, and build a sortable gallery
-puffer eval puffer_drive --load-model-path path/to/model.pt --save-html
-
-# Also include each agent's observation and show the observation overlay
-puffer eval puffer_drive --load-model-path path/to/model.pt --save-html --render-obs 1
-```
-
-`--save-html` implies `--save-zlib`. Outputs are written under the eval run's
-`replays/` and `rendered_replays/` directories. Per-agent observations are omitted
-by default to reduce replay size; pass `--render-obs 1` to include them. Replay
-filenames include the map, scenario when distinct, seed, and episode number.
-
-**For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
+Evaluation outputs are written under `eval/<suite>/`. The suite seed and worker
+count are part of the benchmark configuration: repeated runs with both unchanged
+produce the same map/seed rows. Failure renders replay the exact map and seed
+recorded by the metrics pass.
 
 ## Failure mining
 
