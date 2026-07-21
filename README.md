@@ -13,6 +13,31 @@ uv pip install -e .
 python setup.py build_ext --inplace --force
 ```
 
+## Tests
+
+```bash
+# Run the local suites: Python unit tests, C sim tests, replay-HTML smoke
+# test, notebook executions. Rebuilds the C extension automatically when a
+# .c/.h file changed, and installs missing test deps.
+make test
+
+# Individual suites
+make test-unit       # tests/unit_tests
+make test-c          # tests/drive (dynamics, geometry, IDM, collisions, ...)
+make test-smoke      # replay-HTML smoke test
+make test-notebooks  # execute every checked-in notebook end-to-end
+
+# Force-rebuild the C extension regardless of timestamps
+make rebuild
+
+# Opt-in: full smoke suite in Docker (train/rollout/eval goldens)
+make test-docker-smoke
+```
+
+`make help` (or bare `make`) prints this list. Targets call `.venv/bin/python`
+directly, so no venv activation is needed. If your interpreter lives elsewhere
+(conda, a cluster venv), override it: `make PYTHON=/path/to/python test`.
+
 ## Install (HPC cluster)
 
 For the NYU cluster, PufferDrive recommends a **mixed Singularity + venv** layout:
