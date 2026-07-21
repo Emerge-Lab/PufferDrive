@@ -1800,9 +1800,9 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     // Places num_goals goals along the agent's route by native lane arc-length.
     // Replay follows the loaded route to its end; gigaflow route source random-walks a fresh route
     // when the current one runs out.
+    // Returns false without mutating removal state when no placement fits; the
+    // caller decides whether to resample a spawn position or remove the agent.
     if (agent->route == NULL || agent->route_length <= 0) {
-        invalidate_agent(agent);
-        agent->removed = 1;
         return false;
     }
 
@@ -1841,10 +1841,8 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
         route_remaining_meters += env->road_elements[agent->route[route_idx]].length;
     }
 
-    // Replay: once the agent is essentially at the end of its logged route, retire it.
+    // Replay: once the agent is essentially at the end of its logged route, it is done.
     if (env->simulation_mode == SIMULATION_REPLAY && route_remaining_meters <= env->goal_radius) {
-        invalidate_agent(agent);
-        agent->removed = 1;
         return false;
     }
 
@@ -1880,11 +1878,6 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
         // Free-roam route source: random-walk a fresh route from the current lane, then retry once.
         int start_lane_idx = (agent->current_lane_idx != -1) ? agent->current_lane_idx : agent->route[base_route_idx];
         if (!compute_new_route(env, agent, start_lane_idx)) {
-            invalidate_agent(agent);
-            agent->removed = 1;
-            printf(
-                "[GIGAFLOW WARNING] -> Failed to compute new route for agent %d. Removing from simulation.\n",
-                agent->id);
             return false;
         }
         agent->current_route_idx = 0;
@@ -1909,12 +1902,6 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
             goal_z,
             goal_lane);
         if (placed_goal_count < env->num_goals) {
-            invalidate_agent(agent);
-            agent->removed = 1;
-            printf(
-                "[GIGAFLOW ERROR] -> New route for agent %d is too short for goal generation. Removing from "
-                "simulation.\n",
-                agent->id);
             return false;
         }
         commit_goals(env, agent, goal_x, goal_y, goal_z, goal_lane, placed_goal_count, 0);
@@ -3204,9 +3191,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_x, spawn_y, spawn_z, spawn_heading;
     RoadMapElement *start_lane;
     int start_lane_idx;
-    bool is_agent_spawned = false;
 
-    // Sampling rejection loop
+    // Sampling rejection loop. A candidate position is rejected on collision,
+    // offroad, stop-line crossing, or when no route/goals fit from it (short
+    // or dead-end lanes) — the next attempt resamples a fresh position.
     // TARGET: Only one attempt should be sufficient in most cases
     const int MAX_SPAWN_ATTEMPTS = 30;
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
@@ -3272,55 +3260,50 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        is_agent_spawned = true;
-        break;
-    }
+        // Update simulation state
+        agent->sim_x = spawn_x;
+        agent->sim_y = spawn_y;
+        agent->sim_z = spawn_z;
+        agent->sim_heading = spawn_heading;
+        agent->cos_heading = cosf(spawn_heading);
+        agent->sin_heading = sinf(spawn_heading);
+        copy_pose_to_prev(agent);
+        agent->sim_length = spawn_length;
+        agent->sim_width = spawn_width;
+        agent->sim_height = spawn_height;
+        update_agent_radius(agent);
+        agent->sim_valid = 1;
+        agent->wheelbase = 0.6f * spawn_length;
+        agent->current_lane_idx = start_lane_idx;
+        float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
+        agent->sim_vx = spawn_speed * agent->cos_heading;
+        agent->sim_vy = spawn_speed * agent->sin_heading;
+        agent->yaw_rate = 0.0f;
+        update_agent_speed(agent);
 
-    if (!is_agent_spawned) {
-        printf("[GIGAFLOW WARNING] -> Failed to find a collision-free spawn position for agent %d\n", agent->id);
-        return is_agent_spawned;
-    }
-
-    // Update simulation state
-    agent->sim_x = spawn_x;
-    agent->sim_y = spawn_y;
-    agent->sim_z = spawn_z;
-    agent->sim_heading = spawn_heading;
-    agent->cos_heading = cosf(spawn_heading);
-    agent->sin_heading = sinf(spawn_heading);
-    copy_pose_to_prev(agent);
-    agent->sim_length = spawn_length;
-    agent->sim_width = spawn_width;
-    agent->sim_height = spawn_height;
-    update_agent_radius(agent);
-    agent->sim_valid = 1;
-    agent->wheelbase = 0.6f * spawn_length;
-    agent->current_lane_idx = start_lane_idx;
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
-    agent->sim_vx = spawn_speed * agent->cos_heading;
-    agent->sim_vy = spawn_speed * agent->sin_heading;
-    agent->yaw_rate = 0.0f;
-    update_agent_speed(agent);
-
-    if (env->goal_source == GOAL_SOURCE_MAP) {
-        if (!generate_new_goals_from_map(env, agent)) {
-            printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
-            return false;
+        if (env->goal_source == GOAL_SOURCE_MAP) {
+            if (!generate_new_goals_from_map(env, agent)) {
+                continue;
+            }
+            return true;
         }
+
+        if (!compute_new_route(env, agent, start_lane_idx)) {
+            continue;
+        }
+
+        if (!generate_new_goals_from_route(env, agent)) {
+            continue;
+        }
+
         return true;
     }
 
-    if (!compute_new_route(env, agent, start_lane_idx)) {
-        printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
-        return false; // Failed to compute new goal
-    }
-
-    // Compute initial goal
-    if (!generate_new_goals_from_route(env, agent)) {
-        return false;
-    }
-
-    return true;
+    printf(
+        "[GIGAFLOW WARNING] -> No viable spawn position/route/goals for agent %d after %d attempts\n",
+        agent->id,
+        MAX_SPAWN_ATTEMPTS);
+    return false;
 }
 
 static void set_start_position(Drive *env) {
@@ -3869,15 +3852,20 @@ void init(Drive *env) {
                 agent->current_goal_z = agent->list_goal_z[0];
             }
         }
-    } else if (env->goal_source == GOAL_SOURCE_MAP) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *agent = &env->agents[env->active_agent_indices[i]];
-            generate_new_goals_from_map(env, agent);
-        }
-    } else if (env->goal_source == GOAL_SOURCE_ROUTE) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *agent = &env->agents[env->active_agent_indices[i]];
-            generate_new_goals_from_route(env, agent);
+    } else if (env->goal_source == GOAL_SOURCE_MAP || env->goal_source == GOAL_SOURCE_ROUTE) {
+        // Gigaflow agents already received goals inside spawn_agent; re-rolling
+        // here could fail and strand a removed agent in the active set.
+        if (env->simulation_mode != SIMULATION_GIGAFLOW) {
+            for (int i = 0; i < env->active_agent_count; i++) {
+                Agent *agent = &env->agents[env->active_agent_indices[i]];
+                bool goals_ok = (env->goal_source == GOAL_SOURCE_MAP) ? generate_new_goals_from_map(env, agent)
+                                                                      : generate_new_goals_from_route(env, agent);
+                if (!goals_ok) {
+                    printf("[DRIVE WARNING] -> No goals fit for agent %d at init; removing\n", agent->id);
+                    invalidate_agent(agent);
+                    agent->removed = 1;
+                }
+            }
         }
     }
 }
@@ -5303,7 +5291,11 @@ void c_reset(Drive *env) {
             agent->current_goal_y = agent->list_goal_y[0];
             agent->current_goal_z = agent->list_goal_z[0];
         } else {
-            generate_new_goals_from_route(env, agent);
+            if (!generate_new_goals_from_route(env, agent)) {
+                printf("[DRIVE WARNING] -> No goals fit for agent %d on reset; removing\n", agent->id);
+                invalidate_agent(agent);
+                agent->removed = 1;
+            }
         }
         compute_metrics(env, agent_idx, x);
     }
@@ -5453,8 +5445,9 @@ void c_step(Drive *env) {
         if (!regen) {
             continue;
         }
-        // On regen failure remove the agent (route helper self-invalidates; the extra call is idempotent),
-        // otherwise a stale current_goal_idx >= goal_count leaves an empty goal window and the agent freezes.
+        // On regen failure remove the agent, otherwise a stale
+        // current_goal_idx >= goal_count leaves an empty goal window and the
+        // agent freezes.
         bool regen_ok = (env->goal_source == GOAL_SOURCE_MAP) ? generate_new_goals_from_map(env, agent)
                                                               : generate_new_goals_from_route(env, agent);
         if (!regen_ok) {
