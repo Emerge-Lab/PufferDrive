@@ -931,12 +931,13 @@ def encode_interactive_replay(scenario, replay):
         "metrics_f32": replay["metrics_f32"].astype(np.float32, copy=False),
         "puffer_f32": replay["puffer_f32"].astype(np.float32, copy=False),
         "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
-        "obs": replay["obs"].astype(np.float32, copy=False),
         "raw_action": replay["raw_action"].astype(np.float32, copy=False),
         "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("obs") is not None:
+        chunks["obs"] = replay["obs"].astype(np.float32, copy=False)
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -956,8 +957,9 @@ def encode_interactive_replay(scenario, replay):
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
-        "active_count": int(replay["obs"].shape[1]),
-        "obs_dim": int(replay["obs"].shape[2]),
+        "active_count": int(replay["raw_action"].shape[1]),
+        "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
+        "has_obs": replay.get("obs") is not None,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
@@ -1203,7 +1205,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         }
         function poolAlpha(n) { return Math.min(.58, .22 + n / 140); }
         function selectedGoals(frame, agent) {
-            if (!agent || agent.slot < 0) return [];
+            if (!C.obs || !agent || agent.slot < 0) return [];
             const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs;
             let p = base + 10;
             if (H.reward_conditioning) p += 17;
@@ -1220,7 +1222,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             return out;
         }
         function decodeObs(frame, slot) {
-            if (slot < 0 || slot >= H.active_count) return null;
+            if (!C.obs || slot < 0 || slot >= H.active_count) return null;
             const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
             let p = base, ego = obs.subarray(p, p+10); p += 10;
             if (H.reward_conditioning) p += 17;
@@ -1351,6 +1353,9 @@ def validate_interactive_replay(compressed_payload):
     chunks = header.get("chunks")
     if not isinstance(chunks, dict):
         raise ValueError("Interactive replay header is missing chunks")
+    has_obs = header.get("has_obs", "obs" in chunks)
+    if not isinstance(has_obs, bool) or has_obs != ("obs" in chunks):
+        raise ValueError("Interactive replay observation metadata does not match its chunks")
     required_chunks = {
         "road_points",
         "road_lengths",
@@ -1362,7 +1367,6 @@ def validate_interactive_replay(compressed_payload):
         "metrics_f32",
         "puffer_f32",
         "traffic_i16",
-        "obs",
         "raw_action",
         "clipped_action",
         "value",
@@ -1430,7 +1434,14 @@ def build_gallery_index(folder_path=".", file_metrics=None):
     `file_metrics` is None or empty, behaves as before (filename-order
     dropdown, no sort UI).
     """
-    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
+    if file_metrics:
+        files = [
+            filename
+            for filename in file_metrics
+            if filename.endswith(".html") and os.path.isfile(os.path.join(folder_path, filename))
+        ]
+    else:
+        files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
     if not files:
         print("No matching .html files found in this directory.")

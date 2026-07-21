@@ -1711,6 +1711,26 @@ def _select_replay_rows(args):
     return df
 
 
+def _eval_replay_stem(summary, episode_id):
+    """Build a safe, unique replay stem from externally supplied scenario metadata."""
+
+    def safe_part(value, fallback):
+        if value is None:
+            return fallback
+        basename = os.path.basename(str(value)).rsplit(".", 1)[0]
+        sanitized = "".join(character if character.isalnum() or character in "-_" else "_" for character in basename)
+        return sanitized.strip("_-")[:64] or fallback
+
+    map_name = safe_part(summary.get("map_name"), "unknown_map")
+    scenario_id = safe_part(summary.get("scenario_id"), "")
+    seed = safe_part(summary.get("seed"), "unknown")
+    parts = [map_name]
+    if scenario_id and scenario_id.lower() not in map_name.lower():
+        parts.append(scenario_id)
+    parts.extend((f"seed_{seed}", f"episode_{episode_id:06d}"))
+    return "__".join(parts)
+
+
 def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
@@ -1817,9 +1837,12 @@ def _run_eval_rollout(
     agents_per_worker = agents_per_batch // num_workers
     capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
     replay_history = defaultdict(list)
-    pool_method = getattr(policy, "pool_slot_counts", None)
-    if pool_method is None and getattr(policy, "policy", None) is not None:
-        pool_method = getattr(policy.policy, "pool_slot_counts", None)
+    capture_observations = bool(args.get("render_obs"))
+    pool_method = None
+    if capture_observations:
+        pool_method = getattr(policy, "pool_slot_counts", None)
+        if pool_method is None and getattr(policy, "policy", None) is not None:
+            pool_method = getattr(policy.policy, "pool_slot_counts", None)
 
     scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
     for rollout_step in range(total_steps):
@@ -1840,7 +1863,8 @@ def _run_eval_rollout(
             if value is None:
                 vecenv.close()
                 raise RuntimeError("Standard replay capture requires policy value outputs")
-            replay_history["obs"].append(np.asarray(obs, dtype=np.float32).copy())
+            if capture_observations:
+                replay_history["obs"].append(np.asarray(obs, dtype=np.float32).copy())
             replay_history["raw_action"].append(np.asarray(raw_action, dtype=np.float32).copy())
             replay_history["clipped_action"].append(np.asarray(action, dtype=np.float32).copy())
             replay_history["value"].append(
@@ -1909,7 +1933,7 @@ def _run_eval_rollout(
                             or active_agent_offset < 0
                             or active_agent_count <= 0
                             or global_agent_end > agents_per_batch
-                            or episode_length > len(replay_history["obs"])
+                            or episode_length > len(replay_history["raw_action"])
                         ):
                             vecenv.close()
                             raise RuntimeError("Replay environment metadata is incompatible with the policy history")
@@ -1920,12 +1944,8 @@ def _run_eval_rollout(
                             replay[key] = np.stack(frames[:episode_length], axis=0)[
                                 :, global_agent_start:global_agent_end
                             ]
-                        replay_path = os.path.abspath(
-                            os.path.join(
-                                replay_output_dir,
-                                f"episode_{len(episode_summaries):06d}.replay.zlib",
-                            )
-                        )
+                        replay_stem = _eval_replay_stem(item, len(episode_summaries))
+                        replay_path = os.path.abspath(os.path.join(replay_output_dir, f"{replay_stem}.replay.zlib"))
                         pufferlib.viz.save_interactive_replay_zlib(replay_environment["scenario"], replay, replay_path)
                         item["has_replay"] = 1
                         item["replay_path"] = replay_path
@@ -2063,7 +2083,11 @@ def _render_eval_replays(episode_summaries, out_dir):
         replay_path = summary.get("replay_path")
         if not replay_path or not os.path.isfile(replay_path):
             raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
-        html_filename = f"episode_{episode_id:06d}.html"
+        replay_filename = os.path.basename(replay_path)
+        replay_suffix = ".replay.zlib"
+        if not replay_filename.endswith(replay_suffix):
+            raise RuntimeError(f"Cannot render episode {episode_id}: unexpected replay filename: {replay_filename}")
+        html_filename = f"{replay_filename[: -len(replay_suffix)]}.html"
         output_path = os.path.join(render_dir, html_filename)
         pufferlib.viz.render_interactive_replay_zlib(replay_path, output_path)
         file_metrics[html_filename] = {
@@ -2157,12 +2181,19 @@ def load_config(env_name, config_dir=None):
     parser.add_argument(
         "--save-zlib",
         action="store_true",
-        help="Save one full interactive observation replay zlib for every completed evaluation scenario",
+        help="Save one interactive replay zlib for every completed evaluation scenario",
     )
     parser.add_argument(
         "--save-html",
         action="store_true",
-        help="Save full replay zlibs and render them with the standard interactive HTML viewer",
+        help="Save replay zlibs and render them with the standard interactive HTML viewer",
+    )
+    parser.add_argument(
+        "--render-obs",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="Include per-agent observations in saved eval replays and HTML (default: 0)",
     )
     parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
     parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
