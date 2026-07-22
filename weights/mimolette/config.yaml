@@ -141,6 +141,7 @@ policy:
   partner_input_size: 256
   shared_network: false
   traffic_control_input_size: 128
+  action_type: discrete
 policy_name: Drive
 render: 0
 render_mode: matplotlib

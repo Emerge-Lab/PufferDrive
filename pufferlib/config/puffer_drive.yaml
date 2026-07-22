@@ -195,6 +195,7 @@ policy:
   critic_num_layers: 0
   # Dual or shared actor-critic backbone
   shared_network: true
+  action_type: discrete
 rnn:
   input_size: 512
   hidden_size: 512
