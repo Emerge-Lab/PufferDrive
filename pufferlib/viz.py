@@ -845,6 +845,7 @@ def plot_observation(
 # Bound untrusted zlib expansion and JSON parsing before chunk-level validation.
 MAX_REPLAY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REPLAY_HEADER_BYTES = 16 * 1024 * 1024
+OBSERVATION_QUANTIZATION_FRAME_CHUNK = 64
 
 
 def _pack_replay_binary(header, chunks):
@@ -919,6 +920,31 @@ def encode_interactive_replay(scenario, replay):
         env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
 
+    observation_scale = 1.0
+    quantized_observations = None
+    if replay.get("obs") is not None:
+        observations = np.asarray(replay["obs"])
+        if observations.ndim != 3:
+            raise ValueError("Replay observations must have frame, agent, and feature dimensions")
+        maximum_absolute_observation = 0.0
+        for frame_start in range(0, observations.shape[0], OBSERVATION_QUANTIZATION_FRAME_CHUNK):
+            frame_end = min(frame_start + OBSERVATION_QUANTIZATION_FRAME_CHUNK, observations.shape[0])
+            observation_chunk_f32 = np.asarray(observations[frame_start:frame_end], dtype=np.float32)
+            if not np.all(np.isfinite(observation_chunk_f32)):
+                raise ValueError("Replay observations must contain only finite values")
+            if observation_chunk_f32.size:
+                chunk_maximum = float(np.max(np.abs(observation_chunk_f32)))
+                maximum_absolute_observation = max(maximum_absolute_observation, chunk_maximum)
+        if maximum_absolute_observation > 0.0:
+            observation_scale = maximum_absolute_observation / float(np.iinfo(np.int16).max)
+        quantized_observations = np.empty(observations.shape, dtype=np.int16)
+        for frame_start in range(0, observations.shape[0], OBSERVATION_QUANTIZATION_FRAME_CHUNK):
+            frame_end = min(frame_start + OBSERVATION_QUANTIZATION_FRAME_CHUNK, observations.shape[0])
+            observation_chunk_f32 = np.asarray(observations[frame_start:frame_end], dtype=np.float32)
+            quantized_observations[frame_start:frame_end] = np.round(observation_chunk_f32 / observation_scale).astype(
+                np.int16
+            )
+
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
@@ -935,8 +961,8 @@ def encode_interactive_replay(scenario, replay):
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
-    if replay.get("obs") is not None:
-        chunks["obs"] = replay["obs"].astype(np.float32, copy=False)
+    if quantized_observations is not None:
+        chunks["obs"] = quantized_observations
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -958,6 +984,7 @@ def encode_interactive_replay(scenario, replay):
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
         "has_obs": replay.get("obs") is not None,
+        "obs_scale": observation_scale,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_target_waypoints": int(env_cfg["num_target_waypoints"]),
@@ -1207,7 +1234,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs;
             let p = base + 10;
             if (H.reward_conditioning) p += 17;
-            const scale = H.target_type === "static" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m;
+            const Q = H.obs_scale === undefined ? 1 : H.obs_scale;
+            const scale = (H.target_type === "static" ? H.scales.obs_norm_goal_offset_m : H.scales.obs_norm_xy_offset_m) * Q;
             const out = [];
             for (let i=0;i<H.num_target_waypoints;i++) {
                 const o = p + i * H.target_features;
@@ -1221,7 +1249,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         }
         function decodeObs(frame, slot) {
             if (!C.obs || slot < 0 || slot >= H.active_count) return null;
-            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs;
+            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale;
             let p = base, ego = obs.subarray(p, p+10); p += 10;
             if (H.reward_conditioning) p += 17;
             const targetStart = p; p += H.num_target_waypoints * H.target_features;
@@ -1231,11 +1259,11 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o],obs[o+1]), cs=rot(obs[o+5],obs[o+6]); out.push([xy[0],xy[1],obs[o+3]*H.scales.road_length_to_position,obs[o+4]*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o],obs[o+1]), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*H.scales.veh_len_to_position,w:obs[o+4]*H.scales.veh_width_to_position,h:h,s:obs[o+7],pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=H.target_type === "static" ? H.scales.goal_to_position : 1, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o],obs[o+1]), b=rot(obs[o+2],obs[o+3]); controls.push({type:obs[o+5], state:obs[o+6], x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{s:ego[0],w:ego[1]*H.scales.veh_width_to_position,l:ego[2]*H.scales.veh_len_to_position,st:ego[3],al:ego[4],alat:ego[5]}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
+            const roads = (start,count,poolName) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*7; if(zero(o,7)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,obs[o+4]*Q*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,s:obs[o+7]*Q,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const gps = []; for(let i=0;i<H.num_target_waypoints;i++){ const o=targetStart+i*H.target_features; if(zero(o,H.target_features)) continue; let scale=(H.target_type === "static" ? H.scales.goal_to_position : 1)*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*7; if(zero(o,7)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            return {ego:{s:ego[0]*Q,w:ego[1]*Q*H.scales.veh_width_to_position,l:ego[2]*Q*H.scales.veh_len_to_position,st:ego[3]*Q,al:ego[4]*Q,alat:ego[5]*Q}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane"), bounds:roads(boundsStart,H.boundary_count,"pool_boundary"), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
             resizeObsCanvas();
@@ -1352,6 +1380,13 @@ def validate_interactive_replay(compressed_payload):
     has_obs = header.get("has_obs", "obs" in chunks)
     if not isinstance(has_obs, bool) or has_obs != ("obs" in chunks):
         raise ValueError("Interactive replay observation metadata does not match its chunks")
+    if "obs_scale" in header:
+        try:
+            observation_scale = float(header["obs_scale"])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Interactive replay has an invalid observation scale") from exc
+        if isinstance(header["obs_scale"], bool) or not np.isfinite(observation_scale) or observation_scale <= 0.0:
+            raise ValueError("Interactive replay has an invalid observation scale")
     required_chunks = {
         "road_points",
         "road_lengths",

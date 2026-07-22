@@ -71,7 +71,6 @@ static inline Drive drive_test_env_config(
     env.offroad_behavior = 0;
     env.traffic_light_behavior = 0;
     env.use_map_cache = use_map_cache;
-    env.emit_completed_episodes = 1;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
     env.min_waypoint_spacing = 20.0f;

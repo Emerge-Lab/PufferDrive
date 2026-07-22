@@ -1764,6 +1764,162 @@ def _replay_worker_kwargs(args, pairs, num_workers, scenario_length, capture_rep
     return worker_env_kwargs, max_pairs_per_worker * scenario_length
 
 
+class _EvalReplayCapture:
+    """Capture policy history and combine it with completed environment replay bundles."""
+
+    def __init__(
+        self,
+        args,
+        policy,
+        replay_output_dir,
+        capture_observations,
+        num_workers,
+        agents_per_batch,
+        capture_batch_steps,
+        replay_episode_offset,
+    ):
+        if capture_batch_steps <= 0:
+            raise RuntimeError("Replay capture requires a positive resample frequency")
+        self.capture_observations = bool(capture_observations)
+        self.replay_writer_count = num_workers
+        if self.capture_observations:
+            observation_replay_writer_count = args.get("eval", {}).get("observation_replay_writer_count")
+            if (
+                isinstance(observation_replay_writer_count, bool)
+                or not isinstance(observation_replay_writer_count, int)
+                or observation_replay_writer_count <= 0
+            ):
+                raise pufferlib.APIUsageError(
+                    "eval.observation_replay_writer_count must be a positive integer when rendering observations"
+                )
+            self.replay_writer_count = min(num_workers, observation_replay_writer_count)
+
+        self.env_config = dict(args["env"])
+        self.replay_output_dir = replay_output_dir
+        self.num_workers = num_workers
+        self.agents_per_batch = agents_per_batch
+        self.agents_per_worker = agents_per_batch // num_workers
+        self.capture_batch_steps = capture_batch_steps
+        self.replay_episode_offset = replay_episode_offset
+        self.pool_method = getattr(policy, "pool_slot_counts", None)
+        if self.pool_method is None and getattr(policy, "policy", None) is not None:
+            self.pool_method = getattr(policy.policy, "pool_slot_counts", None)
+        self.history = {}
+        self.history_frame_count = 0
+        self.pending_replays = []
+        os.makedirs(replay_output_dir, exist_ok=True)
+
+    @property
+    def pending_count(self):
+        return len(self.pending_replays)
+
+    def capture_frame(self, obs, policy_obs_tensor, raw_action, action, logits, value, logprob, entropy):
+        if self.history_frame_count == self.capture_batch_steps:
+            self.reset_history()
+        replay_frame = {
+            "raw_action": np.asarray(raw_action, dtype=np.float32),
+            "clipped_action": np.asarray(action, dtype=np.float32),
+            "value": value[: self.agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=False),
+            "entropy": entropy[: self.agents_per_batch]
+            .detach()
+            .reshape(-1)
+            .cpu()
+            .numpy()
+            .astype(np.float32, copy=False),
+        }
+        if self.capture_observations:
+            replay_frame["obs"] = np.asarray(obs, dtype=np.float16)
+        if isinstance(logits, torch.distributions.Normal):
+            replay_frame["policy_mean"] = (
+                logits.loc[: self.agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=False)
+            )
+            replay_frame["policy_std"] = (
+                logits.scale[: self.agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=False)
+            )
+            replay_frame["policy_log_prob"] = (
+                logprob[: self.agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=False)
+            )
+        else:
+            discrete_logits = logits if isinstance(logits, torch.Tensor) else logits[0]
+            replay_frame["policy_probs"] = (
+                torch.softmax(discrete_logits[: self.agents_per_batch], dim=-1)
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=False)
+            )
+        if self.pool_method is not None:
+            for pool_name, pool_values in self.pool_method(policy_obs_tensor).items():
+                replay_frame[pool_name] = (
+                    pool_values[: self.agents_per_batch].detach().cpu().numpy().astype(np.int16, copy=False)
+                )
+
+        if not self.history:
+            self.history = {
+                replay_key: np.empty(
+                    (self.capture_batch_steps, *frame_values.shape),
+                    dtype=frame_values.dtype,
+                )
+                for replay_key, frame_values in replay_frame.items()
+            }
+        for replay_key, frame_values in replay_frame.items():
+            self.history[replay_key][self.history_frame_count] = frame_values
+        self.history_frame_count += 1
+
+    def queue_completed_episode(self, summary, episode_idx):
+        replay_environment_bytes = summary.pop("replay_environment_bundle", None)
+        if not isinstance(replay_environment_bytes, bytes):
+            raise RuntimeError(
+                "Replay capture was requested, but a completed episode did not include environment bytes"
+            )
+        replay_environment = pickle.loads(zlib.decompress(replay_environment_bytes))
+        if replay_environment.get("schema") != "interactive_replay_environment_v1":
+            raise RuntimeError("Replay environment bundle has an unsupported schema")
+
+        metadata = replay_environment["metadata"]
+        episode_length = int(metadata["episode_length"])
+        worker_idx = int(metadata["worker_idx"])
+        active_agent_offset = int(metadata["active_agent_offset"])
+        active_agent_count = int(metadata["active_agent_count"])
+        global_agent_start = worker_idx * self.agents_per_worker + active_agent_offset
+        global_agent_end = global_agent_start + active_agent_count
+        if (
+            worker_idx < 0
+            or worker_idx >= self.num_workers
+            or active_agent_offset < 0
+            or active_agent_count <= 0
+            or global_agent_end > self.agents_per_batch
+            or episode_length > self.history_frame_count
+        ):
+            raise RuntimeError("Replay environment metadata is incompatible with the policy history")
+
+        replay = {"env": self.env_config, **replay_environment["frames"]}
+        for replay_key, history_values in self.history.items():
+            replay[replay_key] = history_values[:episode_length, global_agent_start:global_agent_end]
+        replay_stem = _eval_replay_stem(summary, self.replay_episode_offset + episode_idx)
+        replay_path = os.path.abspath(os.path.join(self.replay_output_dir, f"{replay_stem}.replay.zlib"))
+        self.pending_replays.append((replay_environment["scenario"], replay, replay_path))
+        summary["has_replay"] = 1
+        summary["replay_path"] = replay_path
+
+    def write_pending(self):
+        scenarios, replays, replay_paths = zip(*self.pending_replays)
+        writer_count = min(self.replay_writer_count, len(self.pending_replays))
+        with ThreadPoolExecutor(max_workers=writer_count) as replay_writer:
+            for _ in replay_writer.map(
+                pufferlib.viz.save_interactive_replay_zlib,
+                scenarios,
+                replays,
+                replay_paths,
+            ):
+                pass
+        self.pending_replays = []
+
+    def reset_history(self):
+        self.history = {}
+        self.history_frame_count = 0
+
+
 def _run_eval_rollout(
     args,
     env_name,
@@ -1775,6 +1931,7 @@ def _run_eval_rollout(
     expected_agents_per_batch=None,
     replay_output_dir=None,
     capture_observations=False,
+    replay_episode_offset=0,
 ):
     """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -1790,175 +1947,106 @@ def _run_eval_rollout(
         num_envs=num_workers,
         num_workers=num_workers,
         batch_size=num_workers,
+        seed=args["vec"]["seed"],
     )
-
-    agents_per_batch = vecenv.agents_per_batch
-    policy_agents_per_batch = expected_agents_per_batch or agents_per_batch
-    if agents_per_batch > policy_agents_per_batch:
-        vecenv.close()
-        raise pufferlib.APIUsageError(
-            f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
-            f"CSV policy batch of {policy_agents_per_batch}. Reduce num_agents or the replay worker count."
-        )
-    if agents_per_batch < policy_agents_per_batch:
-        print(
-            f"Padding policy inference from {agents_per_batch} to "
-            f"{policy_agents_per_batch} agents to preserve the recorded batch shape"
-        )
-
-    rollout_seed = 42 if args["train"]["seed"] is None else int(args["train"]["seed"])
-    torch.manual_seed(rollout_seed)
-    policy = policy or load_policy(args, vecenv, env_name)
-    policy.eval()
-    device = torch_device(args["train"]["device"])
-
-    episode_summaries = []
-    capture_replay = replay_output_dir is not None
-    if replay_output_dir is not None:
-        os.makedirs(replay_output_dir, exist_ok=True)
-    obs, _ = vecenv.reset(rollout_seed)
-    padding_agent_count = policy_agents_per_batch - agents_per_batch
-    policy_obs_tensor = None
-    if padding_agent_count:
-        policy_obs_tensor = torch.zeros(
-            (policy_agents_per_batch, *obs.shape[1:]),
-            dtype=torch.as_tensor(obs).dtype,
-            device=device,
-        )
-    agents_per_worker = agents_per_batch // num_workers
-    capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
-    replay_history = defaultdict(list)
-    capture_observations = bool(capture_observations)
-    pool_method = None
-    if capture_observations:
-        pool_method = getattr(policy, "pool_slot_counts", None)
-        if pool_method is None and getattr(policy, "policy", None) is not None:
-            pool_method = getattr(policy.policy, "pool_slot_counts", None)
-
-    scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
-    for rollout_step in range(total_steps):
-        with torch.no_grad():
-            environment_obs_tensor = torch.as_tensor(obs, device=device)
-            if padding_agent_count:
-                policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
-            else:
-                policy_obs_tensor = environment_obs_tensor
-            logits, value = policy.forward_eval(policy_obs_tensor)
-            action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
-            raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
-            action = raw_action
-        if isinstance(logits, torch.distributions.Normal):
-            action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-
-        if capture_replay:
-            if capture_observations:
-                replay_history["obs"].append(np.asarray(obs, dtype=np.float32).copy())
-            replay_history["raw_action"].append(np.asarray(raw_action, dtype=np.float32).copy())
-            replay_history["clipped_action"].append(np.asarray(action, dtype=np.float32).copy())
-            replay_history["value"].append(
-                value[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
+    scenario_progress = None
+    try:
+        agents_per_batch = vecenv.agents_per_batch
+        policy_agents_per_batch = expected_agents_per_batch or agents_per_batch
+        if agents_per_batch > policy_agents_per_batch:
+            raise pufferlib.APIUsageError(
+                f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
+                f"CSV policy batch of {policy_agents_per_batch}. Reduce num_agents or the replay worker count."
             )
-            replay_history["entropy"].append(
-                entropy[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
+        if agents_per_batch < policy_agents_per_batch:
+            print(
+                f"Padding policy inference from {agents_per_batch} to "
+                f"{policy_agents_per_batch} agents to preserve the recorded batch shape"
             )
+
+        rollout_seed = 42 if args["train"]["seed"] is None else int(args["train"]["seed"])
+        torch.manual_seed(rollout_seed)
+        policy = policy or load_policy(args, vecenv, env_name)
+        policy.eval()
+        device = torch_device(args["train"]["device"])
+        obs, _ = vecenv.reset(rollout_seed)
+        padding_agent_count = policy_agents_per_batch - agents_per_batch
+        policy_obs_tensor = None
+        if padding_agent_count:
+            policy_obs_tensor = torch.zeros(
+                (policy_agents_per_batch, *obs.shape[1:]),
+                dtype=torch.as_tensor(obs).dtype,
+                device=device,
+            )
+
+        capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
+        replay_capture = None
+        if replay_output_dir is not None:
+            replay_capture = _EvalReplayCapture(
+                args,
+                policy,
+                replay_output_dir,
+                capture_observations,
+                num_workers,
+                agents_per_batch,
+                capture_batch_steps,
+                replay_episode_offset,
+            )
+
+        episode_summaries = []
+        scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
+        for _ in range(total_steps):
+            with torch.no_grad():
+                environment_obs_tensor = torch.as_tensor(obs, device=device)
+                if padding_agent_count:
+                    policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                else:
+                    policy_obs_tensor = environment_obs_tensor
+                logits, value = policy.forward_eval(policy_obs_tensor)
+                action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                action = raw_action
             if isinstance(logits, torch.distributions.Normal):
-                replay_history["policy_mean"].append(
-                    logits.loc[:agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=True)
-                )
-                replay_history["policy_std"].append(
-                    logits.scale[:agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=True)
-                )
-                replay_history["policy_log_prob"].append(
-                    logprob[:agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=True)
-                )
-            else:
-                discrete_logits = logits if isinstance(logits, torch.Tensor) else logits[0]
-                replay_history["policy_probs"].append(
-                    torch.softmax(discrete_logits[:agents_per_batch], dim=-1)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.float32, copy=True)
-                )
-            if pool_method is not None:
-                pool_outputs = pool_method(policy_obs_tensor)
-                for pool_name, pool_values in pool_outputs.items():
-                    replay_history[pool_name].append(
-                        pool_values[:agents_per_batch].detach().cpu().numpy().astype(np.int16, copy=True)
-                    )
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 
-        obs, _, _, _, infos = vecenv.step(action)
-        replays_to_write = []
-        for worker_info in infos:
-            worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
-            for item in worker_items:
-                if isinstance(item, dict) and item.get("summary_type") == "completed_episode":
-                    replay_environment_bytes = item.pop("replay_environment_bundle", None)
-                    if replay_output_dir is not None:
-                        if not isinstance(replay_environment_bytes, bytes):
-                            vecenv.close()
-                            raise RuntimeError(
-                                "Replay capture was requested, but a completed episode did not include environment bytes"
-                            )
-                        replay_environment = pickle.loads(zlib.decompress(replay_environment_bytes))
-                        if replay_environment.get("schema") != "interactive_replay_environment_v1":
-                            vecenv.close()
-                            raise RuntimeError("Replay environment bundle has an unsupported schema")
-                        metadata = replay_environment["metadata"]
-                        episode_length = int(metadata["episode_length"])
-                        worker_idx = int(metadata["worker_idx"])
-                        active_agent_offset = int(metadata["active_agent_offset"])
-                        active_agent_count = int(metadata["active_agent_count"])
-                        global_agent_start = worker_idx * agents_per_worker + active_agent_offset
-                        global_agent_end = global_agent_start + active_agent_count
-                        if (
-                            worker_idx < 0
-                            or worker_idx >= num_workers
-                            or active_agent_offset < 0
-                            or active_agent_count <= 0
-                            or global_agent_end > agents_per_batch
-                            or episode_length > len(replay_history["raw_action"])
-                        ):
-                            vecenv.close()
-                            raise RuntimeError("Replay environment metadata is incompatible with the policy history")
-                        replay = {"env": dict(args["env"]), **replay_environment["frames"]}
-                        for key, frames in replay_history.items():
-                            if not frames:
-                                continue
-                            scenario_agent_frames = [
-                                frame[global_agent_start:global_agent_end] for frame in frames[:episode_length]
-                            ]
-                            replay[key] = np.stack(scenario_agent_frames, axis=0)
-                        replay_stem = _eval_replay_stem(item, len(episode_summaries))
-                        replay_path = os.path.abspath(os.path.join(replay_output_dir, f"{replay_stem}.replay.zlib"))
-                        replays_to_write.append((replay_environment["scenario"], replay, replay_path))
-                        item["has_replay"] = 1
-                        item["replay_path"] = replay_path
+            if replay_capture is not None:
+                replay_capture.capture_frame(
+                    obs,
+                    policy_obs_tensor,
+                    raw_action,
+                    action,
+                    logits,
+                    value,
+                    logprob,
+                    entropy,
+                )
+
+            obs, _, _, _, infos = vecenv.step(action)
+            for worker_info in infos:
+                worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
+                for item in worker_items:
+                    if not isinstance(item, dict) or item.get("summary_type") != "completed_episode":
+                        continue
+                    if replay_capture is not None:
+                        replay_capture.queue_completed_episode(item, len(episode_summaries))
+                    else:
+                        item.pop("replay_environment_bundle", None)
                     item["agents_per_batch"] = policy_agents_per_batch
                     episode_summaries.append(item)
                     if len(episode_summaries) <= expected_episodes:
                         scenario_progress.update(1)
 
-        if replays_to_write:
-            scenarios, replays, replay_paths = zip(*replays_to_write)
-            scenario_progress.set_postfix_str(f"writing {len(replays_to_write)} replays")
-            with ThreadPoolExecutor(max_workers=min(num_workers, len(replays_to_write))) as replay_writer:
-                for _ in replay_writer.map(
-                    pufferlib.viz.save_interactive_replay_zlib,
-                    scenarios,
-                    replays,
-                    replay_paths,
-                ):
-                    pass
-            scenario_progress.set_postfix_str("")
+            if replay_capture is not None and replay_capture.pending_count:
+                scenario_progress.set_postfix_str(f"writing {replay_capture.pending_count} replays")
+                replay_capture.write_pending()
+                scenario_progress.set_postfix_str("")
 
-        if len(episode_summaries) >= expected_episodes:
-            break
-        if capture_replay and (rollout_step + 1) % capture_batch_steps == 0:
-            replay_history = defaultdict(list)
-
-    scenario_progress.close()
-    vecenv.close()
+            if len(episode_summaries) >= expected_episodes:
+                break
+    finally:
+        if scenario_progress is not None:
+            scenario_progress.close()
+        vecenv.close()
     return episode_summaries
 
 
@@ -1971,6 +2059,9 @@ def eval(env_name, args=None, policy=None):
     selected_datasets = eval_config.get("datasets")
     if selected_datasets is None or not selected_datasets.strip():
         raise pufferlib.APIUsageError("--eval.datasets is required; select one or more benchmark datasets")
+    render_failures = bool(eval_config.get("render_failures"))
+    if render_failures:
+        pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
     evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
     base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
@@ -2017,7 +2108,7 @@ def eval(env_name, args=None, policy=None):
         _write_eval_reports(summaries, suite_output_dir, num_scenarios)
         all_suite_summaries[suite["name"]] = summaries
 
-        if bool(eval_config.get("render_failures")):
+        if render_failures:
             _render_eval_failures(
                 env_name,
                 run_args,
@@ -2133,7 +2224,8 @@ def _selected_agents_per_batch(selected_rows):
 
 
 def _render_eval_failures(env_name, run_args, suite, metrics_path, suite_output_dir, policy, render_obs):
-    selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path)
+    configured_failure_metrics = run_args.get("eval", {}).get("failure_metrics")
+    selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
     failures_dir = os.path.join(suite_output_dir, "failures")
     os.makedirs(failures_dir, exist_ok=True)
     selected_path = os.path.join(failures_dir, "selected_failures.csv")
@@ -2146,28 +2238,63 @@ def _render_eval_failures(env_name, run_args, suite, metrics_path, suite_output_
     seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
     pairs = list(zip(map_indices, seeds))
     failure_args = copy.deepcopy(run_args)
-    num_workers = min(int(failure_args["vec"]["num_envs"]), len(pairs))
-    failure_args["vec"]["num_envs"] = num_workers
-    worker_env_kwargs, total_steps = _replay_worker_kwargs(
-        failure_args,
-        pairs,
-        num_workers,
-        int(failure_args["env"]["scenario_length"]),
-        capture_replay=True,
-    )
+    configured_worker_count = int(failure_args["vec"]["num_envs"])
+    if configured_worker_count <= 0:
+        raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
+    replay_wave_size = len(pairs)
+    if render_obs:
+        observation_replay_wave_size = run_args.get("eval", {}).get("observation_replay_wave_size")
+        if (
+            isinstance(observation_replay_wave_size, bool)
+            or not isinstance(observation_replay_wave_size, int)
+            or observation_replay_wave_size <= 0
+        ):
+            raise pufferlib.APIUsageError(
+                "eval.observation_replay_wave_size must be a positive integer when rendering observations"
+            )
+        replay_wave_size = min(
+            len(pairs),
+            configured_worker_count,
+            observation_replay_wave_size,
+        )
+        replay_agent_capacity = int(failure_args["env"]["max_agents_per_env"])
+        if replay_agent_capacity <= 0:
+            raise pufferlib.APIUsageError("Failure rendering requires max_agents_per_env > 0")
+        failure_args["env"]["num_agents"] = replay_agent_capacity
     replay_output_dir = os.path.join(failures_dir, "replays")
-    summaries = _run_eval_rollout(
-        failure_args,
-        env_name,
-        worker_env_kwargs,
-        total_steps,
-        f"Rendering {suite['name']} failures",
-        len(pairs),
-        policy=policy,
-        expected_agents_per_batch=_selected_agents_per_batch(selected_rows),
-        replay_output_dir=replay_output_dir,
-        capture_observations=render_obs,
-    )
+    os.makedirs(replay_output_dir, exist_ok=True)
+    expected_agents_per_batch = _selected_agents_per_batch(selected_rows)
+    summaries = []
+    replay_wave_count = (len(pairs) + replay_wave_size - 1) // replay_wave_size
+    for replay_wave_idx, replay_pair_start in enumerate(range(0, len(pairs), replay_wave_size)):
+        replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
+        num_workers = min(configured_worker_count, len(replay_pairs))
+        wave_args = copy.deepcopy(failure_args)
+        wave_args["vec"]["num_envs"] = num_workers
+        worker_env_kwargs, total_steps = _replay_worker_kwargs(
+            wave_args,
+            replay_pairs,
+            num_workers,
+            int(wave_args["env"]["scenario_length"]),
+            capture_replay=True,
+        )
+        replay_desc = f"Rendering {suite['name']} failures"
+        if replay_wave_count > 1:
+            replay_desc += f" (wave {replay_wave_idx + 1}/{replay_wave_count})"
+        wave_summaries = _run_eval_rollout(
+            wave_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            replay_desc,
+            len(replay_pairs),
+            policy=policy,
+            expected_agents_per_batch=expected_agents_per_batch,
+            replay_output_dir=replay_output_dir,
+            capture_observations=render_obs,
+            replay_episode_offset=len(summaries),
+        )
+        summaries.extend(wave_summaries)
     _write_eval_reports(summaries, failures_dir, len(pairs))
     _render_eval_replays(summaries, failures_dir)
     return summaries

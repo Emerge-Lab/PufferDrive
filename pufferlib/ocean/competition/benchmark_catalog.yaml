@@ -6,7 +6,7 @@ benchmarks:
     num_scenarios: 150
     num_maps: 8
     max_agents_per_env: 50
-    scenario_length: 250
+    scenario_length: 3000
     control_mode: control_vehicles
     paths:
       local: pufferlib/resources/drive/binaries/carla

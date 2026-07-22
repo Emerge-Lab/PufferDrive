@@ -236,15 +236,42 @@ def build_suite_args(base_args, suite, evaluation_env_config):
     return args
 
 
-def select_failure_rows(metrics_path):
+def parse_failure_metric_columns(configured_failure_metrics):
+    """Resolve and validate the metric columns that define a failed episode."""
+    if configured_failure_metrics is None:
+        return FAILURE_METRIC_COLUMNS
+    if isinstance(configured_failure_metrics, str):
+        failure_metric_columns = [column.strip() for column in configured_failure_metrics.split(",") if column.strip()]
+    elif isinstance(configured_failure_metrics, (list, tuple)):
+        failure_metric_columns = list(configured_failure_metrics)
+    else:
+        raise pufferlib.APIUsageError("eval.failure_metrics must be a comma-separated string or list")
+
+    if not failure_metric_columns:
+        raise pufferlib.APIUsageError("eval.failure_metrics must select at least one failure metric")
+    if any(not isinstance(column, str) or not column for column in failure_metric_columns):
+        raise pufferlib.APIUsageError("eval.failure_metrics entries must be non-empty strings")
+    if len(failure_metric_columns) != len(set(failure_metric_columns)):
+        raise pufferlib.APIUsageError("eval.failure_metrics contains duplicate metric names")
+    unknown_columns = set(failure_metric_columns) - set(FAILURE_METRIC_COLUMNS)
+    if unknown_columns:
+        raise pufferlib.APIUsageError(
+            "eval.failure_metrics contains unsupported metrics: "
+            f"{', '.join(sorted(unknown_columns))}. Supported metrics: {', '.join(FAILURE_METRIC_COLUMNS)}"
+        )
+    return tuple(failure_metric_columns)
+
+
+def select_failure_rows(metrics_path, configured_failure_metrics=None):
     """Select failures using the infraction columns emitted by PufferDrive."""
     if not os.path.isfile(metrics_path):
         raise pufferlib.APIUsageError(f"Benchmark metrics CSV not found: {metrics_path}")
     rows = pd.read_csv(metrics_path)
-    present_columns = [column for column in FAILURE_METRIC_COLUMNS if column in rows.columns]
+    failure_metric_columns = parse_failure_metric_columns(configured_failure_metrics)
+    present_columns = [column for column in failure_metric_columns if column in rows.columns]
     if not present_columns:
         raise pufferlib.APIUsageError(
-            f"Benchmark metrics CSV has none of the failure columns: {', '.join(FAILURE_METRIC_COLUMNS)}"
+            f"Benchmark metrics CSV has none of the configured failure columns: {', '.join(failure_metric_columns)}"
         )
     failure = pd.Series(False, index=rows.index)
     for column in present_columns:
