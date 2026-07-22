@@ -115,7 +115,8 @@ puffer eval puffer_drive \
 Evaluation outputs are written under `eval/<suite>/`. The suite seed and worker
 count are part of the benchmark configuration: repeated runs with both unchanged
 produce the same map/seed rows. Failure renders replay the exact map and seed
-recorded by the metrics pass.
+recorded by the metrics pass. See [docs/evaluation.md](docs/evaluation.md) for
+the catalog schema, failure replay flow, outputs, and training integration.
 
 ## Nightly runs and the regression report
 

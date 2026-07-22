@@ -38,6 +38,8 @@ class TestDriveConfig(unittest.TestCase):
             self.assertTrue(args["eval"]["training_enabled"])
             self.assertEqual(args["eval"]["training_interval"], 100)
             self.assertEqual(args["eval"]["training_datasets"], "carla_fast")
+            self.assertTrue(os.path.isfile(args["eval"]["catalog"]))
+            self.assertTrue(os.path.isfile(args["eval"]["evaluation_config"]))
 
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")

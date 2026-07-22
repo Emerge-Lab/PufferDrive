@@ -4,10 +4,34 @@ from types import SimpleNamespace
 import zlib
 
 import numpy as np
+import pytest
 import torch
 
 import pufferlib
 from pufferlib import pufferl
+
+
+def test_benchmark_rejects_agent_capacity_below_suite_maximum():
+    args = {
+        "train": {},
+        "vec": {},
+        "env": {},
+        "eval": {"num_agents": 16},
+    }
+    suite = {
+        "name": "carla_test",
+        "seed": 42,
+        "mode": "gigaflow",
+        "map_dir": "maps",
+        "num_maps": 1,
+        "num_scenarios": 1,
+        "scenario_length": 100,
+        "max_agents_per_env": 50,
+        "control_mode": "control_vehicles",
+    }
+
+    with pytest.raises(pufferlib.APIUsageError, match="eval.num_agents.*max_agents_per_env"):
+        pufferlib.benchmark.build_suite_args(args, suite, {})
 
 
 class _ZeroPolicy:

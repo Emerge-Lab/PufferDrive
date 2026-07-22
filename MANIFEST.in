@@ -4,7 +4,7 @@ global-include *.h
 global-include *.cpp
 global-include *.cu
 global-include *.py
-recursive-include pufferlib/config *.ini
+recursive-include pufferlib/config *.ini *.yaml
 recursive-include pufferlib/resources *
 recursive-exclude experiments *
 recursive-exclude wandb *

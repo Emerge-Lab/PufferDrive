@@ -32,7 +32,7 @@ rnn_name: null
 max_suggestion_cost: 3600
 vec:
   backend: Multiprocessing
-  num_envs: 20
+  num_envs: 16
   num_workers: auto
   batch_size: auto
   zero_copy: true
@@ -42,7 +42,7 @@ env:
   # Options: "gigaflow", "replay"
   simulation_mode: gigaflow
   # Total number of agents in the environment
-  num_agents: 1024
+  num_agents: 256
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
   max_agents_per_env: 80
@@ -263,8 +263,8 @@ sweep:
 # Catalog-defined evaluation and failure replay settings.
 eval:
   num_agents: 512
-  catalog: pufferlib/ocean/competition/benchmark_catalog.yaml
-  evaluation_config: pufferlib/ocean/competition/benchmark_evaluation.yaml
+  catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
+  evaluation_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
   datasets: null
   render_failures: false
   render_obs: false

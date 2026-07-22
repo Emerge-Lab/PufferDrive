@@ -12,8 +12,7 @@
 #   SEEDS           colon sweep passed to --args train.seed (default 0:1:2 -> 3 jobs)
 #   ACCOUNT/PARTITION/TIME   SLURM overrides
 #   MEM             SLURM --mem (default 192gb; the multi-agent config plus
-#                   inline validation_gigaflow eval can spike past 128gb at
-#                   epoch 250)
+#                   catalog training evaluation can spike past 128gb)
 #   PREFIX          run-name prefix (default <date>_multi_agent)
 #
 # Examples:

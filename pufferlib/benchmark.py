@@ -216,13 +216,19 @@ def load_checkpoint_architecture(args):
 def build_suite_args(base_args, suite, evaluation_env_config):
     """Apply the fixed benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
+    eval_agent_count = _positive_int(args["eval"].get("num_agents", 101), "eval.num_agents")
+    if eval_agent_count < suite["max_agents_per_env"]:
+        raise pufferlib.APIUsageError(
+            f"eval.num_agents ({eval_agent_count}) must be at least benchmark {suite['name']} "
+            f"max_agents_per_env ({suite['max_agents_per_env']})"
+        )
     seed = suite["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
     args["env"].update(copy.deepcopy(evaluation_env_config))
     args["env"].update(
         {
-            "num_agents": int(args["eval"].get("num_agents", 101)),
+            "num_agents": eval_agent_count,
             "simulation_mode": suite["mode"],
             "map_dir": suite["map_dir"],
             "num_maps": suite["num_maps"],
