@@ -218,7 +218,7 @@ train:
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
-  normalize_rewards: true
+  normalize_rewards: false
   ent_coef: 0.01
   # ---
   adam_beta1: 0.9
