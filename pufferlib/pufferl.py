@@ -2175,6 +2175,8 @@ def eval(
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
         base_args = copy.deepcopy(args)
+        evaluation_env_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
+        evaluation_env_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)

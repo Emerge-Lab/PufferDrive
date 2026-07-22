@@ -82,6 +82,63 @@ class _EvaluationReplayVec:
         pass
 
 
+def test_training_eval_keeps_training_observation_dropout(monkeypatch, tmp_path):
+    suite = {
+        "name": "carla_test",
+        "seed": 42,
+        "mode": "gigaflow",
+        "map_dir": "maps",
+        "num_maps": 1,
+        "num_scenarios": 1,
+        "scenario_length": 100,
+        "max_agents_per_env": 16,
+        "control_mode": "control_vehicles",
+    }
+    args = {
+        "package": "ocean",
+        "train": {"seed": 1, "use_rnn": False},
+        "vec": {"seed": 1, "num_envs": 1},
+        "env": {
+            "obs_dropout_lane": 0.5,
+            "obs_dropout_boundary": 0.75,
+        },
+        "eval": {
+            "catalog": "catalog.yaml",
+            "evaluation_config": "evaluation.yaml",
+            "datasets": "carla_test",
+            "num_agents": 16,
+            "render_failures": False,
+        },
+    }
+    captured_args = {}
+
+    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [suite])
+    monkeypatch.setattr(
+        pufferlib.benchmark,
+        "load_evaluation_config",
+        lambda *_: {"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0},
+    )
+    monkeypatch.setattr(pufferl, "_forward_worker_kwargs", lambda *_: ([{}], 1))
+
+    def capture_rollout(run_args, *_args, **_kwargs):
+        captured_args.update(run_args)
+        return []
+
+    monkeypatch.setattr(pufferl, "_run_eval_rollout", capture_rollout)
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
+
+    pufferl.eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=_ZeroPolicy(),
+        eval_output_dir=str(tmp_path),
+        use_training_config=True,
+    )
+
+    assert captured_args["env"]["obs_dropout_lane"] == 0.5
+    assert captured_args["env"]["obs_dropout_boundary"] == 0.75
+
+
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
     monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: _EvaluationReplayVec())
 

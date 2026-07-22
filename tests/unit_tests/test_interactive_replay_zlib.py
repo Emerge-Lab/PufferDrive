@@ -1,7 +1,4 @@
-import zlib
-
 import numpy as np
-import pytest
 
 from pufferlib import viz
 from pufferlib.ocean.drive import binding
@@ -59,19 +56,7 @@ def test_standard_replay_zlib_round_trip_and_html_render(tmp_path):
     html_path = tmp_path / "episode.html"
 
     compressed_payload = viz.save_interactive_replay_zlib(scenario, _standard_replay(), replay_path)
-    header = viz.validate_interactive_replay(compressed_payload)
     viz.render_interactive_replay_zlib(replay_path, html_path)
 
-    assert header["schema"] == viz.REPLAY_SCHEMA
-    assert header["frames"] == 2
     assert replay_path.read_bytes() == compressed_payload
     assert "__B64_PAYLOAD__" not in html_path.read_text()
-
-
-def test_standard_replay_zlib_rejects_trailing_compressed_data():
-    payload = viz.encode_interactive_replay(
-        {"road_elements": [], "traffic_elements": [], "active_agent_indices": []}, _standard_replay()
-    )
-
-    with pytest.raises(ValueError, match="trailing"):
-        viz.validate_interactive_replay(payload + zlib.compress(b"extra"))

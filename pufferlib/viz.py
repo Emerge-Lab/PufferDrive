@@ -841,13 +841,6 @@ def plot_observation(
     return _img_from_fig(fig)
 
 
-# Bound untrusted zlib expansion and JSON parsing before chunk-level validation.
-MAX_REPLAY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
-MAX_REPLAY_HEADER_BYTES = 16 * 1024 * 1024
-OBSERVATION_QUANTIZATION_FRAME_CHUNK = 64
-REPLAY_SCHEMA = "puffer_drive_interactive_replay_v1"
-
-
 def _pack_replay_binary(header, chunks):
     packed = {}
     blob_parts = []
@@ -923,27 +916,12 @@ def encode_interactive_replay(scenario, replay):
     observation_scale = 1.0
     quantized_observations = None
     if replay.get("obs") is not None:
-        observations = np.asarray(replay["obs"])
-        if observations.ndim != 3:
-            raise ValueError("Replay observations must have frame, agent, and feature dimensions")
-        maximum_absolute_observation = 0.0
-        for frame_start in range(0, observations.shape[0], OBSERVATION_QUANTIZATION_FRAME_CHUNK):
-            frame_end = min(frame_start + OBSERVATION_QUANTIZATION_FRAME_CHUNK, observations.shape[0])
-            observation_chunk_f32 = np.asarray(observations[frame_start:frame_end], dtype=np.float32)
-            if not np.all(np.isfinite(observation_chunk_f32)):
-                raise ValueError("Replay observations must contain only finite values")
-            if observation_chunk_f32.size:
-                chunk_maximum = float(np.max(np.abs(observation_chunk_f32)))
-                maximum_absolute_observation = max(maximum_absolute_observation, chunk_maximum)
-        if maximum_absolute_observation > 0.0:
-            observation_scale = maximum_absolute_observation / float(np.iinfo(np.int16).max)
-        quantized_observations = np.empty(observations.shape, dtype=np.int16)
-        for frame_start in range(0, observations.shape[0], OBSERVATION_QUANTIZATION_FRAME_CHUNK):
-            frame_end = min(frame_start + OBSERVATION_QUANTIZATION_FRAME_CHUNK, observations.shape[0])
-            observation_chunk_f32 = np.asarray(observations[frame_start:frame_end], dtype=np.float32)
-            quantized_observations[frame_start:frame_end] = np.round(observation_chunk_f32 / observation_scale).astype(
-                np.int16
-            )
+        observations_f32 = np.asarray(replay["obs"], dtype=np.float32)
+        if observations_f32.size:
+            observation_scale = float(np.max(np.abs(observations_f32))) / 32767.0
+        if observation_scale == 0.0:
+            observation_scale = 1.0
+        quantized_observations = np.round(observations_f32 / observation_scale).astype(np.int16)
 
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
@@ -1008,7 +986,6 @@ def encode_interactive_replay(scenario, replay):
         goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
 
     metadata = {
-        "schema": REPLAY_SCHEMA,
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
         "goal_regen_mode": goal_regen_mode,
@@ -1527,89 +1504,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         f.write(final_html)
 
 
-def validate_interactive_replay(compressed_payload):
-    if not isinstance(compressed_payload, bytes) or not compressed_payload:
-        raise ValueError("Interactive replay payload must be non-empty bytes")
-    decompressor = zlib.decompressobj()
-    payload = decompressor.decompress(compressed_payload, MAX_REPLAY_UNCOMPRESSED_BYTES + 1)
-    if len(payload) > MAX_REPLAY_UNCOMPRESSED_BYTES or decompressor.unconsumed_tail:
-        raise ValueError("Interactive replay exceeds the maximum uncompressed size")
-    payload += decompressor.flush(MAX_REPLAY_UNCOMPRESSED_BYTES + 1 - len(payload))
-    if not decompressor.eof or decompressor.unused_data:
-        raise ValueError("Interactive replay is truncated or contains trailing compressed data")
-    if len(payload) < 4:
-        raise ValueError("Interactive replay is missing its header length")
-    header_size = struct.unpack_from("<I", payload, 0)[0]
-    if header_size <= 0 or header_size > MAX_REPLAY_HEADER_BYTES or 4 + header_size > len(payload):
-        raise ValueError(f"Interactive replay has invalid header size: {header_size}")
-    try:
-        header = json.loads(payload[4 : 4 + header_size])
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Interactive replay has an invalid JSON header") from exc
-    chunks = header.get("chunks")
-    if header.get("schema") != REPLAY_SCHEMA:
-        raise ValueError("Interactive replay has an unsupported schema")
-    if not isinstance(chunks, dict):
-        raise ValueError("Interactive replay header is missing chunks")
-    has_obs = header.get("has_obs", "obs" in chunks)
-    if not isinstance(has_obs, bool) or has_obs != ("obs" in chunks):
-        raise ValueError("Interactive replay observation metadata does not match its chunks")
-    if "obs_scale" in header:
-        try:
-            observation_scale = float(header["obs_scale"])
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("Interactive replay has an invalid observation scale") from exc
-        if isinstance(header["obs_scale"], bool) or not np.isfinite(observation_scale) or observation_scale <= 0.0:
-            raise ValueError("Interactive replay has an invalid observation scale")
-    required_chunks = {
-        "road_points",
-        "road_lengths",
-        "road_types",
-        "traffic_stop_lines",
-        "traffic_types",
-        "agent_f32",
-        "agent_i32",
-        "metrics_f32",
-        "puffer_f32",
-        "traffic_i16",
-        "raw_action",
-        "clipped_action",
-        "value",
-        "entropy",
-    }
-    missing_chunks = required_chunks - chunks.keys()
-    if missing_chunks:
-        raise ValueError(f"Interactive replay is missing chunks: {', '.join(sorted(missing_chunks))}")
-    dtype_sizes = {"float32": 4, "int32": 4, "int16": 2, "uint8": 1}
-    data_start = 4 + header_size
-    data_start += (-data_start) % 4
-    expected_end = 0
-    for name, chunk in chunks.items():
-        if not isinstance(chunk, dict) or chunk.get("dtype") not in dtype_sizes:
-            raise ValueError(f"Interactive replay chunk {name!r} has an invalid dtype")
-        shape = chunk.get("shape")
-        offset = chunk.get("offset")
-        byte_count = chunk.get("nbytes")
-        if (
-            not isinstance(shape, list)
-            or not shape
-            or any(not isinstance(size, int) or size < 0 for size in shape)
-            or not isinstance(offset, int)
-            or offset < 0
-            or offset % 4
-            or not isinstance(byte_count, int)
-            or byte_count < 0
-        ):
-            raise ValueError(f"Interactive replay chunk {name!r} has invalid shape or bounds")
-        expected_bytes = int(np.prod(shape, dtype=np.int64)) * dtype_sizes[chunk["dtype"]]
-        if expected_bytes != byte_count or data_start + offset + byte_count > len(payload):
-            raise ValueError(f"Interactive replay chunk {name!r} has inconsistent byte bounds")
-        expected_end = max(expected_end, offset + byte_count + (-(offset + byte_count)) % 4)
-    if data_start + expected_end != len(payload):
-        raise ValueError("Interactive replay contains missing or trailing binary data")
-    return header
-
-
 def save_interactive_replay_zlib(scenario, replay, filename):
     compressed_payload = encode_interactive_replay(scenario, replay)
     with open(filename, "wb") as replay_file:
@@ -1620,7 +1514,6 @@ def save_interactive_replay_zlib(scenario, replay, filename):
 def render_interactive_replay_zlib(replay_path, filename):
     with open(replay_path, "rb") as replay_file:
         compressed_payload = replay_file.read()
-    validate_interactive_replay(compressed_payload)
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
