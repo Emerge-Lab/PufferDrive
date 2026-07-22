@@ -689,7 +689,6 @@ class Evaluator:
                         logits, value = policy.forward_eval(ob_t, state)
                         pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
                         action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
-                        raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
                     pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
                     if pool_hist is None and pool_outputs:
                         pool_hist = {
@@ -699,9 +698,19 @@ class Evaluator:
                             ]
                             for k, values in pool_outputs.items()
                         }
-                    clipped_action = raw_action
+
+                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                        raw_action = cont_action.cpu().numpy().reshape(vec.action_space.shape)
+                        clipped_action = raw_action
+                        ob, _, _, _, step_infos = vec.step(clipped_action)
+                    else:
+                        raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
+                        clipped_action = raw_action
+                        if isinstance(logits, torch.distributions.Normal):
+                            clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
+                        ob, _, _, _, step_infos = vec.step(clipped_action)
+                    
                     if isinstance(logits, torch.distributions.Normal):
-                        clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
                         policy_outputs = {
                             "mean": logits.loc.cpu().numpy().reshape(vec.action_space.shape),
                             "std": logits.scale.cpu().numpy().reshape(vec.action_space.shape),
@@ -759,12 +768,6 @@ class Evaluator:
                                 np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
                             )
                         start_obs_index = end_obs_index
-
-                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
-                        cont_action = cont_action.cpu().numpy().reshape(vec.action_space.shape)
-                        ob, _, _, _, step_infos = vec.step(cont_action)
-                    else:
-                        ob, _, _, _, step_infos = vec.step(clipped_action)
                     
                     for d in self._flatten_infos(step_infos):
                         if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
