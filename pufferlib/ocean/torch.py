@@ -360,6 +360,14 @@ class Drive(nn.Module):
         self.register_buffer("action_long_norm", long_norm, persistent=False)
         self.register_buffer("action_lat_norm", lat_norm, persistent=False)
 
+        # Joint continuous-action table: row k = the [-1,1] (long, lat) for discrete class k,
+        # where k = long_idx * num_lat + lat_idx (matches drive.h decode).
+        num_lat = lat_norm.numel()
+        num_classes = long_norm.numel() * num_lat
+        k = torch.arange(num_classes)
+        action_table = torch.stack([long_norm[k // num_lat], lat_norm[k % num_lat]], dim=-1)  # [num_classes, 2]
+        self.register_buffer("action_table", action_table, persistent=False)
+
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
         self.ego_dim = env.ego_features
@@ -483,11 +491,8 @@ class Drive(nn.Module):
         return action, value
     
     def discrete_actions_to_continuous(self, actions):
-        actions = actions.long()
-        num_lat = self.action_lat_norm.numel()
-        long_val = self.action_long_norm[actions // num_lat]
-        lat_val  = self.action_lat_norm[actions % num_lat]
+        return self.action_table[actions.long()]
 
-        return torch.stack([long_val, lat_val], dim=-1)
-    
-
+    def discrete_probs_to_continuous_mean(self, probs):
+        # probs: [..., num_classes] -> [..., 2]  (E[cont | probs])
+        return probs @ self.action_table.to(probs.dtype)

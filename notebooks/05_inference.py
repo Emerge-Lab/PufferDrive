@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.torch import Drive as DrivePolicy
-from pufferlib.pytorch import sample_logits
+from pufferlib.pytorch import sample_logits, ACTION_SELECT_MODE, ACTION_SELECT_SAMPLE
 import pufferlib.spaces
 from notebooks.notebook_utils import COEF_NAMES, EGO_LABELS, MAP_DIR, load_notebook_config, zero_actions
 
@@ -79,7 +79,7 @@ with torch.no_grad():
 
 # Sample actions
 action, logprob, ent, cont_action = sample_logits(logits_list, env_continuous=env_continuous, policy=policy)
-action_det, _, _, _ = sample_logits(logits_list, deterministic=True, env_continuous=env_continuous, policy=policy)
+action_det, _, _, _ = sample_logits(logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
 print(f"Entropy: mean={ent.mean():.4f}, std={ent.std():.4f}")
@@ -123,7 +123,7 @@ rew_cond = config["env"].get("reward_conditioning", False)
 n_tgt_wp = config["env"].get("num_goals", 3)
 
 
-def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
+def run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE, horizon=HORIZON):
     obs, _ = env.reset(seed=42)
     N = env.num_agents
 
@@ -146,7 +146,7 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         with torch.no_grad():
             logits_list, val = policy(obs_t)
             act, logp, entr, cont_act = sample_logits(
-                logits_list, deterministic=deterministic, env_continuous=env_continuous, policy=policy
+                logits_list, action_selection=action_selection, env_continuous=env_continuous, policy=policy
             )
 
         buffers["obs"][t] = obs
@@ -175,9 +175,9 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
 
 
 print("Running stochastic rollout...")
-buf_stoch = run_rollout(env, policy, deterministic=False)
+buf_stoch = run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE)
 print("Running deterministic rollout...")
-buf_det = run_rollout(env, policy, deterministic=True)
+buf_det = run_rollout(env, policy, action_selection=ACTION_SELECT_MODE)
 
 for name, buf in [("Stochastic", buf_stoch), ("Deterministic", buf_det)]:
     print(f"\n--- {name} ---")

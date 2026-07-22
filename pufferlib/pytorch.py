@@ -20,6 +20,9 @@ numpy_to_torch_dtype_dict = {
     np.dtype("int8"): torch.int8,
 }
 
+ACTION_SELECT_SAMPLE = "sample"
+ACTION_SELECT_MODE   = "mode"    # argmax
+ACTION_SELECT_MEAN   = "mean"    # probability-weighted continuous mean
 
 LITTLE_BYTE_ORDER = sys.byteorder == "little"
 
@@ -187,13 +190,15 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None, deterministic=False, env_continuous=None, policy=None): # TODO discrete continuous
+def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None): # TODO discrete continuous
     is_discrete = isinstance(logits, torch.Tensor)
+    if action_selection == ACTION_SELECT_MEAN and not (env_continuous and not policy.is_continuous):
+        raise ValueError("action_selection='mean' requires a discrete policy on a continuous env")
     if isinstance(logits, torch.distributions.Normal):
         batch = logits.loc.shape[0]
         if action is None:
             action = logits.sample().view(batch, -1)
-            if deterministic:
+            if action_selection != ACTION_SELECT_SAMPLE:
                 action = logits.loc.view(batch, -1)  # TODO -  DETERMINISTIC use mean action for eval
 
         log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
@@ -211,14 +216,13 @@ def sample_logits(logits, action=None, deterministic=False, env_continuous=None,
     normalized_logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     probs = logits_to_probs(logits)
 
-    # TODO this jumps in here and makes the action determinisitc
     if action is None:
-        if deterministic:
-            action = torch.argmax(probs, -1) # TODO weighted average
-        else:
+        if action_selection == ACTION_SELECT_SAMPLE:
             probs = torch.nan_to_num(probs, 1e-8, 1e-8, 1e-8)
             action = torch.multinomial(probs.reshape(-1, probs.shape[-1]), 1, replacement=True).int()
             action = action.reshape(probs.shape[:-1])
+        else:  # MODE and MEAN both use argmax as the *nominal* discrete action (for logging)
+            action = torch.argmax(probs, -1)
     else:
         batch = logits[0].shape[0]
         action = action.view(batch, -1).T
@@ -228,11 +232,12 @@ def sample_logits(logits, action=None, deterministic=False, env_continuous=None,
     logits_entropy = entropy(normalized_logits).sum(0)
 
     if env_continuous and not policy.is_continuous:
-        cont_actions = policy.discrete_actions_to_continuous(action)
-
+        if action_selection == ACTION_SELECT_MEAN:
+            cont_actions = policy.discrete_probs_to_continuous_mean(probs)
+        else: # Mode and sample we already have an action from the code above.
+            cont_actions = policy.discrete_actions_to_continuous(action)
         if is_discrete:
             return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), cont_actions.squeeze(0)
-
         return action.T, logprob.sum(0), logits_entropy, cont_actions
 
     if is_discrete:

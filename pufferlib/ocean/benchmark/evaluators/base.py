@@ -155,7 +155,7 @@ class Evaluator:
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
-                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=True, env_continuous=env_continuous, policy=policy)
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
 
             if env_continuous and not policy.is_continuous: # TODO check with trajectory
                 cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
@@ -523,7 +523,7 @@ class Evaluator:
                 with torch.no_grad():
                     ob_t = torch.as_tensor(ob).to(device)
                     logits, _ = policy.forward_eval(ob_t, state)
-                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
+                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
 
                 if env_continuous and not policy.is_continuous: # TODO check with trajectory
                     cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
@@ -688,7 +688,7 @@ class Evaluator:
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, value = policy.forward_eval(ob_t, state)
                         pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
-                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
+                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
                         raw_action = action.cpu().numpy().reshape(vec.action_space.shape)
                     pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
                     if pool_hist is None and pool_outputs:
@@ -874,7 +874,7 @@ class Evaluator:
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, actions=None, deterministic=True, env_continuous=env_continuous, policy=policy)
+                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
 
                     if env_continuous and not policy.is_continuous: # TODO check with trajectory
                         cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)

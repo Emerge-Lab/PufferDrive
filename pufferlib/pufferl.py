@@ -404,8 +404,7 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
-                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=False, 
-                                                                                  env_continuous=self.env_continuous, policy=self.policy)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(logits, env_continuous=self.env_continuous, policy=self.policy)
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -1855,7 +1854,7 @@ def mine_failures(env_name, args=None):
             o_t = torch.as_tensor(obs_arr).to(device)
             state = {"reward": None, "done": None, "env_id": None, "mask": None}
             logits, _ = policy.forward_eval(o_t, state)
-            action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action=None, deterministic=False, env_continuous=env_continuous, policy=policy)
+            action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, env_continuous=env_continuous, policy=policy)
             action = action.cpu().numpy()
             if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
                 action = action.reshape(-1, *vecenv.single_action_space.shape)
