@@ -18,19 +18,18 @@ import os
 import sys
 import traceback
 import glob
-import ast
 import time
 import random
 import shutil
 import subprocess
-import argparse
 import importlib
-import configparser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
 import yaml
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 
 import numpy as np
 import psutil
@@ -59,7 +58,6 @@ import rich
 import rich.traceback
 from rich.table import Table
 from rich.console import Console
-from rich_argparse import RichHelpFormatter
 from tqdm import tqdm
 
 
@@ -1388,8 +1386,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         KEYS_OF_INTEREST = {
             "action_type",
             "dynamics_model",
-            "target_type",
-            "num_target_waypoints",
+            "goal_source",
+            "goal_regen_mode",
+            "num_goals",
+            "min_goal_spacing",
+            "max_goal_spacing",
+            "obs_goal_lane_distance",
             "reward_conditioning",
             "reward_randomization",
             "trajectory_prediction_length",
@@ -1466,7 +1468,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 experiment_dir=experiment_dir,
             )
 
-    train_config = dict(**args["train"], env=env_name)
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     if args["train"].get("resume_state_path"):
@@ -1920,11 +1922,11 @@ class _EvalReplayCapture:
             self.history[replay_key][self.history_frame_count] = frame_values
         self.history_frame_count += 1
 
-    def queue_completed_episode(self, summary, episode_idx):
+    def queue_episode(self, summary, episode_idx):
         replay_environment_bytes = summary.pop("replay_environment_bundle", None)
         if not isinstance(replay_environment_bytes, bytes):
             raise RuntimeError(
-                "Replay capture was requested, but a completed episode did not include environment bytes"
+                "Replay capture was requested, but an evaluation episode did not include environment bytes"
             )
         replay_environment = pickle.loads(zlib.decompress(replay_environment_bytes))
         if replay_environment.get("schema") != "interactive_replay_environment_v1":
@@ -1987,7 +1989,7 @@ def _run_eval_rollout(
     capture_observations=False,
     replay_episode_offset=0,
 ):
-    """Roll out a deterministic policy over the workers and gather completed-episode summaries."""
+    """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
     num_workers = len(worker_env_kwargs)
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -2001,7 +2003,7 @@ def _run_eval_rollout(
         num_envs=num_workers,
         num_workers=num_workers,
         batch_size=num_workers,
-        seed=args["vec"]["seed"],
+        seed=args.get("vec", {}).get("seed", args["train"].get("seed", 0)),
     )
     scenario_progress = None
     try:
@@ -2079,10 +2081,10 @@ def _run_eval_rollout(
             for worker_info in infos:
                 worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
                 for item in worker_items:
-                    if not isinstance(item, dict) or item.get("summary_type") != "completed_episode":
+                    if not isinstance(item, dict) or item.get("summary_type") != "evaluation_episode":
                         continue
                     if replay_capture is not None:
-                        replay_capture.queue_completed_episode(item, len(episode_summaries))
+                        replay_capture.queue_episode(item, len(episode_summaries))
                     else:
                         item.pop("replay_environment_bundle", None)
                     item["agents_per_batch"] = policy_agents_per_batch
@@ -2163,7 +2165,7 @@ def eval(
     evaluation_config_path = eval_config.get("evaluation_config")
     selected_datasets = eval_config.get("datasets")
     if selected_datasets is None or not selected_datasets.strip():
-        raise pufferlib.APIUsageError("--eval.datasets is required; select one or more benchmark datasets")
+        raise pufferlib.APIUsageError("eval.datasets is required; select one or more benchmark datasets")
     render_failures = bool(eval_config.get("render_failures"))
     if render_failures:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
@@ -2261,7 +2263,7 @@ def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
 
     report = _build_eval_report(episode_summaries, num_scenarios)
     if report is None:
-        print("No completed episodes were recorded; skipping report.")
+        print("No evaluation episodes were recorded; skipping report.")
         return None
 
     df, summary = report
@@ -2473,106 +2475,32 @@ def load_policy(args, vecenv, env_name=""):
 
 
 def load_config(env_name, config_dir=None):
-    parser = argparse.ArgumentParser(
-        description=f":blowfish: PufferLib [bright_cyan]{pufferlib.__version__}[/]"
-        " demo options. Shows valid args for your env and policy",
-        formatter_class=RichHelpFormatter,
-        add_help=False,
-    )
-    parser.add_argument("--load-model-path", type=str, default=None, help="Path to a pretrained checkpoint")
-    parser.add_argument(
-        "--load-id", type=str, default=None, help="Kickstart/eval from from a finished Wandb/Neptune run"
-    )
-    parser.add_argument(
-        "--eval.datasets",
-        type=str,
-        default=None,
-        help="Comma-separated benchmark datasets to evaluate (required for eval)",
-    )
-    parser.add_argument(
-        "--render-mode", type=str, default="auto", choices=["auto", "human", "ansi", "rgb_array", "raylib", "None"]
-    )
-    parser.add_argument("--video-path", type=str, default="videos", help="Path to save videos")
-    parser.add_argument("--render", type=int, default=0, help="Rendering the evaluation")
-    parser.add_argument("--agent_index", nargs="*", type=int, default=None, help="Agent index to plot the observation")
-    parser.add_argument("--save-frames", type=int, default=0)
-    parser.add_argument("--gif-path", type=str, default="eval.gif")
-    parser.add_argument("--fps", type=float, default=15)
-    parser.add_argument("--max-runs", type=int, default=200, help="Max number of sweep runs")
-    parser.add_argument("--wandb", action="store_true", help="Use wandb for logging")
-    parser.add_argument("--wandb-project", type=str, default="pufferlib")
-    parser.add_argument("--wandb-group", type=str, default="debug")
-    parser.add_argument(
-        "--run-name",
-        type=str,
-        default=None,
-        help="Wandb run display name. Unset → wandb auto-generates one.",
-    )
-    parser.add_argument("--neptune", action="store_true", help="Use neptune for logging")
-    parser.add_argument("--neptune-name", type=str, default="pufferai")
-    parser.add_argument("--neptune-project", type=str, default="ablations")
-    parser.add_argument("--tb", action="store_true", help="Use tensorboard for logging")
-    parser.add_argument("--local-rank", type=int, default=0, help="Used by torchrun for DDP")
-    parser.add_argument("--tag", type=str, default=None, help="Tag for experiment")
-    args = parser.parse_known_args()[0]
-
     if config_dir is None:
         puffer_dir = os.path.dirname(os.path.realpath(__file__))
-    else:
-        print("Using custom config dir:", config_dir)
-        puffer_dir = config_dir
+        config_dir = os.path.join(puffer_dir, "config")
 
-    # Load defaults and config
-    puffer_config_dir = os.path.join(puffer_dir, "config/**/*.ini")
-    puffer_default_config = os.path.join(puffer_dir, "config/default.ini")
-    if env_name == "default":
-        p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-        p.read(puffer_default_config)
-    else:
-        for path in glob.glob(puffer_config_dir, recursive=True):
-            p = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-            p.read([puffer_default_config, path])
-            if env_name in p["base"]["env_name"].split():
-                break
-        else:
-            raise pufferlib.APIUsageError("No config for env_name {}".format(env_name))
+    # Everything left in argv after main() pops mode/env_name is a Hydra
+    # override: train.learning_rate=1e-4, env.num_agents=512, wandb=true
+    overrides = []
+    for arg in sys.argv[1:]:
+        if arg.startswith("--"):
+            hint = arg.lstrip("-").replace("-", "_").split("=")[0]
+            raise pufferlib.APIUsageError(f"'{arg}' uses the old flag syntax. Use Hydra overrides: {hint}=<value>")
+        overrides.append(arg)
 
-    # Dynamic help menu from config
-    def puffer_type(value):
-        try:
-            return ast.literal_eval(value)
-        except:
-            return value
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name=env_name, overrides=overrides)
 
-    for section in p.sections():
-        for key in p[section]:
-            fmt = f"--{key}" if section == "base" else f"--{section}.{key}"
-            parser.add_argument(fmt.replace("_", "-"), default=puffer_type(p[section][key]), type=puffer_type)
-
-    parser.add_argument(
-        "-h", "--help", default=argparse.SUPPRESS, action="help", help="Show this help message and exit"
-    )
-
-    # Unpack to nested dict
-    parsed = vars(parser.parse_args())
-    args = defaultdict(dict)
-    for key, value in parsed.items():
-        next = args
-        for subkey in key.split("."):
-            prev = next
-            next = next.setdefault(subkey, {})
-
-        prev[subkey] = value
+    # Plain nested dict — the contract every downstream consumer relies on.
+    # Protein's sweep.suggest() writes arbitrary keys into it, so no
+    # struct-mode OmegaConf objects may leak past this point.
+    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True))
 
     args["train"]["use_rnn"] = args["rnn_name"] is not None
 
-    # Use World size to divide Num_Agents / minibatch size in DDP
     if "LOCAL_RANK" in os.environ:
         world_size = int(os.environ.get("WORLD_SIZE", 1))
-        args["env"]["num_agents"] = args["env"]["num_agents"]
-        args["train"]["minibatch_size"] = args["train"]["minibatch_size"]
-        args["train"]["max_minibatch_size"] = args["train"]["max_minibatch_size"]
-        args["train"]["total_timesteps"] = args["train"]["total_timesteps"] // world_size
+        args["train"]["total_timesteps"] //= world_size
 
     return args
 

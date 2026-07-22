@@ -7,6 +7,7 @@ import gymnasium
 import json
 import struct
 import os
+from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
@@ -40,9 +41,9 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
-        min_waypoint_spacing=20.0,
-        max_waypoint_spacing=60.0,
-        num_target_waypoints=3,
+        min_goal_spacing=20.0,
+        max_goal_spacing=60.0,
+        num_goals=3,
         goal_radius=2.0,
         collision_behavior=0,
         offroad_behavior=0,
@@ -80,8 +81,9 @@ class Drive(pufferlib.PufferEnv):
         non_sdc_controller="policy",
         non_vehicle_controller="auto",
         map_dir=None,
-        target_type="static",
-        goal_on_lane=True,
+        goal_regen_mode="finite",
+        goal_source="route",
+        obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
         compute_eval_metrics=True,
@@ -138,19 +140,26 @@ class Drive(pufferlib.PufferEnv):
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
         self.goal_radius = goal_radius
-        self.min_waypoint_spacing = min_waypoint_spacing
-        self.max_waypoint_spacing = max_waypoint_spacing
-        if num_target_waypoints > binding.MAX_TARGET_WAYPOINTS:
-            num_target_waypoints = binding.MAX_TARGET_WAYPOINTS
-        self.num_target_waypoints = num_target_waypoints
-        self.target_type_str = target_type
-        if target_type == "static":
-            self.target_type = binding.TARGET_STATIC
-        elif target_type == "dynamic":
-            self.target_type = binding.TARGET_DYNAMIC
+        self.min_goal_spacing = min_goal_spacing
+        self.max_goal_spacing = max_goal_spacing
+        if not 1 <= num_goals <= binding.MAX_GOALS:
+            raise ValueError(f"num_goals must be in [1, {binding.MAX_GOALS}]. Got: {num_goals}")
+        self.num_goals = num_goals
+        if goal_regen_mode == "finite":
+            self.goal_regen_mode = binding.GOAL_REGEN_FINITE
+        elif goal_regen_mode == "rolling":
+            self.goal_regen_mode = binding.GOAL_REGEN_ROLLING
         else:
-            raise ValueError(f"target_type must be 'static' or 'dynamic'. Got: {target_type}")
-        self.goal_on_lane = int(bool(goal_on_lane))
+            raise ValueError(f"goal_regen_mode must be 'finite' or 'rolling'. Got: {goal_regen_mode}")
+        if goal_source == "route":
+            self.goal_source = binding.GOAL_SOURCE_ROUTE
+        elif goal_source == "map":
+            self.goal_source = binding.GOAL_SOURCE_MAP
+        elif goal_source == "gt":
+            self.goal_source = binding.GOAL_SOURCE_GT
+        else:
+            raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
+        self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         self.collision_behavior = collision_behavior
         self.offroad_behavior = offroad_behavior
         self.traffic_light_behavior = traffic_light_behavior
@@ -228,25 +237,24 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration = int(phantom_braking_duration)
         self.partner_features = binding.PARTNER_FEATURES
-        self.road_features = binding.ROAD_FEATURES
+        self.lane_features = binding.LANE_FEATURES
+        self.boundary_features = binding.BOUNDARY_FEATURES
         self.traffic_control_features = binding.TRAFFIC_CONTROL_FEATURES
         self.obs_valid_count_features = binding.OBS_VALID_COUNT_FEATURES
         self.num_reward_coefs = binding.NUM_REWARD_COEFS if reward_conditioning else 0
 
-        # Target features based on target_type
-        if target_type == "static":
-            self.target_features = binding.STATIC_TARGET_FEATURES
-        else:
-            self.target_features = binding.DYNAMIC_TARGET_FEATURES
-        self.target_dim = self.num_target_waypoints * self.target_features
+        # One uniform target representation (ego-frame x, y, z) regardless of goal_regen_mode.
+        self.goal_features = binding.GOAL_FEATURES
+        self.goal_dim = self.num_goals * self.goal_features
 
+        # GPS goal-distance (abs + rel) columns are lane-only (LANE_FEATURES); zero-filled when flag off.
         self.num_obs = (
             self.ego_features
             + self.num_reward_coefs
-            + self.target_dim
+            + self.goal_dim
             + self.obs_slots_partners_n * self.partner_features
-            + self.obs_slots_lane_kept * self.road_features
-            + self.obs_slots_boundary_kept * self.road_features
+            + self.obs_slots_lane_kept * self.lane_features
+            + self.obs_slots_boundary_kept * self.boundary_features
             + self.obs_slots_traffic_controls_n * self.traffic_control_features
             + self.obs_valid_count_features
         )
@@ -279,6 +287,11 @@ class Drive(pufferlib.PufferEnv):
             self.simulation_mode = 1
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
+
+        if self.goal_source == binding.GOAL_SOURCE_GT and self.simulation_mode != 1:
+            raise ValueError(
+                "goal_source 'gt' is only supported in replay simulation_mode (it reads the logged ground-truth trajectory)."
+            )
 
         if self.init_step_spread:
             if self.simulation_mode != 1:
@@ -444,6 +457,10 @@ class Drive(pufferlib.PufferEnv):
             render_mode_flag = 0
         return {
             "render_mode": render_mode_flag,
+            # Absolute directory holding render assets (.glb models), so the C
+            # renderer loads them regardless of the process CWD. Derived from
+            # the installed package location, not a config knob.
+            "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
             "human_agent_idx": self.human_agent_idx,
@@ -468,11 +485,12 @@ class Drive(pufferlib.PufferEnv):
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "goal_radius": self.goal_radius,
-            "min_waypoint_spacing": self.min_waypoint_spacing,
-            "max_waypoint_spacing": self.max_waypoint_spacing,
-            "num_target_waypoints": self.num_target_waypoints,
-            "target_type": self.target_type,
-            "goal_on_lane": self.goal_on_lane,
+            "min_goal_spacing": self.min_goal_spacing,
+            "max_goal_spacing": self.max_goal_spacing,
+            "num_goals": self.num_goals,
+            "goal_regen_mode": self.goal_regen_mode,
+            "goal_source": self.goal_source,
+            "obs_goal_lane_distance": self.obs_goal_lane_distance,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,
             "obs_lane_stride": self.obs_lane_stride,
@@ -569,7 +587,7 @@ class Drive(pufferlib.PufferEnv):
             # Read this batch's finished episodes before the envs are resampled/closed.
             if self.eval_mode:
                 for summary in binding.vec_per_episode_log(self.c_envs):
-                    summary["summary_type"] = "completed_episode"
+                    summary["summary_type"] = "evaluation_episode"
                     if self.capture_replay:
                         summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
                     info.append(summary)
@@ -661,7 +679,9 @@ class Drive(pufferlib.PufferEnv):
                 "map_name": os.path.basename(map_path).split(".")[0],
                 "map_path": map_path,
                 "scenario_id": scenario.get("scenario_id"),
-                "target_type": self.target_type_str,
+                "goal_source": self.goal_source,
+                "goal_regen_mode": self.goal_regen_mode,
+                "num_goals": self.num_goals,
                 "dynamics_model": self.dynamics_model,
                 "worker_idx": self.replay_worker_idx,
                 "active_agent_offset": active_agent_offset,

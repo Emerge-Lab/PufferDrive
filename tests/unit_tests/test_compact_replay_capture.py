@@ -28,8 +28,9 @@ def test_replay_environment_capture_trims_frozen_early_termination():
         resample_frequency=SCENARIO_LENGTH,
         termination_mode=0,
         terminate_on_goal=True,
-        num_target_waypoints=3,
+        num_goals=3,
         goal_radius=2.0,
+        goal_source="gt",
         eval_mode=1,
         num_eval_scenarios=1,
         eval_map_indices=[0],
@@ -43,7 +44,7 @@ def test_replay_environment_capture_trims_frozen_early_termination():
         for _ in range(SCENARIO_LENGTH):
             *_, infos = env.step(zero_action)
             completed_summary = next(
-                (info for info in infos if info.get("summary_type") == "completed_episode"),
+                (info for info in infos if info.get("summary_type") == "evaluation_episode"),
                 completed_summary,
             )
     finally:

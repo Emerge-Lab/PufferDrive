@@ -12,10 +12,11 @@ def _standard_replay():
     agent_count = 1
     return {
         "env": {
-            "target_type": "static",
             "action_type": "discrete",
             "dynamics_model": "jerk",
-            "num_target_waypoints": 3,
+            "goal_source": "route",
+            "goal_regen_mode": "finite",
+            "num_goals": 3,
             "reward_conditioning": False,
             "obs_slots_partners_n": 1,
             "obs_slots_lane_n": 1,

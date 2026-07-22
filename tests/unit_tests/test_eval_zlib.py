@@ -24,7 +24,7 @@ class _RecordingPolicy(_ZeroPolicy):
         return super().forward_eval(observations)
 
 
-class _CompletedReplayVec:
+class _EvaluationReplayVec:
     agents_per_batch = 1
     action_space = SimpleNamespace(shape=(1, 1))
 
@@ -34,7 +34,7 @@ class _CompletedReplayVec:
     def step(self, action):
         self.last_action = action
         summary = {
-            "summary_type": "completed_episode",
+            "summary_type": "evaluation_episode",
             "replay_environment_bundle": zlib.compress(
                 pickle.dumps(
                     {
@@ -59,7 +59,7 @@ class _CompletedReplayVec:
 
 
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
-    monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: _CompletedReplayVec())
+    monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: _EvaluationReplayVec())
 
     def fake_save(scenario, replay, path):
         assert replay["obs"].shape == (1, 1, 1)
@@ -75,6 +75,7 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
     args = {
         "package": "ocean",
         "env": {},
+        "eval": {"observation_replay_writer_count": 1},
         "train": {"seed": 42, "device": "cpu"},
     }
 
@@ -87,55 +88,18 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
         expected_episodes=1,
         policy=_ZeroPolicy(),
         replay_output_dir=tmp_path,
+        capture_observations=True,
     )
 
-    replay_path = tmp_path / "episode_000000.replay.zlib"
+    replay_path = tmp_path / "unknown_map__seed_unknown__episode_000000.replay.zlib"
     assert replay_path.read_bytes() == b"standard replay"
     assert summaries[0]["has_replay"] == 1
     assert summaries[0]["replay_path"] == str(replay_path.resolve())
     assert "replay_environment_bundle" not in summaries[0]
 
 
-def test_direct_eval_save_html_enables_zlib_capture_and_save_zlib_alone_does_not_render(monkeypatch):
-    def fake_rollout(args, env_name, worker_env_kwargs, *unused_args):
-        assert args["save_zlib"] is True
-        assert worker_env_kwargs[0]["capture_replay"] is True
-        return []
-
-    render_calls = []
-    monkeypatch.setattr(pufferl, "_run_eval_rollout", fake_rollout)
-    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *args: None)
-    monkeypatch.setattr(pufferl, "_render_eval_replays", lambda summaries, out_dir: render_calls.append(out_dir))
-    args = {
-        "package": "ocean",
-        "train": {"use_rnn": False},
-        "env": {
-            "scenario_length": 128,
-            "num_agents": 1,
-        },
-        "vec": {"num_envs": 1},
-        "num_scenarios": 1,
-        "save_html": True,
-        "save_zlib": False,
-        "replay_csv": None,
-        "replay_filter": None,
-        "replay_rows": None,
-        "load_model_path": None,
-    }
-
-    pufferl.eval("puffer_drive", args=args)
-
-    assert render_calls == ["eval_results/puffer_drive/eval"]
-
-    args["save_html"] = False
-    render_calls.clear()
-    pufferl.eval("puffer_drive", args=args)
-
-    assert render_calls == []
-
-
 def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypatch):
-    vecenv = _CompletedReplayVec()
+    vecenv = _EvaluationReplayVec()
     policy = _RecordingPolicy()
     monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: vecenv)
     args = {

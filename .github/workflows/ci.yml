@@ -122,7 +122,7 @@ jobs:
         timeout-minutes: 30
 
   smoke-replay:
-    name: Smoke Replay HTML
+    name: Replay Capture and HTML
     runs-on: ubuntu-latest
     env:
       PUFFER_CPU: 1
@@ -151,8 +151,12 @@ jobs:
           pip install -e . --no-cache-dir
           python setup.py build_ext --inplace --force
 
-      - name: Replay HTML test
-        run: python -m pytest -v tests/smoke_tests/test_validation_replay_html.py
+      - name: Replay capture and HTML tests
+        run: >-
+          python -m pytest -v
+          tests/unit_tests/test_compact_replay_capture.py
+          tests/unit_tests/test_eval_zlib.py
+          tests/unit_tests/test_interactive_replay_zlib.py
         timeout-minutes: 20
 
   perf-tests:

@@ -17,7 +17,7 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
         c_step(&env);
         EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
         EXPECT_TRUE(drive_all_finite(env.rewards, env.active_agent_count));
-        if (env.completed_episodes_count > 0 || env.log.n > 0.0f) {
+        if (env.log.n > 0.0f) {
             saw_log = 1;
         }
         for (int i = 0; i < env.active_agent_count; i++) {
@@ -29,12 +29,7 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
     }
 
     EXPECT_TRUE(saw_log);
-    printf(
-        "case %s active=%d log_n=%.0f completed=%d\n",
-        name,
-        env.active_agent_count,
-        env.log.n,
-        env.completed_episodes_count);
+    printf("case %s active=%d log_n=%.0f\n", name, env.active_agent_count, env.log.n);
     free_allocated(&env);
     return 0;
 }
@@ -51,7 +46,7 @@ static int test_nuplan_replay_load_step_log(void) {
     return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_REPLAY, 1);
 }
 
-static int test_truncation_and_completed_episode_queue(void) {
+static int test_truncation_and_episode_log(void) {
     srand(11);
     Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
     env.scenario_length = 3;
@@ -63,17 +58,10 @@ static int test_truncation_and_completed_episode_queue(void) {
         c_step(&env);
     }
 
-    EXPECT_EQ_INT(env.completed_episodes_count, 1);
-    EXPECT_EQ_INT(env.next_episode_index, 1);
+    EXPECT_TRUE(env.log.n > 0.0f);
     for (int i = 0; i < env.active_agent_count; i++) {
         EXPECT_EQ_INT(env.truncations[i], 1);
     }
-
-    CompletedEpisodeSummary summary = {0};
-    EXPECT_EQ_INT(pop_completed_episode_summary(&env, &summary), 1);
-    EXPECT_EQ_INT(env.completed_episodes_count, 0);
-    EXPECT_EQ_INT(summary.episode_index, 0);
-    EXPECT_NEAR(summary.n, (float) env.active_agent_count, 1e-5f);
 
     free_allocated(&env);
     return 0;
@@ -84,6 +72,6 @@ int main(void) {
     RUN_TEST(test_carla_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_gigaflow_load_step_log);
     RUN_TEST(test_nuplan_replay_load_step_log);
-    RUN_TEST(test_truncation_and_completed_episode_queue);
+    RUN_TEST(test_truncation_and_episode_log);
     return test_summary(failures);
 }

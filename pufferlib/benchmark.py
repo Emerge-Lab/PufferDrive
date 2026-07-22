@@ -42,7 +42,7 @@ def _seed(value, label):
 
 
 def load_catalog(catalog_path, selected_names):
-    """Load the old benchmark suite format, plus one deterministic catalog seed."""
+    """Load benchmark suites and apply one deterministic catalog seed."""
     if not isinstance(catalog_path, (str, os.PathLike)) or not os.path.isfile(catalog_path):
         raise pufferlib.APIUsageError(f"Benchmark catalog not found: {catalog_path}")
     try:
@@ -182,10 +182,10 @@ def load_evaluation_config(config_path):
 
 
 def load_checkpoint_architecture(args):
-    """Apply the checkpoint config as the old benchmark loader did."""
+    """Load a 3.0 checkpoint's policy and observation architecture."""
     model_path = args.get("load_model_path")
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
-        raise pufferlib.APIUsageError("Benchmark requires a valid --load-model-path checkpoint")
+        raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
     config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
     if not os.path.isfile(config_path):
         raise pufferlib.APIUsageError(f"Benchmark checkpoint config not found: {config_path}")

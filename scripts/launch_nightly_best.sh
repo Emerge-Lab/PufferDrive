@@ -33,6 +33,9 @@ DATE_STAMP="$(date +%Y-%m-%d)"
 
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 
+# Refresh the nightly trend runs
+python scripts/nightly_report.py update || echo "trend update failed (non-fatal)"
+
 # One submission per seed so we can pass a per-seed run_name (wandb display
 # name like 2026-05-31_seed0).
 IFS=':' read -ra SEED_LIST <<< "$SEEDS"

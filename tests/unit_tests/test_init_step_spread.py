@@ -73,7 +73,7 @@ def _make_spread_env(cls=Drive, *, init_step_spread=True, **overrides):
         termination_mode=0,
         init_step_spread=init_step_spread,
         init_step_min_horizon=MIN_HORIZON,
-        num_target_waypoints=3,
+        num_goals=3,
         goal_radius=2.0,
         seed=0,
     )
