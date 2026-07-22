@@ -333,6 +333,10 @@ eval:
       obs_dropout_boundary: 0.0
       obs_slots_lane_n: 80
       obs_slots_boundary_n: 80
+    # Policy action selection during eval: sample | mode | mean.
+    # mode = argmax; mean = probability-weighted continuous action
+    # (mean requires a discrete policy on a continuous env).
+    action_selection: mode
     eval:
       num_scenarios: 250
       export_episode_csv: 'true'
@@ -409,6 +413,8 @@ eval:
       init_mode: create_all_valid
       scenario_length: 201
       obs_slots_partners_n: 32
+    # Policy action selection during eval: sample | mode | mean.
+    action_selection: mode
     eval:
       num_scenarios: 50
       render_num_scenarios: 2
@@ -500,6 +506,8 @@ eval:
       init_mode: create_all_valid
       init_step: 10
       goal_radius: 2.0
+    # Policy action selection during eval: sample | mode | mean.
+    action_selection: mode
     eval:
       wosac_num_rollouts: 32
       wosac_num_agents: 256

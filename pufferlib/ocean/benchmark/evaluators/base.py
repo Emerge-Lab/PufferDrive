@@ -71,6 +71,23 @@ class Evaluator:
         self.render_views: list = list(config.get("render_views", ["sim_state"]))
         self.clean: bool = bool(config.get("clean", True))
 
+        # Policy action selection during eval: sample | mode | mean. A top-level
+        # evaluator knob (like enabled/render), distinct from `self.mode`
+        # (inline/subprocess run mode). Defaults to argmax (mode).
+        import pufferlib.pytorch
+
+        self.action_selection: str = config.get("action_selection", pufferlib.pytorch.ACTION_SELECT_MODE)
+        valid_action_selections = (
+            pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+            pufferlib.pytorch.ACTION_SELECT_MODE,
+            pufferlib.pytorch.ACTION_SELECT_MEAN,
+        )
+        if self.action_selection not in valid_action_selections:
+            raise ValueError(
+                f"[eval.{name}].action_selection='{self.action_selection}' "
+                f"must be one of {valid_action_selections}"
+            )
+
     # -- Config hooks ---------------------------------------------------
 
     def env_overrides(self) -> dict:
@@ -155,7 +172,7 @@ class Evaluator:
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
-                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
 
             if env_continuous and not policy.is_continuous: # TODO check with trajectory
                 cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
@@ -523,7 +540,7 @@ class Evaluator:
                 with torch.no_grad():
                     ob_t = torch.as_tensor(ob).to(device)
                     logits, _ = policy.forward_eval(ob_t, state)
-                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
+                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
 
                 if env_continuous and not policy.is_continuous: # TODO check with trajectory
                     cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
@@ -688,7 +705,7 @@ class Evaluator:
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, value = policy.forward_eval(ob_t, state)
                         pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
-                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
+                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
                     pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
                     if pool_hist is None and pool_outputs:
                         pool_hist = {
@@ -877,7 +894,7 @@ class Evaluator:
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
+                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
 
                     if env_continuous and not policy.is_continuous: # TODO check with trajectory
                         cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
