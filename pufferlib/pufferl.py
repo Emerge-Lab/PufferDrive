@@ -1349,8 +1349,37 @@ def _save_experiment_config(args, path):
         yaml.dump(config, f)
 
 
+def _validate_training_eval_config(args):
+    eval_config = args.get("eval", {})
+    training_enabled = eval_config.get("training_enabled", False)
+    if not isinstance(training_enabled, bool):
+        raise pufferlib.APIUsageError("eval.training_enabled must be true or false")
+    if not training_enabled:
+        return False
+
+    training_interval = eval_config.get("training_interval")
+    if isinstance(training_interval, bool) or not isinstance(training_interval, int) or training_interval <= 0:
+        raise pufferlib.APIUsageError("eval.training_interval must be a positive integer")
+
+    training_datasets = eval_config.get("training_datasets")
+    if not isinstance(training_datasets, str) or not training_datasets.strip():
+        raise pufferlib.APIUsageError("eval.training_datasets must select at least one benchmark dataset")
+    if args["train"].get("use_rnn"):
+        raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
+
+    pufferlib.benchmark.load_catalog(eval_config.get("catalog"), training_datasets)
+    pufferlib.benchmark.load_evaluation_config(eval_config.get("evaluation_config"))
+    return True
+
+
+def _global_agent_steps(pufferl):
+    world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    return int(pufferl.global_step * world_size)
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
+    training_eval_enabled = _validate_training_eval_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1467,6 +1496,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
+    last_training_eval_epoch = None
 
     while pufferl.global_step < train_config["total_timesteps"]:
         if is_cuda_device(train_config["device"]):
@@ -1489,6 +1519,19 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
+
+        if training_eval_enabled and pufferl.epoch % args["eval"]["training_interval"] == 0:
+            last_training_eval_epoch = pufferl.epoch
+            if is_rank0:
+                run_training_eval(
+                    env_name=env_name,
+                    args=args,
+                    policy=pufferl.uncompiled_policy,
+                    logger=pufferl.logger,
+                    epoch=pufferl.epoch,
+                    global_step=_global_agent_steps(pufferl),
+                    run_dir=path,
+                )
 
         if logs is not None:
             should_stop_early = False
@@ -1516,6 +1559,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # while i < 32 or not stats:
     #     stats = pufferl.evaluate()
     #     i += 1
+
+    if training_eval_enabled and last_training_eval_epoch != pufferl.epoch and is_rank0:
+        run_training_eval(
+            env_name=env_name,
+            args=args,
+            policy=pufferl.uncompiled_policy,
+            logger=pufferl.logger,
+            epoch=pufferl.epoch,
+            global_step=_global_agent_steps(pufferl),
+            run_dir=path,
+        )
 
     logs = pufferl.mean_and_log()
     if logs is not None:
@@ -2050,7 +2104,58 @@ def _run_eval_rollout(
     return episode_summaries
 
 
-def eval(env_name, args=None, policy=None):
+def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_dir):
+    """Run the current catalog evaluator and log its means on the training run."""
+    eval_args = copy.deepcopy(args)
+    eval_args["eval"]["datasets"] = eval_args["eval"]["training_datasets"]
+    eval_args["eval"]["render_failures"] = False
+    eval_output_dir = os.path.join(run_dir, "eval", "training")
+    eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
+
+    rng_state = capture_rng_state()
+    policy_was_training = bool(getattr(policy, "training", False))
+    try:
+        suite_summaries = eval(
+            env_name=env_name,
+            args=eval_args,
+            policy=policy,
+            eval_output_dir=eval_output_dir,
+            eval_output_subdir=eval_output_subdir,
+            use_training_config=True,
+        )
+        suites = pufferlib.benchmark.load_catalog(eval_args["eval"]["catalog"], eval_args["eval"]["training_datasets"])
+        expected_scenarios = {suite["name"]: suite["num_scenarios"] for suite in suites}
+        metrics = {}
+        for suite_name, episode_summaries in suite_summaries.items():
+            report = _build_eval_report(episode_summaries, expected_scenarios[suite_name])
+            if report is None:
+                continue
+            _, summary = report
+            prefix = f"eval_{suite_name}"
+            metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
+            metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
+            metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+        if metrics:
+            logger.log(metrics, global_step)
+        return suite_summaries
+    except Exception:
+        print(f"\n[training eval] Evaluation failed at epoch {epoch}; continuing training:")
+        traceback.print_exc()
+        return {}
+    finally:
+        if hasattr(policy, "train"):
+            policy.train(policy_was_training)
+        restore_rng_state({"rng_state": rng_state})
+
+
+def eval(
+    env_name,
+    args=None,
+    policy=None,
+    eval_output_dir=None,
+    eval_output_subdir=None,
+    use_training_config=False,
+):
     """Run catalog-defined evaluation suites and optionally render failures."""
     args = args or load_config(env_name)
     eval_config = args.get("eval", {})
@@ -2064,16 +2169,25 @@ def eval(env_name, args=None, policy=None):
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
     evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
-    base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
+    if use_training_config:
+        if policy is None:
+            raise pufferlib.APIUsageError("Training evaluation requires the live policy")
+        base_args = copy.deepcopy(args)
+        checkpoint_config_path = None
+    else:
+        base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
     if base_args["train"]["use_rnn"]:
         raise pufferlib.APIUsageError("Multiprocessed evaluation does not support RNN policies yet")
 
-    run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
-    eval_output_dir = os.path.join(run_dir, "eval")
+    if eval_output_dir is None:
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+        eval_output_dir = os.path.join(run_dir, "eval")
     all_suite_summaries = {}
     for suite in suites:
         run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
         suite_output_dir = os.path.join(eval_output_dir, suite["name"])
+        if eval_output_subdir is not None:
+            suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)
         os.makedirs(suite_output_dir, exist_ok=True)
         _write_resolved_benchmark_config(
             run_args,
@@ -2121,15 +2235,9 @@ def eval(env_name, args=None, policy=None):
     return all_suite_summaries
 
 
-def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
-    """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
-    import json
-
+def _build_eval_report(episode_summaries, num_scenarios):
     if not episode_summaries:
-        print("No completed episodes were recorded; skipping report.")
-        return
-
-    os.makedirs(out_dir, exist_ok=True)
+        return None
 
     df = pd.DataFrame(episode_summaries)
     df = df.drop(columns=[col for col in ("summary_type", "env_slot") if col in df.columns])
@@ -2138,15 +2246,29 @@ def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
     lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
     df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
 
-    csv_path = os.path.join(out_dir, "episode_metrics.csv")
-    df.to_csv(csv_path, index=False)
-
     metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
     summary = {
         "num_scenarios": num_scenarios,
         "num_episodes": int(len(df)),
         "metrics_mean": {key: float(value) for key, value in metric_means.items()},
     }
+    return df, summary
+
+
+def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
+    """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
+    import json
+
+    report = _build_eval_report(episode_summaries, num_scenarios)
+    if report is None:
+        print("No completed episodes were recorded; skipping report.")
+        return None
+
+    df, summary = report
+    os.makedirs(out_dir, exist_ok=True)
+    csv_path = os.path.join(out_dir, "episode_metrics.csv")
+    df.to_csv(csv_path, index=False)
+
     json_path = os.path.join(out_dir, "evaluation_summary.json")
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
@@ -2204,7 +2326,7 @@ def _write_resolved_benchmark_config(
     resolved = {
         "benchmark_catalog": os.path.abspath(catalog_path),
         "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
-        "checkpoint_config": os.path.abspath(checkpoint_config_path),
+        "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
         "suite": suite,
         "args": json.loads(json.dumps(args)),
     }
