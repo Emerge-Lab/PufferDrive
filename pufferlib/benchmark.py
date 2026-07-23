@@ -52,6 +52,29 @@ def _seed(value, label):
     return value
 
 
+def validate_training_eval_config(args):
+    eval_config = args.get("eval", {})
+    training_enabled = eval_config.get("training_enabled", False)
+    if not isinstance(training_enabled, bool):
+        raise pufferlib.APIUsageError("eval.training_enabled must be true or false")
+    if not training_enabled:
+        return False
+
+    training_interval = eval_config.get("training_interval")
+    if isinstance(training_interval, bool) or not isinstance(training_interval, int) or training_interval <= 0:
+        raise pufferlib.APIUsageError("eval.training_interval must be a positive integer")
+
+    training_datasets = eval_config.get("training_datasets")
+    if not isinstance(training_datasets, str) or not training_datasets.strip():
+        raise pufferlib.APIUsageError("eval.training_datasets must select at least one benchmark dataset")
+    if args["train"].get("use_rnn"):
+        raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
+
+    load_catalog(eval_config.get("catalog"), training_datasets)
+    load_evaluation_config(eval_config.get("evaluation_config"))
+    return True
+
+
 def load_catalog(catalog_path, selected_names):
     """Load benchmark suites and apply one deterministic catalog seed."""
     catalog = _load_yaml_mapping(catalog_path, "benchmark catalog")

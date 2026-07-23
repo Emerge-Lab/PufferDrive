@@ -1587,6 +1587,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int num_maps = unpack(kwargs, "num_maps");
     int starting_map_counter = unpack(kwargs, "starting_map_counter");
     int eval_mode = unpack(kwargs, "eval_mode");
+    int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
     int sdc_controller = unpack(kwargs, "sdc_controller");
@@ -1648,7 +1649,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             int offset = 0;
             for (int i = 0; i < env_count; i++) {
                 int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
-                                                  : (starting_map_counter + i) % num_maps;
+                                                  : (s_map_counter + i) % num_maps;
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
                 PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
                 offset += agents_per_env;
@@ -1727,20 +1728,20 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (eval_mode) {
         max_envs = eval_target_count;
     }
-    // Upper boundary for this worker's sequential map window
+    // Define the upper boundary for the map window
     int end_map_index = starting_map_counter + eval_target_count;
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
 
     while (total_agent_count < num_agents && env_count < max_envs
-           && (!eval_mode || use_eval_map_indices || starting_map_counter < end_map_index)) {
+           && (!eval_mode || use_eval_map_indices || s_map_counter < end_map_index)) {
         if (eval_mode) {
             if (use_eval_map_indices) {
                 map_id = (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count));
             } else {
-                map_id = starting_map_counter % num_maps;
-                starting_map_counter += 1;
+                map_id = s_map_counter % num_maps;
+                s_map_counter += 1;
             }
         } else {
             map_id = rand() % num_maps;
@@ -1853,7 +1854,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
-    env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->eval_episode_done = 0;
     env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
     env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
@@ -1904,6 +1904,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
+    env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
@@ -1924,56 +1925,6 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
 
     init(env);
-    return 0;
-}
-
-static int my_log(PyObject *dict, Env *env, Log *log, float n) {
-    float total_distance_travelled = log->total_distance_travelled * n;
-    float total_infractions = log->total_infractions * n;
-    float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
-
-    assign_to_dict(dict, "n", log->n);
-    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
-    assign_to_dict(dict, "episode_length", log->episode_length);
-    assign_to_dict(dict, "collision_rate", log->collision_rate);
-    assign_to_dict(dict, "episode_return", log->episode_return);
-    assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
-    assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
-    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
-    assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
-    assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
-    assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
-    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
-    assign_to_dict(dict, "score", log->score);
-    assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
-    assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
-
-    assign_to_dict(dict, "reward_components/collision", log->reward_collision);
-    assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
-    assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
-    assign_to_dict(dict, "reward_components/goal", log->reward_goal);
-    assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
-    assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);
-    assign_to_dict(dict, "reward_components/comfort", log->reward_comfort);
-    assign_to_dict(dict, "reward_components/velocity", log->reward_velocity);
-    assign_to_dict(dict, "reward_components/timestep", log->reward_timestep);
-    assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
-    assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
-    assign_to_dict(dict, "reward_components/ade", log->reward_ade);
-
-    if (env->compute_eval_metrics) {
-        // Puffer score components
-        assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
-        assign_to_dict(dict, "puffer_score", log->puffer_score);
-        assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
-        assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);
-        assign_to_dict(dict, "making_progress_rate", log->making_progress_rate);
-        assign_to_dict(dict, "progress_ratio", log->progress_ratio);
-        assign_to_dict(dict, "comfort_score", log->comfort_score);
-        assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
-        assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
-    }
-
     return 0;
 }
 
@@ -2025,5 +1976,55 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
         }
         Py_DECREF(scenario_id);
     }
+    return 0;
+}
+
+static int my_log(PyObject *dict, Env *env, Log *log, float n) {
+    float total_distance_travelled = log->total_distance_travelled * n;
+    float total_infractions = log->total_infractions * n;
+    float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+
+    assign_to_dict(dict, "n", log->n);
+    assign_to_dict(dict, "offroad_rate", log->offroad_rate);
+    assign_to_dict(dict, "episode_length", log->episode_length);
+    assign_to_dict(dict, "collision_rate", log->collision_rate);
+    assign_to_dict(dict, "episode_return", log->episode_return);
+    assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
+    assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
+    // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
+    assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
+    assign_to_dict(dict, "num_goals_reached", log->num_goals_reached);
+    assign_to_dict(dict, "lane_center_rate", log->lane_center_rate);
+    assign_to_dict(dict, "dnf_rate", log->dnf_rate);
+    assign_to_dict(dict, "score", log->score);
+    assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
+    assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
+
+    assign_to_dict(dict, "reward_components/collision", log->reward_collision);
+    assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
+    assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/goal", log->reward_goal);
+    assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
+    assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);
+    assign_to_dict(dict, "reward_components/comfort", log->reward_comfort);
+    assign_to_dict(dict, "reward_components/velocity", log->reward_velocity);
+    assign_to_dict(dict, "reward_components/timestep", log->reward_timestep);
+    assign_to_dict(dict, "reward_components/reverse", log->reward_reverse);
+    assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
+    assign_to_dict(dict, "reward_components/ade", log->reward_ade);
+
+    if (env->compute_eval_metrics) {
+        // Puffer score components
+        assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
+        assign_to_dict(dict, "puffer_score", log->puffer_score);
+        assign_to_dict(dict, "driving_direction_score", log->driving_direction_score);
+        assign_to_dict(dict, "speed_limit_compliance", log->speed_limit_compliance);
+        assign_to_dict(dict, "making_progress_rate", log->making_progress_rate);
+        assign_to_dict(dict, "progress_ratio", log->progress_ratio);
+        assign_to_dict(dict, "comfort_score", log->comfort_score);
+        assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
+        assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
+    }
+
     return 0;
 }

@@ -421,6 +421,7 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
+    int eval_mode;
     // Observation normalization constants
     float obs_norm_goal_offset_m;
     float obs_norm_xy_offset_m;
@@ -433,7 +434,6 @@ struct Drive {
     float obs_range_road_front_m;
     float obs_range_road_behind_m;
     float obs_range_road_side_m;
-    int eval_mode;
     // Set once this env has emitted its single eval episode; keeps the env
     // frozen (no stepping, no re-emit) until the worker resamples, so each
     // scenario is evaluated exactly once regardless of why the episode ended.
@@ -3093,11 +3093,11 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // width = min(width, length)
     float spawn_length, spawn_width;
     if (env->eval_mode) {
-        // Fixed size range for eval mode
+        // Fixed size for eval mode
         spawn_length = random_uniform(env, 2.0f, 5.5f);
         spawn_width = random_uniform(env, 1.5f, 2.5f);
     } else {
-        // Random size range for training mode
+        // Random size for training mode
         spawn_length = random_uniform(env, 0.8f, 7.0f);
         spawn_width = random_uniform(env, 0.8f, 2.7f);
     }

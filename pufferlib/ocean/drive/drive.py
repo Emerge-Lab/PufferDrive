@@ -381,23 +381,23 @@ class Drive(pufferlib.PufferEnv):
         available_maps = len(self.map_files)
         if num_maps > available_maps:
             raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({available_maps}).")
+        self.starting_map_counter = starting_map
+        self.starting_map_counter_init = starting_map
 
-        self.map_cursor = starting_map
-        self.map_window_start = starting_map
-
-        # Eval walks a fixed map window; each batch handles whatever scenarios
-        # remain between the cursor and the end of this worker's window.
-        self.scenarios_remaining = self.num_eval_scenarios
+        # Calculate dynamic batch size for Eval + Replay mode
+        self.current_num_eval_scenarios = self.num_eval_scenarios
         if self.eval_mode:
-            map_window_end = self.map_window_start + self.num_eval_scenarios
-            self.scenarios_remaining = min(self.num_eval_scenarios, map_window_end - self.map_cursor)
+            self.current_num_eval_scenarios = min(
+                self.num_eval_scenarios,
+                self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
+            )
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
             num_maps=num_maps,
-            starting_map_counter=self.map_cursor,
+            starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
@@ -409,15 +409,15 @@ class Drive(pufferlib.PufferEnv):
             seed=self.random_seed,
             min_agents_per_env=self.min_agents_per_env,
             max_agents_per_env=self.max_agents_per_env,
-            num_eval_scenarios=self.scenarios_remaining,
+            num_eval_scenarios=self.current_num_eval_scenarios,
             eval_map_indices=self.eval_map_indices,
             goal_radius=self.goal_radius,
         )
-        # In eval mode the counter is not wrapped, so exhaustion ends the sweep.
-        self.map_cursor = self.map_cursor + num_envs
+        # In eval mode, don't wrap counter - allows termination condition to work correctly
+        self.starting_map_counter = self.starting_map_counter + num_envs
         # Set once a worker has evaluated its whole map window; a frozen worker
         # stops stepping and emitting so it can't re-process or double-count.
-        self._eval_exhausted = self.eval_mode and self.scenarios_remaining == 0
+        self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
 
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
@@ -482,8 +482,6 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "use_map_cache": self.use_map_cache,
-            "eval_mode": self.eval_mode,
-            "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "goal_radius": self.goal_radius,
             "min_goal_spacing": self.min_goal_spacing,
             "max_goal_spacing": self.max_goal_spacing,
@@ -518,6 +516,8 @@ class Drive(pufferlib.PufferEnv):
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
             "compute_eval_metrics": self.compute_eval_metrics,
+            "eval_mode": self.eval_mode,
+            "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
@@ -584,83 +584,199 @@ class Drive(pufferlib.PufferEnv):
                 # print(log)
         if self.tick > 0 and self.resample_frequency > 0 and self.tick % self.resample_frequency == 0:
             self.tick = 0
-            # Read this batch's finished episodes before the envs are resampled/closed.
-            if self.eval_mode:
-                for summary in binding.vec_per_episode_log(self.c_envs):
-                    summary["summary_type"] = "evaluation_episode"
-                    if self.capture_replay:
-                        summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
-                    info.append(summary)
-            # Eval walks a fixed map window; each batch handles whatever scenarios
-            # remain between the cursor and the end of this worker's window.
-            self.scenarios_remaining = self.num_eval_scenarios
-            if self.eval_mode:
-                map_window_end = self.map_window_start + self.num_eval_scenarios
-                self.scenarios_remaining = min(self.num_eval_scenarios, map_window_end - self.map_cursor)
-            if self.scenarios_remaining == 0:
-                self._eval_exhausted = True
-                return (self.observations, self.rewards, self.terminals, self.truncations, info)
-            binding.vec_close(self.c_envs)
-            # Pairs already replayed this sweep; slice the rest so a deferred
-            # scene resumes exactly where the previous batch stopped.
-            pair_start = self.map_cursor - self.map_window_start
-            remaining_map_indices = self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
-            agent_offsets, map_ids, num_envs = binding.shared(
-                num_agents=self.num_agents,
-                num_maps=self.num_maps,
-                starting_map_counter=self.map_cursor,
-                eval_mode=self.eval_mode,
-                init_mode=self.init_mode,
-                control_mode=self.control_mode,
-                sdc_controller=self.sdc_controller,
-                non_sdc_controller=self.non_sdc_controller,
-                non_vehicle_controller=self.non_vehicle_controller,
-                simulation_mode=self.simulation_mode,
-                init_step=self.init_step,
-                map_files=self.map_files,
-                seed=self.random_seed,
-                min_agents_per_env=self.min_agents_per_env,
-                max_agents_per_env=self.max_agents_per_env,
-                num_eval_scenarios=self.scenarios_remaining,
-                eval_map_indices=remaining_map_indices,
-                goal_radius=self.goal_radius,
-            )
-            self.agent_offsets = agent_offsets
-            self.map_ids = map_ids
-            self.num_envs = num_envs
-            self.map_cursor = self.map_cursor + num_envs
-            env_ids = []
-            for i in range(num_envs):
-                cur = agent_offsets[i]
-                nxt = agent_offsets[i + 1]
-                env_seed = (
-                    self.eval_scenario_seeds[pair_start + i]
-                    if self.eval_scenario_seeds is not None
-                    else self.random_seed
+            will_resample = 1
+            if will_resample:
+                # Read this batch's finished episodes before the envs are resampled/closed.
+                if self.eval_mode:
+                    for summary in binding.vec_per_episode_log(self.c_envs):
+                        summary["summary_type"] = "evaluation_episode"
+                        if self.capture_replay:
+                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
+                        info.append(summary)
+                # Calculate dynamic batch size for Eval + Replay mode
+                self.current_num_eval_scenarios = self.num_eval_scenarios
+                if self.eval_mode:
+                    self.current_num_eval_scenarios = min(
+                        self.num_eval_scenarios,
+                        self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
+                    )
+                if self.current_num_eval_scenarios == 0:
+                    self._eval_exhausted = True
+                    return (self.observations, self.rewards, self.terminals, self.truncations, info)
+                binding.vec_close(self.c_envs)
+                # Pairs already replayed this sweep; slice the rest so a deferred
+                # scene resumes exactly where the previous batch stopped.
+                pair_start = self.starting_map_counter - self.starting_map_counter_init
+                remaining_map_indices = (
+                    self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
                 )
-                env_id = binding.env_init(
-                    self.observations[cur:nxt],
-                    self.actions[cur:nxt],
-                    self.rewards[cur:nxt],
-                    self.terminals[cur:nxt],
-                    self.truncations[cur:nxt],
-                    self.masks[cur:nxt],
-                    env_seed,
-                    **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                agent_offsets, map_ids, num_envs = binding.shared(
+                    num_agents=self.num_agents,
+                    num_maps=self.num_maps,
+                    starting_map_counter=self.starting_map_counter,
+                    eval_mode=self.eval_mode,
+                    init_mode=self.init_mode,
+                    control_mode=self.control_mode,
+                    sdc_controller=self.sdc_controller,
+                    non_sdc_controller=self.non_sdc_controller,
+                    non_vehicle_controller=self.non_vehicle_controller,
+                    simulation_mode=self.simulation_mode,
+                    init_step=self.init_step,
+                    map_files=self.map_files,
+                    seed=self.random_seed,
+                    min_agents_per_env=self.min_agents_per_env,
+                    max_agents_per_env=self.max_agents_per_env,
+                    num_eval_scenarios=self.current_num_eval_scenarios,  # Use the dynamic size here
+                    eval_map_indices=remaining_map_indices,
+                    goal_radius=self.goal_radius,
                 )
-                env_ids.append(env_id)
-            self.c_envs = binding.vectorize(*env_ids)
+                self.agent_offsets = agent_offsets
+                self.map_ids = map_ids
+                self.num_envs = num_envs
+                # In eval mode, don't wrap counter - allows termination condition to work correctly
+                self.starting_map_counter = self.starting_map_counter + num_envs
+                env_ids = []
+                for i in range(num_envs):
+                    cur = agent_offsets[i]
+                    nxt = agent_offsets[i + 1]
+                    env_seed = (
+                        self.eval_scenario_seeds[pair_start + i]
+                        if self.eval_scenario_seeds is not None
+                        else self.random_seed
+                    )
+                    env_id = binding.env_init(
+                        self.observations[cur:nxt],
+                        self.actions[cur:nxt],
+                        self.rewards[cur:nxt],
+                        self.terminals[cur:nxt],
+                        self.truncations[cur:nxt],
+                        self.masks[cur:nxt],
+                        env_seed,
+                        **self._env_init_kwargs(self.map_files[map_ids[i]], nxt - cur),
+                    )
+                    env_ids.append(env_id)
+                self.c_envs = binding.vectorize(*env_ids)
 
-            binding.vec_reset(self.c_envs, self.random_seed)
-            if self.eval_mode:
-                # The initial batch is reset by both __init__ and the caller's reset();
-                # a resampled eval batch must match that to reproduce episodes exactly.
                 binding.vec_reset(self.c_envs, self.random_seed)
-            if self.capture_replay:
-                self._initialize_replay_buffers()
-            # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
-            self.truncations[:] = 1
+                if self.eval_mode:
+                    # The initial batch is reset by both __init__ and the caller's reset();
+                    # a resampled eval batch must match that to reproduce episodes exactly.
+                    binding.vec_reset(self.c_envs, self.random_seed)
+                if self.capture_replay:
+                    self._initialize_replay_buffers()
+                # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
+                self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
+
+    def get_global_agent_state(self):
+        """Get current global state of all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
+            of shape (num_active_agents,)
+        """
+        num_agents = self.num_agents
+
+        states = {
+            "x": np.zeros(num_agents, dtype=np.float32),
+            "y": np.zeros(num_agents, dtype=np.float32),
+            "z": np.zeros(num_agents, dtype=np.float32),
+            "heading": np.zeros(num_agents, dtype=np.float32),
+            "id": np.zeros(num_agents, dtype=np.int32),
+            "length": np.zeros(num_agents, dtype=np.float32),
+            "width": np.zeros(num_agents, dtype=np.float32),
+        }
+
+        binding.vec_get_global_agent_state(
+            self.c_envs,
+            states["x"],
+            states["y"],
+            states["z"],
+            states["heading"],
+            states["id"],
+            states["length"],
+            states["width"],
+        )
+
+        return states
+
+    def get_ground_truth_trajectories(self):
+        """Get ground truth trajectories for all active agents.
+
+        Returns:
+            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays.
+        """
+        num_agents = self.num_agents
+
+        trajectories = {
+            "x": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "y": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "z": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "heading": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
+            "valid": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.int32),
+            "id": np.zeros(num_agents, dtype=np.int32),
+            "scenario_id": np.zeros(num_agents, dtype=np.int32),
+        }
+
+        binding.vec_get_global_ground_truth_trajectories(
+            self.c_envs,
+            trajectories["x"],
+            trajectories["y"],
+            trajectories["z"],
+            trajectories["heading"],
+            trajectories["valid"],
+            trajectories["id"],
+            trajectories["scenario_id"],
+        )
+
+        for key in trajectories:
+            trajectories[key] = trajectories[key][:, None]
+
+        return trajectories
+
+    def get_road_edge_polylines(self):
+        """Get road edge polylines for all scenarios.
+
+        Returns:
+            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
+            x, y are flattened point coordinates; lengths indicates points per polyline.
+        """
+        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
+
+        polylines = {
+            "x": np.zeros(total_points, dtype=np.float32),
+            "y": np.zeros(total_points, dtype=np.float32),
+            "lengths": np.zeros(num_polylines, dtype=np.int32),
+            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
+        }
+
+        binding.vec_get_road_edge_polylines(
+            self.c_envs,
+            polylines["x"],
+            polylines["y"],
+            polylines["lengths"],
+            polylines["scenario_id"],
+        )
+
+        return polylines
+
+    def render(self, env_idx=0, view_mode=0):
+        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
+        # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
+        binding.vec_render(self.c_envs, view_mode, env_idx)
+
+    def set_video_suffix(self, suffix, env_idx=0):
+        # Append `suffix` to the next mp4 filename for the given env.
+        # Must be called BEFORE the first render of a rollout because
+        # make_client reads env->video_suffix when forking ffmpeg.
+        binding.vec_set_video_suffix(self.c_envs, suffix, env_idx)
+
+    def close_client(self, env_idx=0):
+        # Tear down the render Client for one env without destroying the env.
+        # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
+        binding.vec_close_client(self.c_envs, env_idx)
+
+    # ====== Replay capture (active when capture_replay=True) ======
 
     def _normalize_scenarios(self, state):
         if isinstance(state, list):
@@ -770,114 +886,6 @@ class Drive(pufferlib.PufferEnv):
             pickle.dumps(replay_environment_bundle, protocol=pickle.HIGHEST_PROTOCOL),
             level=3,
         )
-
-    def get_global_agent_state(self):
-        """Get current global state of all active agents.
-
-        Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
-            of shape (num_active_agents,)
-        """
-        num_agents = self.num_agents
-
-        states = {
-            "x": np.zeros(num_agents, dtype=np.float32),
-            "y": np.zeros(num_agents, dtype=np.float32),
-            "z": np.zeros(num_agents, dtype=np.float32),
-            "heading": np.zeros(num_agents, dtype=np.float32),
-            "id": np.zeros(num_agents, dtype=np.int32),
-            "length": np.zeros(num_agents, dtype=np.float32),
-            "width": np.zeros(num_agents, dtype=np.float32),
-        }
-
-        binding.vec_get_global_agent_state(
-            self.c_envs,
-            states["x"],
-            states["y"],
-            states["z"],
-            states["heading"],
-            states["id"],
-            states["length"],
-            states["width"],
-        )
-
-        return states
-
-    def get_ground_truth_trajectories(self):
-        """Get ground truth trajectories for all active agents.
-
-        Returns:
-            dict with keys 'x', 'y', 'z', 'heading', 'valid', 'id', 'scenario_id' containing numpy arrays.
-        """
-        num_agents = self.num_agents
-
-        trajectories = {
-            "x": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
-            "y": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
-            "z": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
-            "heading": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.float32),
-            "valid": np.zeros((num_agents, self.scenario_length - self.init_step), dtype=np.int32),
-            "id": np.zeros(num_agents, dtype=np.int32),
-            "scenario_id": np.zeros(num_agents, dtype=np.int32),
-        }
-
-        binding.vec_get_global_ground_truth_trajectories(
-            self.c_envs,
-            trajectories["x"],
-            trajectories["y"],
-            trajectories["z"],
-            trajectories["heading"],
-            trajectories["valid"],
-            trajectories["id"],
-            trajectories["scenario_id"],
-        )
-
-        for key in trajectories:
-            trajectories[key] = trajectories[key][:, None]
-
-        return trajectories
-
-    def get_road_edge_polylines(self):
-        """Get road edge polylines for all scenarios.
-
-        Returns:
-            dict with keys 'x', 'y', 'lengths', 'scenario_id' containing numpy arrays.
-            x, y are flattened point coordinates; lengths indicates points per polyline.
-        """
-        num_polylines, total_points = binding.vec_get_road_edge_counts(self.c_envs)
-
-        polylines = {
-            "x": np.zeros(total_points, dtype=np.float32),
-            "y": np.zeros(total_points, dtype=np.float32),
-            "lengths": np.zeros(num_polylines, dtype=np.int32),
-            "scenario_id": np.zeros(num_polylines, dtype=np.int32),
-        }
-
-        binding.vec_get_road_edge_polylines(
-            self.c_envs,
-            polylines["x"],
-            polylines["y"],
-            polylines["lengths"],
-            polylines["scenario_id"],
-        )
-
-        return polylines
-
-    def render(self, env_idx=0, view_mode=0):
-        # view_mode: 0=default fixed perspective, 1=BEV ego-centered ortho.
-        # See VIEW_MODE_* defines in pufferlib/ocean/drive/render.h.
-        binding.vec_render(self.c_envs, view_mode, env_idx)
-
-    def set_video_suffix(self, suffix, env_idx=0):
-        # Append `suffix` to the next mp4 filename for the given env.
-        # Must be called BEFORE the first render of a rollout because
-        # make_client reads env->video_suffix when forking ffmpeg.
-        binding.vec_set_video_suffix(self.c_envs, suffix, env_idx)
-
-    def close_client(self, env_idx=0):
-        # Tear down the render Client for one env without destroying the env.
-        # Flushes ffmpeg + PBOs on the headless path so the mp4 is fully written.
-        binding.vec_close_client(self.c_envs, env_idx)
 
     def close(self):
         binding.vec_close(self.c_envs)

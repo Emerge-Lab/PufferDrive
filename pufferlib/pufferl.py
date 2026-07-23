@@ -1,4 +1,4 @@
-## puffer [train | eval | sweep] [env_name] [optional args] -- See https://puffer.ai for full details
+## puffer [train | eval | sweep] [env_name] [optional args] -- See https://puffer.ai for full detail0
 # This is the same as python -m pufferlib.pufferl [train | eval | sweep] [env_name] [optional args]
 # Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_nmmo3
 
@@ -59,7 +59,6 @@ import rich.traceback
 from rich.table import Table
 from rich.console import Console
 from tqdm import tqdm
-
 
 rich.traceback.install(show_locals=False)
 
@@ -1347,29 +1346,6 @@ def _save_experiment_config(args, path):
         yaml.dump(config, f)
 
 
-def _validate_training_eval_config(args):
-    eval_config = args.get("eval", {})
-    training_enabled = eval_config.get("training_enabled", False)
-    if not isinstance(training_enabled, bool):
-        raise pufferlib.APIUsageError("eval.training_enabled must be true or false")
-    if not training_enabled:
-        return False
-
-    training_interval = eval_config.get("training_interval")
-    if isinstance(training_interval, bool) or not isinstance(training_interval, int) or training_interval <= 0:
-        raise pufferlib.APIUsageError("eval.training_interval must be a positive integer")
-
-    training_datasets = eval_config.get("training_datasets")
-    if not isinstance(training_datasets, str) or not training_datasets.strip():
-        raise pufferlib.APIUsageError("eval.training_datasets must select at least one benchmark dataset")
-    if args["train"].get("use_rnn"):
-        raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
-
-    pufferlib.benchmark.load_catalog(eval_config.get("catalog"), training_datasets)
-    pufferlib.benchmark.load_evaluation_config(eval_config.get("evaluation_config"))
-    return True
-
-
 def _global_agent_steps(pufferl):
     world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     return int(pufferl.global_step * world_size)
@@ -1377,7 +1353,7 @@ def _global_agent_steps(pufferl):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
-    training_eval_enabled = _validate_training_eval_config(args)
+    training_eval_enabled = pufferlib.benchmark.validate_training_eval_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1581,6 +1557,110 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     model_path = pufferl.close()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
+
+
+def eval(
+    env_name,
+    args=None,
+    policy=None,
+    eval_output_dir=None,
+    eval_output_subdir=None,
+    use_training_config=False,
+):
+    """Run catalog-defined evaluation suites or replay failures from an existing CSV."""
+    args = args or load_config(env_name)
+    eval_config = args.get("eval", {})
+    catalog_path = eval_config.get("catalog")
+    evaluation_config_path = eval_config.get("evaluation_config")
+    selected_datasets = eval_config.get("datasets")
+    render_failures = bool(eval_config.get("render_failures"))
+    render_failures_number = eval_config.get("render_failures_number")
+    replay_failures_csv = eval_config.get("replay_failures_csv")
+    if render_failures:
+        pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
+    suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
+    evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
+    if use_training_config:
+        if policy is None:
+            raise pufferlib.APIUsageError("Training evaluation requires the live policy")
+        base_args = copy.deepcopy(args)
+        evaluation_env_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
+        evaluation_env_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
+        checkpoint_config_path = None
+    else:
+        base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
+    if base_args["train"]["use_rnn"]:
+        raise pufferlib.APIUsageError("Multiprocessed evaluation does not support RNN policies yet")
+
+    if eval_output_dir is None:
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+        eval_output_dir = os.path.join(run_dir, "eval")
+    all_suite_summaries = {}
+    for suite in suites:
+        run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
+        suite_output_dir = os.path.join(eval_output_dir, suite["name"])
+        if eval_output_subdir is not None:
+            suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)
+        os.makedirs(suite_output_dir, exist_ok=True)
+        _write_resolved_benchmark_config(
+            run_args,
+            suite,
+            catalog_path,
+            evaluation_config_path,
+            checkpoint_config_path,
+            os.path.join(suite_output_dir, "resolved_benchmark.yaml"),
+        )
+
+        suite_seed = int(suite["seed"])
+        np.random.seed(suite_seed)
+        torch.manual_seed(suite_seed)
+        if replay_failures_csv is not None:
+            summaries = _render_eval_failures(
+                env_name,
+                run_args,
+                suite,
+                replay_failures_csv,
+                suite_output_dir,
+                policy,
+                bool(eval_config.get("render_obs")),
+                render_failures_number,
+            )
+            all_suite_summaries[suite["name"]] = summaries
+            continue
+
+        num_scenarios = int(suite["num_scenarios"])
+        num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
+        worker_env_kwargs, total_steps = _forward_worker_kwargs(
+            run_args,
+            num_scenarios,
+            num_workers,
+            int(run_args["env"]["scenario_length"]),
+        )
+        print(f"Evaluation {suite['name']}: {num_scenarios} scenarios across {num_workers} workers")
+        summaries = _run_eval_rollout(
+            run_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            f"Evaluating {suite['name']}",
+            num_scenarios,
+            policy=policy,
+        )
+        _write_eval_reports(summaries, suite_output_dir, num_scenarios)
+        all_suite_summaries[suite["name"]] = summaries
+
+        if render_failures:
+            _render_eval_failures(
+                env_name,
+                run_args,
+                suite,
+                os.path.join(suite_output_dir, "episode_metrics.csv"),
+                suite_output_dir,
+                policy,
+                bool(eval_config.get("render_obs")),
+                render_failures_number,
+            )
+    return all_suite_summaries
 
 
 def sweep(args=None, env_name=None):
@@ -2155,110 +2235,6 @@ def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_di
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
         restore_rng_state({"rng_state": rng_state})
-
-
-def eval(
-    env_name,
-    args=None,
-    policy=None,
-    eval_output_dir=None,
-    eval_output_subdir=None,
-    use_training_config=False,
-):
-    """Run catalog-defined evaluation suites or replay failures from an existing CSV."""
-    args = args or load_config(env_name)
-    eval_config = args.get("eval", {})
-    catalog_path = eval_config.get("catalog")
-    evaluation_config_path = eval_config.get("evaluation_config")
-    selected_datasets = eval_config.get("datasets")
-    render_failures = bool(eval_config.get("render_failures"))
-    render_failures_number = eval_config.get("render_failures_number")
-    replay_failures_csv = eval_config.get("replay_failures_csv")
-    if render_failures:
-        pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
-    suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
-    evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
-    if use_training_config:
-        if policy is None:
-            raise pufferlib.APIUsageError("Training evaluation requires the live policy")
-        base_args = copy.deepcopy(args)
-        evaluation_env_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
-        evaluation_env_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
-        checkpoint_config_path = None
-    else:
-        base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
-    if base_args["train"]["use_rnn"]:
-        raise pufferlib.APIUsageError("Multiprocessed evaluation does not support RNN policies yet")
-
-    if eval_output_dir is None:
-        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
-        eval_output_dir = os.path.join(run_dir, "eval")
-    all_suite_summaries = {}
-    for suite in suites:
-        run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
-        suite_output_dir = os.path.join(eval_output_dir, suite["name"])
-        if eval_output_subdir is not None:
-            suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)
-        os.makedirs(suite_output_dir, exist_ok=True)
-        _write_resolved_benchmark_config(
-            run_args,
-            suite,
-            catalog_path,
-            evaluation_config_path,
-            checkpoint_config_path,
-            os.path.join(suite_output_dir, "resolved_benchmark.yaml"),
-        )
-
-        suite_seed = int(suite["seed"])
-        np.random.seed(suite_seed)
-        torch.manual_seed(suite_seed)
-        if replay_failures_csv is not None:
-            summaries = _render_eval_failures(
-                env_name,
-                run_args,
-                suite,
-                replay_failures_csv,
-                suite_output_dir,
-                policy,
-                bool(eval_config.get("render_obs")),
-                render_failures_number,
-            )
-            all_suite_summaries[suite["name"]] = summaries
-            continue
-
-        num_scenarios = int(suite["num_scenarios"])
-        num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
-        worker_env_kwargs, total_steps = _forward_worker_kwargs(
-            run_args,
-            num_scenarios,
-            num_workers,
-            int(run_args["env"]["scenario_length"]),
-        )
-        print(f"Evaluation {suite['name']}: {num_scenarios} scenarios across {num_workers} workers")
-        summaries = _run_eval_rollout(
-            run_args,
-            env_name,
-            worker_env_kwargs,
-            total_steps,
-            f"Evaluating {suite['name']}",
-            num_scenarios,
-            policy=policy,
-        )
-        _write_eval_reports(summaries, suite_output_dir, num_scenarios)
-        all_suite_summaries[suite["name"]] = summaries
-
-        if render_failures:
-            _render_eval_failures(
-                env_name,
-                run_args,
-                suite,
-                os.path.join(suite_output_dir, "episode_metrics.csv"),
-                suite_output_dir,
-                policy,
-                bool(eval_config.get("render_obs")),
-                render_failures_number,
-            )
-    return all_suite_summaries
 
 
 def _build_eval_report(episode_summaries, num_scenarios):
