@@ -730,8 +730,7 @@ class Drive(pufferlib.PufferEnv):
         }
 
     def _capture_replay_step(self):
-        binding.vec_get_replay_frame(
-            self.c_envs,
+        self.get_obs_html_frame(
             self._replay_frame_arrays["agent_f32"],
             self._replay_frame_arrays["agent_i32"],
             self._replay_frame_arrays["metrics_f32"],
@@ -888,6 +887,16 @@ class Drive(pufferlib.PufferEnv):
             return binding.vec_get(self.c_envs)
         except Exception:
             return binding.env_get(self.c_envs)
+
+    def get_obs_html_frame(self, agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16):
+        binding.vec_get_obs_html_frame(
+            self.c_envs,
+            agent_f32,
+            agent_i32,
+            metrics_f32,
+            puffer_f32,
+            traffic_i16,
+        )
 
 
 def calculate_area(p1, p2, p3):

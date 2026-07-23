@@ -13,6 +13,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries", "sdc_replay_test")
 SCENARIO_LENGTH = 400
 REPLAY_SEED = 1234
+REMOVED_FIELD_IDX = 5
+REMOVED_FIELD_UNAVAILABLE = -2
 
 
 def _make_replay_drive(capture_replay, compute_eval_metrics=True, num_environments=1):
@@ -91,7 +93,7 @@ def _extract_python_replay_frame(scenario):
             agent["sim_valid"],
             agent["active_agent"],
             agent["stopped"],
-            int(not agent["sim_valid"]),
+            REMOVED_FIELD_UNAVAILABLE,
             agent["current_lane_idx"],
             active_indices.get(agent_idx, -1),
         )
@@ -142,7 +144,7 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
                     dtype=np.int16,
                 ),
             }
-            binding.vec_get_replay_frame(
+            binding.vec_get_obs_html_frame(
                 env.c_envs,
                 bulk_frame["agent_f32"],
                 bulk_frame["agent_i32"],
@@ -154,6 +156,9 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
                 expected = _extract_python_replay_frame(scenario)
                 for key, expected_values in expected.items():
                     actual_values = bulk_frame[key][env_idx, : expected_values.shape[0]]
+                    if key == "agent_i32":
+                        actual_values = np.delete(actual_values, REMOVED_FIELD_IDX, axis=1)
+                        expected_values = np.delete(expected_values, REMOVED_FIELD_IDX, axis=1)
                     np.testing.assert_array_equal(actual_values, expected_values)
             env.step(np.zeros_like(env.actions))
     finally:
