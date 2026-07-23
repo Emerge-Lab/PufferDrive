@@ -226,6 +226,22 @@ def build_suite_args(base_args, suite, evaluation_env_config):
     return args
 
 
+def write_resolved_benchmark_config(
+    args, suite, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
+):
+    import json
+
+    resolved = {
+        "benchmark_catalog": os.path.abspath(catalog_path),
+        "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
+        "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
+        "suite": suite,
+        "args": json.loads(json.dumps(args)),
+    }
+    with open(output_path, "w") as output_file:
+        yaml.safe_dump(resolved, output_file, sort_keys=False)
+
+
 def parse_failure_metric_columns(configured_failure_metrics):
     """Resolve and validate the metric columns that define a failed episode."""
     if configured_failure_metrics is None:

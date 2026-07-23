@@ -1602,7 +1602,7 @@ def eval(
         if eval_output_subdir is not None:
             suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)
         os.makedirs(suite_output_dir, exist_ok=True)
-        _write_resolved_benchmark_config(
+        pufferlib.benchmark.write_resolved_benchmark_config(
             run_args,
             suite,
             catalog_path,
@@ -1630,7 +1630,7 @@ def eval(
 
         num_scenarios = int(suite["num_scenarios"])
         num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
-        worker_env_kwargs, total_steps = _forward_worker_kwargs(
+        worker_env_kwargs, total_steps = _plan_benchmark_eval_workers(
             run_args,
             num_scenarios,
             num_workers,
@@ -1856,47 +1856,47 @@ def _eval_replay_stem(summary, episode_id):
     return "__".join(parts)
 
 
-def _forward_worker_kwargs(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
+def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
-    map_cursor = 0
+    next_map_idx = 0
     for worker_idx in range(num_workers):
         worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
         env_kwargs = copy.deepcopy(args["env"])
         env_kwargs["eval_mode"] = 1
-        env_kwargs["starting_map"] = map_cursor
+        env_kwargs["starting_map"] = next_map_idx
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
         env_kwargs["capture_replay"] = bool(capture_replay)
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
-        map_cursor += worker_num_scenarios
+        next_map_idx += worker_num_scenarios
     max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
     return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
 
-def _replay_worker_kwargs(args, pairs, num_workers, scenario_length, capture_replay=False):
+def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length, capture_replay=False):
     """Split the (map, seed) pairs across workers; each worker cycles through its
     pairs in fit-aware batches (num_agents from config bounds a batch)."""
-    per, remainder = divmod(len(pairs), num_workers)
+    pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
     worker_env_kwargs = []
-    start = 0
+    pair_start = 0
     for worker_idx in range(num_workers):
-        count = per + (1 if worker_idx < remainder else 0)
-        chunk = pairs[start : start + count]
-        start += count
+        worker_pair_count = pairs_per_worker + (1 if worker_idx < remainder else 0)
+        worker_pairs = map_seed_pairs[pair_start : pair_start + worker_pair_count]
+        pair_start += worker_pair_count
         env_kwargs = copy.deepcopy(args["env"])
         env_kwargs["eval_mode"] = 1
         env_kwargs["resample_frequency"] = scenario_length
         env_kwargs["starting_map"] = 0
-        env_kwargs["num_eval_scenarios"] = count
-        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in chunk]
-        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in chunk]
+        env_kwargs["num_eval_scenarios"] = worker_pair_count
+        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in worker_pairs]
+        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in worker_pairs]
         env_kwargs["capture_replay"] = bool(capture_replay)
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
-    max_pairs_per_worker = per + (1 if remainder else 0)
+    max_pairs_per_worker = pairs_per_worker + (1 if remainder else 0)
     return worker_env_kwargs, max_pairs_per_worker * scenario_length
 
 
@@ -2320,22 +2320,6 @@ def _render_eval_replays(episode_summaries, out_dir):
     return render_dir
 
 
-def _write_resolved_benchmark_config(
-    args, suite, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
-):
-    import json
-
-    resolved = {
-        "benchmark_catalog": os.path.abspath(catalog_path),
-        "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
-        "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
-        "suite": suite,
-        "args": json.loads(json.dumps(args)),
-    }
-    with open(output_path, "w") as output_file:
-        yaml.safe_dump(resolved, output_file, sort_keys=False)
-
-
 def _selected_agents_per_batch(selected_rows):
     if "agents_per_batch" not in selected_rows.columns:
         raise pufferlib.APIUsageError("Benchmark failure rendering requires agents_per_batch in the metrics CSV")
@@ -2406,7 +2390,7 @@ def _render_eval_failures(
         num_workers = min(configured_worker_count, len(replay_pairs))
         wave_args = copy.deepcopy(failure_args)
         wave_args["vec"]["num_envs"] = num_workers
-        worker_env_kwargs, total_steps = _replay_worker_kwargs(
+        worker_env_kwargs, total_steps = _plan_failure_replay_workers(
             wave_args,
             replay_pairs,
             num_workers,

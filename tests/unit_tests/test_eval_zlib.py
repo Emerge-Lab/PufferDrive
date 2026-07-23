@@ -165,7 +165,7 @@ def test_training_eval_keeps_training_observation_dropout(monkeypatch, tmp_path)
         "load_evaluation_config",
         lambda *_: {"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0},
     )
-    monkeypatch.setattr(pufferl, "_forward_worker_kwargs", lambda *_: ([{}], 1))
+    monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", lambda *_: ([{}], 1))
 
     def capture_rollout(run_args, *_args, **_kwargs):
         captured_args.update(run_args)
@@ -227,10 +227,10 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         "build_suite_args",
         lambda loaded_args, _suite, _evaluation_config: loaded_args,
     )
-    monkeypatch.setattr(pufferl, "_write_resolved_benchmark_config", lambda *_: None)
+    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
     monkeypatch.setattr(
         pufferl,
-        "_forward_worker_kwargs",
+        "_plan_benchmark_eval_workers",
         lambda *_args: pytest.fail("standard benchmark worker setup should be skipped"),
     )
     monkeypatch.setattr(
@@ -369,16 +369,16 @@ def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypat
     assert summaries[0]["agents_per_batch"] == 4
 
 
-def test_replay_worker_kwargs_balances_without_fillers():
+def test_failure_replay_worker_plan_balances_without_fillers():
     args = {
         "env": {"num_agents": 1024},
         "save_zlib": False,
     }
     pairs = [(map_idx, 100 + map_idx) for map_idx in range(5)]
 
-    worker_kwargs, total_steps = pufferl._replay_worker_kwargs(
+    worker_kwargs, total_steps = pufferl._plan_failure_replay_workers(
         args=args,
-        pairs=pairs,
+        map_seed_pairs=pairs,
         num_workers=4,
         scenario_length=128,
     )
@@ -442,12 +442,12 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     monkeypatch.setattr(pufferlib.benchmark, "select_failure_rows", lambda *_: selected_rows)
     monkeypatch.setattr(pufferl, "_resolve_map_indices", lambda _map_dir, map_names: list(range(len(map_names))))
 
-    def capture_replay_pairs(_args, pairs, _num_workers, _scenario_length, capture_replay):
+    def capture_replay_pairs(_args, map_seed_pairs, _num_workers, _scenario_length, capture_replay):
         assert capture_replay
-        replay_pairs.extend(pairs)
-        return [{} for _ in pairs], 1
+        replay_pairs.extend(map_seed_pairs)
+        return [{} for _ in map_seed_pairs], 1
 
-    monkeypatch.setattr(pufferl, "_replay_worker_kwargs", capture_replay_pairs)
+    monkeypatch.setattr(pufferl, "_plan_failure_replay_workers", capture_replay_pairs)
 
     def fake_rollout(
         _run_args,
