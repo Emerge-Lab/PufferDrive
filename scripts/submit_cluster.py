@@ -181,9 +181,12 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
         for key, val in main_args.items():
-            # Hydra override syntax: dotted.key=value, booleans lowercase
+            # Hydra override syntax: dotted.key=value, booleans lowercase,
+            # Python None (from YAML null) as Hydra's null literal.
             if isinstance(val, bool):
                 val = str(val).lower()
+            elif val is None:
+                val = "null"
             cmd.append(f"{key}={val}")
 
             if key in overrides and key not in name_skip_keys:
