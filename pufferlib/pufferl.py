@@ -2171,8 +2171,6 @@ def eval(
     catalog_path = eval_config.get("catalog")
     evaluation_config_path = eval_config.get("evaluation_config")
     selected_datasets = eval_config.get("datasets")
-    if selected_datasets is None or not selected_datasets.strip():
-        raise pufferlib.APIUsageError("eval.datasets is required; select one or more benchmark datasets")
     render_failures = bool(eval_config.get("render_failures"))
     render_failures_number = eval_config.get("render_failures_number")
     replay_failures_csv = eval_config.get("replay_failures_csv")

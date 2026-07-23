@@ -44,7 +44,7 @@ def _standard_replay():
     }
 
 
-def test_standard_replay_zlib_round_trip_and_html_render(tmp_path):
+def test_standard_replay_zlib_round_trip_and_html_render(tmp_path, monkeypatch):
     scenario = {
         "map_name": "test_map.bin",
         "scenario_id": "scenario_1",
@@ -56,7 +56,11 @@ def test_standard_replay_zlib_round_trip_and_html_render(tmp_path):
     html_path = tmp_path / "episode.html"
 
     compressed_payload = viz.save_interactive_replay_zlib(scenario, _standard_replay(), replay_path)
+    monkeypatch.setattr(viz, "PAYLOAD_CHUNK_SIZE", 64)
     viz.render_interactive_replay_zlib(replay_path, html_path)
 
     assert replay_path.read_bytes() == compressed_payload
-    assert "__B64_PAYLOAD__" not in html_path.read_text()
+    html = html_path.read_text()
+    assert "__PAYLOAD_CHUNKS__" not in html
+    assert html.count('class="payload-chunk"') > 1
+    assert "decodeReplayPayload()" in html

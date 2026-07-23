@@ -84,6 +84,8 @@ METRIC_LABELS = [
     "multi_lane_score",
 ]
 
+PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+
 
 @dataclasses.dataclass
 class VizConfig:
@@ -1162,8 +1164,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         </div>
     </div>
     <canvas id="c"></canvas>
+__PAYLOAD_CHUNKS__
     <script>
-        const B64_PAYLOAD = "__B64_PAYLOAD__";
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
@@ -1190,11 +1192,90 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             return new Uint8Array(H.buffer, start, n);
         }
         function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
+        async function decodeReplayPayload() {
+            const nodes = Array.from(document.querySelectorAll('.payload-chunk'));
+            if (!nodes.length) throw new Error('Missing replay payload');
+            const workerCode = `
+let parts = [];
+function decodeBase64(encoded) {
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+self.onmessage = async event => {
+    const message = event.data;
+    if (message.type === 'chunk') {
+        parts.push(decodeBase64(message.data));
+        self.postMessage({type:'progress', done:message.index + 1, total:message.total});
+        return;
+    }
+    if (message.type === 'end') {
+        try {
+            const stream = new DecompressionStream('deflate');
+            const buffer = await new Response(new Blob(parts).stream().pipeThrough(stream)).arrayBuffer();
+            parts = null;
+            self.postMessage({type:'done', buffer:buffer}, [buffer]);
+        } catch (error) {
+            self.postMessage({type:'error', message:String(error && error.message ? error.message : error)});
+        }
+    }
+};
+`;
+            return await new Promise((resolve, reject) => {
+                const workerUrl = URL.createObjectURL(new Blob([workerCode], {type:'text/javascript'}));
+                const worker = new Worker(workerUrl);
+                const loadText = document.getElementById('load-text');
+                let chunkIdx = 0;
+
+                function closeWorker() {
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                }
+                function sendNext() {
+                    if (chunkIdx >= nodes.length) {
+                        loadText.textContent = 'Inflating replay...';
+                        worker.postMessage({type:'end'});
+                        return;
+                    }
+                    const node = nodes[chunkIdx];
+                    worker.postMessage({
+                        type:'chunk',
+                        data:node.textContent,
+                        index:chunkIdx,
+                        total:nodes.length,
+                    });
+                    node.textContent = '';
+                    chunkIdx += 1;
+                }
+
+                worker.onmessage = event => {
+                    const message = event.data;
+                    if (message.type === 'progress') {
+                        loadText.textContent = 'Reading replay ' + message.done + ' / ' + message.total;
+                        setTimeout(sendNext, 0);
+                        return;
+                    }
+                    if (message.type === 'done') {
+                        closeWorker();
+                        for (const node of nodes) node.remove();
+                        resolve(message.buffer);
+                        return;
+                    }
+                    if (message.type === 'error') {
+                        closeWorker();
+                        reject(new Error(message.message));
+                    }
+                };
+                worker.onerror = event => {
+                    closeWorker();
+                    reject(new Error(event.message || 'Replay worker failed'));
+                };
+                sendNext();
+            });
+        }
         async function initReplay() {
-            const binary = atob(B64_PAYLOAD), bytes = new Uint8Array(binary.length);
-            for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
-            const ds = new DecompressionStream('deflate');
-            const buf = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+            const buf = await decodeReplayPayload();
             const view = new DataView(buf), headerLen = view.getUint32(0, true);
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
@@ -1495,8 +1576,13 @@ def _render_interactive_replay_payload(compressed_payload, filename):
 </body>
 </html>
     """
+    payload_chunks = "\n".join(
+        f'    <script type="application/octet-stream" class="payload-chunk">'
+        f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
+        for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
+    )
     final_html = (
-        html_template.replace("__B64_PAYLOAD__", payload)
+        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
         .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
         .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
     )

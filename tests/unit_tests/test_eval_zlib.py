@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+import yaml
 
 import pufferlib
 from pufferlib import pufferl
@@ -33,6 +34,42 @@ def test_benchmark_rejects_agent_capacity_below_suite_maximum():
 
     with pytest.raises(pufferlib.APIUsageError, match="eval.num_agents.*max_agents_per_env"):
         pufferlib.benchmark.build_suite_args(args, suite, {})
+
+
+def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
+    map_dir = tmp_path / "maps"
+    map_dir.mkdir()
+    (map_dir / "map.bin").write_bytes(b"")
+    catalog_path = tmp_path / "catalog.yaml"
+    catalog_path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "Optional benchmark metadata",
+                "benchmarks": [
+                    {
+                        "name": "carla_test",
+                        "mode": "gigaflow",
+                        "num_scenarios": 1,
+                        "num_maps": 1,
+                        "scenario_length": 100,
+                        "control_mode": "control_vehicles",
+                        "paths": {"local": str(map_dir)},
+                        "notes": "Optional suite metadata",
+                    }
+                ],
+            }
+        )
+    )
+
+    suites = pufferlib.benchmark.load_catalog(catalog_path, ["carla_test", "carla_test"])
+
+    assert [suite["name"] for suite in suites] == ["carla_test"]
+
+
+def test_failure_metric_selection_deduplicates_names():
+    failure_metrics = pufferlib.benchmark.parse_failure_metric_columns("collision_rate,collision_rate")
+
+    assert failure_metrics == ("collision_rate",)
 
 
 class _ZeroPolicy:

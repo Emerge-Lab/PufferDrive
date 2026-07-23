@@ -29,6 +29,17 @@ def _require_mapping(value, label):
     return value
 
 
+def _load_yaml_mapping(path, label):
+    if not isinstance(path, (str, os.PathLike)) or not os.path.isfile(path):
+        raise pufferlib.APIUsageError(f"{label.capitalize()} not found: {path}")
+    try:
+        with open(path, "r") as yaml_file:
+            value = yaml.safe_load(yaml_file)
+    except yaml.YAMLError as exc:
+        raise pufferlib.APIUsageError(f"{label.capitalize()} is invalid YAML: {path}") from exc
+    return _require_mapping(value, label)
+
+
 def _positive_int(value, label):
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise pufferlib.APIUsageError(f"{label} must be a positive integer")
@@ -43,20 +54,7 @@ def _seed(value, label):
 
 def load_catalog(catalog_path, selected_names):
     """Load benchmark suites and apply one deterministic catalog seed."""
-    if not isinstance(catalog_path, (str, os.PathLike)) or not os.path.isfile(catalog_path):
-        raise pufferlib.APIUsageError(f"Benchmark catalog not found: {catalog_path}")
-    try:
-        with open(catalog_path, "r") as catalog_file:
-            catalog = yaml.safe_load(catalog_file)
-    except yaml.YAMLError as exc:
-        raise pufferlib.APIUsageError(f"Benchmark catalog is invalid YAML: {catalog_path}") from exc
-
-    catalog = _require_mapping(catalog, "benchmark catalog")
-    unknown_catalog_keys = set(catalog) - {"seed", "benchmarks"}
-    if unknown_catalog_keys:
-        raise pufferlib.APIUsageError(
-            f"Benchmark catalog has unsupported keys: {', '.join(sorted(unknown_catalog_keys))}"
-        )
+    catalog = _load_yaml_mapping(catalog_path, "benchmark catalog")
     catalog_seed = _seed(catalog.get("seed", 42), "benchmark catalog seed")
     suites = catalog.get("benchmarks")
     if not isinstance(suites, list) or not suites:
@@ -68,28 +66,11 @@ def load_catalog(catalog_path, selected_names):
         raise pufferlib.APIUsageError("At least one benchmark dataset must be selected")
     if any(not isinstance(name, str) or not name for name in selected_names):
         raise pufferlib.APIUsageError("Benchmark dataset names must be non-empty strings")
-    if len(selected_names) != len(set(selected_names)):
-        raise pufferlib.APIUsageError("Benchmark dataset selection contains duplicate names")
+    selected_names = list(dict.fromkeys(selected_names))
 
     catalog_suites = {}
-    suite_keys = {
-        "name",
-        "mode",
-        "seed",
-        "num_scenarios",
-        "num_maps",
-        "max_agents_per_env",
-        "scenario_length",
-        "control_mode",
-        "paths",
-    }
     for suite_idx, suite in enumerate(suites):
         suite = _require_mapping(suite, f"benchmarks[{suite_idx}]")
-        unknown_suite_keys = set(suite) - suite_keys
-        if unknown_suite_keys:
-            raise pufferlib.APIUsageError(
-                f"benchmarks[{suite_idx}] has unsupported keys: {', '.join(sorted(unknown_suite_keys))}"
-            )
         name = suite.get("name")
         if not isinstance(name, str) or not name.strip():
             raise pufferlib.APIUsageError(f"benchmarks[{suite_idx}].name must be a non-empty string")
@@ -158,20 +139,7 @@ def load_catalog(catalog_path, selected_names):
 
 def load_evaluation_config(config_path):
     """Load the environment overrides shared by every benchmark suite."""
-    if not isinstance(config_path, (str, os.PathLike)) or not os.path.isfile(config_path):
-        raise pufferlib.APIUsageError(f"Benchmark evaluation config not found: {config_path}")
-    try:
-        with open(config_path, "r") as config_file:
-            config = yaml.safe_load(config_file)
-    except yaml.YAMLError as exc:
-        raise pufferlib.APIUsageError(f"Benchmark evaluation config is invalid YAML: {config_path}") from exc
-
-    config = _require_mapping(config, "benchmark evaluation config")
-    unknown_sections = set(config) - {"env"}
-    if unknown_sections:
-        raise pufferlib.APIUsageError(
-            f"Benchmark evaluation config has unsupported sections: {', '.join(sorted(unknown_sections))}"
-        )
+    config = _load_yaml_mapping(config_path, "benchmark evaluation config")
     env_config = _require_mapping(config.get("env"), "benchmark evaluation config env")
     unknown_env_keys = set(env_config) - _drive_env_keys()
     if unknown_env_keys:
@@ -187,14 +155,7 @@ def load_checkpoint_architecture(args):
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
     config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
-    if not os.path.isfile(config_path):
-        raise pufferlib.APIUsageError(f"Benchmark checkpoint config not found: {config_path}")
-    try:
-        with open(config_path, "r") as config_file:
-            checkpoint_config = yaml.safe_load(config_file)
-    except yaml.YAMLError as exc:
-        raise pufferlib.APIUsageError(f"Checkpoint config is invalid YAML: {config_path}") from exc
-    checkpoint_config = _require_mapping(checkpoint_config, "checkpoint config")
+    checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
 
     merged = copy.deepcopy(args)
     for section in ("policy", "rnn"):
@@ -253,19 +214,18 @@ def parse_failure_metric_columns(configured_failure_metrics):
     else:
         raise pufferlib.APIUsageError("eval.failure_metrics must be a comma-separated string or list")
 
-    if not failure_metric_columns:
-        raise pufferlib.APIUsageError("eval.failure_metrics must select at least one failure metric")
-    if any(not isinstance(column, str) or not column for column in failure_metric_columns):
-        raise pufferlib.APIUsageError("eval.failure_metrics entries must be non-empty strings")
-    if len(failure_metric_columns) != len(set(failure_metric_columns)):
-        raise pufferlib.APIUsageError("eval.failure_metrics contains duplicate metric names")
+    if not failure_metric_columns or any(
+        not isinstance(column, str) or not column for column in failure_metric_columns
+    ):
+        raise pufferlib.APIUsageError("eval.failure_metrics must contain non-empty metric names")
+    failure_metric_columns = tuple(dict.fromkeys(failure_metric_columns))
     unknown_columns = set(failure_metric_columns) - set(FAILURE_METRIC_COLUMNS)
     if unknown_columns:
         raise pufferlib.APIUsageError(
             "eval.failure_metrics contains unsupported metrics: "
             f"{', '.join(sorted(unknown_columns))}. Supported metrics: {', '.join(FAILURE_METRIC_COLUMNS)}"
         )
-    return tuple(failure_metric_columns)
+    return failure_metric_columns
 
 
 def select_failure_rows(metrics_path, configured_failure_metrics=None):
