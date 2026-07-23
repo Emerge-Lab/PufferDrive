@@ -32,6 +32,7 @@ ENV_NAME = "puffer_drive"
 
 config = load_notebook_config(CHECKPOINT_PATH, ENV_NAME)
 config["env"]["num_agents"] = 64
+config["env"]["max_agents_per_env"] = 64
 config["env"]["num_maps"] = 8
 config["env"]["eval_mode"] = 1
 config["env"]["map_dir"] = MAP_DIR

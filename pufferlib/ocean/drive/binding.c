@@ -1636,11 +1636,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_GIGAFLOW) {
         if (eval_mode) {
-            // Every eval env gets a full agents_per_env budget (no leftover
-            // remainder env), so an episode's agent count is fixed by (map, seed)
-            // and does not change with the worker layout.
+            // Eval mode: fixed agent count, sequential map cycling
             int agents_per_env = max_agents_per_env;
-            int env_count = num_agents / agents_per_env;
+            int env_count = (num_agents + agents_per_env - 1) / agents_per_env;
             env_count = env_count > eval_target_count ? eval_target_count : env_count;
 
             PyObject *agent_offsets = PyList_New(env_count + 1);
@@ -1652,7 +1650,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                                                   : (s_map_counter + i) % num_maps;
                 PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
                 PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
-                offset += agents_per_env;
+                int remaining = num_agents - offset;
+                offset += (remaining < agents_per_env) ? remaining : agents_per_env;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
