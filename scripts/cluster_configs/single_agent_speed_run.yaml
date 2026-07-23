@@ -95,6 +95,7 @@ policy.backbone_num_layers: 3
 policy.critic_hidden_size: 256
 policy.critic_num_layers: 1
 policy.shared_network: false
+policy.action_type: discrete
 
 # Traffic lights fully off: not observed, not scored, no reward penalty.
 env.traffic_light_behavior: 0

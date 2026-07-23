@@ -88,6 +88,8 @@ class WOSACEvaluator:
             "id": np.zeros((num_agents, self.num_rollouts, self.sim_steps), dtype=np.int32),
         }
 
+        env_continuous = isinstance(puffer_env.single_action_space, pufferlib.spaces.Box)       
+
         for rollout_idx in range(self.num_rollouts):
             print(f"\rCollecting rollout {rollout_idx + 1}/{self.num_rollouts}...", end="", flush=True)
             obs, info = puffer_env.reset()
@@ -98,6 +100,7 @@ class WOSACEvaluator:
                     lstm_c=torch.zeros(num_agents, policy.hidden_size, device=device),
                 )
 
+            # TODO find out how to test this code path
             for time_idx in range(self.sim_steps):
                 # Get global state
                 agent_state = driver.get_global_agent_state()
@@ -111,13 +114,19 @@ class WOSACEvaluator:
                 with torch.no_grad():
                     ob_tensor = torch.as_tensor(obs).to(device)
                     logits, value = policy.forward_eval(ob_tensor, state)
-                    action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                    action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(logits, env_continuous=env_continuous, policy=policy)
                     action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
                 if isinstance(logits, torch.distributions.Normal):
                     action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                obs, _, _, _, _ = puffer_env.step(action_np)
+
+                if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                    cont_action = cont_action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                    obs, _, _, _, _ = puffer_env.step(cont_action)
+                else:
+                    obs, _, _, _, _ = puffer_env.step(action_np)
+                
 
         return trajectories
 
@@ -659,6 +668,7 @@ class HumanReplayEvaluator:
         total_steps = (scenario_length - init_steps + 1) * num_maps
 
         obs, info = puffer_env.reset()
+        env_continuous = isinstance(puffer_env.single_action_space, pufferlib.spaces.Box)    
         state = {}
         if args["train"]["use_rnn"]:
             state = dict(
@@ -671,13 +681,19 @@ class HumanReplayEvaluator:
             with torch.no_grad():
                 ob_tensor = torch.as_tensor(obs).to(device)
                 logits, value = policy.forward_eval(ob_tensor, state)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(logits, env_continuous=env_continuous, policy=policy)
                 action_np = action.cpu().numpy().reshape(puffer_env.action_space.shape)
 
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-            obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+            
+            if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                cont_action = cont_action.cpu().numpy().reshape(puffer_env.action_space.shape)
+                obs, rewards, dones, truncs, info_list = puffer_env.step(cont_action)
+            else:
+                obs, rewards, dones, truncs, info_list = puffer_env.step(action_np)
+
             if info_list:
                 all_infos.extend(info_list)
             # Stop once we've collected at least one info per bin to avoid

@@ -195,6 +195,7 @@ policy:
   critic_num_layers: 0
   # Dual or shared actor-critic backbone
   shared_network: true
+  action_type: discrete
 rnn:
   input_size: 512
   hidden_size: 512
@@ -332,6 +333,10 @@ eval:
       obs_dropout_boundary: 0.0
       obs_slots_lane_n: 80
       obs_slots_boundary_n: 80
+    # Policy action selection during eval: sample | mode | mean.
+    # mode = argmax; mean = probability-weighted continuous action
+    # (mean requires a discrete policy on a continuous env).
+    action_selection: mode
     eval:
       num_scenarios: 250
       export_episode_csv: 'true'
@@ -373,6 +378,38 @@ eval:
       num_scenarios: 32
       render_num_scenarios: 16
       render_max_steps: 300
+      
+      
+  # ---------------------------------------------------------------------------
+  # Driving-behaviour evaluation: nuPlan scenes labeled by scene type. Each
+  # behavior is one [eval.behaviors_*] section. All inherit from the template
+  # below — change shared knobs in one place.
+  # ---------------------------------------------------------------------------
+  #behaviors_defaults:
+  #  enabled: 'false'
+  #  interval: 250
+  #  mode: inline
+  #  clean: 'true'
+  #  render: 'true'
+  #  render_views: [sim_state, bev]
+  #  env:
+  #    simulation_mode: replay
+  #    control_mode: control_sdc_only
+  #    init_mode: create_all_valid
+  #    scenario_length: 201
+  #    obs_slots_partners_n: 32
+    # Policy action selection during eval: sample | mode | mean.
+  #  action_selection: mode
+  #  eval:
+  #    num_scenarios: 50
+  #    render_num_scenarios: 2
+  #    render_max_steps: 200
+  # behaviors_full_dir:
+  #  inherits: behaviors_defaults
+  #  type: behavior_class
+  #  enabled: 'true'
+  #  env:
+  #    map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
 
   # ---------------------------------------------------------------------------
   # Optional: WOSAC realism eval. Off by default.
@@ -389,6 +426,8 @@ eval:
       init_mode: create_all_valid
       init_step: 10
       goal_radius: 2.0
+    # Policy action selection during eval: sample | mode | mean.
+    action_selection: mode
     eval:
       wosac_num_rollouts: 32
       wosac_num_agents: 256

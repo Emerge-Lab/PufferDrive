@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name train_puffer
-#SBATCH --nodes 16                        # Number of nodes requested
+#SBATCH --nodes 2                        # Number of nodes requested
 #SBATCH --ntasks-per-node 1              # Run 1 srun task per node (which fires up torchrun)
 #SBATCH --gres gpu:8                     # GPUs per node
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 2-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0003/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0003/log_%a_%A.err
+#SBATCH --output /home/bjaeger/nightly_PufferDrive/experiments/k_nightly_0006/log_%a_%A.out
+#SBATCH --error /home/bjaeger/nightly_PufferDrive/experiments/k_nightly_0006/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
@@ -20,7 +20,7 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export RUN_NAME=k_nightly_0003
+export RUN_NAME=k_nightly_0006
 echo ${RUN_NAME}
 
 # Thread limit limits CPU thrashing across worker environments
