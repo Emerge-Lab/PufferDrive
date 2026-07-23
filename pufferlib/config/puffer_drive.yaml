@@ -47,7 +47,7 @@ env:
   min_agents_per_env: 1
   max_agents_per_env: 80
   # Actions type - options: "discrete", "continuous"
-  action_type: discrete
+  action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
