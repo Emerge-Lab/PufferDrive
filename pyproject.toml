@@ -226,6 +226,13 @@ cleanrl = [
     'tyro==0.8.6',
 ]
 
+test = [
+    'pytest',
+    'jupytext',
+    'nbclient',
+    'ipykernel',
+]
+
 [project.scripts]
 puffer = "pufferlib.pufferl:main"
 
