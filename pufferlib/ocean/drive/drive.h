@@ -2927,7 +2927,7 @@ static void generate_traffic_light_states(Drive *env) {
     float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (random_uniform(env, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (!env->eval_mode) && (random_uniform(env, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -2947,26 +2947,34 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        // Individual removal
-        if (random_uniform(env, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
-            for (int t = 0; t < fill_steps; t++) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
+        if (!env->eval_mode) {
+            // Individual removal
+            if (random_uniform(env, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+                for (int t = 0; t < fill_steps; t++) {
+                    tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
+                }
+                continue;
             }
-            continue;
-        }
-        // Always green
-        if (random_uniform(env, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
-            for (int t = 0; t < fill_steps; t++) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
+            // Always green
+            if (random_uniform(env, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+                for (int t = 0; t < fill_steps; t++) {
+                    tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
+                }
+                continue;
             }
-            continue;
         }
 
         // Compute phase durations
         float dur_green, dur_yellow, dur_red;
-        dur_green = random_uniform(env, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-        dur_yellow = random_uniform(env, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
-        dur_red = random_uniform(env, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+        if (env->eval_mode) {
+            dur_green = TL_DEFAULT_GREEN_DURATION;
+            dur_yellow = TL_DEFAULT_YELLOW_DURATION;
+            dur_red = TL_DEFAULT_RED_DURATION;
+        } else {
+            dur_green = random_uniform(env, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+            dur_yellow = random_uniform(env, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
+            dur_red = random_uniform(env, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+        }
 
         int steps_green = (int) (dur_green / dt);
         if (steps_green < 1) {
@@ -3084,8 +3092,15 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // width: [0.8, 3.0] m
     // width = min(width, length)
     float spawn_length, spawn_width;
-    spawn_length = random_uniform(env, 0.8f, 7.0f);
-    spawn_width = random_uniform(env, 0.8f, 2.7f);
+    if (env->eval_mode) {
+        // Fixed size range for eval mode
+        spawn_length = random_uniform(env, 2.0f, 5.5f);
+        spawn_width = random_uniform(env, 1.5f, 2.5f);
+    } else {
+        // Random size range for training mode
+        spawn_length = random_uniform(env, 0.8f, 7.0f);
+        spawn_width = random_uniform(env, 0.8f, 2.7f);
+    }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
     }
@@ -4269,12 +4284,12 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
-    if (agent->current_goal_idx < env->num_goals && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
+    if (agent->current_goal_idx < agent->goal_count && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
         && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
-        if (agent->current_goal_idx < env->num_goals) {
+        if (agent->current_goal_idx < agent->goal_count) {
             agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
             agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
             agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
@@ -4672,6 +4687,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float seg_dir_y = (seg_half_len > 0) ? seg_dy / seg_half_len : seg_dy;
         float rel_seg_dir_x, rel_seg_dir_y;
         project_vector_to_ego_frame(ego, seg_dir_x, seg_dir_y, &rel_seg_dir_x, &rel_seg_dir_y);
+        // TODO FIXME: Restore boundary-direction canonicalization after validating observation compatibility.
         // if (is_edge && seg_half_len > 0) {
         //     float angle = atan2f(rel_seg_dir_y, rel_seg_dir_x);
         //     if (angle > (float) M_PI / 2.0f) {

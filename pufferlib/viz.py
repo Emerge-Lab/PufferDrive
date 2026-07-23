@@ -1618,14 +1618,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
     `file_metrics` is None or empty, behaves as before (filename-order
     dropdown, no sort UI).
     """
-    if file_metrics:
-        files = [
-            filename
-            for filename in file_metrics
-            if filename.endswith(".html") and os.path.isfile(os.path.join(folder_path, filename))
-        ]
-    else:
-        files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
+    files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
     if not files:
         print("No matching .html files found in this directory.")
