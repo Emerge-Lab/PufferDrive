@@ -135,7 +135,7 @@ class PuffeRL:
             action_shape = (len(unwrapped_policy.atn_dim),)
             action_dtype = torch.int32
         else:
-            action_shape = vecenv.single_action_space
+            action_shape = vecenv.single_action_space.shape
             action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
