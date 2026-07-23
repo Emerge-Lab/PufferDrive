@@ -6,15 +6,15 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0001/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0001/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0005/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0005/log_%a_%A.err
 #SBATCH --partition dev
 
 # print info about current job
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_nightly_0001
+export RUN_NAME=k_nightly_0005
 echo ${RUN_NAME}
 
 # TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
@@ -40,7 +40,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.num_agents=4096 \
+    eval.validation_gigaflow.render_backend=obs_html \
     tb=True
 
 
