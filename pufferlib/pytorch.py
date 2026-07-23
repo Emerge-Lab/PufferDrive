@@ -21,8 +21,8 @@ numpy_to_torch_dtype_dict = {
 }
 
 ACTION_SELECT_SAMPLE = "sample"
-ACTION_SELECT_MODE   = "mode"    # argmax
-ACTION_SELECT_MEAN   = "mean"    # probability-weighted continuous mean
+ACTION_SELECT_MODE = "mode"  # argmax
+ACTION_SELECT_MEAN = "mean"  # probability-weighted continuous mean
 
 LITTLE_BYTE_ORDER = sys.byteorder == "little"
 
@@ -190,7 +190,9 @@ def entropy_probs(logits, probs):
     return -p_log_p.sum(-1)
 
 
-def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None): # TODO discrete continuous
+def sample_logits(
+    logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None
+):  # TODO discrete continuous
     is_discrete = isinstance(logits, torch.Tensor)
     if action_selection == ACTION_SELECT_MEAN and not (env_continuous and not policy.is_continuous):
         raise ValueError("action_selection='mean' requires a discrete policy on a continuous env")
@@ -234,7 +236,7 @@ def sample_logits(logits, action=None, action_selection=ACTION_SELECT_SAMPLE, en
     if env_continuous and not policy.is_continuous:
         if action_selection == ACTION_SELECT_MEAN:
             cont_actions = policy.discrete_probs_to_continuous_mean(probs)
-        else: # Mode and sample we already have an action from the code above.
+        else:  # Mode and sample we already have an action from the code above.
             cont_actions = policy.discrete_actions_to_continuous(action)
         if is_discrete:
             return action.squeeze(0), logprob.squeeze(0), logits_entropy.squeeze(0), cont_actions.squeeze(0)

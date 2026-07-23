@@ -1,6 +1,6 @@
 puffer train puffer_drive --vec.num-workers 1 --vec.num-envs 1 --env.num-agents 32  --train.minibatch-size 256
 
-puffer train puffer_drive --train.learning_rate 0.001 
+puffer train puffer_drive --train.learning_rate 0.001
 
 .venv/bin/puffer train puffer_drive --wandb --vec.num-envs 16 --train.precision bfloat16 --train.compile 1
 

@@ -79,7 +79,9 @@ with torch.no_grad():
 
 # Sample actions
 action, logprob, ent, cont_action = sample_logits(logits_list, env_continuous=env_continuous, policy=policy)
-action_det, _, _, _ = sample_logits(logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy)
+action_det, _, _, _ = sample_logits(
+    logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy
+)
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
 print(f"Entropy: mean={ent.mean():.4f}, std={ent.std():.4f}")

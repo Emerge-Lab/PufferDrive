@@ -333,12 +333,32 @@ class Drive(nn.Module):
         action_type: str,
     ):
         super().__init__()
-        
-        self.register_buffer("JERK_LONG", torch.tensor((-15.0, -4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False), persistent=False)
-        self.register_buffer("JERK_LAT", torch.tensor((-4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False), persistent=False)
 
-        self.register_buffer("ACCELERATION_VALUES", torch.tensor((-4.0000, -2.6670, -1.3330, -0.0000, 1.3330, 2.6670, 4.0000), dtype=torch.float32, requires_grad=False), persistent=False)
-        self.register_buffer("STEERING_VALUES", torch.tensor((-0.667, -0.500, -0.333, -0.167, 0.000, 0.167, 0.333, 0.500, 0.667), dtype=torch.float32, requires_grad=False), persistent=False)
+        self.register_buffer(
+            "JERK_LONG",
+            torch.tensor((-15.0, -4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False),
+            persistent=False,
+        )
+        self.register_buffer(
+            "JERK_LAT", torch.tensor((-4.0, 0.0, 4.0), dtype=torch.float32, requires_grad=False), persistent=False
+        )
+
+        self.register_buffer(
+            "ACCELERATION_VALUES",
+            torch.tensor(
+                (-4.0000, -2.6670, -1.3330, -0.0000, 1.3330, 2.6670, 4.0000), dtype=torch.float32, requires_grad=False
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "STEERING_VALUES",
+            torch.tensor(
+                (-0.667, -0.500, -0.333, -0.167, 0.000, 0.167, 0.333, 0.500, 0.667),
+                dtype=torch.float32,
+                requires_grad=False,
+            ),
+            persistent=False,
+        )
 
         if env.dynamics_model == "jerk":
             action_long, action_lat = self.JERK_LONG, self.JERK_LAT
@@ -402,7 +422,9 @@ class Drive(nn.Module):
             self.critic_backbone = DriveBackbone(**backbone_args)
 
         # Setup action and value heads
-        self.is_continuous = action_type == "continuous" # TODO Check if what the `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk" features do and if they are considered continuous.
+        self.is_continuous = (
+            action_type == "continuous"
+        )  # TODO Check if what the `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk" features do and if they are considered continuous.
         if self.is_continuous:
             self.atn_dim = (env.single_action_space.shape[0],) * 2
         else:
@@ -489,7 +511,7 @@ class Drive(nn.Module):
         value = self.critic_head(hidden)
 
         return action, value
-    
+
     def discrete_actions_to_continuous(self, actions):
         return self.action_table[actions.long()]
 

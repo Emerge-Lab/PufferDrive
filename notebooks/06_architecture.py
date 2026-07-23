@@ -521,7 +521,7 @@ POLICY_DEFAULTS = {
     "backbone_layer_norm": False,
     "shared_network": True,
     "mask_padded_features": False,
-    "action_type": "discrete"
+    "action_type": "discrete",
 }
 
 results = []

@@ -84,8 +84,7 @@ class Evaluator:
         )
         if self.action_selection not in valid_action_selections:
             raise ValueError(
-                f"[eval.{name}].action_selection='{self.action_selection}' "
-                f"must be one of {valid_action_selections}"
+                f"[eval.{name}].action_selection='{self.action_selection}' must be one of {valid_action_selections}"
             )
 
     # -- Config hooks ---------------------------------------------------
@@ -172,9 +171,11 @@ class Evaluator:
             with torch.no_grad():
                 ob_t = torch.as_tensor(obs).to(device)
                 logits, _ = policy.forward_eval(ob_t, state)
-                action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
+                )
 
-            if env_continuous and not policy.is_continuous: # TODO check with trajectory
+            if env_continuous and not policy.is_continuous:  # TODO check with trajectory
                 cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                 obs, _, terminals, truncations, infos = vecenv.step(cont_action)
             else:
@@ -540,9 +541,11 @@ class Evaluator:
                 with torch.no_grad():
                     ob_t = torch.as_tensor(ob).to(device)
                     logits, _ = policy.forward_eval(ob_t, state)
-                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
+                    action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                        logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
+                    )
 
-                if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                if env_continuous and not policy.is_continuous:  # TODO check with trajectory
                     cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                     ob, _, terminals, truncations, infos = vec.step(cont_action)
                 else:
@@ -705,7 +708,9 @@ class Evaluator:
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, value = policy.forward_eval(ob_t, state)
                         pool_outputs = pool_method(ob_t, state) if pool_method is not None else {}
-                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
+                        action, logprob, entropy, cont_action = pufferlib.pytorch.sample_logits(
+                            logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
+                        )
                     pool_outputs = {k: v.cpu().numpy().astype(np.int16, copy=False) for k, v in pool_outputs.items()}
                     if pool_hist is None and pool_outputs:
                         pool_hist = {
@@ -716,7 +721,7 @@ class Evaluator:
                             for k, values in pool_outputs.items()
                         }
 
-                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                    if env_continuous and not policy.is_continuous:  # TODO check with trajectory
                         raw_action = cont_action.cpu().numpy().reshape(vec.action_space.shape)
                         clipped_action = raw_action
                         ob, _, _, _, step_infos = vec.step(clipped_action)
@@ -726,7 +731,7 @@ class Evaluator:
                         if isinstance(logits, torch.distributions.Normal):
                             clipped_action = np.clip(raw_action, vec.action_space.low, vec.action_space.high)
                         ob, _, _, _, step_infos = vec.step(clipped_action)
-                    
+
                     if isinstance(logits, torch.distributions.Normal):
                         policy_outputs = {
                             "mean": logits.loc.cpu().numpy().reshape(vec.action_space.shape),
@@ -785,7 +790,7 @@ class Evaluator:
                                 np.asarray(policy_outputs[start_obs_index:end_obs_index], dtype=np.float32).copy()
                             )
                         start_obs_index = end_obs_index
-                    
+
                     for d in self._flatten_infos(step_infos):
                         if isinstance(d, dict) and d.get("summary_type") == "completed_episode":
                             batch_summary = d
@@ -894,9 +899,11 @@ class Evaluator:
                     with torch.no_grad():
                         ob_t = torch.as_tensor(ob).to(device)
                         logits, _ = policy.forward_eval(ob_t, state)
-                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy)
+                        action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                            logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
+                        )
 
-                    if env_continuous and not policy.is_continuous: # TODO check with trajectory
+                    if env_continuous and not policy.is_continuous:  # TODO check with trajectory
                         cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                         ob, _, _, _, _ = vecenv.step(cont_action)
                     else:

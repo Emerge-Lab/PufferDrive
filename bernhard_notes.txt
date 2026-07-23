@@ -2,7 +2,7 @@ git merge origin/3.0
 git push origin bernhard
 
 
-# Not in valentins config but in my config. 
+# Not in valentins config but in my config.
 # non_sdc_controller: policy
 # non_vehicle_controller: auto
 # sdc_controller: policy
@@ -48,11 +48,11 @@ SPS                                                                        341.4
     metrics = self._run_rollout_loop(vecenv, policy, args)
   File "/lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-name003_longrun_total-timesteps300000000000_num-envs24_max-waypoint-spacing40.0_num-agents2048_obs-norm-ve_067a078/code_v1/pufferlib/ocean/benchmark/evaluators/base.py", line 156, in _run_rollout_loop
     logits, _ = policy.forward_eval(ob_t, state)
-    
-    
-    
-    
-    
+
+
+
+
+
     slide_idx 687
 traffic_control_dim 28
 self.obs_valid_count_features 4
@@ -114,7 +114,7 @@ lauch.json:
                 "--vec.num-envs", "16",
                 "--env.num-agents", "1024",
                 "--train.minibatch-size", "131072",
-                "--train.max-minibatch-size", "131072", 
+                "--train.max-minibatch-size", "131072",
             ],
             "console"="integratedTerminal",
             "justMyCode"=false
