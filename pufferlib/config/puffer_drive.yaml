@@ -262,11 +262,15 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and failure replay settings.
 eval:
-  num_agents: 512
+  num_agents: 256
   catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
   evaluation_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
   datasets: null
   render_failures: false
+  # Maximum failures rendered per suite; null renders every failure.
+  render_failures_number: null
+  # Existing episode metrics CSV to replay without running the benchmark first.
+  replay_failures_csv: null
   render_obs: false
   failure_metrics: collision_rate,at_fault_collision_rate,offroad_rate,red_light_violation_rate
   observation_replay_wave_size: 16

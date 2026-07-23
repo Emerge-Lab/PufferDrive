@@ -1857,9 +1857,11 @@ class _EvalReplayCapture:
         self.agents_per_worker = agents_per_batch // num_workers
         self.capture_batch_steps = capture_batch_steps
         self.replay_episode_offset = replay_episode_offset
-        self.pool_method = getattr(policy, "pool_slot_counts", None)
-        if self.pool_method is None and getattr(policy, "policy", None) is not None:
-            self.pool_method = getattr(policy.policy, "pool_slot_counts", None)
+        self.pool_method = None
+        if self.capture_observations:
+            self.pool_method = getattr(policy, "pool_slot_counts", None)
+            if self.pool_method is None and getattr(policy, "policy", None) is not None:
+                self.pool_method = getattr(policy.policy, "pool_slot_counts", None)
         self.history = {}
         self.history_frame_count = 0
         self.pending_replays = []
@@ -1875,34 +1877,21 @@ class _EvalReplayCapture:
         replay_frame = {
             "raw_action": np.asarray(raw_action, dtype=np.float32),
             "clipped_action": np.asarray(action, dtype=np.float32),
-            "value": value[: self.agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=False),
-            "entropy": entropy[: self.agents_per_batch]
-            .detach()
-            .reshape(-1)
-            .cpu()
-            .numpy()
-            .astype(np.float32, copy=False),
+            "value": value[: self.agents_per_batch].detach().reshape(-1).float().cpu().numpy(),
+            "entropy": entropy[: self.agents_per_batch].detach().reshape(-1).float().cpu().numpy(),
         }
         if self.capture_observations:
             replay_frame["obs"] = np.asarray(obs, dtype=np.float16)
         if isinstance(logits, torch.distributions.Normal):
-            replay_frame["policy_mean"] = (
-                logits.loc[: self.agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=False)
-            )
-            replay_frame["policy_std"] = (
-                logits.scale[: self.agents_per_batch].detach().cpu().numpy().astype(np.float32, copy=False)
-            )
+            replay_frame["policy_mean"] = logits.loc[: self.agents_per_batch].detach().float().cpu().numpy()
+            replay_frame["policy_std"] = logits.scale[: self.agents_per_batch].detach().float().cpu().numpy()
             replay_frame["policy_log_prob"] = (
-                logprob[: self.agents_per_batch].detach().reshape(-1).cpu().numpy().astype(np.float32, copy=False)
+                logprob[: self.agents_per_batch].detach().reshape(-1).float().cpu().numpy()
             )
         else:
             discrete_logits = logits if isinstance(logits, torch.Tensor) else logits[0]
             replay_frame["policy_probs"] = (
-                torch.softmax(discrete_logits[: self.agents_per_batch], dim=-1)
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32, copy=False)
+                torch.softmax(discrete_logits[: self.agents_per_batch], dim=-1).detach().float().cpu().numpy()
             )
         if self.pool_method is not None:
             for pool_name, pool_values in self.pool_method(policy_obs_tensor).items():
@@ -2024,7 +2013,24 @@ def _run_eval_rollout(
         torch.manual_seed(rollout_seed)
         policy = policy or load_policy(args, vecenv, env_name)
         policy.eval()
+        policy_forward_eval = policy.forward_eval
+        eval_sample_logits = pufferlib.pytorch.sample_logits
+        if args["train"].get("compile", False):
+            compile_kwargs = {
+                "mode": args["train"].get("compile_mode", "default"),
+                "fullgraph": args["train"].get("compile_fullgraph", False),
+            }
+            policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
+            eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
         device = torch_device(args["train"]["device"])
+        use_bfloat16 = (
+            args["train"].get("amp", True)
+            and args["train"].get("precision", "float32") == "bfloat16"
+            and is_cuda_device(device)
+        )
+        if use_bfloat16 and not torch.cuda.is_bf16_supported():
+            raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+        eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
         padding_agent_count = policy_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
@@ -2052,14 +2058,14 @@ def _run_eval_rollout(
         episode_summaries = []
         scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
         for _ in range(total_steps):
-            with torch.no_grad():
+            with torch.no_grad(), eval_amp_context:
                 environment_obs_tensor = torch.as_tensor(obs, device=device)
                 if padding_agent_count:
                     policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
                 else:
                     policy_obs_tensor = environment_obs_tensor
-                logits, value = policy.forward_eval(policy_obs_tensor)
-                action, logprob, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                logits, value = policy_forward_eval(policy_obs_tensor)
+                action, logprob, entropy = eval_sample_logits(logits, deterministic=True)
                 raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                 action = raw_action
             if isinstance(logits, torch.distributions.Normal):
@@ -2111,6 +2117,7 @@ def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_di
     eval_args = copy.deepcopy(args)
     eval_args["eval"]["datasets"] = eval_args["eval"]["training_datasets"]
     eval_args["eval"]["render_failures"] = False
+    eval_args["eval"]["replay_failures_csv"] = None
     eval_output_dir = os.path.join(run_dir, "eval", "training")
     eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
 
@@ -2158,7 +2165,7 @@ def eval(
     eval_output_subdir=None,
     use_training_config=False,
 ):
-    """Run catalog-defined evaluation suites and optionally render failures."""
+    """Run catalog-defined evaluation suites or replay failures from an existing CSV."""
     args = args or load_config(env_name)
     eval_config = args.get("eval", {})
     catalog_path = eval_config.get("catalog")
@@ -2167,6 +2174,8 @@ def eval(
     if selected_datasets is None or not selected_datasets.strip():
         raise pufferlib.APIUsageError("eval.datasets is required; select one or more benchmark datasets")
     render_failures = bool(eval_config.get("render_failures"))
+    render_failures_number = eval_config.get("render_failures_number")
+    replay_failures_csv = eval_config.get("replay_failures_csv")
     if render_failures:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
@@ -2205,6 +2214,20 @@ def eval(
         suite_seed = int(suite["seed"])
         np.random.seed(suite_seed)
         torch.manual_seed(suite_seed)
+        if replay_failures_csv is not None:
+            summaries = _render_eval_failures(
+                env_name,
+                run_args,
+                suite,
+                replay_failures_csv,
+                suite_output_dir,
+                policy,
+                bool(eval_config.get("render_obs")),
+                render_failures_number,
+            )
+            all_suite_summaries[suite["name"]] = summaries
+            continue
+
         num_scenarios = int(suite["num_scenarios"])
         num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
         worker_env_kwargs, total_steps = _forward_worker_kwargs(
@@ -2235,6 +2258,7 @@ def eval(
                 suite_output_dir,
                 policy,
                 bool(eval_config.get("render_obs")),
+                render_failures_number,
             )
     return all_suite_summaries
 
@@ -2349,9 +2373,20 @@ def _selected_agents_per_batch(selected_rows):
     return int(values[0])
 
 
-def _render_eval_failures(env_name, run_args, suite, metrics_path, suite_output_dir, policy, render_obs):
+def _render_eval_failures(
+    env_name,
+    run_args,
+    suite,
+    metrics_path,
+    suite_output_dir,
+    policy,
+    render_obs,
+    render_failures_number,
+):
     configured_failure_metrics = run_args.get("eval", {}).get("failure_metrics")
     selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
+    if render_failures_number is not None:
+        selected_rows = selected_rows.head(render_failures_number).copy()
     failures_dir = os.path.join(suite_output_dir, "failures")
     os.makedirs(failures_dir, exist_ok=True)
     selected_path = os.path.join(failures_dir, "selected_failures.csv")

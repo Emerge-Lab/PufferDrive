@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import zlib
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -46,6 +47,15 @@ class _RecordingPolicy(_ZeroPolicy):
     def forward_eval(self, observations):
         self.observations = observations.clone()
         return super().forward_eval(observations)
+
+
+class _PoolRecordingPolicy(_ZeroPolicy):
+    def __init__(self):
+        self.pool_call_count = 0
+
+    def pool_slot_counts(self, observations):
+        self.pool_call_count += 1
+        return {"pool_lane": torch.zeros((observations.shape[0], 1), dtype=torch.int64)}
 
 
 class _EvaluationReplayVec:
@@ -139,6 +149,94 @@ def test_training_eval_keeps_training_observation_dropout(monkeypatch, tmp_path)
     assert captured_args["env"]["obs_dropout_boundary"] == 0.75
 
 
+def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path):
+    failure_csv_path = tmp_path / "existing_episode_metrics.csv"
+    suite = {
+        "name": "carla",
+        "seed": 42,
+        "mode": "gigaflow",
+        "map_dir": "maps",
+        "num_maps": 1,
+        "num_scenarios": 10,
+        "scenario_length": 100,
+        "max_agents_per_env": 16,
+        "control_mode": "control_vehicles",
+    }
+    args = {
+        "load_model_path": "model.pt",
+        "train": {"use_rnn": False},
+        "eval": {
+            "catalog": "catalog.yaml",
+            "evaluation_config": "evaluation.yaml",
+            "datasets": "carla",
+            "num_agents": 16,
+            "render_failures": False,
+            "render_failures_number": 2,
+            "replay_failures_csv": str(failure_csv_path),
+            "render_obs": False,
+        },
+    }
+    replay_call = {}
+
+    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [suite])
+    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(
+        pufferlib.benchmark,
+        "load_checkpoint_architecture",
+        lambda loaded_args: (loaded_args, "checkpoint_config.yaml"),
+    )
+    monkeypatch.setattr(
+        pufferlib.benchmark,
+        "build_suite_args",
+        lambda loaded_args, _suite, _evaluation_config: loaded_args,
+    )
+    monkeypatch.setattr(pufferl, "_write_resolved_benchmark_config", lambda *_: None)
+    monkeypatch.setattr(
+        pufferl,
+        "_forward_worker_kwargs",
+        lambda *_args: pytest.fail("standard benchmark worker setup should be skipped"),
+    )
+    monkeypatch.setattr(
+        pufferl,
+        "_run_eval_rollout",
+        lambda *_args, **_kwargs: pytest.fail("standard benchmark rollout should be skipped"),
+    )
+
+    def capture_failure_replay(
+        env_name,
+        _run_args,
+        selected_suite,
+        metrics_path,
+        _suite_output_dir,
+        _policy,
+        render_obs,
+        render_failures_number,
+    ):
+        replay_call.update(
+            {
+                "env_name": env_name,
+                "suite": selected_suite["name"],
+                "metrics_path": metrics_path,
+                "render_obs": render_obs,
+                "render_failures_number": render_failures_number,
+            }
+        )
+        return ["failure replay"]
+
+    monkeypatch.setattr(pufferl, "_render_eval_failures", capture_failure_replay)
+
+    summaries = pufferl.eval("puffer_drive", args=args, eval_output_dir=str(tmp_path / "output"))
+
+    assert summaries == {"carla": ["failure replay"]}
+    assert replay_call == {
+        "env_name": "puffer_drive",
+        "suite": "carla",
+        "metrics_path": str(failure_csv_path),
+        "render_obs": False,
+        "render_failures_number": 2,
+    }
+
+
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
     monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: _EvaluationReplayVec())
 
@@ -177,6 +275,34 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
     assert summaries[0]["has_replay"] == 1
     assert summaries[0]["replay_path"] == str(replay_path.resolve())
     assert "replay_environment_bundle" not in summaries[0]
+
+
+def test_eval_replay_capture_skips_pooling_without_observations(tmp_path):
+    policy = _PoolRecordingPolicy()
+    replay_capture = pufferl._EvalReplayCapture(
+        args={"env": {}},
+        policy=policy,
+        replay_output_dir=tmp_path,
+        capture_observations=False,
+        num_workers=1,
+        agents_per_batch=1,
+        capture_batch_steps=1,
+        replay_episode_offset=0,
+    )
+
+    replay_capture.capture_frame(
+        obs=np.zeros((1, 1), dtype=np.float32),
+        policy_obs_tensor=torch.zeros((1, 1)),
+        raw_action=np.zeros((1, 1), dtype=np.float32),
+        action=np.zeros((1, 1), dtype=np.float32),
+        logits=(torch.zeros((1, 1)),),
+        value=torch.zeros((1, 1)),
+        logprob=torch.zeros(1),
+        entropy=torch.zeros(1),
+    )
+
+    assert policy.pool_call_count == 0
+    assert "pool_lane" not in replay_capture.history
 
 
 def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypatch):
@@ -264,3 +390,63 @@ def test_render_eval_replays_writes_pages_with_navigation_and_index(monkeypatch,
     assert (tmp_path / "rendered_replays" / "index.html").read_text() == "index"
     assert render_calls[0][0] == str(replay_paths[0])
     assert render_calls[1][0] == str(replay_paths[1])
+
+
+def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_path):
+    selected_rows = pd.DataFrame(
+        {
+            "map_name": ["map_0", "map_1", "map_2"],
+            "seed": [100, 101, 102],
+            "agents_per_batch": [16, 16, 16],
+        }
+    )
+    replay_pairs = []
+
+    monkeypatch.setattr(pufferlib.benchmark, "select_failure_rows", lambda *_: selected_rows)
+    monkeypatch.setattr(pufferl, "_resolve_map_indices", lambda _map_dir, map_names: list(range(len(map_names))))
+
+    def capture_replay_pairs(_args, pairs, _num_workers, _scenario_length, capture_replay):
+        assert capture_replay
+        replay_pairs.extend(pairs)
+        return [{} for _ in pairs], 1
+
+    monkeypatch.setattr(pufferl, "_replay_worker_kwargs", capture_replay_pairs)
+
+    def fake_rollout(
+        _run_args,
+        _env_name,
+        _worker_env_kwargs,
+        _total_steps,
+        _description,
+        expected_episodes,
+        **_kwargs,
+    ):
+        return [{} for _ in range(expected_episodes)]
+
+    monkeypatch.setattr(pufferl, "_run_eval_rollout", fake_rollout)
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
+    monkeypatch.setattr(pufferl, "_render_eval_replays", lambda *_: None)
+    run_args = {
+        "eval": {"failure_metrics": "collision_rate"},
+        "vec": {"num_envs": 4},
+        "env": {
+            "map_dir": "maps",
+            "scenario_length": 100,
+        },
+    }
+
+    summaries = pufferl._render_eval_failures(
+        "puffer_drive",
+        run_args,
+        {"name": "carla"},
+        str(tmp_path / "episode_metrics.csv"),
+        str(tmp_path),
+        _ZeroPolicy(),
+        render_obs=False,
+        render_failures_number=2,
+    )
+
+    written_rows = pd.read_csv(tmp_path / "failures" / "selected_failures.csv")
+    assert written_rows["map_name"].tolist() == ["map_0", "map_1"]
+    assert replay_pairs == [(0, 100), (1, 101)]
+    assert len(summaries) == 2

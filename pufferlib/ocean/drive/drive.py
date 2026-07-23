@@ -700,82 +700,52 @@ class Drive(pufferlib.PufferEnv):
         for scenario in scenarios:
             self._replay_buffers.append(self._create_replay_buffer(scenario, active_agent_offset))
             active_agent_offset += int(scenario["active_agent_count"])
-
-    def _extract_replay_frame(self, scenario, buffer):
-        agent_capacity = buffer["agent_capacity"]
-        traffic_capacity = max(buffer["traffic_capacity"], 1)
-        frame = {
-            "agent_f32": np.zeros((agent_capacity, binding.AGENT_F32_FIELDS), dtype=np.float32),
-            "agent_i32": np.zeros((agent_capacity, binding.AGENT_I32_FIELDS), dtype=np.int32),
-            "metrics_f32": np.zeros((agent_capacity, binding.METRICS_F32_FIELDS), dtype=np.float32),
-            "puffer_f32": np.zeros((agent_capacity, binding.SCORE_F32_FIELDS), dtype=np.float32),
-            "traffic_i16": np.zeros((traffic_capacity, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
-        }
-        active_indices = {
-            agent_idx: active_idx for active_idx, agent_idx in enumerate(scenario["active_agent_indices"])
-        }
-        puffer_keys = (
-            "score",
-            "no_at_fault",
-            "no_offroad",
-            "no_red_light",
-            "making_progress",
-            "direction_score",
-            "ttc_puffer_rate",
-            "progress_ratio",
-            "speed_limit_compliance",
-            "comfort_score",
-            "multi_lane_score",
-            "multiplier",
-            "weighted_average",
-            "wrong_way_distance",
-            "speed_violation_sum",
+        env_count = len(self._replay_buffers)
+        agent_capacity = max((buffer["agent_capacity"] for buffer in self._replay_buffers), default=0)
+        traffic_capacity = max(
+            (max(buffer["traffic_capacity"], 1) for buffer in self._replay_buffers),
+            default=1,
         )
-        for agent_idx, agent in enumerate(scenario["agents"] or []):
-            frame["agent_f32"][agent_idx] = (
-                agent["sim_x"],
-                agent["sim_y"],
-                agent["sim_z"],
-                agent["sim_heading"],
-                agent["sim_length"],
-                agent["sim_width"],
-                agent["sim_speed"],
-                agent["sim_steering"],
-                agent["accel_long"],
-                agent["accel_lat"],
-                agent["jerk_long"],
-                agent["jerk_lat"],
-            )
-            active_idx = active_indices.get(agent_idx, -1)
-            frame["agent_i32"][agent_idx] = (
-                agent["id"],
-                agent["type"],
-                agent["sim_valid"],
-                agent["active_agent"],
-                agent["stopped"],
-                int(not agent["sim_valid"]),
-                agent["current_lane_idx"],
-                active_idx,
-            )
-            frame["metrics_f32"][agent_idx] = np.asarray(agent["metrics_array"], dtype=np.float32)
-            puffer_metrics = agent.get("puffer_metrics")
-            if puffer_metrics is not None:
-                frame["puffer_f32"][agent_idx] = tuple(puffer_metrics[key] for key in puffer_keys)
-        episode_timestep = int(scenario["episode_timestep"])
-        for traffic_idx, traffic in enumerate(scenario["traffic_elements"] or []):
-            states = traffic["states"] or []
-            state = states[episode_timestep] if episode_timestep < len(states) else 0
-            frame["traffic_i16"][traffic_idx] = (1, traffic["type"], state)
-        return frame
+        self._replay_frame_arrays = {
+            "agent_f32": np.empty(
+                (env_count, agent_capacity, binding.AGENT_F32_FIELDS),
+                dtype=np.float32,
+            ),
+            "agent_i32": np.empty(
+                (env_count, agent_capacity, binding.AGENT_I32_FIELDS),
+                dtype=np.int32,
+            ),
+            "metrics_f32": np.empty(
+                (env_count, agent_capacity, binding.METRICS_F32_FIELDS),
+                dtype=np.float32,
+            ),
+            "puffer_f32": np.empty(
+                (env_count, agent_capacity, binding.SCORE_F32_FIELDS),
+                dtype=np.float32,
+            ),
+            "traffic_i16": np.empty(
+                (env_count, traffic_capacity, binding.TRAFFIC_I16_FIELDS),
+                dtype=np.int16,
+            ),
+        }
 
     def _capture_replay_step(self):
-        scenarios = self._normalize_scenarios(self.get_state())
-        if len(scenarios) != len(self._replay_buffers):
-            raise RuntimeError("Replay environment count changed without reinitializing capture buffers")
-        for scenario, buffer in zip(scenarios, self._replay_buffers):
-            frame = self._extract_replay_frame(scenario, buffer)
-            for key, value in frame.items():
-                buffer["frames"][key].append(value)
+        binding.vec_get_replay_frame(
+            self.c_envs,
+            self._replay_frame_arrays["agent_f32"],
+            self._replay_frame_arrays["agent_i32"],
+            self._replay_frame_arrays["metrics_f32"],
+            self._replay_frame_arrays["puffer_f32"],
+            self._replay_frame_arrays["traffic_i16"],
+        )
+        for env_idx, buffer in enumerate(self._replay_buffers):
+            agent_capacity = buffer["agent_capacity"]
+            traffic_capacity = max(buffer["traffic_capacity"], 1)
+            for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32"):
+                buffer["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
+            buffer["frames"]["traffic_i16"].append(
+                self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
+            )
 
     def _build_replay_environment_bundle(self, summary):
         env_slot = int(summary["env_slot"])

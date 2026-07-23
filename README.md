@@ -109,14 +109,18 @@ puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   eval.datasets=carla \
   eval.render_failures=true \
+  eval.render_failures_number=10 \
   eval.render_obs=false
 ```
 
 Evaluation outputs are written under `eval/<suite>/`. The suite seed and worker
 count are part of the benchmark configuration: repeated runs with both unchanged
 produce the same map/seed rows. Failure renders replay the exact map and seed
-recorded by the metrics pass. See [docs/evaluation.md](docs/evaluation.md) for
-the catalog schema, failure replay flow, outputs, and training integration.
+recorded by the metrics pass. Set
+`eval.replay_failures_csv=<path/to/episode_metrics.csv>` to skip the standard
+benchmark pass and replay failures directly. See
+[docs/evaluation.md](docs/evaluation.md) for the catalog schema, failure replay
+flow, outputs, and training integration.
 
 ## Nightly runs and the regression report
 

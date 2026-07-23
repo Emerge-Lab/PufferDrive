@@ -7,6 +7,8 @@
 #define MY_PUT
 #define MY_GET
 
+static PyObject *vec_get_replay_frame(PyObject *self, PyObject *args);
+
 // Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
 static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
     return PyLong_FromLong((long) g_map_cache_count);
@@ -28,10 +30,137 @@ static PyObject *map_cache_live_count_py(
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"vec_get_replay_frame", vec_get_replay_frame, METH_VARARGS, "Copy compact replay state into NumPy arrays."}
 // clang-format on
 
 #include "../env_binding.h"
+
+// The replay caller owns these buffers and constructs their exact schema shapes.
+// TODO: Validate dtype, dimensions, contiguity, writability, and capacity before exposing this API more broadly.
+static PyObject *vec_get_replay_frame(PyObject *self __attribute__((unused)), PyObject *args) {
+    if (PyTuple_Size(args) != 6) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_replay_frame requires a vector and five output arrays");
+        return NULL;
+    }
+
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+
+    PyObject *agent_f32_object = PyTuple_GetItem(args, 1);
+    PyObject *agent_i32_object = PyTuple_GetItem(args, 2);
+    PyObject *metrics_f32_object = PyTuple_GetItem(args, 3);
+    PyObject *puffer_f32_object = PyTuple_GetItem(args, 4);
+    PyObject *traffic_i16_object = PyTuple_GetItem(args, 5);
+    if (!PyArray_Check(agent_f32_object) || !PyArray_Check(agent_i32_object) || !PyArray_Check(metrics_f32_object)
+        || !PyArray_Check(puffer_f32_object) || !PyArray_Check(traffic_i16_object)) {
+        PyErr_SetString(PyExc_TypeError, "All replay outputs must be NumPy arrays");
+        return NULL;
+    }
+
+    PyArrayObject *agent_f32_array = (PyArrayObject *) agent_f32_object;
+    PyArrayObject *agent_i32_array = (PyArrayObject *) agent_i32_object;
+    PyArrayObject *metrics_f32_array = (PyArrayObject *) metrics_f32_object;
+    PyArrayObject *puffer_f32_array = (PyArrayObject *) puffer_f32_object;
+    PyArrayObject *traffic_i16_array = (PyArrayObject *) traffic_i16_object;
+    npy_intp env_capacity = PyArray_DIM(agent_f32_array, 0);
+    int env_count = vec->num_envs < env_capacity ? vec->num_envs : (int) env_capacity;
+    npy_intp agent_capacity = PyArray_DIM(agent_f32_array, 1);
+    npy_intp traffic_capacity = PyArray_DIM(traffic_i16_array, 1);
+
+    memset(PyArray_DATA(agent_f32_array), 0, PyArray_NBYTES(agent_f32_array));
+    memset(PyArray_DATA(agent_i32_array), 0, PyArray_NBYTES(agent_i32_array));
+    memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
+    memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
+    memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
+
+    float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
+    int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
+    float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
+    float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
+    short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
+
+    for (int env_idx = 0; env_idx < env_count; env_idx++) {
+        Drive *drive = (Drive *) vec->envs[env_idx];
+        int agent_count = drive->num_total_agents < agent_capacity ? drive->num_total_agents : (int) agent_capacity;
+        int traffic_count
+            = drive->num_traffic_elements < traffic_capacity ? drive->num_traffic_elements : (int) traffic_capacity;
+        for (int agent_idx = 0; agent_idx < agent_count; agent_idx++) {
+            Agent *agent = &drive->agents[agent_idx];
+            npy_intp agent_base = (env_idx * agent_capacity + agent_idx) * AGENT_F32_FIELDS;
+            npy_intp agent_int_base = (env_idx * agent_capacity + agent_idx) * AGENT_I32_FIELDS;
+            npy_intp metrics_base = (env_idx * agent_capacity + agent_idx) * METRICS_F32_FIELDS;
+
+            agent_f32[agent_base + 0] = agent->sim_x;
+            agent_f32[agent_base + 1] = agent->sim_y;
+            agent_f32[agent_base + 2] = agent->sim_z;
+            agent_f32[agent_base + 3] = agent->sim_heading;
+            agent_f32[agent_base + 4] = agent->sim_length;
+            agent_f32[agent_base + 5] = agent->sim_width;
+            agent_f32[agent_base + 6] = agent->sim_speed;
+            agent_f32[agent_base + 7] = agent->steering_angle;
+            agent_f32[agent_base + 8] = agent->accel_long;
+            agent_f32[agent_base + 9] = agent->accel_lat;
+            agent_f32[agent_base + 10] = agent->jerk_long;
+            agent_f32[agent_base + 11] = agent->jerk_lat;
+
+            agent_i32[agent_int_base + 0] = agent_idx;
+            agent_i32[agent_int_base + 1] = agent->type;
+            agent_i32[agent_int_base + 2] = agent->sim_valid;
+            agent_i32[agent_int_base + 3] = agent->active_agent;
+            agent_i32[agent_int_base + 4] = agent->stopped;
+            agent_i32[agent_int_base + 5] = !agent->sim_valid;
+            agent_i32[agent_int_base + 6] = agent->current_lane_idx;
+            agent_i32[agent_int_base + 7] = -1;
+
+            memcpy(&metrics_f32[metrics_base], agent->metrics_array, sizeof(float) * METRICS_F32_FIELDS);
+        }
+
+        for (int active_idx = 0; active_idx < drive->active_agent_count; active_idx++) {
+            int agent_idx = drive->active_agent_indices[active_idx];
+            if (agent_idx >= agent_count) {
+                continue;
+            }
+            npy_intp agent_int_base = (env_idx * agent_capacity + agent_idx) * AGENT_I32_FIELDS;
+            agent_i32[agent_int_base + 7] = active_idx;
+            if (!drive->compute_eval_metrics || !drive->logs || active_idx >= drive->logs_capacity) {
+                continue;
+            }
+
+            Log *log = &drive->logs[active_idx];
+            npy_intp puffer_base = (env_idx * agent_capacity + agent_idx) * SCORE_F32_FIELDS;
+            puffer_f32[puffer_base + 0] = log->puffer_score;
+            puffer_f32[puffer_base + 1] = log->no_at_fault;
+            puffer_f32[puffer_base + 2] = log->no_offroad;
+            puffer_f32[puffer_base + 3] = log->no_red_light;
+            puffer_f32[puffer_base + 4] = log->making_progress;
+            puffer_f32[puffer_base + 5] = log->driving_direction_score;
+            puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
+            puffer_f32[puffer_base + 7] = log->progress_ratio;
+            puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
+            puffer_f32[puffer_base + 9] = log->comfort_score;
+            puffer_f32[puffer_base + 10] = log->multi_lane_score;
+            puffer_f32[puffer_base + 11] = log->wrong_way_distance;
+            puffer_f32[puffer_base + 12] = log->speed_violation_sum;
+            puffer_f32[puffer_base + 13] = log->multiplier;
+            puffer_f32[puffer_base + 14] = log->weighted_average;
+        }
+
+        for (int traffic_idx = 0; traffic_idx < traffic_count; traffic_idx++) {
+            TrafficControlElement *traffic = &drive->traffic_elements[traffic_idx];
+            npy_intp traffic_base = (env_idx * traffic_capacity + traffic_idx) * TRAFFIC_I16_FIELDS;
+            traffic_i16[traffic_base + 0] = 1;
+            traffic_i16[traffic_base + 1] = (short) traffic->type;
+            if (traffic->states && drive->timestep >= 0 && drive->timestep < traffic->state_size) {
+                traffic_i16[traffic_base + 2] = (short) traffic->states[drive->timestep];
+            }
+        }
+    }
+
+    Py_RETURN_NONE;
+}
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");

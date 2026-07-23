@@ -38,6 +38,8 @@ class TestDriveConfig(unittest.TestCase):
             self.assertTrue(args["eval"]["training_enabled"])
             self.assertEqual(args["eval"]["training_interval"], 100)
             self.assertEqual(args["eval"]["training_datasets"], "carla_fast")
+            self.assertIsNone(args["eval"]["render_failures_number"])
+            self.assertIsNone(args["eval"]["replay_failures_csv"])
             self.assertTrue(os.path.isfile(args["eval"]["catalog"]))
             self.assertTrue(os.path.isfile(args["eval"]["evaluation_config"]))
 
@@ -61,6 +63,16 @@ class TestDriveConfig(unittest.TestCase):
         """Test that Hydra CLI overrides win over the config file values."""
         args = load_config("puffer_drive")
         self.assertEqual(args["train"]["learning_rate"], 0.5)
+
+    @patch("sys.argv", ["pufferl.py", "eval.render_failures_number=10"])
+    def test_render_failures_number_cli_override(self):
+        args = load_config("puffer_drive")
+        self.assertEqual(args["eval"]["render_failures_number"], 10)
+
+    @patch("sys.argv", ["pufferl.py", "eval.replay_failures_csv=episode_metrics.csv"])
+    def test_replay_failures_csv_cli_override(self):
+        args = load_config("puffer_drive")
+        self.assertEqual(args["eval"]["replay_failures_csv"], "episode_metrics.csv")
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_old_flag_syntax_rejected_with_hint(self):

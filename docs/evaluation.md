@@ -96,6 +96,7 @@ puffer eval puffer_drive \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
   eval.datasets=carla_fast \
   eval.render_failures=true \
+  eval.render_failures_number=10 \
   eval.render_obs=false
 ```
 
@@ -109,10 +110,29 @@ greater than zero. The supported metrics are:
 
 The failure pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
-navigable `index.html`. `eval.render_obs=true` also stores policy observations;
+navigable `index.html`. `eval.render_failures_number` limits each selected suite
+to its first N failures in metrics-file order; the default `null` renders all
+failures. `eval.render_obs=true` also stores policy observations;
 `eval.observation_replay_wave_size` and
 `eval.observation_replay_writer_count` bound its peak memory and writer
 parallelism.
+
+To replay failures from an existing metrics CSV without rerunning the standard
+benchmark pass:
+
+```bash
+puffer eval puffer_drive \
+  load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
+  eval.datasets=carla \
+  eval.replay_failures_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
+  eval.render_failures_number=10 \
+  eval.render_obs=false \
+  train.compile=true \
+  train.precision=bfloat16
+```
+
+The selected dataset supplies the replay environment settings, so it should
+match the suite that produced the CSV.
 
 ## Outputs
 

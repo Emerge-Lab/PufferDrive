@@ -3,7 +3,9 @@ import pickle
 import zlib
 
 import numpy as np
+import pytest
 
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 
 
@@ -13,9 +15,9 @@ SCENARIO_LENGTH = 400
 REPLAY_SEED = 1234
 
 
-def test_replay_environment_capture_trims_frozen_early_termination():
-    env = Drive(
-        num_agents=1,
+def _make_replay_drive(capture_replay, compute_eval_metrics=True, num_environments=1):
+    return Drive(
+        num_agents=num_environments,
         min_agents_per_env=1,
         max_agents_per_env=1,
         num_maps=1,
@@ -32,13 +34,141 @@ def test_replay_environment_capture_trims_frozen_early_termination():
         goal_radius=2.0,
         goal_source="gt",
         eval_mode=1,
-        num_eval_scenarios=1,
-        eval_map_indices=[0],
-        eval_scenario_seeds=[REPLAY_SEED],
-        capture_replay=True,
+        num_eval_scenarios=num_environments,
+        eval_map_indices=[0] * num_environments,
+        eval_scenario_seeds=[REPLAY_SEED + env_idx for env_idx in range(num_environments)],
+        capture_replay=capture_replay,
+        compute_eval_metrics=compute_eval_metrics,
+    )
+
+
+def _extract_python_replay_frame(scenario):
+    agent_capacity = len(scenario["agents"] or [])
+    traffic_capacity = max(len(scenario["traffic_elements"] or []), 1)
+    frame = {
+        "agent_f32": np.zeros((agent_capacity, binding.AGENT_F32_FIELDS), dtype=np.float32),
+        "agent_i32": np.zeros((agent_capacity, binding.AGENT_I32_FIELDS), dtype=np.int32),
+        "metrics_f32": np.zeros((agent_capacity, binding.METRICS_F32_FIELDS), dtype=np.float32),
+        "puffer_f32": np.zeros((agent_capacity, binding.SCORE_F32_FIELDS), dtype=np.float32),
+        "traffic_i16": np.zeros((traffic_capacity, binding.TRAFFIC_I16_FIELDS), dtype=np.int16),
+    }
+    active_indices = {agent_idx: active_idx for active_idx, agent_idx in enumerate(scenario["active_agent_indices"])}
+    puffer_keys = (
+        "score",
+        "no_at_fault",
+        "no_offroad",
+        "no_red_light",
+        "making_progress",
+        "direction_score",
+        "ttc_puffer_rate",
+        "progress_ratio",
+        "speed_limit_compliance",
+        "comfort_score",
+        "multi_lane_score",
+        "wrong_way_distance",
+        "speed_violation_sum",
+        "multiplier",
+        "weighted_average",
+    )
+    for agent_idx, agent in enumerate(scenario["agents"] or []):
+        frame["agent_f32"][agent_idx] = (
+            agent["sim_x"],
+            agent["sim_y"],
+            agent["sim_z"],
+            agent["sim_heading"],
+            agent["sim_length"],
+            agent["sim_width"],
+            agent["sim_speed"],
+            agent["sim_steering"],
+            agent["accel_long"],
+            agent["accel_lat"],
+            agent["jerk_long"],
+            agent["jerk_lat"],
+        )
+        frame["agent_i32"][agent_idx] = (
+            agent["id"],
+            agent["type"],
+            agent["sim_valid"],
+            agent["active_agent"],
+            agent["stopped"],
+            int(not agent["sim_valid"]),
+            agent["current_lane_idx"],
+            active_indices.get(agent_idx, -1),
+        )
+        frame["metrics_f32"][agent_idx] = np.asarray(agent["metrics_array"], dtype=np.float32)
+        puffer_metrics = agent.get("puffer_metrics")
+        if puffer_metrics is not None:
+            frame["puffer_f32"][agent_idx] = tuple(puffer_metrics[key] for key in puffer_keys)
+    episode_timestep = int(scenario["episode_timestep"])
+    for traffic_idx, traffic in enumerate(scenario["traffic_elements"] or []):
+        states = traffic["states"] or []
+        state = states[episode_timestep] if episode_timestep < len(states) else 0
+        frame["traffic_i16"][traffic_idx] = (1, traffic["type"], state)
+    return frame
+
+
+@pytest.mark.parametrize("compute_eval_metrics", [False, True])
+def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics):
+    env = _make_replay_drive(
+        capture_replay=False,
+        compute_eval_metrics=compute_eval_metrics,
+        num_environments=2,
     )
     try:
         env.reset(seed=0)
+        for _ in range(2):
+            scenarios = env.get_state()
+            agent_capacity = max(len(scenario["agents"] or []) for scenario in scenarios)
+            traffic_capacity = max(max(len(scenario["traffic_elements"] or []), 1) for scenario in scenarios)
+            bulk_frame = {
+                "agent_f32": np.empty(
+                    (len(scenarios), agent_capacity, binding.AGENT_F32_FIELDS),
+                    dtype=np.float32,
+                ),
+                "agent_i32": np.empty(
+                    (len(scenarios), agent_capacity, binding.AGENT_I32_FIELDS),
+                    dtype=np.int32,
+                ),
+                "metrics_f32": np.empty(
+                    (len(scenarios), agent_capacity, binding.METRICS_F32_FIELDS),
+                    dtype=np.float32,
+                ),
+                "puffer_f32": np.empty(
+                    (len(scenarios), agent_capacity, binding.SCORE_F32_FIELDS),
+                    dtype=np.float32,
+                ),
+                "traffic_i16": np.empty(
+                    (len(scenarios), traffic_capacity, binding.TRAFFIC_I16_FIELDS),
+                    dtype=np.int16,
+                ),
+            }
+            binding.vec_get_replay_frame(
+                env.c_envs,
+                bulk_frame["agent_f32"],
+                bulk_frame["agent_i32"],
+                bulk_frame["metrics_f32"],
+                bulk_frame["puffer_f32"],
+                bulk_frame["traffic_i16"],
+            )
+            for env_idx, scenario in enumerate(scenarios):
+                expected = _extract_python_replay_frame(scenario)
+                for key, expected_values in expected.items():
+                    actual_values = bulk_frame[key][env_idx, : expected_values.shape[0]]
+                    np.testing.assert_array_equal(actual_values, expected_values)
+            env.step(np.zeros_like(env.actions))
+    finally:
+        env.close()
+
+
+def test_replay_environment_capture_trims_frozen_early_termination():
+    env = _make_replay_drive(capture_replay=True)
+    try:
+        env.reset(seed=0)
+
+        def reject_per_step_state_conversion():
+            raise AssertionError("Replay capture must not call get_state() on each step")
+
+        env.get_state = reject_per_step_state_conversion
         completed_summary = None
         zero_action = np.zeros_like(env.actions)
         for _ in range(SCENARIO_LENGTH):
