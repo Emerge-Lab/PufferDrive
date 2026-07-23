@@ -129,8 +129,10 @@ class PuffeRL:
 
         self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
-        if self.env_continuous and not policy.is_continuous:
-            action_shape = (len(policy.atn_dim),)
+        # Custom policy attributes live on the base module, not the DDP/compile wrapper.
+        unwrapped_policy = base_policy(policy)
+        if self.env_continuous and not unwrapped_policy.is_continuous:
+            action_shape = (len(unwrapped_policy.atn_dim),)
             action_dtype = torch.int32
         else:
             action_shape = vecenv.single_action_space
@@ -405,7 +407,7 @@ class PuffeRL:
                 logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
                 action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
-                    logits, env_continuous=self.env_continuous, policy=self.policy
+                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
                 )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
@@ -461,7 +463,7 @@ class PuffeRL:
 
             profile("env", epoch)
 
-            if self.env_continuous and not self.policy.is_continuous:  # TODO check with trajectory
+            if self.env_continuous and not self.uncompiled_policy.is_continuous:  # TODO check with trajectory
                 cont_action = cont_action.cpu().numpy()
                 self.vecenv.send(cont_action.squeeze(0))
             else:
