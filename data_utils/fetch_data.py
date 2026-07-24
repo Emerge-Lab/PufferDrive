@@ -9,11 +9,6 @@ Fetching elsewhere (--data-root) means pointing env.map_dir there too.
     python data_utils/fetch_data.py nuplan_val
     python data_utils/fetch_data.py nuplan_train --data-root /scratch/$USER/data
     python data_utils/fetch_data.py nuplan_mini_val --dry-run
-
-The AWS CLI ships with the package install. Datasets marked public in the
-manifest need no AWS account; private ones need lab IAM credentials (see
-docs/data_storage.md). Syncs are incremental: re-running downloads only new
-or changed files.
 """
 
 import argparse
