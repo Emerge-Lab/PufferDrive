@@ -243,9 +243,13 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     # symlinks, so snapshots must live outside it.
     project_root_resolved = Path(project_root).resolve()
     save_dir_resolved = Path(save_dir).resolve()
+    save_root_entry = None
     if save_dir_resolved.is_relative_to(project_root_resolved):
         snapshots_root = project_root_resolved.parent / f"{project_root_resolved.name}_code_snapshots"
         save_dir_rel = save_dir_resolved.relative_to(project_root_resolved)
+        # The in-repo save root holds run outputs (and held snapshots before
+        # they moved out of the repo) — never link it into the snapshot.
+        save_root_entry = save_dir_rel.parts[0]
         isolated_root = str(snapshots_root / save_dir_rel / "code")
     else:
         isolated_root = os.path.join(save_dir, "code")
@@ -261,6 +265,8 @@ def isolate_code(project_root: str, save_dir: str) -> str:
         dst = os.path.join(isolated_root, entry)
         # Do not symlink ancestors to avoid infinite recursion
         if isolated_root_real.is_relative_to(Path(src).resolve()):
+            continue
+        if entry == save_root_entry:
             continue
         if os.path.exists(dst) or os.path.islink(dst):
             if os.path.isdir(dst) and not os.path.islink(dst):
