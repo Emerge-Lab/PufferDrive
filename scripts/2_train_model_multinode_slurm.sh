@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/nightly_PufferDrive/experiments/k_scaled_0000/log_%a_%A.out
-#SBATCH --error /home/bjaeger/nightly_PufferDrive/experiments/k_scaled_0000/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0000/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0000/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables

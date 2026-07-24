@@ -9,7 +9,7 @@
 #SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0007/log_%a_%A.out
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0007/log_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-3
+#SBATCH --array=0-2
 
 # print info about current job
 echo "START TIME: $(date)"
