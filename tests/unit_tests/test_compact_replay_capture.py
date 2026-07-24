@@ -109,6 +109,64 @@ def _extract_python_replay_frame(scenario):
     return frame
 
 
+def test_exact_seed_matches_after_resampling():
+    env = Drive(
+        num_agents=1,
+        min_agents_per_env=1,
+        max_agents_per_env=1,
+        num_maps=1,
+        map_dir=MAP_DIR,
+        simulation_mode="replay",
+        control_mode="control_sdc_only",
+        sdc_controller="replay",
+        non_sdc_controller="replay",
+        scenario_length=SCENARIO_LENGTH,
+        resample_frequency=SCENARIO_LENGTH,
+        termination_mode=0,
+        terminate_on_goal=True,
+        num_goals=3,
+        goal_radius=2.0,
+        goal_source="gt",
+        eval_mode=1,
+        num_eval_scenarios=2,
+        eval_map_indices=[0, 0],
+        eval_scenario_seeds=[REPLAY_SEED, REPLAY_SEED],
+        obs_dropout_lane=0.5,
+        obs_dropout_boundary=0.5,
+    )
+    observation_batches = []
+    mask_batches = []
+    summaries = []
+    zero_action = np.zeros_like(env.actions)
+    try:
+        env.reset(seed=0)
+        for _ in range(2):
+            observations = []
+            masks = []
+            for _ in range(SCENARIO_LENGTH):
+                observations.append(env.observations.copy())
+                masks.append(env.masks.copy())
+                *_, infos = env.step(zero_action)
+                summaries.extend(info for info in infos if info.get("summary_type") == "evaluation_episode")
+            observation_batches.append(np.stack(observations))
+            mask_batches.append(np.stack(masks))
+    finally:
+        env.close()
+
+    assert len(summaries) == 2
+    np.testing.assert_array_equal(observation_batches[0], observation_batches[1])
+    np.testing.assert_array_equal(mask_batches[0], mask_batches[1])
+
+    numeric_keys = [key for key, value in summaries[0].items() if isinstance(value, (int, float)) and key != "env_slot"]
+    np.testing.assert_array_equal(
+        np.asarray([summaries[0][key] for key in numeric_keys]),
+        np.asarray([summaries[1][key] for key in numeric_keys]),
+    )
+    assert summaries[0]["seed"] == summaries[1]["seed"] == REPLAY_SEED
+    assert summaries[0]["map_name"] == summaries[1]["map_name"]
+    assert summaries[0]["scenario_id"] == summaries[1]["scenario_id"]
+
+
 @pytest.mark.parametrize("compute_eval_metrics", [False, True])
 def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics):
     env = _make_replay_drive(

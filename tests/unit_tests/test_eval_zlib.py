@@ -11,6 +11,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.eval_replay import EvalReplayCapture
 
 
 def test_benchmark_rejects_agent_capacity_below_suite_maximum():
@@ -504,7 +505,7 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
 
 def test_eval_replay_capture_skips_pooling_without_observations(tmp_path):
     policy = _PoolRecordingPolicy()
-    replay_capture = pufferl._EvalReplayCapture(
+    replay_capture = EvalReplayCapture(
         args={"env": {}},
         policy=policy,
         replay_output_dir=tmp_path,

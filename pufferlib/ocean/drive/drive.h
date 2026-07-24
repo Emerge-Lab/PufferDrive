@@ -434,9 +434,6 @@ struct Drive {
     float obs_range_road_front_m;
     float obs_range_road_behind_m;
     float obs_range_road_side_m;
-    // Set once this env has emitted its single eval episode; keeps the env
-    // frozen (no stepping, no re-emit) until the worker resamples, so each
-    // scenario is evaluated exactly once regardless of why the episode ended.
     int eval_episode_done;
     int use_exact_episode_seed;
     unsigned int rng_state;
@@ -1516,7 +1513,7 @@ static void update_agent_z(Drive *env, Agent *agent) {
 }
 
 static int pick_random_exit_lane(
-    Drive *env,
+    unsigned int *rng_state,
     RoadMapElement *road_elements,
     int lane_idx,
     const int *route,
@@ -1552,9 +1549,9 @@ static int pick_random_exit_lane(
     }
     // Prefer an exit not yet in the route to avoid looping; fall back to any exit when all are visited.
     if (num_fresh_exits > 0) {
-        return fresh_exits[rand_r(&env->rng_state) % num_fresh_exits];
+        return fresh_exits[rand_r(rng_state) % num_fresh_exits];
     }
-    return exits[rand_r(&env->rng_state) % num_exits];
+    return exits[rand_r(rng_state) % num_exits];
 }
 
 // ========================================
@@ -1635,7 +1632,7 @@ static bool route_point_at_distance(
             }
             current_lane_idx = route[cursor_idx];
         } else {
-            current_lane_idx = pick_random_exit_lane(env, env->road_elements, current_lane_idx, NULL, 0);
+            current_lane_idx = pick_random_exit_lane(&env->rng_state, env->road_elements, current_lane_idx, NULL, 0);
             if (current_lane_idx == -1) {
                 return false; // dead-end: no outgoing lane to continue the free-roam walk
             }
@@ -1753,7 +1750,7 @@ static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
         }
         current_lane = &road_elements[current_lane_idx];
         int chosen_exit_lane_idx
-            = pick_random_exit_lane(env, road_elements, current_lane_idx, candidate_route, route_length);
+            = pick_random_exit_lane(&env->rng_state, road_elements, current_lane_idx, candidate_route, route_length);
         if (chosen_exit_lane_idx == -1) {
             break; // dead-end lane: stop here, the route is as long as the graph allows
         }
@@ -2758,9 +2755,6 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
 
     return agent_log->puffer_score;
 }
-
-// Averages the summed Log across the episode's agents, matching how vec_log
-// normalizes its aggregate before reporting.
 
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
@@ -3975,7 +3969,7 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // ========================================
 
 static void subsample_road_observation_rows(
-    Drive *env,
+    unsigned int *rng_state,
     float *buffer,
     int collected_count,
     int keep_count,
@@ -3986,7 +3980,7 @@ static void subsample_road_observation_rows(
     float tmp[feature_count];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
-        int swap_idx = (remaining > 1) ? sample_idx + (rand_r(&env->rng_state) % remaining) : sample_idx;
+        int swap_idx = (remaining > 1) ? sample_idx + (rand_r(rng_state) % remaining) : sample_idx;
         if (swap_idx == sample_idx) {
             continue;
         }
@@ -4749,9 +4743,9 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             = (boundaries_found < env->obs_slots_boundary_kept) ? boundaries_found : env->obs_slots_boundary_kept;
         *lane_count = lanes_to_copy;
         *boundary_count = boundaries_to_copy;
-        subsample_road_observation_rows(env, lanes_buffer, lanes_found, lanes_to_copy, LANE_FEATURES);
+        subsample_road_observation_rows(&env->rng_state, lanes_buffer, lanes_found, lanes_to_copy, LANE_FEATURES);
         subsample_road_observation_rows(
-            env,
+            &env->rng_state,
             boundaries_buffer,
             boundaries_found,
             boundaries_to_copy,
