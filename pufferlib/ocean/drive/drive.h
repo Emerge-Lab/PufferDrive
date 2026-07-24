@@ -517,17 +517,16 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
-static float random_uniform(Drive *env, float min_val, float max_val) {
-    return min_val + ((float) rand_r(&env->rng_state) / (float) RAND_MAX) * (max_val - min_val);
+static float random_uniform(unsigned int *rng_state, float min_val, float max_val) {
+    return min_val + ((float) rand_r(rng_state) / (float) RAND_MAX) * (max_val - min_val);
 }
 
-static float mixed_uniform(Drive *env, float a) {
+static float mixed_uniform(unsigned int *rng_state, float a) {
     // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
-    if ((float) rand_r(&env->rng_state) / (float) RAND_MAX < 0.5f) {
-        return random_uniform(env, 1.0f / a, 1.0f);
-    } else {
-        return random_uniform(env, 1.0f, a);
+    if ((float) rand_r(rng_state) / (float) RAND_MAX < 0.5f) {
+        return random_uniform(rng_state, 1.0f / a, 1.0f);
     }
+    return random_uniform(rng_state, 1.0f, a);
 }
 
 static void begin_episode_rng(Drive *env) {
@@ -1836,7 +1835,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     // Sample a spacing per goal, then walk the route placing goals at those forward distances.
     float goal_spacings_meters[MAX_GOALS];
     for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
-        goal_spacings_meters[goal_idx] = random_uniform(env, env->min_goal_spacing, env->max_goal_spacing);
+        goal_spacings_meters[goal_idx] = random_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
     }
 
     float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
@@ -1954,7 +1953,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     int requested_goal_count = 1 + rand_r(&env->rng_state) % env->num_goals;
     float goal_spacings_meters[MAX_GOALS];
     for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
-        goal_spacings_meters[goal_idx] = random_uniform(env, env->min_goal_spacing, env->max_goal_spacing);
+        goal_spacings_meters[goal_idx] = random_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
     }
     float goal_x[MAX_GOALS], goal_y[MAX_GOALS], goal_z[MAX_GOALS];
     int goal_lane[MAX_GOALS];
@@ -2022,7 +2021,7 @@ static int roll_goals(Drive *env, Agent *agent) {
     }
 
     // Walk one spacing forward to find the appended goal before touching the window.
-    float spacing_meters = random_uniform(env, env->min_goal_spacing, env->max_goal_spacing);
+    float spacing_meters = random_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
     float next_x, next_y, next_z, next_s_on_lane;
     int next_lane_idx, next_cursor_idx; // next_cursor_idx unused: single-step append, no chaining
     if (!route_point_at_distance(
@@ -2869,10 +2868,14 @@ static void add_log(Drive *env) {
 // ========================================
 
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
-    agent->is_blind_partner
-        = (env->partner_blindness_prob > 0.0f && random_uniform(env, 0.0f, 1.0f) < env->partner_blindness_prob) ? 1 : 0;
+    agent->is_blind_partner = (env->partner_blindness_prob > 0.0f
+                               && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_prob)
+        ? 1
+        : 0;
     agent->is_phantom_braker
-        = (env->phantom_braking_prob > 0.0f && random_uniform(env, 0.0f, 1.0f) < env->phantom_braking_prob) ? 1 : 0;
+        = (env->phantom_braking_prob > 0.0f && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_prob)
+        ? 1
+        : 0;
     agent->phantom_braking_counter = 0;
 }
 
@@ -2894,13 +2897,14 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         };
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
-            agent->reward_coefs[c] = random_uniform(env, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
+            agent->reward_coefs[c]
+                = random_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
-        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(env, 1.25f);
-        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(env, 1.25f);
-        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(env, 1.5f);
+        agent->reward_coefs[REWARD_COEF_THROTTLE] = mixed_uniform(&env->rng_state, 1.25f);
+        agent->reward_coefs[REWARD_COEF_STEER] = mixed_uniform(&env->rng_state, 1.25f);
+        agent->reward_coefs[REWARD_COEF_ACC] = mixed_uniform(&env->rng_state, 1.5f);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -2927,7 +2931,7 @@ static void generate_traffic_light_states(Drive *env) {
     float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (random_uniform(env, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = (!env->eval_mode) && (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -2949,14 +2953,14 @@ static void generate_traffic_light_states(Drive *env) {
 
         if (!env->eval_mode) {
             // Individual removal
-            if (random_uniform(env, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            if (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
                 }
                 continue;
             }
             // Always green
-            if (random_uniform(env, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+            if (random_uniform(&env->rng_state, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
                     tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
                 }
@@ -2971,9 +2975,12 @@ static void generate_traffic_light_states(Drive *env) {
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;
         } else {
-            dur_green = random_uniform(env, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = random_uniform(env, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = random_uniform(env, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+            dur_green = random_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+            dur_yellow = random_uniform(
+                &env->rng_state,
+                0.5f * TL_DEFAULT_YELLOW_DURATION,
+                0.75f * TL_DEFAULT_YELLOW_DURATION);
+            dur_red = random_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
         }
 
         int steps_green = (int) (dur_green / dt);
@@ -3094,12 +3101,12 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_length, spawn_width;
     if (env->eval_mode) {
         // Fixed size for eval mode
-        spawn_length = random_uniform(env, 2.0f, 5.5f);
-        spawn_width = random_uniform(env, 1.5f, 2.5f);
+        spawn_length = random_uniform(&env->rng_state, 2.0f, 5.5f);
+        spawn_width = random_uniform(&env->rng_state, 1.5f, 2.5f);
     } else {
         // Random size for training mode
-        spawn_length = random_uniform(env, 0.8f, 7.0f);
-        spawn_width = random_uniform(env, 0.8f, 2.7f);
+        spawn_length = random_uniform(&env->rng_state, 0.8f, 7.0f);
+        spawn_width = random_uniform(&env->rng_state, 0.8f, 2.7f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;
@@ -4517,7 +4524,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    if (ego->is_blind_partner && random_uniform(env, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+    if (ego->is_blind_partner && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
@@ -4895,7 +4902,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         phantom_braking_active = 1;
     } else if (
         agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
-        && random_uniform(env, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
+        && random_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
         agent->phantom_braking_counter = env->phantom_braking_duration - 1;
         phantom_braking_active = 1;
     }
