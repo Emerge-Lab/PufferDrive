@@ -104,6 +104,14 @@ python scripts/submit_cluster.py \
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
 
+- **Shared datasets (S3):** `python data_utils/fetch_data.py` downloads the
+  default ~10 GB nuPlan mini sets; `--list` shows everything fetchable by
+  name — see [`docs/data_storage.md`](docs/data_storage.md). Lab IAM
+  credentials are needed only for private datasets — public ones (and
+  install, build, and training on the bundled maps) need no AWS account.
+- **nuPlan (replay training/eval):** fetched by the default above, or convert
+  yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
+
 ## Train
 
 ```bash

@@ -339,13 +339,13 @@ eval:
   validation_replay:
     inherits: validation_defaults
     type: multi_scenario
-    enabled: 'true'
+    enabled: 'false'
     render: 'true'
     render_backend: triage_html
     env:
       simulation_mode: replay
       control_mode: control_sdc_only
-      map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
+      map_dir: data/nuplan_mini_val
       num_maps: 250
       max_agents_per_env: 64
       scenario_length: 200
@@ -390,100 +390,6 @@ eval:
       num_scenarios: 32
       render_num_scenarios: 16
       render_max_steps: 300
-  # ---------------------------------------------------------------------------
-  # Driving-behaviour evaluation: nuPlan scenes labeled by scene type. Each
-  # behavior is one [eval.behaviors_*] section. All inherit from the template
-  # below — change shared knobs in one place.
-  # ---------------------------------------------------------------------------
-  behaviors_defaults:
-    enabled: 'false'
-    interval: 250
-    mode: inline
-    clean: 'true'
-    render: 'true'
-    render_views: [sim_state, bev]
-    env:
-      simulation_mode: replay
-      control_mode: control_sdc_only
-      init_mode: create_all_valid
-      scenario_length: 201
-      obs_slots_partners_n: 32
-    eval:
-      num_scenarios: 50
-      render_num_scenarios: 2
-      render_max_steps: 200
-  behaviors_full_dir:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/nuplan_mini_train_bins
-  behaviors_hard_stop:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/hard_stop
-  behaviors_highway_straight:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/highway_straight
-  behaviors_lane_change:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/lane_change
-  behaviors_merge:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/merge
-  behaviors_parked_cars:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/parked_cars
-  behaviors_roundabout:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/roundabout
-  behaviors_stopped_traffic:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/stopped_traffic
-  behaviors_traffic_light_green:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/traffic_light_green
-  behaviors_traffic_light_stop:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/traffic_light_stop
-  behaviors_unprotected_left:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/unprotected_left
-  behaviors_unprotected_right:
-    inherits: behaviors_defaults
-    type: behavior_class
-    enabled: 'true'
-    env:
-      map_dir: /scratch/ev2237/data/nuplan/categories_v021/unprotected_right
   # ---------------------------------------------------------------------------
   # Optional: WOSAC realism eval. Off by default.
   # ---------------------------------------------------------------------------
