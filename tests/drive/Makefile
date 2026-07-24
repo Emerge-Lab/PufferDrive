@@ -35,7 +35,11 @@ SMOKE_BINS := $(SMOKE_SRCS:%.c=$(BUILD_DIR)/%)
 RENDER_BINS := $(RENDER_SRCS:%.c=$(BUILD_DIR)/%)
 PERF_BINS := $(PERF_SRCS:%.c=$(BUILD_DIR)/%)
 
-$(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h
+# Sim headers are compiled into every test binary; without them as
+# prerequisites, editing drive.h leaves stale test binaries behind.
+DRIVE_HEADERS := $(wildcard $(ROOT)/pufferlib/ocean/drive/*.h)
+
+$(BUILD_DIR)/%: %.c include/test.h include/drive_fixture.h $(DRIVE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(LDLIBS_DRIVE) -o $@
 

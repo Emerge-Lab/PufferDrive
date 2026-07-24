@@ -13,6 +13,31 @@ uv pip install -e .
 python setup.py build_ext --inplace --force
 ```
 
+## Tests
+
+```bash
+# Run the local suites: Python unit tests, C sim tests, replay-HTML smoke
+# test, notebook executions. Rebuilds the C extension automatically when a
+# .c/.h file changed, and installs missing test deps.
+make test
+
+# Individual suites
+make test-unit       # tests/unit_tests
+make test-c          # tests/drive (dynamics, geometry, IDM, collisions, ...)
+make test-smoke      # replay-HTML smoke test
+make test-notebooks  # execute every checked-in notebook end-to-end
+
+# Force-rebuild the C extension regardless of timestamps
+make rebuild
+
+# Opt-in: full smoke suite in Docker (train/rollout/eval goldens)
+make test-docker-smoke
+```
+
+`make help` (or bare `make`) prints this list. Targets call `.venv/bin/python`
+directly, so no venv activation is needed. If your interpreter lives elsewhere
+(conda, a cluster venv), override it: `make PYTHON=/path/to/python test`.
+
 ## Install (HPC cluster)
 
 For the NYU cluster, PufferDrive recommends a **mixed Singularity + venv** layout:
@@ -78,6 +103,14 @@ python scripts/submit_cluster.py \
 ## Data
 
 Place binaries under `pufferlib/resources/drive/binaries/`.
+
+- **Shared datasets (S3):** `python data_utils/fetch_data.py` downloads the
+  default ~10 GB nuPlan mini sets; `--list` shows everything fetchable by
+  name — see [`docs/data_storage.md`](docs/data_storage.md). Lab IAM
+  credentials are needed only for private datasets — public ones (and
+  install, build, and training on the bundled maps) need no AWS account.
+- **nuPlan (replay training/eval):** fetched by the default above, or convert
+  yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
 
 ## Train
 

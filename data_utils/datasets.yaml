@@ -1,0 +1,64 @@
+# Registry of shared datasets in S3 (see docs/data_storage.md).
+#
+# Fetch with:  python data_utils/fetch_data.py [name ...]
+#
+# Fields:
+#   s3_uri:      source prefix, synced recursively into $PUFFERDRIVE_DATA_ROOT/<name>/
+#   description: what the data is and where it is in its lifecycle
+#   license:     upstream license constraint — governs how copies may be shared
+#   size:        approximate download size and file count, shown before syncing
+#   public:      optional, true for public-read buckets — fetches without AWS
+#                credentials (unsigned requests); omit for IAM-only buckets
+#   default:     optional, true for the entries a bare fetch_data.py run
+#                downloads — the ~10 GB mini splits
+
+nuplan_mini_train:
+  s3_uri: s3://pufferdrive-bins/nuplan/0.3.2-mini/train/
+  size: ~10 GB, ~3.6k bins
+  public: true
+  default: true
+  description: >-
+    10 GB sample of the nuPlan train split as PufferDrive bins
+    (py123d/123Drive conversion 0.3.2). The default training set for
+    development.
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Redistribute only under this same license and keep
+    this notice with any copy.
+
+nuplan_mini_val:
+  s3_uri: s3://pufferdrive-bins/nuplan/0.3.2-mini/val/
+  size: ~10 GB, ~3.6k bins
+  public: true
+  default: true
+  description: >-
+    10 GB sample of the nuPlan validation split as PufferDrive bins
+    (py123d/123Drive conversion 0.3.2). The default eval set for development.
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Redistribute only under this same license and keep
+    this notice with any copy.
+
+nuplan_train:
+  s3_uri: s3://pufferdrive-bins/nuplan/0.3.2/train/
+  size: ~475 GB, ~170k bins
+  public: true
+  description: >-
+    Full nuPlan train split as PufferDrive bins (py123d/123Drive conversion
+    0.3.2).
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Redistribute only under this same license and keep
+    this notice with any copy.
+
+nuplan_val:
+  s3_uri: s3://pufferdrive-bins/nuplan/0.3.2/val/
+  size: ~48 GB, ~17k bins
+  public: true
+  description: >-
+    Full nuPlan validation split as PufferDrive bins (py123d/123Drive
+    conversion 0.3.2).
+  license: >-
+    CC BY-NC-SA 4.0 (nuPlan, Motional) — non-commercial use only, attribution
+    required, share-alike. Redistribute only under this same license and keep
+    this notice with any copy.
