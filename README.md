@@ -86,8 +86,6 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
   install, build, and training on the bundled maps) need no AWS account.
 - **nuPlan (replay training/eval):** fetched by the default above, or convert
   yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
-- **WOMD:** download raw data with `data_utils/download_womd_data.py`, or
-  pre-converted `.bin` maps with `data_utils/download_database_gcp.sh`.
 
 ## Train
 

@@ -263,8 +263,6 @@ install_requires = [
     "numpy",
     "gymnasium==0.29.1",
     "pyyaml",
-    # data_utils/fetch_data.py shells out to `aws s3 sync`. PyPI only carries
-    # AWS CLI v1; a system-installed v2 works identically for this.
     "awscli",
 ]
 
