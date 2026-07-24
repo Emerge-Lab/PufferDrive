@@ -186,6 +186,73 @@ def test_training_eval_keeps_training_observation_dropout(monkeypatch, tmp_path)
     assert captured_args["env"]["obs_dropout_boundary"] == 0.75
 
 
+def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
+    suites = [
+        {
+            "name": "womd_single",
+            "seed": 42,
+            "mode": "replay",
+            "map_dir": "maps",
+            "num_maps": 100,
+            "num_scenarios": 100,
+            "scenario_length": 91,
+            "max_agents_per_env": 64,
+            "control_mode": "control_sdc_only",
+        },
+        {
+            "name": "womd_multi",
+            "seed": 42,
+            "mode": "replay",
+            "map_dir": "maps",
+            "num_maps": 100,
+            "num_scenarios": 100,
+            "scenario_length": 91,
+            "max_agents_per_env": 64,
+            "control_mode": "control_vehicles",
+        },
+    ]
+    args = {
+        "package": "ocean",
+        "train": {"seed": 42, "use_rnn": False},
+        "vec": {"seed": 42, "num_envs": 16},
+        "env": {
+            "obs_dropout_lane": 0.0,
+            "obs_dropout_boundary": 0.0,
+        },
+        "eval": {
+            "catalog": "catalog.yaml",
+            "evaluation_config": "evaluation.yaml",
+            "datasets": ["womd_single", "womd_multi"],
+            "num_agents": 64,
+            "benchmark_sdc_num_envs": 8,
+            "render_failures": False,
+        },
+    }
+    planned_worker_counts = []
+
+    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: suites)
+    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
+
+    def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length):
+        planned_worker_counts.append(num_workers)
+        return [{} for _ in range(num_workers)], 1
+
+    monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", capture_worker_plan)
+    monkeypatch.setattr(pufferl, "_run_eval_rollout", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
+
+    pufferl.eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=_ZeroPolicy(),
+        eval_output_dir=str(tmp_path),
+        use_training_config=True,
+    )
+
+    assert planned_worker_counts == [8, 16]
+
+
 def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path):
     failure_csv_path = tmp_path / "existing_episode_metrics.csv"
     suite = {

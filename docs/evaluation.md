@@ -39,6 +39,10 @@ least the suite's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
 small local CPU check.
 
+Replay suites using `control_sdc_only` additionally cap their worker count with
+`eval.benchmark_sdc_num_envs` (default `8`). Other replay and gigaflow suites
+continue to use `vec.num_envs`.
+
 ## Running evaluation
 
 Dataset selection and a 3.0 checkpoint are required. The checkpoint must be in

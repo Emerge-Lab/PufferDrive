@@ -1576,6 +1576,7 @@ def eval(
     render_failures = bool(eval_config.get("render_failures"))
     render_failures_number = eval_config.get("render_failures_number")
     replay_failures_csv = eval_config.get("replay_failures_csv")
+    benchmark_sdc_num_envs = eval_config.get("benchmark_sdc_num_envs", 8)
     if render_failures:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
@@ -1598,6 +1599,8 @@ def eval(
     all_suite_summaries = {}
     for suite in suites:
         run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
+        if suite["mode"] == "replay" and suite["control_mode"] == "control_sdc_only":
+            run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), benchmark_sdc_num_envs)
         suite_output_dir = os.path.join(eval_output_dir, suite["name"])
         if eval_output_subdir is not None:
             suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)

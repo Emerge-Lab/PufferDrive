@@ -6,7 +6,7 @@ benchmarks:
     num_scenarios: 160
     num_maps: 8
     max_agents_per_env: 50
-    scenario_length: 6000
+    scenario_length: 1000
     control_mode: control_vehicles
     paths:
       local: pufferlib/resources/drive/binaries/carla
@@ -23,7 +23,7 @@ benchmarks:
 
   - name: womd_multi
     mode: replay
-    num_scenarios: 100
+    num_scenarios: 1000
     scenario_length: 91
     control_mode: control_vehicles
     paths:
@@ -31,7 +31,7 @@ benchmarks:
 
   - name: womd_single
     mode: replay
-    num_scenarios: 100
+    num_scenarios: 1000
     scenario_length: 91
     control_mode: control_sdc_only
     paths:
@@ -39,7 +39,7 @@ benchmarks:
 
   - name: nuplan_multi
     mode: replay
-    num_scenarios: 100
+    num_scenarios: 1000
     scenario_length: 91
     control_mode: control_vehicles
     paths:
@@ -47,7 +47,7 @@ benchmarks:
 
   - name: nuplan_single
     mode: replay
-    num_scenarios: 100
+    num_scenarios: 1000
     scenario_length: 91
     control_mode: control_sdc_only
     paths:

@@ -262,7 +262,9 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and failure replay settings.
 eval:
-  num_agents: 256
+  num_agents: 128
+  # Worker cap for replay suites that control only the SDC. Needed for now to not limit RAM usage
+  benchmark_sdc_num_envs: 4
   catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
   evaluation_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
   datasets: null
