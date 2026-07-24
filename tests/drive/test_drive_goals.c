@@ -117,9 +117,39 @@ static int test_map_goals_carry_lane_and_track_slot_zero(void) {
 // Route goal source (walks the agent's own route).
 // ---------------------------------------------------------------------------
 
+static int test_route_goal_source_no_attrition(void) {
+    // Route source used to drop agents whose sampled spawn position sat on short
+    // or dead-end lanes (common on cropped nuPlan maps): route + goal generation
+    // ran only after the position was accepted, so the failure was never
+    // resampled. Spawn now rejects such positions like collisions; every
+    // requested agent must come up live with a full goal set.
+    srand(7);
+    Drive env = drive_test_make_env(drive_nuplan_map(), SIMULATION_GIGAFLOW, 32, 0);
+    EXPECT_EQ_INT(env.active_agent_count, 32);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        EXPECT_FALSE(agent->removed);
+        EXPECT_EQ_INT(agent->goal_count, env.num_goals);
+    }
+
+    // The episode-boundary respawn takes the same path; it must not shed agents
+    // either (c_reset at timestep 0 is the no-op init path, so force past it).
+    env.timestep = 1;
+    c_reset(&env);
+    EXPECT_EQ_INT(env.active_agent_count, 32);
+    for (int i = 0; i < env.active_agent_count; i++) {
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        EXPECT_FALSE(agent->removed);
+        EXPECT_EQ_INT(agent->goal_count, env.num_goals);
+    }
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_route_goals_full_set_or_removed(void) {
-    // The route path front-aligns the full num_goals set or (after a route retry) removes the
-    // agent; it must never leave a live agent with a partial set.
+    // The route path must never leave a live agent with a partial goal set:
+    // active agents either carry the full front-aligned num_goals set or were
+    // removed by the spawn/reset caller after every placement attempt failed.
     srand(5);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
     for (int i = 0; i < env.active_agent_count; i++) {
@@ -250,6 +280,7 @@ int main(void) {
     RUN_TEST(test_commit_goals_back_align_pads_front_with_lane_minus_one);
     RUN_TEST(test_map_goal_source_no_attrition);
     RUN_TEST(test_map_goals_carry_lane_and_track_slot_zero);
+    RUN_TEST(test_route_goal_source_no_attrition);
     RUN_TEST(test_route_goals_full_set_or_removed);
     RUN_TEST(test_route_goals_front_aligned_with_lanes);
     RUN_TEST(test_roll_goals_slides_window_and_appends);
