@@ -225,7 +225,9 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
 
 def isolate_code(project_root: str, save_dir: str) -> str:
-    """Snapshot the code tree into save_dir/code (or code_vN if taken).
+    """Snapshot the code tree into save_dir/code (or code_vN if taken); for an
+    in-repo save_dir the snapshot goes to a <repo>_code_snapshots/ sibling of
+    the repo instead, mirroring save_dir's relative layout.
 
     Top-level entries are symlinked (instant, avoids deep-copying data/),
     except ancestors of the snapshot itself.
@@ -237,7 +239,16 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     import shutil
     from pathlib import Path
 
-    isolated_root = os.path.join(save_dir, "code")
+    # setuptools file discovery walks the whole source tree following
+    # symlinks, so snapshots must live outside it.
+    project_root_resolved = Path(project_root).resolve()
+    save_dir_resolved = Path(save_dir).resolve()
+    if save_dir_resolved.is_relative_to(project_root_resolved):
+        snapshots_root = project_root_resolved.parent / f"{project_root_resolved.name}_code_snapshots"
+        save_dir_rel = save_dir_resolved.relative_to(project_root_resolved)
+        isolated_root = str(snapshots_root / save_dir_rel / "code")
+    else:
+        isolated_root = os.path.join(save_dir, "code")
     if os.path.exists(isolated_root):
         version = 1
         while os.path.exists(f"{isolated_root}_v{version}"):
