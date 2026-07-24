@@ -91,6 +91,31 @@ For each selected suite, the evaluator:
 The resolved configuration is written with the report so every run records its
 catalog, checkpoint configuration, worker arguments, maps, and seeds.
 
+## Scenario replay and rendering
+
+Capture and render every scenario from the standard benchmark pass with:
+
+```bash
+puffer eval puffer_drive \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  eval.datasets=carla_fast \
+  eval.render_scenarios=true \
+  eval.render_obs=false
+```
+
+`eval.render_scenarios=true` records each of the suite's configured
+`num_scenarios` during the metrics rollout. It writes the completed
+`.replay.zlib` files incrementally, then renders one interactive HTML page per
+scenario and builds a navigable `index.html`. The benchmark is not rerun, and
+the suite seed and worker configuration continue to determine the evaluated
+map/seed rows. Capturing every scenario increases CPU, memory, and disk usage.
+
+`eval.render_obs=true` also stores policy observations. Periodic training
+evaluation always disables scenario rendering. If `eval.render_failures` is
+also true, the all-scenario gallery is produced and the redundant failure
+replay pass is skipped. `eval.render_scenarios` cannot be combined with
+`eval.replay_failures_csv`, which skips the standard benchmark pass.
+
 ## Failure replay and rendering
 
 Enable the integrated failure pass with:
@@ -130,9 +155,7 @@ puffer eval puffer_drive \
   eval.datasets=carla \
   eval.replay_failures_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
   eval.render_failures_number=10 \
-  eval.render_obs=false \
-  train.compile=true \
-  train.precision=bfloat16
+  eval.render_obs=false
 ```
 
 The selected dataset supplies the replay environment settings, so it should
@@ -147,7 +170,12 @@ eval/<suite>/
 ├── resolved_benchmark.yaml
 ├── episode_metrics.csv
 ├── evaluation_summary.json
-└── failures/                       # only when render_failures=true
+├── replays/                        # only when render_scenarios=true
+│   └── *.replay.zlib
+├── rendered_replays/               # only when render_scenarios=true
+│   ├── *.html
+│   └── index.html
+└── failures/                       # render_failures=true without render_scenarios
     ├── selected_failures.csv
     ├── episode_metrics.csv
     ├── evaluation_summary.json

@@ -260,7 +260,7 @@ sweep:
   metric: score
   goal: maximize
   downsample: 10
-# Catalog-defined evaluation and failure replay settings.
+# Catalog-defined evaluation and replay rendering settings.
 eval:
   num_agents: 128
   # Worker cap for replay suites that control only the SDC. Needed for now to not limit RAM usage
@@ -268,6 +268,8 @@ eval:
   catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
   evaluation_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
   datasets: null
+  # Capture and render every scenario during the standard benchmark pass.
+  render_scenarios: false
   render_failures: false
   # Maximum failures rendered per suite; null renders every failure.
   render_failures_number: null

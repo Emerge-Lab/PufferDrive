@@ -1573,11 +1573,17 @@ def eval(
     catalog_path = eval_config.get("catalog")
     evaluation_config_path = eval_config.get("evaluation_config")
     selected_datasets = eval_config.get("datasets")
+    render_scenarios = bool(eval_config.get("render_scenarios"))
     render_failures = bool(eval_config.get("render_failures"))
     render_failures_number = eval_config.get("render_failures_number")
     replay_failures_csv = eval_config.get("replay_failures_csv")
     benchmark_sdc_num_envs = eval_config.get("benchmark_sdc_num_envs", 8)
-    if render_failures:
+    if render_scenarios and replay_failures_csv is not None:
+        raise pufferlib.APIUsageError(
+            "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
+            "with eval.replay_failures_csv"
+        )
+    if render_failures and not render_scenarios:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
     evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
@@ -1638,8 +1644,10 @@ def eval(
             num_scenarios,
             num_workers,
             int(run_args["env"]["scenario_length"]),
+            capture_replay=render_scenarios,
         )
         print(f"Evaluation {suite['name']}: {num_scenarios} scenarios across {num_workers} workers")
+        replay_output_dir = os.path.join(suite_output_dir, "replays") if render_scenarios else None
         summaries = _run_eval_rollout(
             run_args,
             env_name,
@@ -1648,11 +1656,15 @@ def eval(
             f"Evaluating {suite['name']}",
             num_scenarios,
             policy=policy,
+            replay_output_dir=replay_output_dir,
+            capture_observations=render_scenarios and bool(eval_config.get("render_obs")),
         )
         _write_eval_reports(summaries, suite_output_dir, num_scenarios)
         all_suite_summaries[suite["name"]] = summaries
 
-        if render_failures:
+        if render_scenarios:
+            _render_eval_replays(summaries, suite_output_dir)
+        elif render_failures:
             _render_eval_failures(
                 env_name,
                 run_args,
@@ -2199,6 +2211,7 @@ def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_di
     """Run the current catalog evaluator and log its means on the training run."""
     eval_args = copy.deepcopy(args)
     eval_args["eval"]["datasets"] = eval_args["eval"]["training_datasets"]
+    eval_args["eval"]["render_scenarios"] = False
     eval_args["eval"]["render_failures"] = False
     eval_args["eval"]["replay_failures_csv"] = None
     eval_output_dir = os.path.join(run_dir, "eval", "training")

@@ -39,6 +39,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertEqual(args["eval"]["training_interval"], 100)
             self.assertEqual(args["eval"]["training_datasets"], "carla_fast")
             self.assertEqual(args["eval"]["benchmark_sdc_num_envs"], 8)
+            self.assertFalse(args["eval"]["render_scenarios"])
             self.assertIsNone(args["eval"]["render_failures_number"])
             self.assertIsNone(args["eval"]["replay_failures_csv"])
             self.assertTrue(os.path.isfile(args["eval"]["catalog"]))
@@ -65,10 +66,21 @@ class TestDriveConfig(unittest.TestCase):
         args = load_config("puffer_drive")
         self.assertEqual(args["train"]["learning_rate"], 0.5)
 
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_performance_defaults(self):
+        args = load_config("puffer_drive")
+        self.assertTrue(args["train"]["compile"])
+        self.assertEqual(args["train"]["precision"], "bfloat16")
+
     @patch("sys.argv", ["pufferl.py", "eval.render_failures_number=10"])
     def test_render_failures_number_cli_override(self):
         args = load_config("puffer_drive")
         self.assertEqual(args["eval"]["render_failures_number"], 10)
+
+    @patch("sys.argv", ["pufferl.py", "eval.render_scenarios=true"])
+    def test_render_scenarios_cli_override(self):
+        args = load_config("puffer_drive")
+        self.assertTrue(args["eval"]["render_scenarios"])
 
     @patch("sys.argv", ["pufferl.py", "eval.benchmark_sdc_num_envs=4"])
     def test_benchmark_sdc_num_envs_cli_override(self):

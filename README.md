@@ -104,7 +104,19 @@ does not choose a dataset implicitly. The default device is CUDA; on a machine
 without it add `train.device=cpu`.
 
 ```bash
-# Run the CARLA YAML benchmark and render only episodes with infractions
+# Run the CARLA YAML benchmark and render every evaluated scenario
+puffer eval puffer_drive \
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  eval.datasets=carla \
+  eval.render_scenarios=true \
+  eval.render_obs=false
+```
+
+Scenario renders are captured during the benchmark pass and written as
+interactive HTML with retained `.replay.zlib` files. To render only episodes
+with infractions instead:
+
+```bash
 puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   eval.datasets=carla \
@@ -120,7 +132,7 @@ recorded by the metrics pass. Set
 `eval.replay_failures_csv=<path/to/episode_metrics.csv>` to skip the standard
 benchmark pass and replay failures directly. See
 [docs/evaluation.md](docs/evaluation.md) for the catalog schema, failure replay
-flow, outputs, and training integration.
+and all-scenario rendering flows, outputs, and training integration.
 
 ## Nightly runs and the regression report
 

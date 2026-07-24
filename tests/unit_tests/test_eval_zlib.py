@@ -165,7 +165,7 @@ def test_training_eval_keeps_training_observation_dropout(monkeypatch, tmp_path)
         "load_evaluation_config",
         lambda *_: {"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0},
     )
-    monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", lambda *_: ([{}], 1))
+    monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", lambda *_, **__: ([{}], 1))
 
     def capture_rollout(run_args, *_args, **_kwargs):
         captured_args.update(run_args)
@@ -234,7 +234,8 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
     monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
-    def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length):
+    def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length, capture_replay):
+        assert not capture_replay
         planned_worker_counts.append(num_workers)
         return [{} for _ in range(num_workers)], 1
 
@@ -251,6 +252,92 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
     )
 
     assert planned_worker_counts == [8, 16]
+
+
+def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeypatch, tmp_path):
+    suite = {
+        "name": "carla_test",
+        "seed": 42,
+        "mode": "gigaflow",
+        "map_dir": "maps",
+        "num_maps": 1,
+        "num_scenarios": 2,
+        "scenario_length": 100,
+        "max_agents_per_env": 16,
+        "control_mode": "control_vehicles",
+    }
+    args = {
+        "package": "ocean",
+        "train": {"seed": 1, "use_rnn": False},
+        "vec": {"seed": 1, "num_envs": 2},
+        "env": {
+            "obs_dropout_lane": 0.0,
+            "obs_dropout_boundary": 0.0,
+        },
+        "eval": {
+            "catalog": "catalog.yaml",
+            "evaluation_config": "evaluation.yaml",
+            "datasets": "carla_test",
+            "num_agents": 16,
+            "render_scenarios": True,
+            "render_failures": True,
+            "render_obs": True,
+        },
+    }
+    captured = {}
+    summaries = [{"map_name": "map_0"}, {"map_name": "map_1"}]
+
+    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [suite])
+    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
+
+    def capture_worker_plan(_run_args, num_scenarios, num_workers, scenario_length, capture_replay):
+        captured["worker_plan"] = (num_scenarios, num_workers, scenario_length, capture_replay)
+        return [{} for _ in range(num_workers)], 1
+
+    def capture_rollout(*_args, **kwargs):
+        captured["rollout"] = kwargs
+        return summaries
+
+    def capture_render(render_summaries, output_dir):
+        captured["render"] = (render_summaries, output_dir)
+
+    monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", capture_worker_plan)
+    monkeypatch.setattr(pufferl, "_run_eval_rollout", capture_rollout)
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
+    monkeypatch.setattr(pufferl, "_render_eval_replays", capture_render)
+    monkeypatch.setattr(
+        pufferl,
+        "_render_eval_failures",
+        lambda *_args, **_kwargs: pytest.fail("all-scenario rendering must skip failure replay"),
+    )
+
+    result = pufferl.eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=_ZeroPolicy(),
+        eval_output_dir=str(tmp_path),
+        use_training_config=True,
+    )
+
+    suite_output_dir = tmp_path / "carla_test"
+    assert captured["worker_plan"] == (2, 2, 100, True)
+    assert captured["rollout"]["replay_output_dir"] == str(suite_output_dir / "replays")
+    assert captured["rollout"]["capture_observations"] is True
+    assert captured["render"] == (summaries, str(suite_output_dir))
+    assert result == {"carla_test": summaries}
+
+
+def test_eval_rejects_render_scenarios_with_failure_csv():
+    args = {
+        "eval": {
+            "render_scenarios": True,
+            "replay_failures_csv": "episode_metrics.csv",
+        }
+    }
+
+    with pytest.raises(pufferlib.APIUsageError, match="render_scenarios.*replay_failures_csv"):
+        pufferl.eval("puffer_drive", args=args)
 
 
 def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path):
@@ -339,6 +426,40 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         "render_obs": False,
         "render_failures_number": 2,
     }
+
+
+def test_training_eval_disables_scenario_rendering(monkeypatch, tmp_path):
+    captured_args = {}
+    args = {
+        "eval": {
+            "catalog": "catalog.yaml",
+            "training_datasets": "carla_fast",
+            "render_scenarios": True,
+            "render_failures": True,
+            "replay_failures_csv": "episode_metrics.csv",
+        }
+    }
+
+    def capture_eval(**kwargs):
+        captured_args.update(kwargs["args"])
+        return {}
+
+    monkeypatch.setattr(pufferl, "eval", capture_eval)
+    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [])
+
+    pufferl.run_training_eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=_ZeroPolicy(),
+        logger=SimpleNamespace(),
+        epoch=1,
+        global_step=100,
+        run_dir=str(tmp_path),
+    )
+
+    assert captured_args["eval"]["render_scenarios"] is False
+    assert captured_args["eval"]["render_failures"] is False
+    assert captured_args["eval"]["replay_failures_csv"] is None
 
 
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
