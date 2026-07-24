@@ -51,6 +51,7 @@ static inline Drive drive_test_env_config(
     int use_map_cache) {
     Drive env = {0};
     env.render_mode = RENDER_WINDOW;
+    snprintf(env.resource_root, sizeof(env.resource_root), "%s", DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive");
     env.action_type = 0;
     env.dynamics_model = CLASSIC;
     env.reward_goal = 1.0f;
@@ -77,8 +78,9 @@ static inline Drive drive_test_env_config(
     env.min_goal_spacing = 20.0f;
     env.max_goal_spacing = 60.0f;
     env.num_goals = 3;
-    env.target_type = TARGET_STATIC;
-    env.goal_on_lane = 1;
+    env.goal_regen_mode = GOAL_REGEN_FINITE;
+    env.goal_source = GOAL_SOURCE_ROUTE;
+    env.obs_goal_lane_distance = 0;
     env.obs_slots_lane_n = 32;
     env.obs_slots_boundary_n = 32;
     env.obs_slots_lane_kept = 32;

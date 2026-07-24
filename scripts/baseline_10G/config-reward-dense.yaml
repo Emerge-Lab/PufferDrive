@@ -77,7 +77,8 @@ env:
   sdc_controller: policy
   simulation_mode: gigaflow
   spawn_initial_speed: 0.0
-  target_type: static
+  goal_regen_mode: finite
+  goal_source: route
   termination_mode: 1
   traffic_light_behavior: 1
   use_map_cache: 1
@@ -218,7 +219,8 @@ eval:
       reward_stop_line: 1.0
       reward_timestep: 2.5e-05
       reward_velocity: 0.0025
-      target_type: static
+      goal_source: route
+      goal_regen_mode: finite
       termination_mode: 0
       traffic_light_behavior: 0
     eval:

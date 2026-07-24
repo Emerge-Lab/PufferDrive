@@ -95,12 +95,12 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
 # Single node
 puffer train puffer_drive
 
-# Override config on the fly
-puffer train puffer_drive --train.learning-rate 0.001 --env.num-agents 512
+# Override config on the fly (Hydra syntax: dotted.key=value)
+puffer train puffer_drive train.learning_rate=0.001 env.num_agents=512
 
 # Local smoke test on a machine without CUDA
-puffer train puffer_drive --train.device cpu --vec.backend Serial --env.num-agents 64 \
-    --train.total-timesteps 20480 --train.batch-size 10240 --train.minibatch-size 2560 --train.bptt-horizon 16
+puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 \
+    train.total_timesteps=20480 train.batch_size=10240 train.minibatch_size=2560 train.bptt_horizon=16
 
 # Multi-GPU
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
@@ -109,26 +109,30 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 ## Eval
 
 All evaluation runs through the unified `Evaluator`/`EvalManager` pipeline.
-`[eval.<name>]` sections in `drive.ini` define each evaluator; the same ones
-run inline during training and standalone here.
+`eval.<name>` sections in `puffer_drive.yaml` define each evaluator; the same
+ones run inline during training and standalone here.
 
-The default device is CUDA; on a machine without it (e.g. a Mac) add `--train.device cpu`.
+The default device is CUDA; on a machine without it (e.g. a Mac) add `train.device=cpu`.
 
 ```bash
-# Run a named evaluator on a checkpoint (config from [eval.<name>])
+# Run a named evaluator on a checkpoint (config from eval.<name>)
 puffer eval puffer_drive --evaluator validation_gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
 
 # Ad-hoc: pick by simulation + override scale from the CLI
 puffer eval puffer_drive --eval_simulation replay \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   --num_scenarios 250 --render 1
 
 # Render the agent's observations (interactive HTML)
 puffer eval puffer_drive --eval_simulation gigaflow \
-  --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   --num_scenarios 10 --render 1 --render-backend obs_html
 ```
+
+(`--evaluator`, `--eval_simulation`, `--num_scenarios`, `--render`, and
+`--render-backend` are per-invocation eval flags consumed before config
+loading; everything else uses Hydra `key=value` overrides.)
 
 **For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
 
@@ -138,13 +142,13 @@ Roll a trained policy out against a scenario suite, capture per-episode compact 
 
 ```bash
 puffer mine_failures puffer_drive \
-    --load-model-path experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
-    --mine.output-dir ./failure_mining/puffer_drive_xxxx \
-    --mine.num-episodes 200 \
-    --mine.score-threshold -10.0
+    load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
+    mine.output_dir=./failure_mining/puffer_drive_xxxx \
+    mine.num_episodes=200 \
+    mine.score_threshold=-10.0
 ```
 
-Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
+Config keys (under `mine:` in `puffer_drive.yaml` or `mine.<key>=<value>` on the CLI):
 
 | Key | Default | Notes |
 |---|---|---|
@@ -153,7 +157,7 @@ Config keys (under `[mine]` in `drive.ini` or `--mine.<key>` on the CLI):
 | `score_threshold` | `-inf` | `episode_return < threshold` → flagged as failure; replay written to disk. With `-inf`, no failures are flagged and no replays are persisted. |
 | `render` | `True` | Render each captured replay to HTML + write `index.html` via `mining_viz` |
 
-`env.*` overrides apply (e.g. `--env.simulation-mode gigaflow` to mine on procedural scenarios). Single vec env, sequential rollout — no per-worker map pinning yet. On a machine without CUDA add `--train.device cpu --vec.backend Serial` (the default vec config assumes cluster core counts).
+`env.*` overrides apply (e.g. `env.simulation_mode=gigaflow` to mine on procedural scenarios). Single vec env, sequential rollout — no per-worker map pinning yet. On a machine without CUDA add `train.device=cpu vec.backend=Serial` (the default vec config assumes cluster core counts).
 
 **Output structure** (under `output_dir`):
 
@@ -285,7 +289,7 @@ NO_OCEAN=1 python setup.py build_ext --inplace --force
 NO_TRAIN=1 python setup.py build_ext --inplace --force
 
 # Debug train
-CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
+CUDA_VISIBLE_DEVICES=None LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pufferlib.pufferl train puffer_drive train.device=cpu vec.backend=Serial
 # or
-gdb --args python -m pufferlib.pufferl train puffer_drive --train.device cpu --vec.backend Serial
+gdb --args python -m pufferlib.pufferl train puffer_drive train.device=cpu vec.backend=Serial
 ```
