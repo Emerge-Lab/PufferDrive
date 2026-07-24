@@ -152,11 +152,7 @@ jobs:
           python setup.py build_ext --inplace --force
 
       - name: Replay capture and HTML tests
-        run: >-
-          python -m pytest -v
-          tests/unit_tests/test_compact_replay_capture.py
-          tests/unit_tests/test_eval_zlib.py
-          tests/unit_tests/test_interactive_replay_zlib.py
+        run: python -m pytest -v tests/smoke_tests/test_validation_replay_html.py
         timeout-minutes: 20
 
   perf-tests:
