@@ -110,12 +110,12 @@ train.precision: bfloat16
 train.normalize_rewards: false
 train.checkpoint_interval: 500
 
-# validation_gigaflow reconfigured to obs_html (CPU-only scene playback +
-# per-episode metrics including dnf_rate), pinned to the same Town10HD
-# single-agent setup the training uses, so each eval cycle drops a gallery of
-# rollouts you can browse for DNFs. No eight-way ffmpeg/EGL spike from the
-# default egl backend. The nuPlan-based evaluators (validation_replay,
-# behaviors_full_dir) ship disabled in drive.ini, so no overrides are needed.
+# Disable the nuPlan-based validation_replay. validation_gigaflow stays on but
+# is reconfigured to triage_html (CPU-only scene playback + per-episode metrics
+# including dnf_rate), pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops a gallery of rollouts you can browse
+# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
+eval.validation_replay.enabled: 0
 eval.validation_gigaflow.render_backend: obs_html
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1

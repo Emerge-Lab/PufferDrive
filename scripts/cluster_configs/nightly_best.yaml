@@ -106,9 +106,9 @@ train.precision: bfloat16
 train.normalize_rewards: false
 train.checkpoint_interval: 500
 
-# Eval — validation_gigaflow (CARLA sweep) runs inline; the nuPlan-based
-# evaluators (validation_replay, behaviors_full_dir) ship disabled in
-# drive.ini, so no overrides are needed here.
+# Eval — keep validation_gigaflow (CARLA sweep) inline; validation_replay
+# needs nuPlan bins not used in this nightly.
+eval.validation_replay.enabled: 0
 
 # W&B — group has no space (submit_cluster.py joins the inner command
 # without quoting arg values). Launchers (launch_nightly_best.sh and

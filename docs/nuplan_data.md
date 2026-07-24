@@ -36,31 +36,42 @@ agent trajectories and map geometry, which the defaults below fetch.
 pip install "py123d[nuplan]"
 pip install "nuplan-devkit @ git+https://github.com/motional/nuplan-devkit/@nuplan-devkit-v1.2"
 
+# Both stages read these env vars — export them before any py123d command
+# (details in the py123d nuPlan guide linked above):
+export NUPLAN_DATA_ROOT=/path/to/nuplan_raw       # raw logs + maps land here
+export NUPLAN_MAPS_ROOT=$NUPLAN_DATA_ROOT/maps
+export PY123D_DATA_ROOT=/path/to/py123d_out       # arrow output root
+
 # Mini set (~11 GB) — enough for replay training and the nuPlan evals:
 py123d-download dataset=nuplan \
     'dataset.downloader.splits=[nuplan-mini_train, nuplan-mini_val, nuplan-mini_test]'
 
 # Parse the downloaded logs + maps into py123d's arrow format:
-py123d-conversion datasets=["nuplan-mini"]
+py123d-conversion dataset=nuplan-mini
 ```
 
-Set `NUPLAN_DATA_ROOT` (and `NUPLAN_MAPS_ROOT`) per the
-[py123d nuPlan guide](https://github.com/kesai-labs/py123d/blob/main/docs/datasets/nuplan.rst)
-before converting, or use the streaming mode described there
+Alternatively, use the streaming mode described in the py123d guide
 (`py123d-conversion dataset=nuplan-mini-stream`), which downloads to a
 temporary directory and cleans up after itself. The full (non-mini) set is
-~135 GB: `py123d-download dataset=nuplan` / `py123d-conversion datasets=["nuplan"]`.
+~135 GB: `py123d-download dataset=nuplan` / `py123d-conversion dataset=nuplan`.
 
 ## Stage 2 — convert arrow to .bin with 123Drive
 
 ```bash
 git clone https://github.com/vcharraut/123Drive && cd 123Drive
 uv sync
-uv run convert --preset nuplan --py123d_path /path/to/py123d/data --output ./nuplan_bins
+
+# PY123D_DATA_ROOT must still be exported (per stage 1): the converter
+# resolves map data through it, not through --py123d_path.
+uv run convert --preset nuplan --datasets nuplan-mini \
+    --py123d_path $PY123D_DATA_ROOT --output ./nuplan_bins
 ```
 
 `--py123d_path` points at the py123d dataset root (the directory containing
-`logs/` and `maps/` from stage 1).
+`logs/` and `maps/` from stage 1). `--datasets` must match the converted
+dataset's name: mini-set scenes carry the `nuplan-mini` prefix, and without
+the flag the scan defaults to `nuplan` and finds no scenarios. Drop the flag
+when converting the full set.
 
 **RAM notes:**
 
@@ -96,28 +107,29 @@ Replay training on nuPlan bins, controlling only the SDC:
 
 ```bash
 puffer train puffer_drive \
-    --env.map-dir data/nuplan_mini_train \
-    --env.num-maps 250 \
-    --env.simulation-mode replay \
-    --env.control-mode control_sdc_only \
-    --env.scenario-length 200
+    env.map_dir=data/nuplan_mini_train \
+    env.num_maps=250 \
+    env.simulation_mode=replay \
+    env.control_mode=control_sdc_only \
+    env.scenario_length=200
 ```
 
 ## Enabling the nuPlan evals
 
-`[eval.validation_replay]` and `[eval.behaviors_full_dir]` in
-`pufferlib/config/ocean/drive.ini` ship **disabled**, with `env.map_dir`
-preset to `data/nuplan_mini_val` — where the default fetch lands.
+The `validation_replay` evaluator in `pufferlib/config/puffer_drive.yaml`
+ships **disabled**, with `env.map_dir` preset to `data/nuplan_mini_val` —
+where the default fetch lands.
 
-- **Inline during training:** after fetching, set `enabled = true` (and
-  point `env.map_dir` elsewhere if your bins live elsewhere).
+- **Inline during training:** after fetching, pass
+  `eval.validation_replay.enabled=true` (or flip it in the yaml), and point
+  `env.map_dir` elsewhere if your bins live elsewhere.
 - **Standalone:** `puffer eval --evaluator <name>` runs a named evaluator
   even when it is disabled; only `env.map_dir` needs overriding, via the
-  generic dotted CLI form:
+  generic dotted Hydra form:
 
 ```bash
 puffer eval puffer_drive --evaluator validation_replay \
-    --eval.validation-replay.env.map-dir data/nuplan_mini_val
+    eval.validation_replay.env.map_dir=data/nuplan_mini_val
 ```
 
 See `docs/evaluation.md` for the full evaluator config schema.
