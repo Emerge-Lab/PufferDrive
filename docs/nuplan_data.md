@@ -61,17 +61,9 @@ temporary directory and cleans up after itself. The full (non-mini) set is
 git clone https://github.com/vcharraut/123Drive && cd 123Drive
 uv sync
 
-# PY123D_DATA_ROOT must still be exported (per stage 1): the converter
-# resolves map data through it, not through --py123d_path.
 uv run convert --preset nuplan --datasets nuplan-mini \
     --py123d_path $PY123D_DATA_ROOT --output ./nuplan_bins
 ```
-
-`--py123d_path` points at the py123d dataset root (the directory containing
-`logs/` and `maps/` from stage 1). `--datasets` must match the converted
-dataset's name: mini-set scenes carry the `nuplan-mini` prefix, and without
-the flag the scan defaults to `nuplan` and finds no scenarios. Drop the flag
-when converting the full set.
 
 **RAM notes:**
 
@@ -113,23 +105,3 @@ puffer train puffer_drive \
     env.control_mode=control_sdc_only \
     env.scenario_length=200
 ```
-
-## Enabling the nuPlan evals
-
-The `validation_replay` evaluator in `pufferlib/config/puffer_drive.yaml`
-ships **disabled**, with `env.map_dir` preset to `data/nuplan_mini_val` —
-where the default fetch lands.
-
-- **Inline during training:** after fetching, pass
-  `eval.validation_replay.enabled=true` (or flip it in the yaml), and point
-  `env.map_dir` elsewhere if your bins live elsewhere.
-- **Standalone:** `puffer eval --evaluator <name>` runs a named evaluator
-  even when it is disabled; only `env.map_dir` needs overriding, via the
-  generic dotted Hydra form:
-
-```bash
-puffer eval puffer_drive --evaluator validation_replay \
-    eval.validation_replay.env.map_dir=data/nuplan_mini_val
-```
-
-See `docs/evaluation.md` for the full evaluator config schema.
