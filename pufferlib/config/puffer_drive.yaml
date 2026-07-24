@@ -339,8 +339,6 @@ eval:
   validation_replay:
     inherits: validation_defaults
     type: multi_scenario
-    # Disabled by default: map_dir points where `python data_utils/fetch_data.py`
-    # lands the nuplan_mini_val set - enable after fetching (docs/nuplan_data.md).
     enabled: 'false'
     render: 'true'
     render_backend: triage_html
