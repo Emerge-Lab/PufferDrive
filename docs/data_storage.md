@@ -52,19 +52,3 @@ s3://pufferdrive-bins/nuplan/0.3.2-mini/val/     # 10 GB sample — default
 Adding a dataset = upload to the appropriate bucket, add an entry to
 `data_utils/datasets.yaml` (source URI, description, license, size), and it
 becomes fetchable by name.
-
-## Licensing constraints on redistribution
-
-What each upstream license allows determines where converted data may live
-and who may access it. Lab-internal S3 (IAM-gated) is fine for all of these;
-the constraints below apply to publishing outside the lab.
-
-- **nuPlan (Motional)** — CC BY-NC-SA 4.0, with Motional's dataset terms
-  prevailing on conflict. Redistribution of the data and derivatives
-  (including converted `.bin` files) is permitted if attributed to Motional,
-  non-commercial, and shared under the same CC BY-NC-SA 4.0 license. Public
-  hosting of converted nuPlan bins is therefore allowed with the right
-  license notice attached.
-- **Waymo Open Motion Dataset** — custom terms: copies and modifications
-  (which includes format-converted bins) may only be distributed to people
-  who have registered at waymo.com/open and agreed to Waymo's terms.
