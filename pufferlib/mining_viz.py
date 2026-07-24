@@ -2037,14 +2037,22 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "target_collision_impact_zone",
         "target_collision_responsibility",
         "target_collision_severity",
+        "target_collision_target_failure_rate",
+        "target_collision_unavoidable_rate",
+        "target_collision_adversary_forced_rate",
+        "t_detect",
+        "t_brake",
         "target_episode_return",
         "target_episode_length",
         "has_replay",
     ]
-    existing_columns = [col for col in preferred_columns if col in episodes_df.columns]
+    derived_columns = {"t_detect", "t_brake"}
+    existing_columns = [col for col in preferred_columns if col in episodes_df.columns or col in derived_columns]
     for row in episodes_df.to_dict(orient="records"):
         replay_html = render_lookup.get(row.get("episode_id"))
         out = {key: _safe_value(row.get(key)) for key in existing_columns}
+        out["t_detect"] = _safe_value(row.get("target_first_time_detected"))
+        out["t_brake"] = _safe_value(row.get("target_last_avoidable_braking_seconds_before_collision"))
         if "target_collision_impact_zone" in out:
             out["target_collision_impact_zone"] = (
                 f"{_impact_zone_label(out['target_collision_impact_zone'])}"
@@ -2112,7 +2120,10 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     <div class="controls">
       <input id="search" type="search" placeholder="Filter rows">
       <button id="filter-replay" class="toggle" type="button">Replay Only</button>
-      <button id="filter-failures" class="toggle" type="button">Failures Only</button>
+      <button id="filter-failures" class="toggle" type="button">Any Failures</button>
+      <button id="filter-genuine" class="toggle" type="button">Genuine Failures Only</button>
+      <button id="filter-unavoidable" class="toggle" type="button">Unavoidable Only</button>
+      <button id="filter-adversary-forced" class="toggle" type="button">Adversary-Forced Only</button>
       <button id="filter-offroad" class="toggle" type="button">Offroad Only</button>
       <button id="filter-at-fault" class="toggle" type="button">At-Fault Collision Only</button>
       <span class="muted" id="count"></span>
@@ -2131,12 +2142,16 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     const search = document.getElementById('search');
     const replayFilter = document.getElementById('filter-replay');
     const failuresFilter = document.getElementById('filter-failures');
+    const genuineFilter = document.getElementById('filter-genuine');
+    const unavoidableFilter = document.getElementById('filter-unavoidable');
+    const adversaryForcedFilter = document.getElementById('filter-adversary-forced');
     const offroadFilter = document.getElementById('filter-offroad');
     const atFaultFilter = document.getElementById('filter-at-fault');
     let sortKey = 'did_target_fail';
     let sortDir = -1;
     let replayOnly = false;
     let failuresOnly = false;
+    let outcomeOnly = '';
     let offroadOnly = false;
     let atFaultOnly = false;
 
@@ -2146,6 +2161,7 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       sortDir = Number(params.get('dir') || sortDir) >= 0 ? 1 : -1;
       replayOnly = params.get('replay') === '1';
       failuresOnly = params.get('failures') === '1';
+      outcomeOnly = params.get('outcome') || '';
       offroadOnly = params.get('offroad') === '1';
       atFaultOnly = params.get('atfault') === '1';
       search.value = params.get('q') || '';
@@ -2157,6 +2173,7 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       params.set('dir', String(sortDir));
       if (replayOnly) params.set('replay', '1');
       if (failuresOnly) params.set('failures', '1');
+      if (outcomeOnly) params.set('outcome', outcomeOnly);
       if (offroadOnly) params.set('offroad', '1');
       if (atFaultOnly) params.set('atfault', '1');
       if (search.value) params.set('q', search.value);
@@ -2216,6 +2233,12 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       const filtered = ROWS.filter(row => {{
         if (replayOnly && !row.rendered_html) return false;
         if (failuresOnly && !(Number(row.did_target_fail || 0) > 0)) return false;
+        if (outcomeOnly === 'target_failure' &&
+            !metricEnabled(row, 'target_collision_target_failure_rate')) return false;
+        if (outcomeOnly === 'unavoidable' &&
+            !metricEnabled(row, 'target_collision_unavoidable_rate')) return false;
+        if (outcomeOnly === 'adversary_forced' &&
+            !metricEnabled(row, 'target_collision_adversary_forced_rate')) return false;
         if (offroadOnly && !metricEnabled(row, 'did_target_offroad')) return false;
         if (atFaultOnly && !atFaultEnabled(row)) return false;
         return JSON.stringify(row).toLowerCase().includes(term);
@@ -2237,6 +2260,9 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
       }});
       replayFilter.classList.toggle('active', replayOnly);
       failuresFilter.classList.toggle('active', failuresOnly);
+      genuineFilter.classList.toggle('active', outcomeOnly === 'target_failure');
+      unavoidableFilter.classList.toggle('active', outcomeOnly === 'unavoidable');
+      adversaryForcedFilter.classList.toggle('active', outcomeOnly === 'adversary_forced');
       offroadFilter.classList.toggle('active', offroadOnly);
       atFaultFilter.classList.toggle('active', atFaultOnly);
       updateUrlState();
@@ -2260,6 +2286,18 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
     }});
     failuresFilter.addEventListener('click', () => {{
       failuresOnly = !failuresOnly;
+      renderTable();
+    }});
+    genuineFilter.addEventListener('click', () => {{
+      outcomeOnly = outcomeOnly === 'target_failure' ? '' : 'target_failure';
+      renderTable();
+    }});
+    unavoidableFilter.addEventListener('click', () => {{
+      outcomeOnly = outcomeOnly === 'unavoidable' ? '' : 'unavoidable';
+      renderTable();
+    }});
+    adversaryForcedFilter.addEventListener('click', () => {{
+      outcomeOnly = outcomeOnly === 'adversary_forced' ? '' : 'adversary_forced';
       renderTable();
     }});
     offroadFilter.addEventListener('click', () => {{
