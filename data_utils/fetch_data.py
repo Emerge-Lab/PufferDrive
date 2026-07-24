@@ -1,7 +1,7 @@
 """Fetch shared PufferDrive datasets from S3.
 
 Datasets are declared in data_utils/datasets.yaml and sync into
-<repo>/data/<name>/ (gitignored), where the drive.ini defaults expect them.
+<repo>/data/<name>/ (gitignored), where the default config expects them.
 Fetching elsewhere (--data-root) means pointing env.map_dir there too.
 
     python data_utils/fetch_data.py                     # the default ~10 GB mini sets
@@ -95,7 +95,7 @@ def main():
     parser.add_argument(
         "--data-root",
         default=DEFAULT_DATA_ROOT,
-        help="destination root (default: <repo>/data, where the drive.ini defaults expect it)",
+        help="destination root (default: <repo>/data, where the default config expects it)",
     )
     parser.add_argument("--dry-run", action="store_true", help="show what would be downloaded without writing")
     args = parser.parse_args()

@@ -55,7 +55,7 @@ class Evaluator:
         # `config` = merged per-evaluator config (after inheritance + clean
         # macro expansion). Has nested `env`, `vec`, plus flat scalar knobs.
         self.config = config
-        # `train_config` = the full training config from drive.ini, used as
+        # `train_config` = the full training config from puffer_drive.yaml, used as
         # the base layer that `config` overrides on top of.
         self.train_config = train_config
 
