@@ -74,6 +74,8 @@
 #define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f // m/s^2 braking magnitude (matches planner max braking)
 // Required detection-to-braking margin; this is not simulated inside the braking rollout.
 #define TARGET_AVOIDABILITY_REACTION_TIME_SECONDS 1.0f
+// One decade of reward growth per four seconds of detection-to-braking margin.
+#define TARGET_MARGIN_SHAPING_SECONDS_PER_DECADE 4.0f
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
@@ -546,8 +548,8 @@ struct Drive {
     float adv_target_time_reward_tau;
     float adv_target_hit_at_fault_bonus;
     float adv_target_hit_low_responsibility_threshold;
-    float adv_target_hit_low_responsibility_penalty;
-    int adv_target_hit_low_responsibility_behavior;
+    float adv_target_hit_unavoidable_penalty;
+    int adv_target_hit_unavoidable_behavior;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
     int target_hit_at_fault_this_step;
@@ -6759,6 +6761,27 @@ static inline int target_collision_is_genuine_failure(const Drive *env) {
                TARGET_AVOIDABILITY_REACTION_TIME_SECONDS - 1e-5f;
 }
 
+static inline int target_collision_is_unavoidable(const Drive *env) {
+    return env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME;
+}
+
+// Smooth collision-quality signal based only on
+// m = t_detect - t_brake:
+//     phi(m) = min(1, 10 ^ ((m - reaction_time) / 4)).
+// If the danger was never detected, t_detect is conservatively treated as zero:
+// the collision remains learnable, but receives only the low-margin tail.
+static inline float target_collision_margin_shaping(const Drive *env) {
+    float t_brake = env->target_last_avoidable_braking_seconds_before_collision;
+    if (t_brake <= 0.0f) {
+        return 0.0f;
+    }
+
+    float t_detect = fmaxf(0.0f, env->target_first_time_detected_episode);
+    float margin = t_detect - t_brake;
+    float exponent = (margin - TARGET_AVOIDABILITY_REACTION_TIME_SECONDS) / TARGET_MARGIN_SHAPING_SECONDS_PER_DECADE;
+    return fminf(1.0f, powf(10.0f, exponent));
+}
+
 static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *target_terms) {
     float bonus = 0.0f;
     if (target_terms->offroad < 0.0f) {
@@ -6769,24 +6792,15 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus;
     }
 
-    // The adversarial objective is a genuine target failure, not merely target
-    // closing motion at impact. Rear rams and otherwise unavoidable/late-detected
-    // collisions receive no target-collision bonus.
-    if (!target_collision_is_genuine_failure(env)) {
-        return bonus;
+    // Physically unavoidable target collisions (including rear rams for which
+    // no historical braking start avoids impact) provide no learning signal.
+    if (target_collision_is_unavoidable(env)) {
+        return bonus - env->adv_target_hit_unavoidable_penalty;
     }
 
-    bonus += env->adv_target_collision_reward;
-    bonus += env->adv_target_failure_reward;
-    if (env->adv_target_avoidability_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
-        env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
-        bonus += env->adv_target_avoidability_reward *
-                 expf(-env->target_last_avoidable_braking_seconds_before_collision / env->adv_target_time_reward_tau);
-    }
-    if (env->adv_target_detection_reward != 0.0f && env->adv_target_time_reward_tau > 0.0f &&
-        env->target_first_time_detected_episode > 0.0f) {
-        bonus += env->adv_target_detection_reward *
-                 (1.0f - expf(-env->target_first_time_detected_episode / env->adv_target_time_reward_tau));
+    bonus += env->adv_target_collision_reward * target_collision_margin_shaping(env);
+    if (target_collision_is_genuine_failure(env)) {
+        bonus += env->adv_target_failure_reward;
     }
     if (env->target_hit_at_fault_this_step) {
         bonus += env->adv_target_hit_at_fault_bonus;
@@ -6999,23 +7013,22 @@ void c_step(Drive *env) {
         }
     }
 
-    int bad_target_hit = env->target_hit_this_step && env->adv_target_hit_low_responsibility_threshold >= 0.0f &&
-                         env->target_hit_responsibility_this_step < env->adv_target_hit_low_responsibility_threshold;
-    if (bad_target_hit && (env->adv_target_hit_low_responsibility_behavior == 1 ||
-                           env->adv_target_hit_low_responsibility_behavior == 2)) {
+    int unavoidable_target_hit = env->target_hit_this_step && target_collision_is_unavoidable(env);
+    if (unavoidable_target_hit &&
+        (env->adv_target_hit_unavoidable_behavior == 1 || env->adv_target_hit_unavoidable_behavior == 2)) {
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            if (env->adv_target_hit_low_responsibility_behavior == 1) {
+            if (env->adv_target_hit_unavoidable_behavior == 1) {
                 env->truncations[i] = 0;
                 env->terminals[i] = 1;
-            } else if (env->adv_target_hit_low_responsibility_behavior == 2) {
+            } else if (env->adv_target_hit_unavoidable_behavior == 2) {
                 if (agent_idx == env->target_hit_hitter_idx_this_step) {
                     env->truncations[i] = 0;
                     env->terminals[i] = 1;
                 }
             }
         }
-        if (env->adv_target_hit_low_responsibility_behavior == 1) {
+        if (env->adv_target_hit_unavoidable_behavior == 1) {
             add_log(env);
             c_reset(env);
             return;

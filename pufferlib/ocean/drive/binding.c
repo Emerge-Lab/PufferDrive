@@ -2019,8 +2019,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_target_hit_at_fault_bonus = (float)unpack(kwargs, "adv_target_hit_at_fault_bonus");
     env->adv_target_hit_low_responsibility_threshold =
         (float)unpack(kwargs, "adv_target_hit_low_responsibility_threshold");
-    env->adv_target_hit_low_responsibility_penalty = (float)unpack(kwargs, "adv_target_hit_low_responsibility_penalty");
-    env->adv_target_hit_low_responsibility_behavior = (int)unpack(kwargs, "adv_target_hit_low_responsibility_behavior");
+    env->adv_target_hit_unavoidable_penalty = (float)unpack(kwargs, "adv_target_hit_unavoidable_penalty");
+    env->adv_target_hit_unavoidable_behavior = (int)unpack(kwargs, "adv_target_hit_unavoidable_behavior");
     env->collision_behavior = (int)unpack(kwargs, "collision_behavior");
     env->ignore_target_collision_behavior = (bool)unpack(kwargs, "ignore_target_collision_behavior");
     env->remove_target_on_collision_or_offroad = (bool)unpack(kwargs, "remove_target_on_collision_or_offroad");

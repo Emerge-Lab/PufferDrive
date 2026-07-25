@@ -143,7 +143,7 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_drive=0.5,
         adv_target_offroad_reward=0.0,
         adv_target_collision_reward=0.5,
-        adv_target_collision_reward_use_responsibility=True,
+        adv_target_collision_reward_use_responsibility=False,
         adv_target_failure_reward=0.0,
         adv_target_avoidability_reward=0.0,
         adv_target_detection_reward=0.0,
@@ -232,6 +232,8 @@ class Drive(pufferlib.PufferEnv):
         capture_compact_replay_failures_only=True,
         emit_completed_episodes=False,
         enable_map_cache=True,
+        adv_target_hit_unavoidable_penalty=None,
+        adv_target_hit_unavoidable_behavior=None,
     ):
         self.dt = dt
         self.pdm_horizon = float(pdm_horizon)
@@ -276,6 +278,15 @@ class Drive(pufferlib.PufferEnv):
         self.adv_target_hit_low_responsibility_threshold = float(adv_target_hit_low_responsibility_threshold)
         self.adv_target_hit_low_responsibility_penalty = float(adv_target_hit_low_responsibility_penalty)
         self.adv_target_hit_low_responsibility_behavior = int(adv_target_hit_low_responsibility_behavior)
+        # Keep the former low-responsibility controls as aliases so existing
+        # experiment configs retain their termination behavior while the gate
+        # itself is now based on physical unavoidability.
+        if adv_target_hit_unavoidable_penalty is None:
+            adv_target_hit_unavoidable_penalty = adv_target_hit_low_responsibility_penalty
+        if adv_target_hit_unavoidable_behavior is None:
+            adv_target_hit_unavoidable_behavior = adv_target_hit_low_responsibility_behavior
+        self.adv_target_hit_unavoidable_penalty = float(adv_target_hit_unavoidable_penalty)
+        self.adv_target_hit_unavoidable_behavior = int(adv_target_hit_unavoidable_behavior)
         self.goal_radius = goal_radius
         self.min_waypoint_spacing = min_waypoint_spacing
         self.max_waypoint_spacing = max_waypoint_spacing
@@ -899,8 +910,8 @@ class Drive(pufferlib.PufferEnv):
             "adv_target_time_reward_tau": self.adv_target_time_reward_tau,
             "adv_target_hit_at_fault_bonus": self.adv_target_hit_at_fault_bonus,
             "adv_target_hit_low_responsibility_threshold": self.adv_target_hit_low_responsibility_threshold,
-            "adv_target_hit_low_responsibility_penalty": self.adv_target_hit_low_responsibility_penalty,
-            "adv_target_hit_low_responsibility_behavior": self.adv_target_hit_low_responsibility_behavior,
+            "adv_target_hit_unavoidable_penalty": self.adv_target_hit_unavoidable_penalty,
+            "adv_target_hit_unavoidable_behavior": self.adv_target_hit_unavoidable_behavior,
             "collision_behavior": self.collision_behavior,
             "ignore_target_collision_behavior": bool(self.ignore_target_collision_behavior),
             "remove_target_on_collision_or_offroad": bool(self.remove_target_on_collision_or_offroad),
