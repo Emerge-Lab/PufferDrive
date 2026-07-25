@@ -551,7 +551,7 @@ HTML_TEMPLATE = """<!doctype html>
           </div>
         </div>
         <div id="avoidability-controls" class="avoidability-controls" hidden>
-          <span class="meta-label">Reaction start</span>
+          <span class="meta-label">Brake start</span>
           <div class="controls-row">
             <span>0.0s</span>
             <input id="reaction-slider" type="range" min="0" max="0" value="0" step="1">
@@ -601,11 +601,11 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="legend-row"><span class="swatch" style="background: var(--inactive)"></span>Inactive / static</div>
         <div class="legend-row"><span class="swatch" style="background: var(--stopped)"></span>Stopped / crashed</div>
         <div class="legend-row"><span class="swatch" style="background: #05a3c7"></span>Velocity vector</div>
-        <div class="legend-row"><span class="swatch" style="background: #f59e0b"></span>Target reaction (constant speed)</div>
+        <div class="legend-row"><span class="swatch" style="background: #f59e0b"></span>Pre-braking response (legacy traces)</div>
         <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target maximum braking</div>
         <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary projected trajectory</div>
-        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target at shared stop sample (avoided)</div>
-        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary at shared stop sample (avoided)</div>
+        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target stopped / impact pose</div>
+        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary rollout / impact pose</div>
         <div class="legend-row"><span class="swatch" style="background: #111827"></span>Impact poses (rejected candidate)</div>
       </div>
     </aside>
@@ -1027,6 +1027,10 @@ HTML_TEMPLATE = """<!doctype html>
       const dt = Number(constants.dt || 0.1);
       const deceleration = Number(constants.braking_deceleration || 5.0);
       const reactionTime = Number(constants.reaction_time_seconds || 1.0);
+      // New traces brake immediately and use reactionTime only for classification.
+      // Traces captured before this field was added retain the delayed rollout.
+      const brakingDelay = Object.prototype.hasOwnProperty.call(constants, 'braking_rollout_delay_seconds')
+        ? Number(constants.braking_rollout_delay_seconds) : reactionTime;
       const maxRolloutSteps = Number(constants.max_rollout_steps || 91);
       const collisionTimestep = Number(collision.collision_timestep);
       const startTimestep = collisionTimestep - stepsBack;
@@ -1038,33 +1042,35 @@ HTML_TEMPLATE = """<!doctype html>
 
       const targetRail = observedAgentRail(targetId, startTimestep, collisionTimestep, collision.target);
       const initialSpeed = speedOfAgent(targetAtStart);
-      const stopTime = initialSpeed <= 0 ? 0 : reactionTime + initialSpeed / Math.max(deceleration, 1e-6);
+      const stopTime = initialSpeed <= 0 ? 0 : brakingDelay + initialSpeed / Math.max(deceleration, 1e-6);
       const targetStopSampleTime = firstRolloutSampleAtOrAfter(stopTime, dt);
+      const observedCollisionTime = stepsBack * dt;
+      const rolloutEndTime = Math.max(targetStopSampleTime, observedCollisionTime);
       const reaction = [];
       const braking = [];
       const targetPointAt = tau => {
-        const brakingTime = Math.max(0, tau - reactionTime);
-        const distance = initialSpeed * tau - 0.5 * deceleration * brakingTime * brakingTime;
+        const motionTime = Math.min(Math.max(0, tau), stopTime);
+        const brakingTime = Math.max(0, motionTime - brakingDelay);
+        const distance = initialSpeed * motionTime - 0.5 * deceleration * brakingTime * brakingTime;
         return sampleRail(targetRail, Math.max(0, distance));
       };
       for (let rolloutStep = 0; rolloutStep < maxRolloutSteps; rolloutStep++) {
         const tau = rolloutStep * dt;
-        if (tau >= stopTime) break;
+        if (tau > rolloutEndTime + 1e-6) break;
         const point = targetPointAt(tau);
-        if (tau <= reactionTime + 1e-6) appendDistinct(reaction, point);
-        if (tau >= reactionTime - 1e-6) appendDistinct(braking, point);
+        if (brakingDelay > 0 && tau <= brakingDelay + 1e-6) appendDistinct(reaction, point);
+        if (tau >= brakingDelay - 1e-6) appendDistinct(braking, point);
       }
       const targetStop = targetPointAt(stopTime);
       appendDistinct(braking, targetStop);
-      const brakingStart = stopTime > reactionTime ? targetPointAt(reactionTime) : null;
+      const brakingStart = stopTime > brakingDelay ? targetPointAt(brakingDelay) : null;
 
       const adversary = collision.adversary;
-      const observedCollisionTime = stepsBack * dt;
       const adversaryTrajectory = [];
       for (let i = 0; i < frames.length; i++) {
         const timestep = Number(episodeTimesteps[i]);
         const relativeTime = (timestep - startTimestep) * dt;
-        if (timestep < startTimestep || timestep >= collisionTimestep || relativeTime > targetStopSampleTime + 1e-6) {
+        if (timestep < startTimestep || timestep >= collisionTimestep || relativeTime > rolloutEndTime + 1e-6) {
           continue;
         }
         const agent = findAgentById(frames[i], adversaryId);
@@ -1076,7 +1082,7 @@ HTML_TEMPLATE = """<!doctype html>
           });
         }
       }
-      if (targetStopSampleTime >= observedCollisionTime - 1e-6) {
+      if (rolloutEndTime >= observedCollisionTime - 1e-6) {
         appendDistinct(adversaryTrajectory, {
           x: Number(adversary.x),
           y: Number(adversary.y),
@@ -1085,7 +1091,7 @@ HTML_TEMPLATE = """<!doctype html>
         const heading = Number(adversary.heading || 0);
         const signedSpeed = Number(adversary.vx || 0) * Math.cos(heading) + Number(adversary.vy || 0) * Math.sin(heading);
         const adversaryStopTime = Math.abs(signedSpeed) / Math.max(deceleration, 1e-6);
-        const postCollisionDuration = Math.max(0, targetStopSampleTime - observedCollisionTime);
+        const postCollisionDuration = Math.max(0, rolloutEndTime - observedCollisionTime);
         const postCollisionSteps = Math.round(postCollisionDuration / dt);
         for (let extensionStep = 1; extensionStep <= postCollisionSteps; extensionStep++) {
           const time = Math.min(extensionStep * dt, adversaryStopTime);
@@ -1099,7 +1105,7 @@ HTML_TEMPLATE = """<!doctype html>
           });
         }
       }
-      const adversaryAtTargetStop = adversaryTrajectory[adversaryTrajectory.length - 1] || null;
+      const adversaryAtRolloutEnd = adversaryTrajectory[adversaryTrajectory.length - 1] || null;
 
       const blockingRolloutStep = Number(candidateValue('blocking_rollout_step', candidateIndex, -1));
       const blockingSnapshot = candidateValue('blocking_agent', candidateIndex, null);
@@ -1107,7 +1113,7 @@ HTML_TEMPLATE = """<!doctype html>
       if (blockingRolloutStep >= 0 && blockingSnapshot && blockingSnapshot.valid) {
         const impactTime = blockingRolloutStep * dt;
         const targetImpact = targetPointAt(impactTime);
-        targetImpact.speed = Math.max(0, initialSpeed - deceleration * Math.max(0, impactTime - reactionTime));
+        targetImpact.speed = Math.max(0, initialSpeed - deceleration * Math.max(0, impactTime - brakingDelay));
         impact = {
           time: impactTime,
           target: targetImpact,
@@ -1129,11 +1135,12 @@ HTML_TEMPLATE = """<!doctype html>
         reaction,
         braking,
         adversaryTrajectory,
-        adversaryAtTargetStop,
+        adversaryAtRolloutEnd,
         targetStop,
         brakingStart,
-        reactionTime,
+        reactionTime: brakingDelay,
         targetStopSampleTime,
+        rolloutEndTime,
         impact,
         targetDimensions: {length: Number(collision.target.length), width: Number(collision.target.width)},
         adversaryDimensions: {length: Number(adversary.length), width: Number(adversary.width)},
@@ -1739,10 +1746,10 @@ HTML_TEMPLATE = """<!doctype html>
           -17
         );
         drawImpactPose(
-          trajectories.adversaryAtTargetStop,
+          trajectories.adversaryAtRolloutEnd,
           trajectories.adversaryDimensions,
           '#0891b2',
-          `adversary at target stop sample · t=${trajectories.targetStopSampleTime.toFixed(2)}s`,
+          `adversary at rollout end · t=${trajectories.rolloutEndTime.toFixed(2)}s`,
           17,
           [7, 4]
         );
@@ -2014,6 +2021,14 @@ def _safe_value(value):
     return value
 
 
+def _safe_first(row, *keys):
+    for key in keys:
+        value = _safe_value(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def generate_failure_index(episodes_df, render_lookup, output_path):
     rows = []
     preferred_columns = [
@@ -2042,17 +2057,19 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "target_collision_adversary_forced_rate",
         "t_detect",
         "t_brake",
+        "t_margin",
         "target_episode_return",
         "target_episode_length",
         "has_replay",
     ]
-    derived_columns = {"t_detect", "t_brake"}
+    derived_columns = {"t_detect", "t_brake", "t_margin"}
     existing_columns = [col for col in preferred_columns if col in episodes_df.columns or col in derived_columns]
     for row in episodes_df.to_dict(orient="records"):
         replay_html = render_lookup.get(row.get("episode_id"))
         out = {key: _safe_value(row.get(key)) for key in existing_columns}
-        out["t_detect"] = _safe_value(row.get("target_first_time_detected"))
-        out["t_brake"] = _safe_value(row.get("target_last_avoidable_braking_seconds_before_collision"))
+        out["t_detect"] = _safe_first(row, "t_detect", "target_first_time_detected")
+        out["t_brake"] = _safe_first(row, "t_brake", "target_mean_last_avoidable_braking_seconds_before_collision")
+        out["t_margin"] = _safe_first(row, "t_detect_minus_t_brake", "target_mean_detection_braking_margin_seconds")
         if "target_collision_impact_zone" in out:
             out["target_collision_impact_zone"] = (
                 f"{_impact_zone_label(out['target_collision_impact_zone'])}"

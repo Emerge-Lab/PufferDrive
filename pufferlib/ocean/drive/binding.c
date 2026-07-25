@@ -1582,8 +1582,9 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
             Py_BuildValue("{s:i,s:i,s:i}", "target_agent_index", debug->target_agent_index, "collision_adversary_index",
                           debug->collision_adversary_index, "collision_timestep", debug->collision_timestep);
         PyObject *constants = Py_BuildValue(
-            "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
-            debug->braking_deceleration, "reaction_time_seconds", debug->reaction_time_seconds, "max_extension_steps",
+            "{s:f,s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f,s:f}", "dt", debug->dt, "braking_deceleration",
+            debug->braking_deceleration, "reaction_time_seconds", debug->reaction_time_seconds,
+            "braking_rollout_delay_seconds", debug->braking_rollout_delay_seconds, "max_extension_steps",
             debug->max_extension_steps, "max_rollout_steps", debug->max_rollout_steps, "ttc_margin_seconds",
             debug->ttc_margin_seconds, "ttc_max_projection_steps", debug->ttc_max_projection_steps,
             "lateral_buffer_base_distance", debug->lateral_buffer_base_distance, "lateral_buffer_response_time_seconds",
@@ -1600,6 +1601,20 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
                           debug->combined_detection_seconds_before_collision,
                           "target_last_avoidable_braking_seconds_before_collision",
                           debug->last_avoidable_braking_seconds_before_collision);
+        if (detection_times != NULL) {
+            float t_detect = debug->combined_detection_seconds_before_collision;
+            float t_brake = debug->last_avoidable_braking_seconds_before_collision;
+            float margin = t_detect > 0.0f && t_brake > 0.0f ? t_detect - t_brake : FIRST_DETECTED_NOT_DETECTED;
+            float unavoidable = t_brake == NO_AVOIDABLE_BRAKING_TIME ? 1.0f : 0.0f;
+            float genuine_target_failure = margin >= debug->reaction_time_seconds - 1e-5f ? 1.0f : 0.0f;
+            float adversary_forced = t_brake > 0.0f && genuine_target_failure == 0.0f ? 1.0f : 0.0f;
+            assign_to_dict(detection_times, "t_detect", t_detect);
+            assign_to_dict(detection_times, "t_brake", t_brake);
+            assign_to_dict(detection_times, "t_detect_minus_t_brake", margin);
+            assign_to_dict(detection_times, "genuine_target_failure", genuine_target_failure);
+            assign_to_dict(detection_times, "adversary_forced", adversary_forced);
+            assign_to_dict(detection_times, "unavoidable", unavoidable);
+        }
         PyObject *target_route = PyList_New(debug->target_route_length);
         if (target_route != NULL) {
             for (int i = 0; i < debug->target_route_length; i++) {
@@ -2181,9 +2196,17 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "target_collision_target_failure_rate", log->target_collision_target_failure_rate);
     assign_to_dict(dict, "target_mean_last_avoidable_braking_seconds_before_collision",
                    log->target_last_avoidable_braking_seconds_before_collision);
+    assign_to_dict(dict, "target_mean_detection_braking_margin_seconds", log->target_detection_braking_margin_seconds);
     assign_to_dict(dict, "target_first_time_detected_ttc", log->target_first_time_detected_ttc);
     assign_to_dict(dict, "target_first_time_detected_lat_rss", log->target_first_time_detected_lat_rss);
     assign_to_dict(dict, "target_first_time_detected", log->target_first_time_detected);
+    // Concise per-episode aliases used by paper tables and compact replay indexes.
+    assign_to_dict(dict, "t_detect", log->target_first_time_detected);
+    assign_to_dict(dict, "t_brake", log->target_last_avoidable_braking_seconds_before_collision);
+    assign_to_dict(dict, "t_detect_minus_t_brake", log->target_detection_braking_margin_seconds);
+    assign_to_dict(dict, "genuine_target_failure", log->target_collision_target_failure_rate);
+    assign_to_dict(dict, "adversary_forced", log->target_collision_adversary_forced_rate);
+    assign_to_dict(dict, "unavoidable", log->target_collision_unavoidable_rate);
     assign_to_dict(dict, "adversaries_collision_severity", log->adversaries_collision_severity);
     assign_to_dict(dict, "adversaries_collision_responsibility", log->adversaries_collision_responsibility);
     assign_to_dict(dict, "adversaries_collision_impact_zone", log->adversaries_collision_impact_zone);
