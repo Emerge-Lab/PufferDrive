@@ -582,6 +582,8 @@ struct Drive {
     int targeted_spawn_mode;
     float targeted_spawn_radius;
     int targeted_spawn_attempts;
+    float spawn_min_separation;
+    float targeted_spawn_close_probability;
     float goal_radius;
     float goal_speed;
     float min_waypoint_spacing;
@@ -4197,7 +4199,7 @@ static void reset_agent_state(Agent *agent) {
 }
 
 // Check if a spawn position collides with any existing agent
-static bool check_spawn_collision(Drive *env, int num_existing_agents, float spawn_x, float spawn_y, float spawn_z,
+static bool check_spawn_collision(Drive *env, int agent_idx, float spawn_x, float spawn_y, float spawn_z,
                                   float spawn_heading, float spawn_length, float spawn_width, float spawn_height) {
     // Create a temporary agent structure for collision checking
     Agent temp_agent;
@@ -4215,7 +4217,7 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, float spa
     // Minimum safe distance
     float min_safe_dist_sq = (spawn_length + 5.0f) * (spawn_length + 5.0f);
 
-    for (int i = 0; i < num_existing_agents; i++) {
+    for (int i = 0; i < agent_idx; i++) {
         Agent *other = &env->agents[i];
 
         // Skip invalid agents
@@ -4236,6 +4238,26 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, float spa
     }
 
     return false; // No collision
+}
+
+static bool check_spawn_separation(Drive *env, int agent_idx, float spawn_x, float spawn_y, bool skip_target) {
+    float min_dist_sq = env->spawn_min_separation * env->spawn_min_separation;
+
+    for (int i = 0; i < agent_idx; i++) {
+        if (skip_target && i == 0)
+            continue;
+
+        Agent *other = &env->agents[i];
+        if (other->sim_x == INVALID_POSITION || other->sim_valid != 1)
+            continue;
+
+        float dx = other->sim_x - spawn_x;
+        float dy = other->sim_y - spawn_y;
+        if (dx * dx + dy * dy < min_dist_sq)
+            return true;
+    }
+
+    return false;
 }
 
 static bool check_spawn_offroad(Drive *env, float spawn_x, float spawn_y, float spawn_heading, float spawn_length,
@@ -4331,12 +4353,14 @@ static bool sample_drivable_lane_candidate_global(Drive *env, int *start_lane_id
     return true;
 }
 
-static bool sample_drivable_lane_candidate_near_target(Drive *env, float target_x, float target_y, float radius,
-                                                       int *start_lane_idx, int *geometry_idx) {
-    if (env->grid_map->num_drivable_grid_cell <= 0 || radius <= 0.0f)
+static bool sample_drivable_lane_candidate_near_target(Drive *env, float target_x, float target_y, float target_z,
+                                                       float min_radius, float max_radius, int *start_lane_idx,
+                                                       int *geometry_idx) {
+    if (env->grid_map->num_drivable_grid_cell <= 0 || max_radius <= 0.0f)
         return false;
 
-    float radius_sq = radius * radius;
+    float min_radius_sq = min_radius * min_radius;
+    float max_radius_sq = max_radius * max_radius;
     int candidate_count = 0;
     int chosen_lane_idx = -1;
     int chosen_geometry_idx = -1;
@@ -4352,9 +4376,12 @@ static bool sample_drivable_lane_candidate_near_target(Drive *env, float target_
                 continue;
 
             RoadMapElement *lane = &env->road_elements[entity.entity_idx];
+            if (fabsf(lane->z[entity.geometry_idx] - target_z) > Z_BUFFER)
+                continue;
             float dx = lane->x[entity.geometry_idx] - target_x;
             float dy = lane->y[entity.geometry_idx] - target_y;
-            if (dx * dx + dy * dy > radius_sq)
+            float dist_sq = dx * dx + dy * dy;
+            if (dist_sq < min_radius_sq || dist_sq > max_radius_sq)
                 continue;
 
             candidate_count++;
@@ -4374,7 +4401,7 @@ static bool sample_drivable_lane_candidate_near_target(Drive *env, float target_
 }
 
 // NOTE: type of function -> void, int, bool ?
-static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
+static int spawn_agent(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     // Free existing route on reset
@@ -4423,16 +4450,24 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
     if (local_attempts > MAX_SPAWN_ATTEMPTS)
         local_attempts = MAX_SPAWN_ATTEMPTS;
 
-    for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
+    bool close_spawn = env->targeted_spawn_mode == 1 && agent_idx > 0 &&
+                       random_uniform(0.0f, 1.0f) < env->targeted_spawn_close_probability;
+    int total_attempts = close_spawn ? MAX_SPAWN_ATTEMPTS + local_attempts : MAX_SPAWN_ATTEMPTS;
+
+    for (int attempt = 0; attempt < total_attempts; attempt++) {
         int candidate_geometry_idx = -1;
         bool sampled = false;
+        bool allow_target_proximity = false;
         bool try_targeted_spawn = env->targeted_spawn_mode == 1 && agent_idx > 0 && attempt < local_attempts &&
                                   env->agents[0].sim_valid == 1 && env->agents[0].sim_x != INVALID_POSITION;
 
         if (try_targeted_spawn) {
+            float min_radius = close_spawn ? 0.0f : env->spawn_min_separation;
+            float max_radius = close_spawn ? env->spawn_min_separation : env->targeted_spawn_radius;
             sampled = sample_drivable_lane_candidate_near_target(env, env->agents[0].sim_x, env->agents[0].sim_y,
-                                                                 env->targeted_spawn_radius, &start_lane_idx,
-                                                                 &candidate_geometry_idx);
+                                                                 env->agents[0].sim_z, min_radius, max_radius,
+                                                                 &start_lane_idx, &candidate_geometry_idx);
+            allow_target_proximity = sampled && close_spawn;
         }
 
         if (!sampled) {
@@ -4448,8 +4483,11 @@ static int spawn_agent(Drive *env, int agent_idx, int num_agents) {
         spawn_z = start_lane->z[candidate_geometry_idx];
         spawn_heading = start_lane->headings[candidate_geometry_idx];
 
+        if (check_spawn_separation(env, agent_idx, spawn_x, spawn_y, allow_target_proximity))
+            continue;
+
         // Check for collision with existing/already-reset agents
-        if (check_spawn_collision(env, num_agents, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width,
+        if (check_spawn_collision(env, agent_idx, spawn_x, spawn_y, spawn_z, spawn_heading, spawn_length, spawn_width,
                                   spawn_height))
             continue;
 
@@ -4645,13 +4683,12 @@ void set_active_agents(Drive *env) {
 
         int successfully_created = 0;
         for (int i = 0; i < num_agents_to_create; i++) {
-            // Pass the number of already successfully created agents for collision checking
-            if (spawn_agent(env, i, successfully_created)) {
+            if (spawn_agent(env, successfully_created)) {
                 successfully_created++;
             } else {
                 // Failed spawn: ensure agent is properly invalidated
-                invalidate_agent(&env->agents[i]);
-                env->agents[i].removed = 1;
+                invalidate_agent(&env->agents[successfully_created]);
+                env->agents[successfully_created].removed = 1;
             }
         }
 
@@ -6858,7 +6895,7 @@ void c_reset(Drive *env) {
             int agent_idx = env->active_agent_indices[x];
 
             // Respawn agent at new random position
-            if (spawn_agent(env, agent_idx, num_reset)) {
+            if (spawn_agent(env, agent_idx)) {
                 num_reset++;
             } else {
                 // Failed spawn: ensure agent is properly invalidated

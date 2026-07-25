@@ -194,6 +194,8 @@ class Drive(pufferlib.PufferEnv):
         targeted_spawn_mode=0,
         targeted_spawn_radius=40.0,
         targeted_spawn_attempts=10,
+        spawn_min_separation=3.0,
+        targeted_spawn_close_probability=0.05,
         target_type="static",
         reward_conditioning=False,
         reward_randomization=False,
@@ -424,6 +426,8 @@ class Drive(pufferlib.PufferEnv):
         self.targeted_spawn_mode = int(targeted_spawn_mode)
         self.targeted_spawn_radius = float(targeted_spawn_radius)
         self.targeted_spawn_attempts = int(targeted_spawn_attempts)
+        self.spawn_min_separation = float(spawn_min_separation)
+        self.targeted_spawn_close_probability = float(targeted_spawn_close_probability)
         self.map_files = _select_map_files(self.map_dir, self.simulation_mode_str, self.maps, num_maps)
         self.num_maps = len(self.map_files)
 
@@ -946,6 +950,8 @@ class Drive(pufferlib.PufferEnv):
             "targeted_spawn_mode": self.targeted_spawn_mode,
             "targeted_spawn_radius": self.targeted_spawn_radius,
             "targeted_spawn_attempts": self.targeted_spawn_attempts,
+            "spawn_min_separation": self.spawn_min_separation,
+            "targeted_spawn_close_probability": self.targeted_spawn_close_probability,
             "init_steps": self.init_steps,
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,

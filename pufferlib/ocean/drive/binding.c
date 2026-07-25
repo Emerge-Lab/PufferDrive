@@ -2059,6 +2059,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->targeted_spawn_mode = (int)unpack(kwargs, "targeted_spawn_mode");
     env->targeted_spawn_radius = (float)unpack(kwargs, "targeted_spawn_radius");
     env->targeted_spawn_attempts = (int)unpack(kwargs, "targeted_spawn_attempts");
+    env->spawn_min_separation = (float)unpack(kwargs, "spawn_min_separation");
+    env->targeted_spawn_close_probability = (float)unpack(kwargs, "targeted_spawn_close_probability");
     int init_steps = (int)unpack(kwargs, "init_steps");
     env->init_steps = init_steps;
     env->timestep = init_steps;
