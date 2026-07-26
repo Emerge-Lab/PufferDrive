@@ -1,22 +1,21 @@
 # Multi-agent "best launch" nightly training program config.
 #
-# The training recipe (env scale, goals, observations, perturbations, rewards,
-# policy architecture, optimizer settings) is the mimolette recipe, which is
-# the default in pufferlib/config/puffer_drive.yaml. This file only overrides
-# run-scale and logging for a night-sized run.
+# The training recipe (env physics, goals, observations, perturbations,
+# rewards, policy architecture, optimizer settings) comes from the defaults
+# in pufferlib/config/puffer_drive.yaml. This file only overrides scale,
+# run length, and logging.
 #
 # Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).
 
-# Mimolette scale. The defaults keep the recipe (env physics, goals, obs,
-# rewards, policy) but are sized to run on-premise for dev; the scale knobs
-# for a real training run live here.
+# Full training scale. The defaults are sized to run on-premise for dev;
+# the scale knobs for a real training run live here.
 env.num_agents: 3200
 vec.num_envs: 40
 train.minibatch_size: 256000
 train.max_minibatch_size: 64000
 train.compile: true
 
-# Night-sized run: mimolette's full schedule doesn't finish overnight.
+# Night-sized run: the default 500B-step schedule doesn't finish overnight.
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 500
 
