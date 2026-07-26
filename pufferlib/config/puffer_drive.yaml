@@ -32,7 +32,7 @@ rnn_name: null
 max_suggestion_cost: 3600
 vec:
   backend: Multiprocessing
-  num_envs: 40
+  num_envs: 20
   num_workers: auto
   batch_size: auto
   zero_copy: true
@@ -42,7 +42,7 @@ env:
   # Options: "gigaflow", "replay"
   simulation_mode: gigaflow
   # Total number of agents in the environment
-  num_agents: 3200
+  num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
   max_agents_per_env: 120
@@ -209,7 +209,7 @@ train:
   anneal_lr: true
   amp: true
   precision: bfloat16
-  total_timesteps: 62500000000
+  total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
   gae_lambda: 0.95
@@ -229,11 +229,11 @@ train:
   checkpoint_interval: 50
   # batch_size = num_workers * num_agents *  bptt_horizon
   batch_size: auto
-  minibatch_size: 256000
+  minibatch_size: 65536
   # Accumulate gradients above this size
-  max_minibatch_size: 64000
+  max_minibatch_size: 65536
   bptt_horizon: 128
-  compile: true
+  compile: false
   compile_mode: default
   compile_fullgraph: false
   vtrace_rho_clip: 1

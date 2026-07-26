@@ -141,7 +141,6 @@ train.compile: true
 train.precision: bfloat16
 train.normalize_rewards: false
 train.checkpoint_interval: 500
-vec.num_envs: 20
 
 # Disable the nuPlan-based validation_replay. validation_gigaflow stays on but
 # is reconfigured to triage_html (CPU-only scene playback + per-episode metrics
