@@ -97,6 +97,7 @@ class Drive(pufferlib.PufferEnv):
         num_eval_scenarios=16,
         eval_map_indices=None,
         eval_scenario_seeds=None,
+        log_ema_alpha=0.707,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -222,6 +223,7 @@ class Drive(pufferlib.PufferEnv):
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
+        self.log_ema_alpha = log_ema_alpha
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
         self.terminate_on_goal = terminate_on_goal
@@ -553,6 +555,7 @@ class Drive(pufferlib.PufferEnv):
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
+            "log_ema_alpha": self.log_ema_alpha,
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
@@ -608,6 +611,8 @@ class Drive(pufferlib.PufferEnv):
         # vec_log is the training aggregate; it resets env->log, which eval reads
         # per episode, so it must not run in eval mode.
         if not self.eval_mode and self.tick % self.report_interval == 0:
+            # Rebuilds env->log from the per-agent EMA slots so vec_log means over agents, not completions.
+            binding.vec_prepare_log(self.c_envs)
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)

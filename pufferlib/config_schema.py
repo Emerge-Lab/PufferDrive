@@ -135,6 +135,7 @@ class DriveEnvConfig:
     reward_timestep: float = MISSING
     reward_overspeed: float = MISSING
     reward_ade: float = MISSING
+    log_ema_alpha: float = MISSING
     map_dir: str = MISSING
     num_maps: int = MISSING
     obs_slots_lane_n: int = MISSING

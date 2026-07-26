@@ -25,13 +25,28 @@ static PyObject *map_cache_live_count_py(
     return PyLong_FromLong(live);
 }
 
+static void prepare_log(Drive *env);
+static PyObject *vec_prepare_log_py(PyObject *self __attribute__((unused)), PyObject *args);
+
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"vec_prepare_log", vec_prepare_log_py, METH_VARARGS, "Aggregate per-agent log EMAs into each env->log."}
 // clang-format on
 
 #include "../env_binding.h"
+
+static PyObject *vec_prepare_log_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        prepare_log((Drive *) vec->envs[i]);
+    }
+    Py_RETURN_NONE;
+}
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
@@ -1893,6 +1908,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->log_ema_alpha = (float) unpack(kwargs, "log_ema_alpha");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
