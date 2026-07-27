@@ -15,7 +15,14 @@ echo "START TIME: $(date)"
 start=`date +%s`
 
 source .venv/bin/activate
-.venv/bin/puffer eval puffer_drive --eval_simulation replay --render 1 --render-backend obs_html --load-model-path /lustre/scwpod02/client/kyutai/kesai/bernhard/PufferDrive/experiments/bernhard_train_base_wandb1_run-namek_004_longrun_300B_total-timesteps300000000000_max-minibatch-size131072_minibatch-size131072_num-envs2_91bb92d/puffer_drive_j671z22p/best_models/best_trainer_state_002981.pt
+.venv/bin/puffer eval puffer_drive \
+    eval_simulation=replay \
+    eval.validation_replay.env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.validation_replay.enabled=1 \
+    render=1 \
+    render-backend obs_html \
+    load-model-path=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt \
+    +render_results_dir=/home/bjaeger/PufferDrive/experiments/k_scaled_0000
 
 end=`date +%s`
 runtime=$((end-start))
