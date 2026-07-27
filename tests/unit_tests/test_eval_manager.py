@@ -470,10 +470,12 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
     """Per-agent LSTM reset on terminations or truncations. Either signal
     means 'episode over, env reset' — the agent's next obs is from a fresh
     scenario and stale recurrent memory would bias the policy."""
+    import gymnasium
     import numpy as np
     import torch
 
     import pufferlib.pytorch
+    import pufferlib.spaces
     from pufferlib.ocean.benchmark.evaluators.base import Evaluator
 
     state = {"lstm_h": torch.ones(4, 8), "lstm_c": torch.ones(4, 8)}
@@ -492,7 +494,10 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
 
     class _Vec:
         observation_space = type("S", (), {"shape": (4, 6)})()
-        action_space = type("A", (), {"shape": (4,), "low": -1.0, "high": 1.0})()
+        # Discrete env, like drive "jerk": per-agent MultiDiscrete([12]) (not a
+        # Box -> env_continuous is False), joint action_space is Box(shape=(4, 1)).
+        single_action_space = gymnasium.spaces.MultiDiscrete([12])
+        action_space = pufferlib.spaces.joint_space(single_action_space, 4)
         reset_obs = np.zeros((4, 6), dtype=np.float32)
 
         def step(self, action):
@@ -500,6 +505,8 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
             return self.reset_obs, np.zeros(4), np.array([0, 1, 0, 0]), np.array([1, 0, 1, 0]), []
 
     class _Policy:
+        is_continuous = False
+
         def forward_eval(self, ob, state):
             return torch.zeros(ob.shape[0], 1), None
 
@@ -508,7 +515,16 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
     monkeypatch.setattr(
         pufferlib.pytorch,
         "sample_logits",
-        lambda logits, deterministic=True: (torch.zeros(4, dtype=torch.long), None, None),
+        lambda logits,
+        action=None,
+        action_selection=pufferlib.pytorch.ACTION_SELECT_MODE,
+        env_continuous=None,
+        policy=None: (
+            torch.zeros(4, dtype=torch.long),
+            None,
+            None,
+            None,
+        ),
     )
 
     args = {"train": {"device": "cpu", "use_rnn": True}, "env": {}}
@@ -715,6 +731,9 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
     Mocks the env construction + render so we can control the filenames
     the fake env produces.
     """
+    import gymnasium
+
+    import pufferlib.spaces
     import pufferlib.vector
     from pufferlib.ocean.benchmark.evaluators.base import Evaluator
 
@@ -740,7 +759,10 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
 
     class _FakeVec:
         observation_space = type("S", (), {"shape": (2, 4)})()
-        action_space = type("A", (), {"shape": (2,), "low": -1.0, "high": 1.0})()
+        # Discrete env (2 agents): per-agent MultiDiscrete([12]) (not a Box ->
+        # env_continuous is False), joint action_space is Box(shape=(2, 1)).
+        single_action_space = gymnasium.spaces.MultiDiscrete([12])
+        action_space = pufferlib.spaces.joint_space(single_action_space, 2)
 
         def reset(self):
             import numpy as np
@@ -781,13 +803,24 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
     import pufferlib.pytorch
 
     class _Policy:
+        is_continuous = False
+
         def forward_eval(self, ob, state):
             return torch.zeros(ob.shape[0], 1), None
 
     monkeypatch.setattr(
         pufferlib.pytorch,
         "sample_logits",
-        lambda logits, deterministic=True: (torch.zeros(logits.shape[0], dtype=torch.long), None, None),
+        lambda logits,
+        action=None,
+        action_selection=pufferlib.pytorch.ACTION_SELECT_MODE,
+        env_continuous=None,
+        policy=None: (
+            torch.zeros(logits.shape[0], dtype=torch.long),
+            None,
+            None,
+            None,
+        ),
     )
 
     class _Ev(Evaluator):

@@ -24,7 +24,8 @@ import torch.nn.functional as F
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.torch import Drive as DrivePolicy
-from pufferlib.pytorch import sample_logits
+from pufferlib.pytorch import sample_logits, ACTION_SELECT_MODE, ACTION_SELECT_SAMPLE
+import pufferlib.spaces
 from notebooks.notebook_utils import COEF_NAMES, EGO_LABELS, MAP_DIR, load_notebook_config, zero_actions
 
 CHECKPOINT_PATH = ""
@@ -54,8 +55,9 @@ if CHECKPOINT_PATH:
     policy.load_state_dict(sd)
     print(f"Loaded checkpoint: {CHECKPOINT_PATH}")
 
-is_continuous = policy.is_continuous
-ACT_SHAPE = (N, len(env.single_action_space.nvec)) if not is_continuous else (N, env.single_action_space.shape[0])
+is_continuous = policy.is_continuous  # policy output space
+env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)  # env action space
+ACT_SHAPE = (N, env.single_action_space.shape[0]) if env_continuous else (N, len(env.single_action_space.nvec))
 
 print(f"Policy on {device}, params: {sum(p.numel() for p in policy.parameters()):,}")
 print(f"Obs shape: {obs.shape}, Action space: {env.single_action_space}")
@@ -76,8 +78,10 @@ with torch.no_grad():
     logits_list, value = policy(obs_tensor)
 
 # Sample actions
-action, logprob, ent = sample_logits(logits_list)
-action_det, _, _ = sample_logits(logits_list, deterministic=True)
+action, logprob, ent, cont_action = sample_logits(logits_list, env_continuous=env_continuous, policy=policy)
+action_det, _, _, _ = sample_logits(
+    logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy
+)
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
 print(f"Entropy: mean={ent.mean():.4f}, std={ent.std():.4f}")
@@ -121,7 +125,7 @@ rew_cond = config["env"].get("reward_conditioning", False)
 n_tgt_wp = config["env"].get("num_goals", 3)
 
 
-def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
+def run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE, horizon=HORIZON):
     obs, _ = env.reset(seed=42)
     N = env.num_agents
 
@@ -143,7 +147,9 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         obs_t = torch.FloatTensor(obs).to(device)
         with torch.no_grad():
             logits_list, val = policy(obs_t)
-            act, logp, entr = sample_logits(logits_list, deterministic=deterministic)
+            act, logp, entr, cont_act = sample_logits(
+                logits_list, action_selection=action_selection, env_continuous=env_continuous, policy=policy
+            )
 
         buffers["obs"][t] = obs
         buffers["actions"][t] = act.cpu().numpy().reshape(N) if act.dim() > 1 else act.cpu().numpy()
@@ -156,8 +162,12 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         buffers["positions_x"][t] = gstate["x"]
         buffers["positions_y"][t] = gstate["y"]
 
-        # Step env
-        env_actions = act.cpu().numpy().reshape(ACT_SHAPE)
+        # Step env. A discrete policy on a continuous env steps with the decoded
+        # continuous action; otherwise the (discrete or continuous) action itself.
+        if env_continuous and not is_continuous:
+            env_actions = cont_act.cpu().numpy().reshape(N, -1)
+        else:
+            env_actions = act.cpu().numpy().reshape(ACT_SHAPE)
         obs, rew, term, trunc, info = env.step(env_actions)
         buffers["rewards"][t] = rew
         buffers["terminals"][t] = term
@@ -167,9 +177,9 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
 
 
 print("Running stochastic rollout...")
-buf_stoch = run_rollout(env, policy, deterministic=False)
+buf_stoch = run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE)
 print("Running deterministic rollout...")
-buf_det = run_rollout(env, policy, deterministic=True)
+buf_det = run_rollout(env, policy, action_selection=ACTION_SELECT_MODE)
 
 for name, buf in [("Stochastic", buf_stoch), ("Deterministic", buf_det)]:
     print(f"\n--- {name} ---")
@@ -1049,7 +1059,7 @@ plt.show()
 
 # %%
 # Compute action probs over time for tracked agent (stochastic rollout)
-n_actions = env.single_action_space.nvec[0] if not is_continuous else 1
+n_actions = policy.atn_dim[0] if not is_continuous else 1
 action_probs_time = np.zeros((HORIZON, n_actions))
 for t in range(HORIZON):
     obs_t = torch.FloatTensor(buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]).to(device)

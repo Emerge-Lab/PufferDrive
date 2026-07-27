@@ -118,6 +118,7 @@ policy.actor_num_layers: 0
 policy.critic_hidden_size: 256
 policy.critic_num_layers: 0
 policy.shared_network: true
+policy.action_type: discrete
 
 # Training
 train.seed: 42
