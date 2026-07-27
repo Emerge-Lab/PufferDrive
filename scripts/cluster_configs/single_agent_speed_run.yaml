@@ -2,7 +2,7 @@
 # One controlled agent per environment on a single CARLA map (Town10), with many
 # parallel environments sharing one cached copy of the map geometry. Traffic
 # lights are fully disabled (no observation, no metric, no reward penalty). Keys
-# here override pufferlib/config/ocean/drive.ini; submit_cluster.py converts
+# here override pufferlib/config/puffer_drive.yaml; submit_cluster.py converts
 # underscores in each key to dashes for the CLI.
 #
 # Launch (3 seeds via the colon sweep):

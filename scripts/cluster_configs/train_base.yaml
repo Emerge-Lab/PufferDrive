@@ -1,7 +1,7 @@
 # Base training configuration for PufferDrive cluster jobs (turbostream).
 # These args are passed to `puffer train puffer_drive` as --key=value flags.
 #
-# Only keys listed here override the defaults in pufferlib/config/ocean/drive.ini.
+# Only keys listed here override the defaults in pufferlib/config/puffer_drive.yaml.
 # Vec settings (num_envs, num_workers, batch_size), env.map_dir, env.num_maps,
 # and env.num_agents are all intentionally omitted so runs inherit the ini.
 
