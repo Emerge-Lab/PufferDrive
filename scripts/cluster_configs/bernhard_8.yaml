@@ -1,7 +1,0 @@
-# Kyutai cluster compute configuration
-account: bernhard  # Set your account/allocation
-nodes: 1
-gpus: 8
-cpus: 224
-mem: 1024gb
-time: 5760  # minutes

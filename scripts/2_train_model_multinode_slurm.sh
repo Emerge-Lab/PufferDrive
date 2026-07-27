@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0002/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0002/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0003/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0003/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
@@ -20,7 +20,7 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0002
+export RUN_NAME=k_scaled_0003
 echo ${RUN_NAME}
 
 # Thread limit limits CPU thrashing across worker environments
@@ -49,7 +49,7 @@ srun torchrun \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
     train.total_timesteps=100000000000 \
-    train.learning_rate=0.004 \
+    train.learning_rate=0.01 \
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
