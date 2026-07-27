@@ -24,7 +24,6 @@ source .venv/bin/activate
     --render-backend obs_html \
     eval.validation_defaults.action_selection=mean \
     eval.validation_replay.env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.validation_defaults.traffic_light_behavior=1 \
     eval.validation_defaults.env.traffic_light_behavior=1 \
     env.min_goal_spacing=30.0 \
     env.max_goal_spacing=30.0 \
@@ -35,7 +34,7 @@ source .venv/bin/activate
     --eval-simulation gigaflow \
     --render 1 \
     --render-backend obs_html \
-    num_scenarios=1000 \
+    eval.validation_defaults.eval.num_scenarios=1000 \
     load_model_path=${MODEL_PATH} \
     eval.validation_defaults.action_selection=mean \
     eval.validation_gigaflow.env.min_agents_per_env=50 \
