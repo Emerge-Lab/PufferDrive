@@ -143,17 +143,13 @@ def test_continuous_policy_sample_differs_from_mode():
 def test_mean_rejects_continuous_policy():
     dist = torch.distributions.Normal(torch.zeros(1, 2), torch.ones(1, 2))
     with pytest.raises(ValueError):
-        P.sample_logits(
-            dist, action_selection=P.ACTION_SELECT_MEAN, env_continuous=True, policy=_ContinuousPolicy()
-        )
+        P.sample_logits(dist, action_selection=P.ACTION_SELECT_MEAN, env_continuous=True, policy=_ContinuousPolicy())
 
 
 def test_mean_rejects_discrete_env():
     logits = _discrete_logits([[0.0, 0.0, 0.0]])
     with pytest.raises(ValueError):
-        P.sample_logits(
-            logits, action_selection=P.ACTION_SELECT_MEAN, env_continuous=False, policy=_DiscretePolicy()
-        )
+        P.sample_logits(logits, action_selection=P.ACTION_SELECT_MEAN, env_continuous=False, policy=_DiscretePolicy())
 
 
 # --------------------------------------------------------------------------
@@ -176,9 +172,7 @@ def test_evaluator_defaults_to_mode():
     assert _make_evaluator().action_selection == P.ACTION_SELECT_MODE
 
 
-@pytest.mark.parametrize(
-    "mode", [P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTION_SELECT_MEAN]
-)
+@pytest.mark.parametrize("mode", [P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTION_SELECT_MEAN])
 def test_evaluator_accepts_valid_action_selection(mode):
     assert _make_evaluator(mode).action_selection == mode
 
