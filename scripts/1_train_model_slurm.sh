@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0007/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0007/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_nightly_0008/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_nightly_0008/log_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-2
 
@@ -15,7 +15,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_nightly_0007
+export RUN_NAME=k_nightly_0008
 echo ${RUN_NAME}
 
 # Seed each array task deterministically: 1000 * array task id
