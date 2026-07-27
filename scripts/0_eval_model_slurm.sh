@@ -16,12 +16,11 @@ start=`date +%s`
 
 source .venv/bin/activate
 .venv/bin/puffer eval puffer_drive \
-    eval_simulation=replay \
+    --eval-simulation replay \
+    --render 1 \
+    --render-backend obs_html \
     eval.validation_replay.env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.validation_replay.enabled=1 \
-    render=1 \
-    render-backend obs_html \
-    load-model-path=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt \
+    load_model_path=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt \
     +render_results_dir=/home/bjaeger/PufferDrive/experiments/k_scaled_0000
 
 end=`date +%s`
