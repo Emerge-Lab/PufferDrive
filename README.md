@@ -131,16 +131,16 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 
 ## Eval
 
-The eval command loads one or more named suites from the YAML catalog and
-writes per-episode metrics for each suite. Dataset selection is mandatory; eval
-does not choose a dataset implicitly. The default device is CUDA; on a machine
+The eval command loads one or more named benchmarks from the YAML catalog and
+writes per-episode metrics for each benchmark. Benchmark selection is mandatory;
+eval does not choose one implicitly. The default device is CUDA; on a machine
 without it add `train.device=cpu`.
 
 ```bash
 # Run the CARLA YAML benchmark and render every evaluated scenario
 puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  eval.datasets=carla \
+  eval.benchmarks=carla \
   eval.render_scenarios=true \
   eval.render_obs=false
 ```
@@ -152,14 +152,14 @@ with infractions instead:
 ```bash
 puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  eval.datasets=carla \
+  eval.benchmarks=carla \
   eval.render_failures=true \
   eval.render_failures_number=10 \
   eval.render_obs=false
 ```
 
-Evaluation outputs are written under `eval/<suite>/`. The suite seed and worker
-count are part of the benchmark configuration: repeated runs with both unchanged
+Evaluation outputs are written under `eval/<benchmark>/`. The benchmark seed and
+worker count are part of the benchmark configuration: repeated runs with both unchanged
 produce the same map/seed rows. Failure renders replay the exact map and seed
 recorded by the metrics pass. Set
 `eval.replay_failures_csv=<path/to/episode_metrics.csv>` to skip the standard

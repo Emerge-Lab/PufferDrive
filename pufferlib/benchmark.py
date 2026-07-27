@@ -52,76 +52,80 @@ def _seed(value, label):
     return value
 
 
-def validate_training_eval_config(args):
+def validate_training_evaluation_config(args):
     eval_config = args.get("eval", {})
-    training_enabled = eval_config.get("training_enabled", False)
-    if not isinstance(training_enabled, bool):
-        raise pufferlib.APIUsageError("eval.training_enabled must be true or false")
-    if not training_enabled:
+    train_config = args.get("train", {})
+    evaluation_interval_epochs = train_config.get("evaluation_interval_epochs")
+    if evaluation_interval_epochs is None:
         return False
 
-    training_interval = eval_config.get("training_interval")
-    if isinstance(training_interval, bool) or not isinstance(training_interval, int) or training_interval <= 0:
-        raise pufferlib.APIUsageError("eval.training_interval must be a positive integer")
+    if (
+        isinstance(evaluation_interval_epochs, bool)
+        or not isinstance(evaluation_interval_epochs, int)
+        or evaluation_interval_epochs <= 0
+    ):
+        raise pufferlib.APIUsageError("train.evaluation_interval_epochs must be a positive integer or null")
 
-    training_datasets = eval_config.get("training_datasets")
-    if not isinstance(training_datasets, str) or not training_datasets.strip():
-        raise pufferlib.APIUsageError("eval.training_datasets must select at least one benchmark dataset")
+    evaluation_benchmarks = train_config.get("evaluation_benchmarks")
+    if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
+        raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
     if args["train"].get("use_rnn"):
         raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
 
-    load_catalog(eval_config.get("catalog"), training_datasets)
+    load_catalog(eval_config.get("catalog"), evaluation_benchmarks)
     load_evaluation_config(eval_config.get("evaluation_config"))
     return True
 
 
 def load_catalog(catalog_path, selected_names):
-    """Load benchmark suites and apply one deterministic catalog seed."""
+    """Load benchmarks and apply one deterministic catalog seed."""
     catalog = _load_yaml_mapping(catalog_path, "benchmark catalog")
     catalog_seed = _seed(catalog.get("seed", 42), "benchmark catalog seed")
-    suites = catalog.get("benchmarks")
-    if not isinstance(suites, list) or not suites:
+    benchmarks = catalog.get("benchmarks")
+    if not isinstance(benchmarks, list) or not benchmarks:
         raise pufferlib.APIUsageError("Benchmark catalog must contain a non-empty benchmarks list")
 
     if isinstance(selected_names, str):
         selected_names = [name.strip() for name in selected_names.split(",") if name.strip()]
     if not isinstance(selected_names, list) or not selected_names:
-        raise pufferlib.APIUsageError("At least one benchmark dataset must be selected")
+        raise pufferlib.APIUsageError("At least one benchmark must be selected")
     if any(not isinstance(name, str) or not name for name in selected_names):
-        raise pufferlib.APIUsageError("Benchmark dataset names must be non-empty strings")
+        raise pufferlib.APIUsageError("Benchmark names must be non-empty strings")
     selected_names = list(dict.fromkeys(selected_names))
 
-    catalog_suites = {}
-    for suite_idx, suite in enumerate(suites):
-        suite = _require_mapping(suite, f"benchmarks[{suite_idx}]")
-        name = suite.get("name")
+    catalog_benchmarks = {}
+    for benchmark_idx, benchmark in enumerate(benchmarks):
+        benchmark = _require_mapping(benchmark, f"benchmarks[{benchmark_idx}]")
+        name = benchmark.get("name")
         if not isinstance(name, str) or not name.strip():
-            raise pufferlib.APIUsageError(f"benchmarks[{suite_idx}].name must be a non-empty string")
+            raise pufferlib.APIUsageError(f"benchmarks[{benchmark_idx}].name must be a non-empty string")
         name = name.strip()
-        if name in catalog_suites:
-            raise pufferlib.APIUsageError(f"Benchmark catalog contains duplicate suite name: {name}")
-        catalog_suites[name] = suite
+        if name in catalog_benchmarks:
+            raise pufferlib.APIUsageError(f"Benchmark catalog contains duplicate benchmark name: {name}")
+        catalog_benchmarks[name] = benchmark
 
-    missing_names = [name for name in selected_names if name not in catalog_suites]
+    missing_names = [name for name in selected_names if name not in catalog_benchmarks]
     if missing_names:
-        raise pufferlib.APIUsageError(f"Unknown benchmark datasets: {', '.join(missing_names)}")
+        raise pufferlib.APIUsageError(f"Unknown benchmarks: {', '.join(missing_names)}")
 
-    resolved_suites = []
+    resolved_benchmarks = []
     for name in selected_names:
-        suite = catalog_suites[name]
-        mode = suite.get("mode")
+        benchmark = catalog_benchmarks[name]
+        mode = benchmark.get("mode")
         if mode not in ("gigaflow", "replay"):
             raise pufferlib.APIUsageError(f"Benchmark {name} mode must be 'gigaflow' or 'replay'")
-        num_scenarios = _positive_int(suite.get("num_scenarios"), f"Benchmark {name} num_scenarios")
-        scenario_length = _positive_int(suite.get("scenario_length"), f"Benchmark {name} scenario_length")
-        max_agents_per_env = _positive_int(suite.get("max_agents_per_env", 64), f"Benchmark {name} max_agents_per_env")
-        num_maps = suite.get("num_maps", num_scenarios if mode == "replay" else None)
+        num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
+        scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
+        max_agents_per_env = _positive_int(
+            benchmark.get("max_agents_per_env", 64), f"Benchmark {name} max_agents_per_env"
+        )
+        num_maps = benchmark.get("num_maps", num_scenarios if mode == "replay" else None)
         num_maps = _positive_int(num_maps, f"Benchmark {name} num_maps")
-        control_mode = suite.get("control_mode")
+        control_mode = benchmark.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
             raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
 
-        paths = _require_mapping(suite.get("paths"), f"Benchmark {name} paths")
+        paths = _require_mapping(benchmark.get("paths"), f"Benchmark {name} paths")
         map_dir = paths.get("local")
         if not isinstance(map_dir, str) or not map_dir:
             raise pufferlib.APIUsageError(f"Benchmark {name} paths.local must be a non-empty path")
@@ -144,11 +148,11 @@ def load_catalog(catalog_path, selected_names):
                 f"{available_map_count} maps"
             )
 
-        resolved_suites.append(
+        resolved_benchmarks.append(
             {
                 "name": name,
                 "mode": mode,
-                "seed": _seed(suite.get("seed", catalog_seed), f"Benchmark {name} seed"),
+                "seed": _seed(benchmark.get("seed", catalog_seed), f"Benchmark {name} seed"),
                 "num_scenarios": num_scenarios,
                 "num_maps": num_maps,
                 "max_agents_per_env": max_agents_per_env,
@@ -157,11 +161,11 @@ def load_catalog(catalog_path, selected_names):
                 "map_dir": map_dir,
             }
         )
-    return resolved_suites
+    return resolved_benchmarks
 
 
 def load_evaluation_config(config_path):
-    """Load the environment overrides shared by every benchmark suite."""
+    """Load the environment overrides shared by every benchmark."""
     config = _load_yaml_mapping(config_path, "benchmark evaluation config")
     env_config = _require_mapping(config.get("env"), "benchmark evaluation config env")
     unknown_env_keys = set(env_config) - _drive_env_keys()
@@ -197,37 +201,37 @@ def load_checkpoint_architecture(args):
     return merged, config_path
 
 
-def build_suite_args(base_args, suite, evaluation_env_config):
+def build_benchmark_args(base_args, benchmark, evaluation_env_config):
     """Apply the fixed benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
     eval_agent_count = _positive_int(args["eval"].get("num_agents", 101), "eval.num_agents")
-    if eval_agent_count < suite["max_agents_per_env"]:
+    if eval_agent_count < benchmark["max_agents_per_env"]:
         raise pufferlib.APIUsageError(
-            f"eval.num_agents ({eval_agent_count}) must be at least benchmark {suite['name']} "
-            f"max_agents_per_env ({suite['max_agents_per_env']})"
+            f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
+            f"max_agents_per_env ({benchmark['max_agents_per_env']})"
         )
-    seed = suite["seed"]
+    seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
     args["env"].update(copy.deepcopy(evaluation_env_config))
     args["env"].update(
         {
             "num_agents": eval_agent_count,
-            "simulation_mode": suite["mode"],
-            "map_dir": suite["map_dir"],
-            "num_maps": suite["num_maps"],
-            "scenario_length": suite["scenario_length"],
-            "resample_frequency": suite["scenario_length"],
-            "max_agents_per_env": suite["max_agents_per_env"],
-            "control_mode": suite["control_mode"],
+            "simulation_mode": benchmark["mode"],
+            "map_dir": benchmark["map_dir"],
+            "num_maps": benchmark["num_maps"],
+            "scenario_length": benchmark["scenario_length"],
+            "resample_frequency": benchmark["scenario_length"],
+            "max_agents_per_env": benchmark["max_agents_per_env"],
+            "control_mode": benchmark["control_mode"],
         }
     )
-    args["num_scenarios"] = suite["num_scenarios"]
+    args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 
 
 def write_resolved_benchmark_config(
-    args, suite, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
+    args, benchmark, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
 ):
     import json
 
@@ -235,7 +239,7 @@ def write_resolved_benchmark_config(
         "benchmark_catalog": os.path.abspath(catalog_path),
         "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
         "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
-        "suite": suite,
+        "benchmark": benchmark,
         "args": json.loads(json.dumps(args)),
     }
     with open(output_path, "w") as output_file:

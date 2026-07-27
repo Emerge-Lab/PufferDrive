@@ -107,9 +107,8 @@ train.normalize_rewards: false
 train.checkpoint_interval: 500
 
 # Run the catalog-defined fast CARLA evaluation every 100 training epochs.
-eval.training_enabled: true
-eval.training_interval: 100
-eval.training_datasets: carla_fast
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: carla_fast
 
 # W&B — group has no space (submit_cluster.py joins the inner command
 # without quoting arg values). Launchers (launch_nightly_best.sh and

@@ -1352,7 +1352,7 @@ def _global_agent_steps(pufferl):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
-    training_eval_enabled = pufferlib.benchmark.validate_training_eval_config(args)
+    training_evaluation_scheduled = pufferlib.benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1473,7 +1473,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
-    last_training_eval_epoch = None
+    last_training_evaluation_epoch = None
 
     while pufferl.global_step < train_config["total_timesteps"]:
         if is_cuda_device(train_config["device"]):
@@ -1497,10 +1497,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 torch.distributed.destroy_process_group()
             raise
 
-        if training_eval_enabled and pufferl.epoch % args["eval"]["training_interval"] == 0:
-            last_training_eval_epoch = pufferl.epoch
+        if training_evaluation_scheduled and pufferl.epoch % args["train"]["evaluation_interval_epochs"] == 0:
+            last_training_evaluation_epoch = pufferl.epoch
             if is_rank0:
-                run_training_eval(
+                run_training_evaluation(
                     env_name=env_name,
                     args=args,
                     policy=pufferl.uncompiled_policy,
@@ -1537,8 +1537,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     #     stats = pufferl.evaluate()
     #     i += 1
 
-    if training_eval_enabled and last_training_eval_epoch != pufferl.epoch and is_rank0:
-        run_training_eval(
+    if training_evaluation_scheduled and last_training_evaluation_epoch != pufferl.epoch and is_rank0:
+        run_training_evaluation(
             env_name=env_name,
             args=args,
             policy=pufferl.uncompiled_policy,
@@ -1566,12 +1566,12 @@ def eval(
     eval_output_subdir=None,
     use_training_config=False,
 ):
-    """Run catalog-defined evaluation suites or replay failures from an existing CSV."""
+    """Run catalog-defined benchmarks or replay failures from an existing CSV."""
     args = args or load_config(env_name)
     eval_config = args.get("eval", {})
     catalog_path = eval_config.get("catalog")
     evaluation_config_path = eval_config.get("evaluation_config")
-    selected_datasets = eval_config.get("datasets")
+    selected_benchmarks = eval_config.get("benchmarks")
     render_scenarios = bool(eval_config.get("render_scenarios"))
     render_failures = bool(eval_config.get("render_failures"))
     render_failures_number = eval_config.get("render_failures_number")
@@ -1584,7 +1584,7 @@ def eval(
         )
     if render_failures and not render_scenarios:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
-    suites = pufferlib.benchmark.load_catalog(catalog_path, selected_datasets)
+    benchmarks = pufferlib.benchmark.load_catalog(catalog_path, selected_benchmarks)
     evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
     if use_training_config:
         if policy is None:
@@ -1601,42 +1601,42 @@ def eval(
     if eval_output_dir is None:
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
         eval_output_dir = os.path.join(run_dir, "eval")
-    all_suite_summaries = {}
-    for suite in suites:
-        run_args = pufferlib.benchmark.build_suite_args(base_args, suite, evaluation_env_config)
-        if suite["mode"] == "replay" and suite["control_mode"] == "control_sdc_only":
+    all_benchmark_summaries = {}
+    for benchmark in benchmarks:
+        run_args = pufferlib.benchmark.build_benchmark_args(base_args, benchmark, evaluation_env_config)
+        if benchmark["mode"] == "replay" and benchmark["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), benchmark_sdc_num_envs)
-        suite_output_dir = os.path.join(eval_output_dir, suite["name"])
+        benchmark_output_dir = os.path.join(eval_output_dir, benchmark["name"])
         if eval_output_subdir is not None:
-            suite_output_dir = os.path.join(suite_output_dir, eval_output_subdir)
-        os.makedirs(suite_output_dir, exist_ok=True)
+            benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
+        os.makedirs(benchmark_output_dir, exist_ok=True)
         pufferlib.benchmark.write_resolved_benchmark_config(
             run_args,
-            suite,
+            benchmark,
             catalog_path,
             evaluation_config_path,
             checkpoint_config_path,
-            os.path.join(suite_output_dir, "resolved_benchmark.yaml"),
+            os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
         )
 
-        suite_seed = int(suite["seed"])
-        np.random.seed(suite_seed)
-        torch.manual_seed(suite_seed)
+        benchmark_seed = int(benchmark["seed"])
+        np.random.seed(benchmark_seed)
+        torch.manual_seed(benchmark_seed)
         if replay_failures_csv is not None:
             summaries = _render_eval_failures(
                 env_name,
                 run_args,
-                suite,
+                benchmark,
                 replay_failures_csv,
-                suite_output_dir,
+                benchmark_output_dir,
                 policy,
                 bool(eval_config.get("render_obs")),
                 render_failures_number,
             )
-            all_suite_summaries[suite["name"]] = summaries
+            all_benchmark_summaries[benchmark["name"]] = summaries
             continue
 
-        num_scenarios = int(suite["num_scenarios"])
+        num_scenarios = int(benchmark["num_scenarios"])
         num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
         worker_env_kwargs, total_steps = _plan_benchmark_eval_workers(
             run_args,
@@ -1645,36 +1645,36 @@ def eval(
             int(run_args["env"]["scenario_length"]),
             capture_replay=render_scenarios,
         )
-        print(f"Evaluation {suite['name']}: {num_scenarios} scenarios across {num_workers} workers")
-        replay_output_dir = os.path.join(suite_output_dir, "replays") if render_scenarios else None
+        print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
+        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None
         summaries = _run_eval_rollout(
             run_args,
             env_name,
             worker_env_kwargs,
             total_steps,
-            f"Evaluating {suite['name']}",
+            f"Evaluating {benchmark['name']}",
             num_scenarios,
             policy=policy,
             replay_output_dir=replay_output_dir,
             capture_observations=render_scenarios and bool(eval_config.get("render_obs")),
         )
-        _write_eval_reports(summaries, suite_output_dir, num_scenarios)
-        all_suite_summaries[suite["name"]] = summaries
+        _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
+        all_benchmark_summaries[benchmark["name"]] = summaries
 
         if render_scenarios:
-            _render_eval_replays(summaries, suite_output_dir)
+            _render_eval_replays(summaries, benchmark_output_dir)
         elif render_failures:
             _render_eval_failures(
                 env_name,
                 run_args,
-                suite,
-                os.path.join(suite_output_dir, "episode_metrics.csv"),
-                suite_output_dir,
+                benchmark,
+                os.path.join(benchmark_output_dir, "episode_metrics.csv"),
+                benchmark_output_dir,
                 policy,
                 bool(eval_config.get("render_obs")),
                 render_failures_number,
             )
-    return all_suite_summaries
+    return all_benchmark_summaries
 
 
 def sweep(args=None, env_name=None):
@@ -2041,10 +2041,10 @@ def _run_eval_rollout(
     return episode_summaries
 
 
-def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_dir):
+def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, run_dir):
     """Run the current catalog evaluator and log its means on the training run."""
     eval_args = copy.deepcopy(args)
-    eval_args["eval"]["datasets"] = eval_args["eval"]["training_datasets"]
+    eval_args["eval"]["benchmarks"] = eval_args["train"]["evaluation_benchmarks"]
     eval_args["eval"]["render_scenarios"] = False
     eval_args["eval"]["render_failures"] = False
     eval_args["eval"]["replay_failures_csv"] = None
@@ -2054,7 +2054,7 @@ def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_di
     rng_state = capture_rng_state()
     policy_was_training = bool(getattr(policy, "training", False))
     try:
-        suite_summaries = eval(
+        benchmark_summaries = eval(
             env_name=env_name,
             args=eval_args,
             policy=policy,
@@ -2062,21 +2062,23 @@ def run_training_eval(env_name, args, policy, logger, epoch, global_step, run_di
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        suites = pufferlib.benchmark.load_catalog(eval_args["eval"]["catalog"], eval_args["eval"]["training_datasets"])
-        expected_scenarios = {suite["name"]: suite["num_scenarios"] for suite in suites}
+        benchmarks = pufferlib.benchmark.load_catalog(
+            eval_args["eval"]["catalog"], eval_args["train"]["evaluation_benchmarks"]
+        )
+        expected_scenarios = {benchmark["name"]: benchmark["num_scenarios"] for benchmark in benchmarks}
         metrics = {}
-        for suite_name, episode_summaries in suite_summaries.items():
-            report = _build_eval_report(episode_summaries, expected_scenarios[suite_name])
+        for benchmark_name, episode_summaries in benchmark_summaries.items():
+            report = _build_eval_report(episode_summaries, expected_scenarios[benchmark_name])
             if report is None:
                 continue
             _, summary = report
-            prefix = f"eval_{suite_name}"
+            prefix = f"eval_{benchmark_name}"
             metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
             metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
             metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
         if metrics:
             logger.log(metrics, global_step)
-        return suite_summaries
+        return benchmark_summaries
     except Exception:
         print(f"\n[training eval] Evaluation failed at epoch {epoch}; continuing training:")
         traceback.print_exc()
@@ -2184,9 +2186,9 @@ def _selected_agents_per_batch(selected_rows):
 def _render_eval_failures(
     env_name,
     run_args,
-    suite,
+    benchmark,
     metrics_path,
-    suite_output_dir,
+    benchmark_output_dir,
     policy,
     render_obs,
     render_failures_number,
@@ -2195,12 +2197,12 @@ def _render_eval_failures(
     selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
     if render_failures_number is not None:
         selected_rows = selected_rows.head(render_failures_number).copy()
-    failures_dir = os.path.join(suite_output_dir, "failures")
+    failures_dir = os.path.join(benchmark_output_dir, "failures")
     os.makedirs(failures_dir, exist_ok=True)
     selected_path = os.path.join(failures_dir, "selected_failures.csv")
     selected_rows.to_csv(selected_path, index=False)
     if selected_rows.empty:
-        print(f"No failures matched for benchmark {suite['name']}; wrote {selected_path}")
+        print(f"No failures matched for benchmark {benchmark['name']}; wrote {selected_path}")
         return []
 
     map_indices = _resolve_map_indices(run_args["env"]["map_dir"], selected_rows["map_name"].tolist())
@@ -2247,7 +2249,7 @@ def _render_eval_failures(
             int(wave_args["env"]["scenario_length"]),
             capture_replay=True,
         )
-        replay_desc = f"Rendering {suite['name']} failures"
+        replay_desc = f"Rendering {benchmark['name']} failures"
         if replay_wave_count > 1:
             replay_desc += f" (wave {replay_wave_idx + 1}/{replay_wave_count})"
         wave_summaries = _run_eval_rollout(

@@ -35,9 +35,9 @@ class TestDriveConfig(unittest.TestCase):
             # load_config should return a populated config dict without raising.
             self.assertIsInstance(args, dict)
             self.assertTrue(len(args) > 0)
-            self.assertTrue(args["eval"]["training_enabled"])
-            self.assertEqual(args["eval"]["training_interval"], 100)
-            self.assertEqual(args["eval"]["training_datasets"], "carla_fast")
+            self.assertIsNone(args["train"]["evaluation_interval_epochs"])
+            self.assertEqual(args["train"]["evaluation_benchmarks"], "carla_fast")
+            self.assertIsNone(args["eval"]["benchmarks"])
             self.assertEqual(args["eval"]["benchmark_sdc_num_envs"], 4)
             self.assertFalse(args["eval"]["render_scenarios"])
             self.assertIsNone(args["eval"]["render_failures_number"])

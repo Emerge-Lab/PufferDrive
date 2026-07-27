@@ -202,6 +202,9 @@ train:
   name: pufferai
   project: ablations
   seed: 42
+  # Null disables evaluation during training.
+  evaluation_interval_epochs: null
+  evaluation_benchmarks: carla_fast
   torch_deterministic: false
   cpu_offload: false
   device: cuda
@@ -263,15 +266,15 @@ sweep:
 # Catalog-defined evaluation and replay rendering settings.
 eval:
   num_agents: 128
-  # Worker cap for replay suites that control only the SDC. Needed for now to not limit RAM usage
+  # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   benchmark_sdc_num_envs: 4
   catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
   evaluation_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
-  datasets: null
+  benchmarks: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
   render_failures: false
-  # Maximum failures rendered per suite; null renders every failure.
+  # Maximum failures rendered per benchmark; null renders every failure.
   render_failures_number: null
   # Existing episode metrics CSV to replay without running the benchmark first.
   replay_failures_csv: null
@@ -279,9 +282,6 @@ eval:
   failure_metrics: collision_rate,at_fault_collision_rate,offroad_rate,red_light_violation_rate
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
-  training_enabled: true
-  training_interval: 100
-  training_datasets: carla_fast
 controlled_exp:
   train:
     # [sweep.train.learning_rate]
