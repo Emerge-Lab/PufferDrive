@@ -515,7 +515,11 @@ def test_rollout_zeros_lstm_state_per_agent_on_done(monkeypatch):
     monkeypatch.setattr(
         pufferlib.pytorch,
         "sample_logits",
-        lambda logits, action=None, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=None, policy=None: (
+        lambda logits,
+        action=None,
+        action_selection=pufferlib.pytorch.ACTION_SELECT_MODE,
+        env_continuous=None,
+        policy=None: (
             torch.zeros(4, dtype=torch.long),
             None,
             None,
@@ -807,7 +811,11 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pufferlib.pytorch,
         "sample_logits",
-        lambda logits, action=None, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE, env_continuous=None, policy=None: (
+        lambda logits,
+        action=None,
+        action_selection=pufferlib.pytorch.ACTION_SELECT_MODE,
+        env_continuous=None,
+        policy=None: (
             torch.zeros(logits.shape[0], dtype=torch.long),
             None,
             None,

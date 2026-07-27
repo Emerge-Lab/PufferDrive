@@ -1,6 +1,8 @@
 git merge origin/3.0
 git push origin bernhard
 
+Run for formatting.
+pre-commit run --all-files
 
 # Not in valentins config but in my config.
 # non_sdc_controller: policy
@@ -107,7 +109,7 @@ lauch.json:
             "name"="PufferDrive Train",
             "type"="python",
             "request"="launch",
-            "program"="${workspaceFolder}/.venv/bin/puffer",
+            "program"="${workspaceFolder}pre-commit run --all-files/.venv/bin/puffer",
             "args"=[
                 "train",
                 "puffer_drive",
