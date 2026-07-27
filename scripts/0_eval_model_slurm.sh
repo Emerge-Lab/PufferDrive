@@ -4,11 +4,11 @@
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
 #SBATCH --gres=gpu:1
-#SBATCH --mem=256G
-#SBATCH --cpus-per-task=28
-#SBATCH --output=/lustre/scwpod02/client/kyutai/kesai/bernhard/carla_closed_loop/results/logs/eval_server_%a_%A.out
-#SBATCH --error=/lustre/scwpod02/client/kyutai/kesai/bernhard/carla_closed_loop/results/logs/eval_server_%a_%A.err
-#SBATCH --partition=kyutai
+#SBATCH --mem=125G
+#SBATCH --cpus-per-task=18
+#SBATCH --output=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_nuPlan_%a_%A.out
+#SBATCH --error=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_nuPlan_%a_%A.err
+#SBATCH --partition=dev
 
 # print info about current job
 echo "START TIME: $(date)"
