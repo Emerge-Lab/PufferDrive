@@ -201,7 +201,7 @@ def sample_logits(
         if action is None:
             action = logits.sample().view(batch, -1)
             if action_selection != ACTION_SELECT_SAMPLE:
-                action = logits.loc.view(batch, -1)  # TODO -  DETERMINISTIC use mean action for eval
+                action = logits.loc.view(batch, -1)
 
         log_probs = logits.log_prob(action.view(batch, -1)).sum(1)
         logits_entropy = logits.entropy().view(batch, -1).sum(1)

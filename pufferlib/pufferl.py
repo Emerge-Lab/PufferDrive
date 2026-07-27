@@ -463,7 +463,7 @@ class PuffeRL:
 
             profile("env", epoch)
 
-            if self.env_continuous and not self.uncompiled_policy.is_continuous:  # TODO check with trajectory
+            if self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
                 self.vecenv.send(cont_action.squeeze(0))
             else:
@@ -1864,7 +1864,7 @@ def mine_failures(env_name, args=None):
             if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
                 action = action.reshape(-1, *vecenv.single_action_space.shape)
 
-        if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+        if env_continuous and not policy.is_continuous:
             cont_action = cont_action.cpu().numpy()
             vecenv.send(cont_action.squeeze(0))
         else:

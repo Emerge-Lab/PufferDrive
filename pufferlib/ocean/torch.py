@@ -422,9 +422,7 @@ class Drive(nn.Module):
             self.critic_backbone = DriveBackbone(**backbone_args)
 
         # Setup action and value heads
-        self.is_continuous = (
-            action_type == "continuous"
-        )  # TODO Check if what the `"trajectory"`, `"trajectory_frenet"`, `"trajectory_jerk" features do and if they are considered continuous.
+        self.is_continuous = action_type == "continuous"
         if self.is_continuous:
             self.atn_dim = (env.single_action_space.shape[0],) * 2
         else:

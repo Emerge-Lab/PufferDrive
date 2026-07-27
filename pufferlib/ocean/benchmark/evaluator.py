@@ -122,7 +122,7 @@ class WOSACEvaluator:
                 if isinstance(logits, torch.distributions.Normal):
                     action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-                if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+                if env_continuous and not policy.is_continuous:
                     cont_action = cont_action.cpu().numpy().reshape(puffer_env.action_space.shape)
                     obs, _, _, _, _ = puffer_env.step(cont_action)
                 else:
@@ -689,7 +689,7 @@ class HumanReplayEvaluator:
             if isinstance(logits, torch.distributions.Normal):
                 action_np = np.clip(action_np, puffer_env.action_space.low, puffer_env.action_space.high)
 
-            if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+            if env_continuous and not policy.is_continuous:
                 cont_action = cont_action.cpu().numpy().reshape(puffer_env.action_space.shape)
                 obs, rewards, dones, truncs, info_list = puffer_env.step(cont_action)
             else:

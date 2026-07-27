@@ -175,7 +175,7 @@ class Evaluator:
                     logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
                 )
 
-            if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+            if env_continuous and not policy.is_continuous:
                 cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                 obs, _, terminals, truncations, infos = vecenv.step(cont_action)
             else:
@@ -545,7 +545,7 @@ class Evaluator:
                         logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
                     )
 
-                if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+                if env_continuous and not policy.is_continuous:
                     cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                     ob, _, terminals, truncations, infos = vec.step(cont_action)
                 else:
@@ -721,7 +721,7 @@ class Evaluator:
                             for k, values in pool_outputs.items()
                         }
 
-                    if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+                    if env_continuous and not policy.is_continuous:
                         raw_action = cont_action.cpu().numpy().reshape(vec.action_space.shape)
                         clipped_action = raw_action
                         ob, _, _, _, step_infos = vec.step(clipped_action)
@@ -905,7 +905,7 @@ class Evaluator:
                             logits, action_selection=self.action_selection, env_continuous=env_continuous, policy=policy
                         )
 
-                    if env_continuous and not policy.is_continuous:  # TODO check with trajectory
+                    if env_continuous and not policy.is_continuous:
                         cont_action = cont_action.cpu().numpy().reshape(vecenv.action_space.shape)
                         ob, _, _, _, _ = vecenv.step(cont_action)
                     else:

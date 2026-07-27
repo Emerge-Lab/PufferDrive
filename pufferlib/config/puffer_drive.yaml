@@ -341,7 +341,6 @@ eval:
       num_scenarios: 250
       export_episode_csv: 'true'
       verify_coverage: 'true'
-
   validation_replay:
     inherits: validation_defaults
     type: multi_scenario
@@ -359,7 +358,6 @@ eval:
     eval:
       render_num_scenarios: 5
       render_max_steps: 200
-
   validation_gigaflow:
     inherits: validation_defaults
     type: multi_scenario
@@ -397,8 +395,6 @@ eval:
       num_scenarios: 32
       render_num_scenarios: 16
       render_max_steps: 300
-
-
   # ---------------------------------------------------------------------------
   # Optional: WOSAC realism eval. Off by default.
   # ---------------------------------------------------------------------------
