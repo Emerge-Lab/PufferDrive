@@ -20,7 +20,7 @@ evaluation application, not the simulator:
 
 Each configured benchmark contains:
 
-- `name`: value passed to `eval.benchmarks`.
+- `name`: positional benchmark name passed after `puffer_drive`.
 - `mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
 - `num_scenarios`: number of episode summaries expected in the report.
 - `num_maps`: number of sorted map files available to the benchmark.
@@ -29,14 +29,15 @@ Each configured benchmark contains:
 - `control_mode`: which agents the policy controls.
 - `paths.local`: local map file or directory containing `.bin` files.
 
-The config seed and optional benchmark seed must be non-negative integers. Map
-files, requested counts, modes, and environment override keys are validated
-before environments are created.
+Each benchmark seed must be a non-negative integer. Map files, requested counts,
+modes, and environment override keys are validated before environments are
+created.
 
 `eval.num_agents` is the agent capacity of each evaluation worker and must be at
 least the benchmark's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
-small local CPU check.
+small local CPU check. `env.num_agents` configures training and is rejected by
+the direct evaluation command; use `eval.num_agents` for evaluation.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
 `eval.max_sdc_replay_workers` (default `4`). Other replay and gigaflow benchmarks
@@ -50,9 +51,8 @@ a run's `models` directory, with the matching `config.yaml` in the run directory
 ```bash
 source .venv/bin/activate
 
-puffer eval puffer_drive \
+puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla_fast \
   eval.render_failures=false \
   train.device=cpu
 ```
@@ -60,21 +60,33 @@ puffer eval puffer_drive \
 Select multiple benchmarks with a comma-separated value:
 
 ```bash
-puffer eval puffer_drive \
-  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla_fast,womd_single
+puffer eval puffer_drive carla_fast,womd_single \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt
 ```
 
 For a smaller CPU run using the committed `carla_fast` benchmark:
 
 ```bash
-puffer eval puffer_drive \
+puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla_fast \
   eval.num_agents=50 \
   vec.num_envs=2 \
   train.device=cpu
 ```
+
+Hydra overrides are applied after the selected benchmark. This supports
+parameter experiments without editing `benchmark.yaml`:
+
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  env.goal_speed=10 \
+  eval.output_name=goal_speed_10
+```
+
+Use `eval.output_name` when comparing runs so the folder identifies the
+experiment. The resolved configuration saved with every result records the
+effective values.
 
 ## Evaluation flow
 
@@ -95,9 +107,8 @@ benchmark config, checkpoint configuration, worker arguments, maps, and seeds.
 Capture and render every scenario from the standard benchmark pass with:
 
 ```bash
-puffer eval puffer_drive \
+puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla_fast \
   eval.render_scenarios=true \
   eval.capture_observations=false
 ```
@@ -120,9 +131,8 @@ replay pass is skipped. `eval.render_scenarios` cannot be combined with
 Enable the integrated failure pass with:
 
 ```bash
-puffer eval puffer_drive \
+puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla_fast \
   eval.render_failures=true \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
@@ -149,9 +159,8 @@ To replay failures from an existing metrics CSV without rerunning the standard
 benchmark pass:
 
 ```bash
-puffer eval puffer_drive \
+puffer eval puffer_drive carla \
   load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
-  eval.benchmarks=carla \
   eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
@@ -165,7 +174,7 @@ match the benchmark that produced the CSV.
 Direct checkpoint evaluation writes below the checkpoint run directory:
 
 ```text
-eval/<benchmark>/
+eval/<benchmark>[_<output_name>][_<collision_index>]/
 ├── resolved_benchmark.yaml
 ├── episode_metrics.csv
 ├── evaluation_summary.json
@@ -185,6 +194,10 @@ eval/<benchmark>/
         └── index.html
 ```
 
+Without `eval.output_name`, the first run uses `<benchmark>`. With a name, it
+uses `<benchmark>_<output_name>`. If that directory exists, evaluation preserves
+it and appends `_0`, `_1`, and so on to the new directory.
+
 `episode_metrics.csv` contains map and scenario identifiers, the episode seed,
 agent batch size, infractions, progress, rewards, and score metrics.
 `evaluation_summary.json` contains the requested scenario count, emitted episode
@@ -195,12 +208,20 @@ count, and means for every numeric metric.
 Training uses the same configured evaluator and the live policy:
 
 ```yaml
+env:
+  num_agents: 1024
+eval:
+  num_agents: 128
 train:
   evaluation_interval_epochs: 100
   evaluation_benchmarks: carla_fast
 ```
 
-The configured benchmarks run every 100 training epochs. If training ends between
-scheduled intervals, one final evaluation runs at the last epoch. Training
-evaluation logs benchmark metric means to the active logger and writes reports under
-the training run's `eval/training` hierarchy.
+The default `evaluation_interval_epochs: null` disables evaluation during
+training. With the configuration above, the selected benchmarks run every 100
+epochs in a separate evaluation environment with 128 agents; the training
+environment remains at 1024. Mid-training evaluation currently shares
+`vec.num_envs` with training. If training ends between scheduled intervals, one
+final evaluation runs at the last epoch. Training evaluation logs benchmark
+metric means to the active logger and writes reports under the training run's
+`eval/training` hierarchy.

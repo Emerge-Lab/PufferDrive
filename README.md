@@ -138,9 +138,8 @@ without it add `train.device=cpu`.
 
 ```bash
 # Run the CARLA YAML benchmark and render every evaluated scenario
-puffer eval puffer_drive \
+puffer eval puffer_drive carla \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  eval.benchmarks=carla \
   eval.render_scenarios=true \
   eval.capture_observations=false
 ```
@@ -150,18 +149,20 @@ interactive HTML with retained `.replay.zlib` files. To render only episodes
 with infractions instead:
 
 ```bash
-puffer eval puffer_drive \
+puffer eval puffer_drive carla \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  eval.benchmarks=carla \
   eval.render_failures=true \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
 ```
 
-Evaluation outputs are written under `eval/<benchmark>/`. The benchmark seed and
-worker count are part of the benchmark configuration: repeated runs with both unchanged
-produce the same map/seed rows. Failure renders replay the exact map and seed
-recorded by the metrics pass. Set
+Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
+Evaluation outputs are written under
+`eval/<benchmark>[_<output_name>][_<collision_index>]/`; existing directories
+are preserved. The benchmark seed and effective worker count are saved in the
+resolved configuration: repeated runs with both unchanged produce the same
+map/seed rows. Failure renders replay the exact map and seed recorded by the
+metrics pass. Set
 `eval.failure_replay_csv=<path/to/episode_metrics.csv>` to skip the standard
 benchmark pass and replay failures directly. See
 [docs/evaluation.md](docs/evaluation.md) for the benchmark schema, failure replay
