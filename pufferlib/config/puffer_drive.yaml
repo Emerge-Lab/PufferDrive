@@ -32,7 +32,7 @@ rnn_name: null
 max_suggestion_cost: 3600
 vec:
   backend: Multiprocessing
-  num_envs: 16
+  num_envs: 20
   num_workers: auto
   batch_size: auto
   zero_copy: true
@@ -42,7 +42,7 @@ env:
   # Options: "gigaflow", "replay"
   simulation_mode: gigaflow
   # Total number of agents in the environment
-  num_agents: 256
+  num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
   max_agents_per_env: 80
@@ -268,8 +268,7 @@ eval:
   num_agents: 128
   # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   max_sdc_replay_workers: 4
-  catalog: pufferlib/config/evaluation/benchmark_catalog.yaml
-  environment_config: pufferlib/config/evaluation/benchmark_evaluation.yaml
+  benchmark_config: pufferlib/config/evaluation/benchmark.yaml
   benchmarks: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false

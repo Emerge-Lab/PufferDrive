@@ -1566,11 +1566,10 @@ def eval(
     eval_output_subdir=None,
     use_training_config=False,
 ):
-    """Run catalog-defined benchmarks or replay failures from an existing CSV."""
+    """Run configured benchmarks or replay failures from an existing CSV."""
     args = args or load_config(env_name)
     eval_config = args.get("eval", {})
-    catalog_path = eval_config.get("catalog")
-    environment_config_path = eval_config.get("environment_config")
+    benchmark_config_path = eval_config.get("benchmark_config")
     selected_benchmarks = eval_config.get("benchmarks")
     render_scenarios = bool(eval_config.get("render_scenarios"))
     render_failures = bool(eval_config.get("render_failures"))
@@ -1584,8 +1583,9 @@ def eval(
         )
     if render_failures and not render_scenarios:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
-    benchmarks = pufferlib.benchmark.load_catalog(catalog_path, selected_benchmarks)
-    environment_config = pufferlib.benchmark.load_environment_config(environment_config_path)
+    environment_config, benchmarks = pufferlib.benchmark.load_benchmark_config(
+        benchmark_config_path, selected_benchmarks
+    )
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
@@ -1613,8 +1613,7 @@ def eval(
         pufferlib.benchmark.write_resolved_benchmark_config(
             run_args,
             benchmark,
-            catalog_path,
-            environment_config_path,
+            benchmark_config_path,
             checkpoint_config_path,
             os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
         )
@@ -2042,7 +2041,7 @@ def _run_eval_rollout(
 
 
 def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, run_dir):
-    """Run the current catalog evaluator and log its means on the training run."""
+    """Run the configured evaluator and log its means on the training run."""
     eval_args = copy.deepcopy(args)
     eval_args["eval"]["benchmarks"] = eval_args["train"]["evaluation_benchmarks"]
     eval_args["eval"]["render_scenarios"] = False
@@ -2062,8 +2061,8 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        benchmarks = pufferlib.benchmark.load_catalog(
-            eval_args["eval"]["catalog"], eval_args["train"]["evaluation_benchmarks"]
+        _, benchmarks = pufferlib.benchmark.load_benchmark_config(
+            eval_args["eval"]["benchmark_config"], eval_args["train"]["evaluation_benchmarks"]
         )
         expected_scenarios = {benchmark["name"]: benchmark["num_scenarios"] for benchmark in benchmarks}
         metrics = {}

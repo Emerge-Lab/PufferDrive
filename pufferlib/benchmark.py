@@ -72,18 +72,23 @@ def validate_training_evaluation_config(args):
     if args["train"].get("use_rnn"):
         raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
 
-    load_catalog(eval_config.get("catalog"), evaluation_benchmarks)
-    load_environment_config(eval_config.get("environment_config"))
+    load_benchmark_config(eval_config.get("benchmark_config"), evaluation_benchmarks)
     return True
 
 
-def load_catalog(catalog_path, selected_names):
-    """Load benchmarks and apply one deterministic catalog seed."""
-    catalog = _load_yaml_mapping(catalog_path, "benchmark catalog")
-    catalog_seed = _seed(catalog.get("seed", 42), "benchmark catalog seed")
-    benchmarks = catalog.get("benchmarks")
+def load_benchmark_config(config_path, selected_names):
+    """Load the shared environment and selected benchmarks."""
+    config = _load_yaml_mapping(config_path, "benchmark config")
+    environment_config = _require_mapping(config.get("env"), "benchmark config env")
+    unknown_env_keys = set(environment_config) - _drive_env_keys()
+    if unknown_env_keys:
+        raise pufferlib.APIUsageError(
+            f"Benchmark config has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
+        )
+    config_seed = _seed(config.get("seed", 42), "benchmark config seed")
+    benchmarks = config.get("benchmarks")
     if not isinstance(benchmarks, list) or not benchmarks:
-        raise pufferlib.APIUsageError("Benchmark catalog must contain a non-empty benchmarks list")
+        raise pufferlib.APIUsageError("Benchmark config must contain a non-empty benchmarks list")
 
     if isinstance(selected_names, str):
         selected_names = [name.strip() for name in selected_names.split(",") if name.strip()]
@@ -93,24 +98,24 @@ def load_catalog(catalog_path, selected_names):
         raise pufferlib.APIUsageError("Benchmark names must be non-empty strings")
     selected_names = list(dict.fromkeys(selected_names))
 
-    catalog_benchmarks = {}
+    configured_benchmarks = {}
     for benchmark_idx, benchmark in enumerate(benchmarks):
         benchmark = _require_mapping(benchmark, f"benchmarks[{benchmark_idx}]")
         name = benchmark.get("name")
         if not isinstance(name, str) or not name.strip():
             raise pufferlib.APIUsageError(f"benchmarks[{benchmark_idx}].name must be a non-empty string")
         name = name.strip()
-        if name in catalog_benchmarks:
-            raise pufferlib.APIUsageError(f"Benchmark catalog contains duplicate benchmark name: {name}")
-        catalog_benchmarks[name] = benchmark
+        if name in configured_benchmarks:
+            raise pufferlib.APIUsageError(f"Benchmark config contains duplicate benchmark name: {name}")
+        configured_benchmarks[name] = benchmark
 
-    missing_names = [name for name in selected_names if name not in catalog_benchmarks]
+    missing_names = [name for name in selected_names if name not in configured_benchmarks]
     if missing_names:
         raise pufferlib.APIUsageError(f"Unknown benchmarks: {', '.join(missing_names)}")
 
     resolved_benchmarks = []
     for name in selected_names:
-        benchmark = catalog_benchmarks[name]
+        benchmark = configured_benchmarks[name]
         mode = benchmark.get("mode")
         if mode not in ("gigaflow", "replay"):
             raise pufferlib.APIUsageError(f"Benchmark {name} mode must be 'gigaflow' or 'replay'")
@@ -152,7 +157,7 @@ def load_catalog(catalog_path, selected_names):
             {
                 "name": name,
                 "mode": mode,
-                "seed": _seed(benchmark.get("seed", catalog_seed), f"Benchmark {name} seed"),
+                "seed": _seed(benchmark.get("seed", config_seed), f"Benchmark {name} seed"),
                 "num_scenarios": num_scenarios,
                 "num_maps": num_maps,
                 "max_agents_per_env": max_agents_per_env,
@@ -161,19 +166,7 @@ def load_catalog(catalog_path, selected_names):
                 "map_dir": map_dir,
             }
         )
-    return resolved_benchmarks
-
-
-def load_environment_config(config_path):
-    """Load the environment overrides shared by every benchmark."""
-    config = _load_yaml_mapping(config_path, "benchmark evaluation config")
-    env_config = _require_mapping(config.get("env"), "benchmark evaluation config env")
-    unknown_env_keys = set(env_config) - _drive_env_keys()
-    if unknown_env_keys:
-        raise pufferlib.APIUsageError(
-            f"Benchmark evaluation config has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
-        )
-    return copy.deepcopy(env_config)
+    return copy.deepcopy(environment_config), resolved_benchmarks
 
 
 def load_checkpoint_architecture(args):
@@ -230,14 +223,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     return args
 
 
-def write_resolved_benchmark_config(
-    args, benchmark, catalog_path, environment_config_path, checkpoint_config_path, output_path
-):
+def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, checkpoint_config_path, output_path):
     import json
 
     resolved = {
-        "benchmark_catalog": os.path.abspath(catalog_path),
-        "benchmark_environment_config": os.path.abspath(environment_config_path),
+        "benchmark_config": os.path.abspath(benchmark_config_path),
         "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
         "benchmark": benchmark,
         "args": json.loads(json.dumps(args)),

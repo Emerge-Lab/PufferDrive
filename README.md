@@ -131,7 +131,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 
 ## Eval
 
-The eval command loads one or more named benchmarks from the YAML catalog and
+The eval command loads one or more named benchmarks from the benchmark YAML and
 writes per-episode metrics for each benchmark. Benchmark selection is mandatory;
 eval does not choose one implicitly. The default device is CUDA; on a machine
 without it add `train.device=cpu`.
@@ -164,7 +164,7 @@ produce the same map/seed rows. Failure renders replay the exact map and seed
 recorded by the metrics pass. Set
 `eval.failure_replay_csv=<path/to/episode_metrics.csv>` to skip the standard
 benchmark pass and replay failures directly. See
-[docs/evaluation.md](docs/evaluation.md) for the catalog schema, failure replay
+[docs/evaluation.md](docs/evaluation.md) for the benchmark schema, failure replay
 and all-scenario rendering flows, outputs, and training integration.
 
 ## Nightly runs and the regression report

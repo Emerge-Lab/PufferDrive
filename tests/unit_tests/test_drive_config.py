@@ -42,8 +42,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertFalse(args["eval"]["render_scenarios"])
             self.assertIsNone(args["eval"]["max_rendered_failures"])
             self.assertIsNone(args["eval"]["failure_replay_csv"])
-            self.assertTrue(os.path.isfile(args["eval"]["catalog"]))
-            self.assertTrue(os.path.isfile(args["eval"]["environment_config"]))
+            self.assertTrue(os.path.isfile(args["eval"]["benchmark_config"]))
 
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")

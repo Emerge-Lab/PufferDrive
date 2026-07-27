@@ -1,7 +1,7 @@
 # Evaluation
 
-PufferDrive evaluation is catalog-driven. A named benchmark defines which
-scenarios to run, while one shared evaluation file defines the environment
+PufferDrive evaluation is config-driven. A named benchmark defines which
+scenarios to run, while the shared `env` section defines the environment
 settings used for every benchmark. The evaluator writes deterministic per-episode
 metrics and can replay only the failed episodes as interactive HTML.
 
@@ -13,13 +13,12 @@ Failure selection, replay capture, and HTML rendering are all handled by
 The evaluation files live outside `pufferlib/ocean` because they configure the
 evaluation application, not the simulator:
 
-- `pufferlib/config/evaluation/benchmark_catalog.yaml` defines named benchmarks.
-- `pufferlib/config/evaluation/benchmark_evaluation.yaml` defines shared,
-  deterministic environment overrides.
-- `pufferlib/config/puffer_drive.yaml` selects those files and configures the
+- `pufferlib/config/evaluation/benchmark.yaml` defines the shared deterministic
+  environment and named benchmarks.
+- `pufferlib/config/puffer_drive.yaml` selects that file and configures the
   evaluator under `eval`.
 
-Each catalog benchmark contains:
+Each configured benchmark contains:
 
 - `name`: value passed to `eval.benchmarks`.
 - `mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
@@ -30,7 +29,7 @@ Each catalog benchmark contains:
 - `control_mode`: which agents the policy controls.
 - `paths.local`: local map file or directory containing `.bin` files.
 
-The catalog seed and optional benchmark seed must be non-negative integers. Map
+The config seed and optional benchmark seed must be non-negative integers. Map
 files, requested counts, modes, and environment override keys are validated
 before environments are created.
 
@@ -89,7 +88,7 @@ For each selected benchmark, the evaluator:
 5. Writes per-episode metrics and aggregate numeric means.
 
 The resolved configuration is written with the report so every run records its
-catalog, checkpoint configuration, worker arguments, maps, and seeds.
+benchmark config, checkpoint configuration, worker arguments, maps, and seeds.
 
 ## Scenario replay and rendering
 
@@ -193,7 +192,7 @@ count, and means for every numeric metric.
 
 ## Evaluation during training
 
-Training uses the same catalog evaluator and the live policy:
+Training uses the same configured evaluator and the live policy:
 
 ```yaml
 train:

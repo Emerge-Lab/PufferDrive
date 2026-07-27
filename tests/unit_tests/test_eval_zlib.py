@@ -41,11 +41,12 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
     map_dir = tmp_path / "maps"
     map_dir.mkdir()
     (map_dir / "map.bin").write_bytes(b"")
-    catalog_path = tmp_path / "catalog.yaml"
-    catalog_path.write_text(
+    config_path = tmp_path / "benchmark.yaml"
+    config_path.write_text(
         yaml.safe_dump(
             {
                 "description": "Optional benchmark metadata",
+                "env": {},
                 "benchmarks": [
                     {
                         "name": "carla_test",
@@ -62,7 +63,7 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
         )
     )
 
-    benchmarks = pufferlib.benchmark.load_catalog(catalog_path, ["carla_test", "carla_test"])
+    _, benchmarks = pufferlib.benchmark.load_benchmark_config(config_path, ["carla_test", "carla_test"])
 
     assert [benchmark["name"] for benchmark in benchmarks] == ["carla_test"]
 
@@ -151,8 +152,7 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
             "obs_dropout_boundary": 0.75,
         },
         "eval": {
-            "catalog": "catalog.yaml",
-            "environment_config": "evaluation.yaml",
+            "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla_test",
             "num_agents": 16,
             "render_failures": False,
@@ -160,11 +160,10 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
     }
     captured_args = {}
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
     monkeypatch.setattr(
         pufferlib.benchmark,
-        "load_environment_config",
-        lambda *_: {"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0},
+        "load_benchmark_config",
+        lambda *_: ({"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0}, [benchmark]),
     )
     monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", lambda *_, **__: ([{}], 1))
 
@@ -221,8 +220,7 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
             "obs_dropout_boundary": 0.0,
         },
         "eval": {
-            "catalog": "catalog.yaml",
-            "environment_config": "evaluation.yaml",
+            "benchmark_config": "benchmark.yaml",
             "benchmarks": ["womd_single", "womd_multi"],
             "num_agents": 64,
             "max_sdc_replay_workers": 8,
@@ -231,8 +229,7 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
     }
     planned_worker_counts = []
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: benchmarks)
-    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, benchmarks))
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length, capture_replay):
@@ -276,8 +273,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
             "obs_dropout_boundary": 0.0,
         },
         "eval": {
-            "catalog": "catalog.yaml",
-            "environment_config": "evaluation.yaml",
+            "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla_test",
             "num_agents": 16,
             "render_scenarios": True,
@@ -288,8 +284,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
     captured = {}
     summaries = [{"map_name": "map_0"}, {"map_name": "map_1"}]
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
-    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, num_scenarios, num_workers, scenario_length, capture_replay):
@@ -358,8 +353,7 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         "load_model_path": "model.pt",
         "train": {"use_rnn": False},
         "eval": {
-            "catalog": "catalog.yaml",
-            "environment_config": "evaluation.yaml",
+            "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla",
             "num_agents": 16,
             "render_failures": False,
@@ -370,8 +364,7 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
     }
     replay_call = {}
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
-    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
     monkeypatch.setattr(
         pufferlib.benchmark,
         "load_checkpoint_architecture",
@@ -436,7 +429,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
             "evaluation_benchmarks": "carla_fast",
         },
         "eval": {
-            "catalog": "catalog.yaml",
+            "benchmark_config": "benchmark.yaml",
             "render_scenarios": True,
             "render_failures": True,
             "failure_replay_csv": "episode_metrics.csv",
@@ -448,7 +441,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
         return {}
 
     monkeypatch.setattr(pufferl, "eval", capture_eval)
-    monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [])
+    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, []))
 
     pufferl.run_training_evaluation(
         env_name="puffer_drive",
