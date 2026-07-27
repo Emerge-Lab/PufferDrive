@@ -225,7 +225,9 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
 
 def isolate_code(project_root: str, save_dir: str) -> str:
-    """Snapshot the code tree into save_dir/code (or code_vN if taken).
+    """Snapshot the code tree into save_dir/code (or code_vN if taken); for an
+    in-repo save_dir the snapshot goes to a <repo>_code_snapshots/ sibling of
+    the repo instead, mirroring save_dir's relative layout.
 
     Top-level entries are symlinked (instant, avoids deep-copying data/),
     except ancestors of the snapshot itself.
@@ -237,7 +239,20 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     import shutil
     from pathlib import Path
 
-    isolated_root = os.path.join(save_dir, "code")
+    # setuptools file discovery walks the whole source tree following
+    # symlinks, so snapshots must live outside it.
+    project_root_resolved = Path(project_root).resolve()
+    save_dir_resolved = Path(save_dir).resolve()
+    save_root_entry = None
+    if save_dir_resolved.is_relative_to(project_root_resolved):
+        snapshots_root = project_root_resolved.parent / f"{project_root_resolved.name}_code_snapshots"
+        save_dir_rel = save_dir_resolved.relative_to(project_root_resolved)
+        # The in-repo save root holds run outputs (and held snapshots before
+        # they moved out of the repo) — never link it into the snapshot.
+        save_root_entry = save_dir_rel.parts[0]
+        isolated_root = str(snapshots_root / save_dir_rel / "code")
+    else:
+        isolated_root = os.path.join(save_dir, "code")
     if os.path.exists(isolated_root):
         version = 1
         while os.path.exists(f"{isolated_root}_v{version}"):
@@ -250,6 +265,8 @@ def isolate_code(project_root: str, save_dir: str) -> str:
         dst = os.path.join(isolated_root, entry)
         # Do not symlink ancestors to avoid infinite recursion
         if isolated_root_real.is_relative_to(Path(src).resolve()):
+            continue
+        if entry == save_root_entry:
             continue
         if os.path.exists(dst) or os.path.islink(dst):
             if os.path.isdir(dst) and not os.path.islink(dst):

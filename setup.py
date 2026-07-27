@@ -263,6 +263,7 @@ install_requires = [
     "numpy",
     "gymnasium==0.29.1",
     "pyyaml",
+    "awscli",
 ]
 
 if not NO_TRAIN:
