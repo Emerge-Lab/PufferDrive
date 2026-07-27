@@ -49,7 +49,7 @@ class EvalReplayCapture:
         self.capture_observations = bool(capture_observations)
         self.replay_writer_count = num_workers
         if self.capture_observations:
-            observation_replay_writer_count = args.get("eval", {}).get("observation_replay_writer_count")
+            observation_replay_writer_count = args["eval"]["observation_replay_writer_count"]
             if (
                 isinstance(observation_replay_writer_count, bool)
                 or not isinstance(observation_replay_writer_count, int)

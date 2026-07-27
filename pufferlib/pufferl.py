@@ -78,6 +78,7 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_time",
     "speed_limit_compliance",
 }
+MAX_EVAL_OUTPUT_COLLISIONS = 1_000_000
 
 
 def torch_device(device):
@@ -1558,6 +1559,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
+def _create_eval_output_dir(requested_output_dir):
+    output_dir = requested_output_dir
+    for collision_idx in range(MAX_EVAL_OUTPUT_COLLISIONS):
+        try:
+            os.makedirs(output_dir)
+            return output_dir
+        except FileExistsError:
+            output_dir = f"{requested_output_dir}_{collision_idx}"
+    raise RuntimeError(f"Unable to create evaluation output directory for {requested_output_dir}")
+
+
 def eval(
     env_name,
     args=None,
@@ -1565,24 +1577,28 @@ def eval(
     eval_output_dir=None,
     eval_output_subdir=None,
     use_training_config=False,
+    benchmark_names=None,
 ):
     """Run configured benchmarks or replay failures from an existing CSV."""
+    cli_overrides = list(sys.argv[1:]) if args is None else []
     args = args or load_config(env_name)
-    eval_config = args.get("eval", {})
-    benchmark_config_path = eval_config.get("benchmark_config")
-    selected_benchmarks = eval_config.get("benchmarks")
-    render_scenarios = bool(eval_config.get("render_scenarios"))
-    render_failures = bool(eval_config.get("render_failures"))
-    max_rendered_failures = eval_config.get("max_rendered_failures")
-    failure_replay_csv = eval_config.get("failure_replay_csv")
-    max_sdc_replay_workers = eval_config.get("max_sdc_replay_workers", 8)
+    eval_config = args["eval"]
+    benchmark_config_path = eval_config["benchmark_config"]
+    selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
+    eval_config["benchmarks"] = selected_benchmarks
+    output_name = eval_config["output_name"]
+    render_scenarios = bool(eval_config["render_scenarios"])
+    render_failures = bool(eval_config["render_failures"])
+    max_rendered_failures = eval_config["max_rendered_failures"]
+    failure_replay_csv = eval_config["failure_replay_csv"]
+    max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
             "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
             "with eval.failure_replay_csv"
         )
     if render_failures and not render_scenarios:
-        pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
+        pufferlib.benchmark.parse_failure_metric_columns(eval_config["failure_metrics"])
     environment_config, benchmarks = pufferlib.benchmark.load_benchmark_config(
         benchmark_config_path, selected_benchmarks
     )
@@ -1602,14 +1618,22 @@ def eval(
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
         eval_output_dir = os.path.join(run_dir, "eval")
     all_benchmark_summaries = {}
+    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
         run_args = pufferlib.benchmark.build_benchmark_args(base_args, benchmark, environment_config)
-        if benchmark["mode"] == "replay" and benchmark["control_mode"] == "control_sdc_only":
+        run_args = OmegaConf.to_container(
+            OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
+            resolve=True,
+        )
+        if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), max_sdc_replay_workers)
-        benchmark_output_dir = os.path.join(eval_output_dir, benchmark["name"])
+        output_directory_name = benchmark["name"]
+        if output_name is not None:
+            output_directory_name = f"{output_directory_name}_{output_name}"
+        benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
         if eval_output_subdir is not None:
             benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
-        os.makedirs(benchmark_output_dir, exist_ok=True)
+        benchmark_output_dir = _create_eval_output_dir(benchmark_output_dir)
         pufferlib.benchmark.write_resolved_benchmark_config(
             run_args,
             benchmark,
@@ -1618,9 +1642,9 @@ def eval(
             os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
         )
 
-        benchmark_seed = int(benchmark["seed"])
-        np.random.seed(benchmark_seed)
-        torch.manual_seed(benchmark_seed)
+        evaluation_seed = int(run_args["train"]["seed"])
+        np.random.seed(evaluation_seed)
+        torch.manual_seed(evaluation_seed)
         if failure_replay_csv is not None:
             summaries = _render_eval_failures(
                 env_name,
@@ -1629,13 +1653,13 @@ def eval(
                 failure_replay_csv,
                 benchmark_output_dir,
                 policy,
-                bool(eval_config.get("capture_observations")),
+                bool(eval_config["capture_observations"]),
                 max_rendered_failures,
             )
             all_benchmark_summaries[benchmark["name"]] = summaries
             continue
 
-        num_scenarios = int(benchmark["num_scenarios"])
+        num_scenarios = int(run_args["num_scenarios"])
         num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
         worker_env_kwargs, total_steps = _plan_benchmark_eval_workers(
             run_args,
@@ -1655,7 +1679,7 @@ def eval(
             num_scenarios,
             policy=policy,
             replay_output_dir=replay_output_dir,
-            capture_observations=render_scenarios and bool(eval_config.get("capture_observations")),
+            capture_observations=render_scenarios and bool(eval_config["capture_observations"]),
         )
         _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
         all_benchmark_summaries[benchmark["name"]] = summaries
@@ -1670,7 +1694,7 @@ def eval(
                 os.path.join(benchmark_output_dir, "episode_metrics.csv"),
                 benchmark_output_dir,
                 policy,
-                bool(eval_config.get("capture_observations")),
+                bool(eval_config["capture_observations"]),
                 max_rendered_failures,
             )
     return all_benchmark_summaries
@@ -1920,7 +1944,7 @@ def _run_eval_rollout(
         num_envs=num_workers,
         num_workers=num_workers,
         batch_size=num_workers,
-        seed=args.get("vec", {}).get("seed", args["train"].get("seed", 0)),
+        seed=args["vec"]["seed"],
     )
     scenario_progress = None
     try:
@@ -1937,25 +1961,21 @@ def _run_eval_rollout(
                 f"{inference_agents_per_batch} agents to preserve the recorded batch shape"
             )
 
-        rollout_seed = 42 if args["train"]["seed"] is None else int(args["train"]["seed"])
+        rollout_seed = int(args["train"]["seed"])
         torch.manual_seed(rollout_seed)
         policy = policy or load_policy(args, vecenv, env_name)
         policy.eval()
         policy_forward_eval = policy.forward_eval
         eval_sample_logits = pufferlib.pytorch.sample_logits
-        if args["train"].get("compile", False):
+        if args["train"]["compile"]:
             compile_kwargs = {
-                "mode": args["train"].get("compile_mode", "default"),
-                "fullgraph": args["train"].get("compile_fullgraph", False),
+                "mode": args["train"]["compile_mode"],
+                "fullgraph": args["train"]["compile_fullgraph"],
             }
             policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
             eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
         device = torch_device(args["train"]["device"])
-        use_bfloat16 = (
-            args["train"].get("amp", True)
-            and args["train"].get("precision", "float32") == "bfloat16"
-            and is_cuda_device(device)
-        )
+        use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
@@ -1969,7 +1989,7 @@ def _run_eval_rollout(
                 device=device,
             )
 
-        capture_batch_steps = int(worker_env_kwargs[0].get("resample_frequency", total_steps))
+        capture_batch_steps = int(worker_env_kwargs[0]["resample_frequency"])
         replay_capture = None
         if replay_output_dir is not None:
             replay_capture = EvalReplayCapture(
@@ -2192,7 +2212,7 @@ def _render_eval_failures(
     capture_observations,
     max_rendered_failures,
 ):
-    configured_failure_metrics = run_args.get("eval", {}).get("failure_metrics")
+    configured_failure_metrics = run_args["eval"]["failure_metrics"]
     selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
     if max_rendered_failures is not None:
         selected_rows = selected_rows.head(max_rendered_failures).copy()
@@ -2213,7 +2233,7 @@ def _render_eval_failures(
         raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
     replay_wave_size = len(pairs)
     if capture_observations:
-        observation_replay_wave_size = run_args.get("eval", {}).get("observation_replay_wave_size")
+        observation_replay_wave_size = run_args["eval"]["observation_replay_wave_size"]
         if (
             isinstance(observation_replay_wave_size, bool)
             or not isinstance(observation_replay_wave_size, int)
@@ -2361,7 +2381,10 @@ def main():
     if mode == "train":
         train(env_name=env_name)
     elif mode == "eval":
-        eval(env_name=env_name)
+        if len(sys.argv) < 2:
+            raise pufferlib.APIUsageError("Usage: puffer eval [env_name] [benchmark_name] [optional args]")
+        benchmark_name = sys.argv.pop(1)
+        eval(env_name=env_name, benchmark_names=benchmark_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

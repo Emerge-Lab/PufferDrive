@@ -50,9 +50,11 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
                 "benchmarks": [
                     {
                         "name": "carla_test",
+                        "seed": 42,
                         "mode": "gigaflow",
                         "num_scenarios": 1,
                         "num_maps": 1,
+                        "max_agents_per_env": 1,
                         "scenario_length": 100,
                         "control_mode": "control_vehicles",
                         "paths": {"local": str(map_dir)},
@@ -154,8 +156,15 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
         "eval": {
             "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla_test",
+            "output_name": None,
             "num_agents": 16,
+            "max_sdc_replay_workers": 8,
+            "render_scenarios": False,
             "render_failures": False,
+            "max_rendered_failures": None,
+            "failure_replay_csv": None,
+            "capture_observations": False,
+            "failure_metrics": "collision_rate",
         },
     }
     captured_args = {}
@@ -222,9 +231,15 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
         "eval": {
             "benchmark_config": "benchmark.yaml",
             "benchmarks": ["womd_single", "womd_multi"],
+            "output_name": None,
             "num_agents": 64,
             "max_sdc_replay_workers": 8,
+            "render_scenarios": False,
             "render_failures": False,
+            "max_rendered_failures": None,
+            "failure_replay_csv": None,
+            "capture_observations": False,
+            "failure_metrics": "collision_rate",
         },
     }
     planned_worker_counts = []
@@ -275,10 +290,15 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
         "eval": {
             "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla_test",
+            "output_name": None,
             "num_agents": 16,
             "render_scenarios": True,
             "render_failures": True,
+            "max_rendered_failures": None,
+            "failure_replay_csv": None,
             "capture_observations": True,
+            "failure_metrics": "collision_rate",
+            "max_sdc_replay_workers": 8,
         },
     }
     captured = {}
@@ -327,8 +347,17 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
 def test_eval_rejects_render_scenarios_with_failure_csv():
     args = {
         "eval": {
+            "benchmark_config": "benchmark.yaml",
+            "benchmarks": "carla_test",
+            "output_name": None,
+            "num_agents": 16,
+            "max_sdc_replay_workers": 8,
             "render_scenarios": True,
+            "render_failures": False,
+            "max_rendered_failures": None,
             "failure_replay_csv": "episode_metrics.csv",
+            "capture_observations": False,
+            "failure_metrics": "collision_rate",
         }
     }
 
@@ -351,15 +380,23 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
     }
     args = {
         "load_model_path": "model.pt",
-        "train": {"use_rnn": False},
+        "train": {"seed": 42, "use_rnn": False},
+        "env": {
+            "simulation_mode": "gigaflow",
+            "control_mode": "control_vehicles",
+        },
         "eval": {
             "benchmark_config": "benchmark.yaml",
             "benchmarks": "carla",
+            "output_name": None,
             "num_agents": 16,
+            "max_sdc_replay_workers": 8,
+            "render_scenarios": False,
             "render_failures": False,
             "max_rendered_failures": 2,
             "failure_replay_csv": str(failure_csv_path),
             "capture_observations": False,
+            "failure_metrics": "collision_rate",
         },
     }
     replay_call = {}
@@ -476,13 +513,22 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
         "package": "ocean",
         "env": {},
         "eval": {"observation_replay_writer_count": 1},
-        "train": {"seed": 42, "device": "cpu"},
+        "train": {
+            "seed": 42,
+            "device": "cpu",
+            "compile": False,
+            "compile_mode": "default",
+            "compile_fullgraph": False,
+            "amp": True,
+            "precision": "float32",
+        },
+        "vec": {"seed": 42},
     }
 
     summaries = pufferl._run_eval_rollout(
         args=args,
         env_name="puffer_drive",
-        worker_env_kwargs=[{}],
+        worker_env_kwargs=[{"resample_frequency": 1}],
         total_steps=1,
         desc="test replay",
         expected_episodes=1,
@@ -532,13 +578,22 @@ def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypat
     monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: vecenv)
     args = {
         "package": "ocean",
-        "train": {"seed": 42, "device": "cpu"},
+        "train": {
+            "seed": 42,
+            "device": "cpu",
+            "compile": False,
+            "compile_mode": "default",
+            "compile_fullgraph": False,
+            "amp": True,
+            "precision": "float32",
+        },
+        "vec": {"seed": 42},
     }
 
     summaries = pufferl._run_eval_rollout(
         args=args,
         env_name="puffer_drive",
-        worker_env_kwargs=[{}],
+        worker_env_kwargs=[{"resample_frequency": 1}],
         total_steps=1,
         desc="test padded replay",
         expected_episodes=1,

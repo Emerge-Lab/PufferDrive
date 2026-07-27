@@ -53,9 +53,9 @@ def _seed(value, label):
 
 
 def validate_training_evaluation_config(args):
-    eval_config = args.get("eval", {})
-    train_config = args.get("train", {})
-    evaluation_interval_epochs = train_config.get("evaluation_interval_epochs")
+    eval_config = args["eval"]
+    train_config = args["train"]
+    evaluation_interval_epochs = train_config["evaluation_interval_epochs"]
     if evaluation_interval_epochs is None:
         return False
 
@@ -66,13 +66,13 @@ def validate_training_evaluation_config(args):
     ):
         raise pufferlib.APIUsageError("train.evaluation_interval_epochs must be a positive integer or null")
 
-    evaluation_benchmarks = train_config.get("evaluation_benchmarks")
+    evaluation_benchmarks = train_config["evaluation_benchmarks"]
     if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
         raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
-    if args["train"].get("use_rnn"):
+    if args["train"]["use_rnn"]:
         raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
 
-    load_benchmark_config(eval_config.get("benchmark_config"), evaluation_benchmarks)
+    load_benchmark_config(eval_config["benchmark_config"], evaluation_benchmarks)
     return True
 
 
@@ -85,7 +85,6 @@ def load_benchmark_config(config_path, selected_names):
         raise pufferlib.APIUsageError(
             f"Benchmark config has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
         )
-    config_seed = _seed(config.get("seed", 42), "benchmark config seed")
     benchmarks = config.get("benchmarks")
     if not isinstance(benchmarks, list) or not benchmarks:
         raise pufferlib.APIUsageError("Benchmark config must contain a non-empty benchmarks list")
@@ -121,11 +120,8 @@ def load_benchmark_config(config_path, selected_names):
             raise pufferlib.APIUsageError(f"Benchmark {name} mode must be 'gigaflow' or 'replay'")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
         scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
-        max_agents_per_env = _positive_int(
-            benchmark.get("max_agents_per_env", 64), f"Benchmark {name} max_agents_per_env"
-        )
-        num_maps = benchmark.get("num_maps", num_scenarios if mode == "replay" else None)
-        num_maps = _positive_int(num_maps, f"Benchmark {name} num_maps")
+        max_agents_per_env = _positive_int(benchmark.get("max_agents_per_env"), f"Benchmark {name} max_agents_per_env")
+        num_maps = _positive_int(benchmark.get("num_maps"), f"Benchmark {name} num_maps")
         control_mode = benchmark.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
             raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
@@ -157,7 +153,7 @@ def load_benchmark_config(config_path, selected_names):
             {
                 "name": name,
                 "mode": mode,
-                "seed": _seed(benchmark.get("seed", config_seed), f"Benchmark {name} seed"),
+                "seed": _seed(benchmark.get("seed"), f"Benchmark {name} seed"),
                 "num_scenarios": num_scenarios,
                 "num_maps": num_maps,
                 "max_agents_per_env": max_agents_per_env,
@@ -171,7 +167,7 @@ def load_benchmark_config(config_path, selected_names):
 
 def load_checkpoint_architecture(args):
     """Load a 3.0 checkpoint's policy and observation architecture."""
-    model_path = args.get("load_model_path")
+    model_path = args["load_model_path"]
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
     config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
@@ -197,7 +193,7 @@ def load_checkpoint_architecture(args):
 def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the fixed benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
-    eval_agent_count = _positive_int(args["eval"].get("num_agents", 101), "eval.num_agents")
+    eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
     if eval_agent_count < benchmark["max_agents_per_env"]:
         raise pufferlib.APIUsageError(
             f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
@@ -238,8 +234,6 @@ def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, chec
 
 def parse_failure_metric_columns(configured_failure_metrics):
     """Resolve and validate the metric columns that define a failed episode."""
-    if configured_failure_metrics is None:
-        return FAILURE_METRIC_COLUMNS
     if isinstance(configured_failure_metrics, str):
         failure_metric_columns = [column.strip() for column in configured_failure_metrics.split(",") if column.strip()]
     elif isinstance(configured_failure_metrics, (list, tuple)):
@@ -261,7 +255,7 @@ def parse_failure_metric_columns(configured_failure_metrics):
     return failure_metric_columns
 
 
-def select_failure_rows(metrics_path, configured_failure_metrics=None):
+def select_failure_rows(metrics_path, configured_failure_metrics):
     """Select failures using the infraction columns emitted by PufferDrive."""
     if not os.path.isfile(metrics_path):
         raise pufferlib.APIUsageError(f"Benchmark metrics CSV not found: {metrics_path}")

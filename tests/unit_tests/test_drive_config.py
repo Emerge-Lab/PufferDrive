@@ -38,6 +38,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertIsNone(args["train"]["evaluation_interval_epochs"])
             self.assertEqual(args["train"]["evaluation_benchmarks"], "carla_fast")
             self.assertIsNone(args["eval"]["benchmarks"])
+            self.assertIsNone(args["eval"]["output_name"])
             self.assertEqual(args["eval"]["max_sdc_replay_workers"], 4)
             self.assertFalse(args["eval"]["render_scenarios"])
             self.assertIsNone(args["eval"]["max_rendered_failures"])

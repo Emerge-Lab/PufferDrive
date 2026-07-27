@@ -1,5 +1,3 @@
-seed: 42
-
 env:
   eval_mode: 1
   compute_eval_metrics: true
@@ -37,6 +35,7 @@ env:
 
 benchmarks:
   - name: carla
+    seed: 42
     mode: gigaflow
     num_scenarios: 1000
     num_maps: 8
@@ -47,6 +46,7 @@ benchmarks:
       local: pufferlib/resources/drive/binaries/carla
 
   - name: carla_fast
+    seed: 42
     mode: gigaflow
     num_scenarios: 10
     num_maps: 8
@@ -57,32 +57,44 @@ benchmarks:
       local: pufferlib/resources/drive/binaries/carla
 
   - name: womd_multi
+    seed: 42
     mode: replay
     num_scenarios: 1000
+    num_maps: 1000
+    max_agents_per_env: 64
     scenario_length: 91
     control_mode: control_vehicles
     paths:
       local: pufferlib/resources/drive/binaries/womd
 
   - name: womd_single
+    seed: 42
     mode: replay
     num_scenarios: 1000
+    num_maps: 1000
+    max_agents_per_env: 64
     scenario_length: 91
     control_mode: control_sdc_only
     paths:
       local: pufferlib/resources/drive/binaries/womd
 
   - name: nuplan_multi
+    seed: 42
     mode: replay
     num_scenarios: 1000
+    num_maps: 1000
+    max_agents_per_env: 64
     scenario_length: 200
     control_mode: control_vehicles
     paths:
       local: pufferlib/resources/drive/binaries/nuplan
 
   - name: nuplan_single
+    seed: 42
     mode: replay
     num_scenarios: 1000
+    num_maps: 1000
+    max_agents_per_env: 64
     scenario_length: 200
     control_mode: control_sdc_only
     paths:

@@ -270,6 +270,7 @@ eval:
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml
   benchmarks: null
+  output_name: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
   render_failures: false
