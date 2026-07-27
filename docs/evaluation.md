@@ -40,7 +40,7 @@ the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
 small local CPU check.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
-`eval.benchmark_sdc_num_envs` (default `4`). Other replay and gigaflow benchmarks
+`eval.max_sdc_replay_workers` (default `4`). Other replay and gigaflow benchmarks
 continue to use `vec.num_envs`.
 
 ## Running evaluation
@@ -100,7 +100,7 @@ puffer eval puffer_drive \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
   eval.benchmarks=carla_fast \
   eval.render_scenarios=true \
-  eval.render_obs=false
+  eval.capture_observations=false
 ```
 
 `eval.render_scenarios=true` records each of the benchmark's configured
@@ -110,11 +110,11 @@ scenario and builds a navigable `index.html`. The benchmark is not rerun, and
 the benchmark seed and worker configuration continue to determine the evaluated
 map/seed rows. Capturing every scenario increases CPU, memory, and disk usage.
 
-`eval.render_obs=true` also stores policy observations. Periodic training
+`eval.capture_observations=true` also stores policy observations. Periodic training
 evaluation always disables scenario rendering. If `eval.render_failures` is
 also true, the all-scenario gallery is produced and the redundant failure
 replay pass is skipped. `eval.render_scenarios` cannot be combined with
-`eval.replay_failures_csv`, which skips the standard benchmark pass.
+`eval.failure_replay_csv`, which skips the standard benchmark pass.
 
 ## Failure replay and rendering
 
@@ -125,8 +125,8 @@ puffer eval puffer_drive \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
   eval.benchmarks=carla_fast \
   eval.render_failures=true \
-  eval.render_failures_number=10 \
-  eval.render_obs=false
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
 ```
 
 An episode is selected when any configured `eval.failure_metrics` value is
@@ -139,9 +139,9 @@ greater than zero. The supported metrics are:
 
 The failure pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
-navigable `index.html`. `eval.render_failures_number` limits each selected benchmark
+navigable `index.html`. `eval.max_rendered_failures` limits each selected benchmark
 to its first N failures in metrics-file order; the default `null` renders all
-failures. `eval.render_obs=true` also stores policy observations;
+failures. `eval.capture_observations=true` also stores policy observations;
 `eval.observation_replay_wave_size` and
 `eval.observation_replay_writer_count` bound its peak memory and writer
 parallelism.
@@ -153,9 +153,9 @@ benchmark pass:
 puffer eval puffer_drive \
   load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
   eval.benchmarks=carla \
-  eval.replay_failures_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
-  eval.render_failures_number=10 \
-  eval.render_obs=false
+  eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
 ```
 
 The selected benchmark supplies the replay environment settings, so it should

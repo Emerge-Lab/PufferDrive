@@ -73,7 +73,7 @@ def validate_training_evaluation_config(args):
         raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
 
     load_catalog(eval_config.get("catalog"), evaluation_benchmarks)
-    load_evaluation_config(eval_config.get("evaluation_config"))
+    load_environment_config(eval_config.get("environment_config"))
     return True
 
 
@@ -164,7 +164,7 @@ def load_catalog(catalog_path, selected_names):
     return resolved_benchmarks
 
 
-def load_evaluation_config(config_path):
+def load_environment_config(config_path):
     """Load the environment overrides shared by every benchmark."""
     config = _load_yaml_mapping(config_path, "benchmark evaluation config")
     env_config = _require_mapping(config.get("env"), "benchmark evaluation config env")
@@ -201,7 +201,7 @@ def load_checkpoint_architecture(args):
     return merged, config_path
 
 
-def build_benchmark_args(base_args, benchmark, evaluation_env_config):
+def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the fixed benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
     eval_agent_count = _positive_int(args["eval"].get("num_agents", 101), "eval.num_agents")
@@ -213,7 +213,7 @@ def build_benchmark_args(base_args, benchmark, evaluation_env_config):
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
-    args["env"].update(copy.deepcopy(evaluation_env_config))
+    args["env"].update(copy.deepcopy(environment_config))
     args["env"].update(
         {
             "num_agents": eval_agent_count,
@@ -231,13 +231,13 @@ def build_benchmark_args(base_args, benchmark, evaluation_env_config):
 
 
 def write_resolved_benchmark_config(
-    args, benchmark, catalog_path, evaluation_config_path, checkpoint_config_path, output_path
+    args, benchmark, catalog_path, environment_config_path, checkpoint_config_path, output_path
 ):
     import json
 
     resolved = {
         "benchmark_catalog": os.path.abspath(catalog_path),
-        "benchmark_evaluation_config": os.path.abspath(evaluation_config_path),
+        "benchmark_environment_config": os.path.abspath(environment_config_path),
         "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
         "benchmark": benchmark,
         "args": json.loads(json.dumps(args)),

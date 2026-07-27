@@ -152,7 +152,7 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
         },
         "eval": {
             "catalog": "catalog.yaml",
-            "evaluation_config": "evaluation.yaml",
+            "environment_config": "evaluation.yaml",
             "benchmarks": "carla_test",
             "num_agents": 16,
             "render_failures": False,
@@ -163,7 +163,7 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
     monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
     monkeypatch.setattr(
         pufferlib.benchmark,
-        "load_evaluation_config",
+        "load_environment_config",
         lambda *_: {"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0},
     )
     monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", lambda *_, **__: ([{}], 1))
@@ -222,17 +222,17 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
         },
         "eval": {
             "catalog": "catalog.yaml",
-            "evaluation_config": "evaluation.yaml",
+            "environment_config": "evaluation.yaml",
             "benchmarks": ["womd_single", "womd_multi"],
             "num_agents": 64,
-            "benchmark_sdc_num_envs": 8,
+            "max_sdc_replay_workers": 8,
             "render_failures": False,
         },
     }
     planned_worker_counts = []
 
     monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: benchmarks)
-    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length, capture_replay):
@@ -277,19 +277,19 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
         },
         "eval": {
             "catalog": "catalog.yaml",
-            "evaluation_config": "evaluation.yaml",
+            "environment_config": "evaluation.yaml",
             "benchmarks": "carla_test",
             "num_agents": 16,
             "render_scenarios": True,
             "render_failures": True,
-            "render_obs": True,
+            "capture_observations": True,
         },
     }
     captured = {}
     summaries = [{"map_name": "map_0"}, {"map_name": "map_1"}]
 
     monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
-    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, num_scenarios, num_workers, scenario_length, capture_replay):
@@ -333,11 +333,11 @@ def test_eval_rejects_render_scenarios_with_failure_csv():
     args = {
         "eval": {
             "render_scenarios": True,
-            "replay_failures_csv": "episode_metrics.csv",
+            "failure_replay_csv": "episode_metrics.csv",
         }
     }
 
-    with pytest.raises(pufferlib.APIUsageError, match="render_scenarios.*replay_failures_csv"):
+    with pytest.raises(pufferlib.APIUsageError, match="render_scenarios.*failure_replay_csv"):
         pufferl.eval("puffer_drive", args=args)
 
 
@@ -359,19 +359,19 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         "train": {"use_rnn": False},
         "eval": {
             "catalog": "catalog.yaml",
-            "evaluation_config": "evaluation.yaml",
+            "environment_config": "evaluation.yaml",
             "benchmarks": "carla",
             "num_agents": 16,
             "render_failures": False,
-            "render_failures_number": 2,
-            "replay_failures_csv": str(failure_csv_path),
-            "render_obs": False,
+            "max_rendered_failures": 2,
+            "failure_replay_csv": str(failure_csv_path),
+            "capture_observations": False,
         },
     }
     replay_call = {}
 
     monkeypatch.setattr(pufferlib.benchmark, "load_catalog", lambda *_: [benchmark])
-    monkeypatch.setattr(pufferlib.benchmark, "load_evaluation_config", lambda *_: {})
+    monkeypatch.setattr(pufferlib.benchmark, "load_environment_config", lambda *_: {})
     monkeypatch.setattr(
         pufferlib.benchmark,
         "load_checkpoint_architecture",
@@ -380,7 +380,7 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
     monkeypatch.setattr(
         pufferlib.benchmark,
         "build_benchmark_args",
-        lambda loaded_args, _benchmark, _evaluation_config: loaded_args,
+        lambda loaded_args, _benchmark, _environment_config: loaded_args,
     )
     monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
     monkeypatch.setattr(
@@ -401,16 +401,16 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         metrics_path,
         _benchmark_output_dir,
         _policy,
-        render_obs,
-        render_failures_number,
+        capture_observations,
+        max_rendered_failures,
     ):
         replay_call.update(
             {
                 "env_name": env_name,
                 "benchmark": selected_benchmark["name"],
                 "metrics_path": metrics_path,
-                "render_obs": render_obs,
-                "render_failures_number": render_failures_number,
+                "capture_observations": capture_observations,
+                "max_rendered_failures": max_rendered_failures,
             }
         )
         return ["failure replay"]
@@ -424,8 +424,8 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         "env_name": "puffer_drive",
         "benchmark": "carla",
         "metrics_path": str(failure_csv_path),
-        "render_obs": False,
-        "render_failures_number": 2,
+        "capture_observations": False,
+        "max_rendered_failures": 2,
     }
 
 
@@ -439,7 +439,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
             "catalog": "catalog.yaml",
             "render_scenarios": True,
             "render_failures": True,
-            "replay_failures_csv": "episode_metrics.csv",
+            "failure_replay_csv": "episode_metrics.csv",
         },
     }
 
@@ -462,7 +462,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
 
     assert captured_args["eval"]["render_scenarios"] is False
     assert captured_args["eval"]["render_failures"] is False
-    assert captured_args["eval"]["replay_failures_csv"] is None
+    assert captured_args["eval"]["failure_replay_csv"] is None
 
 
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
@@ -550,7 +550,7 @@ def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypat
         desc="test padded replay",
         expected_episodes=1,
         policy=policy,
-        expected_agents_per_batch=4,
+        recorded_agents_per_batch=4,
     )
 
     assert policy.observations.shape == (4, 1)
@@ -670,8 +670,8 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
         str(tmp_path / "episode_metrics.csv"),
         str(tmp_path),
         _ZeroPolicy(),
-        render_obs=False,
-        render_failures_number=2,
+        capture_observations=False,
+        max_rendered_failures=2,
     )
 
     written_rows = pd.read_csv(tmp_path / "failures" / "selected_failures.csv")

@@ -142,7 +142,7 @@ puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   eval.benchmarks=carla \
   eval.render_scenarios=true \
-  eval.render_obs=false
+  eval.capture_observations=false
 ```
 
 Scenario renders are captured during the benchmark pass and written as
@@ -154,15 +154,15 @@ puffer eval puffer_drive \
   load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
   eval.benchmarks=carla \
   eval.render_failures=true \
-  eval.render_failures_number=10 \
-  eval.render_obs=false
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
 ```
 
 Evaluation outputs are written under `eval/<benchmark>/`. The benchmark seed and
 worker count are part of the benchmark configuration: repeated runs with both unchanged
 produce the same map/seed rows. Failure renders replay the exact map and seed
 recorded by the metrics pass. Set
-`eval.replay_failures_csv=<path/to/episode_metrics.csv>` to skip the standard
+`eval.failure_replay_csv=<path/to/episode_metrics.csv>` to skip the standard
 benchmark pass and replay failures directly. See
 [docs/evaluation.md](docs/evaluation.md) for the catalog schema, failure replay
 and all-scenario rendering flows, outputs, and training integration.

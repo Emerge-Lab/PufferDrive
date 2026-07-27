@@ -1570,28 +1570,28 @@ def eval(
     args = args or load_config(env_name)
     eval_config = args.get("eval", {})
     catalog_path = eval_config.get("catalog")
-    evaluation_config_path = eval_config.get("evaluation_config")
+    environment_config_path = eval_config.get("environment_config")
     selected_benchmarks = eval_config.get("benchmarks")
     render_scenarios = bool(eval_config.get("render_scenarios"))
     render_failures = bool(eval_config.get("render_failures"))
-    render_failures_number = eval_config.get("render_failures_number")
-    replay_failures_csv = eval_config.get("replay_failures_csv")
-    benchmark_sdc_num_envs = eval_config.get("benchmark_sdc_num_envs", 8)
-    if render_scenarios and replay_failures_csv is not None:
+    max_rendered_failures = eval_config.get("max_rendered_failures")
+    failure_replay_csv = eval_config.get("failure_replay_csv")
+    max_sdc_replay_workers = eval_config.get("max_sdc_replay_workers", 8)
+    if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
             "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
-            "with eval.replay_failures_csv"
+            "with eval.failure_replay_csv"
         )
     if render_failures and not render_scenarios:
         pufferlib.benchmark.parse_failure_metric_columns(eval_config.get("failure_metrics"))
     benchmarks = pufferlib.benchmark.load_catalog(catalog_path, selected_benchmarks)
-    evaluation_env_config = pufferlib.benchmark.load_evaluation_config(evaluation_config_path)
+    environment_config = pufferlib.benchmark.load_environment_config(environment_config_path)
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
         base_args = copy.deepcopy(args)
-        evaluation_env_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
-        evaluation_env_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
+        environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
+        environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
@@ -1603,9 +1603,9 @@ def eval(
         eval_output_dir = os.path.join(run_dir, "eval")
     all_benchmark_summaries = {}
     for benchmark in benchmarks:
-        run_args = pufferlib.benchmark.build_benchmark_args(base_args, benchmark, evaluation_env_config)
+        run_args = pufferlib.benchmark.build_benchmark_args(base_args, benchmark, environment_config)
         if benchmark["mode"] == "replay" and benchmark["control_mode"] == "control_sdc_only":
-            run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), benchmark_sdc_num_envs)
+            run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), max_sdc_replay_workers)
         benchmark_output_dir = os.path.join(eval_output_dir, benchmark["name"])
         if eval_output_subdir is not None:
             benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
@@ -1614,7 +1614,7 @@ def eval(
             run_args,
             benchmark,
             catalog_path,
-            evaluation_config_path,
+            environment_config_path,
             checkpoint_config_path,
             os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
         )
@@ -1622,16 +1622,16 @@ def eval(
         benchmark_seed = int(benchmark["seed"])
         np.random.seed(benchmark_seed)
         torch.manual_seed(benchmark_seed)
-        if replay_failures_csv is not None:
+        if failure_replay_csv is not None:
             summaries = _render_eval_failures(
                 env_name,
                 run_args,
                 benchmark,
-                replay_failures_csv,
+                failure_replay_csv,
                 benchmark_output_dir,
                 policy,
-                bool(eval_config.get("render_obs")),
-                render_failures_number,
+                bool(eval_config.get("capture_observations")),
+                max_rendered_failures,
             )
             all_benchmark_summaries[benchmark["name"]] = summaries
             continue
@@ -1656,7 +1656,7 @@ def eval(
             num_scenarios,
             policy=policy,
             replay_output_dir=replay_output_dir,
-            capture_observations=render_scenarios and bool(eval_config.get("render_obs")),
+            capture_observations=render_scenarios and bool(eval_config.get("capture_observations")),
         )
         _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
         all_benchmark_summaries[benchmark["name"]] = summaries
@@ -1671,8 +1671,8 @@ def eval(
                 os.path.join(benchmark_output_dir, "episode_metrics.csv"),
                 benchmark_output_dir,
                 policy,
-                bool(eval_config.get("render_obs")),
-                render_failures_number,
+                bool(eval_config.get("capture_observations")),
+                max_rendered_failures,
             )
     return all_benchmark_summaries
 
@@ -1902,7 +1902,7 @@ def _run_eval_rollout(
     desc,
     expected_episodes,
     policy=None,
-    expected_agents_per_batch=None,
+    recorded_agents_per_batch=None,
     replay_output_dir=None,
     capture_observations=False,
     replay_episode_offset=0,
@@ -1926,16 +1926,16 @@ def _run_eval_rollout(
     scenario_progress = None
     try:
         agents_per_batch = vecenv.agents_per_batch
-        policy_agents_per_batch = expected_agents_per_batch or agents_per_batch
-        if agents_per_batch > policy_agents_per_batch:
+        inference_agents_per_batch = recorded_agents_per_batch or agents_per_batch
+        if agents_per_batch > inference_agents_per_batch:
             raise pufferlib.APIUsageError(
                 f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
-                f"CSV policy batch of {policy_agents_per_batch}. Reduce num_agents or the replay worker count."
+                f"CSV policy batch of {inference_agents_per_batch}. Reduce num_agents or the replay worker count."
             )
-        if agents_per_batch < policy_agents_per_batch:
+        if agents_per_batch < inference_agents_per_batch:
             print(
                 f"Padding policy inference from {agents_per_batch} to "
-                f"{policy_agents_per_batch} agents to preserve the recorded batch shape"
+                f"{inference_agents_per_batch} agents to preserve the recorded batch shape"
             )
 
         rollout_seed = 42 if args["train"]["seed"] is None else int(args["train"]["seed"])
@@ -1961,11 +1961,11 @@ def _run_eval_rollout(
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
-        padding_agent_count = policy_agents_per_batch - agents_per_batch
+        padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
         if padding_agent_count:
             policy_obs_tensor = torch.zeros(
-                (policy_agents_per_batch, *obs.shape[1:]),
+                (inference_agents_per_batch, *obs.shape[1:]),
                 dtype=torch.as_tensor(obs).dtype,
                 device=device,
             )
@@ -2022,7 +2022,7 @@ def _run_eval_rollout(
                         replay_capture.queue_episode(item, len(episode_summaries))
                     else:
                         item.pop("replay_environment_bundle", None)
-                    item["agents_per_batch"] = policy_agents_per_batch
+                    item["agents_per_batch"] = inference_agents_per_batch
                     episode_summaries.append(item)
                     if len(episode_summaries) <= expected_episodes:
                         scenario_progress.update(1)
@@ -2047,7 +2047,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
     eval_args["eval"]["benchmarks"] = eval_args["train"]["evaluation_benchmarks"]
     eval_args["eval"]["render_scenarios"] = False
     eval_args["eval"]["render_failures"] = False
-    eval_args["eval"]["replay_failures_csv"] = None
+    eval_args["eval"]["failure_replay_csv"] = None
     eval_output_dir = os.path.join(run_dir, "eval", "training")
     eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
 
@@ -2190,13 +2190,13 @@ def _render_eval_failures(
     metrics_path,
     benchmark_output_dir,
     policy,
-    render_obs,
-    render_failures_number,
+    capture_observations,
+    max_rendered_failures,
 ):
     configured_failure_metrics = run_args.get("eval", {}).get("failure_metrics")
     selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
-    if render_failures_number is not None:
-        selected_rows = selected_rows.head(render_failures_number).copy()
+    if max_rendered_failures is not None:
+        selected_rows = selected_rows.head(max_rendered_failures).copy()
     failures_dir = os.path.join(benchmark_output_dir, "failures")
     os.makedirs(failures_dir, exist_ok=True)
     selected_path = os.path.join(failures_dir, "selected_failures.csv")
@@ -2213,7 +2213,7 @@ def _render_eval_failures(
     if configured_worker_count <= 0:
         raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
     replay_wave_size = len(pairs)
-    if render_obs:
+    if capture_observations:
         observation_replay_wave_size = run_args.get("eval", {}).get("observation_replay_wave_size")
         if (
             isinstance(observation_replay_wave_size, bool)
@@ -2234,7 +2234,7 @@ def _render_eval_failures(
         failure_args["env"]["num_agents"] = replay_agent_capacity
     replay_output_dir = os.path.join(failures_dir, "replays")
     os.makedirs(replay_output_dir, exist_ok=True)
-    expected_agents_per_batch = _selected_agents_per_batch(selected_rows)
+    recorded_agents_per_batch = _selected_agents_per_batch(selected_rows)
     summaries = []
     replay_wave_count = (len(pairs) + replay_wave_size - 1) // replay_wave_size
     for replay_wave_idx, replay_pair_start in enumerate(range(0, len(pairs), replay_wave_size)):
@@ -2260,9 +2260,9 @@ def _render_eval_failures(
             replay_desc,
             len(replay_pairs),
             policy=policy,
-            expected_agents_per_batch=expected_agents_per_batch,
+            recorded_agents_per_batch=recorded_agents_per_batch,
             replay_output_dir=replay_output_dir,
-            capture_observations=render_obs,
+            capture_observations=capture_observations,
             replay_episode_offset=len(summaries),
         )
         summaries.extend(wave_summaries)
