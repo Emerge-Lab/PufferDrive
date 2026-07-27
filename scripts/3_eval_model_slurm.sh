@@ -14,7 +14,7 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000
+RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_001
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt
 
 source .venv/bin/activate
@@ -24,6 +24,10 @@ source .venv/bin/activate
     --render-backend obs_html \
     eval.validation_defaults.action_selection=mean \
     eval.validation_replay.env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.validation_defaults.traffic_light_behavior=1 \
+    eval.validation_defaults.env.traffic_light_behavior=1 \
+    env.min_goal_spacing=30.0 \
+    env.max_goal_spacing=30.0 \
     load_model_path=${MODEL_PATH} \
     +render_results_dir=${RESULTS_PATH}
 
@@ -37,7 +41,11 @@ source .venv/bin/activate
     eval.validation_gigaflow.env.min_agents_per_env=50 \
     eval.validation_gigaflow.env.max_agents_per_env=50 \
     eval.validation_gigaflow.env.scenario_length=6000 \
+    eval.validation_defaults.env.traffic_light_behavior=1 \
+    env.min_goal_spacing=30.0 \
+    env.max_goal_spacing=30.0 \
     +render_results_dir=${RESULTS_PATH}
+
 
 
 # 50 agents per scenario, 1k scenario, 6k steps
