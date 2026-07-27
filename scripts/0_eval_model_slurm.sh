@@ -14,14 +14,33 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
+RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt
+
 source .venv/bin/activate
 .venv/bin/puffer eval puffer_drive \
     --eval-simulation replay \
     --render 1 \
     --render-backend obs_html \
+    eval.validation_defaults.action_selection=mean \
     eval.validation_replay.env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    load_model_path=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt \
-    +render_results_dir=/home/bjaeger/PufferDrive/experiments/k_scaled_0000
+    load_model_path=${MODEL_PATH} \
+    +render_results_dir=${RESULTS_PATH}
+
+.venv/bin/puffer eval puffer_drive \
+    --eval-simulation gigaflow \
+    --render 1 \
+    --render-backend obs_html \
+    num_scenarios=1000 \
+    load_model_path=${MODEL_PATH} \
+    eval.validation_defaults.action_selection=mean \
+    eval.validation_gigaflow.env.min_agents_per_env=50 \
+    eval.validation_gigaflow.env.max_agents_per_env=50 \
+    eval.validation_gigaflow.env.scenario_length=6000 \
+    +render_results_dir=${RESULTS_PATH}
+
+
+# 50 agents per scenario, 1k scenario, 6k steps
 
 end=`date +%s`
 runtime=$((end-start))
