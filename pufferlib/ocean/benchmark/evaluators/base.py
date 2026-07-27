@@ -872,8 +872,6 @@ class Evaluator:
         num_scenarios = int(eval_cfg["render_num_scenarios"])
         max_steps = int(eval_cfg["render_max_steps"])
 
-        saved_cwd = os.getcwd()
-        os.chdir(out_dir)
         # Glob by full view_suffix (= step_suffix + view marker) so we get
         # only this-view's mp4s — not files written by a prior view in the
         # same render pass, which would otherwise duplicate in all_paths.
@@ -881,7 +879,11 @@ class Evaluator:
         # matches bev files but not the bare sim_state ones.
         view_glob = f"*{view_suffix}.mp4"
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
+        # chdir must be inside the try so the finally always restores the cwd,
+        # even if a later statement raises before the loop starts.
+        saved_cwd = os.getcwd()
         try:
+            os.chdir(out_dir)
             state = self._init_lstm_state(num_agents, policy, device, args)
             scenarios_processed = 0
             while scenarios_processed < num_scenarios:
