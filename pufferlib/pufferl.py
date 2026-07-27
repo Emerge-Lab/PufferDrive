@@ -1581,6 +1581,8 @@ def eval(
 ):
     """Run configured benchmarks or replay failures from an existing CSV."""
     cli_overrides = list(sys.argv[1:]) if args is None else []
+    if any(override.split("=", 1)[0] == "env.num_agents" for override in cli_overrides):
+        raise pufferlib.APIUsageError("Use eval.num_agents to configure evaluation agent count")
     args = args or load_config(env_name)
     eval_config = args["eval"]
     benchmark_config_path = eval_config["benchmark_config"]
@@ -1625,6 +1627,7 @@ def eval(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
             resolve=True,
         )
+        run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), max_sdc_replay_workers)
         output_directory_name = benchmark["name"]
