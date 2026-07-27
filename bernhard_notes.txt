@@ -4,6 +4,26 @@ git push origin bernhard
 Run for formatting.
 pre-commit run --all-files
 
+
+git fetch origin
+git checkout -b your-new-branch-name origin/3.0
+git push -u origin your-new-branch-name
+
+git merge bernhard_01 --no-commit --no-ff
+
+git restore --source=HEAD path/to/excluded-file.txt
+Or undo personal files in VS Code.
+Commit changes.
+
+Then remove extra files from feature branch:
+git clean -nd
+Check if correct files then:
+git clean -fd
+
+Make pull request:
+
+Switch back to development branch
+
 # Not in valentins config but in my config.
 # non_sdc_controller: policy
 # non_vehicle_controller: auto
