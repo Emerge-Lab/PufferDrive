@@ -341,7 +341,7 @@ eval:
     type: multi_scenario
     enabled: 'false'
     render: 'true'
-    render_backend: triage_html
+    render_backend: obs_html
     env:
       simulation_mode: replay
       control_mode: control_sdc_only
@@ -358,8 +358,7 @@ eval:
     type: multi_scenario
     enabled: 'true'
     render: 'true'
-    render_backend: egl
-    render_views: [sim_state, bev]
+    render_backend: obs_html
     env:
       simulation_mode: gigaflow
       map_dir: pufferlib/resources/drive/binaries/carla
@@ -377,7 +376,7 @@ eval:
     type: multi_scenario
     enabled: 'false'
     render: 'true'
-    render_backend: triage_html
+    render_backend: obs_html
     env:
       simulation_mode: gigaflow
       map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin

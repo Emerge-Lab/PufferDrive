@@ -73,12 +73,9 @@ train.update_epochs: 2
 train.compile: true
 train.checkpoint_interval: 500
 
-# validation_gigaflow reconfigured to obs_html (CPU-only scene playback +
-# per-episode metrics including dnf_rate), pinned to the same Town10HD
-# single-agent setup the training uses, so each eval cycle drops a gallery of
-# rollouts you can browse for DNFs. No eight-way ffmpeg/EGL spike from the
-# default egl backend.
-eval.validation_gigaflow.render_backend: obs_html
+# validation_gigaflow pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops an obs_html gallery of rollouts
+# you can browse for DNFs.
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1
 eval.validation_gigaflow.env.num_agents: 64
