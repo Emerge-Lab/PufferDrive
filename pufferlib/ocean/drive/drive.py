@@ -189,8 +189,8 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
         self.capture_replay = bool(capture_replay)
-        self.replay_worker_idx = int(replay_worker_idx)
-        self._replay_buffers = []
+        self.replay_worker_idx = replay_worker_idx
+        self._replay_captures = []
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
@@ -466,8 +466,6 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
-        if self.capture_replay:
-            self._initialize_replay_buffers()
 
     def _env_init_kwargs(self, map_file, max_agents):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
@@ -577,7 +575,7 @@ class Drive(pufferlib.PufferEnv):
         self.tick = 0
         self.truncations[:] = 0
         if self.capture_replay:
-            self._initialize_replay_buffers()
+            self._initialize_replay_captures()
         return self.observations, []
 
     def step(self, actions):
@@ -676,7 +674,7 @@ class Drive(pufferlib.PufferEnv):
 
                 binding.vec_reset(self.c_envs)
                 if self.capture_replay:
-                    self._initialize_replay_buffers()
+                    self._initialize_replay_captures()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
@@ -798,7 +796,7 @@ class Drive(pufferlib.PufferEnv):
             return [state]
         raise RuntimeError(f"Unexpected Drive state type for replay capture: {type(state).__name__}")
 
-    def _create_replay_buffer(self, scenario, active_agent_offset):
+    def _create_replay_capture(self, scenario, active_agent_offset):
         map_path = scenario.get("map_name")
         if not isinstance(map_path, str) or not map_path:
             raise RuntimeError("Replay capture requires a non-empty scenario map_name")
@@ -822,17 +820,17 @@ class Drive(pufferlib.PufferEnv):
             "frames": {key: [] for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32", "traffic_i16")},
         }
 
-    def _initialize_replay_buffers(self):
+    def _initialize_replay_captures(self):
         scenarios = self._normalize_scenarios(self.get_state())
         active_agent_offset = 0
-        self._replay_buffers = []
+        self._replay_captures = []
         for scenario in scenarios:
-            self._replay_buffers.append(self._create_replay_buffer(scenario, active_agent_offset))
+            self._replay_captures.append(self._create_replay_capture(scenario, active_agent_offset))
             active_agent_offset += int(scenario["active_agent_count"])
-        env_count = len(self._replay_buffers)
-        agent_capacity = max((buffer["agent_capacity"] for buffer in self._replay_buffers), default=0)
+        env_count = len(self._replay_captures)
+        agent_capacity = max((capture["agent_capacity"] for capture in self._replay_captures), default=0)
         traffic_capacity = max(
-            (max(buffer["traffic_capacity"], 1) for buffer in self._replay_buffers),
+            (max(capture["traffic_capacity"], 1) for capture in self._replay_captures),
             default=1,
         )
         self._replay_frame_arrays = {
@@ -866,34 +864,34 @@ class Drive(pufferlib.PufferEnv):
             self._replay_frame_arrays["puffer_f32"],
             self._replay_frame_arrays["traffic_i16"],
         )
-        for env_idx, buffer in enumerate(self._replay_buffers):
-            agent_capacity = buffer["agent_capacity"]
-            traffic_capacity = max(buffer["traffic_capacity"], 1)
+        for env_idx, capture in enumerate(self._replay_captures):
+            agent_capacity = capture["agent_capacity"]
+            traffic_capacity = max(capture["traffic_capacity"], 1)
             for key in ("agent_f32", "agent_i32", "metrics_f32", "puffer_f32"):
-                buffer["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
-            buffer["frames"]["traffic_i16"].append(
+                capture["frames"][key].append(self._replay_frame_arrays[key][env_idx, :agent_capacity].copy())
+            capture["frames"]["traffic_i16"].append(
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
             )
 
     def _build_replay_environment_bundle(self, summary):
         env_slot = int(summary["env_slot"])
-        if env_slot < 0 or env_slot >= len(self._replay_buffers):
+        if env_slot < 0 or env_slot >= len(self._replay_captures):
             raise RuntimeError(f"Replay summary has invalid env_slot={env_slot}")
-        buffer = self._replay_buffers[env_slot]
+        capture = self._replay_captures[env_slot]
         episode_length = int(summary["episode_length"])
-        captured_frame_count = len(buffer["frames"]["agent_f32"])
+        captured_frame_count = len(capture["frames"]["agent_f32"])
         if episode_length <= 0 or episode_length > captured_frame_count:
             raise RuntimeError(
                 f"Replay episode_length={episode_length} is incompatible with "
                 f"captured_frame_count={captured_frame_count} for env_slot={env_slot}"
             )
-        metadata = dict(buffer["metadata"])
+        metadata = dict(capture["metadata"])
         metadata["episode_length"] = episode_length
         replay_environment_bundle = {
             "schema": "interactive_replay_environment_v1",
             "metadata": metadata,
-            "scenario": buffer["scenario"],
-            "frames": {key: np.stack(frames[:episode_length], axis=0) for key, frames in buffer["frames"].items()},
+            "scenario": capture["scenario"],
+            "frames": {key: np.stack(frames[:episode_length], axis=0) for key, frames in capture["frames"].items()},
         }
         return zlib.compress(
             pickle.dumps(replay_environment_bundle, protocol=pickle.HIGHEST_PROTOCOL),
