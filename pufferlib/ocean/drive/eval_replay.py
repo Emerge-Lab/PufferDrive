@@ -83,7 +83,8 @@ class EvalReplayCapture:
 
     def capture_frame(self, obs, policy_obs_tensor, raw_action, action, logits, value, logprob, entropy):
         if self.history_frame_count == self.capture_batch_steps:
-            self.reset_history()
+            self.history = {}
+            self.history_frame_count = 0
         replay_frame = {
             "raw_action": np.asarray(raw_action, dtype=np.float32),
             "clipped_action": np.asarray(action, dtype=np.float32),
@@ -132,10 +133,10 @@ class EvalReplayCapture:
             raise RuntimeError("Replay environment bundle has an unsupported schema")
 
         metadata = replay_environment["metadata"]
-        episode_length = int(metadata["episode_length"])
-        worker_idx = int(metadata["worker_idx"])
-        active_agent_offset = int(metadata["active_agent_offset"])
-        active_agent_count = int(metadata["active_agent_count"])
+        episode_length = metadata["episode_length"]
+        worker_idx = metadata["worker_idx"]
+        active_agent_offset = metadata["active_agent_offset"]
+        active_agent_count = metadata["active_agent_count"]
         global_agent_start = worker_idx * self.agents_per_worker + active_agent_offset
         global_agent_end = global_agent_start + active_agent_count
         if (
@@ -169,7 +170,3 @@ class EvalReplayCapture:
             ):
                 pass
         self.pending_replays = []
-
-    def reset_history(self):
-        self.history = {}
-        self.history_frame_count = 0

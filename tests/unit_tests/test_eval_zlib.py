@@ -12,8 +12,8 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
-from pufferlib.eval_replay import EvalReplayCapture
 from pufferlib.ocean.drive import benchmark as drive_benchmark
+from pufferlib.ocean.drive.eval_replay import EvalReplayCapture
 
 
 def test_benchmark_rejects_agent_capacity_below_benchmark_maximum():

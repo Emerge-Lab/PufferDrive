@@ -43,7 +43,7 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 import pufferlib.viz
-from pufferlib.eval_replay import EvalReplayCapture
+from pufferlib.ocean.drive.eval_replay import EvalReplayCapture
 
 
 try:
