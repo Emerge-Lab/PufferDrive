@@ -1,9 +1,9 @@
 # Single-agent "speed run" training program config (for submit_cluster.py).
 # One controlled agent per environment on a single CARLA map (Town10), with many
 # parallel environments sharing one cached copy of the map geometry. Traffic
-# lights are fully disabled (no observation, no metric, no reward penalty).
-# Only keys that differ from the pufferlib/config/puffer_drive.yaml defaults
-# appear here; everything else derives from the defaults.
+# lights are fully disabled (no observation, no metric, no reward penalty). Keys
+# here override pufferlib/config/puffer_drive.yaml; submit_cluster.py converts
+# underscores in each key to dashes for the CLI.
 #
 # Launch (3 seeds via the colon sweep):
 #   source /scratch/$USER/venvs/pufferdrive/bin/activate
@@ -44,9 +44,13 @@ env.reward_conditioning: false
 env.reward_randomization: false
 env.reward_collision: 0.0
 env.reward_offroad: 1.0
-env.reward_comfort: 0.0
-env.reward_lane_align: 0.0
-env.reward_lane_center: 0.0
+env.reward_stop_line: 1.0
+env.reward_comfort: 0.05
+env.reward_lane_align: 0.01
+env.reward_vel_align: 1.0
+env.reward_lane_center: 0.005
+env.reward_center_bias: 0.0
+env.reward_velocity: 0.0025
 env.reward_reverse: 0.0
 env.reward_timestep: 0.0
 env.reward_overspeed: 0.0
