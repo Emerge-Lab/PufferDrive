@@ -1,3 +1,7 @@
+import json
+import struct
+import zlib
+
 import numpy as np
 
 from pufferlib import viz
@@ -49,6 +53,11 @@ def test_standard_replay_zlib_round_trip_and_html_render(tmp_path, monkeypatch):
         "map_name": "test_map.bin",
         "scenario_id": "scenario_1",
         "active_agent_indices": [0],
+        "agents": [
+            {"mark_as_expert": 0},
+            {"mark_as_expert": 1},
+            {"mark_as_expert": 0},
+        ],
         "road_elements": [],
         "traffic_elements": [],
     }
@@ -64,3 +73,18 @@ def test_standard_replay_zlib_round_trip_and_html_render(tmp_path, monkeypatch):
     assert "__PAYLOAD_CHUNKS__" not in html
     assert html.count('class="payload-chunk"') > 1
     assert "decodeReplayPayload()" in html
+    assert 'const DYNAMIC_EXPERT_COLOR = "#c4c8cf";' in html
+    assert 'const STATIC_AGENT_COLOR = "#4a505a";' in html
+    assert 'const INFRACTION_AGENT_COLOR = "#d92d20";' in html
+    assert "function agentHasInfraction(frame, idx)" in html
+    assert "function colorForAgent(id, isActive, isExpert, hasInfraction)" in html
+    assert "const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);" in html
+    assert "function colorFor(id, isActive, isExpert)" in html
+    assert "if (isActive) return VEHICLE_COLORS" in html
+    assert "return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;" in html
+    assert 'stopped ? "red"' not in html
+
+    payload = zlib.decompress(compressed_payload)
+    header_length = struct.unpack_from("<I", payload)[0]
+    header = json.loads(payload[4 : 4 + header_length])
+    assert header["expert_indices"] == [1]

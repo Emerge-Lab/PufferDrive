@@ -958,6 +958,7 @@ def encode_interactive_replay(scenario, replay):
     # Fields: x, y, heading, length, width; width <= 0 marks frames with no valid logged pose.
     agents = scenario.get("agents", []) or []
     active_indices = scenario.get("active_agent_indices", []) or []
+    expert_indices = [agent_idx for agent_idx, agent in enumerate(agents) if int(agent.get("mark_as_expert", 0)) == 1]
     frame_count = int(replay["agent_f32"].shape[0])
     active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
@@ -992,6 +993,7 @@ def encode_interactive_replay(scenario, replay):
         "scenario_id": scenario.get("scenario_id", "Unknown"),
         "goal_regen_mode": goal_regen_mode,
         "active_indices": scenario.get("active_agent_indices", []),
+        "expert_indices": expert_indices,
         "total_agents": int(scenario.get("num_total_agents", replay["agent_f32"].shape[1])),
         "eval_overrides": replay.get("eval_overrides") or {},
         "frames": int(replay["agent_f32"].shape[0]),
@@ -1172,6 +1174,11 @@ __PAYLOAD_CHUNKS__
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
+        const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
+        const STATIC_AGENT_COLOR = "#4a505a";
+        const INFRACTION_AGENT_COLOR = "#d92d20";
+        const INFRACTION_METRIC_COUNT = 4;
+        const LEGACY_DYNAMIC_DISTANCE_SQ = 0.01;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
@@ -1182,6 +1189,7 @@ __PAYLOAD_CHUNKS__
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
+        let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
 
         function chunk(name) {
@@ -1281,6 +1289,9 @@ self.onmessage = async event => {
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
+            expertAgentIndices = Array.isArray(H.expert_indices)
+                ? new Set(H.expert_indices)
+                : inferLegacyDynamicAgents();
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
@@ -1309,7 +1320,38 @@ self.onmessage = async event => {
                 p += len;
             }
         }
-        function colorFor(id, control_state, stopped) { return control_state === 3 ? "#9b59b6" : (stopped ? "red" : (control_state === 0 ? VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length] : (control_state === 1 ? "#bfbfbf" : "#404040"))); }
+        function inferLegacyDynamicAgents() {
+            const dynamicAgentIndices = new Set();
+            for (let agentIdx=0;agentIdx<H.agent_cap;agentIdx++) {
+                let referenceX = null, referenceY = null;
+                for (let frame=0;frame<H.frames;frame++) {
+                    const intBase = (frame * H.agent_cap + agentIdx) * F.ai;
+                    if (!C.agent_i32[intBase+2]) continue;
+                    const floatBase = (frame * H.agent_cap + agentIdx) * F.af;
+                    const x = C.agent_f32[floatBase], y = C.agent_f32[floatBase+1];
+                    if (referenceX === null) { referenceX = x; referenceY = y; continue; }
+                    const deltaX = x - referenceX, deltaY = y - referenceY;
+                    if (deltaX*deltaX + deltaY*deltaY <= LEGACY_DYNAMIC_DISTANCE_SQ) continue;
+                    dynamicAgentIndices.add(agentIdx);
+                    break;
+                }
+            }
+            return dynamicAgentIndices;
+        }
+        function colorFor(id, isActive, isExpert) {
+            if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
+            return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
+        }
+        function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
+        }
+        function agentHasInfraction(frame, idx) {
+            const metricsBase = (frame * H.agent_cap + idx) * F.mf;
+            for (let metricIdx=0;metricIdx<INFRACTION_METRIC_COUNT;metricIdx++) {
+                if (C.metrics_f32[metricsBase+metricIdx] > 0) return true;
+            }
+            return false;
+        }
         function rr(x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
         function drawAgentBody(a, outline) {
             // Top-down sprites in agent frame (+x forward, rear at -l/2). Detail only when zoomed in enough to see it.
@@ -1339,7 +1381,11 @@ self.onmessage = async event => {
             const ib = (frame * H.agent_cap + idx) * F.ai;
             if (!C.agent_i32[ib+2]) return null;
             const fb = (frame * H.agent_cap + idx) * F.af;
-            return {idx:idx, id:C.agent_i32[ib], type:C.agent_i32[ib+1], control_state:C.agent_i32[ib+3], stopped:C.agent_i32[ib+4], removed:C.agent_i32[ib+5], cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:colorFor(C.agent_i32[ib], C.agent_i32[ib+3], C.agent_i32[ib+4])};
+            const agentType = C.agent_i32[ib+1], isActive = C.agent_i32[ib+3] === 1;
+            const isExpert = expertAgentIndices.has(idx);
+            const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
+            const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, isActive:isActive, isExpert:isExpert, hasInfraction:hasInfraction, stopped:C.agent_i32[ib+4], removed:C.agent_i32[ib+5], cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1613,10 +1659,8 @@ def build_gallery_index(folder_path=".", file_metrics=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
     If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
-    the index also exposes a sort dropdown so the user can flip between sort
-    keys (default: `score` ascending — failures bubble to the top). When
-    `file_metrics` is None or empty, behaves as before (filename-order
-    dropdown, no sort UI).
+    the index exposes a filter for each supported infraction present in the
+    metrics. Previous/next navigation follows the active filtered list.
     """
     files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
@@ -1624,180 +1668,646 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         print("No matching .html files found in this directory.")
         return
 
-    # Lexicographic sort over the full filename. With the triage_html stem
-    # `{map}_{scenario_id}_{scenarios_done:04d}_epoch{e}_step{s}.html`, the
-    # zero-padded scenarios_done dominates ordering within a map.
     files.sort()
 
     metrics_map = file_metrics or {}
-    has_metrics = bool(metrics_map)
+    present_metrics = set()
+    for metrics in metrics_map.values():
+        present_metrics.update(metrics.keys())
 
-    # (key, default_direction). Anything in this list with at least one
-    # non-null value across files gets a dropdown entry. Default direction
-    # is what makes triage-useful values bubble to the top.
-    SORT_KEYS = [
-        ("score", "asc"),
-        ("dnf_rate", "desc"),
-        ("episode_return", "asc"),
-        ("num_goals_reached", "asc"),
-        ("collision_rate", "desc"),
-        ("offroad_rate", "desc"),
-        ("red_light_violation_rate", "desc"),
-        ("total_infractions", "desc"),
-        ("total_distance_travelled", "asc"),
-        ("episode_length", "asc"),
+    FAILURE_FILTERS = (
+        ("offroad", "offroad_rate", "Off-road"),
+        ("collision", "collision_rate", "Collisions"),
+        ("atfault", "at_fault_collision_rate", "At-fault collisions"),
+        ("redlight", "red_light_violation_rate", "Red-light violations"),
+    )
+    available_failure_filters = [
+        failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
     ]
 
-    available_keys = []
-    if has_metrics:
-        present = set()
-        for v in metrics_map.values():
-            present.update(v.keys())
-        for k, d in SORT_KEYS:
-            if k in present:
-                available_keys.append((k, d))
+    failure_flags = {}
+    for filename in files:
+        metrics = metrics_map.get(filename, {})
+        failure_flags[filename] = {
+            filter_key: metrics.get(metric_key, 0) > 0 for filter_key, metric_key, _ in FAILURE_FILTERS
+        }
 
-    metrics_json = json.dumps(metrics_map, separators=(",", ":"))
-    defaults_json = json.dumps({k: d for k, d in available_keys}, separators=(",", ":"))
+    def make_label(filename):
+        return filename.removesuffix(".html")
 
-    def make_label(f):
-        if not has_metrics or f not in metrics_map:
-            return f.replace(".html", "").replace("_", " ")
-        bits = [f.replace(".html", "")]
-        for k in ("score", "dnf_rate", "num_goals_reached", "episode_return"):
-            if k in metrics_map[f]:
-                v = metrics_map[f][k]
-                bits.append(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}")
-        return "  ·  ".join(bits)
-
-    options_html = "\n".join(f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files)
-
-    sort_ui = ""
-    sort_js = ""
-    if has_metrics and available_keys:
-        sort_options = "\n".join(
-            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>' for k, _ in available_keys
-        )
-        sort_ui = (
-            '<span style="color:#888;font-size:12px;font-weight:bold">SORT</span>'
-            f'<select id="sortKey" onchange="onSortKeyChange()">{sort_options}</select>'
-            '<select id="sortDir" onchange="resortFiles()">'
-            '<option value="asc" selected>asc</option>'
-            '<option value="desc">desc</option>'
-            "</select>"
-        )
-        sort_js = (
-            (
-                "const FILE_METRICS = __METRICS_JSON__;"
-                "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
-                "const sortKeySel = document.getElementById('sortKey');"
-                "const sortDirSel = document.getElementById('sortDir');"
-                "function onSortKeyChange() {"
-                "  const k = sortKeySel.value;"
-                "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
-                "  resortFiles();"
-                "}"
-                "function resortFiles() {"
-                "  const key = sortKeySel.value;"
-                "  const dir = sortDirSel.value;"
-                "  const opts = Array.from(select.options);"
-                "  opts.sort(function (a, b) {"
-                "    const fA = a.getAttribute('data-name');"
-                "    const fB = b.getAttribute('data-name');"
-                "    const mA = (FILE_METRICS[fA] || {})[key];"
-                "    const mB = (FILE_METRICS[fB] || {})[key];"
-                "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
-                "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
-                "    if (nA === nB) return fA.localeCompare(fB);"
-                "    return dir === 'asc' ? nA - nB : nB - nA;"
-                "  });"
-                "  const current = select.value;"
-                "  while (select.firstChild) select.removeChild(select.firstChild);"
-                "  opts.forEach(function (o) { select.appendChild(o); });"
-                "  select.value = current;"
-                "  updateButtons();"
-                "}"
-                "resortFiles();"
+    options_html = "\n".join(
+        (
+            f'<option value="{filename}" data-name="{filename}" '
+            + " ".join(
+                f'data-{filter_key}="{str(failure_flags[filename][filter_key]).lower()}"'
+                for filter_key, _, _ in FAILURE_FILTERS
             )
-            .replace("__METRICS_JSON__", metrics_json)
-            .replace("__DEFAULTS_JSON__", defaults_json)
+            + ">"
+            f"{make_label(filename)}</option>"
+        )
+        for filename in files
+    )
+
+    category_filter_ui = ""
+    if available_failure_filters:
+        category_buttons = "".join(
+            (
+                f'<button class="filter-button category-button" type="button" '
+                f'data-filter="{filter_key}" aria-pressed="false"'
+                f"{' disabled' if failure_count == 0 else ''}>"
+                '<span class="selection-mark" aria-hidden="true">&#10003;</span>'
+                f'<span class="filter-dot {filter_key}-dot"></span>'
+                f"<span>{filter_label}</span>"
+                f'<span class="category-count">{failure_count}</span></button>'
+            )
+            for filter_key, _, filter_label in available_failure_filters
+            for failure_count in [sum(flags[filter_key] for flags in failure_flags.values())]
+        )
+        category_filter_ui = (
+            '<nav class="category-bar" aria-label="Replay category">'
+            '<div id="failureFilters" class="category-filters" role="group" '
+            'aria-label="Replay category">'
+            '<button class="filter-button category-button is-active" type="button" '
+            'data-filter="all" aria-pressed="true">'
+            '<span class="selection-mark" aria-hidden="true">&#10003;</span>'
+            '<span class="filter-dot all-dot"></span><span>All replays</span>'
+            f'<span class="category-count">{len(files)}</span></button>'
+            f"{category_buttons}"
+            "</div>"
+            "</nav>"
         )
 
     html_content = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>PufferDrive Replay Gallery</title>
-        <style>
-            body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
-            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 15px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-            #viewer { flex-grow: 1; border: none; width: 100%; height: 100%; }
-            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 14px; outline: none;}
-            select:focus { border-color: #007bff; }
-            button { padding: 8px 16px; border-radius: 8px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: 800; font-size: 13px; text-transform: uppercase; transition: 0.2s;}
-            button:hover:not(:disabled) { background: #0056b3; transform: scale(1.05); }
-            button:disabled { background: #444; color: #888; cursor: not-allowed; }
-            .title { font-weight: 900; font-size: 18px; margin-right: auto; letter-spacing: 1px; color: #fff;}
-            #fileSelect { flex: 1 1 280px; min-width: 240px; }
-        </style>
-    </head>
-    <body>
-        <div id="topbar">
-            <div class="title">PUFFERDRIVE GALLERY</div>
-            <button id="prevBtn" onclick="navigate(-1)">&#9664; Prev</button>
-            __SORT_UI__
-            <select id="fileSelect" onchange="loadSelected()">
-                __OPTIONS__
-            </select>
-            <button id="nextBtn" onclick="navigate(1)">Next &#9654;</button>
-        </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PufferDrive Replay Gallery</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --background: #f3f4f6;
+            --surface: #ffffff;
+            --surface-muted: #f8f9fb;
+            --border: #d7dce2;
+            --border-strong: #aeb6c2;
+            --text: #1f2933;
+            --muted: #667085;
+            --accent: #2563eb;
+            --offroad: #b45309;
+            --collision: #b42318;
+            --atfault: #7e22ce;
+            --redlight: #d92d20;
+        }
 
-        <iframe id="viewer" src="__FIRST__"></iframe>
+        * { box-sizing: border-box; }
 
-        <script>
-            const select = document.getElementById('fileSelect');
-            const viewer = document.getElementById('viewer');
-            const prevBtn = document.getElementById('prevBtn');
-            const nextBtn = document.getElementById('nextBtn');
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--background);
+            color: var(--text);
+            font-family: Arial, system-ui, sans-serif;
+        }
 
-            function loadSelected() {
-                viewer.src = select.value;
-                updateButtons();
+        .app-shell {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+        }
+
+        .top-header {
+            display: grid;
+            flex: 0 0 auto;
+            grid-template-columns: 170px minmax(0, 1fr) minmax(360px, 450px);
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .brand {
+            display: flex;
+            grid-column: 1;
+            flex-direction: column;
+            justify-content: center;
+            padding: 8px 18px;
+        }
+
+        .brand-kicker {
+            margin-bottom: 4px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .brand-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .top-section {
+            min-width: 0;
+            padding: 8px 12px;
+            border-left: 1px solid var(--border);
+        }
+
+        .browse-section {
+            display: flex;
+            align-items: center;
+            grid-column: 3;
+            width: min(100%, 450px);
+            justify-self: end;
+        }
+
+        button, select {
+            min-height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            outline: none;
+            color: var(--text);
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:focus-visible, select:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 1px;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.38;
+        }
+
+        .filter-dot {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 1px;
+            background: var(--muted);
+        }
+
+        .all-dot { background: var(--accent); }
+        .offroad-dot { background: var(--offroad); }
+        .collision-dot { background: var(--collision); }
+        .atfault-dot { background: var(--atfault); }
+        .redlight-dot { background: var(--redlight); }
+
+        select {
+            cursor: pointer;
+            width: 100%;
+            padding: 0 28px 0 10px;
+            background: var(--surface);
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        select:hover { border-color: var(--border-strong); }
+
+        .replay-picker {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #fileSelect {
+            width: 100%;
+            min-width: 0;
+            border-color: var(--border);
+            background: var(--surface);
+        }
+
+        .browse-controls {
+            display: grid;
+            grid-template-columns: minmax(180px, 1fr) auto;
+            align-items: end;
+            gap: 8px;
+        }
+
+        .navigation {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-button {
+            min-height: 30px;
+            padding: 0 8px;
+            background: var(--surface);
+            color: var(--text);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .nav-button:not(:disabled):hover {
+            border-color: var(--accent);
+            background: var(--surface-muted);
+        }
+
+        #position {
+            min-width: 52px;
+            color: var(--muted);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .category-bar {
+            display: flex;
+            grid-column: 2;
+            flex: 0 0 auto;
+            min-width: 0;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-left: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .category-filters {
+            display: flex;
+            min-width: 0;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+
+        .category-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 34px;
+            padding: 0 8px;
+            border: 2px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .category-button:not(:disabled):not(.is-active):hover {
+            border-color: var(--border-strong);
+            background: var(--surface-muted);
+        }
+
+        .category-button.is-active {
+            border-color: var(--text);
+            background: var(--text);
+            color: var(--surface);
+        }
+
+        .category-button.is-active .filter-dot {
+            outline: 1px solid rgba(255, 255, 255, 0.65);
+            outline-offset: 1px;
+        }
+
+        .selection-mark {
+            display: none;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .category-button.is-active .selection-mark {
+            display: inline;
+        }
+
+        .category-count {
+            display: inline-flex;
+            min-width: 21px;
+            height: 21px;
+            align-items: center;
+            justify-content: center;
+            padding-inline: 5px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--surface-muted);
+            color: var(--text);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+        }
+
+        .category-button.is-active .category-count {
+            border-color: #647080;
+            background: #374151;
+            color: var(--surface);
+        }
+
+        .replay-stage {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: column;
+            min-height: 0;
+            min-width: 0;
+            background: var(--background);
+        }
+
+        .scenario-header {
+            display: flex;
+            flex: 0 0 auto;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            min-height: 52px;
+            margin: 8px 12px 0;
+            padding: 7px 12px;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .scenario-identity {
+            min-width: 0;
+            flex: 1 1 280px;
+        }
+
+        .scenario-eyebrow {
+            display: block;
+            margin-bottom: 2px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        #currentReplayName {
+            display: block;
+            overflow: hidden;
+            font-size: 14px;
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #currentFailures {
+            display: flex;
+            flex: 0 1 auto;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 5px;
+            margin-left: auto;
+        }
+
+        .scenario-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 5px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--surface-muted);
+            color: var(--muted);
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .scenario-badge.offroad {
+            border-left: 3px solid var(--offroad);
+            color: var(--offroad);
+        }
+
+        .scenario-badge.collision {
+            border-left: 3px solid var(--collision);
+            color: var(--collision);
+        }
+
+        .scenario-badge.atfault {
+            border-left: 3px solid var(--atfault);
+            color: var(--atfault);
+        }
+
+        .scenario-badge.redlight {
+            border-left: 3px solid var(--redlight);
+            color: var(--redlight);
+        }
+
+        #viewer {
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 0;
+            border: 0;
+            background: var(--surface);
+        }
+
+        @media (max-width: 1200px) {
+            body {
+                overflow: auto;
             }
 
-            function navigate(dir) {
-                let newIdx = select.selectedIndex + dir;
-                if (newIdx >= 0 && newIdx < select.options.length) {
-                    select.selectedIndex = newIdx;
-                    loadSelected();
-                }
+            .app-shell {
+                min-height: 100%;
+                height: auto;
             }
 
-            function updateButtons() {
-                prevBtn.disabled = select.selectedIndex === 0;
-                nextBtn.disabled = select.selectedIndex === select.options.length - 1;
-
-                // Return focus to the iframe so your Spacebar/Arrow keys still work!
-                viewer.onload = () => viewer.contentWindow.focus();
+            .top-header {
+                grid-template-columns: 170px minmax(0, 1fr);
             }
 
-            __SORT_JS__
+            .category-bar {
+                grid-column: 2;
+            }
 
-            updateButtons();
-        </script>
-    </body>
-    </html>
+            .browse-section {
+                grid-column: 1 / -1;
+                width: 100%;
+                border-top: 1px solid var(--border);
+                border-left: 0;
+            }
+
+            .category-bar {
+                border-left: 1px solid var(--border);
+            }
+
+            .replay-stage { min-height: 72vh; }
+        }
+
+        @media (max-width: 720px) {
+            .top-header { display: flex; flex-direction: column; }
+            .brand { padding-block: 16px; }
+            .brand-title { font-size: 18px; }
+            .top-section { border-top: 1px solid var(--border); border-left: 0; }
+            .category-bar { border-top: 1px solid var(--border); border-left: 0; }
+            .browse-section { width: 100%; }
+            .browse-controls { grid-template-columns: 1fr; }
+            .category-bar { padding: 12px; }
+            .category-filters { width: 100%; }
+            .scenario-header { align-items: flex-start; }
+            #currentFailures { margin-left: 0; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="top-header">
+            <div class="brand">
+                <span class="brand-kicker">PufferDrive</span>
+                <span class="brand-title">Replay index</span>
+            </div>
+            __CATEGORY_FILTER_UI__
+            <section class="top-section browse-section">
+                <div class="browse-controls">
+                    <div class="replay-picker">
+                        <select id="fileSelect" aria-label="Replay">
+                            __OPTIONS__
+                        </select>
+                    </div>
+                    <nav class="navigation" aria-label="Replay navigation">
+                        <button id="prevBtn" class="nav-button" type="button" aria-label="Previous replay">
+                            &#8592; Previous
+                        </button>
+                        <span id="position" aria-live="polite"></span>
+                        <button id="nextBtn" class="nav-button" type="button" aria-label="Next replay">
+                            Next &#8594;
+                        </button>
+                    </nav>
+                </div>
+            </section>
+        </header>
+
+        <main class="replay-stage">
+            <header class="scenario-header">
+                <div class="scenario-identity">
+                    <span class="scenario-eyebrow">Selected replay</span>
+                    <strong id="currentReplayName"></strong>
+                </div>
+                <div id="currentFailures" aria-label="Scenario failures"></div>
+            </header>
+            <iframe id="viewer" src="__FIRST__" title="Replay viewer"></iframe>
+        </main>
+    </div>
+
+    <script>
+        const select = document.getElementById('fileSelect');
+        const viewer = document.getElementById('viewer');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const position = document.getElementById('position');
+        const currentReplayName = document.getElementById('currentReplayName');
+        const currentFailures = document.getElementById('currentFailures');
+        const filterButtons = Array.from(document.querySelectorAll('.filter-button'));
+        const allOptions = Array.from(select.options);
+        let activeFilter = 'all';
+
+        function optionMatchesActiveFilter(option) {
+            if (activeFilter === 'all') return true;
+            return option.dataset[activeFilter] === 'true';
+        }
+
+        function compareOptions(firstOption, secondOption) {
+            return firstOption.dataset.name.localeCompare(secondOption.dataset.name);
+        }
+
+        function addFailureBadge(label, failureClass) {
+            const badge = document.createElement('span');
+            badge.className = `scenario-badge ${failureClass}`;
+            const dot = document.createElement('span');
+            dot.className = `filter-dot ${failureClass}-dot`;
+            badge.append(dot, label);
+            currentFailures.appendChild(badge);
+        }
+
+        function updateScenarioSummary() {
+            const selectedOption = select.options[select.selectedIndex];
+            currentFailures.replaceChildren();
+
+            if (!selectedOption) {
+                currentReplayName.textContent = 'No replay matches this filter';
+                return;
+            }
+
+            const filename = selectedOption.dataset.name;
+            currentReplayName.textContent = filename.replace(/\\.html$/, '');
+            if (selectedOption.dataset.offroad === 'true') addFailureBadge('Off-road', 'offroad');
+            if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
+            if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
+            if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
+            if (!currentFailures.childElementCount) {
+                const badge = document.createElement('span');
+                badge.className = 'scenario-badge';
+                badge.textContent = 'No recorded infraction';
+                currentFailures.appendChild(badge);
+            }
+        }
+
+        function updateControls() {
+            const optionCount = select.options.length;
+            const selectedIndex = select.selectedIndex;
+            prevBtn.disabled = selectedIndex <= 0;
+            nextBtn.disabled = selectedIndex < 0 || selectedIndex >= optionCount - 1;
+            position.textContent = selectedIndex < 0 ? `0 / ${optionCount}` : `${selectedIndex + 1} / ${optionCount}`;
+            updateScenarioSummary();
+        }
+
+        function loadSelected() {
+            if (select.selectedIndex < 0) {
+                viewer.removeAttribute('src');
+                updateControls();
+                return;
+            }
+            viewer.src = select.value;
+            updateControls();
+        }
+
+        function renderOptions(loadReplay) {
+            const currentFilename = select.value;
+            const matchingOptions = allOptions.filter(optionMatchesActiveFilter).sort(compareOptions);
+            select.replaceChildren(...matchingOptions);
+
+            const currentOption = matchingOptions.find(option => option.value === currentFilename);
+            if (currentOption) {
+                select.value = currentFilename;
+            } else {
+                select.selectedIndex = matchingOptions.length > 0 ? 0 : -1;
+            }
+
+            const selectionChanged = select.value !== currentFilename;
+            if (loadReplay && selectionChanged) loadSelected();
+            else updateControls();
+        }
+
+        function setFilter(filterName) {
+            activeFilter = filterName;
+            for (const button of filterButtons) {
+                const isActive = button.dataset.filter === activeFilter;
+                button.classList.toggle('is-active', isActive);
+                button.setAttribute('aria-pressed', String(isActive));
+            }
+            renderOptions(true);
+        }
+
+        function navigate(direction) {
+            const nextIndex = select.selectedIndex + direction;
+            if (nextIndex < 0 || nextIndex >= select.options.length) return;
+            select.selectedIndex = nextIndex;
+            loadSelected();
+        }
+
+        select.addEventListener('change', loadSelected);
+        prevBtn.addEventListener('click', () => navigate(-1));
+        nextBtn.addEventListener('click', () => navigate(1));
+        for (const button of filterButtons) {
+            button.addEventListener('click', () => setFilter(button.dataset.filter));
+        }
+        viewer.addEventListener('load', () => viewer.contentWindow.focus());
+
+        renderOptions(false);
+    </script>
+</body>
+</html>
     """
 
     final_html = (
         html_content.replace("__OPTIONS__", options_html)
         .replace("__FIRST__", files[0])
-        .replace("__SORT_UI__", sort_ui)
-        .replace("__SORT_JS__", sort_js)
+        .replace("__CATEGORY_FILTER_UI__", category_filter_ui)
     )
 
-    # 5. Save the file
     index_path = os.path.join(folder_path, "index.html")
     with open(index_path, "w") as f:
         f.write(final_html)
