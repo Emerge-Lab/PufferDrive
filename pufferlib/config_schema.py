@@ -1,29 +1,18 @@
-"""Structured-config schemas for load_config — Hydra migration phase 2.
+"""Structured-config schemas for load_config
 
-Each entry in ENV_SCHEMAS is an OmegaConf structured schema merged over the
-composed monolithic YAML in `pufferlib.pufferl.load_config`, so type errors,
-unknown keys, and invalid enum names fail at config load instead of deep in
-env construction.
+This files defines input admissible values for the config, and allows to raise
+errors whenever an input value does not respect the schema. Every field is
+MISSING by design: missing values in the YAML raise errors.
 
-Every field is MISSING on purpose: the YAML is the single source of values,
-the schema only contributes types. A key present here but absent from the
-YAML surfaces as a missing-value error at load time.
+Enum int values mirror the #defines in pufferlib/ocean/drive/drive.h. We enforce
+the match via tests via tests/unit_tests/test_config_schema.py. If a python enum
+class does not have corresponding int-class entries to the respective C enum
+the test fails.
 
-Enum int values mirror the #defines in pufferlib/ocean/drive/drive.h (the
-source of truth, exported to Python via binding). Only the *names* gate
-config validation — drive.py still maps names to binding constants itself.
-
-Naming convention (Google enum style): every C #define is
-`<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
-`InfractionBehavior.stop` <-> `INFRACTION_BEHAVIOR_STOP`. This makes the C
-name mechanically derivable from the Python one (and vice versa) instead of
-needing a lookup table. NonVehicleController is the one exception: it
-reuses Controller's C constants (`CONTROLLER_*`) since it's the same
-underlying controller, plus a Python-only `auto` sentinel that drive.py
-resolves before it ever reaches C. tests/unit_tests/test_config_schema.py
-walks every class here and asserts the derived name exists in binding with
-the matching value, so a new enum is checked automatically without a new
-hand-written assert.
+Enums classes are matched to the respective C counterparts via name matching. The
+naming convention is CamelCase for python and PascalCase for C values: every C
+#define is `<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
+`InfractionBehavior.stop` <-> `INFRACTION_BEHAVIOR_STOP`.
 """
 
 from dataclasses import dataclass
