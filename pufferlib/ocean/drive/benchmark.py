@@ -9,12 +9,6 @@ import pufferlib
 
 
 MAX_C_SEED = 2**31 - 1
-RENDER_FILTER_COLUMNS = (
-    "collision_rate",
-    "at_fault_collision_rate",
-    "offroad_rate",
-    "red_light_violation_rate",
-)
 
 
 def _drive_env_keys():
@@ -233,14 +227,7 @@ def parse_render_filter_columns(configured_render_filter):
 
     if not render_filter_columns or any(not isinstance(column, str) or not column for column in render_filter_columns):
         raise pufferlib.APIUsageError("eval.render_filter must contain non-empty metric names")
-    render_filter_columns = tuple(dict.fromkeys(render_filter_columns))
-    unknown_columns = set(render_filter_columns) - set(RENDER_FILTER_COLUMNS)
-    if unknown_columns:
-        raise pufferlib.APIUsageError(
-            "eval.render_filter contains unsupported metrics: "
-            f"{', '.join(sorted(unknown_columns))}. Supported metrics: {', '.join(RENDER_FILTER_COLUMNS)}"
-        )
-    return render_filter_columns
+    return tuple(dict.fromkeys(render_filter_columns))
 
 
 def select_render_rows(metrics_path, configured_render_filter):

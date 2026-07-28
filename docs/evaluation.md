@@ -136,14 +136,10 @@ puffer eval puffer_drive carla_fast \
   eval.capture_observations=false
 ```
 
-The default `eval.render_filter: null` disables filtered rendering. Multiple
-comma-separated metrics use OR: `collision_rate,offroad_rate` selects scenarios
-where either metric is greater than zero. The supported metrics are:
-
-- `collision_rate`
-- `at_fault_collision_rate`
-- `offroad_rate`
-- `red_light_violation_rate`
+The default `eval.render_filter: null` disables filtered rendering. Any numeric
+column in `episode_metrics.csv` can be used. Multiple comma-separated columns
+use OR: `collision_rate,offroad_rate` selects scenarios where either metric is
+greater than zero. Unknown columns raise an error when the metrics CSV is read.
 
 The filtered pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
