@@ -203,8 +203,8 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
-        self.eval_map_indices = self._int_list_or_none(eval_map_indices)
-        self.eval_scenario_seeds = self._int_list_or_none(eval_scenario_seeds)
+        self.eval_map_indices = eval_map_indices
+        self.eval_scenario_seeds = eval_scenario_seeds
         if self.eval_map_indices is not None:
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
@@ -567,12 +567,6 @@ class Drive(pufferlib.PufferEnv):
             return self.init_step
         upper = self.scenario_length - self.init_step_min_horizon
         return int(self.rng.integers(0, upper))
-
-    @staticmethod
-    def _int_list_or_none(values):
-        if values is None or values == "None":
-            return None
-        return [int(value) for value in values]
 
     @property
     def random_seed(self):
