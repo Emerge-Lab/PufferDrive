@@ -356,8 +356,8 @@ eval:
     inherits: validation_defaults
     type: multi_scenario
     enabled: 'true'
-    render: 'true'
-    render_backend: egl
+    render: 'false'
+    render_backend: obs_html
     render_views: [sim_state, bev]
     env:
       simulation_mode: gigaflow
