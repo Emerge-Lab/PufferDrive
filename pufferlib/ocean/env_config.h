@@ -104,8 +104,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else if (strcmp(value, "\"continuous\"") == 0 || strcmp(value, "continuous") == 0) {
             env_config->action_type = 1; // ACTION_TYPE_CONTINUOUS
         } else {
-            printf("Warning: Unknown action_type value '%s', defaulting to ACTION_TYPE_DISCRETE\n", value);
-            env_config->action_type = 0; // Default to ACTION_TYPE_DISCRETE
+            fprintf(stderr, "Invalid action_type value '%s': must be \"discrete\" or \"continuous\"\n", value);
+            exit(1);
         }
     } else if (MATCH("env", "dynamics_model")) {
         if (strcmp(value, "\"classic\"") == 0 || strcmp(value, "classic") == 0) {
@@ -113,8 +113,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else if (strcmp(value, "\"jerk\"") == 0 || strcmp(value, "jerk") == 0) {
             env_config->dynamics_model = 1; // DYNAMICS_MODEL_JERK
         } else {
-            printf("Warning: Unknown dynamics_model value '%s', defaulting to DYNAMICS_MODEL_JERK\n", value);
-            env_config->dynamics_model = 1; // Default to DYNAMICS_MODEL_JERK
+            fprintf(stderr, "Invalid dynamics_model value '%s': must be \"classic\" or \"jerk\"\n", value);
+            exit(1);
         }
     } else if (MATCH("env", "collision_behavior")) {
         env_config->collision_behavior = parse_infraction_behavior(name, value);
@@ -130,8 +130,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else if (strcmp(value, "\"rolling\"") == 0 || strcmp(value, "rolling") == 0) {
             env_config->goal_regen_mode = 1; // GOAL_REGEN_ROLLING
         } else {
-            printf("Warning: Unknown goal_regen_mode value '%s', defaulting to finite\n", value);
-            env_config->goal_regen_mode = 0;
+            fprintf(stderr, "Invalid goal_regen_mode value '%s': must be \"finite\" or \"rolling\"\n", value);
+            exit(1);
         }
     } else if (MATCH("env", "goal_source")) {
         if (strcmp(value, "\"route\"") == 0 || strcmp(value, "route") == 0) {
@@ -141,8 +141,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         } else if (strcmp(value, "\"gt\"") == 0 || strcmp(value, "gt") == 0) {
             env_config->goal_source = 2; // GOAL_SOURCE_GT
         } else {
-            printf("Warning: Unknown goal_source value '%s', defaulting to route\n", value);
-            env_config->goal_source = 0;
+            fprintf(stderr, "Invalid goal_source value '%s': must be \"route\", \"map\", or \"gt\"\n", value);
+            exit(1);
         }
     } else if (MATCH("env", "obs_goal_lane_distance")) {
         if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
