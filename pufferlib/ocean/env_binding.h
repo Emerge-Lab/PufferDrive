@@ -494,8 +494,8 @@ static PyObject *vectorize(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_reset(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_reset requires 2 arguments");
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "vec_reset requires 1 argument");
         return NULL;
     }
 
@@ -504,16 +504,7 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *seed_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "seed must be an integer");
-        return NULL;
-    }
-    int seed = PyLong_AsLong(seed_arg);
-
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        srand(i + seed);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;

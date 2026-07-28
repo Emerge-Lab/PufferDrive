@@ -466,7 +466,6 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
-        binding.vec_reset(self.c_envs, self.random_seed)
         if self.capture_replay:
             self._initialize_replay_buffers()
 
@@ -579,8 +578,8 @@ class Drive(pufferlib.PufferEnv):
     def random_seed(self):
         return int(self.rng.integers(0, 2**24))
 
-    def reset(self, seed=0):
-        binding.vec_reset(self.c_envs, seed)
+    def reset(self, seed=None):
+        binding.vec_reset(self.c_envs)
         self.tick = 0
         self.truncations[:] = 0
         if self.capture_replay:
@@ -681,11 +680,7 @@ class Drive(pufferlib.PufferEnv):
                     env_ids.append(env_id)
                 self.c_envs = binding.vectorize(*env_ids)
 
-                binding.vec_reset(self.c_envs, self.random_seed)
-                if self.eval_mode:
-                    # The initial batch is reset by both __init__ and the caller's reset();
-                    # a resampled eval batch must match that to reproduce episodes exactly.
-                    binding.vec_reset(self.c_envs, self.random_seed)
+                binding.vec_reset(self.c_envs)
                 if self.capture_replay:
                     self._initialize_replay_buffers()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
