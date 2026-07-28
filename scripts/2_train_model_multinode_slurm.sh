@@ -48,8 +48,8 @@ srun torchrun \
     train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
-    train.total_timesteps=100000000000 \
-    train.learning_rate=0.01 \
+    train.total_timesteps=1000000000000 \
+    train.learning_rate=0.004 \
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
