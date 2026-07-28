@@ -42,8 +42,7 @@ benchmarks:
     max_agents_per_env: 50
     scenario_length: 6000
     control_mode: control_vehicles
-    paths:
-      local: pufferlib/resources/drive/binaries/carla
+    map_dir: pufferlib/resources/drive/binaries/carla
 
   - name: carla_fast
     seed: 42
@@ -53,8 +52,7 @@ benchmarks:
     max_agents_per_env: 50
     scenario_length: 200
     control_mode: control_vehicles
-    paths:
-      local: pufferlib/resources/drive/binaries/carla
+    map_dir: pufferlib/resources/drive/binaries/carla
 
   - name: womd_multi
     seed: 42
@@ -64,8 +62,7 @@ benchmarks:
     max_agents_per_env: 64
     scenario_length: 91
     control_mode: control_vehicles
-    paths:
-      local: pufferlib/resources/drive/binaries/womd
+    map_dir: pufferlib/resources/drive/binaries/womd
 
   - name: womd_single
     seed: 42
@@ -75,8 +72,7 @@ benchmarks:
     max_agents_per_env: 64
     scenario_length: 91
     control_mode: control_sdc_only
-    paths:
-      local: pufferlib/resources/drive/binaries/womd
+    map_dir: pufferlib/resources/drive/binaries/womd
 
   - name: nuplan_multi
     seed: 42
@@ -86,8 +82,7 @@ benchmarks:
     max_agents_per_env: 64
     scenario_length: 200
     control_mode: control_vehicles
-    paths:
-      local: pufferlib/resources/drive/binaries/nuplan
+    map_dir: pufferlib/resources/drive/binaries/nuplan
 
   - name: nuplan_single
     seed: 42
@@ -97,5 +92,4 @@ benchmarks:
     max_agents_per_env: 64
     scenario_length: 200
     control_mode: control_sdc_only
-    paths:
-      local: pufferlib/resources/drive/binaries/nuplan
+    map_dir: pufferlib/resources/drive/binaries/nuplan

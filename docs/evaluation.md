@@ -27,7 +27,7 @@ Each configured benchmark contains:
 - `max_agents_per_env`: maximum active agents in one simulator environment.
 - `scenario_length`: maximum number of simulator steps per scenario.
 - `control_mode`: which agents the policy controls.
-- `paths.local`: local map file or directory containing `.bin` files.
+- `map_dir`: local map file or directory containing `.bin` files.
 
 Each benchmark seed must be a non-negative integer. Map files, requested counts,
 modes, and environment override keys are validated before environments are

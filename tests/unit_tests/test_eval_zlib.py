@@ -58,7 +58,7 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
                         "max_agents_per_env": 1,
                         "scenario_length": 100,
                         "control_mode": "control_vehicles",
-                        "paths": {"local": str(map_dir)},
+                        "map_dir": str(map_dir),
                         "notes": "Optional benchmark metadata",
                     }
                 ],

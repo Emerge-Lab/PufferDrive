@@ -124,10 +124,9 @@ def load_benchmark_config(config_path, selected_names):
         if not isinstance(control_mode, str) or not control_mode:
             raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
 
-        paths = _require_mapping(benchmark.get("paths"), f"Benchmark {name} paths")
-        map_dir = paths.get("local")
+        map_dir = benchmark.get("map_dir")
         if not isinstance(map_dir, str) or not map_dir:
-            raise pufferlib.APIUsageError(f"Benchmark {name} paths.local must be a non-empty path")
+            raise pufferlib.APIUsageError(f"Benchmark {name} map_dir must be a non-empty path")
         map_dir = os.path.abspath(map_dir)
         if not os.path.isdir(map_dir) and not (os.path.isfile(map_dir) and map_dir.endswith(".bin")):
             raise pufferlib.APIUsageError(f"Benchmark {name} map path does not exist: {map_dir}")
