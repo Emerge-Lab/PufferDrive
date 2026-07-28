@@ -78,7 +78,6 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_time",
     "speed_limit_compliance",
 }
-MAX_EVAL_OUTPUT_COLLISIONS = 1_000_000
 
 
 def torch_device(device):
@@ -1559,17 +1558,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
-def _create_eval_output_dir(requested_output_dir):
-    output_dir = requested_output_dir
-    for collision_idx in range(MAX_EVAL_OUTPUT_COLLISIONS):
-        try:
-            os.makedirs(output_dir)
-            return output_dir
-        except FileExistsError:
-            output_dir = f"{requested_output_dir}_{collision_idx}"
-    raise RuntimeError(f"Unable to create evaluation output directory for {requested_output_dir}")
-
-
 def eval(
     env_name,
     args=None,
@@ -1619,6 +1607,8 @@ def eval(
     if eval_output_dir is None:
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
         eval_output_dir = os.path.join(run_dir, "eval")
+    if eval_output_subdir is None:
+        eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
     all_benchmark_summaries = {}
     cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
@@ -1634,9 +1624,8 @@ def eval(
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
         benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
-        if eval_output_subdir is not None:
-            benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
-        benchmark_output_dir = _create_eval_output_dir(benchmark_output_dir)
+        benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
+        os.makedirs(benchmark_output_dir)
         pufferlib.benchmark.write_resolved_benchmark_config(
             run_args,
             benchmark,

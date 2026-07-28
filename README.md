@@ -158,8 +158,8 @@ puffer eval puffer_drive carla \
 
 Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
 Evaluation outputs are written under
-`eval/<benchmark>[_<output_name>][_<collision_index>]/`; existing directories
-are preserved. The benchmark seed and effective worker count are saved in the
+`eval/<benchmark>[_<output_name>]/<timestamp>/`. The benchmark seed and effective
+worker count are saved in the
 resolved configuration: repeated runs with both unchanged produce the same
 map/seed rows. Failure renders replay the exact map and seed recorded by the
 metrics pass. Set

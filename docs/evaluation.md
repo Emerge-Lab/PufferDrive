@@ -174,7 +174,7 @@ match the benchmark that produced the CSV.
 Direct checkpoint evaluation writes below the checkpoint run directory:
 
 ```text
-eval/<benchmark>[_<output_name>][_<collision_index>]/
+eval/<benchmark>[_<output_name>]/<timestamp>/
 ├── resolved_benchmark.yaml
 ├── episode_metrics.csv
 ├── evaluation_summary.json
