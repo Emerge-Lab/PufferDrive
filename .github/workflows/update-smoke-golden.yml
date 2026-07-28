@@ -33,7 +33,7 @@ jobs:
           docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
             -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
             pufferdrive-smoke tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_drive_rollout.py
-        timeout-minutes: 45
+        timeout-minutes: 30
 
       - name: Upload golden artifact
         uses: actions/upload-artifact@v4
