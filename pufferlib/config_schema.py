@@ -10,8 +10,9 @@ class does not have corresponding int-class entries to the respective C enum
 the test fails.
 
 Enums classes are matched to the respective C counterparts via name matching. The
-naming convention is CamelCase for python and PascalCase for C values: every C
-#define is `<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
+naming convention is CamelCase for python classes, LowerPascalCase for python values
+and PascalCase for C class names and values: every C #define is
+`<ENUM_CLASS_NAME_IN_SCREAMING_SNAKE>_<MEMBER_NAME_UPPER>`, e.g.
 `InfractionBehavior.stop` <-> `INFRACTION_BEHAVIOR_STOP`.
 """
 
