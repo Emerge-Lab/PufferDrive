@@ -1,6 +1,3 @@
-# Monolithic config for `puffer <mode> puffer_drive` — the single source of
-# truth for every default. Override at the CLI with Hydra syntax:
-# train.learning_rate=1e-4 env.num_agents=512 wandb=true
 load_model_path: null
 load_id: null
 render_mode: auto
@@ -26,7 +23,7 @@ eval_simulation: null
 package: ocean
 env_name: puffer_drive
 policy_name: Drive
-# Options: Recurrent, None
+# Options: Recurrent, None (null)
 rnn_name: null
 max_suggestion_cost: 3600
 vec:
@@ -40,7 +37,7 @@ env:
   # --- Simulation ---
   # Options: "gigaflow", "replay"
   simulation_mode: gigaflow
-  # Total number of agents in the environment
+  # Total number of agents in the environments
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
@@ -307,7 +304,6 @@ eval:
       eval_mode: 1
       collision_behavior: stop
       offroad_behavior: stop
-      # Explicit "ignore" wins over the clean macro's red-light enforcement.
       traffic_light_behavior: ignore
       reward_randomization: false
       termination_mode: 0
