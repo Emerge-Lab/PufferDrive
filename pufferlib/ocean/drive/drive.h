@@ -4761,7 +4761,6 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float rel_x, rel_y;
         float rel_z = mid_z - ego->sim_z;
         project_point_to_ego_frame(ego, mid_x, mid_y, &rel_x, &rel_y);
-
         if (rel_x < -env->obs_range_road_behind_m || rel_x > env->obs_range_road_front_m) {
             continue;
         }
