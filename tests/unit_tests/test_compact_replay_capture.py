@@ -44,7 +44,7 @@ def _make_replay_drive(capture_replay, compute_eval_metrics=True, num_environmen
     )
 
 
-def _extract_python_replay_frame(scenario):
+def _extract_python_replay_frame(scenario, episode_timestep):
     agent_capacity = len(scenario["agents"] or [])
     traffic_capacity = max(len(scenario["traffic_elements"] or []), 1)
     frame = {
@@ -101,7 +101,6 @@ def _extract_python_replay_frame(scenario):
         puffer_metrics = agent.get("puffer_metrics")
         if puffer_metrics is not None:
             frame["puffer_f32"][agent_idx] = tuple(puffer_metrics[key] for key in puffer_keys)
-    episode_timestep = int(scenario["episode_timestep"])
     for traffic_idx, traffic in enumerate(scenario["traffic_elements"] or []):
         states = traffic["states"] or []
         state = states[episode_timestep] if episode_timestep < len(states) else 0
@@ -176,7 +175,7 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
     )
     try:
         env.reset(seed=0)
-        for _ in range(2):
+        for episode_timestep in range(2):
             scenarios = env.get_state()
             agent_capacity = max(len(scenario["agents"] or []) for scenario in scenarios)
             traffic_capacity = max(max(len(scenario["traffic_elements"] or []), 1) for scenario in scenarios)
@@ -211,7 +210,7 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
                 bulk_frame["traffic_i16"],
             )
             for env_idx, scenario in enumerate(scenarios):
-                expected = _extract_python_replay_frame(scenario)
+                expected = _extract_python_replay_frame(scenario, episode_timestep)
                 for key, expected_values in expected.items():
                     actual_values = bulk_frame[key][env_idx, : expected_values.shape[0]]
                     if key == "agent_i32":
