@@ -1917,7 +1917,7 @@ def _run_eval_rollout(
     recorded_agents_per_batch=None,
     replay_output_dir=None,
     capture_observations=False,
-    replay_episode_offset=0,
+    episode_id_offset=0,
 ):
     """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -1995,7 +1995,7 @@ def _run_eval_rollout(
                 num_workers,
                 agents_per_batch,
                 capture_batch_steps,
-                replay_episode_offset,
+                episode_id_offset,
             )
 
         episode_summaries = []
@@ -2044,7 +2044,7 @@ def _run_eval_rollout(
                     if not isinstance(item, dict) or item.get("summary_type") != "evaluation_episode":
                         continue
                     if replay_capture is not None:
-                        replay_capture.queue_episode(item, len(episode_summaries))
+                        replay_capture.queue_replay(item, len(episode_summaries))
                     else:
                         item.pop("replay_environment_bundle", None)
                     item["agents_per_batch"] = inference_agents_per_batch
@@ -2288,7 +2288,7 @@ def _render_eval_failures(
             recorded_agents_per_batch=recorded_agents_per_batch,
             replay_output_dir=replay_output_dir,
             capture_observations=capture_observations,
-            replay_episode_offset=len(summaries),
+            episode_id_offset=len(summaries),
         )
         summaries.extend(wave_summaries)
     _write_eval_reports(summaries, failures_dir, len(pairs))

@@ -609,7 +609,7 @@ def test_eval_replay_capture_skips_pooling_without_observations(tmp_path):
         num_workers=1,
         agents_per_batch=1,
         capture_batch_steps=1,
-        replay_episode_offset=0,
+        episode_id_offset=0,
     )
 
     replay_capture.capture_frame(
@@ -624,7 +624,7 @@ def test_eval_replay_capture_skips_pooling_without_observations(tmp_path):
     )
 
     assert policy.pool_call_count == 0
-    assert "pool_lane" not in replay_capture.history
+    assert "pool_lane" not in replay_capture.policy_history
 
 
 def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypatch):

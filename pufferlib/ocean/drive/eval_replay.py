@@ -27,7 +27,7 @@ class EvalReplayCapture:
         num_workers,
         agents_per_batch,
         capture_batch_steps,
-        replay_episode_offset,
+        episode_id_offset,
     ):
         if capture_batch_steps <= 0:
             raise RuntimeError("Replay capture requires a positive resample frequency")
@@ -51,14 +51,14 @@ class EvalReplayCapture:
         self.agents_per_batch = agents_per_batch
         self.agents_per_worker = agents_per_batch // num_workers
         self.capture_batch_steps = capture_batch_steps
-        self.replay_episode_offset = replay_episode_offset
-        self.pool_method = None
+        self.episode_id_offset = episode_id_offset
+        self.pool_slot_counts = None
         if self.capture_observations:
-            self.pool_method = getattr(policy, "pool_slot_counts", None)
-            if self.pool_method is None and getattr(policy, "policy", None) is not None:
-                self.pool_method = getattr(policy.policy, "pool_slot_counts", None)
-        self.history = {}
-        self.history_frame_count = 0
+            self.pool_slot_counts = getattr(policy, "pool_slot_counts", None)
+            if self.pool_slot_counts is None and getattr(policy, "policy", None) is not None:
+                self.pool_slot_counts = getattr(policy.policy, "pool_slot_counts", None)
+        self.policy_history = {}
+        self.policy_history_frame_count = 0
         self.pending_replays = []
         os.makedirs(replay_output_dir, exist_ok=True)
 
@@ -67,9 +67,9 @@ class EvalReplayCapture:
         return len(self.pending_replays)
 
     def capture_frame(self, obs, policy_obs_tensor, raw_action, action, logits, value, logprob, entropy):
-        if self.history_frame_count == self.capture_batch_steps:
-            self.history = {}
-            self.history_frame_count = 0
+        if self.policy_history_frame_count == self.capture_batch_steps:
+            self.policy_history = {}
+            self.policy_history_frame_count = 0
         replay_frame = {
             "raw_action": np.asarray(raw_action, dtype=np.float32),
             "clipped_action": np.asarray(action, dtype=np.float32),
@@ -89,14 +89,14 @@ class EvalReplayCapture:
             replay_frame["policy_probs"] = (
                 torch.softmax(discrete_logits[: self.agents_per_batch], dim=-1).detach().float().cpu().numpy()
             )
-        if self.pool_method is not None:
-            for pool_name, pool_values in self.pool_method(policy_obs_tensor).items():
+        if self.pool_slot_counts is not None:
+            for pool_name, pool_values in self.pool_slot_counts(policy_obs_tensor).items():
                 replay_frame[pool_name] = (
                     pool_values[: self.agents_per_batch].detach().cpu().numpy().astype(np.int16, copy=False)
                 )
 
-        if not self.history:
-            self.history = {
+        if not self.policy_history:
+            self.policy_history = {
                 replay_key: np.empty(
                     (self.capture_batch_steps, *frame_values.shape),
                     dtype=frame_values.dtype,
@@ -104,10 +104,10 @@ class EvalReplayCapture:
                 for replay_key, frame_values in replay_frame.items()
             }
         for replay_key, frame_values in replay_frame.items():
-            self.history[replay_key][self.history_frame_count] = frame_values
-        self.history_frame_count += 1
+            self.policy_history[replay_key][self.policy_history_frame_count] = frame_values
+        self.policy_history_frame_count += 1
 
-    def queue_episode(self, summary, episode_idx):
+    def queue_replay(self, summary, episode_id):
         replay_environment_bytes = summary.pop("replay_environment_bundle", None)
         if not isinstance(replay_environment_bytes, bytes):
             raise RuntimeError(
@@ -130,14 +130,14 @@ class EvalReplayCapture:
             or active_agent_offset < 0
             or active_agent_count <= 0
             or global_agent_end > self.agents_per_batch
-            or episode_length > self.history_frame_count
+            or episode_length > self.policy_history_frame_count
         ):
             raise RuntimeError("Replay environment metadata is incompatible with the policy history")
 
         replay = {"env": self.env_config, **replay_environment["frames"]}
-        for replay_key, history_values in self.history.items():
+        for replay_key, history_values in self.policy_history.items():
             replay[replay_key] = history_values[:episode_length, global_agent_start:global_agent_end]
-        replay_stem = _eval_replay_stem(summary, self.replay_episode_offset + episode_idx)
+        replay_stem = _eval_replay_stem(summary, self.episode_id_offset + episode_id)
         replay_path = os.path.abspath(os.path.join(self.replay_output_dir, f"{replay_stem}.replay.zlib"))
         self.pending_replays.append((replay_environment["scenario"], replay, replay_path))
         summary["has_replay"] = 1
