@@ -1892,8 +1892,6 @@ static int compute_new_route(Drive *env, int agent_idx, int current_lane_idx) {
         agent->sim_y);
 
     if (route_length == 0) {
-        printf("[GIGAFLOW WARNING] -> Failed to generate route for agent %d\n", agent_idx);
-        agent->removed = 1;
         return 0;
     }
 
@@ -2014,7 +2012,9 @@ static int pick_random_drivable_position(
     return 1;
 }
 
-static void compute_goals(Drive *env, int agent_idx) {
+// Returns 1 on success. Returns 0 when no goal placement fits (short or
+// dead-end routes); the caller decides whether to resample or remove.
+static int compute_goals(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     // goal_on_lane=False: place each goal at a random drivable point whose
@@ -2039,9 +2039,7 @@ static void compute_goals(Drive *env, int agent_idx) {
                     &gx,
                     &gy,
                     &gz)) {
-                printf("[GIGAFLOW WARNING] -> pick_random_drivable_position failed for agent %d\n", agent_idx);
-                agent->removed = 1;
-                return;
+                return 0;
             }
             agent->list_goal_x[i] = gx;
             agent->list_goal_y[i] = gy;
@@ -2053,16 +2051,14 @@ static void compute_goals(Drive *env, int agent_idx) {
         agent->current_goal_x = agent->list_goal_x[0];
         agent->current_goal_y = agent->list_goal_y[0];
         agent->current_goal_z = agent->list_goal_z[0];
-        return;
+        return 1;
     }
 
     struct Path *path = agent->path;
 
     // Validate path exists
     if (path == NULL || path->num_waypoints == 0) {
-        printf("[GIGAFLOW WARNING] -> Agent %d has no valid path\n", agent_idx);
-        agent->removed = 1;
-        return;
+        return 0;
     }
 
     int num_goals = env->num_goals;
@@ -2088,14 +2084,11 @@ static void compute_goals(Drive *env, int agent_idx) {
         if (needed_s >= path_end_s) {
             if (env->simulation_mode == SIMULATION_GIGAFLOW) {
                 if (iter > 3) {
-                    printf("[GIGAFLOW WARNING] -> Max iterations in compute_goals for agent %d\n", agent_idx);
-                    agent->removed = 1;
-                    return;
+                    return 0;
                 }
                 int route_ok = compute_new_route(env, agent_idx, path->waypoints[base_idx].lane_idx);
                 if (route_ok == 0) {
-                    agent->removed = 1;
-                    return;
+                    return 0;
                 }
                 path = agent->path;
                 continue;
@@ -2125,11 +2118,10 @@ static void compute_goals(Drive *env, int agent_idx) {
         agent->current_goal_x = agent->list_goal_x[0];
         agent->current_goal_y = agent->list_goal_y[0];
         agent->current_goal_z = agent->list_goal_z[0];
-        return;
+        return 1;
     }
 
-    printf("[GIGAFLOW ERROR] -> Failed to compute goals for agent %d after multiple attempts\n", agent_idx);
-    agent->removed = 1;
+    return 0;
 }
 
 // ========================================
@@ -3267,9 +3259,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_x, spawn_y, spawn_z, spawn_heading;
     RoadMapElement *start_lane;
     int start_lane_idx;
-    bool is_agent_spawned = false;
 
-    // Sampling rejection loop
+    // Sampling rejection loop. A candidate position is rejected on collision,
+    // offroad, stop-line crossing, or when no route/goals fit from it (short
+    // or dead-end lanes) — the next attempt resamples a fresh position.
     // TARGET: Only one attempt should be sufficient in most cases
     const int MAX_SPAWN_ATTEMPTS = 30;
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
@@ -3335,46 +3328,43 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        is_agent_spawned = true;
-        break;
+        // Update simulation state
+        agent->sim_x = spawn_x;
+        agent->sim_y = spawn_y;
+        agent->sim_z = spawn_z;
+        agent->sim_heading = spawn_heading;
+        agent->cos_heading = cosf(spawn_heading);
+        agent->sin_heading = sinf(spawn_heading);
+        copy_pose_to_prev(agent);
+        agent->sim_length = spawn_length;
+        agent->sim_width = spawn_width;
+        agent->sim_height = spawn_height;
+        update_agent_radius(agent);
+        agent->sim_valid = 1;
+        agent->wheelbase = 0.6f * spawn_length;
+        agent->current_lane_idx = start_lane_idx;
+        float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
+        agent->sim_vx = spawn_speed * agent->cos_heading;
+        agent->sim_vy = spawn_speed * agent->sin_heading;
+        agent->yaw_rate = 0.0f;
+        update_agent_speed(agent);
+
+        if (!compute_new_route(env, agent_idx, start_lane_idx)) {
+            continue;
+        }
+
+        if (!compute_goals(env, agent_idx)) {
+            continue;
+        }
+
+        return true;
     }
 
-    if (!is_agent_spawned) {
-        printf("[GIGAFLOW WARNING] -> Failed to find a collision-free spawn position for agent %d\n", agent->id);
-        return is_agent_spawned;
-    }
-
-    // Update simulation state
-    agent->sim_x = spawn_x;
-    agent->sim_y = spawn_y;
-    agent->sim_z = spawn_z;
-    agent->sim_heading = spawn_heading;
-    agent->cos_heading = cosf(spawn_heading);
-    agent->sin_heading = sinf(spawn_heading);
-    copy_pose_to_prev(agent);
-    agent->sim_length = spawn_length;
-    agent->sim_width = spawn_width;
-    agent->sim_height = spawn_height;
-    update_agent_radius(agent);
-    agent->sim_valid = 1;
-    agent->wheelbase = 0.6f * spawn_length;
-    agent->current_lane_idx = start_lane_idx;
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
-    agent->sim_vx = spawn_speed * agent->cos_heading;
-    agent->sim_vy = spawn_speed * agent->sin_heading;
-    agent->yaw_rate = 0.0f;
-    update_agent_speed(agent);
-
-    // Compute initial route
-    if (!compute_new_route(env, agent_idx, start_lane_idx)) {
-        printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
-        return false; // Failed to compute new goal
-    }
-
-    // Compute initial goal
-    compute_goals(env, agent_idx);
-
-    return true;
+    printf(
+        "[GIGAFLOW WARNING] -> No viable spawn position/route/goals for agent %d after %d attempts\n",
+        agent->id,
+        MAX_SPAWN_ATTEMPTS);
+    return false;
 }
 
 static void set_start_position(Drive *env) {
@@ -5335,7 +5325,10 @@ void c_reset(Drive *env) {
             agent->current_goal_z = agent->list_goal_z[0];
         } else {
             build_path(env, agent_idx);
-            compute_goals(env, agent_idx);
+            if (!compute_goals(env, agent_idx)) {
+                printf("[GIGAFLOW WARNING] -> Failed to compute goals for agent %d on reset\n", agent_idx);
+                agent->removed = 1;
+            }
         }
         initialize_agent_progression(env, agent_idx);
         compute_metrics(env, agent_idx, x);
@@ -5469,8 +5462,9 @@ void c_step(Drive *env) {
                 // Replay mode: leave current_goal_idx saturated so the
                 // reached-goal condition won't fire again. Re-generating
                 // route-based goals on WOMD maps fails (removed=1).
-            } else {
-                compute_goals(env, agent_idx);
+            } else if (!compute_goals(env, agent_idx)) {
+                printf("[GIGAFLOW WARNING] -> No further goals fit for agent %d; removing\n", agent_idx);
+                agent->removed = 1;
             }
         }
     }

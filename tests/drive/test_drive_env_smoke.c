@@ -10,6 +10,9 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
     EXPECT_TRUE(env.observations != NULL);
     EXPECT_TRUE(env.rewards != NULL);
     EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
+    for (int i = 0; i < env.active_agent_count; i++) {
+        EXPECT_TRUE(!env.agents[env.active_agent_indices[i]].removed);
+    }
 
     int saw_log = 0;
     for (int t = 0; t < env.scenario_length + 5; t++) {
@@ -25,6 +28,7 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
             int terminal_flags = (agent->metrics_array[COLLISION_IDX] > 0.0f)
                 + (agent->metrics_array[OFFROAD_IDX] > 0.0f) + (agent->metrics_array[RED_LIGHT_IDX] > 0.0f);
             EXPECT_TRUE(terminal_flags <= 1);
+            EXPECT_TRUE(!agent->removed);
         }
     }
 
