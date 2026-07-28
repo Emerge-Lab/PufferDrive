@@ -283,9 +283,7 @@ Client *make_client(Drive *env) {
             FILE *f = fopen(lock_file, "r");
             if (f) {
                 pid_t pid = -1;
-                if (fscanf(f, "%d", &pid) != 1) {
-                    pid = -1;
-                }
+                fscanf(f, "%d", &pid);
                 fclose(f);
                 if (pid > 0 && kill(pid, 0) != 0) {
                     unlink(lock_file);
