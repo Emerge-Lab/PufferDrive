@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import pickle
 from types import SimpleNamespace
@@ -322,6 +323,8 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
 
 
 def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeypatch, tmp_path):
+    evaluation_datetime = datetime(2026, 7, 28, 12, 34, 56)
+    monkeypatch.setattr(pufferl, "datetime", SimpleNamespace(now=lambda: evaluation_datetime))
     benchmark = {
         "name": "carla_test",
         "seed": 42,
@@ -390,7 +393,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
         use_training_config=True,
     )
 
-    benchmark_output_dir = tmp_path / "carla_test"
+    benchmark_output_dir = tmp_path / "carla_test" / evaluation_datetime.strftime("%Y%m%d-%H%M%S")
     assert captured["worker_plan"] == (2, 2, 100, True)
     assert captured["rollout"]["replay_output_dir"] == str(benchmark_output_dir / "replays")
     assert captured["rollout"]["capture_observations"] is True
