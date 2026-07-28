@@ -3609,12 +3609,12 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
-    if (agent->current_goal_idx < env->num_goals && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
+    if (agent->current_goal_idx < agent->goal_count && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
         && goal_z_dist < Z_BUFFER) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
-        if (agent->current_goal_idx < env->num_goals) {
+        if (agent->current_goal_idx < agent->goal_count) {
             agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
             agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
             agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];

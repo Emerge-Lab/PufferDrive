@@ -527,7 +527,7 @@ class PuffeRL:
                         print(f"Failed to export model weights: {e}")
 
         # All evaluation is now driven by the unified EvalManager. Each
-        # [eval.<name>] section in drive.ini is one evaluator instance;
+        # eval.<name> section in puffer_drive.yaml is one evaluator instance;
         # the manager fires any whose interval divides this epoch. See
         # docs/eval_unification.md for the design.
         # Under DDP, only rank 0 runs eval — every rank has identical
@@ -1619,7 +1619,7 @@ def _merge_checkpoint_arch(args, model_path):
     """Adopt a checkpoint's architecture from its sibling config.yaml.
 
     A standalone eval may load a checkpoint whose network shape or observation
-    layout differs from drive.ini. The training run writes config.yaml next to
+    layout differs from puffer_drive.yaml. The training run writes config.yaml next to
     models/, so pull from it before the policy/env are built:
       - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
         else load_state_dict mismatches.
@@ -1665,7 +1665,7 @@ def eval(
     render_backend=None,
     num_maps=None,
 ):
-    """Run a single named evaluator from drive.ini.
+    """Run a single named evaluator from puffer_drive.yaml.
 
     Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
     evaluator's config (env/vec overrides, render flag, etc.) comes from
@@ -1676,7 +1676,7 @@ def eval(
     flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
     override the chosen evaluator's config for this run (only when passed),
     so a checkpoint can be evaluated at an arbitrary scale from the CLI
-    without editing drive.ini.
+    without editing puffer_drive.yaml.
 
     Subprocess form: `--out <json>` writes the result dict to a JSON file
     so the parent EvalManager can read structured metrics back without
@@ -1691,7 +1691,7 @@ def eval(
 
     # When evaluating a checkpoint, adopt its network architecture from the
     # training run's sibling config.yaml so the policy is built to match the
-    # weights regardless of what drive.ini currently says.
+    # weights regardless of what puffer_drive.yaml currently says.
     if args.get("load_model_path"):
         _merge_checkpoint_arch(args, args["load_model_path"])
 
@@ -1702,7 +1702,7 @@ def eval(
     if evaluator_name is None:
         raise pufferlib.APIUsageError(
             "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
-            "named [eval.<name>] sections live in drive.ini"
+            "named eval.<name> sections live in puffer_drive.yaml"
         )
 
     # Derive a default render output dir from the model path when none is set.
@@ -1721,7 +1721,7 @@ def eval(
 
     # Ad-hoc CLI overrides applied to the chosen evaluator for this run.
     # The evaluator reads self.config / self.render at rollout time, so
-    # mutating them here takes effect without touching drive.ini.
+    # mutating them here takes effect without touching puffer_drive.yaml.
     if num_scenarios is not None:
         target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
     if num_maps is not None:
