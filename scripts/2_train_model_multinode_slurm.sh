@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0003/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0003/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0004/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0004/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
@@ -20,7 +20,7 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0003
+export RUN_NAME=k_scaled_0004
 echo ${RUN_NAME}
 
 # Thread limit limits CPU thrashing across worker environments
