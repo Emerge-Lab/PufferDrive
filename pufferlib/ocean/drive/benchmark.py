@@ -156,7 +156,7 @@ def load_benchmark_config(config_path, selected_names):
                 "map_dir": map_dir,
             }
         )
-    return copy.deepcopy(environment_config), resolved_benchmarks
+    return environment_config, resolved_benchmarks
 
 
 def load_checkpoint_architecture(args):
@@ -170,12 +170,10 @@ def load_checkpoint_architecture(args):
     merged = copy.deepcopy(args)
     for section in ("policy", "rnn"):
         values = _require_mapping(checkpoint_config.get(section), f"checkpoint config {section}")
-        merged[section].update(copy.deepcopy(values))
+        merged[section].update(values)
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
     accepted_env_keys = _drive_env_keys()
-    merged["env"].update(
-        {key: copy.deepcopy(value) for key, value in checkpoint_env.items() if key in accepted_env_keys}
-    )
+    merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
     for key in ("policy_name", "rnn_name"):
         if key not in checkpoint_config:
             raise pufferlib.APIUsageError(f"Checkpoint config is missing {key}")
@@ -251,12 +249,12 @@ def select_render_rows(metrics_path, configured_render_filter):
         raise pufferlib.APIUsageError(f"Benchmark metrics CSV not found: {metrics_path}")
     rows = pd.read_csv(metrics_path)
     render_filter_columns = parse_render_filter_columns(configured_render_filter)
-    present_columns = [column for column in render_filter_columns if column in rows.columns]
-    if not present_columns:
+    missing_columns = [column for column in render_filter_columns if column not in rows.columns]
+    if missing_columns:
         raise pufferlib.APIUsageError(
-            f"Benchmark metrics CSV has none of the configured render filter columns: {', '.join(render_filter_columns)}"
+            f"Benchmark metrics CSV is missing configured render filter columns: {', '.join(missing_columns)}"
         )
     selected = pd.Series(False, index=rows.index)
-    for column in present_columns:
-        selected |= pd.to_numeric(rows[column], errors="coerce").fillna(0) > 0
+    for column in render_filter_columns:
+        selected |= rows[column] > 0
     return rows[selected].copy()
