@@ -1601,9 +1601,6 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
-    if base_args["train"]["use_rnn"]:
-        raise pufferlib.APIUsageError("Multiprocessed evaluation does not support RNN policies yet")
-
     if eval_output_dir is None:
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
         eval_output_dir = os.path.join(run_dir, "eval")
@@ -1980,6 +1977,12 @@ def _run_eval_rollout(
                 dtype=torch.as_tensor(obs).dtype,
                 device=device,
             )
+        recurrent_state = None
+        if args["train"].get("use_rnn", False):
+            recurrent_state = {
+                "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
+                "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
+            }
 
         capture_batch_steps = int(worker_env_kwargs[0]["resample_frequency"])
         replay_capture = None
@@ -2004,7 +2007,10 @@ def _run_eval_rollout(
                     policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
                 else:
                     policy_obs_tensor = environment_obs_tensor
-                logits, value = policy_forward_eval(policy_obs_tensor)
+                if recurrent_state is None:
+                    logits, value = policy_forward_eval(policy_obs_tensor)
+                else:
+                    logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
                 action, logprob, entropy = eval_sample_logits(logits, deterministic=True)
                 raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                 action = raw_action
@@ -2023,7 +2029,15 @@ def _run_eval_rollout(
                     entropy,
                 )
 
-            obs, _, _, _, infos = vecenv.step(action)
+            obs, _, terminals, truncations, infos = vecenv.step(action)
+            if recurrent_state is not None:
+                finished_agent_mask = torch.as_tensor(
+                    np.logical_or(terminals, truncations),
+                    dtype=torch.bool,
+                    device=device,
+                ).reshape(agents_per_batch, 1)
+                recurrent_state["lstm_h"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+                recurrent_state["lstm_c"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
             for worker_info in infos:
                 worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
                 for item in worker_items:

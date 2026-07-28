@@ -76,6 +76,20 @@ def test_failure_metric_selection_deduplicates_names():
     assert failure_metrics == ("collision_rate",)
 
 
+def test_training_evaluation_accepts_recurrent_policy(monkeypatch):
+    args = {
+        "train": {
+            "use_rnn": True,
+            "evaluation_interval_epochs": 1,
+            "evaluation_benchmarks": "carla_fast",
+        },
+        "eval": {"benchmark_config": "benchmark.yaml"},
+    }
+    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, []))
+
+    assert pufferlib.benchmark.validate_training_evaluation_config(args) is True
+
+
 class _ZeroPolicy:
     def eval(self):
         return self
@@ -88,6 +102,22 @@ class _RecordingPolicy(_ZeroPolicy):
     def forward_eval(self, observations):
         self.observations = observations.clone()
         return super().forward_eval(observations)
+
+
+class _RecordingRecurrentPolicy:
+    hidden_size = 2
+
+    def __init__(self):
+        self.hidden_inputs = []
+
+    def eval(self):
+        return self
+
+    def forward_eval(self, observations, state):
+        self.hidden_inputs.append(state["lstm_h"].clone())
+        state["lstm_h"] = state["lstm_h"] + 1
+        state["lstm_c"] = state["lstm_c"] + 2
+        return (torch.zeros((observations.shape[0], 1)),), torch.zeros((observations.shape[0], 1))
 
 
 class _PoolRecordingPolicy(_ZeroPolicy):
@@ -128,6 +158,30 @@ class _EvaluationReplayVec:
         }
         empty = np.zeros(1, dtype=np.float32)
         return np.zeros((1, 1), dtype=np.float32), empty, empty, empty, [[summary]]
+
+    def close(self):
+        pass
+
+
+class _RecurrentEvaluationVec:
+    agents_per_batch = 2
+    action_space = SimpleNamespace(shape=(2, 1))
+
+    def __init__(self):
+        self.step_count = 0
+
+    def reset(self, seed):
+        return np.ones((2, 1), dtype=np.float32), {}
+
+    def step(self, action):
+        self.step_count += 1
+        rewards = np.zeros(2, dtype=np.float32)
+        terminals = np.array([self.step_count == 1, False])
+        truncations = np.array([False, self.step_count == 2])
+        infos = []
+        if self.step_count == 2:
+            infos = [[{"summary_type": "evaluation_episode"}]]
+        return np.ones((2, 1), dtype=np.float32), rewards, terminals, truncations, infos
 
     def close(self):
         pass
@@ -605,6 +659,53 @@ def test_eval_rollout_pads_policy_batch_and_slices_environment_actions(monkeypat
     assert policy.observations[0].item() == 1
     assert torch.count_nonzero(policy.observations[1:]).item() == 0
     assert vecenv.last_action.shape == (1, 1)
+    assert summaries[0]["agents_per_batch"] == 4
+
+
+def test_eval_rollout_carries_and_resets_recurrent_state_with_padding(monkeypatch):
+    vecenv = _RecurrentEvaluationVec()
+    policy = _RecordingRecurrentPolicy()
+    monkeypatch.setattr(pufferlib.vector, "make", lambda *args, **kwargs: vecenv)
+    args = {
+        "package": "ocean",
+        "train": {
+            "seed": 42,
+            "device": "cpu",
+            "use_rnn": True,
+            "compile": False,
+            "compile_mode": "default",
+            "compile_fullgraph": False,
+            "amp": True,
+            "precision": "float32",
+        },
+        "vec": {"seed": 42},
+    }
+
+    summaries = pufferl._run_eval_rollout(
+        args=args,
+        env_name="puffer_drive",
+        worker_env_kwargs=[{"resample_frequency": 1}],
+        total_steps=2,
+        desc="test recurrent replay",
+        expected_episodes=1,
+        policy=policy,
+        recorded_agents_per_batch=4,
+    )
+
+    assert len(policy.hidden_inputs) == 2
+    assert policy.hidden_inputs[0].shape == (4, policy.hidden_size)
+    assert torch.count_nonzero(policy.hidden_inputs[0]).item() == 0
+    assert torch.equal(
+        policy.hidden_inputs[1],
+        torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 1.0],
+                [1.0, 1.0],
+                [1.0, 1.0],
+            ]
+        ),
+    )
     assert summaries[0]["agents_per_batch"] == 4
 
 

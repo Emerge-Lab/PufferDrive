@@ -69,8 +69,6 @@ def validate_training_evaluation_config(args):
     evaluation_benchmarks = train_config["evaluation_benchmarks"]
     if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
         raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
-    if args["train"]["use_rnn"]:
-        raise pufferlib.APIUsageError("Multiprocessed training evaluation does not support RNN policies yet")
 
     load_benchmark_config(eval_config["benchmark_config"], evaluation_benchmarks)
     return True
