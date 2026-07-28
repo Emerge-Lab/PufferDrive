@@ -4761,6 +4761,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float rel_x, rel_y;
         float rel_z = mid_z - ego->sim_z;
         project_point_to_ego_frame(ego, mid_x, mid_y, &rel_x, &rel_y);
+
         if (rel_x < -env->obs_range_road_behind_m || rel_x > env->obs_range_road_front_m) {
             continue;
         }
@@ -4775,16 +4776,6 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         float seg_dir_y = (seg_half_len > 0) ? seg_dy / seg_half_len : seg_dy;
         float rel_seg_dir_x, rel_seg_dir_y;
         project_vector_to_ego_frame(ego, seg_dir_x, seg_dir_y, &rel_seg_dir_x, &rel_seg_dir_y);
-        if (is_edge && seg_half_len > 0) {
-            float angle = atan2f(rel_seg_dir_y, rel_seg_dir_x);
-            if (angle > (float) M_PI / 2.0f) {
-                angle -= (float) M_PI;
-            } else if (angle < -(float) M_PI / 2.0f) {
-                angle += (float) M_PI;
-            }
-            rel_seg_dir_x = cosf(angle);
-            rel_seg_dir_y = sinf(angle);
-        }
 
         float *segment_dest = is_lane ? lane_obs_dest : boundary_obs_dest;
         int *segment_count = is_lane ? &lanes_found : &boundaries_found;
