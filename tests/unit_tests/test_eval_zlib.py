@@ -142,6 +142,8 @@ class _EvaluationReplayVec:
         self.last_action = action
         summary = {
             "summary_type": "evaluation_episode",
+            "map_name": "test_map.bin",
+            "seed": 42,
             "replay_environment_bundle": zlib.compress(
                 pickle.dumps(
                     {
@@ -590,7 +592,7 @@ def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkey
         capture_observations=True,
     )
 
-    replay_path = tmp_path / "unknown_map__seed_unknown__episode_000000.replay.zlib"
+    replay_path = tmp_path / "test_map__seed_42__episode_000000.replay.zlib"
     assert replay_path.read_bytes() == b"standard replay"
     assert summaries[0]["has_replay"] == 1
     assert summaries[0]["replay_path"] == str(replay_path.resolve())

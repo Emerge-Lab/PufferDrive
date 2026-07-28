@@ -11,23 +11,8 @@ import pufferlib.viz
 
 
 def _eval_replay_stem(summary, episode_id):
-    """Build a safe, unique replay stem from externally supplied scenario metadata."""
-
-    def safe_part(value, fallback):
-        if value is None:
-            return fallback
-        basename = os.path.basename(str(value)).rsplit(".", 1)[0]
-        sanitized = "".join(character if character.isalnum() or character in "-_" else "_" for character in basename)
-        return sanitized.strip("_-")[:64] or fallback
-
-    map_name = safe_part(summary.get("map_name"), "unknown_map")
-    scenario_id = safe_part(summary.get("scenario_id"), "")
-    seed = safe_part(summary.get("seed"), "unknown")
-    parts = [map_name]
-    if scenario_id and scenario_id.lower() not in map_name.lower():
-        parts.append(scenario_id)
-    parts.extend((f"seed_{seed}", f"episode_{episode_id:06d}"))
-    return "__".join(parts)
+    map_stem = os.path.splitext(os.path.basename(summary["map_name"]))[0]
+    return f"{map_stem}__seed_{summary['seed']}__episode_{episode_id:06d}"
 
 
 class EvalReplayCapture:
