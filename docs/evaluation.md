@@ -21,7 +21,7 @@ evaluation application, not the simulator:
 Each configured benchmark contains:
 
 - `name`: positional benchmark name passed after `puffer_drive`.
-- `mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
+- `simulation_mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
 - `num_scenarios`: number of episode summaries expected in the report.
 - `num_maps`: number of sorted map files available to the benchmark.
 - `max_agents_per_env`: maximum active agents in one simulator environment.

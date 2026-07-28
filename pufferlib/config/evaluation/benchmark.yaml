@@ -36,7 +36,7 @@ env:
 benchmarks:
   - name: carla
     seed: 42
-    mode: gigaflow
+    simulation_mode: gigaflow
     num_scenarios: 1000
     num_maps: 8
     max_agents_per_env: 50
@@ -46,7 +46,7 @@ benchmarks:
 
   - name: carla_fast
     seed: 42
-    mode: gigaflow
+    simulation_mode: gigaflow
     num_scenarios: 10
     num_maps: 8
     max_agents_per_env: 50
@@ -56,7 +56,7 @@ benchmarks:
 
   - name: womd_multi
     seed: 42
-    mode: replay
+    simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
     max_agents_per_env: 64
@@ -66,7 +66,7 @@ benchmarks:
 
   - name: womd_single
     seed: 42
-    mode: replay
+    simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
     max_agents_per_env: 64
@@ -76,7 +76,7 @@ benchmarks:
 
   - name: nuplan_multi
     seed: 42
-    mode: replay
+    simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
     max_agents_per_env: 64
@@ -86,7 +86,7 @@ benchmarks:
 
   - name: nuplan_single
     seed: 42
-    mode: replay
+    simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
     max_agents_per_env: 64

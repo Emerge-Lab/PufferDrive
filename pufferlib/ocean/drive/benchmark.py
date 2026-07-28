@@ -46,12 +46,6 @@ def _positive_int(value, label):
     return value
 
 
-def _seed(value, label):
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_C_SEED:
-        raise pufferlib.APIUsageError(f"{label} must be an integer in [0, {MAX_C_SEED}]")
-    return value
-
-
 def validate_training_evaluation_config(args):
     eval_config = args["eval"]
     train_config = args["train"]
@@ -113,9 +107,12 @@ def load_benchmark_config(config_path, selected_names):
     resolved_benchmarks = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
-        mode = benchmark.get("mode")
-        if mode not in ("gigaflow", "replay"):
-            raise pufferlib.APIUsageError(f"Benchmark {name} mode must be 'gigaflow' or 'replay'")
+        simulation_mode = benchmark.get("simulation_mode")
+        if simulation_mode not in ("gigaflow", "replay"):
+            raise pufferlib.APIUsageError(f"Benchmark {name} simulation_mode must be 'gigaflow' or 'replay'")
+        seed = benchmark.get("seed")
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_C_SEED:
+            raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
         scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
         max_agents_per_env = _positive_int(benchmark.get("max_agents_per_env"), f"Benchmark {name} max_agents_per_env")
@@ -140,7 +137,7 @@ def load_benchmark_config(config_path, selected_names):
             raise pufferlib.APIUsageError(
                 f"Benchmark {name} requests {num_maps} maps, but {map_dir} contains {available_map_count}"
             )
-        if mode == "replay" and num_scenarios > available_map_count:
+        if simulation_mode == "replay" and num_scenarios > available_map_count:
             raise pufferlib.APIUsageError(
                 f"Replay benchmark {name} requests {num_scenarios} scenarios, but {map_dir} contains "
                 f"{available_map_count} maps"
@@ -149,8 +146,8 @@ def load_benchmark_config(config_path, selected_names):
         resolved_benchmarks.append(
             {
                 "name": name,
-                "mode": mode,
-                "seed": _seed(benchmark.get("seed"), f"Benchmark {name} seed"),
+                "simulation_mode": simulation_mode,
+                "seed": seed,
                 "num_scenarios": num_scenarios,
                 "num_maps": num_maps,
                 "max_agents_per_env": max_agents_per_env,
@@ -203,7 +200,7 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     args["env"].update(
         {
             "num_agents": eval_agent_count,
-            "simulation_mode": benchmark["mode"],
+            "simulation_mode": benchmark["simulation_mode"],
             "map_dir": benchmark["map_dir"],
             "num_maps": benchmark["num_maps"],
             "scenario_length": benchmark["scenario_length"],
@@ -217,13 +214,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
 
 
 def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, checkpoint_config_path, output_path):
-    import json
-
     resolved = {
         "benchmark_config": os.path.abspath(benchmark_config_path),
         "checkpoint_config": os.path.abspath(checkpoint_config_path) if checkpoint_config_path is not None else None,
         "benchmark": benchmark,
-        "args": json.loads(json.dumps(args)),
+        "args": args,
     }
     with open(output_path, "w") as output_file:
         yaml.safe_dump(resolved, output_file, sort_keys=False)

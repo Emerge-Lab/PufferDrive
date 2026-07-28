@@ -13,6 +13,7 @@ import yaml
 import pufferlib
 from pufferlib import pufferl
 from pufferlib.eval_replay import EvalReplayCapture
+from pufferlib.ocean.drive import benchmark as drive_benchmark
 
 
 def test_benchmark_rejects_agent_capacity_below_benchmark_maximum():
@@ -25,7 +26,7 @@ def test_benchmark_rejects_agent_capacity_below_benchmark_maximum():
     benchmark = {
         "name": "carla_test",
         "seed": 42,
-        "mode": "gigaflow",
+        "simulation_mode": "gigaflow",
         "map_dir": "maps",
         "num_maps": 1,
         "num_scenarios": 1,
@@ -35,7 +36,7 @@ def test_benchmark_rejects_agent_capacity_below_benchmark_maximum():
     }
 
     with pytest.raises(pufferlib.APIUsageError, match="eval.num_agents.*max_agents_per_env"):
-        pufferlib.benchmark.build_benchmark_args(args, benchmark, {})
+        drive_benchmark.build_benchmark_args(args, benchmark, {})
 
 
 def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
@@ -52,7 +53,7 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
                     {
                         "name": "carla_test",
                         "seed": 42,
-                        "mode": "gigaflow",
+                        "simulation_mode": "gigaflow",
                         "num_scenarios": 1,
                         "num_maps": 1,
                         "max_agents_per_env": 1,
@@ -66,13 +67,13 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
         )
     )
 
-    _, benchmarks = pufferlib.benchmark.load_benchmark_config(config_path, ["carla_test", "carla_test"])
+    _, benchmarks = drive_benchmark.load_benchmark_config(config_path, ["carla_test", "carla_test"])
 
     assert [benchmark["name"] for benchmark in benchmarks] == ["carla_test"]
 
 
 def test_render_filter_selection_deduplicates_names():
-    render_filter = pufferlib.benchmark.parse_render_filter_columns("collision_rate,collision_rate")
+    render_filter = drive_benchmark.parse_render_filter_columns("collision_rate,collision_rate")
 
     assert render_filter == ("collision_rate",)
 
@@ -86,9 +87,9 @@ def test_training_evaluation_accepts_recurrent_policy(monkeypatch):
         },
         "eval": {"benchmark_config": "benchmark.yaml"},
     }
-    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, []))
+    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, []))
 
-    assert pufferlib.benchmark.validate_training_evaluation_config(args) is True
+    assert drive_benchmark.validate_training_evaluation_config(args) is True
 
 
 class _ZeroPolicy:
@@ -192,7 +193,7 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
     benchmark = {
         "name": "carla_test",
         "seed": 42,
-        "mode": "gigaflow",
+        "simulation_mode": "gigaflow",
         "map_dir": "maps",
         "num_maps": 1,
         "num_scenarios": 1,
@@ -224,7 +225,7 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
     captured_args = {}
 
     monkeypatch.setattr(
-        pufferlib.benchmark,
+        drive_benchmark,
         "load_benchmark_config",
         lambda *_: ({"obs_dropout_lane": 0.0, "obs_dropout_boundary": 0.0}, [benchmark]),
     )
@@ -254,7 +255,7 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
         {
             "name": "womd_single",
             "seed": 42,
-            "mode": "replay",
+            "simulation_mode": "replay",
             "map_dir": "maps",
             "num_maps": 100,
             "num_scenarios": 100,
@@ -265,7 +266,7 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
         {
             "name": "womd_multi",
             "seed": 42,
-            "mode": "replay",
+            "simulation_mode": "replay",
             "map_dir": "maps",
             "num_maps": 100,
             "num_scenarios": 100,
@@ -297,8 +298,8 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
     }
     planned_worker_counts = []
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, benchmarks))
-    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
+    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, benchmarks))
+    monkeypatch.setattr(drive_benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, _num_scenarios, num_workers, _scenario_length, capture_replay):
         assert not capture_replay
@@ -326,7 +327,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
     benchmark = {
         "name": "carla_test",
         "seed": 42,
-        "mode": "gigaflow",
+        "simulation_mode": "gigaflow",
         "map_dir": "maps",
         "num_maps": 1,
         "num_scenarios": 2,
@@ -358,8 +359,8 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
     captured = {}
     summaries = [{"map_name": "map_0"}, {"map_name": "map_1"}]
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
-    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
+    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
+    monkeypatch.setattr(drive_benchmark, "write_resolved_benchmark_config", lambda *_: None)
 
     def capture_worker_plan(_run_args, num_scenarios, num_workers, scenario_length, capture_replay):
         captured["worker_plan"] = (num_scenarios, num_workers, scenario_length, capture_replay)
@@ -423,7 +424,7 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
     benchmark = {
         "name": "carla",
         "seed": 42,
-        "mode": "gigaflow",
+        "simulation_mode": "gigaflow",
         "map_dir": "maps",
         "num_maps": 1,
         "num_scenarios": 10,
@@ -453,18 +454,18 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
     }
     replay_call = {}
 
-    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
+    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
     monkeypatch.setattr(
-        pufferlib.benchmark,
+        drive_benchmark,
         "load_checkpoint_architecture",
         lambda loaded_args: (loaded_args, "checkpoint_config.yaml"),
     )
     monkeypatch.setattr(
-        pufferlib.benchmark,
+        drive_benchmark,
         "build_benchmark_args",
         lambda loaded_args, _benchmark, _environment_config: loaded_args,
     )
-    monkeypatch.setattr(pufferlib.benchmark, "write_resolved_benchmark_config", lambda *_: None)
+    monkeypatch.setattr(drive_benchmark, "write_resolved_benchmark_config", lambda *_: None)
     monkeypatch.setattr(
         pufferl,
         "_plan_benchmark_eval_workers",
@@ -530,7 +531,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
         return {}
 
     monkeypatch.setattr(pufferl, "eval", capture_eval)
-    monkeypatch.setattr(pufferlib.benchmark, "load_benchmark_config", lambda *_: ({}, []))
+    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, []))
 
     pufferl.run_training_evaluation(
         env_name="puffer_drive",
@@ -777,7 +778,7 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     )
     replay_pairs = []
 
-    monkeypatch.setattr(pufferlib.benchmark, "select_render_rows", lambda *_: selected_rows)
+    monkeypatch.setattr(drive_benchmark, "select_render_rows", lambda *_: selected_rows)
     monkeypatch.setattr(pufferl, "_resolve_map_indices", lambda _map_dir, map_names: list(range(len(map_names))))
 
     def capture_replay_pairs(_args, map_seed_pairs, _num_workers, _scenario_length, capture_replay):

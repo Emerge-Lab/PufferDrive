@@ -37,7 +37,7 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
-import pufferlib.benchmark
+from pufferlib.ocean.drive import benchmark as drive_benchmark
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -1352,7 +1352,7 @@ def _global_agent_steps(pufferl):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
-    training_evaluation_scheduled = pufferlib.benchmark.validate_training_evaluation_config(args)
+    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1590,10 +1590,8 @@ def eval(
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
     if render_filter is not None and not render_scenarios:
-        pufferlib.benchmark.parse_render_filter_columns(render_filter)
-    environment_config, benchmarks = pufferlib.benchmark.load_benchmark_config(
-        benchmark_config_path, selected_benchmarks
-    )
+        drive_benchmark.parse_render_filter_columns(render_filter)
+    environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
@@ -1602,7 +1600,7 @@ def eval(
         environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
     else:
-        base_args, checkpoint_config_path = pufferlib.benchmark.load_checkpoint_architecture(args)
+        base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
     if eval_output_dir is None:
         run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
         eval_output_dir = os.path.join(run_dir, "eval")
@@ -1611,7 +1609,7 @@ def eval(
     all_benchmark_summaries = {}
     cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
-        run_args = pufferlib.benchmark.build_benchmark_args(base_args, benchmark, environment_config)
+        run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
         run_args = OmegaConf.to_container(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
             resolve=True,
@@ -1625,7 +1623,7 @@ def eval(
         benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
         benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
         os.makedirs(benchmark_output_dir)
-        pufferlib.benchmark.write_resolved_benchmark_config(
+        drive_benchmark.write_resolved_benchmark_config(
             run_args,
             benchmark,
             benchmark_config_path,
@@ -2089,7 +2087,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        _, benchmarks = pufferlib.benchmark.load_benchmark_config(
+        _, benchmarks = drive_benchmark.load_benchmark_config(
             eval_args["eval"]["benchmark_config"], eval_args["train"]["evaluation_benchmarks"]
         )
         expected_scenarios = {benchmark["name"]: benchmark["num_scenarios"] for benchmark in benchmarks}
@@ -2221,7 +2219,7 @@ def _render_eval_failures(
     max_rendered_failures,
 ):
     configured_render_filter = run_args["eval"]["render_filter"]
-    selected_rows = pufferlib.benchmark.select_render_rows(metrics_path, configured_render_filter)
+    selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
     if max_rendered_failures is not None:
         selected_rows = selected_rows.head(max_rendered_failures).copy()
     failures_dir = os.path.join(benchmark_output_dir, "failures")
