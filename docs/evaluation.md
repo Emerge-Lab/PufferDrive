@@ -49,11 +49,8 @@ Benchmark selection and a 3.0 checkpoint are required. The checkpoint must be in
 a run's `models` directory, with the matching `config.yaml` in the run directory.
 
 ```bash
-source .venv/bin/activate
-
 puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.render_failures=false \
   train.device=cpu
 ```
 
@@ -121,53 +118,57 @@ the benchmark seed and worker configuration continue to determine the evaluated
 map/seed rows. Capturing every scenario increases CPU, memory, and disk usage.
 
 `eval.capture_observations=true` also stores policy observations. Periodic training
-evaluation always disables scenario rendering. If `eval.render_failures` is
-also true, the all-scenario gallery is produced and the redundant failure
+evaluation always disables scenario rendering. If `eval.render_filter` is
+also set, the all-scenario gallery is produced and the redundant filtered
 replay pass is skipped. `eval.render_scenarios` cannot be combined with
 `eval.failure_replay_csv`, which skips the standard benchmark pass.
 
-## Failure replay and rendering
+## Filtered replay and rendering
 
-Enable the integrated failure pass with:
+Set `eval.render_filter` to render scenarios where a selected metric is greater
+than zero:
 
 ```bash
 puffer eval puffer_drive carla_fast \
   load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
-  eval.render_failures=true \
+  eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
 ```
 
-An episode is selected when any configured `eval.failure_metrics` value is
-greater than zero. The supported metrics are:
+The default `eval.render_filter: null` disables filtered rendering. Multiple
+comma-separated metrics use OR: `collision_rate,offroad_rate` selects scenarios
+where either metric is greater than zero. The supported metrics are:
 
 - `collision_rate`
 - `at_fault_collision_rate`
 - `offroad_rate`
 - `red_light_violation_rate`
 
-The failure pass replays the selected map/seed pairs, captures standard
+The filtered pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
 navigable `index.html`. `eval.max_rendered_failures` limits each selected benchmark
-to its first N failures in metrics-file order; the default `null` renders all
-failures. `eval.capture_observations=true` also stores policy observations;
+to its first N matching scenarios in metrics-file order; the default `null`
+renders every match. `eval.capture_observations=true` also stores policy observations;
 `eval.observation_replay_wave_size` and
 `eval.observation_replay_writer_count` bound its peak memory and writer
 parallelism.
 
-To replay failures from an existing metrics CSV without rerunning the standard
+To filter and replay an existing metrics CSV without rerunning the standard
 benchmark pass:
 
 ```bash
 puffer eval puffer_drive carla \
   load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
   eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
+  eval.render_filter=offroad_rate \
   eval.max_rendered_failures=10 \
   eval.capture_observations=false
 ```
 
 The selected benchmark supplies the replay environment settings, so it should
-match the benchmark that produced the CSV.
+match the benchmark that produced the CSV. `eval.failure_replay_csv` requires a
+non-null `eval.render_filter`.
 
 ## Outputs
 
@@ -183,7 +184,7 @@ eval/<benchmark>[_<output_name>]/<timestamp>/
 ├── rendered_replays/               # only when render_scenarios=true
 │   ├── *.html
 │   └── index.html
-└── failures/                       # render_failures=true without render_scenarios
+└── failures/                       # render_filter set without render_scenarios
     ├── selected_failures.csv
     ├── episode_metrics.csv
     ├── evaluation_summary.json

@@ -1578,7 +1578,7 @@ def eval(
     eval_config["benchmarks"] = selected_benchmarks
     output_name = eval_config["output_name"]
     render_scenarios = bool(eval_config["render_scenarios"])
-    render_failures = bool(eval_config["render_failures"])
+    render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
     max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
@@ -1587,8 +1587,10 @@ def eval(
             "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
             "with eval.failure_replay_csv"
         )
-    if render_failures and not render_scenarios:
-        pufferlib.benchmark.parse_failure_metric_columns(eval_config["failure_metrics"])
+    if failure_replay_csv is not None and render_filter is None:
+        raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
+    if render_filter is not None and not render_scenarios:
+        pufferlib.benchmark.parse_render_filter_columns(render_filter)
     environment_config, benchmarks = pufferlib.benchmark.load_benchmark_config(
         benchmark_config_path, selected_benchmarks
     )
@@ -1675,7 +1677,7 @@ def eval(
 
         if render_scenarios:
             _render_eval_replays(summaries, benchmark_output_dir)
-        elif render_failures:
+        elif render_filter is not None:
             _render_eval_failures(
                 env_name,
                 run_args,
@@ -2071,7 +2073,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
     eval_args = copy.deepcopy(args)
     eval_args["eval"]["benchmarks"] = eval_args["train"]["evaluation_benchmarks"]
     eval_args["eval"]["render_scenarios"] = False
-    eval_args["eval"]["render_failures"] = False
+    eval_args["eval"]["render_filter"] = None
     eval_args["eval"]["failure_replay_csv"] = None
     eval_output_dir = os.path.join(run_dir, "eval", "training")
     eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
@@ -2218,8 +2220,8 @@ def _render_eval_failures(
     capture_observations,
     max_rendered_failures,
 ):
-    configured_failure_metrics = run_args["eval"]["failure_metrics"]
-    selected_rows = pufferlib.benchmark.select_failure_rows(metrics_path, configured_failure_metrics)
+    configured_render_filter = run_args["eval"]["render_filter"]
+    selected_rows = pufferlib.benchmark.select_render_rows(metrics_path, configured_render_filter)
     if max_rendered_failures is not None:
         selected_rows = selected_rows.head(max_rendered_failures).copy()
     failures_dir = os.path.join(benchmark_output_dir, "failures")

@@ -273,13 +273,13 @@ eval:
   output_name: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
-  render_failures: false
+  # Render scenarios where any configured metric is greater than zero; null disables filtered rendering.
+  render_filter: null
   # Maximum failures rendered per benchmark; null renders every failure.
   max_rendered_failures: null
   # Existing episode metrics CSV to replay without running the benchmark first.
   failure_replay_csv: null
   capture_observations: false
-  failure_metrics: collision_rate,at_fault_collision_rate,offroad_rate,red_light_violation_rate
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
 controlled_exp:

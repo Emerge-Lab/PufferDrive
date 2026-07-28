@@ -9,7 +9,7 @@ import pufferlib
 
 
 MAX_C_SEED = 2**31 - 1
-FAILURE_METRIC_COLUMNS = (
+RENDER_FILTER_COLUMNS = (
     "collision_rate",
     "at_fault_collision_rate",
     "offroad_rate",
@@ -230,41 +230,39 @@ def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, chec
         yaml.safe_dump(resolved, output_file, sort_keys=False)
 
 
-def parse_failure_metric_columns(configured_failure_metrics):
-    """Resolve and validate the metric columns that define a failed episode."""
-    if isinstance(configured_failure_metrics, str):
-        failure_metric_columns = [column.strip() for column in configured_failure_metrics.split(",") if column.strip()]
-    elif isinstance(configured_failure_metrics, (list, tuple)):
-        failure_metric_columns = list(configured_failure_metrics)
+def parse_render_filter_columns(configured_render_filter):
+    """Resolve and validate the metric columns used to select rendered episodes."""
+    if isinstance(configured_render_filter, str):
+        render_filter_columns = [column.strip() for column in configured_render_filter.split(",") if column.strip()]
+    elif isinstance(configured_render_filter, (list, tuple)):
+        render_filter_columns = list(configured_render_filter)
     else:
-        raise pufferlib.APIUsageError("eval.failure_metrics must be a comma-separated string or list")
+        raise pufferlib.APIUsageError("eval.render_filter must be a comma-separated string or list")
 
-    if not failure_metric_columns or any(
-        not isinstance(column, str) or not column for column in failure_metric_columns
-    ):
-        raise pufferlib.APIUsageError("eval.failure_metrics must contain non-empty metric names")
-    failure_metric_columns = tuple(dict.fromkeys(failure_metric_columns))
-    unknown_columns = set(failure_metric_columns) - set(FAILURE_METRIC_COLUMNS)
+    if not render_filter_columns or any(not isinstance(column, str) or not column for column in render_filter_columns):
+        raise pufferlib.APIUsageError("eval.render_filter must contain non-empty metric names")
+    render_filter_columns = tuple(dict.fromkeys(render_filter_columns))
+    unknown_columns = set(render_filter_columns) - set(RENDER_FILTER_COLUMNS)
     if unknown_columns:
         raise pufferlib.APIUsageError(
-            "eval.failure_metrics contains unsupported metrics: "
-            f"{', '.join(sorted(unknown_columns))}. Supported metrics: {', '.join(FAILURE_METRIC_COLUMNS)}"
+            "eval.render_filter contains unsupported metrics: "
+            f"{', '.join(sorted(unknown_columns))}. Supported metrics: {', '.join(RENDER_FILTER_COLUMNS)}"
         )
-    return failure_metric_columns
+    return render_filter_columns
 
 
-def select_failure_rows(metrics_path, configured_failure_metrics):
-    """Select failures using the infraction columns emitted by PufferDrive."""
+def select_render_rows(metrics_path, configured_render_filter):
+    """Select rows where any configured render metric is greater than zero."""
     if not os.path.isfile(metrics_path):
         raise pufferlib.APIUsageError(f"Benchmark metrics CSV not found: {metrics_path}")
     rows = pd.read_csv(metrics_path)
-    failure_metric_columns = parse_failure_metric_columns(configured_failure_metrics)
-    present_columns = [column for column in failure_metric_columns if column in rows.columns]
+    render_filter_columns = parse_render_filter_columns(configured_render_filter)
+    present_columns = [column for column in render_filter_columns if column in rows.columns]
     if not present_columns:
         raise pufferlib.APIUsageError(
-            f"Benchmark metrics CSV has none of the configured failure columns: {', '.join(failure_metric_columns)}"
+            f"Benchmark metrics CSV has none of the configured render filter columns: {', '.join(render_filter_columns)}"
         )
-    failure = pd.Series(False, index=rows.index)
+    selected = pd.Series(False, index=rows.index)
     for column in present_columns:
-        failure |= pd.to_numeric(rows[column], errors="coerce").fillna(0) > 0
-    return rows[failure].copy()
+        selected |= pd.to_numeric(rows[column], errors="coerce").fillna(0) > 0
+    return rows[selected].copy()

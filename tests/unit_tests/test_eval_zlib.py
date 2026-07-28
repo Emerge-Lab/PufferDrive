@@ -71,10 +71,10 @@ def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
     assert [benchmark["name"] for benchmark in benchmarks] == ["carla_test"]
 
 
-def test_failure_metric_selection_deduplicates_names():
-    failure_metrics = pufferlib.benchmark.parse_failure_metric_columns("collision_rate,collision_rate")
+def test_render_filter_selection_deduplicates_names():
+    render_filter = pufferlib.benchmark.parse_render_filter_columns("collision_rate,collision_rate")
 
-    assert failure_metrics == ("collision_rate",)
+    assert render_filter == ("collision_rate",)
 
 
 def test_training_evaluation_accepts_recurrent_policy(monkeypatch):
@@ -215,11 +215,10 @@ def test_training_evaluation_keeps_training_observation_dropout(monkeypatch, tmp
             "num_agents": 16,
             "max_sdc_replay_workers": 8,
             "render_scenarios": False,
-            "render_failures": False,
+            "render_filter": None,
             "max_rendered_failures": None,
             "failure_replay_csv": None,
             "capture_observations": False,
-            "failure_metrics": "collision_rate",
         },
     }
     captured_args = {}
@@ -290,11 +289,10 @@ def test_eval_caps_only_sdc_replay_workers(monkeypatch, tmp_path):
             "num_agents": 64,
             "max_sdc_replay_workers": 8,
             "render_scenarios": False,
-            "render_failures": False,
+            "render_filter": None,
             "max_rendered_failures": None,
             "failure_replay_csv": None,
             "capture_observations": False,
-            "failure_metrics": "collision_rate",
         },
     }
     planned_worker_counts = []
@@ -350,11 +348,10 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
             "output_name": None,
             "num_agents": 16,
             "render_scenarios": True,
-            "render_failures": True,
+            "render_filter": "collision_rate",
             "max_rendered_failures": None,
             "failure_replay_csv": None,
             "capture_observations": True,
-            "failure_metrics": "collision_rate",
             "max_sdc_replay_workers": 8,
         },
     }
@@ -410,11 +407,10 @@ def test_eval_rejects_render_scenarios_with_failure_csv():
             "num_agents": 16,
             "max_sdc_replay_workers": 8,
             "render_scenarios": True,
-            "render_failures": False,
+            "render_filter": None,
             "max_rendered_failures": None,
             "failure_replay_csv": "episode_metrics.csv",
             "capture_observations": False,
-            "failure_metrics": "collision_rate",
         }
     }
 
@@ -449,11 +445,10 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
             "num_agents": 16,
             "max_sdc_replay_workers": 8,
             "render_scenarios": False,
-            "render_failures": False,
+            "render_filter": "collision_rate",
             "max_rendered_failures": 2,
             "failure_replay_csv": str(failure_csv_path),
             "capture_observations": False,
-            "failure_metrics": "collision_rate",
         },
     }
     replay_call = {}
@@ -525,7 +520,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
         "eval": {
             "benchmark_config": "benchmark.yaml",
             "render_scenarios": True,
-            "render_failures": True,
+            "render_filter": "collision_rate",
             "failure_replay_csv": "episode_metrics.csv",
         },
     }
@@ -548,7 +543,7 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
     )
 
     assert captured_args["eval"]["render_scenarios"] is False
-    assert captured_args["eval"]["render_failures"] is False
+    assert captured_args["eval"]["render_filter"] is None
     assert captured_args["eval"]["failure_replay_csv"] is None
 
 
@@ -782,7 +777,7 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     )
     replay_pairs = []
 
-    monkeypatch.setattr(pufferlib.benchmark, "select_failure_rows", lambda *_: selected_rows)
+    monkeypatch.setattr(pufferlib.benchmark, "select_render_rows", lambda *_: selected_rows)
     monkeypatch.setattr(pufferl, "_resolve_map_indices", lambda _map_dir, map_names: list(range(len(map_names))))
 
     def capture_replay_pairs(_args, map_seed_pairs, _num_workers, _scenario_length, capture_replay):
@@ -807,7 +802,7 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
     monkeypatch.setattr(pufferl, "_render_eval_replays", lambda *_: None)
     run_args = {
-        "eval": {"failure_metrics": "collision_rate"},
+        "eval": {"render_filter": "collision_rate"},
         "vec": {"num_envs": 4},
         "env": {
             "map_dir": "maps",

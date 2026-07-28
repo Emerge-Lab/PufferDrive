@@ -41,6 +41,7 @@ class TestDriveConfig(unittest.TestCase):
             self.assertIsNone(args["eval"]["output_name"])
             self.assertEqual(args["eval"]["max_sdc_replay_workers"], 4)
             self.assertFalse(args["eval"]["render_scenarios"])
+            self.assertIsNone(args["eval"]["render_filter"])
             self.assertIsNone(args["eval"]["max_rendered_failures"])
             self.assertIsNone(args["eval"]["failure_replay_csv"])
             self.assertTrue(os.path.isfile(args["eval"]["benchmark_config"]))
