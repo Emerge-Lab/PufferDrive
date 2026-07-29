@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+from pathlib import Path
 import pickle
 from types import SimpleNamespace
 import zlib
@@ -39,6 +40,15 @@ def test_benchmark_rejects_agent_capacity_below_benchmark_maximum():
         drive_benchmark.build_benchmark_args(args, benchmark, {})
 
 
+def test_benchmark_config_does_not_override_checkpoint_num_goals():
+    benchmark_config_path = Path(pufferlib.__file__).parent / "config" / "evaluation" / "benchmark.yaml"
+
+    with open(benchmark_config_path, "r") as benchmark_config_file:
+        benchmark_config = yaml.safe_load(benchmark_config_file)
+
+    assert "num_goals" not in benchmark_config["env"]
+
+
 def test_benchmark_allows_metadata_and_deduplicates_selection(tmp_path):
     map_dir = tmp_path / "maps"
     map_dir.mkdir()
@@ -76,6 +86,50 @@ def test_render_filter_selection_deduplicates_names():
     render_filter = drive_benchmark.parse_render_filter_columns("collision_rate,collision_rate")
 
     assert render_filter == ("collision_rate",)
+
+
+def test_render_filter_all_expands_and_deduplicates_failure_metrics():
+    expected_columns = (
+        "collision_rate",
+        "at_fault_collision_rate",
+        "offroad_rate",
+        "red_light_violation_rate",
+    )
+
+    assert drive_benchmark.parse_render_filter_columns("all") == expected_columns
+    assert drive_benchmark.parse_render_filter_columns(["all", "offroad_rate"]) == expected_columns
+
+
+def test_render_filter_all_selects_every_failure_type(tmp_path):
+    metrics_path = tmp_path / "episode_metrics.csv"
+    pd.DataFrame(
+        {
+            "scenario_id": ["collision", "at_fault", "offroad", "red_light", "clean"],
+            "collision_rate": [1, 0, 0, 0, 0],
+            "at_fault_collision_rate": [0, 1, 0, 0, 0],
+            "offroad_rate": [0, 0, 1, 0, 0],
+            "red_light_violation_rate": [0, 0, 0, 1, 0],
+            "score": [1, 1, 1, 1, 1],
+        }
+    ).to_csv(metrics_path, index=False)
+
+    selected_rows = drive_benchmark.select_render_rows(metrics_path, "all")
+
+    assert selected_rows["scenario_id"].tolist() == ["collision", "at_fault", "offroad", "red_light"]
+
+
+def test_render_filter_all_rejects_missing_failure_column(tmp_path):
+    metrics_path = tmp_path / "episode_metrics.csv"
+    pd.DataFrame(
+        {
+            "collision_rate": [1],
+            "at_fault_collision_rate": [0],
+            "offroad_rate": [0],
+        }
+    ).to_csv(metrics_path, index=False)
+
+    with pytest.raises(pufferlib.APIUsageError, match="red_light_violation_rate"):
+        drive_benchmark.select_render_rows(metrics_path, "all")
 
 
 def test_training_evaluation_accepts_recurrent_policy(monkeypatch):

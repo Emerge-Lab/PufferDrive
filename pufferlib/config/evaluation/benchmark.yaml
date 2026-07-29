@@ -21,7 +21,6 @@ env:
   goal_speed: 20.0
   goal_source: "route"
   goal_radius: 2.0
-  num_goals: 3
   goal_regen_mode: "finite"
   min_goal_spacing: 30.0
   max_goal_spacing: 30.0

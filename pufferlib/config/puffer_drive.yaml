@@ -272,7 +272,7 @@ eval:
   output_name: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
-  # Render scenarios where any configured metric is greater than zero; null disables filtered rendering.
+  # Render scenarios where any configured metric is positive; use all for every failure type; null disables it.
   render_filter: null
   # Maximum failures rendered per benchmark; null renders every failure.
   max_rendered_failures: null
