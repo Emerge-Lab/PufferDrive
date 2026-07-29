@@ -206,9 +206,9 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 `FINALS_METRICS` / `CURVE_METRICS` in `scripts/nightly_report.py`, then run
 `update` followed by `report`.
 
-## Key Configuration (`pufferlib/config/ocean/drive.ini`)
+## Key Configuration (`pufferlib/config/puffer_drive.yaml`)
 
-### `[env]` — Simulation
+### `env` — Simulation
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
@@ -225,7 +225,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `reward_conditioning` | `False` | Condition policy on reward weights |
 | `reward_randomization` | `False` | Randomize reward weights each episode |
 
-### `[env]` — Reward Shaping
+### `env` — Reward Shaping
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
@@ -238,7 +238,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `reward_stop_line` | `1.0` | Stop line penalty |
 | `reward_overspeed` | `0.05` | Speeding penalty |
 
-### `[train]` — PPO
+### `train` — PPO
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
@@ -252,7 +252,7 @@ To add a metric to the report: add its key to `TREND_METRICS` /
 | `vtrace_rho_clip` / `vtrace_c_clip` | `1` | V-trace IS ratio clipping |
 | `adv_sampling_prio_alpha` / `adv_sampling_prio_beta0` | `0.85` | Priority sampling exponents |
 
-### `[policy]` — Network
+### `policy` — Network
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
