@@ -1577,7 +1577,7 @@ def eval(
     selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
     eval_config["benchmarks"] = selected_benchmarks
     output_name = eval_config["output_name"]
-    render_scenarios = bool(eval_config["render_scenarios"])
+    render_scenarios = eval_config["render_scenarios"]
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
@@ -1615,7 +1615,7 @@ def eval(
         )
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
-            run_args["vec"]["num_envs"] = min(int(run_args["vec"]["num_envs"]), max_sdc_replay_workers)
+            run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
@@ -1630,8 +1630,7 @@ def eval(
             os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
         )
 
-        evaluation_seed = int(run_args["train"]["seed"])
-        np.random.seed(evaluation_seed)
+        np.random.seed(run_args["train"]["seed"])
         if failure_replay_csv is not None:
             benchmark_results[benchmark["name"]] = _render_eval_failures(
                 env_name,
@@ -1640,19 +1639,19 @@ def eval(
                 failure_replay_csv,
                 benchmark_output_dir,
                 policy,
-                bool(eval_config["capture_observations"]),
+                eval_config["capture_observations"],
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
             )
             continue
 
-        num_scenarios = int(run_args["num_scenarios"])
-        num_workers = min(int(run_args["vec"]["num_envs"]), num_scenarios)
+        num_scenarios = run_args["num_scenarios"]
+        num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
         worker_env_kwargs, total_steps = _plan_benchmark_eval_workers(
             run_args,
             num_scenarios,
             num_workers,
-            int(run_args["env"]["scenario_length"]),
+            run_args["env"]["scenario_length"],
             capture_replay=render_scenarios,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
@@ -1666,7 +1665,7 @@ def eval(
             num_scenarios,
             policy=policy,
             replay_output_dir=replay_output_dir,
-            capture_observations=render_scenarios and bool(eval_config["capture_observations"]),
+            capture_observations=render_scenarios and eval_config["capture_observations"],
             evaluation_policy_cache=evaluation_policy_cache,
         )
         summary = _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
@@ -1685,7 +1684,7 @@ def eval(
                 os.path.join(benchmark_output_dir, "episode_metrics.csv"),
                 benchmark_output_dir,
                 policy,
-                bool(eval_config["capture_observations"]),
+                eval_config["capture_observations"],
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
             )
@@ -1877,7 +1876,7 @@ def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_leng
         env_kwargs["starting_map"] = next_map_idx
         env_kwargs["num_eval_scenarios"] = worker_num_scenarios
         env_kwargs["resample_frequency"] = scenario_length
-        env_kwargs["capture_replay"] = bool(capture_replay)
+        env_kwargs["capture_replay"] = capture_replay
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
         next_map_idx += worker_num_scenarios
@@ -1885,7 +1884,7 @@ def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_leng
     return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
 
-def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length, capture_replay=False):
+def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
     """Split the (map, seed) pairs across workers; each worker cycles through its
     pairs in fit-aware batches (num_agents from config bounds a batch)."""
     pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
@@ -1902,7 +1901,7 @@ def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_len
         env_kwargs["num_eval_scenarios"] = worker_pair_count
         env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in worker_pairs]
         env_kwargs["eval_scenario_seeds"] = [seed for _, seed in worker_pairs]
-        env_kwargs["capture_replay"] = bool(capture_replay)
+        env_kwargs["capture_replay"] = True
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)
     max_pairs_per_worker = pairs_per_worker + (1 if remainder else 0)
@@ -1954,7 +1953,7 @@ def _run_eval_rollout(
                 f"{inference_agents_per_batch} agents to preserve the recorded batch shape"
             )
 
-        rollout_seed = int(args["train"]["seed"])
+        rollout_seed = args["train"]["seed"]
         torch.manual_seed(rollout_seed)
         if evaluation_policy_cache is None:
             evaluation_policy_cache = {"policy": policy}
@@ -1998,7 +1997,7 @@ def _run_eval_rollout(
                 "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
             }
 
-        capture_batch_steps = int(worker_env_kwargs[0]["resample_frequency"])
+        capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
         replay_capture = None
         if replay_output_dir is not None:
             replay_capture = EvalReplayCapture(
@@ -2077,6 +2076,12 @@ def _run_eval_rollout(
         if scenario_progress is not None:
             scenario_progress.close()
         vecenv.close()
+    if len(episode_summaries) != expected_episodes:
+        print(
+            f"WARNING: Evaluation expected {expected_episodes} episode summaries, "
+            f"but received {len(episode_summaries)}. Writing the available results.",
+            file=sys.stderr,
+        )
     return episode_summaries
 
 
@@ -2207,17 +2212,6 @@ def _render_eval_replays(episode_summaries, out_dir):
     return render_dir
 
 
-def _selected_agents_per_batch(selected_rows):
-    if "agents_per_batch" not in selected_rows.columns:
-        raise pufferlib.APIUsageError("Benchmark failure rendering requires agents_per_batch in the metrics CSV")
-    values = pd.to_numeric(selected_rows["agents_per_batch"], errors="coerce").unique()
-    if len(values) != 1 or not np.isfinite(values[0]) or int(values[0]) != values[0] or values[0] <= 0:
-        raise pufferlib.APIUsageError(
-            "Benchmark failure rows must contain exactly one positive integer agents_per_batch value"
-        )
-    return int(values[0])
-
-
 def _render_eval_failures(
     env_name,
     run_args,
@@ -2245,7 +2239,7 @@ def _render_eval_failures(
     seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
     pairs = list(zip(map_indices, seeds))
     failure_args = copy.deepcopy(run_args)
-    configured_worker_count = int(failure_args["vec"]["num_envs"])
+    configured_worker_count = failure_args["vec"]["num_envs"]
     if configured_worker_count <= 0:
         raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
     replay_wave_size = len(pairs)
@@ -2264,32 +2258,33 @@ def _render_eval_failures(
             configured_worker_count,
             observation_replay_wave_size,
         )
-        replay_agent_capacity = int(failure_args["env"]["max_agents_per_env"])
+        replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
         if replay_agent_capacity <= 0:
             raise pufferlib.APIUsageError("Failure rendering requires max_agents_per_env > 0")
         failure_args["env"]["num_agents"] = replay_agent_capacity
     replay_output_dir = os.path.join(failures_dir, "replays")
     os.makedirs(replay_output_dir, exist_ok=True)
-    recorded_agents_per_batch = _selected_agents_per_batch(selected_rows)
+    agents_per_batch_values = selected_rows["agents_per_batch"].unique()
+    if len(agents_per_batch_values) != 1:
+        raise pufferlib.APIUsageError("Benchmark failure rows must contain exactly one agents_per_batch value")
+    recorded_agents_per_batch = int(agents_per_batch_values[0])
     summaries = []
     replay_wave_count = (len(pairs) + replay_wave_size - 1) // replay_wave_size
     for replay_wave_idx, replay_pair_start in enumerate(range(0, len(pairs), replay_wave_size)):
         replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
         num_workers = min(configured_worker_count, len(replay_pairs))
-        wave_args = copy.deepcopy(failure_args)
-        wave_args["vec"]["num_envs"] = num_workers
+        failure_args["vec"]["num_envs"] = num_workers
         worker_env_kwargs, total_steps = _plan_failure_replay_workers(
-            wave_args,
+            failure_args,
             replay_pairs,
             num_workers,
-            int(wave_args["env"]["scenario_length"]),
-            capture_replay=True,
+            failure_args["env"]["scenario_length"],
         )
         replay_desc = f"Rendering {benchmark['name']} failures"
         if replay_wave_count > 1:
             replay_desc += f" (wave {replay_wave_idx + 1}/{replay_wave_count})"
         wave_summaries = _run_eval_rollout(
-            wave_args,
+            failure_args,
             env_name,
             worker_env_kwargs,
             total_steps,

@@ -197,7 +197,9 @@ uses `<benchmark>_<output_name>`.
 `episode_metrics.csv` contains map and scenario identifiers, the episode seed,
 agent batch size, infractions, progress, rewards, and score metrics.
 `evaluation_summary.json` contains the requested scenario count, emitted episode
-count, and means for every numeric metric.
+count, and means for every numeric metric. If the evaluator emits fewer or more
+episodes than requested, it prints a warning and still writes the available
+results; compare `num_scenarios` with `num_episodes` to detect the mismatch.
 
 ## Evaluation during training
 

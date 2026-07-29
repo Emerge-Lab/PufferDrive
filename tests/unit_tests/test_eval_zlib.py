@@ -765,6 +765,7 @@ def test_failure_replay_worker_plan_balances_without_fillers():
     assert total_steps == 256
     assert [kwargs["num_eval_scenarios"] for kwargs in worker_kwargs] == [2, 1, 1, 1]
     assert [map_idx for kwargs in worker_kwargs for map_idx in kwargs["eval_map_indices"]] == list(range(5))
+    assert all(kwargs["capture_replay"] for kwargs in worker_kwargs)
 
 
 def test_render_eval_replays_writes_pages_with_navigation_and_index(monkeypatch, tmp_path):
@@ -821,8 +822,7 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     monkeypatch.setattr(drive_benchmark, "select_render_rows", lambda *_: selected_rows)
     monkeypatch.setattr(pufferl, "_resolve_map_indices", lambda _map_dir, map_names: list(range(len(map_names))))
 
-    def capture_replay_pairs(_args, map_seed_pairs, _num_workers, _scenario_length, capture_replay):
-        assert capture_replay
+    def capture_replay_pairs(_args, map_seed_pairs, _num_workers, _scenario_length):
         replay_pairs.extend(map_seed_pairs)
         return [{} for _ in map_seed_pairs], 1
 

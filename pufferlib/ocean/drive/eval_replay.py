@@ -31,7 +31,7 @@ class EvalReplayCapture:
     ):
         if capture_batch_steps <= 0:
             raise RuntimeError("Replay capture requires a positive resample frequency")
-        self.capture_observations = bool(capture_observations)
+        self.capture_observations = capture_observations
         self.replay_writer_count = num_workers
         if self.capture_observations:
             observation_replay_writer_count = args["eval"]["observation_replay_writer_count"]
