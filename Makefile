@@ -10,17 +10,18 @@ EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config
 BINDING := pufferlib/ocean/drive/binding$(EXT_SUFFIX)
 DRIVE_SOURCES := $(wildcard pufferlib/ocean/drive/*.c) $(wildcard pufferlib/ocean/drive/*.h) setup.py
 
-.PHONY: help test rebuild ensure-test-deps test-unit test-c test-notebooks test-docker-smoke
+.PHONY: help test rebuild ensure-test-deps test-unit test-eval test-c test-notebooks test-docker-smoke
 
 help:
 	@echo "PufferDrive test targets:"
 	@echo ""
-	@echo "  make test               Run the local suites (unit + C + notebooks),"
+	@echo "  make test               Run the local suites (unit + eval + C + notebooks),"
 	@echo "                          fail-fast. Rebuilds the C extension first if any"
 	@echo "                          .c/.h changed; installs test deps if missing."
 	@echo "  make rebuild            Force-rebuild the C extension unconditionally"
 	@echo ""
 	@echo "  make test-unit          Python unit tests (tests/unit_tests)"
+	@echo "  make test-eval          Evaluation integration tests (tests/eval)"
 	@echo "  make test-c             C sim tests (tests/drive: dynamics, geometry, IDM, ...)"
 	@echo "  make test-notebooks     Execute every checked-in notebook end-to-end"
 	@echo ""
@@ -29,10 +30,10 @@ help:
 $(BINDING): $(DRIVE_SOURCES)
 	$(PYTHON) setup.py build_ext --inplace --force
 
-# Local suites, fast-failing first: Python unit tests, C sim tests,
+# Local suites, fast-failing first: Python unit tests, eval integration, C sim tests,
 # then the notebook executions (slowest). The
 # Docker smoke suite stays opt-in — it needs a Docker daemon.
-test: test-unit test-c test-notebooks
+test: test-unit test-eval test-c test-notebooks
 
 rebuild:
 	$(PYTHON) setup.py build_ext --inplace --force
@@ -44,6 +45,9 @@ ensure-test-deps:
 
 test-unit: $(BINDING)
 	$(PYTHON) -m pytest -v tests/unit_tests
+
+test-eval: $(BINDING)
+	$(PYTHON) -m pytest -v tests/eval
 
 test-c:
 	$(MAKE) -C tests/drive test

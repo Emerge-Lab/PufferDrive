@@ -40,6 +40,10 @@ jobs:
       - name: Unit tests
         run: python -m pytest -v tests/unit_tests
 
+      - name: Evaluation integration tests
+        run: python -m pytest -v tests/eval
+        timeout-minutes: 15
+
   c-drive-tests:
     name: C Drive Tests
     runs-on: ubuntu-latest
