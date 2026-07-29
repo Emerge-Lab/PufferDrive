@@ -7,7 +7,7 @@
 static int test_obs_reward_done_parity_cache_on_vs_off(void) {
     const int steps = 20;
     srand(12345);
-    Drive off = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive off = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int obs_count = off.active_agent_count * compute_observation_size(&off);
     int agent_count = off.active_agent_count;
     float *obs_log = (float *) malloc(steps * obs_count * sizeof(float));
@@ -26,7 +26,7 @@ static int test_obs_reward_done_parity_cache_on_vs_off(void) {
     free_allocated(&off);
 
     srand(12345);
-    Drive on = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 1);
+    Drive on = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 1);
     EXPECT_EQ_INT(on.active_agent_count, agent_count);
     EXPECT_EQ_INT(on.active_agent_count * compute_observation_size(&on), obs_count);
     for (int t = 0; t < steps; t++) {
@@ -51,7 +51,7 @@ static int close_order_case(const int *order) {
     srand(9);
     Drive envs[3];
     for (int i = 0; i < 3; i++) {
-        envs[i] = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 1);
+        envs[i] = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 1);
         drive_set_neutral_actions(&envs[i]);
         c_step(&envs[i]);
     }
@@ -81,7 +81,7 @@ static int test_multi_env_close_orderings_do_not_crash(void) {
 static int test_cache_size_bounded_by_unique_maps(void) {
     drive_map_cache_clear();
     for (int cycle = 0; cycle < 3; cycle++) {
-        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 1);
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 1);
         free_allocated(&env);
         EXPECT_EQ_INT(g_map_cache_count, 1);
         EXPECT_EQ_INT(drive_map_cache_live_count(), 0);
@@ -92,7 +92,7 @@ static int test_cache_size_bounded_by_unique_maps(void) {
 
 static int test_forked_child_can_build_and_free_its_own_entry(void) {
     drive_map_cache_clear();
-    Drive warm = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 1);
+    Drive warm = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 1);
     free_allocated(&warm);
     int parent_size_before_fork = g_map_cache_count;
     int fds[2];
@@ -101,7 +101,7 @@ static int test_forked_child_can_build_and_free_its_own_entry(void) {
     pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
-        Drive child = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 1);
+        Drive child = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 1);
         int live_after_build = drive_map_cache_live_count();
         free_allocated(&child);
         int live_after_close = drive_map_cache_live_count();

@@ -3,7 +3,7 @@
 
 static int test_metric_offroad_outside_grid(void) {
     srand(5);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 2, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 2, 0);
     int agent_idx = env.active_agent_indices[0];
     Agent *agent = &env.agents[agent_idx];
     agent->sim_x = env.grid_map->top_left_x - 1000.0f;
@@ -40,7 +40,7 @@ static int test_metric_invalid_position_resets(void) {
 
 static int test_metric_on_road_lane_alignment(void) {
     srand(7);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     int agent_idx = env.active_agent_indices[0];
     Agent *agent = &env.agents[agent_idx];
 
