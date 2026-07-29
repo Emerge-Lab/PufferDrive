@@ -1,9 +1,9 @@
 env:
   eval_mode: 1
   compute_eval_metrics: true
-  collision_behavior: 1
-  offroad_behavior: 1
-  traffic_light_behavior: 1
+  collision_behavior: stop
+  offroad_behavior: stop
+  traffic_light_behavior: stop
   dt: 0.1
   reward_randomization: false
   reward_collision: 3.0

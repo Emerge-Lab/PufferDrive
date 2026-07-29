@@ -1,6 +1,12 @@
+"""Smoke coverage from a real evaluation rollout to a rendered replay gallery."""
+
 import copy
+import json
 import os
+import struct
 import sys
+import zlib
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +20,7 @@ MAP_DIR = os.path.join(REPO_ROOT, "pufferlib", "resources", "drive", "binaries",
 SCENARIO_LENGTH = 400
 REPLAY_SEED = 1234
 DISCRETE_ACTION_COUNT = 12
+OBSERVATION_DIMENSION = 57
 MIN_REPLAY_BYTES = 1_000
 MIN_SCENARIO_HTML_BYTES = 50_000
 
@@ -62,6 +69,10 @@ def _build_eval_args():
             "num_goals": 3,
             "goal_radius": 2.0,
             "goal_source": "gt",
+            "obs_slots_partners_n": 1,
+            "obs_slots_lane_n": 1,
+            "obs_slots_boundary_n": 1,
+            "obs_slots_traffic_controls_n": 1,
             "compute_eval_metrics": True,
         }
     )
@@ -69,8 +80,15 @@ def _build_eval_args():
     return args
 
 
+def _read_replay_header(replay_path):
+    payload = zlib.decompress(Path(replay_path).read_bytes())
+    header_length = struct.unpack_from("<I", payload)[0]
+    return json.loads(payload[4 : 4 + header_length])
+
+
 @pytest.mark.parametrize("capture_observations", [False, True])
 def test_validation_replay_html_generation(tmp_path, capture_observations):
+    """A real discrete rollout produces a replay and usable HTML with optional observations."""
     assert os.path.isdir(MAP_DIR), f"Replay fixture missing: {MAP_DIR}"
     args = _build_eval_args()
     worker_env_kwargs = copy.deepcopy(args["env"])
@@ -103,6 +121,17 @@ def test_validation_replay_html_generation(tmp_path, capture_observations):
     replay_path = summaries[0]["replay_path"]
     assert os.path.isfile(replay_path)
     assert os.path.getsize(replay_path) > MIN_REPLAY_BYTES
+
+    replay_header = _read_replay_header(replay_path)
+    assert replay_header["action_type"] == "discrete"
+    assert replay_header["active_count"] == 1
+    assert replay_header["chunks"]["policy_probs"]["shape"][1:] == [1, DISCRETE_ACTION_COUNT]
+    if capture_observations:
+        assert replay_header["obs_dim"] == OBSERVATION_DIMENSION
+        assert replay_header["chunks"]["obs"]["shape"][1:] == [1, OBSERVATION_DIMENSION]
+    else:
+        assert replay_header["obs_dim"] == 0
+        assert "obs" not in replay_header["chunks"]
 
     render_dir = pufferl._render_eval_replays(summaries, str(tmp_path))
     scenario_html_paths = [

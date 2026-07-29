@@ -1,3 +1,5 @@
+"""Verify that compact C replay capture is deterministic, complete, and frame-aligned."""
+
 import os
 import pickle
 import zlib
@@ -109,6 +111,7 @@ def _extract_python_replay_frame(scenario, episode_timestep):
 
 
 def test_exact_seed_matches_after_resampling():
+    """Resampling the same evaluation seed reproduces the same scenario."""
     env = Drive(
         num_agents=1,
         min_agents_per_env=1,
@@ -168,6 +171,7 @@ def test_exact_seed_matches_after_resampling():
 
 @pytest.mark.parametrize("compute_eval_metrics", [False, True])
 def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics):
+    """The compact C replay frame matches the readable Python state."""
     env = _make_replay_drive(
         capture_replay=False,
         compute_eval_metrics=compute_eval_metrics,
@@ -175,6 +179,7 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
     )
     try:
         env.reset(seed=0)
+        observed_nonzero_puffer_metrics = False
         for episode_timestep in range(2):
             scenarios = env.get_state()
             agent_capacity = max(len(scenario["agents"] or []) for scenario in scenarios)
@@ -209,6 +214,7 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
                 bulk_frame["puffer_f32"],
                 bulk_frame["traffic_i16"],
             )
+            observed_nonzero_puffer_metrics |= bool(np.any(bulk_frame["puffer_f32"]))
             for env_idx, scenario in enumerate(scenarios):
                 expected = _extract_python_replay_frame(scenario, episode_timestep)
                 for key, expected_values in expected.items():
@@ -218,11 +224,13 @@ def test_bulk_replay_frame_matches_python_state_extraction(compute_eval_metrics)
                         expected_values = np.delete(expected_values, REMOVED_FIELD_IDX, axis=1)
                     np.testing.assert_array_equal(actual_values, expected_values)
             env.step(np.zeros_like(env.actions))
+        assert observed_nonzero_puffer_metrics == compute_eval_metrics
     finally:
         env.close()
 
 
 def test_replay_environment_capture_trims_frozen_early_termination():
+    """Early termination excludes frozen tail frames from the replay bundle."""
     env = _make_replay_drive(capture_replay=True)
     try:
         env.reset(seed=0)
