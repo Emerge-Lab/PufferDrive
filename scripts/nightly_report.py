@@ -108,51 +108,87 @@ def update_trends():
         for run in stale:
             run.delete()
 
-        for seed in sorted(by_seed):
-            trend = wandb.init(
-                entity=ENTITY,
-                project=TREND_PROJECT,
-                name=f"{project}-seed{seed}",
-                group=project,
-                tags=["trend"],
-            )
-            for night in sorted(by_seed[seed]):
-                run = by_seed[seed][night]
-                night_index = (night - NIGHT_ZERO).days
-                row = {"_timestamp": datetime.datetime.combine(night, datetime.time()).timestamp()}
-                for metric in TREND_METRICS:
-                    if metric in run.summary:
-                        row[metric] = run.summary[metric]
-                trend.log(row, step=night_index)
-                print(f"{project} seed{seed} night {night_index} ({night}): {len(row) - 1} metrics")
-            trend.finish()
+        # One aggregate trend run per project. Seeds are folded here (mean +
+        # stderr per night) rather than by panel grouping, because per-series
+        # style overrides (the "points" mark) only address ungrouped series,
+        # keyed by run id. The run id changes on every rebuild, so update()
+        # ends by rewriting the report, which re-keys the marks.
+        nights = sorted({night for seeds in by_seed.values() for night in seeds})
+        trend = wandb.init(
+            entity=ENTITY,
+            project=TREND_PROJECT,
+            name=f"{project}-mean",
+            group=project,
+            tags=["trend"],
+        )
+        for night in nights:
+            night_index = (night - NIGHT_ZERO).days
+            row = {"_timestamp": datetime.datetime.combine(night, datetime.time()).timestamp()}
+            for metric in TREND_METRICS:
+                values = [
+                    by_seed[seed][night].summary[metric]
+                    for seed in by_seed
+                    if night in by_seed[seed] and metric in by_seed[seed][night].summary
+                ]
+                if not values:
+                    continue
+                mean = sum(values) / len(values)
+                if len(values) > 1:
+                    variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+                    stderr = (variance / len(values)) ** 0.5
+                else:
+                    stderr = 0.0
+                row[metric] = mean
+                row[f"{metric}__hi"] = mean + stderr
+                row[f"{metric}__lo"] = mean - stderr
+            trend.log(row, step=night_index)
+            print(f"{project} night {night_index} ({night}): {(len(row) - 1) // 3} metrics")
+        trend.finish()
+
+
+def trend_run_id(project):
+    api = wandb.Api()
+    runs = list(api.runs(f"{ENTITY}/{TREND_PROJECT}", filters={"group": project}))
+    if len(runs) != 1:
+        raise RuntimeError(f"expected exactly one trend run for {project}, found {len(runs)}; rerun update first")
+    return runs[0].id
 
 
 def trend_section(wr, project):
+    run_id = trend_run_id(project)
     runset = wr.Runset(
         entity=ENTITY,
         project=TREND_PROJECT,
         name=f"{project} trend runs",
         filters=f'group == "{project}"',
     )
+    stderr_grey = "#b0b0b0"
     panels = [
         wr.LinePlot(
             x="_timestamp",
-            y=[m],
-            groupby="group",
-            groupby_aggfunc="mean",
-            groupby_rangefunc="stderr",
+            y=[m, f"{m}__hi", f"{m}__lo"],
             range_x=(NIGHT_ZERO_TS, None),
             title=m,
+            # "points" marks only bind to ungrouped series, keyed by run id;
+            # update() rewrites this report after every rebuild so the keys
+            # track the recreated trend run.
+            line_marks={f"{run_id}:{y}": "points" for y in (m, f"{m}__hi", f"{m}__lo")},
+            line_colors={f"{run_id}:{m}__hi": stderr_grey, f"{run_id}:{m}__lo": stderr_grey},
+            line_titles={
+                f"{run_id}:{m}": "mean",
+                f"{run_id}:{m}__hi": "+stderr",
+                f"{run_id}:{m}__lo": "-stderr",
+            },
         )
         for m in FINALS_METRICS
     ]
     return [
-        wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
+        wr.H1(f"{project}: nightly trend (mean over seeds, ±stderr points)"),
         wr.P(
             "x = the night (wall-time axis; each trend row is stamped with "
-            "its night's midnight). Trend runs live in the nightly-trends "
-            "project and are rebuilt by this script at each nightly launch."
+            "its night's midnight). Seeds are folded into mean/±stderr rows "
+            "in the nightly-trends project, rebuilt by this script at each "
+            "nightly launch; unconnected points keep skipped nights visible."
         ),
         wr.PanelGrid(runsets=[runset], panels=panels),
     ]
@@ -232,6 +268,9 @@ def main():
     args = parser.parse_args()
     if args.command == "update":
         update_trends()
+        # The rebuild gave the trend runs new ids; rewrite the report so its
+        # run-id-keyed point marks bind to the new runs.
+        make_report(create=False)
     else:
         make_report(args.create)
 
