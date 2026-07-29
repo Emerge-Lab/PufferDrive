@@ -191,7 +191,6 @@ sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_A
 print(dyn_model, tgt_type, rew_cond, n_tgt_wp)
 img = plot_observation(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -228,7 +227,6 @@ ego_features_over_time = []
 for t in range(HORIZON):
     ego, *_ = unpack_obs(
         buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0],
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -278,7 +276,6 @@ sample_t = min(50, HORIZON - 1)
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -466,7 +463,6 @@ def unpack_all_timesteps(bufs, agent_idx):
         ob = bufs["obs"][t : t + 1, agent_idx : agent_idx + 1][0]
         ego, tgt, part, lane, bnd, tfc = unpack_obs(
             ob,
-            goal_regen_mode=tgt_type,
             reward_conditioning=rew_cond,
             num_goals=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
@@ -544,7 +540,6 @@ for t in range(HORIZON):
     ob = buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
     _, _, part, _, _, _ = unpack_obs(
         ob,
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -572,7 +567,6 @@ plt.show()
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,

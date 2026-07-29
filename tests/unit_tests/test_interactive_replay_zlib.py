@@ -83,8 +83,23 @@ def test_standard_replay_zlib_round_trip_and_html_render(tmp_path, monkeypatch):
     assert "if (isActive) return VEHICLE_COLORS" in html
     assert "return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;" in html
     assert 'stopped ? "red"' not in html
+    assert "inferLegacyDynamicAgents" not in html
+    assert "road_width_to_position" not in html
+    assert 'id="meta-obs-road"' not in html
 
     payload = zlib.decompress(compressed_payload)
     header_length = struct.unpack_from("<I", payload)[0]
     header = json.loads(payload[4 : 4 + header_length])
     assert header["expert_indices"] == [1]
+    for unused_metadata_key in (
+        "goal_regen_mode",
+        "active_indices",
+        "has_obs",
+        "obs_slots_lane_n",
+        "obs_slots_boundary_n",
+        "obs_dropout_lane",
+        "obs_dropout_boundary",
+        "obs_lane_stride",
+        "obs_boundary_stride",
+    ):
+        assert unused_metadata_key not in header

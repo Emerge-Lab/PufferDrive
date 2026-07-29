@@ -45,6 +45,7 @@ def test_gallery_index_builds_inclusive_failure_filters(tmp_path):
     pufferlib.viz.build_gallery_index(tmp_path, file_metrics=file_metrics)
 
     index_html = (tmp_path / "index.html").read_text()
+    assert 'id="failureFilters"' not in index_html
     assert 'data-filter="all"' in index_html
     assert 'data-filter="offroad"' in index_html
     assert 'data-filter="collision"' in index_html
@@ -74,7 +75,8 @@ def test_gallery_index_builds_inclusive_failure_filters(tmp_path):
     ) in index_html
     assert 'data-offroad="false" data-collision="false" data-atfault="false" data-redlight="false"' in index_html
     assert "const allOptions = Array.from(select.options);" in index_html
-    assert "allOptions.filter(optionMatchesActiveFilter).sort(compareOptions)" in index_html
+    assert "const matchingOptions = allOptions.filter(optionMatchesActiveFilter);" in index_html
+    assert "compareOptions" not in index_html
     assert "const nextIndex = select.selectedIndex + direction;" in index_html
     assert '<main class="replay-stage">' in index_html
     assert 'id="currentReplayName"' in index_html

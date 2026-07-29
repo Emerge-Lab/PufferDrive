@@ -1,10 +1,5 @@
 """Bird's Eye View visualization for PufferDrive scenarios using Matplotlib."""
 
-import dataclasses
-from typing import Optional, Tuple
-
-
-import re
 import matplotlib.figure
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -27,9 +22,6 @@ COLORS = {
     "road_line": "#808080",
     "road_edge": "#000000",
     "lane": "#D3D3D3",
-    "crosswalk": "#E6C200",
-    "speed_bump": "#C90000",
-    "stop_sign": "#FF0000",
     "inactive_agent": "#808080",
     "background": "#F5F5F5",
 }
@@ -85,41 +77,21 @@ METRIC_LABELS = [
 ]
 
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+SIMULATOR_FIGSIZE = (20.0, 20.0)
+SIMULATOR_DPI = 100
+SIMULATOR_GOAL_RADIUS_METERS = 2.0
+SIMULATOR_DEFAULT_RADIUS_METERS = 100.0
 
 
-@dataclasses.dataclass
-class VizConfig:
-    """Visualization config using radius and center for view bounds."""
-
-    center: Optional[Tuple[float, float]] = None
-    radius: Optional[float] = None
-    figsize: Tuple[float, float] = (20.0, 20.0)
-    dpi: int = 100
-    show_agent_id: bool = True
-    show_goal: bool = True
-    goal_radius: float = 2.0
-
-    def get_bounds(self, scenario) -> Tuple[float, float, float, float]:
-        map_corners = scenario.get("map_corners")
-
-        if self.center is not None:
-            cx, cy = self.center
-        elif map_corners and len(map_corners) >= 4:
-            cx, cy = (map_corners[0] + map_corners[2]) / 2, (map_corners[1] + map_corners[3]) / 2
-        else:
-            cx, cy = 0.0, 0.0
-
-        if self.radius is not None:
-            r = self.radius
-        elif map_corners and len(map_corners) >= 4:
-            r = max(map_corners[2] - map_corners[0], map_corners[3] - map_corners[1]) / 2 * 1.02
-        else:
-            r = 100.0
-        return (cx - r, cx + r, cy - r, cy + r)
-
-
-def get_agent_color(agent_id, is_active=True):
-    return COLORS["inactive_agent"] if not is_active else VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)]
+def _get_bounds(scenario):
+    map_corners = scenario.get("map_corners")
+    if map_corners and len(map_corners) >= 4:
+        center_x = (map_corners[0] + map_corners[2]) / 2
+        center_y = (map_corners[1] + map_corners[3]) / 2
+        radius = max(map_corners[2] - map_corners[0], map_corners[3] - map_corners[1]) / 2 * 1.02
+        return (center_x - radius, center_x + radius, center_y - radius, center_y + radius)
+    radius = SIMULATOR_DEFAULT_RADIUS_METERS
+    return (-radius, radius, -radius, radius)
 
 
 def _traffic_control_kind(control_type):
@@ -137,10 +109,6 @@ def _traffic_light_color(state):
     return TRAFFIC_LIGHT_COLORS.get(int(state), COLORS["inactive_agent"])
 
 
-def _scale_ratio(numerator, denominator, default=1.0):
-    return default if denominator == 0 else float(numerator) / float(denominator)
-
-
 def _obs_scales(
     env_cfg=None,
     obs_norm_goal_offset_m=100.0,
@@ -148,7 +116,6 @@ def _obs_scales(
     obs_norm_veh_width_m=10.0,
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
 ):
     env_cfg = env_cfg or {}
     obs_norm_goal_offset_m = float(env_cfg.get("obs_norm_goal_offset_m", obs_norm_goal_offset_m))
@@ -156,27 +123,14 @@ def _obs_scales(
     obs_norm_veh_width_m = float(env_cfg.get("obs_norm_veh_width_m", obs_norm_veh_width_m))
     obs_norm_veh_length_m = float(env_cfg.get("obs_norm_veh_length_m", obs_norm_veh_length_m))
     obs_norm_road_seg_length_m = float(env_cfg.get("obs_norm_road_seg_length_m", obs_norm_road_seg_length_m))
-    obs_norm_road_seg_width_m = float(env_cfg.get("obs_norm_road_seg_width_m", obs_norm_road_seg_width_m))
+    inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
     return {
         "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
-        "obs_norm_xy_offset_m": obs_norm_xy_offset_m,
-        "veh_width_to_position": _scale_ratio(obs_norm_veh_width_m, obs_norm_xy_offset_m),
-        "veh_len_to_position": _scale_ratio(obs_norm_veh_length_m, obs_norm_xy_offset_m),
-        "goal_to_position": _scale_ratio(obs_norm_goal_offset_m, obs_norm_xy_offset_m),
-        "road_length_to_position": _scale_ratio(obs_norm_road_seg_length_m, obs_norm_xy_offset_m),
-        "road_width_to_position": _scale_ratio(obs_norm_road_seg_width_m, obs_norm_xy_offset_m),
+        "veh_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_width_m * inverse_xy_scale,
+        "veh_len_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_length_m * inverse_xy_scale,
+        "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
+        "road_length_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_length_m * inverse_xy_scale,
     }
-
-
-def _init_fig_ax(config: VizConfig):
-    fig, ax_main = plt.subplots()
-    fig.set_size_inches(config.figsize)
-
-    fig.set_dpi(config.dpi)
-    fig.set_facecolor(COLORS["background"])
-    ax_main.set_facecolor(COLORS["background"])
-
-    return fig, ax_main
 
 
 def _build_road_data(road_elements):
@@ -289,7 +243,7 @@ def _render_traffic(ax, traffic_data, timestep):
         )
 
 
-def _render_agents(ax, agents, active_indices, static_indices, config, px_per_meter):
+def _render_agents(ax, agents, active_indices, static_indices, px_per_meter):
     if not agents:
         return
     active_set, static_set = set(active_indices or []), set(static_indices or [])
@@ -318,7 +272,7 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
         agent_type = agent.get("type", 1)
         agent_id = agent.get("id", idx)
         is_active = idx in active_set
-        color = get_agent_color(agent_id, is_active)
+        color = VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)] if is_active else COLORS["inactive_agent"]
         edge = "black" if is_active else COLORS["inactive_agent"]
 
         if agent_type == 1:
@@ -335,10 +289,9 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
             vehicle_colors.append(color)
             vehicle_edges.append(edge)
 
-            if config.show_agent_id:
-                text_items.append((x, y + width, str(agent_id)))
+            text_items.append((x, y + width, str(agent_id)))
 
-            if config.show_goal and is_active:
+            if is_active:
                 gx, gy = agent.get("current_goal_x"), agent.get("current_goal_y")
                 if gx is not None and gy is not None:
                     goal_points.append((gx, gy))
@@ -442,7 +395,7 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
     if goal_points:
         gx, gy = zip(*goal_points)
         ax.scatter(gx, gy, s=20, c=goal_colors, marker="o", zorder=13)
-        goal_patches = [Circle((x, y), radius=config.goal_radius) for x, y in goal_points]
+        goal_patches = [Circle((x, y), radius=SIMULATOR_GOAL_RADIUS_METERS) for x, y in goal_points]
         ax.add_collection(
             PatchCollection(
                 goal_patches,
@@ -462,22 +415,22 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
 
 def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
     """Render simulator state to RGB image array."""
-    vis_config = VizConfig()
-    map_data = {
-        "map_name": scenario.get("map_name"),
-        "road": _build_road_data(scenario.get("road_elements", [])),
-        "traffic": _build_traffic_data(scenario.get("traffic_elements", [])),
-    }
+    road_data = _build_road_data(scenario.get("road_elements", []))
+    traffic_data = _build_traffic_data(scenario.get("traffic_elements", []))
 
-    bounds = vis_config.get_bounds(scenario)
+    bounds = _get_bounds(scenario)
     x_min, x_max, y_min, y_max = bounds
 
     px_per_meter = min(
-        vis_config.figsize[0] * vis_config.dpi / (x_max - x_min),
-        vis_config.figsize[1] * vis_config.dpi / (y_max - y_min),
+        SIMULATOR_FIGSIZE[0] * SIMULATOR_DPI / (x_max - x_min),
+        SIMULATOR_FIGSIZE[1] * SIMULATOR_DPI / (y_max - y_min),
     )
 
-    fig, ax = _init_fig_ax(vis_config)
+    fig, ax = plt.subplots()
+    fig.set_size_inches(SIMULATOR_FIGSIZE)
+    fig.set_dpi(SIMULATOR_DPI)
+    fig.set_facecolor(COLORS["background"])
+    ax.set_facecolor(COLORS["background"])
 
     ax.set_aspect("equal")
     ax.set_title(
@@ -486,15 +439,14 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
         fontweight="bold",
     )
 
-    _render_roads(ax, map_data.get("road"))
-    _render_traffic(ax, map_data.get("traffic"), timestep)
+    _render_roads(ax, road_data)
+    _render_traffic(ax, traffic_data, timestep)
 
     _render_agents(
         ax,
         scenario.get("agents", []),
         scenario.get("active_agent_indices", []),
         scenario.get("static_agent_indices", []),
-        vis_config,
         px_per_meter,
     )
 
@@ -504,19 +456,17 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
     return _img_from_fig(fig)
 
 
-def _img_from_fig(fig: matplotlib.figure.Figure, close: bool = True) -> np.ndarray:
+def _img_from_fig(fig: matplotlib.figure.Figure) -> np.ndarray:
     fig.subplots_adjust(left=0.01, bottom=0.02, right=1.00, top=0.96)
     fig.canvas.draw()
     data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
     img = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
-    if close:
-        plt.close(fig)
+    plt.close(fig)
     return img
 
 
 def unpack_obs(
     obs_flat,
-    goal_regen_mode: str = "finite",
     reward_conditioning: bool = False,
     num_goals: int = 5,
     obs_slots_partners_n: int = 16,
@@ -537,9 +487,6 @@ def unpack_obs(
     obs_flat = np.asarray(obs_flat)
     if obs_flat.ndim == 1:
         obs_flat = obs_flat[None, :]
-
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
 
     ego_dim = binding.EGO_FEATURES
 
@@ -609,7 +556,6 @@ def unpack_obs(
 
 def plot_observation(
     obs,
-    goal_regen_mode="finite",
     reward_conditioning=False,
     num_goals=10,
     obs_slots_partners_n=16,
@@ -627,22 +573,16 @@ def plot_observation(
     obs_norm_veh_width_m=10.0,
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
     Args:
         obs: flattened observation tensor
-        goal_regen_mode: "finite" or "rolling"
     """
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
-
     fig, ax = plt.subplots(figsize=(20, 20))
 
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
-        goal_regen_mode=goal_regen_mode,
         reward_conditioning=reward_conditioning,
         num_goals=num_goals,
         obs_slots_partners_n=obs_slots_partners_n,
@@ -659,7 +599,6 @@ def plot_observation(
         obs_norm_veh_width_m=obs_norm_veh_width_m,
         obs_norm_veh_length_m=obs_norm_veh_length_m,
         obs_norm_road_seg_length_m=obs_norm_road_seg_length_m,
-        obs_norm_road_seg_width_m=obs_norm_road_seg_width_m,
     )
     target_position_scale = scales["goal_to_position"]
 
@@ -746,14 +685,13 @@ def plot_observation(
 
     # Road elements
     rl2p = scales["road_length_to_position"]
-    rw2p = scales["road_width_to_position"]
     count_lane = 0
     for i in range(lane_obs.shape[0]):
         if np.all(lane_obs[i] == 0):
             continue
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
-        length, width = lane_obs[i][3] * rl2p, lane_obs[i][4] * rw2p
+        length = lane_obs[i][3] * rl2p
         dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
         # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
         color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
@@ -772,7 +710,7 @@ def plot_observation(
             continue
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
-        length, width = boundary_obs[i][3] * rl2p, boundary_obs[i][4] * rw2p
+        length = boundary_obs[i][3] * rl2p
         dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -984,15 +922,9 @@ def encode_interactive_replay(scenario, replay):
         ghost[:n, slot, 4] = np.where(lv[window] == 0, 0.0, width) if lv.shape[0] >= init_step + n else width
     chunks["ghost_f32"] = ghost
 
-    goal_regen_mode = scenario.get("goal_regen_mode", env_cfg.get("goal_regen_mode", "finite"))
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
-
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
-        "goal_regen_mode": goal_regen_mode,
-        "active_indices": scenario.get("active_agent_indices", []),
         "expert_indices": expert_indices,
         "total_agents": int(scenario.get("num_total_agents", replay["agent_f32"].shape[1])),
         "eval_overrides": replay.get("eval_overrides") or {},
@@ -1001,7 +933,6 @@ def encode_interactive_replay(scenario, replay):
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
-        "has_obs": replay.get("obs") is not None,
         "obs_scale": observation_scale,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
@@ -1016,12 +947,6 @@ def encode_interactive_replay(scenario, replay):
         "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
-        "obs_slots_lane_n": int(env_cfg["obs_slots_lane_n"]),
-        "obs_slots_boundary_n": int(env_cfg["obs_slots_boundary_n"]),
-        "obs_dropout_lane": float(env_cfg.get("obs_dropout_lane", 0.0)),
-        "obs_dropout_boundary": float(env_cfg.get("obs_dropout_boundary", 0.0)),
-        "obs_lane_stride": int(env_cfg.get("obs_lane_stride", 1)),
-        "obs_boundary_stride": int(env_cfg.get("obs_boundary_stride", 1)),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
         "goal_features": int(binding.GOAL_FEATURES),
         "scales": scales,
@@ -1044,7 +969,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         :root {
             --bg:#e9ebee; --surface:rgba(255,255,255,.92); --surface-solid:#ffffff; --border:#dcdfe5;
             --text:#181b20; --muted:#6c7484; --field:rgba(108,116,132,.07);
-            --accent:#0a66d0; --accent-soft:rgba(10,102,208,.12); --danger:#d6202c;
+            --accent:#0a66d0; --danger:#d6202c;
             --road:#c6cad1; --line:#959ca8; --edge:#2a2e35;
             --shadow:0 1px 2px rgba(22,26,34,.05),0 10px 30px rgba(22,26,34,.10);
             --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -1052,7 +977,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         [data-theme="dark"] {
             --bg:#0d0f12; --surface:rgba(23,26,31,.92); --surface-solid:#171a1f; --border:#2a2f37;
             --text:#e9ebef; --muted:#8c94a4; --field:rgba(140,148,164,.08);
-            --accent:#4d9fff; --accent-soft:rgba(77,159,255,.16); --danger:#ff5560;
+            --accent:#4d9fff; --danger:#ff5560;
             --road:#363b43; --line:#5d6573; --edge:#06070a;
             --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 34px rgba(0,0,0,.55);
         }
@@ -1070,7 +995,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
         .dim { color:var(--muted); }
         .highlight { color:var(--accent); }
-        .link { color:var(--accent); cursor:pointer; }
         button, select, input { font:inherit; color:inherit; }
         .btn { border:1px solid var(--border); border-radius:7px; padding:6px 12px; background:var(--surface-solid); color:var(--text); font-size:12px; font-weight:600; cursor:pointer; }
         .btn:hover { border-color:var(--accent); color:var(--accent); }
@@ -1085,7 +1009,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         #overrides-body { grid-template-columns:1fr; max-height:34vh; overflow-y:auto; }
         #overrides-body .num { font-size:10px; overflow-wrap:anywhere; text-align:right; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
-        #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; --accent-soft:rgba(124,188,255,.25); position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
+        #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
         #tel-drag-handle { display:flex; align-items:center; gap:6px; }
         .cam-chip { margin-left:auto; padding:2px 8px; border:1px solid var(--border); border-radius:10px; background:transparent; color:var(--muted); font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
@@ -1131,7 +1055,6 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Agents (active / total)</div><div class="value mono" id="meta-agents">-</div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
             <div id="overrides-body" class="grid toggle-body is-collapsed"></div>
-            <div class="label">Obs Road</div><div class="value" id="meta-obs-road">-</div>
             <button class="btn" onclick="toggleTheme()" style="width:100%; margin-top:12px">Toggle theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
@@ -1178,7 +1101,6 @@ __PAYLOAD_CHUNKS__
         const STATIC_AGENT_COLOR = "#4a505a";
         const INFRACTION_AGENT_COLOR = "#d92d20";
         const INFRACTION_METRIC_COUNT = 4;
-        const LEGACY_DYNAMIC_DISTANCE_SQ = 0.01;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
@@ -1289,9 +1211,7 @@ self.onmessage = async event => {
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
-            expertAgentIndices = Array.isArray(H.expert_indices)
-                ? new Set(H.expert_indices)
-                : inferLegacyDynamicAgents();
+            expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
@@ -1319,24 +1239,6 @@ self.onmessage = async event => {
                 for (let j=1;j<len;j++) path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
                 p += len;
             }
-        }
-        function inferLegacyDynamicAgents() {
-            const dynamicAgentIndices = new Set();
-            for (let agentIdx=0;agentIdx<H.agent_cap;agentIdx++) {
-                let referenceX = null, referenceY = null;
-                for (let frame=0;frame<H.frames;frame++) {
-                    const intBase = (frame * H.agent_cap + agentIdx) * F.ai;
-                    if (!C.agent_i32[intBase+2]) continue;
-                    const floatBase = (frame * H.agent_cap + agentIdx) * F.af;
-                    const x = C.agent_f32[floatBase], y = C.agent_f32[floatBase+1];
-                    if (referenceX === null) { referenceX = x; referenceY = y; continue; }
-                    const deltaX = x - referenceX, deltaY = y - referenceY;
-                    if (deltaX*deltaX + deltaY*deltaY <= LEGACY_DYNAMIC_DISTANCE_SQ) continue;
-                    dynamicAgentIndices.add(agentIdx);
-                    break;
-                }
-            }
-            return dynamicAgentIndices;
         }
         function colorFor(id, isActive, isExpert) {
             if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
@@ -1385,7 +1287,7 @@ self.onmessage = async event => {
             const isExpert = expertAgentIndices.has(idx);
             const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
             const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, isActive:isActive, isExpert:isExpert, hasInfraction:hasInfraction, stopped:C.agent_i32[ib+4], removed:C.agent_i32[ib+5], cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1462,7 +1364,7 @@ self.onmessage = async event => {
                 for (let j=0;j<H.goal_features;j++) if (obs[o+j] !== 0) empty = false;
                 if (empty) continue;
                 const rx = obs[o] * scale, ry = obs[o+1] * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
-                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch, i:i});
+                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch});
             }
             return out;
         }
@@ -1478,27 +1380,27 @@ self.onmessage = async event => {
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,obs[o+4]*Q*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,s:obs[o+7]*Q,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{s:obs[egoStart]*Q,w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position,st:obs[egoStart+3]*Q,al:obs[egoStart+4]*Q,alat:obs[egoStart+5]*Q}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            return {ego:{w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
             resizeObsCanvas();
             const scale = (Math.min(obsC.width, obsC.height) / 2) * obsZoom, px = dpr / scale;
             const showAll = obsMode !== 1, showPool = obsMode !== 0, bothMode = obsMode === 2;
             let poolMax = 1;
-            for(const r of frame.lanes) if(r[6] > poolMax) poolMax = r[6];
-            for(const r of frame.bounds) if(r[6] > poolMax) poolMax = r[6];
+            for(const r of frame.lanes) if(r[5] > poolMax) poolMax = r[5];
+            for(const r of frame.bounds) if(r[5] > poolMax) poolMax = r[5];
             for(const p of frame.partners) if(p.pool > poolMax) poolMax = p.pool;
             for(const t of frame.traffic_controls) if(t.pool > poolMax) poolMax = t.pool;
             const pw = t => (2.0 + 2.4*t)*px;
             obsCtx.fillStyle = "#fff"; obsCtx.fillRect(0,0,obsC.width,obsC.height);
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
-            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[6] > 0){ obsCtx.strokeStyle=poolColor(r[6]/poolMax); obsCtx.lineWidth=pw(r[6]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } } }
+            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
+            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
+            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=poolColor(r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
             for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700")); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
@@ -1649,12 +1551,6 @@ def render_interactive_replay_zlib(replay_path, filename):
     _render_interactive_replay_payload(compressed_payload, filename)
 
 
-def generate_interactive_replay(scenario, replay, filename="replay.html"):
-    compressed_payload = encode_interactive_replay(scenario, replay)
-    _render_interactive_replay_payload(compressed_payload, filename)
-    return compressed_payload
-
-
 def build_gallery_index(folder_path=".", file_metrics=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
@@ -1692,9 +1588,6 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             filter_key: metrics.get(metric_key, 0) > 0 for filter_key, metric_key, _ in FAILURE_FILTERS
         }
 
-    def make_label(filename):
-        return filename.removesuffix(".html")
-
     options_html = "\n".join(
         (
             f'<option value="{filename}" data-name="{filename}" '
@@ -1703,7 +1596,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
                 for filter_key, _, _ in FAILURE_FILTERS
             )
             + ">"
-            f"{make_label(filename)}</option>"
+            f"{filename.removesuffix('.html')}</option>"
         )
         for filename in files
     )
@@ -1725,7 +1618,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         )
         category_filter_ui = (
             '<nav class="category-bar" aria-label="Replay category">'
-            '<div id="failureFilters" class="category-filters" role="group" '
+            '<div class="category-filters" role="group" '
             'aria-label="Replay category">'
             '<button class="filter-button category-button is-active" type="button" '
             'data-filter="all" aria-pressed="true">'
@@ -2199,10 +2092,6 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             return option.dataset[activeFilter] === 'true';
         }
 
-        function compareOptions(firstOption, secondOption) {
-            return firstOption.dataset.name.localeCompare(secondOption.dataset.name);
-        }
-
         function addFailureBadge(label, failureClass) {
             const badge = document.createElement('span');
             badge.className = `scenario-badge ${failureClass}`;
@@ -2256,7 +2145,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
 
         function renderOptions(loadReplay) {
             const currentFilename = select.value;
-            const matchingOptions = allOptions.filter(optionMatchesActiveFilter).sort(compareOptions);
+            const matchingOptions = allOptions.filter(optionMatchesActiveFilter);
             select.replaceChildren(...matchingOptions);
 
             const currentOption = matchingOptions.find(option => option.value === currentFilename);
