@@ -178,13 +178,23 @@ static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;
 
+
+// These are the values used in the action discretization of the GIGAFLOW models. Potentially we might need to tune them for real car deployments.
+// The limits should be set such that the model is forced to drive comfortably while still being able to control the car sufficiently as to drive well.
+// The MIN limit for longetudinal (break) is much lower, such that the car can execute uncomfortable breaking behaviors in order to avoid collisions.
 // Jerk action space (for JERK dynamics model)
-static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
-static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+#define NUM_JERK_LONG_ACTIONS 4
+#define NUM_JERK_LAT_ACTIONS 3
+static const float JERK_LONG[NUM_JERK_LONG_ACTIONS] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
 
 // Classic action space (for CLASSIC dynamics model)
-static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
-static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
+#define NUM_ACCELERATION_ACTIONS 7
+#define NUM_STEERING_ACTIONS 9
+static const float ACCELERATION_VALUES[NUM_ACCELERATION_ACTIONS]
+    = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
+static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
+    = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
 
 typedef struct Drive Drive;
 typedef struct Client Client;
@@ -5097,7 +5107,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             j_long = JERK_LONG[0]; // max braking jerk
             j_lat = 0.0f;
         }
-
         // Get dynamic conditioning coefficients
         float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
         float c_steer = agent->reward_coefs[REWARD_COEF_STEER];
