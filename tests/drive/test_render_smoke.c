@@ -4,7 +4,7 @@
 static int test_render_default_frame(void) {
     srand(13);
     SetTraceLogLevel(LOG_WARNING);
-    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
     env.render_mode = RENDER_WINDOW;
     allocate(&env);
     c_reset(&env);

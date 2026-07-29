@@ -1422,7 +1422,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
     EndMode3D();
 
     // Draw track indices for the tracks to predict
-    if (mode == 1 && env->control_mode == CONTROL_WOSAC) {
+    if (mode == 1 && env->control_mode == CONTROL_MODE_WOSAC) {
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
