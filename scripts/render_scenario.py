@@ -167,8 +167,8 @@ def main():
         env_overrides["max_agents_per_env"] = num_agents
     elif cli.simulation_mode == "replay":
         # Don't stop the SDC for offroad/collision so the full trajectory renders
-        env_overrides["offroad_behavior"] = 0
-        env_overrides["collision_behavior"] = 0
+        env_overrides["offroad_behavior"] = "ignore"
+        env_overrides["collision_behavior"] = "ignore"
         env_overrides["scenario_length"] = steps
         env_overrides["resample_frequency"] = steps
 

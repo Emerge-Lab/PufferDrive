@@ -645,7 +645,7 @@ def plot_observation(
         s = 200 if i == 0 else 80
         ax.scatter(wp_x, wp_y, color=color, marker=marker, s=s, zorder=15)
 
-    # Add dynamics info text for JERK model
+    # Add dynamics info text for DYNAMICS_MODEL_JERK model
     ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
     ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {accel_long:.2f}\naccel_lat: {accel_lat:.2f}"

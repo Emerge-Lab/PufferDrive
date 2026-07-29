@@ -1616,7 +1616,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "min_agents_per_env must be <= max_agents_per_env");
         return NULL;
     }
-    if (simulation_mode == SIMULATION_GIGAFLOW && num_agents < min_agents_per_env) {
+    if (simulation_mode == SIMULATION_MODE_GIGAFLOW && num_agents < min_agents_per_env) {
         PyErr_SetString(PyExc_ValueError, "num_agents must be >= min_agents_per_env");
         return NULL;
     }
@@ -1624,7 +1624,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     srand(seed);
 
     // GIGAFLOW mode: use random sampling for agent counts per env
-    if (simulation_mode == SIMULATION_GIGAFLOW) {
+    if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         if (eval_mode) {
             // Eval mode: fixed agent count, sequential map cycling
             int agents_per_env = max_agents_per_env;

@@ -74,7 +74,7 @@ static int test_map_goal_source_no_attrition(void) {
     // Map source used to remove any agent whose single seed draw dead-ended, permanently
     // for the env lifetime. With the fresh-cell retry, every active agent spawns.
     srand(7);
-    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     env.goal_source = GOAL_SOURCE_MAP;
     allocate(&env);
     c_reset(&env);
@@ -93,7 +93,7 @@ static int test_map_goals_carry_lane_and_track_slot_zero(void) {
     // feature can look them up; a -1 there would silently zero-fill it. current_goal_idx front-aligns
     // at 0 and the current_goal_* alias must mirror slot 0.
     srand(3);
-    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     env.goal_source = GOAL_SOURCE_MAP;
     allocate(&env);
     c_reset(&env);
@@ -121,7 +121,7 @@ static int test_route_goals_full_set_or_removed(void) {
     // The route path front-aligns the full num_goals set or (after a route retry) removes the
     // agent; it must never leave a live agent with a partial set.
     srand(5);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     for (int i = 0; i < env.active_agent_count; i++) {
         Agent *agent = &env.agents[env.active_agent_indices[i]];
         EXPECT_TRUE(agent->removed || agent->goal_count == env.num_goals);
@@ -133,7 +133,7 @@ static int test_route_goals_full_set_or_removed(void) {
 static int test_route_goals_front_aligned_with_lanes(void) {
     // Every live route agent front-aligns a full, lane-tagged, finite goal set with the alias on slot 0.
     srand(11);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int checked = 0;
     for (int i = 0; i < env.active_agent_count; i++) {
         Agent *agent = &env.agents[env.active_agent_indices[i]];
@@ -164,7 +164,7 @@ static int test_roll_goals_slides_window_and_appends(void) {
     // Rolling regen drops the reached goal, shifts every later goal one slot toward the front, and
     // appends a fresh frontier goal in the last slot while keeping current_goal_idx pinned to 0.
     srand(13);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 32, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int rolled = 0;
     for (int i = 0; i < env.active_agent_count && rolled == 0; i++) {
         Agent *agent = &env.agents[env.active_agent_indices[i]];
@@ -223,7 +223,7 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     // = -1, so no GPS lane-distance) and every coordinate is finite. current_goal_idx starts at 0 but
     // may already have advanced if the agent spawns inside the first goal's radius (metrics run in reset).
     srand(17);
-    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_REPLAY, 1, 0);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
     env.goal_source = GOAL_SOURCE_GT;
     allocate(&env);
     c_reset(&env);

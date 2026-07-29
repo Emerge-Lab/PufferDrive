@@ -3,9 +3,9 @@
 
 static int test_classic_action_clipping(void) {
     srand(19);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     env.action_type = 1;
-    env.dynamics_model = CLASSIC;
+    env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     Agent *agent = &env.agents[env.active_agent_indices[0]];
     agent->sim_speed_signed = MAX_SPEED * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
@@ -20,9 +20,9 @@ static int test_classic_action_clipping(void) {
 
 static int test_jerk_action_clipping(void) {
     srand(23);
-    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     env.action_type = 1;
-    env.dynamics_model = JERK;
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
     Agent *agent = &env.agents[env.active_agent_indices[0]];
     agent->sim_speed_signed = MAX_SPEED * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
@@ -70,9 +70,9 @@ static int test_dynamics_removed_agent_invalidated(void) {
 
 static int test_neutral_actions_zero_out(void) {
     {
-        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
         env.action_type = 0;
-        env.dynamics_model = CLASSIC;
+        env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
         drive_set_neutral_actions(&env);
         int action_val = ((int *) env.actions)[0];
         int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
@@ -83,9 +83,9 @@ static int test_neutral_actions_zero_out(void) {
         free_allocated(&env);
     }
     {
-        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+        Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
         env.action_type = 0;
-        env.dynamics_model = JERK;
+        env.dynamics_model = DYNAMICS_MODEL_JERK;
         drive_set_neutral_actions(&env);
         int action_val = ((int *) env.actions)[0];
         int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);

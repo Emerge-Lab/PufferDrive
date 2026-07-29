@@ -35,20 +35,20 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
 }
 
 static int test_carla_gigaflow_load_step_log(void) {
-    return run_case("carla-gigaflow", drive_carla_map(), SIMULATION_GIGAFLOW, 32);
+    return run_case("carla-gigaflow", drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32);
 }
 
 static int test_nuplan_gigaflow_load_step_log(void) {
-    return run_case("nuplan-gigaflow", drive_nuplan_map(), SIMULATION_GIGAFLOW, 32);
+    return run_case("nuplan-gigaflow", drive_nuplan_map(), SIMULATION_MODE_GIGAFLOW, 32);
 }
 
 static int test_nuplan_replay_load_step_log(void) {
-    return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_REPLAY, 1);
+    return run_case("nuplan-replay", drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1);
 }
 
 static int test_truncation_and_episode_log(void) {
     srand(11);
-    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 8, 0);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 8, 0);
     env.scenario_length = 3;
     allocate(&env);
     c_reset(&env);
