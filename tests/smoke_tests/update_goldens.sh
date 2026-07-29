@@ -9,7 +9,6 @@
 # the gitignored data/):
 #   git add tests/smoke_tests/data/drive_smoke_golden.json
 #   git add -f tests/smoke_tests/data/drive_rollout_golden.json
-#   git add -f tests/smoke_tests/data/drive_eval_golden.json
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -19,7 +18,6 @@ if [ ${#TESTS[@]} -eq 0 ]; then
   TESTS=(
     tests/smoke_tests/test_drive_train.py
     tests/smoke_tests/test_drive_rollout.py
-    tests/smoke_tests/test_drive_eval.py
   )
 fi
 

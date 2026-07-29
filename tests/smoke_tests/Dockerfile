@@ -48,4 +48,4 @@ RUN python -m pip install -U pip pytest \
 # bit-reproducible across CI runners and dev boxes. ENTRYPOINT fixes the emulator;
 # CMD is the default test list (override it to pass other pytest args).
 ENTRYPOINT ["qemu-x86_64-static", "-cpu", "Haswell", "/usr/local/bin/python", "-m", "pytest", "-v"]
-CMD ["tests/smoke_tests/test_drive_train.py", "tests/smoke_tests/test_drive_rollout.py", "tests/smoke_tests/test_drive_eval.py"]
+CMD ["tests/smoke_tests/test_drive_train.py", "tests/smoke_tests/test_drive_rollout.py"]

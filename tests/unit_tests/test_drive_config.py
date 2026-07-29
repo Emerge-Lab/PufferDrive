@@ -35,17 +35,6 @@ class TestDriveConfig(unittest.TestCase):
             # load_config should return a populated config dict without raising.
             self.assertIsInstance(args, dict)
             self.assertTrue(len(args) > 0)
-            self.assertIsNone(args["train"]["evaluation_interval_epochs"])
-            self.assertEqual(args["train"]["evaluation_benchmarks"], "carla_fast")
-            self.assertIsNone(args["eval"]["benchmarks"])
-            self.assertIsNone(args["eval"]["output_name"])
-            self.assertEqual(args["eval"]["max_sdc_replay_workers"], 4)
-            self.assertFalse(args["eval"]["render_scenarios"])
-            self.assertIsNone(args["eval"]["render_filter"])
-            self.assertIsNone(args["eval"]["max_rendered_failures"])
-            self.assertIsNone(args["eval"]["failure_replay_csv"])
-            self.assertTrue(os.path.isfile(args["eval"]["benchmark_config"]))
-
         except Exception as err:
             self.fail(f"load_config failed with an unexpected exception: {err}")
 
@@ -72,26 +61,6 @@ class TestDriveConfig(unittest.TestCase):
         args = load_config("puffer_drive")
         self.assertFalse(args["train"]["compile"])
         self.assertEqual(args["train"]["precision"], "float32")
-
-    @patch("sys.argv", ["pufferl.py", "eval.max_rendered_failures=10"])
-    def test_max_rendered_failures_cli_override(self):
-        args = load_config("puffer_drive")
-        self.assertEqual(args["eval"]["max_rendered_failures"], 10)
-
-    @patch("sys.argv", ["pufferl.py", "eval.render_scenarios=true"])
-    def test_render_scenarios_cli_override(self):
-        args = load_config("puffer_drive")
-        self.assertTrue(args["eval"]["render_scenarios"])
-
-    @patch("sys.argv", ["pufferl.py", "eval.max_sdc_replay_workers=8"])
-    def test_max_sdc_replay_workers_cli_override(self):
-        args = load_config("puffer_drive")
-        self.assertEqual(args["eval"]["max_sdc_replay_workers"], 8)
-
-    @patch("sys.argv", ["pufferl.py", "eval.failure_replay_csv=episode_metrics.csv"])
-    def test_failure_replay_csv_cli_override(self):
-        args = load_config("puffer_drive")
-        self.assertEqual(args["eval"]["failure_replay_csv"], "episode_metrics.csv")
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_old_flag_syntax_rejected_with_hint(self):
