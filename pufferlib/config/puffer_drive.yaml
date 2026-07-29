@@ -356,8 +356,9 @@ eval:
     inherits: validation_defaults
     type: multi_scenario
     enabled: 'true'
-    render: 'true'
+    render: 'false'
     render_backend: obs_html
+    render_views: [sim_state, bev]
     env:
       simulation_mode: gigaflow
       map_dir: pufferlib/resources/drive/binaries/carla
