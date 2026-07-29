@@ -6,8 +6,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=125G
 #SBATCH --cpus-per-task=18
-#SBATCH --output=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_nuPlan_%a_%A.out
-#SBATCH --error=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_nuPlan_%a_%A.err
+#SBATCH --output=/home/bjaeger/PufferDrive/experiments/k_nightly_0008/puffer_drive_kxgplcb0/eval/eval_nuPlan_%a_%A.out
+#SBATCH --error=/home/bjaeger/PufferDrive/experiments/k_nightly_0008/puffer_drive_kxgplcb0/eval/eval_nuPlan_%a_%A.err
 #SBATCH --partition=dev
 
 # print info about current job
