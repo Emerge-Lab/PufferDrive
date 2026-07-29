@@ -192,8 +192,7 @@ eval/<benchmark>[_<output_name>]/<timestamp>/
 ```
 
 Without `eval.output_name`, the first run uses `<benchmark>`. With a name, it
-uses `<benchmark>_<output_name>`. If that directory exists, evaluation preserves
-it and appends `_0`, `_1`, and so on to the new directory.
+uses `<benchmark>_<output_name>`.
 
 `episode_metrics.csv` contains map and scenario identifiers, the episode seed,
 agent batch size, infractions, progress, rewards, and score metrics.

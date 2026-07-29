@@ -1589,8 +1589,6 @@ def eval(
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
-    if render_filter is not None and not render_scenarios:
-        drive_benchmark.parse_render_filter_columns(render_filter)
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
     if use_training_config:
         if policy is None:
@@ -1606,7 +1604,8 @@ def eval(
         eval_output_dir = os.path.join(run_dir, "eval")
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
-    all_benchmark_summaries = {}
+    benchmark_results = {}
+    evaluation_policy_cache = {"policy": policy}
     cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
         run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
@@ -1633,9 +1632,8 @@ def eval(
 
         evaluation_seed = int(run_args["train"]["seed"])
         np.random.seed(evaluation_seed)
-        torch.manual_seed(evaluation_seed)
         if failure_replay_csv is not None:
-            summaries = _render_eval_failures(
+            benchmark_results[benchmark["name"]] = _render_eval_failures(
                 env_name,
                 run_args,
                 benchmark,
@@ -1644,8 +1642,8 @@ def eval(
                 policy,
                 bool(eval_config["capture_observations"]),
                 max_rendered_failures,
+                evaluation_policy_cache=evaluation_policy_cache,
             )
-            all_benchmark_summaries[benchmark["name"]] = summaries
             continue
 
         num_scenarios = int(run_args["num_scenarios"])
@@ -1669,9 +1667,13 @@ def eval(
             policy=policy,
             replay_output_dir=replay_output_dir,
             capture_observations=render_scenarios and bool(eval_config["capture_observations"]),
+            evaluation_policy_cache=evaluation_policy_cache,
         )
-        _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
-        all_benchmark_summaries[benchmark["name"]] = summaries
+        summary = _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
+        benchmark_results[benchmark["name"]] = {
+            "episodes": summaries,
+            "summary": summary,
+        }
 
         if render_scenarios:
             _render_eval_replays(summaries, benchmark_output_dir)
@@ -1685,8 +1687,9 @@ def eval(
                 policy,
                 bool(eval_config["capture_observations"]),
                 max_rendered_failures,
+                evaluation_policy_cache=evaluation_policy_cache,
             )
-    return all_benchmark_summaries
+    return benchmark_results
 
 
 def sweep(args=None, env_name=None):
@@ -1918,6 +1921,7 @@ def _run_eval_rollout(
     replay_output_dir=None,
     capture_observations=False,
     episode_id_offset=0,
+    evaluation_policy_cache=None,
 ):
     """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
     num_workers = len(worker_env_kwargs)
@@ -1952,17 +1956,27 @@ def _run_eval_rollout(
 
         rollout_seed = int(args["train"]["seed"])
         torch.manual_seed(rollout_seed)
-        policy = policy or load_policy(args, vecenv, env_name)
+        if evaluation_policy_cache is None:
+            evaluation_policy_cache = {"policy": policy}
+        policy = evaluation_policy_cache["policy"]
+        if policy is None:
+            policy = load_policy(args, vecenv, env_name)
+            evaluation_policy_cache["policy"] = policy
         policy.eval()
-        policy_forward_eval = policy.forward_eval
-        eval_sample_logits = pufferlib.pytorch.sample_logits
-        if args["train"]["compile"]:
-            compile_kwargs = {
-                "mode": args["train"]["compile_mode"],
-                "fullgraph": args["train"]["compile_fullgraph"],
-            }
-            policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
-            eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
+        if "policy_forward_eval" not in evaluation_policy_cache:
+            policy_forward_eval = policy.forward_eval
+            eval_sample_logits = pufferlib.pytorch.sample_logits
+            if args["train"]["compile"]:
+                compile_kwargs = {
+                    "mode": args["train"]["compile_mode"],
+                    "fullgraph": args["train"]["compile_fullgraph"],
+                }
+                policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
+                eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
+            evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
+            evaluation_policy_cache["sample_logits"] = eval_sample_logits
+        policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
+        eval_sample_logits = evaluation_policy_cache["sample_logits"]
         device = torch_device(args["train"]["device"])
         use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
@@ -2079,7 +2093,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
     rng_state = capture_rng_state()
     policy_was_training = bool(getattr(policy, "training", False))
     try:
-        benchmark_summaries = eval(
+        benchmark_results = eval(
             env_name=env_name,
             args=eval_args,
             policy=policy,
@@ -2087,23 +2101,18 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        _, benchmarks = drive_benchmark.load_benchmark_config(
-            eval_args["eval"]["benchmark_config"], eval_args["train"]["evaluation_benchmarks"]
-        )
-        expected_scenarios = {benchmark["name"]: benchmark["num_scenarios"] for benchmark in benchmarks}
         metrics = {}
-        for benchmark_name, episode_summaries in benchmark_summaries.items():
-            report = _build_eval_report(episode_summaries, expected_scenarios[benchmark_name])
-            if report is None:
+        for benchmark_name, benchmark_result in benchmark_results.items():
+            summary = benchmark_result["summary"]
+            if summary is None:
                 continue
-            _, summary = report
             prefix = f"eval_{benchmark_name}"
             metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
             metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
             metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
         if metrics:
             logger.log(metrics, global_step)
-        return benchmark_summaries
+        return benchmark_results
     except Exception:
         print(f"\n[training eval] Evaluation failed at epoch {epoch}; continuing training:")
         traceback.print_exc()
@@ -2154,6 +2163,7 @@ def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
 
     print(f"Wrote {len(df)} per-episode rows to {csv_path}")
     print(f"Wrote metric averages to {json_path}")
+    return summary
 
 
 def _render_eval_replays(episode_summaries, out_dir):
@@ -2217,6 +2227,7 @@ def _render_eval_failures(
     policy,
     capture_observations,
     max_rendered_failures,
+    evaluation_policy_cache=None,
 ):
     configured_render_filter = run_args["eval"]["render_filter"]
     selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
@@ -2228,7 +2239,7 @@ def _render_eval_failures(
     selected_rows.to_csv(selected_path, index=False)
     if selected_rows.empty:
         print(f"No failures matched for benchmark {benchmark['name']}; wrote {selected_path}")
-        return []
+        return {"episodes": [], "summary": None}
 
     map_indices = _resolve_map_indices(run_args["env"]["map_dir"], selected_rows["map_name"].tolist())
     seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
@@ -2289,11 +2300,15 @@ def _render_eval_failures(
             replay_output_dir=replay_output_dir,
             capture_observations=capture_observations,
             episode_id_offset=len(summaries),
+            evaluation_policy_cache=evaluation_policy_cache,
         )
         summaries.extend(wave_summaries)
-    _write_eval_reports(summaries, failures_dir, len(pairs))
+    summary = _write_eval_reports(summaries, failures_dir, len(pairs))
     _render_eval_replays(summaries, failures_dir)
-    return summaries
+    return {
+        "episodes": summaries,
+        "summary": summary,
+    }
 
 
 def load_env(env_name, args):

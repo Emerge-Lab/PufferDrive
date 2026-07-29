@@ -360,6 +360,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
     }
     captured = {}
     summaries = [{"map_name": "map_0"}, {"map_name": "map_1"}]
+    summary = {"num_scenarios": 2, "num_episodes": 2, "metrics_mean": {}}
 
     monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, [benchmark]))
     monkeypatch.setattr(drive_benchmark, "write_resolved_benchmark_config", lambda *_: None)
@@ -377,7 +378,7 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
 
     monkeypatch.setattr(pufferl, "_plan_benchmark_eval_workers", capture_worker_plan)
     monkeypatch.setattr(pufferl, "_run_eval_rollout", capture_rollout)
-    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: None)
+    monkeypatch.setattr(pufferl, "_write_eval_reports", lambda *_: summary)
     monkeypatch.setattr(pufferl, "_render_eval_replays", capture_render)
     monkeypatch.setattr(
         pufferl,
@@ -398,7 +399,12 @@ def test_eval_captures_and_renders_all_scenarios_during_standard_rollout(monkeyp
     assert captured["rollout"]["replay_output_dir"] == str(benchmark_output_dir / "replays")
     assert captured["rollout"]["capture_observations"] is True
     assert captured["render"] == (summaries, str(benchmark_output_dir))
-    assert result == {"carla_test": summaries}
+    assert result == {
+        "carla_test": {
+            "episodes": summaries,
+            "summary": summary,
+        }
+    }
 
 
 def test_eval_rejects_render_scenarios_with_failure_csv():
@@ -488,7 +494,9 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
         _policy,
         capture_observations,
         max_rendered_failures,
+        evaluation_policy_cache,
     ):
+        assert evaluation_policy_cache == {"policy": None}
         replay_call.update(
             {
                 "env_name": env_name,
@@ -498,13 +506,21 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
                 "max_rendered_failures": max_rendered_failures,
             }
         )
-        return ["failure replay"]
+        return {
+            "episodes": ["failure replay"],
+            "summary": {"num_scenarios": 1, "num_episodes": 1, "metrics_mean": {}},
+        }
 
     monkeypatch.setattr(pufferl, "_render_eval_failures", capture_failure_replay)
 
     summaries = pufferl.eval("puffer_drive", args=args, eval_output_dir=str(tmp_path / "output"))
 
-    assert summaries == {"carla": ["failure replay"]}
+    assert summaries == {
+        "carla": {
+            "episodes": ["failure replay"],
+            "summary": {"num_scenarios": 1, "num_episodes": 1, "metrics_mean": {}},
+        }
+    }
     assert replay_call == {
         "env_name": "puffer_drive",
         "benchmark": "carla",
@@ -516,6 +532,7 @@ def test_eval_replays_failure_csv_without_standard_rollout(monkeypatch, tmp_path
 
 def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
     captured_args = {}
+    logged = {}
     args = {
         "train": {
             "evaluation_benchmarks": "carla_fast",
@@ -530,16 +547,29 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
 
     def capture_eval(**kwargs):
         captured_args.update(kwargs["args"])
-        return {}
+        return {
+            "carla_fast": {
+                "episodes": [{}],
+                "summary": {
+                    "num_scenarios": 1,
+                    "num_episodes": 1,
+                    "metrics_mean": {"offroad_rate": 0.5},
+                },
+            }
+        }
 
     monkeypatch.setattr(pufferl, "eval", capture_eval)
-    monkeypatch.setattr(drive_benchmark, "load_benchmark_config", lambda *_: ({}, []))
+    monkeypatch.setattr(
+        drive_benchmark,
+        "load_benchmark_config",
+        lambda *_: pytest.fail("training evaluation must reuse the report returned by eval"),
+    )
 
     pufferl.run_training_evaluation(
         env_name="puffer_drive",
         args=args,
         policy=_ZeroPolicy(),
-        logger=SimpleNamespace(),
+        logger=SimpleNamespace(log=lambda metrics, step: logged.update({"metrics": metrics, "step": step})),
         epoch=1,
         global_step=100,
         run_dir=str(tmp_path),
@@ -548,6 +578,14 @@ def test_training_evaluation_disables_scenario_rendering(monkeypatch, tmp_path):
     assert captured_args["eval"]["render_scenarios"] is False
     assert captured_args["eval"]["render_filter"] is None
     assert captured_args["eval"]["failure_replay_csv"] is None
+    assert logged == {
+        "metrics": {
+            "eval_carla_fast/num_scenarios": 1,
+            "eval_carla_fast/num_episodes": 1,
+            "eval_carla_fast/offroad_rate": 0.5,
+        },
+        "step": 100,
+    }
 
 
 def test_eval_rollout_writes_replay_bundle_and_keeps_bytes_out_of_summary(monkeypatch, tmp_path):
@@ -813,7 +851,7 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
         },
     }
 
-    summaries = pufferl._render_eval_failures(
+    result = pufferl._render_eval_failures(
         "puffer_drive",
         run_args,
         {"name": "carla"},
@@ -827,4 +865,5 @@ def test_render_eval_failures_limits_selection_to_first_rows(monkeypatch, tmp_pa
     written_rows = pd.read_csv(tmp_path / "failures" / "selected_failures.csv")
     assert written_rows["map_name"].tolist() == ["map_0", "map_1"]
     assert replay_pairs == [(0, 100), (1, 101)]
-    assert len(summaries) == 2
+    assert len(result["episodes"]) == 2
+    assert result["summary"] is None
