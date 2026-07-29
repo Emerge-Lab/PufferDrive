@@ -58,7 +58,7 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
-    max_agents_per_env: 64
+    max_agents_per_env: 128
     scenario_length: 91
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/womd
@@ -68,7 +68,6 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
-    max_agents_per_env: 64
     scenario_length: 91
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/womd
@@ -78,7 +77,7 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
-    max_agents_per_env: 64
+    max_agents_per_env: 300
     scenario_length: 200
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/nuplan
@@ -88,7 +87,6 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
-    max_agents_per_env: 64
     scenario_length: 200
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/nuplan
