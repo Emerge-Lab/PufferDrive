@@ -14,8 +14,8 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/eval_001
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0000/puffer_drive_z09qq1nr/puffer_drive_z09qq1nr.pt
+RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0004/puffer_drive_cg20352a/eval
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0004/puffer_drive_cg20352a/puffer_drive_cg20352a.pt
 
 source .venv/bin/activate
 .venv/bin/puffer eval puffer_drive \
