@@ -1,5 +1,5 @@
-#ifndef PUFFERLIB_OCEAN_DRIVE_DATALOADER_H
-#define PUFFERLIB_OCEAN_DRIVE_DATALOADER_H
+#ifndef PUFFERLIB_OCEAN_DRIVE_MAP_DATA_H
+#define PUFFERLIB_OCEAN_DRIVE_MAP_DATA_H
 
 // ========================================
 // Grid Map Functions

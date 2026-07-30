@@ -566,7 +566,7 @@ static inline void project_vector_to_ego_frame(
     project_vector_to_local(world_vec_x, world_vec_y, ego->cos_heading, ego->sin_heading, rel_x, rel_y);
 }
 
-#include "dataloader.h"
+#include "map_data.h"
 
 // ========================================
 // Road Utility Functions
