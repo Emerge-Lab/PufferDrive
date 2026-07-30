@@ -3292,7 +3292,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Update lane alignment metric (running average)
     if (lane_idx != -1) {
         agent->previous_lane_idx = agent->current_lane_idx;
-        ² agent->current_lane_idx = lane_idx;
+        agent->current_lane_idx = lane_idx;
 
         // Lane distance and angle metrics
         // x_f = lateral offset from lane center (left = negative, right = positive)
