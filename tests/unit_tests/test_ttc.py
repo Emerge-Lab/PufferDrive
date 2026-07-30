@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import torch
 
-from pufferlib.ocean.benchmark.wosac import interaction_features
+from pufferlib.ocean.evaluation_utils.wosac import interaction_features
 
 MAX_HEADING_DIFF = interaction_features.MAX_HEADING_DIFF
 SMALL_OVERLAP_THRESHOLD = interaction_features.SMALL_OVERLAP_THRESHOLD

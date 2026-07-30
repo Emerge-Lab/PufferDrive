@@ -9,8 +9,8 @@ import configparser
 import os
 
 import pufferlib
-from pufferlib.ocean.benchmark.wosac import metrics
-from pufferlib.ocean.benchmark.wosac import estimators
+from pufferlib.ocean.evaluation_utils.wosac import metrics
+from pufferlib.ocean.evaluation_utils.wosac import estimators
 
 
 _METRIC_FIELD_NAMES = [

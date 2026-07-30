@@ -5,7 +5,7 @@ Adapted from: https://github.com/waymo-research/waymo-open-dataset/blob/master/s
 import math
 import torch
 
-from pufferlib.ocean.benchmark.wosac import geometry_utils
+from pufferlib.ocean.evaluation_utils.wosac import geometry_utils
 
 EXTREMELY_LARGE_DISTANCE = 1e10
 COLLISION_DISTANCE_THRESHOLD = 0.0
@@ -180,7 +180,7 @@ def compute_time_to_collision(
     Returns:
         Time-to-collision, shape (num_eval_agents, num_rollouts, num_steps)
     """
-    from pufferlib.ocean.benchmark.wosac import metrics
+    from pufferlib.ocean.evaluation_utils.wosac import metrics
 
     valid = valid.to(dtype=torch.bool, device=center_x.device)
     evaluated_object_mask = evaluated_object_mask.to(dtype=torch.bool, device=center_x.device)

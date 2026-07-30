@@ -14,8 +14,8 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
-from pufferlib.ocean.benchmark import evaluation as drive_benchmark
-from pufferlib.ocean.benchmark import eval_replay as drive_eval_replay
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
+from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 
 
 SEED = 42
