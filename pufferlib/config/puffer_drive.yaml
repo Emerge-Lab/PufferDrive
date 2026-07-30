@@ -41,13 +41,13 @@ env:
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
-  max_agents_per_env: 80
+  max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
   action_type: discrete
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
-  dt: 0.1
+  dt: 0.3
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
@@ -57,11 +57,11 @@ env:
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
-  use_map_cache: 0
+  use_map_cache: 1
   # Number of steps before reset
-  scenario_length: 1280
+  scenario_length: 2560
   # Frequency of resampling scenario (in steps), 0 to disable
-  resample_frequency: 128000000
+  resample_frequency: 256000
   # End of episode - options: 0 - scenario_length, 1 - early reset when too many agents are removed
   termination_mode: 1
   # Ratio of inactive agents (stopped/removed) that triggers early reset (used when termination_mode = 1)
@@ -95,21 +95,21 @@ env:
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
   # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
-  goal_source: "route"
+  goal_source: map
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
-  obs_goal_lane_distance: False
+  obs_goal_lane_distance: True
   # Meters around goal to be considered "reached"
   goal_radius: 2.0
   # Maximum speed at final waypoint to count goal reward
-  goal_speed: 1000.0
+  goal_speed: 3.0
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
-  max_goal_spacing: 60.0
+  max_goal_spacing: 200.0
   # --- Rewards ---
-  reward_conditioning: false
-  reward_randomization: false
+  reward_conditioning: true
+  reward_randomization: true
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
@@ -117,7 +117,7 @@ env:
   reward_comfort: 0.05
   reward_lane_align: 0.025
   reward_vel_align: 1.0
-  reward_lane_center: 0.0038
+  reward_lane_center: 0.001
   reward_center_bias: 0.0
   reward_velocity: 0.0025
   reward_reverse: 0.005
@@ -130,67 +130,67 @@ env:
   # Number of maps to load from map_dir
   num_maps: 8
   # --- Observation slot counts ---
-  obs_slots_lane_n: 80
-  obs_slots_boundary_n: 80
+  obs_slots_lane_n: 70
+  obs_slots_boundary_n: 50
   obs_slots_partners_n: 16
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
-  obs_dropout_lane: 0.0
-  obs_dropout_boundary: 0.0
+  obs_dropout_lane: 0.3
+  obs_dropout_boundary: 0.4
   # Stride for lane and boundary segments; 1 means use every segment, 2 means use every other segment, etc.
-  obs_lane_stride: 1
+  obs_lane_stride: 2
   obs_boundary_stride: 1
   # --- Observation normalization ---
-  obs_norm_goal_offset_m: 120.0
-  obs_norm_xy_offset_m: 120.0
-  obs_norm_veh_length_m: 15.0
-  obs_norm_veh_width_m: 10.0
+  obs_norm_goal_offset_m: 200.0
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_veh_length_m: 10.0
+  obs_norm_veh_width_m: 5.0
   obs_norm_road_seg_length_m: 10.0
   obs_norm_road_seg_width_m: 5.0
   # --- Observation ranges (meters, ego frame) ---
-  obs_range_road_front_m: 120.0
-  obs_range_road_behind_m: 20.0
-  obs_range_road_side_m: 30.0
-  obs_range_partner_m: 100.0
-  obs_range_traffic_control_m: 100.0
+  obs_range_road_front_m: 200.0
+  obs_range_road_behind_m: 60.0
+  obs_range_road_side_m: 50.0
+  obs_range_partner_m: 200.0
+  obs_range_traffic_control_m: 200.0
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
   # Per-episode probability that an agent is blind to other agents for the whole episode
-  partner_blindness_prob: 0.0
+  partner_blindness_prob: 0.02
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
-  partner_blindness_trigger_prob: 0.0
+  partner_blindness_trigger_prob: 0.03
   # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
-  phantom_braking_prob: 0.0
+  phantom_braking_prob: 0.02
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
-  phantom_braking_trigger_prob: 0.0
+  phantom_braking_trigger_prob: 0.03
   # Duration (in steps) of phantom braking once triggered
   phantom_braking_duration: 10
 policy:
   # Encoder layer (per-encoder embedding width)
-  ego_input_size: 64
-  partner_input_size: 64
-  lane_input_size: 64
-  boundary_input_size: 64
-  traffic_control_input_size: 64
-  context_input_size: 64
+  ego_input_size: 128
+  partner_input_size: 256
+  lane_input_size: 256
+  boundary_input_size: 256
+  traffic_control_input_size: 128
+  context_input_size: 128
   # Encoder activation - options: "relu", "tanh", "gelu"
   encoder_activation: relu
   encoder_layer_norm: true
   mask_padded_features: false
   # Shared backbone layer
-  backbone_hidden_size: 512
-  backbone_num_layers: 4
+  backbone_hidden_size: 1024
+  backbone_num_layers: 3
   # Backbone activation - options: "relu", "tanh", "gelu"
   backbone_activation: gelu
   backbone_layer_norm: false
   # Actor head layer
-  actor_hidden_size: 512
-  actor_num_layers: 0
+  actor_hidden_size: 256
+  actor_num_layers: 1
   # Critic head layer
-  critic_hidden_size: 512
-  critic_num_layers: 0
+  critic_hidden_size: 256
+  critic_num_layers: 1
   # Dual or shared actor-critic backbone
-  shared_network: true
+  shared_network: false
 rnn:
   input_size: 512
   hidden_size: 512
@@ -204,17 +204,17 @@ train:
   optimizer: adamw
   anneal_lr: true
   amp: true
-  precision: float32
-  total_timesteps: 10000000000
+  precision: bfloat16
+  total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
   gae_lambda: 0.95
-  update_epochs: 2
+  update_epochs: 3
   clip_coef: 0.2
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
-  normalize_rewards: true
+  normalize_rewards: false
   ent_coef: 0.01
   # ---
   adam_beta1: 0.9
@@ -336,7 +336,7 @@ eval:
     type: multi_scenario
     enabled: 'false'
     render: 'true'
-    render_backend: triage_html
+    render_backend: obs_html
     env:
       simulation_mode: replay
       control_mode: control_sdc_only
@@ -372,7 +372,7 @@ eval:
     type: multi_scenario
     enabled: 'false'
     render: 'true'
-    render_backend: triage_html
+    render_backend: obs_html
     env:
       simulation_mode: gigaflow
       map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin

@@ -16,70 +16,32 @@
 #       --args train.seed=0:1:2
 
 # Environment: single agent per env, Town10HD only (map_dir points directly
-# at one .bin), shared map cache.
-env.simulation_mode: gigaflow
-
+# at one .bin), shorter episodes than the multi-agent default.
 env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 env.num_maps: 1
-env.min_agents_per_env: 1
 env.max_agents_per_env: 1
 env.num_agents: 2048
-env.use_map_cache: 1
 env.scenario_length: 1280
-env.dt: 0.3
-env.dynamics_model: jerk
-env.action_type: discrete
-env.init_mode: create_all_valid
-env.init_step: 0
-env.init_step_spread: false
-env.init_step_min_horizon: 20
 env.resample_frequency: 128000
-env.control_mode: control_vehicles
-env.sdc_controller: policy
-env.non_sdc_controller: policy
-env.non_vehicle_controller: auto
-env.spawn_initial_speed: 0
-env.inactive_agent_threshold: 0.4
-env.termination_mode: 1
-env.terminate_on_goal: 0
-env.collision_behavior: 1
-env.offroad_behavior: 1
 env.traffic_light_behavior: 0
-env.compute_eval_metrics: false
-# Goals
+# Goals: a single far goal (~200 m, the far end of the default spacing
+# range) instead of the default chain
 env.num_goals: 1
-env.goal_source: map
 env.goal_speed: 300
-env.goal_radius: 2
-env.goal_regen_mode: finite
-env.min_goal_spacing: 20.0
-env.max_goal_spacing: 20.0
-env.obs_goal_lane_distance: true
-# Observation shaping
+env.min_goal_spacing: 200.0
+# Observation shaping: no partners/traffic controls to observe; no dropout
 env.obs_slots_lane_n: 60
 env.obs_slots_boundary_n: 40
 env.obs_slots_partners_n: 0
 env.obs_slots_traffic_controls_n: 0
 env.obs_lane_stride: 1
-env.obs_boundary_stride: 1
-env.obs_range_partner_m: 200
-env.obs_range_road_front_m: 200
 env.obs_range_road_behind_m: 30
 env.obs_range_road_side_m: 40
-env.obs_range_traffic_control_m: 200
-env.obs_norm_xy_offset_m: 200
-env.obs_norm_goal_offset_m: 200
-env.obs_norm_road_seg_length_m: 10
-env.obs_norm_road_seg_width_m: 5
-env.obs_norm_veh_length_m: 10
-env.obs_norm_veh_width_m: 5
 env.obs_dropout_lane: 0
 env.obs_dropout_boundary: 0
-# Reward shaping
+# Reward shaping: fixed weights, most penalties off for the speed run
 env.reward_conditioning: false
 env.reward_randomization: false
-env.reward_ade: 0
-env.reward_goal: 1.0
 env.reward_collision: 0.0
 env.reward_offroad: 1.0
 env.reward_stop_line: 1.0
@@ -92,63 +54,32 @@ env.reward_velocity: 0.0025
 env.reward_reverse: 0.0
 env.reward_timestep: 0.0
 env.reward_overspeed: 0.0
-# Behavioral perturbations
+# Behavioral perturbations off (single agent, no partners to perturb)
 env.phantom_braking_prob: 0
-env.phantom_braking_duration: 10
-env.phantom_braking_trigger_prob: 0.1
 env.partner_blindness_prob: 0
-env.partner_blindness_trigger_prob: 0.15
 
-# Policy — 3x1024 backbone, split actor/critic
-policy.ego_input_size: 128
+# Policy: smaller shared-backbone net than the default split actor/critic
 policy.partner_input_size: 128
 policy.lane_input_size: 128
 policy.boundary_input_size: 128
-policy.traffic_control_input_size: 128
-policy.context_input_size: 128
-policy.encoder_activation: relu
-policy.encoder_layer_norm: true
-policy.mask_padded_features: false
-policy.backbone_activation: gelu
 policy.backbone_hidden_size: 512
 policy.backbone_num_layers: 2
-policy.backbone_layer_norm: false
-policy.actor_hidden_size: 256
 policy.actor_num_layers: 0
-policy.critic_hidden_size: 256
 policy.critic_num_layers: 0
 policy.shared_network: true
 
-# Training
-train.seed: 42
+# Training: short schedule, small minibatch, compiled
 train.total_timesteps: 1_000_000_000
-train.batch_size: auto
 train.learning_rate: 0.001
-train.anneal_lr: true
-train.gamma: 0.999
-train.gae_lambda: 0.95
-train.clip_coef: 0.2
-train.vf_coef: 0.5
-train.vf_clip_coef: null
-train.ent_coef: 0.01
-train.max_grad_norm: 0.5
-train.bptt_horizon: 128
 train.minibatch_size: 32000
 train.max_minibatch_size: 32000
 train.update_epochs: 2
-train.optimizer: adamw
 train.compile: true
-train.precision: bfloat16
-train.normalize_rewards: false
 train.checkpoint_interval: 500
 
-# Disable the nuPlan-based validation_replay. validation_gigaflow stays on but
-# is reconfigured to triage_html (CPU-only scene playback + per-episode metrics
-# including dnf_rate), pinned to the same Town10HD single-agent setup the
-# training uses, so each eval cycle drops a gallery of rollouts you can browse
-# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
-eval.validation_replay.enabled: 0
-eval.validation_gigaflow.render_backend: obs_html
+# validation_gigaflow pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops an obs_html gallery of rollouts
+# you can browse for DNFs.
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1
 eval.validation_gigaflow.env.num_agents: 64
