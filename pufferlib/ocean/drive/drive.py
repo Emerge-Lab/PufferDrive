@@ -12,6 +12,28 @@ import pufferlib
 from pufferlib.ocean.drive import binding
 
 
+def map_dir_missing_message(map_dir):
+    """Error text for a nonexistent map_dir. When its basename is a dataset
+    registered in data_utils/datasets.yaml, the message names the exact fetch
+    command instead of leaving the user with a bare missing-path error."""
+    message = f"map_dir '{map_dir}' does not exist."
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    manifest_path = os.path.join(repo_root, "data_utils", "datasets.yaml")
+    dataset_name = os.path.basename(os.path.normpath(str(map_dir)))
+    if not os.path.isfile(manifest_path):
+        return message
+    with open(manifest_path) as f:
+        is_registered_dataset = any(line.startswith(f"{dataset_name}:") for line in f)
+    if is_registered_dataset:
+        message += (
+            f" It is a fetchable dataset:\n"
+            f"    python data_utils/fetch_data.py {dataset_name}\n"
+            f"Run from the repo root, or point map_dir at wherever you fetched it"
+            f" — see docs/data_storage.md."
+        )
+    return message
+
+
 def compute_effective_road_obs_count(max_count, dropout):
     if max_count <= 0:
         return 0
@@ -45,9 +67,9 @@ class Drive(pufferlib.PufferEnv):
         max_goal_spacing=60.0,
         num_goals=3,
         goal_radius=2.0,
-        collision_behavior=0,
-        offroad_behavior=0,
-        traffic_light_behavior=0,
+        collision_behavior="ignore",
+        offroad_behavior="ignore",
+        traffic_light_behavior="ignore",
         use_map_cache=0,
         # emit_completed_episodes=True: env emits one summary dict per
         # completed episode via info (drained from a per-env C-side queue).
@@ -163,9 +185,21 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
-        self.collision_behavior = collision_behavior
-        self.offroad_behavior = offroad_behavior
-        self.traffic_light_behavior = traffic_light_behavior
+        infraction_behavior_values = {
+            "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
+            "stop": binding.INFRACTION_BEHAVIOR_STOP,
+            "remove": binding.INFRACTION_BEHAVIOR_REMOVE,
+        }
+        for behavior_name, behavior in (
+            ("collision_behavior", collision_behavior),
+            ("offroad_behavior", offroad_behavior),
+            ("traffic_light_behavior", traffic_light_behavior),
+        ):
+            if behavior not in infraction_behavior_values:
+                raise ValueError(f"{behavior_name} must be one of 'ignore', 'stop', or 'remove'. Got: {behavior}")
+        self.collision_behavior = infraction_behavior_values[collision_behavior]
+        self.offroad_behavior = infraction_behavior_values[offroad_behavior]
+        self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
@@ -179,9 +213,9 @@ class Drive(pufferlib.PufferEnv):
         self.resample_frequency = resample_frequency
         self.dynamics_model = dynamics_model
         if dynamics_model == "classic":
-            self.dynamics_model_flag = 0
+            self.dynamics_model_flag = binding.DYNAMICS_MODEL_CLASSIC
         elif dynamics_model == "jerk":
-            self.dynamics_model_flag = 1
+            self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
@@ -278,12 +312,14 @@ class Drive(pufferlib.PufferEnv):
         if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
             self.map_files = [map_dir]
         else:
+            if not os.path.isdir(map_dir):
+                raise FileNotFoundError(map_dir_missing_message(map_dir))
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
         if self.simulation_mode_str == "gigaflow":
-            self.simulation_mode = 0
+            self.simulation_mode = binding.SIMULATION_MODE_GIGAFLOW
         elif self.simulation_mode_str == "replay":
-            self.simulation_mode = 1
+            self.simulation_mode = binding.SIMULATION_MODE_REPLAY
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
 
@@ -293,7 +329,7 @@ class Drive(pufferlib.PufferEnv):
             )
 
         if self.init_step_spread:
-            if self.simulation_mode != 1:
+            if self.simulation_mode != binding.SIMULATION_MODE_REPLAY:
                 raise ValueError(
                     "init_step_spread is only supported in replay simulation_mode (it seeds each environment at a different expert timestep)."
                 )
@@ -303,13 +339,13 @@ class Drive(pufferlib.PufferEnv):
                 )
 
         if self.control_mode_str == "control_vehicles":
-            self.control_mode = 0
+            self.control_mode = binding.CONTROL_MODE_VEHICLES
         elif self.control_mode_str == "control_agents":
-            self.control_mode = 1
+            self.control_mode = binding.CONTROL_MODE_AGENTS
         elif self.control_mode_str == "control_wosac":
-            self.control_mode = 2
+            self.control_mode = binding.CONTROL_MODE_WOSAC
         elif self.control_mode_str == "control_sdc_only":
-            self.control_mode = 3
+            self.control_mode = binding.CONTROL_MODE_SDC_ONLY
         else:
             raise ValueError(
                 "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
@@ -344,16 +380,16 @@ class Drive(pufferlib.PufferEnv):
         self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
 
         if self.init_mode_str == "create_all_valid":
-            self.init_mode = 0
+            self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
         elif self.init_mode_str == "create_only_controlled":
-            self.init_mode = 1
+            self.init_mode = binding.INIT_MODE_CREATE_ONLY_CONTROLLED
         else:
             raise ValueError(
                 f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
             )
 
         if action_type == "discrete":
-            self._action_type_flag = 0
+            self._action_type_flag = binding.ACTION_TYPE_DISCRETE
             if dynamics_model == "classic":
                 # Joint action space (assume dependence)
                 self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
@@ -365,7 +401,7 @@ class Drive(pufferlib.PufferEnv):
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
-            self._action_type_flag = 1
+            self._action_type_flag = binding.ACTION_TYPE_CONTINUOUS
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
         else:
             raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")

@@ -22,7 +22,7 @@ void test_drivenet() {
 
     // Weights* weights = load_weights("resources/drive/puffer_drive_weights.bin");
     Weights *weights = load_weights("puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, num_agents, CLASSIC);
+    DriveNet *net = init_drivenet(weights, num_agents, DYNAMICS_MODEL_CLASSIC);
 
     forward(net, observations, actions);
     for (int i = 0; i < num_agents * num_actions; i++) {

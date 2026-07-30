@@ -53,7 +53,7 @@ static inline Drive drive_test_env_config(
     env.render_mode = RENDER_WINDOW;
     snprintf(env.resource_root, sizeof(env.resource_root), "%s", DRIVE_TEST_REPO_ROOT "/pufferlib/resources/drive");
     env.action_type = 0;
-    env.dynamics_model = CLASSIC;
+    env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     env.reward_goal = 1.0f;
     env.reward_collision = 3.0f;
     env.reward_offroad = 3.0f;
@@ -68,9 +68,9 @@ static inline Drive drive_test_env_config(
     env.reward_timestep = 0.000025f;
     env.reward_overspeed = 0.05f;
     env.reward_ade = 0.0f;
-    env.collision_behavior = 0;
-    env.offroad_behavior = 0;
-    env.traffic_light_behavior = 0;
+    env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;
+    env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
+    env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.use_map_cache = use_map_cache;
     env.emit_completed_episodes = 1;
     env.goal_radius = 2.0f;
@@ -98,8 +98,8 @@ static inline Drive drive_test_env_config(
     env.num_max_agents = 64;
     env.init_step = 0;
     env.timestep = 0;
-    env.init_mode = INIT_ALL_VALID;
-    env.control_mode = simulation_mode == SIMULATION_REPLAY ? CONTROL_SDC_ONLY : CONTROL_VEHICLES;
+    env.init_mode = INIT_MODE_CREATE_ALL_VALID;
+    env.control_mode = simulation_mode == SIMULATION_MODE_REPLAY ? CONTROL_MODE_SDC_ONLY : CONTROL_MODE_VEHICLES;
     env.sdc_controller = CONTROLLER_POLICY;
     env.non_sdc_controller = CONTROLLER_POLICY;
     env.non_vehicle_controller = CONTROLLER_REPLAY;
@@ -138,7 +138,7 @@ static inline void drive_set_neutral_actions(Drive *env) {
     if (env->action_type == 0) {
         int *actions = (int *) env->actions;
         int neutral;
-        if (env->dynamics_model == JERK) {
+        if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
             int num_long = sizeof(JERK_LONG) / sizeof(JERK_LONG[0]);
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
             neutral = (num_long / 2) * num_lat + (num_lat / 2);

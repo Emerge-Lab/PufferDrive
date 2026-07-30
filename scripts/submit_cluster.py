@@ -55,6 +55,10 @@ def parse_args():
     parser.add_argument("--wandb-name", type=str, default=None, help="Wandb run name (defaults to --prefix)")
     parser.add_argument("--wandb-group", type=str, default=None, help="Wandb group name (overrides program config)")
     parser.add_argument("--wandb-project", type=str, default=None, help="Wandb project name (overrides program config)")
+    # Exported as env vars into the container command (not passed via --args,
+    # since URLs contain ':' which --args interprets as sweep separators).
+    parser.add_argument("--wandb-base-url", type=str, default=None, help="WANDB_BASE_URL, e.g. https://api.wandb.ai")
+    parser.add_argument("--wandb-entity", type=str, default=None, help="WANDB_ENTITY, e.g. emerge_")
     parser.add_argument("--dry", action="store_true", help="Dry run (don't submit, just print commands)")
 
     # Config files
@@ -181,9 +185,12 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
             name_entries.append(args.program_config.split("/")[-1].rsplit(".", 1)[0])
 
         for key, val in main_args.items():
-            # Hydra override syntax: dotted.key=value, booleans lowercase
+            # Hydra override syntax: dotted.key=value, booleans lowercase,
+            # Python None (from YAML null) as Hydra's null literal.
             if isinstance(val, bool):
                 val = str(val).lower()
+            elif val is None:
+                val = "null"
             cmd.append(f"{key}={val}")
 
             if key in overrides and key not in name_skip_keys:
@@ -222,7 +229,9 @@ def get_all_commands(args) -> Dict[str, Tuple[List[str], str]]:
 
 
 def isolate_code(project_root: str, save_dir: str) -> str:
-    """Snapshot the code tree into save_dir/code (or code_vN if taken).
+    """Snapshot the code tree into save_dir/code (or code_vN if taken); for an
+    in-repo save_dir the snapshot goes to a <repo>_code_snapshots/ sibling of
+    the repo instead, mirroring save_dir's relative layout.
 
     Top-level entries are symlinked (instant, avoids deep-copying data/),
     except ancestors of the snapshot itself.
@@ -234,7 +243,20 @@ def isolate_code(project_root: str, save_dir: str) -> str:
     import shutil
     from pathlib import Path
 
-    isolated_root = os.path.join(save_dir, "code")
+    # setuptools file discovery walks the whole source tree following
+    # symlinks, so snapshots must live outside it.
+    project_root_resolved = Path(project_root).resolve()
+    save_dir_resolved = Path(save_dir).resolve()
+    save_root_entry = None
+    if save_dir_resolved.is_relative_to(project_root_resolved):
+        snapshots_root = project_root_resolved.parent / f"{project_root_resolved.name}_code_snapshots"
+        save_dir_rel = save_dir_resolved.relative_to(project_root_resolved)
+        # The in-repo save root holds run outputs (and held snapshots before
+        # they moved out of the repo) — never link it into the snapshot.
+        save_root_entry = save_dir_rel.parts[0]
+        isolated_root = str(snapshots_root / save_dir_rel / "code")
+    else:
+        isolated_root = os.path.join(save_dir, "code")
     if os.path.exists(isolated_root):
         version = 1
         while os.path.exists(f"{isolated_root}_v{version}"):
@@ -247,6 +269,8 @@ def isolate_code(project_root: str, save_dir: str) -> str:
         dst = os.path.join(isolated_root, entry)
         # Do not symlink ancestors to avoid infinite recursion
         if isolated_root_real.is_relative_to(Path(src).resolve()):
+            continue
+        if entry == save_root_entry:
             continue
         if os.path.exists(dst) or os.path.islink(dst):
             if os.path.isdir(dst) and not os.path.islink(dst):
@@ -397,6 +421,13 @@ def submit(args, job_name: str, command: List[str], save_dir: str, dry: bool):
                 f"export WANDB_DIR={scratch_dir}/wandb_data && "
                 f"mkdir -p {scratch_dir}/cache"
             )
+            # Pin the wandb server/org when requested, overriding the container's
+            # default login (e.g. a self-hosted server) so runs land on the
+            # intended entity.
+            if args.wandb_base_url:
+                cache_exports += f" && export WANDB_BASE_URL={args.wandb_base_url}"
+            if args.wandb_entity:
+                cache_exports += f" && export WANDB_ENTITY={args.wandb_entity}"
             train_str = " ".join(full_cmd)
             if args.heartbeat:
                 train_str = wrap_with_heartbeat(train_str)

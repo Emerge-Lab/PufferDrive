@@ -1,7 +1,7 @@
 """Unified evaluator framework for PufferDrive.
 
 Each Evaluator subclass owns one rollout pattern. The EvalManager (parent
-package) discovers evaluators from `[eval.<name>]` sections in drive.ini
+package) discovers evaluators from `eval.<name>` sections in puffer_drive.yaml
 and dispatches them inline (during training) or as subprocesses.
 
 See docs/eval_unification.md for the full design rationale.

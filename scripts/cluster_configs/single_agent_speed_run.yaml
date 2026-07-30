@@ -2,7 +2,7 @@
 # One controlled agent per environment on a single CARLA map (Town10), with many
 # parallel environments sharing one cached copy of the map geometry. Traffic
 # lights are fully disabled (no observation, no metric, no reward penalty). Keys
-# here override pufferlib/config/ocean/drive.ini; submit_cluster.py converts
+# here override pufferlib/config/puffer_drive.yaml; submit_cluster.py converts
 # underscores in each key to dashes for the CLI.
 #
 # Launch (3 seeds via the colon sweep):
@@ -16,55 +16,75 @@
 #       --args train.seed=0:1:2
 
 # Environment: single agent per env, Town10HD only (map_dir points directly
-# at one .bin), shared map cache.
-env.simulation_mode: gigaflow
+# at one .bin), shorter episodes than the multi-agent default.
 env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 env.num_maps: 1
-env.min_agents_per_env: 1
 env.max_agents_per_env: 1
-env.num_agents: 1024
-env.use_map_cache: 1
-
-# Single goal placed at a random drivable point on the map whose Euclidean
-# distance from the agent lies in [min_goal_spacing, max_goal_spacing].
-# 6m floor avoids spawning the goal on top of the agent; 500m saturates at the
-# Town10HD map diameter (~260m) so goals can land anywhere on the network.
-env.num_goals: 1
-env.goal_source: "map"
-env.min_goal_spacing: 6.0
-env.max_goal_spacing: 500.0
-
-# Traffic lights fully off: not observed, not scored, no reward penalty.
+env.num_agents: 2048
+env.scenario_length: 1280
+env.resample_frequency: 128000
 env.traffic_light_behavior: 0
+# Goals: a single far goal (~200 m, the far end of the default spacing
+# range) instead of the default chain
+env.num_goals: 1
+env.goal_speed: 300
+env.min_goal_spacing: 200.0
+# Observation shaping: no partners/traffic controls to observe; no dropout
+env.obs_slots_lane_n: 60
+env.obs_slots_boundary_n: 40
+env.obs_slots_partners_n: 0
 env.obs_slots_traffic_controls_n: 0
+env.obs_lane_stride: 1
+env.obs_range_road_behind_m: 30
+env.obs_range_road_side_m: 40
+env.obs_dropout_lane: 0
+env.obs_dropout_boundary: 0
+# Reward shaping: fixed weights, most penalties off for the speed run
+env.reward_conditioning: false
+env.reward_randomization: false
+env.reward_collision: 0.0
+env.reward_offroad: 1.0
+env.reward_stop_line: 1.0
+env.reward_comfort: 0.05
+env.reward_lane_align: 0.01
+env.reward_vel_align: 1.0
+env.reward_lane_center: 0.005
+env.reward_center_bias: 0.0
+env.reward_velocity: 0.0025
+env.reward_reverse: 0.0
+env.reward_timestep: 0.0
+env.reward_overspeed: 0.0
+# Behavioral perturbations off (single agent, no partners to perturb)
+env.phantom_braking_prob: 0
+env.partner_blindness_prob: 0
 
-# Training
+# Policy: smaller shared-backbone net than the default split actor/critic
+policy.partner_input_size: 128
+policy.lane_input_size: 128
+policy.boundary_input_size: 128
+policy.backbone_hidden_size: 512
+policy.backbone_num_layers: 2
+policy.actor_num_layers: 0
+policy.critic_num_layers: 0
+policy.shared_network: true
+
+# Training: short schedule, small minibatch, compiled
 train.total_timesteps: 1_000_000_000
+train.learning_rate: 0.001
+train.minibatch_size: 32000
+train.max_minibatch_size: 32000
+train.update_epochs: 2
+train.compile: true
+train.checkpoint_interval: 500
 
-# Disable nuPlan-based evaluators. validation_gigaflow stays on but is
-# reconfigured to triage_html (CPU-only scene playback + per-episode metrics
-# including dnf_rate), pinned to the same Town10HD single-agent setup the
-# training uses, so each eval cycle drops a gallery of rollouts you can browse
-# for DNFs. The eight-way ffmpeg/EGL spike of the default egl backend is gone.
-eval.validation_replay.enabled: 0
-eval.validation_gigaflow.render_backend: obs_html
+# validation_gigaflow pinned to the same Town10HD single-agent setup the
+# training uses, so each eval cycle drops an obs_html gallery of rollouts
+# you can browse for DNFs.
 eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
 eval.validation_gigaflow.env.num_maps: 1
 eval.validation_gigaflow.env.num_agents: 64
 eval.validation_gigaflow.env.min_agents_per_env: 1
 eval.validation_gigaflow.env.max_agents_per_env: 1
-eval.behaviors_full_dir.enabled: 0
-eval.behaviors_hard_stop.enabled: 0
-eval.behaviors_highway_straight.enabled: 0
-eval.behaviors_lane_change.enabled: 0
-eval.behaviors_merge.enabled: 0
-eval.behaviors_parked_cars.enabled: 0
-eval.behaviors_roundabout.enabled: 0
-eval.behaviors_stopped_traffic.enabled: 0
-eval.behaviors_traffic_light_green.enabled: 0
-eval.behaviors_traffic_light_stop.enabled: 0
-eval.behaviors_unprotected_left.enabled: 0
-eval.behaviors_unprotected_right.enabled: 0
 
 # W&B. Group has no space: submit_cluster.py joins the inner command into a
 # bash -c string without quoting arg values, so a space would split the arg.

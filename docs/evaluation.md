@@ -8,10 +8,10 @@ training and standalone from the CLI — there is no second eval path.
 
 ## Concepts
 
-- **Evaluator** — one evaluation, defined by an `[eval.<name>]` section in
-  `pufferlib/config/ocean/drive.ini`. It owns an env config, a rollout, a set
+- **Evaluator** — one evaluation, defined by an `eval.<name>` section in
+  `pufferlib/config/puffer_drive.yaml`. It owns an env config, a rollout, a set
   of metrics, and optional rendering.
-- **EvalManager** — discovers every `[eval.<name>]` section, instantiates the
+- **EvalManager** — discovers every `eval.<name>` section, instantiates the
   evaluators, and runs the ones whose `interval` is due (inline) or that you
   name (standalone). One evaluator failing doesn't stop the rest.
 - **Evaluator types** (the `type` field): `multi_scenario` (sweep a scenario
@@ -20,25 +20,28 @@ training and standalone from the CLI — there is no second eval path.
 
 ## Config schema
 
-```ini
-[eval.<name>]
-type          = "multi_scenario"   ; registered evaluator class (omit for a template)
-enabled       = true               ; skip when false
-interval      = 250                ; run every N epochs inline (0 disables inline)
-mode          = "inline"           ; "inline" (block training) | "subprocess"
-inherits      = "<other_section>"  ; optional: pull defaults from another section
-clean         = true               ; zero perturbations/dropout + enforce red lights
-render        = true               ; capture renders during the rollout
-render_views  = ["sim_state","bev"]; camera views for the egl backend
-render_backend = "egl"             ; egl | triage_html | obs_html (see Render backends)
-env.<key>     = <value>            ; any [env] override (dotted)
-eval.<key>    = <value>            ; evaluator-specific knob (see below)
-vec.<key>     = <value>            ; any [vec] override
+```yaml
+eval:
+  <name>:
+    type: multi_scenario        # registered evaluator class (omit for a template)
+    enabled: 'true'             # skip when false
+    interval: 250               # run every N epochs inline (0 disables inline)
+    mode: inline                # inline (block training) | subprocess
+    inherits: <other_section>   # optional: pull defaults from another section
+    clean: 'true'               # zero perturbations/dropout + enforce red lights
+    render: 'true'              # capture renders during the rollout
+    render_views: [sim_state, bev]  # camera views for the egl backend
+    render_backend: egl         # egl | triage_html | obs_html (see Render backends)
+    env:                        # any env override
+      <key>: <value>
+    eval:                       # evaluator-specific knobs (see below)
+      <key>: <value>
+    vec:                        # any vec override
+      <key>: <value>
 ```
 
 A section **without** a `type` is a *template*: it is never instantiated, only
-pulled in via `inherits`. `validation_defaults` and `behaviors_defaults` are
-templates.
+pulled in via `inherits`. `validation_defaults` is a template.
 
 `eval.*` knobs read by `multi_scenario`:
 
@@ -71,23 +74,23 @@ puffer eval puffer_drive --evaluator validation_gigaflow \
     --load-model-path experiments/puffer_drive_xxxx/models/model_000500.pt
 ```
 
-Runs that one evaluator with its `[eval.validation_gigaflow]` config. The
+Runs that one evaluator with its `eval.validation_gigaflow` config. The
 checkpoint's network architecture is read from the sibling `config.yaml` (next
 to `models/`), so a checkpoint loads even if its policy/rnn dims differ from
-`drive.ini`. With no `--load-model-path`, a fresh (random) policy is used —
+`puffer_drive.yaml`. With no `--load-model-path`, a fresh (random) policy is used —
 useful for smoke-testing the eval path itself.
 
 ### Standalone, ad-hoc
 
 Same as by-name, except instead of naming an evaluator you select one of the two
 built-in `validation_*` evaluators by simulation and override its config from the
-CLI — no `drive.ini` edit needed:
+CLI — no config edit needed:
 
 - `--eval_simulation gigaflow` → runs the `validation_gigaflow` section
 - `--eval_simulation replay` → runs the `validation_replay` section
 
 The flags below override that evaluator's config for this run, and each applies
-**only when passed** — omit one and the evaluator's own `[eval.*]` value stands:
+**only when passed** — omit one and the evaluator's own `eval.*` value stands:
 
 ```bash
 puffer eval puffer_drive --eval_simulation gigaflow \
@@ -149,14 +152,12 @@ record the observation, so it's heavier but shows the policy's actual inputs.
 
 | Section | Type | What it runs |
 |---|---|---|
-| `validation_replay` | multi_scenario | replay sweep over the nuPlan bins, `control_sdc_only` |
+| `validation_replay` | multi_scenario | replay sweep over a nuPlan bin directory, `control_sdc_only` |
 | `validation_gigaflow` | multi_scenario | gigaflow sweep over the CARLA maps |
-| `behaviors_*` | behavior_class | one labelled nuPlan scene bucket each (hard_stop, merge, …) |
 | `wosac` | wosac | Waymo open sim agents challenge metrics |
 
 `validation_replay` and `validation_gigaflow` inherit shared eval reward
-weights and clean-eval knobs from the `validation_defaults` template; the
-`behaviors_*` sections inherit from `behaviors_defaults`.
+weights and clean-eval knobs from the `validation_defaults` template.
 
 ## Adding an evaluator
 
@@ -165,7 +166,7 @@ weights and clean-eval knobs from the `validation_defaults` template; the
    `evaluators/__init__.py`. Most subclasses only override `env_overrides`,
    `_should_stop`, and optionally `_render_env_overrides`; the base `rollout`
    handles the step loop, metric aggregation, CSV, and coverage.
-2. Add an `[eval.<name>]` section with `type = "<your_type_name>"`.
+2. Add an `eval.<name>` section with `type: <your_type_name>`.
 
 ## Scripts
 
