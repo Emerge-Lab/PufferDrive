@@ -22,7 +22,7 @@ static int test_observation_size_formula(void) {
 
 static int test_observation_zero_fill_and_valid_counts(void) {
     srand(3);
-    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_GIGAFLOW, 1, 0);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     env.obs_slots_partners_n = 4;
     env.obs_slots_lane_n = 8;
     env.obs_slots_boundary_n = 8;
@@ -70,7 +70,7 @@ static void init_reward_env(Drive *env, Agent *agent, Log *log, int *active, flo
     env->active_agent_count = 1;
     env->dt = 0.1f;
     env->reward_goal = 2.0f;
-    env->simulation_mode = SIMULATION_GIGAFLOW;
+    env->simulation_mode = SIMULATION_MODE_GIGAFLOW;
     env->num_goals = 3;
     agent->goal_count = 3;
     env->compute_eval_metrics = 0;

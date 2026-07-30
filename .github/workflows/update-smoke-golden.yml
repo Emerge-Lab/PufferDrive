@@ -28,34 +28,38 @@ jobs:
       - name: Build smoke image
         run: docker build -f tests/smoke_tests/Dockerfile -t pufferdrive-smoke .
 
-      - name: Regenerate golden
+      - name: Regenerate goldens
         run: |
           docker run --rm -e SMOKE_UPDATE_GOLDEN=1 \
             -v "$PWD/tests/smoke_tests/data:/app/tests/smoke_tests/data" \
-            pufferdrive-smoke tests/smoke_tests/test_drive_train.py
+            pufferdrive-smoke tests/smoke_tests/test_drive_train.py tests/smoke_tests/test_drive_rollout.py
         timeout-minutes: 30
 
       - name: Upload golden artifact
         uses: actions/upload-artifact@v4
         with:
           name: drive_smoke_golden
-          path: tests/smoke_tests/data/drive_smoke_golden.json
+          path: |
+            tests/smoke_tests/data/drive_smoke_golden.json
+            tests/smoke_tests/data/drive_rollout_golden.json
 
-      - name: Commit regenerated golden
+      - name: Commit regenerated goldens
         run: |
-          # The container writes the golden as root via the bind mount; reclaim
-          # it so git can stage/commit cleanly.
-          sudo chown "$(id -u):$(id -g)" tests/smoke_tests/data/drive_smoke_golden.json
-          # json.dump writes no trailing newline; add one so the committed file
-          # satisfies pre-commit's end-of-file-fixer.
-          [ -n "$(tail -c1 tests/smoke_tests/data/drive_smoke_golden.json)" ] \
-            && printf '\n' >> tests/smoke_tests/data/drive_smoke_golden.json
-          if git diff --quiet -- tests/smoke_tests/data/drive_smoke_golden.json; then
-            echo "Golden unchanged; nothing to commit."
+          GOLDENS="tests/smoke_tests/data/drive_smoke_golden.json tests/smoke_tests/data/drive_rollout_golden.json"
+          # The container writes the goldens as root via the bind mount; reclaim
+          # them so git can stage/commit cleanly.
+          sudo chown "$(id -u):$(id -g)" $GOLDENS
+          # json.dump writes no trailing newline; add one so the committed files
+          # satisfy pre-commit's end-of-file-fixer.
+          for f in $GOLDENS; do
+            [ -n "$(tail -c1 "$f")" ] && printf '\n' >> "$f"
+          done
+          if git diff --quiet -- $GOLDENS; then
+            echo "Goldens unchanged; nothing to commit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f tests/smoke_tests/data/drive_smoke_golden.json  # data/ is gitignored; file is tracked
-          git commit -m "Regenerate smoke golden for partner seconds_stopped feature"
+          git add -f $GOLDENS  # data/ is gitignored; the files are tracked
+          git commit -m "Regenerate smoke goldens"
           git push origin "HEAD:${{ github.ref_name }}"

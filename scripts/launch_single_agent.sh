@@ -28,6 +28,14 @@ SEEDS="${SEEDS:-0:1:2}"
 PREFIX="${PREFIX:-$(date +%Y-%m-%d)_single_agent}"
 DATE_STAMP="$(date +%Y-%m-%d)"
 
+# Optional wandb rerouting: exporting WANDB_BASE_URL/WANDB_ENTITY in the
+# launch environment pins the server/org for the jobs (e.g.
+# WANDB_BASE_URL=https://api.wandb.ai WANDB_ENTITY=emerge_ for the public
+# org instead of the cluster's self-hosted default).
+EXTRA_WANDB_ARGS=()
+[ -n "${WANDB_BASE_URL:-}" ] && EXTRA_WANDB_ARGS+=(--wandb-base-url "$WANDB_BASE_URL")
+[ -n "${WANDB_ENTITY:-}" ] && EXTRA_WANDB_ARGS+=(--wandb-entity "$WANDB_ENTITY")
+
 source "/scratch/$USER/venvs/pufferdrive/bin/activate"
 
 # Refresh the nightly trend runs
@@ -42,7 +50,7 @@ for SEED in "${SEED_LIST[@]}"; do
         --prefix "$PREFIX" \
         --compute_config "$COMPUTE_CONFIG" \
         --program_config "$PROGRAM_CONFIG" \
-        --container --heartbeat \
+        --container --heartbeat "${EXTRA_WANDB_ARGS[@]}" \
         --account "$ACCOUNT" --partition "$PARTITION" --time "$TIME" \
         --args "train.seed=$SEED" "run_name=${DATE_STAMP}_seed${SEED}" "wandb_group=${DATE_STAMP}"
 done

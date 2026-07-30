@@ -46,6 +46,118 @@
 #include <GL/glext.h>
 #endif
 
+// Render modes (selected by drive.py's render_mode kwarg, plumbed via binding.c)
+#define RENDER_WINDOW 0
+#define RENDER_HEADLESS 1
+
+#define INVALID_POSITION -10000.0f
+// Ego agent is always at index 0 in the agents array
+#define EGO_IDX 0
+
+// Initialization modes
+#define INIT_ALL_VALID 0
+#define INIT_ONLY_CONTROLLABLE_AGENTS 1
+
+// Control modes
+#define CONTROL_VEHICLES 0
+#define CONTROL_AGENTS 1
+#define CONTROL_WOSAC 2
+#define CONTROL_SDC_ONLY 3
+
+// Controller modes
+#define CONTROLLER_STATIC 0
+#define CONTROLLER_POLICY 1
+#define CONTROLLER_REPLAY 2
+#define CONTROLLER_IDM 3
+
+// Simulation modes
+#define SIMULATION_GIGAFLOW 0
+#define SIMULATION_REPLAY 1
+
+// Lane selection scoring
+#define LANE_SELECTION_DISTANCE_WEIGHT 0.7f
+#define LANE_SELECTION_HEADING_WEIGHT 0.3f
+#define LANE_DISTANCE_NORMALIZATION 4.0f
+#define LANE_SWITCH_THRESHOLD 0.05f // Hysteresis: new lane must be 5% better to switch
+#define LANE_ALIGN_COS_THRESHOLD 0.5f
+
+// Collision and distance thresholds
+#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
+#define COLLISION_SKIP_DISP_M 0.1f
+#define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
+#define MAX_CHECKED_LANES 32
+#define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
+#define MAX_STOPPED_SECONDS 60.0f
+#define DTC_FRONT_CONE_COS_THRESHOLD -0.90f       // 340 degree cone centered on ego heading
+#define DTC_OPPOSITE_HEADING_COS_THRESHOLD -0.90f // Exclude near-perfect opposite directions
+#define DEFAULT_DTC 50.0f                         // Ignore candidates beyond this range
+#define STOP_LINE_DIST_SQ (10.0f * 10.0f)
+#define STOP_LINE_EXTENSION_FACTOR 1.5f
+#define STOP_LINE_HEADING_THRESHOLD (M_PI / 4.0f)
+#define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
+
+// TTC default value when no vehicle ahead
+#define DEFAULT_TTC 5.0f
+// TTC violation threshold for "within bound" rate
+#define TTC_VIOLATION_THRESHOLD 0.95f
+#define METRIC_SCORE_WINDOW_SECONDS 10.0f
+#define PUFFER_PROGRESS_REFERENCE_SPEED 10.0f
+// Multi-lane detection thresholds
+#define LANE_WIDTH 3.7f
+#define LANE_MARGIN 0.2f
+#define MULTI_LANE_THRESHOLD (LANE_WIDTH / 2.0f + LANE_MARGIN) // 2.05m
+#define MULTI_LANE_FULL_SCORE_TIME 3.4f                        // seconds
+#define MULTI_LANE_HALF_SCORE_TIME 5.7f                        // seconds
+
+// Collision/Infraction behaviors
+#define STOP_AGENT 1
+#define REMOVE_AGENT 2
+
+#define MAX_SPEED 40.0f
+
+// Grid cell size
+#define GRID_CELL_SIZE 5.0f
+// Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
+// => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
+#define MAX_ENTITIES_PER_CELL 30
+// Heading deviation since last kept point that forces a keep when obs stride > 1 (~15 degrees).
+#define OBS_STRIDE_HEADING_THRESHOLD 0.2618f
+#define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25)
+
+// GOAL_REGEN modes
+#define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
+#define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier
+// GOAL_SOURCE modes
+#define GOAL_SOURCE_ROUTE 0               // seed from the agent's own forward route
+#define GOAL_SOURCE_MAP 1                 // seed from a uniformly sampled map lane
+#define GOAL_SOURCE_GT 2                  // seed directly from the logged ground-truth trajectory
+#define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
+#define MAX_ROUTE_LENGTH 64
+#define ROUTE_TARGET_DISTANCE 1000.0f
+#define ROUTE_EXIT_MAX_CANDIDATES 5
+#define GT_GOAL_RADIUS_M 6.0f
+
+// Observation feature counts
+#define EGO_FEATURES 10
+#define LANE_FEATURES 9
+#define BOUNDARY_FEATURES 9
+#define PARTNER_FEATURES 9
+#define TRAFFIC_CONTROL_FEATURES 7
+#define GOAL_FEATURES 3
+#define OBS_VALID_COUNT_FEATURES 4
+
+// Traffic light generation
+#define TL_DEFAULT_RED_DURATION 2.0f
+#define TL_DEFAULT_YELLOW_DURATION 3.0f
+#define TL_DEFAULT_GREEN_DURATION 10.0f
+#define TL_EPISODE_DISABLE_PROB 0.20f
+#define TL_INDIVIDUAL_REMOVE_PROB 0.20f
+#define TL_ALWAYS_GREEN_PROB 0.05f
+
+// 2.5D Z estimation
+#define Z_BUFFER 4.0f
+#define Z_NUM_PT_AVG 30
+
 typedef struct {
     float z_dis;
     float euclidean_dis;
@@ -486,9 +598,9 @@ static inline void update_agent_radius(Agent *agent) {
 }
 
 static inline void apply_infraction_behavior(Agent *agent, int behavior) {
-    if (behavior == STOP_AGENT && !agent->stopped) {
+    if (behavior == INFRACTION_BEHAVIOR_STOP && !agent->stopped) {
         agent->stopped = 1;
-    } else if (behavior == REMOVE_AGENT && !agent->removed) {
+    } else if (behavior == INFRACTION_BEHAVIOR_REMOVE && !agent->removed) {
         agent->removed = 1;
     }
 }
@@ -1002,7 +1114,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     }
 
     // Replay: once the agent is essentially at the end of its logged route, retire it.
-    if (env->simulation_mode == SIMULATION_REPLAY && route_remaining_meters <= env->goal_radius) {
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY && route_remaining_meters <= env->goal_radius) {
         invalidate_agent(agent);
         agent->removed = 1;
         return false;
@@ -1036,7 +1148,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     }
 
     // Route exhausted before all goals fit.
-    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+    if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         // Free-roam route source: random-walk a fresh route from the current lane, then retry once.
         int start_lane_idx = (agent->current_lane_idx != -1) ? agent->current_lane_idx : agent->route[base_route_idx];
         if (!compute_new_route(env, agent, start_lane_idx)) {
@@ -2495,7 +2607,7 @@ static void set_start_position(Drive *env) {
         Agent *agent = &env->agents[i];
 
         // Initialize simulation trajectory from logged trajectory at init_step
-        if (env->simulation_mode == SIMULATION_REPLAY) {
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
             // Clamp init_step to ensure we don't go out of bounds
             int step = env->init_step;
             if (step >= agent->trajectory_size) {
@@ -2562,11 +2674,11 @@ static bool should_control_agent(Drive *env, int agent_idx) {
 
     Agent *agent = &env->agents[agent_idx];
 
-    if (env->control_mode == CONTROL_SDC_ONLY) {
+    if (env->control_mode == CONTROL_MODE_SDC_ONLY) {
         return agent_idx == EGO_IDX && agent->route_length != 0;
     }
 
-    if (env->control_mode == CONTROL_WOSAC) {
+    if (env->control_mode == CONTROL_MODE_WOSAC) {
         for (int j = 0; j < env->num_tracks_to_predict; j++) {
             if (env->tracks_to_predict[j] == agent_idx) {
                 return true;
@@ -2577,9 +2689,9 @@ static bool should_control_agent(Drive *env, int agent_idx) {
 
     // Standard mode: check type, distance to goal, and expert status
     bool type_is_controllable = false;
-    if (env->control_mode == CONTROL_VEHICLES) {
+    if (env->control_mode == CONTROL_MODE_VEHICLES) {
         type_is_controllable = (agent->type == VEHICLE);
-    } else { // CONTROL_AGENTS mode
+    } else { // CONTROL_MODE_AGENTS mode
         type_is_controllable = is_controllable_agent(agent->type);
     }
 
@@ -2629,7 +2741,7 @@ void set_active_agents(Drive *env) {
     env->num_agents = 0;                // Total agents created
 
     // In GIGAFLOW mode, spawn agents dynamically on the map
-    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+    if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int num_agents_to_create = env->num_controllable_agents;
 
         // Initialize agents for GIGAFLOW mode
@@ -2667,7 +2779,7 @@ void set_active_agents(Drive *env) {
     }
 
     // In REPLAY mode, determine which agents to control
-    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
+    bool is_log_replay = (env->control_mode == CONTROL_MODE_SDC_ONLY);
     // In log-replay mode, no cap on actors
     int max_agents = is_log_replay ? env->num_total_agents : env->num_max_agents;
 
@@ -2688,9 +2800,9 @@ void set_active_agents(Drive *env) {
         bool should_create = false;
         if (is_log_replay) {
             should_create = true; // Log-replay: all valid agents
-        } else if (env->init_mode == INIT_ALL_VALID) {
+        } else if (env->init_mode == INIT_MODE_CREATE_ALL_VALID) {
             should_create = true; // All valid entities
-        } else if (env->control_mode == CONTROL_VEHICLES) {
+        } else if (env->control_mode == CONTROL_MODE_VEHICLES) {
             should_create = (agent->type == VEHICLE);
         } else { // Control all agents
             should_create = (is_controllable_agent(agent->type));
@@ -2710,7 +2822,7 @@ void set_active_agents(Drive *env) {
             env->active_agent_count++;
             env->agents[i].active_agent = 1;
             env->agents[i].controller = resolve_agent_controller(env, i, 1, 0);
-        } else if (is_log_replay || env->init_mode != INIT_ONLY_CONTROLLABLE_AGENTS) {
+        } else if (is_log_replay || env->init_mode != INIT_MODE_CREATE_ONLY_CONTROLLED) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
@@ -2754,11 +2866,11 @@ void set_active_agents(Drive *env) {
 }
 
 void move_expert(Drive *env, int agent_idx) {
-    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+    if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         printf("[GIGAFLOW ERROR] -> move_expert() called in GIGAFLOW mode\n");
         return;
     }
-    bool is_log_replay = (env->control_mode == CONTROL_SDC_ONLY);
+    bool is_log_replay = (env->control_mode == CONTROL_MODE_SDC_ONLY);
 
     Agent *agent = &env->agents[agent_idx];
     int t = env->timestep;
@@ -2797,7 +2909,7 @@ void move_expert(Drive *env, int agent_idx) {
 }
 
 void remove_bad_trajectories(Drive *env) {
-    if (env->control_mode == CONTROL_WOSAC) {
+    if (env->control_mode == CONTROL_MODE_WOSAC) {
         return; // Leave all trajectories in WOSAC control mode
     }
 
@@ -2907,7 +3019,7 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
-    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+    if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
             for (int i = 0; i < env->num_traffic_elements; i++) {
@@ -2933,7 +3045,7 @@ void init(Drive *env) {
     }
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
-    if (env->simulation_mode == SIMULATION_REPLAY) {
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
         remove_bad_trajectories(env);
     }
     set_start_position(env);
@@ -3201,7 +3313,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     // Compute log-replay metrics
-    if (env->simulation_mode == SIMULATION_REPLAY) {
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
         // Compute displacement error
         float displacement_error = compute_displacement_error(agent, env->timestep);
         if (displacement_error > 0.0f) { // Only count valid displacements
@@ -4074,12 +4186,12 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         phantom_braking_active = 1;
     }
 
-    if (env->dynamics_model == CLASSIC) {
+    if (env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
         // Classic dynamics model
         float acceleration = 0.0f;
         float steering = 0.0f;
 
-        if (env->action_type == 0) { // discrete
+        if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *) env->actions;
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
@@ -4088,7 +4200,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             int steering_index = action_val % num_steer;
             acceleration = ACCELERATION_VALUES[acceleration_index];
             steering = STEERING_VALUES[steering_index];
-        } else if (env->action_type == 1) { // continuous
+        } else if (env->action_type == ACTION_TYPE_CONTINUOUS) {
             float (*action_array_f)[2] = (float (*)[2]) env->actions;
             acceleration = action_array_f[action_idx][0];
             steering = action_array_f[action_idx][1];
@@ -4156,10 +4268,10 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
     } else {
-        // JERK dynamics model
+        // DYNAMICS_MODEL_JERK dynamics model
         // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == 1) { // continuous
+        if (env->action_type == ACTION_TYPE_CONTINUOUS) {
             float (*action_array_f)[2] = (float (*)[2]) env->actions;
 
             // Asymmetric scaling for longitudinal jerk to match discrete action space
@@ -4173,7 +4285,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
             // Symmetric scaling for lateral jerk
             j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
-        } else if (env->action_type == 0) { // discrete
+        } else if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
             int *action_array = (int *) env->actions;
             int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
@@ -4317,7 +4429,7 @@ void c_reset(Drive *env) {
 
     env->timestep = env->init_step;
 
-    if (env->simulation_mode == SIMULATION_GIGAFLOW) {
+    if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
         int num_reset = 0;
         for (int x = 0; x < env->active_agent_count; x++) {
@@ -4426,7 +4538,7 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[background_idx];
         if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
-        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, background_idx);
         }
     }
@@ -4440,7 +4552,7 @@ void c_step(Drive *env) {
             move_dynamics(env, i, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
-        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_REPLAY) {
+        } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         }
     }
@@ -4493,8 +4605,8 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_REPLAY
-        && env->control_mode == CONTROL_SDC_ONLY) {
+    if (env->terminate_on_goal == 1 && env->simulation_mode == SIMULATION_MODE_REPLAY
+        && env->control_mode == CONTROL_MODE_SDC_ONLY) {
         for (int i = 0; i < env->active_agent_count; i++) {
             Agent *agent = &env->agents[env->active_agent_indices[i]];
             if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f && agent->current_goal_idx == env->num_goals) {
