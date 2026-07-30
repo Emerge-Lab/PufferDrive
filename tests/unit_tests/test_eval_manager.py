@@ -808,9 +808,6 @@ def test_render_pass_per_evaluator_subdir_and_step_glob(tmp_path, monkeypatch):
         "env_name": "puffer_drive",
         "train": {"device": "cpu"},
         "render_results_dir": str(tmp_path),
-        # This test exercises the egl mp4-naming path specifically; pin the
-        # backend since the default is obs_html.
-        "render_backend": "egl",
         "epoch": 7,
         "global_step": 1234,
         "eval": cfg["eval"],

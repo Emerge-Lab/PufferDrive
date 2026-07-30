@@ -393,7 +393,7 @@ class Evaluator:
           "obs_html"    — interactive scene + the agent's unpacked NN observation
         Subclasses customize the render env via `_render_env_overrides`.
         """
-        backend = args.get("render_backend", "obs_html")
+        backend = args.get("render_backend", "egl")
         if backend == "obs_html":
             return self._render_pass_obs(vecenv, policy, args)
         if backend == "triage_html":
