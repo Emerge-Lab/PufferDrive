@@ -35,8 +35,8 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
-from pufferlib.ocean.drive import benchmark as drive_benchmark
-from pufferlib.ocean.drive import eval_replay as drive_eval_replay
+from pufferlib.ocean.benchmark import evaluation as drive_benchmark
+from pufferlib.ocean.benchmark import eval_replay as drive_eval_replay
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector

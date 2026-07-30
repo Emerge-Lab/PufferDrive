@@ -6,7 +6,8 @@ import numpy as np
 import torch
 from typing import Tuple
 
-from pufferlib.ocean.benchmark import kinematic_features, interaction_features, map_metric_features
+from pufferlib.ocean.benchmark.wosac import interaction_features, map_metric_features
+from pufferlib.ocean.benchmark.wosac import kinematic_features
 
 
 def _to_tensor(value, dtype, device=None):

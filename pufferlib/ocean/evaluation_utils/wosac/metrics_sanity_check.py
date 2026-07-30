@@ -9,7 +9,7 @@ import argparse
 import numpy as np
 
 from pufferlib.pufferl import load_config, load_env, load_policy
-from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
+from pufferlib.ocean.benchmark.wosac.evaluator import WOSACEvaluator
 
 
 def replace_rollouts_with_gt(simulated_traj, gt_traj, num_replacements):

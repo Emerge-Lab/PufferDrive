@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from pufferlib.ocean.benchmark import interaction_features
+from pufferlib.ocean.benchmark.wosac import interaction_features
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
