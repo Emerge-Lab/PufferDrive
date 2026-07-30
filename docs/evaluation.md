@@ -1,8 +1,7 @@
 # Evaluation
 
 PufferDrive evaluation is config-driven. A named benchmark defines which
-scenarios to run, while the shared `env` section defines the environment
-settings used for every benchmark. The evaluator writes deterministic per-episode
+scenarios to run. The evaluator writes deterministic per-episode
 metrics and can replay only the failed episodes as interactive HTML.
 
 Failure selection, replay capture, and HTML rendering are all handled by
@@ -29,24 +28,18 @@ Each configured benchmark contains:
 - `control_mode`: which agents the policy controls.
 - `map_dir`: local map file or directory containing `.bin` files.
 
-Each benchmark seed must be a non-negative integer. Map files, requested counts,
-modes, and environment override keys are validated before environments are
-created.
 
 `eval.num_agents` is the agent capacity of each evaluation worker and must be at
 least the benchmark's `max_agents_per_env`. The policy inference batch grows with
 the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
-small local CPU check. `env.num_agents` configures training and is rejected by
-the direct evaluation command; use `eval.num_agents` for evaluation.
+small local CPU check.
 
 Replay benchmarks using `control_sdc_only` additionally cap their worker count with
-`eval.max_sdc_replay_workers` (default `4`). Other replay and gigaflow benchmarks
-continue to use `vec.num_envs`.
+`eval.max_sdc_replay_workers` (default `4`).
 
 ## Running evaluation
 
-Benchmark selection and a 3.0 checkpoint are required. The checkpoint must be in
-a run's `models` directory, with the matching `config.yaml` in the run directory.
+Benchmark selection and a 3.0 checkpoint are required, with the matching `config.yaml` in the run directory.
 
 ```bash
 puffer eval puffer_drive carla_fast \
@@ -113,15 +106,9 @@ puffer eval puffer_drive carla_fast \
 `eval.render_scenarios=true` records each of the benchmark's configured
 `num_scenarios` during the metrics rollout. It writes the completed
 `.replay.zlib` files incrementally, then renders one interactive HTML page per
-scenario and builds a navigable `index.html`. The benchmark is not rerun, and
-the benchmark seed and worker configuration continue to determine the evaluated
-map/seed rows. Capturing every scenario increases CPU, memory, and disk usage.
+scenario and builds a navigable `index.html`.
 
-`eval.capture_observations=true` also stores policy observations. Periodic training
-evaluation always disables scenario rendering. If `eval.render_filter` is
-also set, the all-scenario gallery is produced and the redundant filtered
-replay pass is skipped. `eval.render_scenarios` cannot be combined with
-`eval.failure_replay_csv`, which skips the standard benchmark pass.
+`eval.capture_observations=true` also stores policy observations.
 
 ## Filtered replay and rendering
 
@@ -136,12 +123,7 @@ puffer eval puffer_drive carla_fast \
   eval.capture_observations=false
 ```
 
-The default `eval.render_filter: null` disables filtered rendering. Any numeric
-column in `episode_metrics.csv` can be used. Multiple comma-separated columns
-use OR: `collision_rate,offroad_rate` selects scenarios where either metric is
-greater than zero. Use `eval.render_filter=all` to select collision, at-fault
-collision, offroad, and red-light failures. Unknown or missing columns raise an
-error when the metrics CSV is read.
+The default `eval.render_filter: null` disables filtered rendering. Multiple comma-separated columns use OR: `collision_rate,offroad_rate` selects scenarios where either metric is greater than zero. Use `eval.render_filter=all` to select collision, at-fault collision, offroad, and red-light failures.
 
 The filtered pass replays the selected map/seed pairs, captures standard
 interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
@@ -218,9 +200,7 @@ train:
 ```
 
 The default `evaluation_interval_epochs: null` disables evaluation during
-training. With the configuration above, the selected benchmarks run every 100
-epochs in a separate evaluation environment with 128 agents; the training
-environment remains at 1024. Mid-training evaluation currently shares
+training. Mid-training evaluation currently shares
 `vec.num_envs` with training. If training ends between scheduled intervals, one
 final evaluation runs at the last epoch. Training evaluation logs benchmark
 metric means to the active logger and writes reports under the training run's
