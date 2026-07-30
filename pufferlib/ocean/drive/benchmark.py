@@ -2,6 +2,7 @@ import copy
 import inspect
 import os
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -45,6 +46,22 @@ def _positive_int(value, label):
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise pufferlib.APIUsageError(f"{label} must be a positive integer")
     return value
+
+
+def _resolve_map_indices(map_dir, map_names):
+    """Map each logged map name back to its index in the sorted .bin map set."""
+    if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
+        map_files = [map_dir]
+    else:
+        map_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
+    name_to_idx = {os.path.basename(f).split(".")[0]: i for i, f in enumerate(map_files)}
+    indices = []
+    for name in map_names:
+        key = os.path.basename(str(name)).split(".")[0]
+        if key not in name_to_idx:
+            raise pufferlib.APIUsageError(f"Replay map '{key}' not found in {map_dir}")
+        indices.append(name_to_idx[key])
+    return indices
 
 
 def validate_training_evaluation_config(args):
@@ -212,6 +229,50 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     return args
 
 
+def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
+    """One disjoint contiguous map window per worker; together they cover the set once."""
+    scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
+    worker_env_kwargs = []
+    next_map_idx = 0
+    for worker_idx in range(num_workers):
+        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
+        env_kwargs = copy.deepcopy(args["env"])
+        env_kwargs["eval_mode"] = 1
+        env_kwargs["starting_map"] = next_map_idx
+        env_kwargs["num_eval_scenarios"] = worker_num_scenarios
+        env_kwargs["resample_frequency"] = scenario_length
+        env_kwargs["capture_replay"] = capture_replay
+        env_kwargs["replay_worker_idx"] = worker_idx
+        worker_env_kwargs.append(env_kwargs)
+        next_map_idx += worker_num_scenarios
+    max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
+    return worker_env_kwargs, max_scenarios_per_worker * scenario_length
+
+
+def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
+    """Split the (map, seed) pairs across workers; each worker cycles through its
+    pairs in fit-aware batches (num_agents from config bounds a batch)."""
+    pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
+    worker_env_kwargs = []
+    pair_start = 0
+    for worker_idx in range(num_workers):
+        worker_pair_count = pairs_per_worker + (1 if worker_idx < remainder else 0)
+        worker_pairs = map_seed_pairs[pair_start : pair_start + worker_pair_count]
+        pair_start += worker_pair_count
+        env_kwargs = copy.deepcopy(args["env"])
+        env_kwargs["eval_mode"] = 1
+        env_kwargs["resample_frequency"] = scenario_length
+        env_kwargs["starting_map"] = 0
+        env_kwargs["num_eval_scenarios"] = worker_pair_count
+        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in worker_pairs]
+        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in worker_pairs]
+        env_kwargs["capture_replay"] = True
+        env_kwargs["replay_worker_idx"] = worker_idx
+        worker_env_kwargs.append(env_kwargs)
+    max_pairs_per_worker = pairs_per_worker + (1 if remainder else 0)
+    return worker_env_kwargs, max_pairs_per_worker * scenario_length
+
+
 def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, checkpoint_config_path, output_path):
     resolved = {
         "benchmark_config": os.path.abspath(benchmark_config_path),
@@ -221,6 +282,49 @@ def write_resolved_benchmark_config(args, benchmark, benchmark_config_path, chec
     }
     with open(output_path, "w") as output_file:
         yaml.safe_dump(resolved, output_file, sort_keys=False)
+
+
+def _build_eval_report(episode_summaries, num_scenarios):
+    if not episode_summaries:
+        return None
+
+    df = pd.DataFrame(episode_summaries)
+    df = df.drop(columns=[col for col in ("summary_type", "env_slot") if col in df.columns])
+    if "map_name" in df.columns:
+        df["map_name"] = df["map_name"].map(lambda name: os.path.basename(str(name)).split(".")[0])
+    lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
+    df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
+
+    metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
+    summary = {
+        "num_scenarios": num_scenarios,
+        "num_episodes": int(len(df)),
+        "metrics_mean": {key: float(value) for key, value in metric_means.items()},
+    }
+    return df, summary
+
+
+def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
+    """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
+    import json
+
+    report = _build_eval_report(episode_summaries, num_scenarios)
+    if report is None:
+        print("No evaluation episodes were recorded; skipping report.")
+        return None
+
+    df, summary = report
+    os.makedirs(out_dir, exist_ok=True)
+    csv_path = os.path.join(out_dir, "episode_metrics.csv")
+    df.to_csv(csv_path, index=False)
+
+    json_path = os.path.join(out_dir, "evaluation_summary.json")
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Wrote {len(df)} per-episode rows to {csv_path}")
+    print(f"Wrote metric averages to {json_path}")
+    return summary
 
 
 def parse_render_filter_columns(configured_render_filter):

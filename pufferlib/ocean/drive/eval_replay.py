@@ -1,3 +1,4 @@
+import numbers
 import os
 import pickle
 import zlib
@@ -5,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 import pufferlib
 import pufferlib.viz
@@ -155,3 +157,44 @@ class EvalReplayCapture:
             ):
                 pass
         self.pending_replays = []
+
+
+def _render_eval_replays(episode_summaries, out_dir):
+    """Render captured eval replays as navigable HTML pages plus an index."""
+    render_dir = os.path.join(out_dir, "rendered_replays")
+    os.makedirs(render_dir, exist_ok=True)
+
+    file_metrics = {}
+    replay_paths = []
+    output_paths = []
+    for episode_id, summary in enumerate(episode_summaries):
+        replay_path = summary.get("replay_path")
+        if not replay_path or not os.path.isfile(replay_path):
+            raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
+        replay_filename = os.path.basename(replay_path)
+        replay_suffix = ".replay.zlib"
+        if not replay_filename.endswith(replay_suffix):
+            raise RuntimeError(f"Cannot render episode {episode_id}: unexpected replay filename: {replay_filename}")
+        html_filename = f"{replay_filename[: -len(replay_suffix)]}.html"
+        output_path = os.path.join(render_dir, html_filename)
+        replay_paths.append(replay_path)
+        output_paths.append(output_path)
+        file_metrics[html_filename] = {
+            key: value for key, value in summary.items() if isinstance(value, numbers.Real) and np.isfinite(value)
+        }
+
+    if replay_paths:
+        html_renderer_count = min(os.cpu_count() or 1, len(replay_paths))
+        with ThreadPoolExecutor(max_workers=html_renderer_count) as html_renderer:
+            rendered_replays = html_renderer.map(
+                pufferlib.viz.render_interactive_replay_zlib,
+                replay_paths,
+                output_paths,
+            )
+            for _ in tqdm(rendered_replays, total=len(replay_paths), desc="Rendering replay HTML"):
+                pass
+
+    pufferlib.viz.build_gallery_index(render_dir, file_metrics=file_metrics)
+    print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
+    print(f"Wrote replay index to {os.path.join(render_dir, 'index.html')}")
+    return render_dir

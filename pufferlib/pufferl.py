@@ -4,7 +4,6 @@
 
 import contextlib
 import copy
-import numbers
 import warnings
 
 import pandas as pd
@@ -21,7 +20,6 @@ import random
 import shutil
 import subprocess
 import importlib
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -38,12 +36,11 @@ from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
 from pufferlib.ocean.drive import benchmark as drive_benchmark
+from pufferlib.ocean.drive import eval_replay as drive_eval_replay
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
-import pufferlib.viz
-from pufferlib.ocean.drive.eval_replay import EvalReplayCapture
 from pufferlib.config_schema import ENV_SCHEMAS
 
 
@@ -1648,7 +1645,7 @@ def eval(
 
         num_scenarios = run_args["num_scenarios"]
         num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
-        worker_env_kwargs, total_steps = _plan_benchmark_eval_workers(
+        worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
             run_args,
             num_scenarios,
             num_workers,
@@ -1669,14 +1666,14 @@ def eval(
             capture_observations=render_scenarios and eval_config["capture_observations"],
             evaluation_policy_cache=evaluation_policy_cache,
         )
-        summary = _write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
+        summary = drive_benchmark._write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
         benchmark_results[benchmark["name"]] = {
             "episodes": summaries,
             "summary": summary,
         }
 
         if render_scenarios:
-            _render_eval_replays(summaries, benchmark_output_dir)
+            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir)
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -1849,66 +1846,6 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
-def _resolve_map_indices(map_dir, map_names):
-    """Map each logged map name back to its index in the sorted .bin map set."""
-    if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
-        map_files = [map_dir]
-    else:
-        map_files = sorted(f for f in os.listdir(map_dir) if f.endswith(".bin"))
-    name_to_idx = {os.path.basename(f).split(".")[0]: i for i, f in enumerate(map_files)}
-    indices = []
-    for name in map_names:
-        key = os.path.basename(str(name)).split(".")[0]
-        if key not in name_to_idx:
-            raise pufferlib.APIUsageError(f"Replay map '{key}' not found in {map_dir}")
-        indices.append(name_to_idx[key])
-    return indices
-
-
-def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
-    """One disjoint contiguous map window per worker; together they cover the set once."""
-    scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
-    worker_env_kwargs = []
-    next_map_idx = 0
-    for worker_idx in range(num_workers):
-        worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
-        env_kwargs = copy.deepcopy(args["env"])
-        env_kwargs["eval_mode"] = 1
-        env_kwargs["starting_map"] = next_map_idx
-        env_kwargs["num_eval_scenarios"] = worker_num_scenarios
-        env_kwargs["resample_frequency"] = scenario_length
-        env_kwargs["capture_replay"] = capture_replay
-        env_kwargs["replay_worker_idx"] = worker_idx
-        worker_env_kwargs.append(env_kwargs)
-        next_map_idx += worker_num_scenarios
-    max_scenarios_per_worker = scenarios_per_worker + (1 if remainder else 0)
-    return worker_env_kwargs, max_scenarios_per_worker * scenario_length
-
-
-def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
-    """Split the (map, seed) pairs across workers; each worker cycles through its
-    pairs in fit-aware batches (num_agents from config bounds a batch)."""
-    pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
-    worker_env_kwargs = []
-    pair_start = 0
-    for worker_idx in range(num_workers):
-        worker_pair_count = pairs_per_worker + (1 if worker_idx < remainder else 0)
-        worker_pairs = map_seed_pairs[pair_start : pair_start + worker_pair_count]
-        pair_start += worker_pair_count
-        env_kwargs = copy.deepcopy(args["env"])
-        env_kwargs["eval_mode"] = 1
-        env_kwargs["resample_frequency"] = scenario_length
-        env_kwargs["starting_map"] = 0
-        env_kwargs["num_eval_scenarios"] = worker_pair_count
-        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in worker_pairs]
-        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in worker_pairs]
-        env_kwargs["capture_replay"] = True
-        env_kwargs["replay_worker_idx"] = worker_idx
-        worker_env_kwargs.append(env_kwargs)
-    max_pairs_per_worker = pairs_per_worker + (1 if remainder else 0)
-    return worker_env_kwargs, max_pairs_per_worker * scenario_length
-
-
 def _run_eval_rollout(
     args,
     env_name,
@@ -2001,7 +1938,7 @@ def _run_eval_rollout(
         capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
         replay_capture = None
         if replay_output_dir is not None:
-            replay_capture = EvalReplayCapture(
+            replay_capture = drive_eval_replay.EvalReplayCapture(
                 args,
                 policy,
                 replay_output_dir,
@@ -2129,90 +2066,6 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
         restore_rng_state({"rng_state": rng_state})
 
 
-def _build_eval_report(episode_summaries, num_scenarios):
-    if not episode_summaries:
-        return None
-
-    df = pd.DataFrame(episode_summaries)
-    df = df.drop(columns=[col for col in ("summary_type", "env_slot") if col in df.columns])
-    if "map_name" in df.columns:
-        df["map_name"] = df["map_name"].map(lambda name: os.path.basename(str(name)).split(".")[0])
-    lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
-    df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
-
-    metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
-    summary = {
-        "num_scenarios": num_scenarios,
-        "num_episodes": int(len(df)),
-        "metrics_mean": {key: float(value) for key, value in metric_means.items()},
-    }
-    return df, summary
-
-
-def _write_eval_reports(episode_summaries, out_dir, num_scenarios):
-    """Write a per-episode metrics CSV and a JSON of metric averages to out_dir."""
-    import json
-
-    report = _build_eval_report(episode_summaries, num_scenarios)
-    if report is None:
-        print("No evaluation episodes were recorded; skipping report.")
-        return None
-
-    df, summary = report
-    os.makedirs(out_dir, exist_ok=True)
-    csv_path = os.path.join(out_dir, "episode_metrics.csv")
-    df.to_csv(csv_path, index=False)
-
-    json_path = os.path.join(out_dir, "evaluation_summary.json")
-    with open(json_path, "w") as f:
-        json.dump(summary, f, indent=2)
-
-    print(f"Wrote {len(df)} per-episode rows to {csv_path}")
-    print(f"Wrote metric averages to {json_path}")
-    return summary
-
-
-def _render_eval_replays(episode_summaries, out_dir):
-    """Render captured eval replays as navigable HTML pages plus an index."""
-    render_dir = os.path.join(out_dir, "rendered_replays")
-    os.makedirs(render_dir, exist_ok=True)
-
-    file_metrics = {}
-    replay_paths = []
-    output_paths = []
-    for episode_id, summary in enumerate(episode_summaries):
-        replay_path = summary.get("replay_path")
-        if not replay_path or not os.path.isfile(replay_path):
-            raise RuntimeError(f"Cannot render episode {episode_id}: replay file is missing: {replay_path}")
-        replay_filename = os.path.basename(replay_path)
-        replay_suffix = ".replay.zlib"
-        if not replay_filename.endswith(replay_suffix):
-            raise RuntimeError(f"Cannot render episode {episode_id}: unexpected replay filename: {replay_filename}")
-        html_filename = f"{replay_filename[: -len(replay_suffix)]}.html"
-        output_path = os.path.join(render_dir, html_filename)
-        replay_paths.append(replay_path)
-        output_paths.append(output_path)
-        file_metrics[html_filename] = {
-            key: value for key, value in summary.items() if isinstance(value, numbers.Real) and np.isfinite(value)
-        }
-
-    if replay_paths:
-        html_renderer_count = min(os.cpu_count() or 1, len(replay_paths))
-        with ThreadPoolExecutor(max_workers=html_renderer_count) as html_renderer:
-            rendered_replays = html_renderer.map(
-                pufferlib.viz.render_interactive_replay_zlib,
-                replay_paths,
-                output_paths,
-            )
-            for _ in tqdm(rendered_replays, total=len(replay_paths), desc="Rendering replay HTML"):
-                pass
-
-    pufferlib.viz.build_gallery_index(render_dir, file_metrics=file_metrics)
-    print(f"Rendered {len(episode_summaries)} replay pages into {render_dir}")
-    print(f"Wrote replay index to {os.path.join(render_dir, 'index.html')}")
-    return render_dir
-
-
 def _render_eval_failures(
     env_name,
     run_args,
@@ -2236,7 +2089,10 @@ def _render_eval_failures(
         print(f"No failures matched for benchmark {benchmark['name']}; wrote {selected_path}")
         return {"episodes": [], "summary": None}
 
-    map_indices = _resolve_map_indices(run_args["env"]["map_dir"], selected_rows["map_name"].tolist())
+    map_indices = drive_benchmark._resolve_map_indices(
+        run_args["env"]["map_dir"],
+        selected_rows["map_name"].tolist(),
+    )
     seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
     pairs = list(zip(map_indices, seeds))
     failure_args = copy.deepcopy(run_args)
@@ -2275,7 +2131,7 @@ def _render_eval_failures(
         replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
         num_workers = min(configured_worker_count, len(replay_pairs))
         failure_args["vec"]["num_envs"] = num_workers
-        worker_env_kwargs, total_steps = _plan_failure_replay_workers(
+        worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
             failure_args,
             replay_pairs,
             num_workers,
@@ -2299,8 +2155,8 @@ def _render_eval_failures(
             evaluation_policy_cache=evaluation_policy_cache,
         )
         summaries.extend(wave_summaries)
-    summary = _write_eval_reports(summaries, failures_dir, len(pairs))
-    _render_eval_replays(summaries, failures_dir)
+    summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
+    drive_eval_replay._render_eval_replays(summaries, failures_dir)
     return {
         "episodes": summaries,
         "summary": summary,

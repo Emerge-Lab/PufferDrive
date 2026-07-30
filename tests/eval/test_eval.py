@@ -15,6 +15,7 @@ import yaml
 import pufferlib
 from pufferlib import pufferl
 from pufferlib.ocean.drive import benchmark as drive_benchmark
+from pufferlib.ocean.drive import eval_replay as drive_eval_replay
 
 
 SEED = 42
@@ -251,12 +252,12 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     replay_args = drive_benchmark.build_benchmark_args(args, benchmarks[0], environment_config)
     replay_args["env"]["num_agents"] = replay_args["eval"]["num_agents"]
 
-    map_indices = pufferl._resolve_map_indices(
+    map_indices = drive_benchmark._resolve_map_indices(
         replay_args["env"]["map_dir"],
         standard_metrics["map_name"].tolist(),
     )
     map_seed_pairs = [(map_idx, int(seed)) for map_idx, seed in zip(map_indices, standard_metrics["seed"].tolist())]
-    worker_env_kwargs, total_steps = pufferl._plan_failure_replay_workers(
+    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
         replay_args,
         map_seed_pairs,
         CARLA_WORKER_COUNT,
@@ -275,7 +276,7 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
         policy=ZeroPolicy(action_count=63),
     )
     replay_output_dir = carla_evaluation["output_root"] / "seed_replay"
-    replay_summary = pufferl._write_eval_reports(
+    replay_summary = drive_benchmark._write_eval_reports(
         replay_summaries,
         replay_output_dir,
         CARLA_SCENARIO_COUNT,
@@ -341,7 +342,7 @@ def _read_replay_header(replay_path):
 def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch):
     args = _replay_render_args()
     map_seed_pairs = [(0, 1234), (0, 5678)]
-    worker_env_kwargs, total_steps = pufferl._plan_failure_replay_workers(
+    worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
         args,
         map_seed_pairs,
         num_workers=2,
@@ -391,7 +392,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         assert header["obs_dim"] > 0
         assert required_chunks <= set(header["chunks"])
 
-    render_dir = Path(pufferl._render_eval_replays(summaries, str(tmp_path)))
+    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path)))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
