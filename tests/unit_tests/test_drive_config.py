@@ -60,7 +60,7 @@ class TestDriveConfig(unittest.TestCase):
     def test_training_performance_defaults(self):
         args = load_config("puffer_drive")
         self.assertFalse(args["train"]["compile"])
-        self.assertEqual(args["train"]["precision"], "float32")
+        self.assertEqual(args["train"]["precision"], "bfloat16")
 
     @patch("sys.argv", ["pufferl.py", "--train.learning-rate=0.5"])
     def test_old_flag_syntax_rejected_with_hint(self):

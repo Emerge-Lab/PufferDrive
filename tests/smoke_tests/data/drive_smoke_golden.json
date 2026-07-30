@@ -28,7 +28,7 @@
     "reward_components/timestep": -9.865621832432226e-05,
     "reward_components/velocity": 0.0,
     "score": 0.0,
-    "velocity_progress_sum": 0.0
+    "velocity_progress_sum": 0.02285407153506051
   },
   "losses": {
     "approx_kl": 0.005337630065956286,

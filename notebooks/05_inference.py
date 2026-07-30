@@ -1554,8 +1554,12 @@ axes[0].set_title("Mean L2 norm of pooled embedding\n(relative contribution to b
 axes[0].tick_params(axis="x", rotation=45)
 axes[0].grid(True, axis="y", alpha=0.3)
 
-# (2) Mean |activation| per embedding dim, per encoder
-M = np.stack([pooled[n].abs().mean(0).cpu().numpy() for n in enc_names])
+# (2) Mean |activation| per embedding dim, per encoder. Encoder embedding
+# widths differ, so NaN-pad rows to the widest (imshow leaves NaN blank).
+rows = [pooled[n].abs().mean(0).cpu().numpy() for n in enc_names]
+M = np.full((len(rows), max(r.shape[0] for r in rows)), np.nan)
+for row_idx, row in enumerate(rows):
+    M[row_idx, : row.shape[0]] = row
 im = axes[1].imshow(M, aspect="auto", cmap="magma")
 axes[1].set_yticks(range(len(enc_names)))
 axes[1].set_yticklabels(enc_names)
