@@ -76,14 +76,14 @@
 // =====================================================================================
 
 // Which agents get initialized at reset
-#define INIT_ALL_VALID 0
-#define INIT_ONLY_CONTROLLABLE_AGENTS 1
+#define INIT_MODE_CREATE_ALL_VALID 0
+#define INIT_MODE_CREATE_ONLY_CONTROLLED 1
 
 // Which initialized agents the policy controls
-#define CONTROL_VEHICLES 0
-#define CONTROL_AGENTS 1
-#define CONTROL_WOSAC 2
-#define CONTROL_SDC_ONLY 3
+#define CONTROL_MODE_VEHICLES 0
+#define CONTROL_MODE_AGENTS 1
+#define CONTROL_MODE_WOSAC 2
+#define CONTROL_MODE_SDC_ONLY 3
 
 // Per-agent controller
 #define CONTROLLER_STATIC 0
@@ -92,8 +92,8 @@
 #define CONTROLLER_IDM 3
 
 // Episode generation
-#define SIMULATION_GIGAFLOW 0
-#define SIMULATION_REPLAY 1
+#define SIMULATION_MODE_GIGAFLOW 0
+#define SIMULATION_MODE_REPLAY 1
 
 // Which traffic controls are enforced
 #define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
@@ -101,8 +101,9 @@
 #define TRAFFIC_CONTROL_SCOPE_ALL 2
 
 // What happens to an agent on collision/infraction
-#define STOP_AGENT 1
-#define REMOVE_AGENT 2
+#define INFRACTION_BEHAVIOR_IGNORE 0
+#define INFRACTION_BEHAVIOR_STOP 1
+#define INFRACTION_BEHAVIOR_REMOVE 2
 
 // Goal set refresh policy
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
@@ -114,8 +115,12 @@
 #define GOAL_SOURCE_GT 2    // seed directly from the logged ground-truth trajectory
 
 // Dynamics model
-#define CLASSIC 0
-#define JERK 1
+#define DYNAMICS_MODEL_CLASSIC 0
+#define DYNAMICS_MODEL_JERK 1
+
+// Action representation
+#define ACTION_TYPE_DISCRETE 0
+#define ACTION_TYPE_CONTINUOUS 1
 
 // Render target (selected by drive.py's render_mode kwarg, plumbed via binding.c)
 #define RENDER_WINDOW 0
@@ -131,11 +136,11 @@ static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
-// Discrete action space, JERK model
+// Discrete action space, DYNAMICS_MODEL_JERK
 static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
 static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
 
-// Discrete action space, CLASSIC model
+// Discrete action space, DYNAMICS_MODEL_CLASSIC
 static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
 static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
 
