@@ -5075,11 +5075,19 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->jerk_lat = (new_a_lat - agent->accel_lat) / env->dt;
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
-    } else {
-        // DYNAMICS_MODEL_JERK dynamics model
+    } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
         // Extract jerk action components
         float j_long, j_lat;
-        if (env->action_type == ACTION_TYPE_CONTINUOUS) {
+        if (env->action_type == ACTION_TYPE_DISCRETE) {
+            // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
+            int *action_array = (int *) env->actions;
+            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
+            int action_val = action_array[action_idx];
+            int j_long_idx = action_val / num_lat;
+            int j_lat_idx = action_val % num_lat;
+            j_long = JERK_LONG[j_long_idx];
+            j_lat = JERK_LAT[j_lat_idx];
+        } else if (env->action_type == ACTION_TYPE_CONTINUOUS) {
             float (*action_array_f)[2] = (float (*)[2]) env->actions;
             // Asymmetric scaling for longitudinal jerk to match discrete action space
             // Discrete: JERK_LONG = [-15, -4, 0, 4] (more braking than acceleration)
@@ -5091,15 +5099,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
             // Symmetric scaling for lateral jerk
             j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
-        } else if (env->action_type == ACTION_TYPE_DISCRETE) {
-            // Interpret action as a single integer: a = long_idx * num_lat + lat_idx
-            int *action_array = (int *) env->actions;
-            int num_lat = sizeof(JERK_LAT) / sizeof(JERK_LAT[0]);
-            int action_val = action_array[action_idx];
-            int j_long_idx = action_val / num_lat;
-            int j_lat_idx = action_val % num_lat;
-            j_long = JERK_LONG[j_long_idx];
-            j_lat = JERK_LAT[j_lat_idx];
         }
 
         if (phantom_braking_active) {
