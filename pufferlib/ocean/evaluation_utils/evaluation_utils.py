@@ -10,7 +10,7 @@ import pufferlib
 
 
 MAX_C_SEED = 2**31 - 1
-ALL_RENDER_FILTER = "all"
+ALL_INFRACTIONS_RENDER_FILTER = "all_infractions"
 FAILURE_RENDER_FILTER_COLUMNS = (
     "collision_rate",
     "at_fault_collision_rate",
@@ -341,7 +341,7 @@ def parse_render_filter_columns(configured_render_filter):
 
     resolved_render_filter_columns = []
     for column in render_filter_columns:
-        if column == ALL_RENDER_FILTER:
+        if column == ALL_INFRACTIONS_RENDER_FILTER:
             resolved_render_filter_columns.extend(FAILURE_RENDER_FILTER_COLUMNS)
             continue
         resolved_render_filter_columns.append(column)
