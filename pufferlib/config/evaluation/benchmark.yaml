@@ -61,7 +61,7 @@ benchmarks:
     max_agents_per_env: 128
     scenario_length: 91
     control_mode: control_vehicles
-    map_dir: pufferlib/resources/drive/binaries/womd
+    map_dir: pufferlib/resources/drive/binaries/wod-motion_val
 
   - name: womd_single
     seed: 42
@@ -70,7 +70,7 @@ benchmarks:
     num_maps: 1000
     scenario_length: 91
     control_mode: control_sdc_only
-    map_dir: pufferlib/resources/drive/binaries/womd
+    map_dir: pufferlib/resources/drive/binaries/wod-motion_val
 
   - name: nuplan_multi
     seed: 42
