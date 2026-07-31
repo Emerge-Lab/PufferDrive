@@ -68,6 +68,7 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
+    max_agents_per_env: null
     scenario_length: 91
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/wod-motion_val
@@ -87,6 +88,7 @@ benchmarks:
     simulation_mode: replay
     num_scenarios: 1000
     num_maps: 1000
+    max_agents_per_env: null
     scenario_length: 200
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/nuplan

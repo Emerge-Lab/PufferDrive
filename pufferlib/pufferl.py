@@ -1602,6 +1602,14 @@ def eval(
         eval_output_dir = os.path.join(run_dir, "eval")
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
+    failure_replay_output_dir = None
+    if failure_replay_csv is not None:
+        failure_replay_csv = os.path.abspath(failure_replay_csv)
+        if not os.path.isfile(failure_replay_csv):
+            raise pufferlib.APIUsageError(
+                f"eval.failure_replay_csv must reference an existing CSV file: {failure_replay_csv}"
+            )
+        failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
     cli_override_config = OmegaConf.from_dotlist(cli_overrides)
@@ -1617,15 +1625,21 @@ def eval(
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
-        benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
-        benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
-        os.makedirs(benchmark_output_dir)
+        if failure_replay_output_dir is not None:
+            benchmark_output_dir = failure_replay_output_dir
+            resolved_benchmark_output_dir = os.path.join(benchmark_output_dir, "failures")
+            os.makedirs(resolved_benchmark_output_dir, exist_ok=True)
+        else:
+            benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
+            benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
+            os.makedirs(benchmark_output_dir)
+            resolved_benchmark_output_dir = benchmark_output_dir
         drive_benchmark.write_resolved_benchmark_config(
             run_args,
             benchmark,
             benchmark_config_path,
             checkpoint_config_path,
-            os.path.join(benchmark_output_dir, "resolved_benchmark.yaml"),
+            os.path.join(resolved_benchmark_output_dir, "resolved_benchmark.yaml"),
         )
 
         np.random.seed(run_args["train"]["seed"])

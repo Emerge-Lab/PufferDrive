@@ -133,11 +133,14 @@ def load_benchmark_config(config_path, selected_names):
             raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
         scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
-        max_agents_per_env = _positive_int(benchmark.get("max_agents_per_env"), f"Benchmark {name} max_agents_per_env")
         num_maps = _positive_int(benchmark.get("num_maps"), f"Benchmark {name} num_maps")
         control_mode = benchmark.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
             raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
+        max_agents_per_env = benchmark.get("max_agents_per_env")
+        is_single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
+        if max_agents_per_env is not None or not is_single_agent_replay:
+            max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} max_agents_per_env")
 
         map_dir = benchmark.get("map_dir")
         if not isinstance(map_dir, str) or not map_dir:
@@ -204,10 +207,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the fixed benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
-    if eval_agent_count < benchmark["max_agents_per_env"]:
+    max_agents_per_env = benchmark["max_agents_per_env"]
+    if max_agents_per_env is not None and eval_agent_count < max_agents_per_env:
         raise pufferlib.APIUsageError(
             f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
-            f"max_agents_per_env ({benchmark['max_agents_per_env']})"
+            f"max_agents_per_env ({max_agents_per_env})"
         )
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
@@ -221,10 +225,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
             "num_maps": benchmark["num_maps"],
             "scenario_length": benchmark["scenario_length"],
             "resample_frequency": benchmark["scenario_length"],
-            "max_agents_per_env": benchmark["max_agents_per_env"],
             "control_mode": benchmark["control_mode"],
         }
     )
+    if max_agents_per_env is not None:
+        args["env"]["max_agents_per_env"] = max_agents_per_env
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 
