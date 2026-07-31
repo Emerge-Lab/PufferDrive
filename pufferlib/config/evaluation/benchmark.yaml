@@ -1,5 +1,5 @@
 env:
-  eval_mode: 1
+  eval_mode: true
   compute_eval_metrics: true
   collision_behavior: stop
   offroad_behavior: stop

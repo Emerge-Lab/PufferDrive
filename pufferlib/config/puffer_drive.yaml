@@ -200,6 +200,7 @@ train:
   seed: 42
   # Null disables evaluation during training.
   evaluation_interval_epochs: null
+  # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
   evaluation_benchmarks: carla_fast
   torch_deterministic: false
   cpu_offload: false
