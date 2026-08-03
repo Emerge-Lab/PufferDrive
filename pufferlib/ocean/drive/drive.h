@@ -4225,6 +4225,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Zero-crossing: snap to 0 when crossing zero
         if (signed_v * v_new < 0) {
             v_new = 0.0f;
+            a_long_new = 0.0f;
+            a_lat_new = 0.0f;
         } else {
             v_new = clip(v_new, -2.0f, MAX_SPEED);
         }
