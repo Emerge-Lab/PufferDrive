@@ -77,14 +77,9 @@ train.update_epochs: 2
 train.compile: true
 train.checkpoint_interval: 500
 
-# validation_gigaflow pinned to the same Town10HD single-agent setup the
-# training uses, so each eval cycle drops an obs_html gallery of rollouts
-# you can browse for DNFs.
-eval.validation_gigaflow.env.map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
-eval.validation_gigaflow.env.num_maps: 1
-eval.validation_gigaflow.env.num_agents: 64
-eval.validation_gigaflow.env.min_agents_per_env: 1
-eval.validation_gigaflow.env.max_agents_per_env: 1
+# Run the catalog-defined fast CARLA evaluation every 100 training epochs.
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: carla_fast
 
 # W&B. Group has no space: submit_cluster.py joins the inner command into a
 # bash -c string without quoting arg values, so a space would split the arg.

@@ -1,179 +1,207 @@
-# Evaluation — operational guide
+# Evaluation
 
-How evaluation works in PufferDrive and how to run it. All evaluation goes
-through one system: the `Evaluator` classes in
-`pufferlib/ocean/benchmark/evaluators/` orchestrated by the `EvalManager` in
-`pufferlib/ocean/benchmark/manager.py`. The same evaluators run inline during
-training and standalone from the CLI — there is no second eval path.
+PufferDrive evaluation is config-driven. A named benchmark defines which
+scenarios to run. The evaluator writes deterministic per-episode
+metrics and can replay only the failed episodes as interactive HTML.
 
-## Concepts
+Failure selection, replay capture, and HTML rendering are all handled by
+`puffer eval`; there is no separate failure-mining workflow.
 
-- **Evaluator** — one evaluation, defined by an `eval.<name>` section in
-  `pufferlib/config/puffer_drive.yaml`. It owns an env config, a rollout, a set
-  of metrics, and optional rendering.
-- **EvalManager** — discovers every `eval.<name>` section, instantiates the
-  evaluators, and runs the ones whose `interval` is due (inline) or that you
-  name (standalone). One evaluator failing doesn't stop the rest.
-- **Evaluator types** (the `type` field): `multi_scenario` (sweep a scenario
-  set in one batched rollout), `behavior_class` (a labelled nuPlan scene
-  bucket), `human_replay`, `wosac`.
+## Configuration
 
-## Config schema
+The evaluation files live outside `pufferlib/ocean` because they configure the
+evaluation application, not the simulator:
 
-```yaml
-eval:
-  <name>:
-    type: multi_scenario        # registered evaluator class (omit for a template)
-    enabled: 'true'             # skip when false
-    interval: 250               # run every N epochs inline (0 disables inline)
-    mode: inline                # inline (block training) | subprocess
-    inherits: <other_section>   # optional: pull defaults from another section
-    clean: 'true'               # zero perturbations/dropout + enforce red lights
-    render: 'true'              # capture renders during the rollout
-    render_views: [sim_state, bev]  # camera views for the egl backend
-    render_backend: egl         # egl | triage_html | obs_html (see Render backends)
-    env:                        # any env override
-      <key>: <value>
-    eval:                       # evaluator-specific knobs (see below)
-      <key>: <value>
-    vec:                        # any vec override
-      <key>: <value>
-```
+- `pufferlib/config/evaluation/benchmark.yaml` defines the shared deterministic
+  environment and named benchmarks.
+- `pufferlib/config/puffer_drive.yaml` selects that file and configures the
+  evaluator under `eval`.
 
-A section **without** a `type` is a *template*: it is never instantiated, only
-pulled in via `inherits`. `validation_defaults` is a template.
+Each configured benchmark contains:
 
-`eval.*` knobs read by `multi_scenario`:
+- `name`: positional benchmark name passed after `puffer_drive`.
+- `simulation_mode`: `gigaflow` for generated scenarios or `replay` for recorded ones.
+- `num_scenarios`: number of episode summaries expected in the report.
+- `num_maps`: number of sorted map files available to the benchmark.
+- `max_agents_per_env`: maximum active agents in one simulator environment.
+- `scenario_length`: maximum number of simulator steps per scenario.
+- `control_mode`: which agents the policy controls.
+- `map_dir`: local map file or directory containing `.bin` files.
 
-| Key | Meaning |
-|---|---|
-| `eval.num_scenarios` | how many episodes to evaluate (loop target) |
-| `eval.export_episode_csv` | write one CSV row per finished episode |
-| `eval.verify_coverage` | report expected-vs-evaluated counts + duplicate maps |
-| `eval.render_num_scenarios` | how many scenarios to render (caps render cost) |
-| `eval.render_max_steps` | steps per rendered clip |
 
-The `clean` macro zeros `obs_dropout_lane`, `obs_dropout_boundary`,
-`partner_blindness_prob`, `phantom_braking_prob`,
-`phantom_braking_trigger_prob` and sets `traffic_light_behavior=1`. A value set
-explicitly in the section wins over the macro (e.g. `env.traffic_light_behavior
-= 0` keeps red lights ignored even with `clean = true`).
+`eval.num_agents` is the agent capacity of each evaluation worker and must be at
+least the benchmark's `max_agents_per_env`. The policy inference batch grows with
+the number of workers, so reduce both `eval.num_agents` and `vec.num_envs` for a
+small local CPU check.
+
+Replay benchmarks using `control_sdc_only` additionally cap their worker count with
+`eval.max_sdc_replay_workers` (default `4`).
 
 ## Running evaluation
 
-### Inline during training
-
-Any `enabled` evaluator with `interval > 0` runs automatically every `interval`
-epochs (and once at shutdown). Nothing extra to do — the metrics land in
-wandb/TensorBoard under `<name>/<metric>` and renders under `<name>/render`.
-
-### Standalone, by name
+Benchmark selection and a 3.0 checkpoint are required, with the matching `config.yaml` in the run directory.
 
 ```bash
-puffer eval puffer_drive --evaluator validation_gigaflow \
-    --load-model-path experiments/puffer_drive_xxxx/models/model_000500.pt
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  train.device=cpu
 ```
 
-Runs that one evaluator with its `eval.validation_gigaflow` config. The
-checkpoint's network architecture is read from the sibling `config.yaml` (next
-to `models/`), so a checkpoint loads even if its policy/rnn dims differ from
-`puffer_drive.yaml`. With no `--load-model-path`, a fresh (random) policy is used —
-useful for smoke-testing the eval path itself.
-
-### Standalone, ad-hoc
-
-Same as by-name, except instead of naming an evaluator you select one of the two
-built-in `validation_*` evaluators by simulation and override its config from the
-CLI — no config edit needed:
-
-- `--eval_simulation gigaflow` → runs the `validation_gigaflow` section
-- `--eval_simulation replay` → runs the `validation_replay` section
-
-The flags below override that evaluator's config for this run, and each applies
-**only when passed** — omit one and the evaluator's own `eval.*` value stands:
+Select multiple benchmarks with a comma-separated value:
 
 ```bash
-puffer eval puffer_drive --eval_simulation gigaflow \
-    --load-model-path <ckpt> \
-    --num_scenarios 50 --render 1 --render-backend obs_html --num_maps 4
+puffer eval puffer_drive carla_fast,womd_single \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt
 ```
 
-| Flag | Effect |
-|---|---|
-| `--eval_simulation gigaflow\|replay` | selects `validation_<sim>` when `--evaluator` is absent |
-| `--num_scenarios N` | override the evaluator's `eval.num_scenarios` |
-| `--render 0\|1` | toggle rendering on/off |
-| `--render-backend egl\|triage_html\|obs_html` | choose the renderer (see Render backends) |
-| `--num_maps N` | override `env.num_maps` (CARLA maps for gigaflow, bin count for replay) |
+For a smaller CPU run using the committed `carla_fast` benchmark:
 
-Any other section value can be overridden with the generic dotted form, e.g.
-`--eval.validation-replay.env.scenario-length 91`.
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  eval.num_agents=50 \
+  vec.num_envs=2 \
+  train.device=cpu
+```
 
-### Subprocess mode
+Hydra overrides are applied after the selected benchmark. This supports
+parameter experiments without editing `benchmark.yaml`:
 
-`mode = "subprocess"` runs the evaluator in a fresh `python -m pufferlib.pufferl
-eval … --out <json>` process that loads the latest checkpoint from disk; the
-parent reads metrics back from the JSON. Use it to isolate a heavy/leaky eval
-from the training process.
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  env.goal_speed=10 \
+  eval.output_name=goal_speed_10
+```
+
+Use `eval.output_name` when comparing runs so the folder identifies the
+experiment. The resolved configuration saved with every result records the
+effective values.
+
+## Evaluation flow
+
+For each selected benchmark, the evaluator:
+
+1. Loads the checkpoint's policy, RNN, and accepted 3.0 environment settings.
+2. Applies the benchmark and shared evaluation overrides.
+3. Splits a deterministic scenario window across evaluation workers.
+4. Runs deterministic policy inference and gathers one `evaluation_episode`
+   summary per scenario.
+5. Writes per-episode metrics and aggregate numeric means.
+
+The resolved configuration is written with the report so every run records its
+benchmark config, checkpoint configuration, worker arguments, maps, and seeds.
+
+## Scenario replay and rendering
+
+Capture and render every scenario from the standard benchmark pass with:
+
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  eval.render_scenarios=true \
+  eval.capture_observations=false
+```
+
+`eval.render_scenarios=true` records each of the benchmark's configured
+`num_scenarios` during the metrics rollout. It writes the completed
+`.replay.zlib` files incrementally, then renders one interactive HTML page per
+scenario and builds a navigable `index.html`.
+
+`eval.capture_observations=true` also stores policy observations.
+
+## Filtered replay and rendering
+
+Set `eval.render_filter` to render scenarios where a selected metric is greater
+than zero:
+
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=weights/mimolette/models/model_puffer_drive_003815.pt \
+  eval.render_filter=offroad_rate \
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
+```
+
+The default `eval.render_filter: null` disables filtered rendering. Multiple comma-separated columns use OR: `collision_rate,offroad_rate` selects scenarios where either metric is greater than zero. Use `eval.render_filter=all_infractions` to select collision, at-fault collision, offroad, and red-light failures.
+
+The filtered pass replays the selected map/seed pairs, captures standard
+interactive `.replay.zlib` files, renders one HTML page per replay, and builds a
+navigable `index.html`. `eval.max_rendered_failures` limits each selected benchmark
+to its first N matching scenarios in metrics-file order; the default `null`
+renders every match. `eval.capture_observations=true` also stores policy observations;
+`eval.observation_replay_wave_size` and
+`eval.observation_replay_writer_count` bound its peak memory and writer
+parallelism.
+
+To filter and replay an existing metrics CSV without rerunning the standard
+benchmark pass:
+
+```bash
+puffer eval puffer_drive carla \
+  load_model_path=experiments/mimolette/models/model_puffer_drive_003815.pt \
+  eval.failure_replay_csv=experiments/mimolette/eval/carla/episode_metrics.csv \
+  eval.render_filter=offroad_rate \
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
+```
+
+The selected benchmark supplies the replay environment settings, so it should
+match the benchmark that produced the CSV. `eval.failure_replay_csv` requires a
+non-null `eval.render_filter`.
 
 ## Outputs
 
-- **Aggregate metrics** — a weighted per-agent mean of the env's `vec_log`
-  emissions, logged to wandb/TensorBoard. Always produced.
-- **Per-episode CSV** (`eval.export_episode_csv = true`) — one row per finished
-  episode in `episode_metrics/<name>_epoch{E}_step{N}.csv`, including
-  `map_name`/`scenario_id` and the per-episode metrics. Drains the env's
-  `completed_episode` summaries, which the manager enables automatically for
-  evaluators that opt in.
-- **Coverage** (`eval.verify_coverage = true`) — folds `coverage_expected`,
-  `coverage_found`, `coverage_unique_maps`, `coverage_complete` into the
-  metrics and logs any maps evaluated more than once. For a unique-scenario
-  sweep (replay) duplicates flag a problem; for cycling maps (gigaflow) they
-  are expected.
-- **Renders** — selected by `render_backend` (see below). `render_num_scenarios`
-  caps how many scenarios are rendered, so render cost stays bounded regardless
-  of `num_scenarios`.
+Direct checkpoint evaluation writes below the checkpoint run directory:
 
-### Render backends
+```text
+eval/<benchmark>[_<output_name>]/<timestamp>/
+├── resolved_benchmark.yaml
+├── episode_metrics.csv
+├── evaluation_summary.json
+├── replays/                        # only when render_scenarios=true
+│   └── *.replay.zlib
+├── rendered_replays/               # only when render_scenarios=true
+│   ├── *.html
+│   └── index.html
+└── failures/                       # render_filter set without render_scenarios
+    ├── selected_failures.csv
+    ├── episode_metrics.csv
+    ├── evaluation_summary.json
+    ├── replays/
+    │   └── *.replay.zlib
+    └── rendered_replays/
+        ├── *.html
+        └── index.html
+```
 
-`render_backend` picks one renderer (it is not a stack — exactly one runs):
+Without `eval.output_name`, the first run uses `<benchmark>`. With a name, it
+uses `<benchmark>_<output_name>`.
 
-| `render_backend` | Output | Shows | Built from | Use it to |
-|---|---|---|---|---|
-| `egl` (default) | mp4 per (scenario, view) | top-down sim camera | GPU EGL → ffmpeg | get a shareable video clip |
-| `triage_html` | one HTML per episode → `gif/<name>/` | scene playback **+ per-episode metrics** | the captured compact-replay bundle (no re-sim) | triage *which* episodes failed |
-| `obs_html` | one HTML per scenario (+ gallery `index.html`) → `obs/<name>/` | interactive scene **+ each agent's NN observation** | a CPU re-roll capturing state + obs | inspect *what the policy sees* |
+`episode_metrics.csv` contains map and scenario identifiers, the episode seed,
+agent batch size, infractions, progress, rewards, and score metrics.
+`evaluation_summary.json` contains the requested scenario count, emitted episode
+count, and means for every numeric metric. If the evaluator emits fewer or more
+episodes than requested, it prints a warning and still writes the available
+results; compare `num_scenarios` with `num_episodes` to detect the mismatch.
 
-Both HTML backends are CPU-only (no EGL/ffmpeg). `triage_html` is lighter (it
-reuses data already captured during the rollout); `obs_html` re-simulates to
-record the observation, so it's heavier but shows the policy's actual inputs.
+## Evaluation during training
 
-## The built-in evaluators
+Training uses the same configured evaluator and the live policy:
 
-| Section | Type | What it runs |
-|---|---|---|
-| `validation_replay` | multi_scenario | replay sweep over a nuPlan bin directory, `control_sdc_only` |
-| `validation_gigaflow` | multi_scenario | gigaflow sweep over the CARLA maps |
-| `wosac` | wosac | Waymo open sim agents challenge metrics |
+```yaml
+env:
+  num_agents: 1024
+eval:
+  num_agents: 128
+train:
+  evaluation_interval_epochs: 100
+  evaluation_benchmarks: carla_fast
+```
 
-`validation_replay` and `validation_gigaflow` inherit shared eval reward
-weights and clean-eval knobs from the `validation_defaults` template.
-
-## Adding an evaluator
-
-1. Subclass `Evaluator` (or an existing type) in
-   `pufferlib/ocean/benchmark/evaluators/`, set `type_name`, and register it in
-   `evaluators/__init__.py`. Most subclasses only override `env_overrides`,
-   `_should_stop`, and optionally `_render_env_overrides`; the base `rollout`
-   handles the step loop, metric aggregation, CSV, and coverage.
-2. Add an `eval.<name>` section with `type: <your_type_name>`.
-
-## Scripts
-
-`scripts/eval/` drives the unified pipeline over many checkpoints:
-
-- `run_all_eval.sh` — eval the latest checkpoint in every `experiments/*/`.
-- `run_all_latest_eval.py` — eval the latest checkpoint in every `runs/*/`, with rendering.
-- `run_failure_scenarios.py` — re-eval from a failure CSV.
-
-All call `puffer eval puffer_drive` with the flags above.
+The default `evaluation_interval_epochs: null` disables evaluation during
+training. Mid-training evaluation currently shares
+`vec.num_envs` with training. If training ends between scheduled intervals, one
+final evaluation runs at the last epoch. Training evaluation logs benchmark
+metric means to the active logger and writes reports under the training run's
+`eval/training` hierarchy.
