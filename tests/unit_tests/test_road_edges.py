@@ -1,6 +1,6 @@
 """Test script for road edge extraction.
 
-Run with: python -m pufferlib.ocean.benchmark.test_road_edges
+Run with: python tests/unit_tests/test_road_edges.py
 """
 
 import numpy as np

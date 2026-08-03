@@ -13,9 +13,9 @@ import torch
 from matplotlib.patches import Polygon
 
 from pufferlib.pufferl import load_config, load_env, load_policy
-from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
-from pufferlib.ocean.benchmark.metrics import compute_interaction_features, compute_map_features
-from pufferlib.ocean.benchmark.geometry_utils import get_2d_box_corners
+from pufferlib.ocean.evaluation_utils.wosac.evaluator import WOSACEvaluator
+from pufferlib.ocean.evaluation_utils.wosac.metrics import compute_interaction_features, compute_map_features
+from pufferlib.ocean.evaluation_utils.wosac.geometry_utils import get_2d_box_corners
 
 
 def plot_road_edges(ax, road_edge_polylines, scenario_id):

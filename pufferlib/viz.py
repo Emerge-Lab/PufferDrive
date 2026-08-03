@@ -1,10 +1,5 @@
 """Bird's Eye View visualization for PufferDrive scenarios using Matplotlib."""
 
-import dataclasses
-from typing import Optional, Tuple
-
-
-import re
 import matplotlib.figure
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -27,9 +22,6 @@ COLORS = {
     "road_line": "#808080",
     "road_edge": "#000000",
     "lane": "#D3D3D3",
-    "crosswalk": "#E6C200",
-    "speed_bump": "#C90000",
-    "stop_sign": "#FF0000",
     "inactive_agent": "#808080",
     "background": "#F5F5F5",
 }
@@ -84,40 +76,22 @@ METRIC_LABELS = [
     "multi_lane_score",
 ]
 
-
-@dataclasses.dataclass
-class VizConfig:
-    """Visualization config using radius and center for view bounds."""
-
-    center: Optional[Tuple[float, float]] = None
-    radius: Optional[float] = None
-    figsize: Tuple[float, float] = (20.0, 20.0)
-    dpi: int = 100
-    show_agent_id: bool = True
-    show_goal: bool = True
-    goal_radius: float = 2.0
-
-    def get_bounds(self, scenario) -> Tuple[float, float, float, float]:
-        map_corners = scenario.get("map_corners")
-
-        if self.center is not None:
-            cx, cy = self.center
-        elif map_corners and len(map_corners) >= 4:
-            cx, cy = (map_corners[0] + map_corners[2]) / 2, (map_corners[1] + map_corners[3]) / 2
-        else:
-            cx, cy = 0.0, 0.0
-
-        if self.radius is not None:
-            r = self.radius
-        elif map_corners and len(map_corners) >= 4:
-            r = max(map_corners[2] - map_corners[0], map_corners[3] - map_corners[1]) / 2 * 1.02
-        else:
-            r = 100.0
-        return (cx - r, cx + r, cy - r, cy + r)
+PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+SIMULATOR_FIGSIZE = (20.0, 20.0)
+SIMULATOR_DPI = 100
+SIMULATOR_GOAL_RADIUS_METERS = 2.0
+SIMULATOR_DEFAULT_RADIUS_METERS = 100.0
 
 
-def get_agent_color(agent_id, is_active=True):
-    return COLORS["inactive_agent"] if not is_active else VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)]
+def _get_bounds(scenario):
+    map_corners = scenario.get("map_corners")
+    if map_corners and len(map_corners) >= 4:
+        center_x = (map_corners[0] + map_corners[2]) / 2
+        center_y = (map_corners[1] + map_corners[3]) / 2
+        radius = max(map_corners[2] - map_corners[0], map_corners[3] - map_corners[1]) / 2 * 1.02
+        return (center_x - radius, center_x + radius, center_y - radius, center_y + radius)
+    radius = SIMULATOR_DEFAULT_RADIUS_METERS
+    return (-radius, radius, -radius, radius)
 
 
 def _traffic_control_kind(control_type):
@@ -135,10 +109,6 @@ def _traffic_light_color(state):
     return TRAFFIC_LIGHT_COLORS.get(int(state), COLORS["inactive_agent"])
 
 
-def _scale_ratio(numerator, denominator, default=1.0):
-    return default if denominator == 0 else float(numerator) / float(denominator)
-
-
 def _obs_scales(
     env_cfg=None,
     obs_norm_goal_offset_m=100.0,
@@ -146,7 +116,6 @@ def _obs_scales(
     obs_norm_veh_width_m=10.0,
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
 ):
     env_cfg = env_cfg or {}
     obs_norm_goal_offset_m = float(env_cfg.get("obs_norm_goal_offset_m", obs_norm_goal_offset_m))
@@ -154,27 +123,14 @@ def _obs_scales(
     obs_norm_veh_width_m = float(env_cfg.get("obs_norm_veh_width_m", obs_norm_veh_width_m))
     obs_norm_veh_length_m = float(env_cfg.get("obs_norm_veh_length_m", obs_norm_veh_length_m))
     obs_norm_road_seg_length_m = float(env_cfg.get("obs_norm_road_seg_length_m", obs_norm_road_seg_length_m))
-    obs_norm_road_seg_width_m = float(env_cfg.get("obs_norm_road_seg_width_m", obs_norm_road_seg_width_m))
+    inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
     return {
         "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
-        "obs_norm_xy_offset_m": obs_norm_xy_offset_m,
-        "veh_width_to_position": _scale_ratio(obs_norm_veh_width_m, obs_norm_xy_offset_m),
-        "veh_len_to_position": _scale_ratio(obs_norm_veh_length_m, obs_norm_xy_offset_m),
-        "goal_to_position": _scale_ratio(obs_norm_goal_offset_m, obs_norm_xy_offset_m),
-        "road_length_to_position": _scale_ratio(obs_norm_road_seg_length_m, obs_norm_xy_offset_m),
-        "road_width_to_position": _scale_ratio(obs_norm_road_seg_width_m, obs_norm_xy_offset_m),
+        "veh_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_width_m * inverse_xy_scale,
+        "veh_len_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_length_m * inverse_xy_scale,
+        "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
+        "road_length_to_position": 1.0 if inverse_xy_scale is None else obs_norm_road_seg_length_m * inverse_xy_scale,
     }
-
-
-def _init_fig_ax(config: VizConfig):
-    fig, ax_main = plt.subplots()
-    fig.set_size_inches(config.figsize)
-
-    fig.set_dpi(config.dpi)
-    fig.set_facecolor(COLORS["background"])
-    ax_main.set_facecolor(COLORS["background"])
-
-    return fig, ax_main
 
 
 def _build_road_data(road_elements):
@@ -287,7 +243,7 @@ def _render_traffic(ax, traffic_data, timestep):
         )
 
 
-def _render_agents(ax, agents, active_indices, static_indices, config, px_per_meter):
+def _render_agents(ax, agents, active_indices, static_indices, px_per_meter):
     if not agents:
         return
     active_set, static_set = set(active_indices or []), set(static_indices or [])
@@ -316,7 +272,7 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
         agent_type = agent.get("type", 1)
         agent_id = agent.get("id", idx)
         is_active = idx in active_set
-        color = get_agent_color(agent_id, is_active)
+        color = VEHICLE_COLORS[agent_id % len(VEHICLE_COLORS)] if is_active else COLORS["inactive_agent"]
         edge = "black" if is_active else COLORS["inactive_agent"]
 
         if agent_type == 1:
@@ -333,10 +289,9 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
             vehicle_colors.append(color)
             vehicle_edges.append(edge)
 
-            if config.show_agent_id:
-                text_items.append((x, y + width, str(agent_id)))
+            text_items.append((x, y + width, str(agent_id)))
 
-            if config.show_goal and is_active:
+            if is_active:
                 gx, gy = agent.get("current_goal_x"), agent.get("current_goal_y")
                 if gx is not None and gy is not None:
                     goal_points.append((gx, gy))
@@ -440,7 +395,7 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
     if goal_points:
         gx, gy = zip(*goal_points)
         ax.scatter(gx, gy, s=20, c=goal_colors, marker="o", zorder=13)
-        goal_patches = [Circle((x, y), radius=config.goal_radius) for x, y in goal_points]
+        goal_patches = [Circle((x, y), radius=SIMULATOR_GOAL_RADIUS_METERS) for x, y in goal_points]
         ax.add_collection(
             PatchCollection(
                 goal_patches,
@@ -460,22 +415,22 @@ def _render_agents(ax, agents, active_indices, static_indices, config, px_per_me
 
 def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
     """Render simulator state to RGB image array."""
-    vis_config = VizConfig()
-    map_data = {
-        "map_name": scenario.get("map_name"),
-        "road": _build_road_data(scenario.get("road_elements", [])),
-        "traffic": _build_traffic_data(scenario.get("traffic_elements", [])),
-    }
+    road_data = _build_road_data(scenario.get("road_elements", []))
+    traffic_data = _build_traffic_data(scenario.get("traffic_elements", []))
 
-    bounds = vis_config.get_bounds(scenario)
+    bounds = _get_bounds(scenario)
     x_min, x_max, y_min, y_max = bounds
 
     px_per_meter = min(
-        vis_config.figsize[0] * vis_config.dpi / (x_max - x_min),
-        vis_config.figsize[1] * vis_config.dpi / (y_max - y_min),
+        SIMULATOR_FIGSIZE[0] * SIMULATOR_DPI / (x_max - x_min),
+        SIMULATOR_FIGSIZE[1] * SIMULATOR_DPI / (y_max - y_min),
     )
 
-    fig, ax = _init_fig_ax(vis_config)
+    fig, ax = plt.subplots()
+    fig.set_size_inches(SIMULATOR_FIGSIZE)
+    fig.set_dpi(SIMULATOR_DPI)
+    fig.set_facecolor(COLORS["background"])
+    ax.set_facecolor(COLORS["background"])
 
     ax.set_aspect("equal")
     ax.set_title(
@@ -484,15 +439,14 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
         fontweight="bold",
     )
 
-    _render_roads(ax, map_data.get("road"))
-    _render_traffic(ax, map_data.get("traffic"), timestep)
+    _render_roads(ax, road_data)
+    _render_traffic(ax, traffic_data, timestep)
 
     _render_agents(
         ax,
         scenario.get("agents", []),
         scenario.get("active_agent_indices", []),
         scenario.get("static_agent_indices", []),
-        vis_config,
         px_per_meter,
     )
 
@@ -502,19 +456,17 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
     return _img_from_fig(fig)
 
 
-def _img_from_fig(fig: matplotlib.figure.Figure, close: bool = True) -> np.ndarray:
+def _img_from_fig(fig: matplotlib.figure.Figure) -> np.ndarray:
     fig.subplots_adjust(left=0.01, bottom=0.02, right=1.00, top=0.96)
     fig.canvas.draw()
     data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
     img = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
-    if close:
-        plt.close(fig)
+    plt.close(fig)
     return img
 
 
 def unpack_obs(
     obs_flat,
-    goal_regen_mode: str = "finite",
     reward_conditioning: bool = False,
     num_goals: int = 5,
     obs_slots_partners_n: int = 16,
@@ -535,9 +487,6 @@ def unpack_obs(
     obs_flat = np.asarray(obs_flat)
     if obs_flat.ndim == 1:
         obs_flat = obs_flat[None, :]
-
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
 
     ego_dim = binding.EGO_FEATURES
 
@@ -607,7 +556,6 @@ def unpack_obs(
 
 def plot_observation(
     obs,
-    goal_regen_mode="finite",
     reward_conditioning=False,
     num_goals=10,
     obs_slots_partners_n=16,
@@ -625,22 +573,16 @@ def plot_observation(
     obs_norm_veh_width_m=10.0,
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
-    obs_norm_road_seg_width_m=5.0,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
     Args:
         obs: flattened observation tensor
-        goal_regen_mode: "finite" or "rolling"
     """
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
-
     fig, ax = plt.subplots(figsize=(20, 20))
 
     ego_state, target_obs, partners_obs, lane_obs, boundary_obs, traffic_controls_obs = unpack_obs(
         obs,
-        goal_regen_mode=goal_regen_mode,
         reward_conditioning=reward_conditioning,
         num_goals=num_goals,
         obs_slots_partners_n=obs_slots_partners_n,
@@ -657,7 +599,6 @@ def plot_observation(
         obs_norm_veh_width_m=obs_norm_veh_width_m,
         obs_norm_veh_length_m=obs_norm_veh_length_m,
         obs_norm_road_seg_length_m=obs_norm_road_seg_length_m,
-        obs_norm_road_seg_width_m=obs_norm_road_seg_width_m,
     )
     target_position_scale = scales["goal_to_position"]
 
@@ -744,14 +685,13 @@ def plot_observation(
 
     # Road elements
     rl2p = scales["road_length_to_position"]
-    rw2p = scales["road_width_to_position"]
     count_lane = 0
     for i in range(lane_obs.shape[0]):
         if np.all(lane_obs[i] == 0):
             continue
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
-        length, width = lane_obs[i][3] * rl2p, lane_obs[i][4] * rw2p
+        length = lane_obs[i][3] * rl2p
         dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
         # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
         color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
@@ -770,7 +710,7 @@ def plot_observation(
             continue
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
-        length, width = boundary_obs[i][3] * rl2p, boundary_obs[i][4] * rw2p
+        length = boundary_obs[i][3] * rl2p
         dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -868,10 +808,10 @@ def _pack_replay_binary(header, chunks):
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
     payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
-    return base64.b64encode(zlib.compress(payload, level=6)).decode("ascii")
+    return zlib.compress(payload, level=3)
 
 
-def generate_interactive_replay(scenario, replay, filename="replay.html"):
+def encode_interactive_replay(scenario, replay):
     road_points = []
     road_lengths = []
     road_types = []
@@ -913,11 +853,15 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
 
-    # Quantize obs to int16: the obs chunk dominates file size; symmetric scale recovers values within ~S/2.
-    obs_f32 = np.asarray(replay["obs"], dtype=np.float32)
-    obs_scale = float(np.max(np.abs(obs_f32))) / 32767.0 if obs_f32.size else 1.0
-    if obs_scale == 0.0:
-        obs_scale = 1.0
+    observation_scale = 1.0
+    quantized_observations = None
+    if replay.get("obs") is not None:
+        observations_f32 = np.asarray(replay["obs"], dtype=np.float32)
+        if observations_f32.size:
+            observation_scale = float(np.max(np.abs(observations_f32))) / 32767.0
+        if observation_scale == 0.0:
+            observation_scale = 1.0
+        quantized_observations = np.round(observations_f32 / observation_scale).astype(np.int16)
 
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
@@ -930,12 +874,13 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "metrics_f32": replay["metrics_f32"].astype(np.float32, copy=False),
         "puffer_f32": replay["puffer_f32"].astype(np.float32, copy=False),
         "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
-        "obs": np.round(obs_f32 / obs_scale).astype(np.int16),
         "raw_action": replay["raw_action"].astype(np.float32, copy=False),
         "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if quantized_observations is not None:
+        chunks["obs"] = quantized_observations
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -951,8 +896,9 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
     # Fields: x, y, heading, length, width; width <= 0 marks frames with no valid logged pose.
     agents = scenario.get("agents", []) or []
     active_indices = scenario.get("active_agent_indices", []) or []
+    expert_indices = [agent_idx for agent_idx, agent in enumerate(agents) if int(agent.get("mark_as_expert", 0)) == 1]
     frame_count = int(replay["agent_f32"].shape[0])
-    active_count = int(replay["obs"].shape[1])
+    active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
     ghost = np.zeros((frame_count, max(1, active_count), 5), dtype=np.float32)
     for slot in range(min(active_count, len(active_indices))):
@@ -976,23 +922,18 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         ghost[:n, slot, 4] = np.where(lv[window] == 0, 0.0, width) if lv.shape[0] >= init_step + n else width
     chunks["ghost_f32"] = ghost
 
-    goal_regen_mode = scenario.get("goal_regen_mode", env_cfg.get("goal_regen_mode", "finite"))
-    if isinstance(goal_regen_mode, int):
-        goal_regen_mode = "finite" if goal_regen_mode == binding.GOAL_REGEN_FINITE else "rolling"
-
     metadata = {
         "map_name": scenario.get("map_name", "Unknown"),
         "scenario_id": scenario.get("scenario_id", "Unknown"),
-        "goal_regen_mode": goal_regen_mode,
-        "active_indices": scenario.get("active_agent_indices", []),
+        "expert_indices": expert_indices,
         "total_agents": int(scenario.get("num_total_agents", replay["agent_f32"].shape[1])),
         "eval_overrides": replay.get("eval_overrides") or {},
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
-        "active_count": int(replay["obs"].shape[1]),
-        "obs_dim": int(replay["obs"].shape[2]),
-        "obs_scale": obs_scale,
+        "active_count": int(replay["raw_action"].shape[1]),
+        "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
+        "obs_scale": observation_scale,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_goals": int(env_cfg["num_goals"]),
@@ -1006,19 +947,17 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
         "lane_count": int(lane_count),
         "boundary_count": int(boundary_count),
-        "obs_slots_lane_n": int(env_cfg["obs_slots_lane_n"]),
-        "obs_slots_boundary_n": int(env_cfg["obs_slots_boundary_n"]),
-        "obs_dropout_lane": float(env_cfg.get("obs_dropout_lane", 0.0)),
-        "obs_dropout_boundary": float(env_cfg.get("obs_dropout_boundary", 0.0)),
-        "obs_lane_stride": int(env_cfg.get("obs_lane_stride", 1)),
-        "obs_boundary_stride": int(env_cfg.get("obs_boundary_stride", 1)),
         "traffic_obs_count": int(env_cfg["obs_slots_traffic_controls_n"]),
         "goal_features": int(binding.GOAL_FEATURES),
         "scales": scales,
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
     }
-    payload = _pack_replay_binary(metadata, chunks)
+    return _pack_replay_binary(metadata, chunks)
+
+
+def _render_interactive_replay_payload(compressed_payload, filename):
+    payload = base64.b64encode(compressed_payload).decode("ascii")
 
     html_template = """
 <!DOCTYPE html>
@@ -1030,7 +969,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         :root {
             --bg:#e9ebee; --surface:rgba(255,255,255,.92); --surface-solid:#ffffff; --border:#dcdfe5;
             --text:#181b20; --muted:#6c7484; --field:rgba(108,116,132,.07);
-            --accent:#0a66d0; --accent-soft:rgba(10,102,208,.12); --danger:#d6202c;
+            --accent:#0a66d0; --danger:#d6202c;
             --road:#c6cad1; --line:#959ca8; --edge:#2a2e35;
             --shadow:0 1px 2px rgba(22,26,34,.05),0 10px 30px rgba(22,26,34,.10);
             --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -1038,7 +977,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         [data-theme="dark"] {
             --bg:#0d0f12; --surface:rgba(23,26,31,.92); --surface-solid:#171a1f; --border:#2a2f37;
             --text:#e9ebef; --muted:#8c94a4; --field:rgba(140,148,164,.08);
-            --accent:#4d9fff; --accent-soft:rgba(77,159,255,.16); --danger:#ff5560;
+            --accent:#4d9fff; --danger:#ff5560;
             --road:#363b43; --line:#5d6573; --edge:#06070a;
             --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 34px rgba(0,0,0,.55);
         }
@@ -1056,7 +995,6 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
         .dim { color:var(--muted); }
         .highlight { color:var(--accent); }
-        .link { color:var(--accent); cursor:pointer; }
         button, select, input { font:inherit; color:inherit; }
         .btn { border:1px solid var(--border); border-radius:7px; padding:6px 12px; background:var(--surface-solid); color:var(--text); font-size:12px; font-weight:600; cursor:pointer; }
         .btn:hover { border-color:var(--accent); color:var(--accent); }
@@ -1071,7 +1009,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         #overrides-body { grid-template-columns:1fr; max-height:34vh; overflow-y:auto; }
         #overrides-body .num { font-size:10px; overflow-wrap:anywhere; text-align:right; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
-        #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; --accent-soft:rgba(124,188,255,.25); position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
+        #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
         #tel-drag-handle { display:flex; align-items:center; gap:6px; }
         .cam-chip { margin-left:auto; padding:2px 8px; border:1px solid var(--border); border-radius:10px; background:transparent; color:var(--muted); font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; }
@@ -1117,7 +1055,6 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             <div class="label">Agents (active / total)</div><div class="value mono" id="meta-agents">-</div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
             <div id="overrides-body" class="grid toggle-body is-collapsed"></div>
-            <div class="label">Obs Road</div><div class="value" id="meta-obs-road">-</div>
             <button class="btn" onclick="toggleTheme()" style="width:100%; margin-top:12px">Toggle theme</button>
         </div>
         <div id="hud-telemetry" class="panel">
@@ -1152,14 +1089,18 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         </div>
     </div>
     <canvas id="c"></canvas>
+__PAYLOAD_CHUNKS__
     <script>
-        const B64_PAYLOAD = "__B64_PAYLOAD__";
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
+        const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
+        const STATIC_AGENT_COLOR = "#4a505a";
+        const INFRACTION_AGENT_COLOR = "#d92d20";
+        const INFRACTION_METRIC_COUNT = 4;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
@@ -1170,6 +1111,7 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
+        let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
 
         function chunk(name) {
@@ -1180,16 +1122,96 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             return new Uint8Array(H.buffer, start, n);
         }
         function frameMax() { return Math.max(0, (H ? H.frames : 1) - 1); }
+        async function decodeReplayPayload() {
+            const nodes = Array.from(document.querySelectorAll('.payload-chunk'));
+            if (!nodes.length) throw new Error('Missing replay payload');
+            const workerCode = `
+let parts = [];
+function decodeBase64(encoded) {
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+self.onmessage = async event => {
+    const message = event.data;
+    if (message.type === 'chunk') {
+        parts.push(decodeBase64(message.data));
+        self.postMessage({type:'progress', done:message.index + 1, total:message.total});
+        return;
+    }
+    if (message.type === 'end') {
+        try {
+            const stream = new DecompressionStream('deflate');
+            const buffer = await new Response(new Blob(parts).stream().pipeThrough(stream)).arrayBuffer();
+            parts = null;
+            self.postMessage({type:'done', buffer:buffer}, [buffer]);
+        } catch (error) {
+            self.postMessage({type:'error', message:String(error && error.message ? error.message : error)});
+        }
+    }
+};
+`;
+            return await new Promise((resolve, reject) => {
+                const workerUrl = URL.createObjectURL(new Blob([workerCode], {type:'text/javascript'}));
+                const worker = new Worker(workerUrl);
+                const loadText = document.getElementById('load-text');
+                let chunkIdx = 0;
+
+                function closeWorker() {
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                }
+                function sendNext() {
+                    if (chunkIdx >= nodes.length) {
+                        loadText.textContent = 'Inflating replay...';
+                        worker.postMessage({type:'end'});
+                        return;
+                    }
+                    const node = nodes[chunkIdx];
+                    worker.postMessage({
+                        type:'chunk',
+                        data:node.textContent,
+                        index:chunkIdx,
+                        total:nodes.length,
+                    });
+                    node.textContent = '';
+                    chunkIdx += 1;
+                }
+
+                worker.onmessage = event => {
+                    const message = event.data;
+                    if (message.type === 'progress') {
+                        loadText.textContent = 'Reading replay ' + message.done + ' / ' + message.total;
+                        setTimeout(sendNext, 0);
+                        return;
+                    }
+                    if (message.type === 'done') {
+                        closeWorker();
+                        for (const node of nodes) node.remove();
+                        resolve(message.buffer);
+                        return;
+                    }
+                    if (message.type === 'error') {
+                        closeWorker();
+                        reject(new Error(message.message));
+                    }
+                };
+                worker.onerror = event => {
+                    closeWorker();
+                    reject(new Error(event.message || 'Replay worker failed'));
+                };
+                sendNext();
+            });
+        }
         async function initReplay() {
-            const binary = atob(B64_PAYLOAD), bytes = new Uint8Array(binary.length);
-            for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
-            const ds = new DecompressionStream('deflate');
-            const buf = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+            const buf = await decodeReplayPayload();
             const view = new DataView(buf), headerLen = view.getUint32(0, true);
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
+            expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
@@ -1218,7 +1240,20 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
                 p += len;
             }
         }
-        function colorFor(id, control_state, stopped) { return control_state === 3 ? "#9b59b6" : (stopped ? "red" : (control_state === 0 ? VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length] : (control_state === 1 ? "#bfbfbf" : "#404040"))); }
+        function colorFor(id, isActive, isExpert) {
+            if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
+            return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
+        }
+        function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
+        }
+        function agentHasInfraction(frame, idx) {
+            const metricsBase = (frame * H.agent_cap + idx) * F.mf;
+            for (let metricIdx=0;metricIdx<INFRACTION_METRIC_COUNT;metricIdx++) {
+                if (C.metrics_f32[metricsBase+metricIdx] > 0) return true;
+            }
+            return false;
+        }
         function rr(x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
         function drawAgentBody(a, outline) {
             // Top-down sprites in agent frame (+x forward, rear at -l/2). Detail only when zoomed in enough to see it.
@@ -1248,7 +1283,11 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             const ib = (frame * H.agent_cap + idx) * F.ai;
             if (!C.agent_i32[ib+2]) return null;
             const fb = (frame * H.agent_cap + idx) * F.af;
-            return {idx:idx, id:C.agent_i32[ib], type:C.agent_i32[ib+1], control_state:C.agent_i32[ib+3], stopped:C.agent_i32[ib+4], removed:C.agent_i32[ib+5], cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:colorFor(C.agent_i32[ib], C.agent_i32[ib+3], C.agent_i32[ib+4])};
+            const agentType = C.agent_i32[ib+1], isActive = C.agent_i32[ib+3] === 1;
+            const isExpert = expertAgentIndices.has(idx);
+            const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
+            const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1313,8 +1352,8 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
         function selectedGoals(frame, agent) {
-            if (!agent || agent.slot < 0) return [];
-            const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale;
+            if (!C.obs || !agent || agent.slot < 0) return [];
+            const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale;
             let p = base + H.ego_dim;
             if (H.reward_conditioning) p += H.reward_coef_count;
             const scale = H.scales.obs_norm_goal_offset_m * Q;
@@ -1325,13 +1364,13 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
                 for (let j=0;j<H.goal_features;j++) if (obs[o+j] !== 0) empty = false;
                 if (empty) continue;
                 const rx = obs[o] * scale, ry = obs[o+1] * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
-                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch, i:i});
+                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch});
             }
             return out;
         }
         function decodeObs(frame, slot) {
-            if (slot < 0 || slot >= H.active_count) return null;
-            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale, LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
+            if (!C.obs || slot < 0 || slot >= H.active_count) return null;
+            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale, LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
             let p = base; const egoStart = p; p += H.ego_dim;
             if (H.reward_conditioning) p += H.reward_coef_count;
             const targetStart = p; p += H.num_goals * H.goal_features;
@@ -1341,27 +1380,27 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,obs[o+4]*Q*H.scales.road_width_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,s:obs[o+7]*Q,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{s:obs[egoStart]*Q,w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position,st:obs[egoStart+3]*Q,al:obs[egoStart+4]*Q,alat:obs[egoStart+5]*Q}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            return {ego:{w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
         function drawObs(frame) {
             resizeObsCanvas();
             const scale = (Math.min(obsC.width, obsC.height) / 2) * obsZoom, px = dpr / scale;
             const showAll = obsMode !== 1, showPool = obsMode !== 0, bothMode = obsMode === 2;
             let poolMax = 1;
-            for(const r of frame.lanes) if(r[6] > poolMax) poolMax = r[6];
-            for(const r of frame.bounds) if(r[6] > poolMax) poolMax = r[6];
+            for(const r of frame.lanes) if(r[5] > poolMax) poolMax = r[5];
+            for(const r of frame.bounds) if(r[5] > poolMax) poolMax = r[5];
             for(const p of frame.partners) if(p.pool > poolMax) poolMax = p.pool;
             for(const t of frame.traffic_controls) if(t.pool > poolMax) poolMax = t.pool;
             const pw = t => (2.0 + 2.4*t)*px;
             obsCtx.fillStyle = "#fff"; obsCtx.fillRect(0,0,obsC.width,obsC.height);
             obsCtx.save(); obsCtx.translate(obsC.width/2, obsC.height/2); obsCtx.scale(scale, -scale); obsCtx.lineCap = "round";
-            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } }
-            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[6] > 0){ obsCtx.strokeStyle=poolColor(r[6]/poolMax); obsCtx.lineWidth=pw(r[6]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[4]*r[2]/2,r[1]+r[5]*r[2]/2); obsCtx.lineTo(r[0]-r[4]*r[2]/2,r[1]-r[5]*r[2]/2); obsCtx.stroke(); } } }
+            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#bbb"; obsCtx.lineWidth=1.5*px; for(const r of frame.lanes){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
+            if(showAll){ obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=3*px; for(const r of frame.bounds){ obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } }
+            if(showPool){ for(const r of frame.lanes.concat(frame.bounds)){ if(r[5] > 0){ obsCtx.strokeStyle=poolColor(r[5]/poolMax); obsCtx.lineWidth=pw(r[5]/poolMax); obsCtx.beginPath(); obsCtx.moveTo(r[0]+r[3]*r[2]/2,r[1]+r[4]*r[2]/2); obsCtx.lineTo(r[0]-r[3]*r[2]/2,r[1]-r[4]*r[2]/2); obsCtx.stroke(); } } }
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
             for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700")); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
@@ -1485,8 +1524,13 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
 </body>
 </html>
     """
+    payload_chunks = "\n".join(
+        f'    <script type="application/octet-stream" class="payload-chunk">'
+        f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
+        for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
+    )
     final_html = (
-        html_template.replace("__B64_PAYLOAD__", payload)
+        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
         .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
         .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
     )
@@ -1494,14 +1538,25 @@ def generate_interactive_replay(scenario, replay, filename="replay.html"):
         f.write(final_html)
 
 
+def save_interactive_replay_zlib(scenario, replay, filename):
+    compressed_payload = encode_interactive_replay(scenario, replay)
+    with open(filename, "wb") as replay_file:
+        replay_file.write(compressed_payload)
+    return compressed_payload
+
+
+def render_interactive_replay_zlib(replay_path, filename):
+    with open(replay_path, "rb") as replay_file:
+        compressed_payload = replay_file.read()
+    _render_interactive_replay_payload(compressed_payload, filename)
+
+
 def build_gallery_index(folder_path=".", file_metrics=None):
     """Build an index.html navigator for per-episode replay HTMLs in folder_path.
 
     If `file_metrics` is a dict mapping `<html basename> -> {metric_name: value}`,
-    the index also exposes a sort dropdown so the user can flip between sort
-    keys (default: `score` ascending — failures bubble to the top). When
-    `file_metrics` is None or empty, behaves as before (filename-order
-    dropdown, no sort UI).
+    the index exposes a filter for each supported infraction present in the
+    metrics. Previous/next navigation follows the active filtered list.
     """
     files = [f for f in os.listdir(folder_path) if f != "index.html" and f.endswith(".html")]
 
@@ -1509,180 +1564,639 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         print("No matching .html files found in this directory.")
         return
 
-    # Lexicographic sort over the full filename. With the triage_html stem
-    # `{map}_{scenario_id}_{scenarios_done:04d}_epoch{e}_step{s}.html`, the
-    # zero-padded scenarios_done dominates ordering within a map.
     files.sort()
 
     metrics_map = file_metrics or {}
-    has_metrics = bool(metrics_map)
+    present_metrics = set()
+    for metrics in metrics_map.values():
+        present_metrics.update(metrics.keys())
 
-    # (key, default_direction). Anything in this list with at least one
-    # non-null value across files gets a dropdown entry. Default direction
-    # is what makes triage-useful values bubble to the top.
-    SORT_KEYS = [
-        ("score", "asc"),
-        ("dnf_rate", "desc"),
-        ("episode_return", "asc"),
-        ("num_goals_reached", "asc"),
-        ("collision_rate", "desc"),
-        ("offroad_rate", "desc"),
-        ("red_light_violation_rate", "desc"),
-        ("total_infractions", "desc"),
-        ("total_distance_travelled", "asc"),
-        ("episode_length", "asc"),
+    FAILURE_FILTERS = (
+        ("offroad", "offroad_rate", "Off-road"),
+        ("collision", "collision_rate", "Collisions"),
+        ("atfault", "at_fault_collision_rate", "At-fault collisions"),
+        ("redlight", "red_light_violation_rate", "Red-light violations"),
+    )
+    available_failure_filters = [
+        failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
     ]
 
-    available_keys = []
-    if has_metrics:
-        present = set()
-        for v in metrics_map.values():
-            present.update(v.keys())
-        for k, d in SORT_KEYS:
-            if k in present:
-                available_keys.append((k, d))
+    failure_flags = {}
+    for filename in files:
+        metrics = metrics_map.get(filename, {})
+        failure_flags[filename] = {
+            filter_key: metrics.get(metric_key, 0) > 0 for filter_key, metric_key, _ in FAILURE_FILTERS
+        }
 
-    metrics_json = json.dumps(metrics_map, separators=(",", ":"))
-    defaults_json = json.dumps({k: d for k, d in available_keys}, separators=(",", ":"))
-
-    def make_label(f):
-        if not has_metrics or f not in metrics_map:
-            return f.replace(".html", "").replace("_", " ")
-        bits = [f.replace(".html", "")]
-        for k in ("score", "dnf_rate", "num_goals_reached", "episode_return"):
-            if k in metrics_map[f]:
-                v = metrics_map[f][k]
-                bits.append(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}")
-        return "  ·  ".join(bits)
-
-    options_html = "\n".join(f'<option value="{f}" data-name="{f}">{make_label(f)}</option>' for f in files)
-
-    sort_ui = ""
-    sort_js = ""
-    if has_metrics and available_keys:
-        sort_options = "\n".join(
-            f'<option value="{k}"{" selected" if k == "score" else ""}>{k}</option>' for k, _ in available_keys
-        )
-        sort_ui = (
-            '<span style="color:#888;font-size:12px;font-weight:bold">SORT</span>'
-            f'<select id="sortKey" onchange="onSortKeyChange()">{sort_options}</select>'
-            '<select id="sortDir" onchange="resortFiles()">'
-            '<option value="asc" selected>asc</option>'
-            '<option value="desc">desc</option>'
-            "</select>"
-        )
-        sort_js = (
-            (
-                "const FILE_METRICS = __METRICS_JSON__;"
-                "const SORT_DEFAULTS = __DEFAULTS_JSON__;"
-                "const sortKeySel = document.getElementById('sortKey');"
-                "const sortDirSel = document.getElementById('sortDir');"
-                "function onSortKeyChange() {"
-                "  const k = sortKeySel.value;"
-                "  if (SORT_DEFAULTS[k]) sortDirSel.value = SORT_DEFAULTS[k];"
-                "  resortFiles();"
-                "}"
-                "function resortFiles() {"
-                "  const key = sortKeySel.value;"
-                "  const dir = sortDirSel.value;"
-                "  const opts = Array.from(select.options);"
-                "  opts.sort(function (a, b) {"
-                "    const fA = a.getAttribute('data-name');"
-                "    const fB = b.getAttribute('data-name');"
-                "    const mA = (FILE_METRICS[fA] || {})[key];"
-                "    const mB = (FILE_METRICS[fB] || {})[key];"
-                "    const nA = (mA === undefined || mA === null) ? -Infinity : mA;"
-                "    const nB = (mB === undefined || mB === null) ? -Infinity : mB;"
-                "    if (nA === nB) return fA.localeCompare(fB);"
-                "    return dir === 'asc' ? nA - nB : nB - nA;"
-                "  });"
-                "  const current = select.value;"
-                "  while (select.firstChild) select.removeChild(select.firstChild);"
-                "  opts.forEach(function (o) { select.appendChild(o); });"
-                "  select.value = current;"
-                "  updateButtons();"
-                "}"
-                "resortFiles();"
+    options_html = "\n".join(
+        (
+            f'<option value="{filename}" data-name="{filename}" '
+            + " ".join(
+                f'data-{filter_key}="{str(failure_flags[filename][filter_key]).lower()}"'
+                for filter_key, _, _ in FAILURE_FILTERS
             )
-            .replace("__METRICS_JSON__", metrics_json)
-            .replace("__DEFAULTS_JSON__", defaults_json)
+            + ">"
+            f"{filename.removesuffix('.html')}</option>"
+        )
+        for filename in files
+    )
+
+    category_filter_ui = ""
+    if available_failure_filters:
+        category_buttons = "".join(
+            (
+                f'<button class="filter-button category-button" type="button" '
+                f'data-filter="{filter_key}" aria-pressed="false"'
+                f"{' disabled' if failure_count == 0 else ''}>"
+                '<span class="selection-mark" aria-hidden="true">&#10003;</span>'
+                f'<span class="filter-dot {filter_key}-dot"></span>'
+                f"<span>{filter_label}</span>"
+                f'<span class="category-count">{failure_count}</span></button>'
+            )
+            for filter_key, _, filter_label in available_failure_filters
+            for failure_count in [sum(flags[filter_key] for flags in failure_flags.values())]
+        )
+        category_filter_ui = (
+            '<nav class="category-bar" aria-label="Replay category">'
+            '<div class="category-filters" role="group" '
+            'aria-label="Replay category">'
+            '<button class="filter-button category-button is-active" type="button" '
+            'data-filter="all" aria-pressed="true">'
+            '<span class="selection-mark" aria-hidden="true">&#10003;</span>'
+            '<span class="filter-dot all-dot"></span><span>All replays</span>'
+            f'<span class="category-count">{len(files)}</span></button>'
+            f"{category_buttons}"
+            "</div>"
+            "</nav>"
         )
 
     html_content = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>PufferDrive Replay Gallery</title>
-        <style>
-            body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
-            #topbar { padding: 12px 20px; background: #222; display: flex; align-items: center; gap: 15px; border-bottom: 2px solid #007bff; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-            #viewer { flex-grow: 1; border: none; width: 100%; height: 100%; }
-            select { padding: 8px 12px; border-radius: 8px; background: #333; color: white; border: 1px solid #555; cursor: pointer; font-weight: bold; font-size: 14px; outline: none;}
-            select:focus { border-color: #007bff; }
-            button { padding: 8px 16px; border-radius: 8px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: 800; font-size: 13px; text-transform: uppercase; transition: 0.2s;}
-            button:hover:not(:disabled) { background: #0056b3; transform: scale(1.05); }
-            button:disabled { background: #444; color: #888; cursor: not-allowed; }
-            .title { font-weight: 900; font-size: 18px; margin-right: auto; letter-spacing: 1px; color: #fff;}
-            #fileSelect { flex: 1 1 280px; min-width: 240px; }
-        </style>
-    </head>
-    <body>
-        <div id="topbar">
-            <div class="title">PUFFERDRIVE GALLERY</div>
-            <button id="prevBtn" onclick="navigate(-1)">&#9664; Prev</button>
-            __SORT_UI__
-            <select id="fileSelect" onchange="loadSelected()">
-                __OPTIONS__
-            </select>
-            <button id="nextBtn" onclick="navigate(1)">Next &#9654;</button>
-        </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PufferDrive Replay Gallery</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --background: #f3f4f6;
+            --surface: #ffffff;
+            --surface-muted: #f8f9fb;
+            --border: #d7dce2;
+            --border-strong: #aeb6c2;
+            --text: #1f2933;
+            --muted: #667085;
+            --accent: #2563eb;
+            --offroad: #b45309;
+            --collision: #b42318;
+            --atfault: #7e22ce;
+            --redlight: #d92d20;
+        }
 
-        <iframe id="viewer" src="__FIRST__"></iframe>
+        * { box-sizing: border-box; }
 
-        <script>
-            const select = document.getElementById('fileSelect');
-            const viewer = document.getElementById('viewer');
-            const prevBtn = document.getElementById('prevBtn');
-            const nextBtn = document.getElementById('nextBtn');
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--background);
+            color: var(--text);
+            font-family: Arial, system-ui, sans-serif;
+        }
 
-            function loadSelected() {
-                viewer.src = select.value;
-                updateButtons();
+        .app-shell {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+        }
+
+        .top-header {
+            display: grid;
+            flex: 0 0 auto;
+            grid-template-columns: 170px minmax(0, 1fr) minmax(360px, 450px);
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .brand {
+            display: flex;
+            grid-column: 1;
+            flex-direction: column;
+            justify-content: center;
+            padding: 8px 18px;
+        }
+
+        .brand-kicker {
+            margin-bottom: 4px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .brand-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .top-section {
+            min-width: 0;
+            padding: 8px 12px;
+            border-left: 1px solid var(--border);
+        }
+
+        .browse-section {
+            display: flex;
+            align-items: center;
+            grid-column: 3;
+            width: min(100%, 450px);
+            justify-self: end;
+        }
+
+        button, select {
+            min-height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            outline: none;
+            color: var(--text);
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:focus-visible, select:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 1px;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.38;
+        }
+
+        .filter-dot {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 1px;
+            background: var(--muted);
+        }
+
+        .all-dot { background: var(--accent); }
+        .offroad-dot { background: var(--offroad); }
+        .collision-dot { background: var(--collision); }
+        .atfault-dot { background: var(--atfault); }
+        .redlight-dot { background: var(--redlight); }
+
+        select {
+            cursor: pointer;
+            width: 100%;
+            padding: 0 28px 0 10px;
+            background: var(--surface);
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        select:hover { border-color: var(--border-strong); }
+
+        .replay-picker {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #fileSelect {
+            width: 100%;
+            min-width: 0;
+            border-color: var(--border);
+            background: var(--surface);
+        }
+
+        .browse-controls {
+            display: grid;
+            grid-template-columns: minmax(180px, 1fr) auto;
+            align-items: end;
+            gap: 8px;
+        }
+
+        .navigation {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-button {
+            min-height: 30px;
+            padding: 0 8px;
+            background: var(--surface);
+            color: var(--text);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .nav-button:not(:disabled):hover {
+            border-color: var(--accent);
+            background: var(--surface-muted);
+        }
+
+        #position {
+            min-width: 52px;
+            color: var(--muted);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .category-bar {
+            display: flex;
+            grid-column: 2;
+            flex: 0 0 auto;
+            min-width: 0;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-left: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .category-filters {
+            display: flex;
+            min-width: 0;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+
+        .category-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 34px;
+            padding: 0 8px;
+            border: 2px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .category-button:not(:disabled):not(.is-active):hover {
+            border-color: var(--border-strong);
+            background: var(--surface-muted);
+        }
+
+        .category-button.is-active {
+            border-color: var(--text);
+            background: var(--text);
+            color: var(--surface);
+        }
+
+        .category-button.is-active .filter-dot {
+            outline: 1px solid rgba(255, 255, 255, 0.65);
+            outline-offset: 1px;
+        }
+
+        .selection-mark {
+            display: none;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .category-button.is-active .selection-mark {
+            display: inline;
+        }
+
+        .category-count {
+            display: inline-flex;
+            min-width: 21px;
+            height: 21px;
+            align-items: center;
+            justify-content: center;
+            padding-inline: 5px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--surface-muted);
+            color: var(--text);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+        }
+
+        .category-button.is-active .category-count {
+            border-color: #647080;
+            background: #374151;
+            color: var(--surface);
+        }
+
+        .replay-stage {
+            display: flex;
+            flex: 1 1 auto;
+            flex-direction: column;
+            min-height: 0;
+            min-width: 0;
+            background: var(--background);
+        }
+
+        .scenario-header {
+            display: flex;
+            flex: 0 0 auto;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            min-height: 52px;
+            margin: 8px 12px 0;
+            padding: 7px 12px;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .scenario-identity {
+            min-width: 0;
+            flex: 1 1 280px;
+        }
+
+        .scenario-eyebrow {
+            display: block;
+            margin-bottom: 2px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        #currentReplayName {
+            display: block;
+            overflow: hidden;
+            font-size: 14px;
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #currentFailures {
+            display: flex;
+            flex: 0 1 auto;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 5px;
+            margin-left: auto;
+        }
+
+        .scenario-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 5px;
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            background: var(--surface-muted);
+            color: var(--muted);
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .scenario-badge.offroad {
+            border-left: 3px solid var(--offroad);
+            color: var(--offroad);
+        }
+
+        .scenario-badge.collision {
+            border-left: 3px solid var(--collision);
+            color: var(--collision);
+        }
+
+        .scenario-badge.atfault {
+            border-left: 3px solid var(--atfault);
+            color: var(--atfault);
+        }
+
+        .scenario-badge.redlight {
+            border-left: 3px solid var(--redlight);
+            color: var(--redlight);
+        }
+
+        #viewer {
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 0;
+            border: 0;
+            background: var(--surface);
+        }
+
+        @media (max-width: 1200px) {
+            body {
+                overflow: auto;
             }
 
-            function navigate(dir) {
-                let newIdx = select.selectedIndex + dir;
-                if (newIdx >= 0 && newIdx < select.options.length) {
-                    select.selectedIndex = newIdx;
-                    loadSelected();
-                }
+            .app-shell {
+                min-height: 100%;
+                height: auto;
             }
 
-            function updateButtons() {
-                prevBtn.disabled = select.selectedIndex === 0;
-                nextBtn.disabled = select.selectedIndex === select.options.length - 1;
-
-                // Return focus to the iframe so your Spacebar/Arrow keys still work!
-                viewer.onload = () => viewer.contentWindow.focus();
+            .top-header {
+                grid-template-columns: 170px minmax(0, 1fr);
             }
 
-            __SORT_JS__
+            .category-bar {
+                grid-column: 2;
+            }
 
-            updateButtons();
-        </script>
-    </body>
-    </html>
+            .browse-section {
+                grid-column: 1 / -1;
+                width: 100%;
+                border-top: 1px solid var(--border);
+                border-left: 0;
+            }
+
+            .category-bar {
+                border-left: 1px solid var(--border);
+            }
+
+            .replay-stage { min-height: 72vh; }
+        }
+
+        @media (max-width: 720px) {
+            .top-header { display: flex; flex-direction: column; }
+            .brand { padding-block: 16px; }
+            .brand-title { font-size: 18px; }
+            .top-section { border-top: 1px solid var(--border); border-left: 0; }
+            .category-bar { border-top: 1px solid var(--border); border-left: 0; }
+            .browse-section { width: 100%; }
+            .browse-controls { grid-template-columns: 1fr; }
+            .category-bar { padding: 12px; }
+            .category-filters { width: 100%; }
+            .scenario-header { align-items: flex-start; }
+            #currentFailures { margin-left: 0; justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="top-header">
+            <div class="brand">
+                <span class="brand-kicker">PufferDrive</span>
+                <span class="brand-title">Replay index</span>
+            </div>
+            __CATEGORY_FILTER_UI__
+            <section class="top-section browse-section">
+                <div class="browse-controls">
+                    <div class="replay-picker">
+                        <select id="fileSelect" aria-label="Replay">
+                            __OPTIONS__
+                        </select>
+                    </div>
+                    <nav class="navigation" aria-label="Replay navigation">
+                        <button id="prevBtn" class="nav-button" type="button" aria-label="Previous replay">
+                            &#8592; Previous
+                        </button>
+                        <span id="position" aria-live="polite"></span>
+                        <button id="nextBtn" class="nav-button" type="button" aria-label="Next replay">
+                            Next &#8594;
+                        </button>
+                    </nav>
+                </div>
+            </section>
+        </header>
+
+        <main class="replay-stage">
+            <header class="scenario-header">
+                <div class="scenario-identity">
+                    <span class="scenario-eyebrow">Selected replay</span>
+                    <strong id="currentReplayName"></strong>
+                </div>
+                <div id="currentFailures" aria-label="Scenario failures"></div>
+            </header>
+            <iframe id="viewer" src="__FIRST__" title="Replay viewer"></iframe>
+        </main>
+    </div>
+
+    <script>
+        const select = document.getElementById('fileSelect');
+        const viewer = document.getElementById('viewer');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const position = document.getElementById('position');
+        const currentReplayName = document.getElementById('currentReplayName');
+        const currentFailures = document.getElementById('currentFailures');
+        const filterButtons = Array.from(document.querySelectorAll('.filter-button'));
+        const allOptions = Array.from(select.options);
+        let activeFilter = 'all';
+
+        function optionMatchesActiveFilter(option) {
+            if (activeFilter === 'all') return true;
+            return option.dataset[activeFilter] === 'true';
+        }
+
+        function addFailureBadge(label, failureClass) {
+            const badge = document.createElement('span');
+            badge.className = `scenario-badge ${failureClass}`;
+            const dot = document.createElement('span');
+            dot.className = `filter-dot ${failureClass}-dot`;
+            badge.append(dot, label);
+            currentFailures.appendChild(badge);
+        }
+
+        function updateScenarioSummary() {
+            const selectedOption = select.options[select.selectedIndex];
+            currentFailures.replaceChildren();
+
+            if (!selectedOption) {
+                currentReplayName.textContent = 'No replay matches this filter';
+                return;
+            }
+
+            const filename = selectedOption.dataset.name;
+            currentReplayName.textContent = filename.replace(/\\.html$/, '');
+            if (selectedOption.dataset.offroad === 'true') addFailureBadge('Off-road', 'offroad');
+            if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
+            if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
+            if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
+            if (!currentFailures.childElementCount) {
+                const badge = document.createElement('span');
+                badge.className = 'scenario-badge';
+                badge.textContent = 'No recorded infraction';
+                currentFailures.appendChild(badge);
+            }
+        }
+
+        function updateControls() {
+            const optionCount = select.options.length;
+            const selectedIndex = select.selectedIndex;
+            prevBtn.disabled = selectedIndex <= 0;
+            nextBtn.disabled = selectedIndex < 0 || selectedIndex >= optionCount - 1;
+            position.textContent = selectedIndex < 0 ? `0 / ${optionCount}` : `${selectedIndex + 1} / ${optionCount}`;
+            updateScenarioSummary();
+        }
+
+        function loadSelected() {
+            if (select.selectedIndex < 0) {
+                viewer.removeAttribute('src');
+                updateControls();
+                return;
+            }
+            viewer.src = select.value;
+            updateControls();
+        }
+
+        function renderOptions(loadReplay) {
+            const currentFilename = select.value;
+            const matchingOptions = allOptions.filter(optionMatchesActiveFilter);
+            select.replaceChildren(...matchingOptions);
+
+            const currentOption = matchingOptions.find(option => option.value === currentFilename);
+            if (currentOption) {
+                select.value = currentFilename;
+            } else {
+                select.selectedIndex = matchingOptions.length > 0 ? 0 : -1;
+            }
+
+            const selectionChanged = select.value !== currentFilename;
+            if (loadReplay && selectionChanged) loadSelected();
+            else updateControls();
+        }
+
+        function setFilter(filterName) {
+            activeFilter = filterName;
+            for (const button of filterButtons) {
+                const isActive = button.dataset.filter === activeFilter;
+                button.classList.toggle('is-active', isActive);
+                button.setAttribute('aria-pressed', String(isActive));
+            }
+            renderOptions(true);
+        }
+
+        function navigate(direction) {
+            const nextIndex = select.selectedIndex + direction;
+            if (nextIndex < 0 || nextIndex >= select.options.length) return;
+            select.selectedIndex = nextIndex;
+            loadSelected();
+        }
+
+        select.addEventListener('change', loadSelected);
+        prevBtn.addEventListener('click', () => navigate(-1));
+        nextBtn.addEventListener('click', () => navigate(1));
+        for (const button of filterButtons) {
+            button.addEventListener('click', () => setFilter(button.dataset.filter));
+        }
+        viewer.addEventListener('load', () => viewer.contentWindow.focus());
+
+        renderOptions(false);
+    </script>
+</body>
+</html>
     """
 
     final_html = (
         html_content.replace("__OPTIONS__", options_html)
         .replace("__FIRST__", files[0])
-        .replace("__SORT_UI__", sort_ui)
-        .replace("__SORT_JS__", sort_js)
+        .replace("__CATEGORY_FILTER_UI__", category_filter_ui)
     )
 
-    # 5. Save the file
     index_path = os.path.join(folder_path, "index.html")
     with open(index_path, "w") as f:
         f.write(final_html)

@@ -61,7 +61,6 @@ class Serial:
 
     def __init__(self, env_creators, env_args, env_kwargs, num_envs, buf=None, seed=0, **kwargs):
         self.driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
-        self.driver_env.starting_map_counter = 0  # reset map counter for serial envs - only used in evaluation
         self.agents_per_batch = self.driver_env.num_agents * num_envs
         self.num_agents = self.agents_per_batch
 
