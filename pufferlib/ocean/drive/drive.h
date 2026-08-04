@@ -204,7 +204,6 @@ struct Drive {
     int *neighbor_offsets;
     int use_map_cache;
     int use_neighbor_cache;
-    int obs_neighbor_scratch_cap;
     struct SharedMapData *shared_map;
     float world_mean_x;
     float world_mean_y;
@@ -2791,9 +2790,6 @@ void init(Drive *env) {
         env->grid_map = shared->grid_map;
         env->neighbor_offsets = shared->neighbor_offsets;
         env->lane_graph = shared->lane_graph;
-        if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
-            cache_neighbor_offsets(env);
-        }
         env->shared_map = shared;
         shared->ref_count++;
     } else {
@@ -2808,9 +2804,6 @@ void init(Drive *env) {
             / GRID_CELL_SIZE);
         env->grid_map->vision_range = 2 * vision_half_range + 1;
         init_neighbor_offsets(env);
-        if (env->use_neighbor_cache) {
-            cache_neighbor_offsets(env);
-        }
         if (env->use_map_cache) {
             // Transfer the just-built geometry into a shared, ref-counted entry that
             // this env borrows (ref_count starts at 1).
@@ -2829,14 +2822,11 @@ void init(Drive *env) {
             env->shared_map = entry;
         }
     }
-    // On-demand neighbor scan needs a reusable scratch buffer. The window subset can never
-    // exceed the grid's total entity count, so that is a safe non-truncating capacity.
+    if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
+        cache_neighbor_offsets(env);
+    }
     if (!env->use_neighbor_cache) {
-        env->obs_neighbor_scratch_cap = env->grid_map->total_entities;
-        env->obs_neighbor_scratch = (GridMapEntity *) malloc(env->obs_neighbor_scratch_cap * sizeof(GridMapEntity));
-    } else {
-        env->obs_neighbor_scratch = NULL;
-        env->obs_neighbor_scratch_cap = 0;
+        env->obs_neighbor_scratch = (GridMapEntity *) malloc(env->grid_map->total_entities * sizeof(GridMapEntity));
     }
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
@@ -2943,22 +2933,8 @@ void c_close(Drive *env) {
             free_road_element(&env->road_elements[i]);
         }
         free(env->road_elements);
-        int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-            free(env->grid_map->cells[grid_index]);
-        }
-        free(env->grid_map->cells);
-        free(env->grid_map->cell_entities_count);
-        free(env->grid_map->grid_index_drivable);
         free(env->neighbor_offsets);
-        if (env->grid_map->neighbor_cache_entities != NULL) {
-            for (int i = 0; i < grid_cell_count; i++) {
-                free(env->grid_map->neighbor_cache_entities[i]);
-            }
-            free(env->grid_map->neighbor_cache_entities);
-        }
-        free(env->grid_map->neighbor_cache_count);
-        free(env->grid_map);
+        free_grid_map(env->grid_map);
         free_lane_graph(&env->lane_graph);
     }
 
@@ -3758,7 +3734,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
                 ego->sim_x,
                 ego->sim_y,
                 env->obs_neighbor_scratch,
-                env->obs_neighbor_scratch_cap,
+                env->grid_map->total_entities,
                 (const int (*)[2]) env->neighbor_offsets,
                 env->grid_map->vision_range * env->grid_map->vision_range);
             neighbor_entities = env->obs_neighbor_scratch;
