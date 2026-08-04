@@ -386,8 +386,8 @@ static float sample_uniform(unsigned int *rng_state, float min_val, float max_va
     return min_val + ((float) rand_r(rng_state) / (float) RAND_MAX) * (max_val - min_val);
 }
 
-static float sample_log_uniform(float min_val, float max_val) {
-    return expf(sample_uniform(logf(min_val), logf(max_val)));
+static float sample_log_uniform(unsigned int *rng_state, float min_val, float max_val) {
+    return expf(sample_uniform(rng_state, logf(min_val), logf(max_val)));
 }
 
 static float sample_mixed_uniform(unsigned int *rng_state, float a) {
@@ -395,14 +395,14 @@ static float sample_mixed_uniform(unsigned int *rng_state, float a) {
     if ((float) rand_r(rng_state) / (float) RAND_MAX < 0.5f) {
         return sample_uniform(rng_state, 1.0f / a, 1.0f);
     }
-    return random_uniform(rng_state, 1.0f, a);
+    return sample_uniform(rng_state, 1.0f, a);
 }
 
 static void begin_episode_rng(Drive *env) {
     if (env->use_exact_episode_seed) {
         env->episode_seed = env->seed_stream_state;
     } else {
-        return sample_uniform(1.0f, a);
+        env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
     }
     env->rng_state = env->episode_seed;
 }
@@ -2060,7 +2060,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
             agent->reward_coefs[c] = REWARD_BOUNDS[c].log_scale
-                ? sample_log_uniform(REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
+                ? sample_log_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
                 : sample_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
