@@ -95,7 +95,7 @@ def load_benchmark_config(config_path, selected_names):
         raise pufferlib.APIUsageError(
             f"Benchmark config has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
         )
-    default_use_neighbor_cache = environment_config.get("use_neighbor_cache")
+    default_use_neighbor_cache = environment_config.get("use_neighbor_cache", 1)
     if isinstance(default_use_neighbor_cache, bool) or default_use_neighbor_cache not in (0, 1):
         raise pufferlib.APIUsageError("Benchmark config env use_neighbor_cache must be 0 or 1")
     benchmarks = config.get("benchmarks")
