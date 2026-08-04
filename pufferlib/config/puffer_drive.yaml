@@ -41,13 +41,13 @@ env:
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
-  max_agents_per_env: 80
+  max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
-  dt: 0.1
+  dt: 0.3
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
@@ -57,11 +57,11 @@ env:
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
-  use_map_cache: 0
+  use_map_cache: 1
   # Number of steps before reset
-  scenario_length: 1280
+  scenario_length: 2560
   # Frequency of resampling scenario (in steps), 0 to disable
-  resample_frequency: 128000000
+  resample_frequency: 256000
   # End of episode - options: 0 - scenario_length, 1 - early reset when too many agents are removed
   termination_mode: 1
   # Ratio of inactive agents (stopped/removed) that triggers early reset (used when termination_mode = 1)
@@ -95,21 +95,21 @@ env:
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
   # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
-  goal_source: "route"
+  goal_source: map
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
-  obs_goal_lane_distance: False
+  obs_goal_lane_distance: True
   # Meters around goal to be considered "reached"
   goal_radius: 2.0
   # Maximum speed at final waypoint to count goal reward
-  goal_speed: 1000.0
+  goal_speed: 3.0
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
-  max_goal_spacing: 60.0
+  max_goal_spacing: 200.0
   # --- Rewards ---
-  reward_conditioning: false
-  reward_randomization: false
+  reward_conditioning: true
+  reward_randomization: true
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
@@ -117,7 +117,7 @@ env:
   reward_comfort: 0.05
   reward_lane_align: 0.025
   reward_vel_align: 1.0
-  reward_lane_center: 0.0038
+  reward_lane_center: 0.001
   reward_center_bias: 0.0
   reward_velocity: 0.0025
   reward_reverse: 0.005
@@ -130,68 +130,69 @@ env:
   # Number of maps to load from map_dir
   num_maps: 8
   # --- Observation slot counts ---
-  obs_slots_lane_n: 80
-  obs_slots_boundary_n: 80
+  obs_slots_lane_n: 70
+  obs_slots_boundary_n: 50
   obs_slots_partners_n: 16
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
-  obs_dropout_lane: 0.0
-  obs_dropout_boundary: 0.0
+  obs_dropout_lane: 0.3
+  obs_dropout_boundary: 0.4
   # Stride for lane and boundary segments; 1 means use every segment, 2 means use every other segment, etc.
-  obs_lane_stride: 1
+  obs_lane_stride: 2
   obs_boundary_stride: 1
   # --- Observation normalization ---
-  obs_norm_goal_offset_m: 120.0
-  obs_norm_xy_offset_m: 120.0
-  obs_norm_veh_length_m: 15.0
-  obs_norm_veh_width_m: 10.0
+  obs_norm_goal_offset_m: 200.0
+  obs_norm_xy_offset_m: 200.0
+  obs_norm_veh_length_m: 10.0
+  obs_norm_veh_width_m: 5.0
   obs_norm_road_seg_length_m: 10.0
   obs_norm_road_seg_width_m: 5.0
   # --- Observation ranges (meters, ego frame) ---
-  obs_range_road_front_m: 120.0
-  obs_range_road_behind_m: 20.0
-  obs_range_road_side_m: 30.0
-  obs_range_partner_m: 100.0
-  obs_range_traffic_control_m: 100.0
+  obs_range_road_front_m: 200.0
+  obs_range_road_behind_m: 60.0
+  obs_range_road_side_m: 50.0
+  obs_range_partner_m: 200.0
+  obs_range_traffic_control_m: 200.0
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
   # Per-episode probability that an agent is blind to other agents for the whole episode
-  partner_blindness_prob: 0.0
+  partner_blindness_prob: 0.02
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
-  partner_blindness_trigger_prob: 0.0
+  partner_blindness_trigger_prob: 0.03
   # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
-  phantom_braking_prob: 0.0
+  phantom_braking_prob: 0.02
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
-  phantom_braking_trigger_prob: 0.0
+  phantom_braking_trigger_prob: 0.03
   # Duration (in steps) of phantom braking once triggered
   phantom_braking_duration: 10
 policy:
   # Encoder layer (per-encoder embedding width)
-  ego_input_size: 64
-  partner_input_size: 64
-  lane_input_size: 64
-  boundary_input_size: 64
-  traffic_control_input_size: 64
-  context_input_size: 64
+  ego_input_size: 128
+  partner_input_size: 256
+  lane_input_size: 256
+  boundary_input_size: 256
+  traffic_control_input_size: 128
+  context_input_size: 128
   # Encoder activation - options: "relu", "tanh", "gelu"
   encoder_activation: relu
   encoder_layer_norm: true
   mask_padded_features: false
   # Shared backbone layer
-  backbone_hidden_size: 512
-  backbone_num_layers: 4
+  backbone_hidden_size: 1024
+  backbone_num_layers: 3
   # Backbone activation - options: "relu", "tanh", "gelu"
   backbone_activation: gelu
   backbone_layer_norm: false
   # Actor head layer
-  actor_hidden_size: 512
-  actor_num_layers: 0
+  actor_hidden_size: 256
+  actor_num_layers: 1
   # Critic head layer
-  critic_hidden_size: 512
-  critic_num_layers: 0
+  critic_hidden_size: 256
+  critic_num_layers: 1
   # Dual or shared actor-critic backbone
-  shared_network: true
+  shared_network: false
   action_type: discrete
+
 rnn:
   input_size: 512
   hidden_size: 512
@@ -199,23 +200,27 @@ train:
   name: pufferai
   project: ablations
   seed: 42
+  # Null disables evaluation during training.
+  evaluation_interval_epochs: null
+  # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
+  evaluation_benchmarks: carla_fast
   torch_deterministic: false
   cpu_offload: false
   device: cuda
   optimizer: adamw
   anneal_lr: true
   amp: true
-  precision: float32
-  total_timesteps: 10000000000
+  precision: bfloat16
+  total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
   gae_lambda: 0.95
-  update_epochs: 2
+  update_epochs: 3
   clip_coef: 0.2
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
-  normalize_rewards: true
+  normalize_rewards: false
   ent_coef: 0.01
   # ---
   adam_beta1: 0.9
@@ -257,161 +262,30 @@ sweep:
   metric: score
   goal: maximize
   downsample: 10
-# ===========================================================================
-# Evaluation suites
-#
-# Each [eval.<name>] section is one Evaluator instance. EvalManager discovers
-# them via auto-discovery (any section under [eval] with a `type` field).
-# Sections without a `type` field are templates — referenced from other
-# sections via `inherits = "<template_name>"`.
-#
-# Field reference:
-# type           — registered evaluator class (multi_scenario, behavior_class,
-# human_replay, wosac)
-# enabled        — true|false
-# interval       — epochs between runs (0 disables)
-# mode           — "inline" (block training) | "subprocess" (spawn process)
-# inherits       — pull defaults from another section, recursively
-# clean          — true → zero perturbations + dropout + enforce red lights
-# render         — true → capture mp4(s) during rollout
-# render_views   — list of camera views: sim_state, bev, topdown_sim, bev_all
-# env.<key>      — any [env] override (dotted key)
-# eval.<key>     — evaluator-specific knob (e.g. num_scenarios)
-# vec.<key>      — any [vec] override
-# ===========================================================================
-mine:
-  # Failure-mining workflow. `puffer mine_failures puffer_drive ...`
-  # rolls a trained policy out N times and writes compact-replay HTML
-  # for episodes whose episode_return is strictly below score_threshold.
-  output_dir: ''
-  num_episodes: 100
-  score_threshold: -inf
-  render: 'true'
+# Catalog-defined evaluation and replay rendering settings.
 eval:
-  # ---------------------------------------------------------------------------
-  # Multi-scenario validation eval. validation_defaults holds the shared
-  # clean-eval env + fixed eval reward weights; the replay / gigaflow sections
-  # add their sim-specific map set and agent layout. Each sweeps 250 scenarios,
-  # ignores traffic lights, and disables reward randomization so metrics are
-  # comparable across checkpoints. Both write a per-episode CSV and a coverage
-  # report (episode_metrics/).
-  # ---------------------------------------------------------------------------
-  validation_defaults:
-    enabled: 'true'
-    interval: 250
-    mode: inline
-    clean: 'true'
-    env:
-      eval_mode: 1
-      collision_behavior: stop
-      offroad_behavior: stop
-      traffic_light_behavior: ignore
-      reward_randomization: false
-      termination_mode: 0
-      num_agents: 1024
-      goal_regen_mode: finite
-      goal_source: route
-      goal_speed: 3.0
-      reward_collision: 3.0
-      reward_offroad: 3.0
-      reward_stop_line: 1.0
-      reward_goal: 1.0
-      reward_overspeed: 0.05
-      reward_comfort: 0.05
-      reward_velocity: 0.0025
-      reward_lane_align: 0.025
-      reward_lane_center: 0.0038
-      reward_timestep: 2.5e-05
-      reward_reverse: 0.005
-      reward_ade: 0.0
-      obs_dropout_lane: 0.0
-      obs_dropout_boundary: 0.0
-      obs_slots_lane_n: 80
-      obs_slots_boundary_n: 80
-    # Policy action selection during eval: sample | mode | mean.
-    # mode = argmax; mean = probability-weighted continuous action
-    # (mean requires a discrete policy on a continuous env).
-    action_selection: mode
-    eval:
-      num_scenarios: 250
-      export_episode_csv: 'true'
-      verify_coverage: 'true'
-  validation_replay:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'false'
-    render: 'true'
-    render_backend: triage_html
-    env:
-      simulation_mode: replay
-      control_mode: control_sdc_only
-      map_dir: data/nuplan_mini_val
-      num_maps: 250
-      max_agents_per_env: 64
-      scenario_length: 200
-      resample_frequency: 200
-    eval:
-      render_num_scenarios: 5
-      render_max_steps: 200
-  validation_gigaflow:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'true'
-    render: 'false'
-    render_backend: obs_html
-    render_views: [sim_state, bev]
-    env:
-      simulation_mode: gigaflow
-      map_dir: pufferlib/resources/drive/binaries/carla
-      num_maps: 8
-      num_agents: 1024
-      min_agents_per_env: 40
-      max_agents_per_env: 40
-      scenario_length: 500
-      resample_frequency: 500
-    eval:
-      render_num_scenarios: 8
-      render_max_steps: 300
-  dnf_triage:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'false'
-    render: 'true'
-    render_backend: triage_html
-    env:
-      simulation_mode: gigaflow
-      map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
-      num_maps: 1
-      min_agents_per_env: 1
-      max_agents_per_env: 1
-      scenario_length: 500
-      resample_frequency: 500
-    eval:
-      num_scenarios: 32
-      render_num_scenarios: 16
-      render_max_steps: 300
-  # ---------------------------------------------------------------------------
-  # Optional: WOSAC realism eval. Off by default.
-  # ---------------------------------------------------------------------------
-  wosac:
-    type: wosac
-    enabled: 'false'
-    interval: 500
-    mode: subprocess
-    clean: 'true'
-    render: 'false'
-    env:
-      control_mode: control_wosac
-      init_mode: create_all_valid
-      init_step: 10
-      goal_radius: 2.0
-    # Policy action selection during eval: sample | mode | mean.
-    action_selection: mode
-    eval:
-      wosac_num_rollouts: 32
-      wosac_num_agents: 256
-      wosac_sanity_check: 'false'
-      wosac_aggregate_results: 'true'
+  num_agents: 128
+  # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
+  max_sdc_replay_workers: 4
+  benchmark_config: pufferlib/config/evaluation/benchmark.yaml
+  benchmarks: null
+  output_name: null
+  # Capture and render every scenario during the standard benchmark pass.
+  render_scenarios: false
+  # Render scenarios where any configured metric is positive.
+  # Use all_infractions for every infraction type; null disables it.
+  render_filter: null
+  # Maximum failures rendered per benchmark; null renders every failure.
+  max_rendered_failures: null
+  # Existing episode metrics CSV to replay without running the benchmark first.
+  failure_replay_csv: null
+  capture_observations: false
+  observation_replay_wave_size: 16
+  observation_replay_writer_count: 4
+  # Policy action selection during eval: sample | mode | mean.
+  # mode = argmax; mean = probability-weighted continuous action
+  # (mean requires a discrete policy on a continuous env).
+  action_selection: mode
 controlled_exp:
   train:
     # [sweep.train.learning_rate]

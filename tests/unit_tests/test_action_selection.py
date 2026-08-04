@@ -12,6 +12,8 @@ The logic lives in `pufferlib.pytorch.sample_logits`; the mode is chosen by
 Both are covered here without an env/C-sim/GPU.
 """
 
+import sys
+
 import pytest
 import torch
 
@@ -153,30 +155,42 @@ def test_mean_rejects_discrete_env():
 
 
 # --------------------------------------------------------------------------
-# Evaluator config plumbing: config -> validated self.action_selection
+# Eval config plumbing: eval.action_selection -> validated -> sample_logits
 # --------------------------------------------------------------------------
-def _make_evaluator(action_selection=None):
-    from pufferlib.ocean.benchmark.evaluators.base import Evaluator
-
-    class _Ev(Evaluator):
-        type_name = "_action_selection_test"
-
-        def _should_stop(self, args, infos_collected, steps):
-            return True
-
-    config = {} if action_selection is None else {"action_selection": action_selection}
-    return _Ev("atn_test", config, train_config={})
+VALID_ACTION_SELECTIONS = (P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTION_SELECT_MEAN)
 
 
-def test_evaluator_defaults_to_mode():
-    assert _make_evaluator().action_selection == P.ACTION_SELECT_MODE
+def _eval_args(action_selection):
+    # Minimal args for pufferl.eval; validation runs before any benchmark loading.
+    return {
+        "eval": {
+            "action_selection": action_selection,
+            "benchmark_config": "pufferlib/config/evaluation/benchmark.yaml",
+            "benchmarks": None,
+            "output_name": None,
+            "render_scenarios": False,
+            "render_filter": None,
+            "max_rendered_failures": None,
+            "failure_replay_csv": None,
+            "max_sdc_replay_workers": 1,
+        }
+    }
 
 
-@pytest.mark.parametrize("mode", [P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTION_SELECT_MEAN])
-def test_evaluator_accepts_valid_action_selection(mode):
-    assert _make_evaluator(mode).action_selection == mode
+def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
+    # Guards the key itself: a config refactor that drops or renames
+    # eval.action_selection must fail here, not at the first eval run.
+    import pufferlib.pufferl as pufferl
+
+    # load_config treats everything left in argv as a Hydra override.
+    monkeypatch.setattr(sys, "argv", ["puffer"])
+    args = pufferl.load_config("puffer_drive")
+    assert args["eval"]["action_selection"] in VALID_ACTION_SELECTIONS
 
 
-def test_evaluator_rejects_invalid_action_selection():
-    with pytest.raises(ValueError):
-        _make_evaluator("banana")
+def test_eval_rejects_invalid_action_selection():
+    import pufferlib
+    import pufferlib.pufferl as pufferl
+
+    with pytest.raises(pufferlib.APIUsageError):
+        pufferl.eval(env_name="puffer_drive", args=_eval_args("banana"))

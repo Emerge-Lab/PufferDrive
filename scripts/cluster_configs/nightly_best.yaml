@@ -1,115 +1,28 @@
-# Multi-agent "best launch" nightly training program config. Multi-agent
-# gigaflow over the 8 local CARLA maps, full reward shaping (conditioning +
-# randomization on), partner-blindness / phantom-braking perturbations
-# enabled. Keys here override pufferlib/config/ocean/drive.ini.
+# Multi-agent "best launch" nightly training program config.
+#
+# The training recipe (env physics, goals, observations, perturbations,
+# rewards, policy architecture, optimizer settings) comes from the defaults
+# in pufferlib/config/puffer_drive.yaml. This file only overrides scale,
+# run length, and logging.
 #
 # Launch via scripts/launch_nightly_best.sh (3 seeds, date-stamped).
 
-# Environment scale
-env.simulation_mode: gigaflow
-env.map_dir: pufferlib/resources/drive/binaries/carla
-env.num_maps: 8
-env.num_agents: 4096
-env.min_agents_per_env: 1
-env.max_agents_per_env: 120
-env.use_map_cache: 1
-env.scenario_length: 2560
-# 0 disables periodic scenario resampling — every sub-env keeps the same map
-# for the full run instead of swapping every 38400 steps.
-env.resample_frequency: 256000
-env.termination_mode: 1
-env.inactive_agent_threshold: 0.4
-env.dynamics_model: jerk
-env.dt: 0.3
-
-# Goal setup — three sequential goals, route-based placement [20, 60m]
-env.goal_regen_mode: finite
-env.goal_source: map
-env.obs_goal_lane_distance: True
-env.num_goals: 3
-env.min_goal_spacing: 20.0
-env.max_goal_spacing: 200.0
-env.goal_radius: 2.0
-env.goal_speed: 1000.0
-
-# Observation shaping
-env.obs_slots_lane_n: 70
-env.obs_slots_boundary_n: 50
-env.obs_slots_partners_n: 12
-env.obs_slots_traffic_controls_n: 4
-env.obs_range_partner_m: 200.0
-env.obs_range_road_front_m: 200.0
-env.obs_range_road_behind_m: 60.0
-env.obs_range_road_side_m: 50.0
-env.obs_range_traffic_control_m: 200.0
-env.obs_norm_xy_offset_m: 200.0
-env.obs_norm_goal_offset_m: 200.0
-env.obs_norm_road_seg_length_m: 10.0
-env.obs_norm_road_seg_width_m: 5.0
-env.obs_norm_veh_length_m: 10.0
-env.obs_norm_veh_width_m: 5.0
-env.obs_dropout_lane: 0.3
-env.obs_dropout_boundary: 0.4
-env.obs_lane_stride: 2
-
-# Perturbations (on during training; eval's clean macro zeros these)
-env.partner_blindness_prob: 0.03
-env.partner_blindness_trigger_prob: 0.05
-env.phantom_braking_prob: 0.02
-env.phantom_braking_trigger_prob: 0.03
-env.phantom_braking_duration: 10
-
-# Reward shaping (conditioning + randomization on)
-env.reward_conditioning: true
-env.reward_randomization: true
-env.reward_goal: 0.5
-env.reward_collision: 1.5
-env.reward_offroad: 1.5
-env.reward_stop_line: 1.0
-env.reward_comfort: 0.05
-env.reward_lane_align: 0.025
-env.reward_vel_align: 1.0
-env.reward_lane_center: 0.005
-env.reward_velocity: 0.0025
-env.reward_reverse: 0.005
-env.reward_timestep: 2.5e-05
-env.reward_overspeed: 0.05
-
-# Policy — 3x1024 backbone, split actor/critic
-policy.ego_input_size: 128
-policy.partner_input_size: 256
-policy.lane_input_size: 256
-policy.boundary_input_size: 256
-policy.traffic_control_input_size: 128
-policy.context_input_size: 128
-policy.encoder_activation: relu
-policy.encoder_layer_norm: true
-policy.mask_padded_features: false
-policy.backbone_activation: gelu
-policy.backbone_hidden_size: 1024
-policy.backbone_num_layers: 3
-policy.backbone_layer_norm: false
-policy.actor_hidden_size: 256
-policy.actor_num_layers: 1
-policy.backbone_num_layers: 3
-policy.critic_hidden_size: 256
-policy.critic_num_layers: 1
-policy.shared_network: false
+# Full training scale. The defaults are sized to run on-premise for dev;
+# the scale knobs for a real training run live here.
 policy.action_type: discrete
-
-# Training — large minibatch, compiled bfloat16
-train.total_timesteps: 10_000_000_000
-train.minibatch_size: 128000
-train.max_minibatch_size: 128000
-train.update_epochs: 3
+env.num_agents: 3200
+vec.num_envs: 40
+train.minibatch_size: 256000
+train.max_minibatch_size: 64000
 train.compile: true
-train.precision: bfloat16
-train.normalize_rewards: false
+
+# Night-sized run: the default 500B-step schedule doesn't finish overnight.
+train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 500
 
-# Eval — keep validation_gigaflow (CARLA sweep) inline; validation_replay
-# needs nuPlan bins not used in this nightly.
-eval.validation_replay.enabled: 0
+# Run the catalog-defined fast CARLA evaluation every 100 training epochs.
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: carla_fast
 
 # W&B — group has no space (submit_cluster.py joins the inner command
 # without quoting arg values). Launchers (launch_nightly_best.sh and

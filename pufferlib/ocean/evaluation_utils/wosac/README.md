@@ -2,15 +2,8 @@
 
 ## Usage
 
-WOSAC evaluation with random policy
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True
-```
-
-WOSAC evaluation with your checkpoint
-```bash
-puffer eval puffer_drive --eval.wosac-realism-eval True --load-model-path <your-trained-policy>.pt
-```
+The current `puffer benchmark` catalog does not orchestrate WOSAC metrics yet.
+This directory contains the metric implementation for future integration.
 
 ## Links
 

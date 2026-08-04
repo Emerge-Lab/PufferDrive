@@ -33,6 +33,7 @@ ENV_NAME = "puffer_drive"
 
 config = load_notebook_config(CHECKPOINT_PATH, ENV_NAME)
 config["env"]["num_agents"] = 64
+config["env"]["max_agents_per_env"] = 64
 config["env"]["num_maps"] = 8
 config["env"]["eval_mode"] = 1
 config["env"]["map_dir"] = MAP_DIR
@@ -200,7 +201,6 @@ sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_A
 print(dyn_model, tgt_type, rew_cond, n_tgt_wp)
 img = plot_observation(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -237,7 +237,6 @@ ego_features_over_time = []
 for t in range(HORIZON):
     ego, *_ = unpack_obs(
         buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0],
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -287,7 +286,6 @@ sample_t = min(50, HORIZON - 1)
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -475,7 +473,6 @@ def unpack_all_timesteps(bufs, agent_idx):
         ob = bufs["obs"][t : t + 1, agent_idx : agent_idx + 1][0]
         ego, tgt, part, lane, bnd, tfc = unpack_obs(
             ob,
-            goal_regen_mode=tgt_type,
             reward_conditioning=rew_cond,
             num_goals=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
@@ -553,7 +550,6 @@ for t in range(HORIZON):
     ob = buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
     _, _, part, _, _, _ = unpack_obs(
         ob,
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -581,7 +577,6 @@ plt.show()
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -1569,8 +1564,12 @@ axes[0].set_title("Mean L2 norm of pooled embedding\n(relative contribution to b
 axes[0].tick_params(axis="x", rotation=45)
 axes[0].grid(True, axis="y", alpha=0.3)
 
-# (2) Mean |activation| per embedding dim, per encoder
-M = np.stack([pooled[n].abs().mean(0).cpu().numpy() for n in enc_names])
+# (2) Mean |activation| per embedding dim, per encoder. Encoder embedding
+# widths differ, so NaN-pad rows to the widest (imshow leaves NaN blank).
+rows = [pooled[n].abs().mean(0).cpu().numpy() for n in enc_names]
+M = np.full((len(rows), max(r.shape[0] for r in rows)), np.nan)
+for row_idx, row in enumerate(rows):
+    M[row_idx, : row.shape[0]] = row
 im = axes[1].imshow(M, aspect="auto", cmap="magma")
 axes[1].set_yticks(range(len(enc_names)))
 axes[1].set_yticklabels(enc_names)
