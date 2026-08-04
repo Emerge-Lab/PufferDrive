@@ -9,9 +9,9 @@
     "episode_return": -0.7864702496263716,
     "lane_center_rate": 0.6887658986780378,
     "n": 16.0,
-    "num_goals_reached": 0.0125,
-    "offroad_rate": 0.40555555555555556,
-    "red_light_violation_rate": 0.029166666666666667,
+    "num_goals_reached": 0.00997340425531915,
+    "offroad_rate": 0.4115691489361702,
+    "red_light_violation_rate": 0.025930851063829786,
     "reward_components/ade": 0.0,
     "reward_components/collision": -0.049521034707625707,
     "reward_components/comfort": -0.10717053327502477,
@@ -25,7 +25,7 @@
     "reward_components/timestep": -8.832291556852094e-05,
     "reward_components/velocity": 0.00019301686790842924,
     "score": 0.0,
-    "velocity_progress_sum": 0.019166570348251196
+    "velocity_progress_sum": 0.018232046272308428
   },
   "meta": {
     "bptt_horizon": 64,
