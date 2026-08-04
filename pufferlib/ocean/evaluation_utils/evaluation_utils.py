@@ -95,6 +95,9 @@ def load_benchmark_config(config_path, selected_names):
         raise pufferlib.APIUsageError(
             f"Benchmark config has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
         )
+    default_use_neighbor_cache = environment_config.get("use_neighbor_cache")
+    if isinstance(default_use_neighbor_cache, bool) or default_use_neighbor_cache not in (0, 1):
+        raise pufferlib.APIUsageError("Benchmark config env use_neighbor_cache must be 0 or 1")
     benchmarks = config.get("benchmarks")
     if not isinstance(benchmarks, list) or not benchmarks:
         raise pufferlib.APIUsageError("Benchmark config must contain a non-empty benchmarks list")
@@ -146,6 +149,9 @@ def load_benchmark_config(config_path, selected_names):
         if not isinstance(map_dir, str) or not map_dir:
             raise pufferlib.APIUsageError(f"Benchmark {name} map_dir must be a non-empty path")
         map_dir = os.path.abspath(map_dir)
+        use_neighbor_cache = benchmark.get("use_neighbor_cache", default_use_neighbor_cache)
+        if isinstance(use_neighbor_cache, bool) or use_neighbor_cache not in (0, 1):
+            raise pufferlib.APIUsageError(f"Benchmark {name} use_neighbor_cache must be 0 or 1")
         if not os.path.isdir(map_dir) and not (os.path.isfile(map_dir) and map_dir.endswith(".bin")):
             raise pufferlib.APIUsageError(f"Benchmark {name} map path does not exist: {map_dir}")
 
@@ -175,6 +181,7 @@ def load_benchmark_config(config_path, selected_names):
                 "scenario_length": scenario_length,
                 "control_mode": control_mode,
                 "map_dir": map_dir,
+                "use_neighbor_cache": use_neighbor_cache,
             }
         )
     return environment_config, resolved_benchmarks
@@ -226,6 +233,7 @@ def build_benchmark_args(base_args, benchmark, environment_config):
             "scenario_length": benchmark["scenario_length"],
             "resample_frequency": benchmark["scenario_length"],
             "control_mode": benchmark["control_mode"],
+            "use_neighbor_cache": benchmark["use_neighbor_cache"],
         }
     )
     if max_agents_per_env is not None:

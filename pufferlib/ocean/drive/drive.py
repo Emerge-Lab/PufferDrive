@@ -71,7 +71,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         use_map_cache=0,
-        use_neighbor_cache=0,
+        use_neighbor_cache=1,
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,

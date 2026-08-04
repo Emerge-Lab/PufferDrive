@@ -82,6 +82,7 @@ benchmarks:
     scenario_length: 200
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/nuplan
+    use_neighbor_cache: 0
 
   - name: nuplan_single
     seed: 42
@@ -92,3 +93,4 @@ benchmarks:
     scenario_length: 200
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/nuplan
+    use_neighbor_cache: 0

@@ -58,6 +58,8 @@ env:
   traffic_light_behavior: stop
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
+  # Precompute neighboring road entities for observation queries - 0 off, 1 on
+  use_neighbor_cache: 1
   # Number of steps before reset
   scenario_length: 2560
   # Frequency of resampling scenario (in steps), 0 to disable
