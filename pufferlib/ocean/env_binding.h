@@ -4,7 +4,7 @@
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
 static int my_init(Env *env, PyObject *args, PyObject *kwargs);
-static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpisodeSummary *summary);
+static int my_episode_to_dict(PyObject *dict, Env *env);
 static int assign_to_dict(PyObject *dict, char *key, float value);
 
 static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs);
@@ -494,8 +494,8 @@ static PyObject *vectorize(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_reset(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 2) {
-        PyErr_SetString(PyExc_TypeError, "vec_reset requires 2 arguments");
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "vec_reset requires 1 argument");
         return NULL;
     }
 
@@ -504,22 +504,15 @@ static PyObject *vec_reset(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyObject *seed_arg = PyTuple_GetItem(args, 1);
-    if (!PyObject_TypeCheck(seed_arg, &PyLong_Type)) {
-        PyErr_SetString(PyExc_TypeError, "seed must be an integer");
-        return NULL;
-    }
-    int seed = PyLong_AsLong(seed_arg);
-
     for (int i = 0; i < vec->num_envs; i++) {
-        // Assumes each process has the same number of environments
-        srand(i + seed);
         c_reset(vec->envs[i]);
     }
     Py_RETURN_NONE;
 }
 
-static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
+// One row per env whose (single, frozen) eval episode has finished. Envs with no
+// completed episode (log.n == 0) are skipped, so no division by zero.
+static PyObject *vec_per_episode_log(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
@@ -532,26 +525,26 @@ static PyObject *vec_pop_completed_episodes(PyObject *self, PyObject *args) {
 
     for (int i = 0; i < vec->num_envs; i++) {
         Env *env = vec->envs[i];
-        CompletedEpisodeSummary summary;
-        while (pop_completed_episode_summary(env, &summary)) {
-            PyObject *dict = PyDict_New();
-            if (!dict) {
-                Py_DECREF(list);
-                return NULL;
-            }
-            if (my_completed_episode_to_dict(dict, env, &summary) != 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            assign_to_dict(dict, "env_slot", (float) i);
-            if (PyList_Append(list, dict) < 0) {
-                Py_DECREF(dict);
-                Py_DECREF(list);
-                return NULL;
-            }
-            Py_DECREF(dict);
+        if (env->log.n <= 0.0f) {
+            continue;
         }
+        PyObject *dict = PyDict_New();
+        if (!dict) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        if (my_episode_to_dict(dict, env) != 0) {
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        assign_to_dict(dict, "env_slot", (float) i);
+        if (PyList_Append(list, dict) < 0) {
+            Py_DECREF(dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(dict);
     }
     return list;
 }
@@ -708,87 +701,40 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     float num_agents = (float) PyLong_AsLong(num_agents_arg);
     int num_keys = sizeof(Log) / sizeof(float);
 
-    Env *env = vec->envs[0];
-    if (env->eval_mode) {
-        PyObject *list = PyList_New(vec->num_envs);
-        PyObject *dict = PyDict_New();
-
-        if (env->log.n == 0) {
-            return dict;
+    Log aggregate = {0};
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *) &aggregate)[j] += ((float *) &env->log)[j];
         }
+    }
 
-        // Got enough data. Reset logs and return metrics
-        for (int i = 0; i < vec->num_envs; i++) {
-            PyObject *dict = PyDict_New();
-            Env *env = vec->envs[i];
-            float n = env->log.n;
-            // Average across agents
-            for (int i = 0; i < num_keys; i++) {
-                ((float *) &env->log)[i] /= n;
-            }
-            my_log(dict, env, &env->log, n);
-            assign_to_dict(dict, "n", n);
-            // Add map_name to dict
-            if (env->map_name) {
-                PyObject *s = PyUnicode_FromString(env->map_name);
-                if (s != NULL) {
-                    PyDict_SetItemString(dict, "map_name", s);
-                    Py_DECREF(s);
-                }
-            }
+    PyObject *dict = PyDict_New();
 
-            PyList_SetItem(list, i, dict);
-        }
-        // Reset logs to 0 after extracting metrics (prevents accumulation across episodes)
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &env->log)[j] = 0.0f;
-            }
-        }
-        return list;
-    } else {
-        Log aggregate = {0};
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &aggregate)[j] += ((float *) &env->log)[j];
-            }
-        }
-
-        PyObject *dict = PyDict_New();
-
-        // Only log if we have at least num_agents worth of data
-        Env *env = vec->envs[0];
-        if (env->eval_mode) {
-            if (aggregate.n == 0) {
-                return dict;
-            }
-        } else {
-            if (aggregate.n < num_agents) {
-                return dict;
-            }
-        }
-
-        // Got enough data. Reset logs and return metrics
-        for (int i = 0; i < vec->num_envs; i++) {
-            Env *env = vec->envs[i];
-            for (int j = 0; j < num_keys; j++) {
-                ((float *) &env->log)[j] = 0.0f;
-            }
-        }
-
-        float n = aggregate.n;
-
-        // Average across agents
-        for (int i = 0; i < num_keys; i++) {
-            ((float *) &aggregate)[i] /= n;
-        }
-        // User populates dict
-        my_log(dict, env, &aggregate, n);
-        assign_to_dict(dict, "n", n);
+    // Only log if we have at least num_agents worth of data
+    if (aggregate.n < num_agents) {
         return dict;
     }
+
+    // Got enough data. Reset logs and return metrics
+    for (int i = 0; i < vec->num_envs; i++) {
+        Env *env = vec->envs[i];
+        for (int j = 0; j < num_keys; j++) {
+            ((float *) &env->log)[j] = 0.0f;
+        }
+    }
+
+    float n = aggregate.n;
+
+    // Average across agents
+    for (int i = 0; i < num_keys; i++) {
+        ((float *) &aggregate)[i] /= n;
+    }
+    // User populates dict
+    Env *env = vec->envs[0];
+    my_log(dict, env, &aggregate, n);
+    assign_to_dict(dict, "n", n);
+    return dict;
 }
 
 static PyObject *vec_get(PyObject *self, PyObject *args) {
@@ -1328,10 +1274,10 @@ static PyMethodDef methods[]
        {"vec_init", (PyCFunction) vec_init, METH_VARARGS | METH_KEYWORDS, "Initialize a vector of environments"},
        {"vec_reset", vec_reset, METH_VARARGS, "Reset the vector of environments"},
        {"vec_step", vec_step, METH_VARARGS, "Step the vector of environments"},
-       {"vec_pop_completed_episodes",
-        vec_pop_completed_episodes,
+       {"vec_per_episode_log",
+        vec_per_episode_log,
         METH_VARARGS,
-        "Drain per-env queues of completed-episode summary dicts"},
+        "Return one per-episode metrics dict per env whose eval episode has finished"},
        {"vec_log", vec_log, METH_VARARGS, "Log the vector of environments"},
        {"vec_render", vec_render, METH_VARARGS, "Render the vector of environments"},
        {"vec_set_video_suffix", vec_set_video_suffix, METH_VARARGS, "Set the mp4 filename suffix for an env"},

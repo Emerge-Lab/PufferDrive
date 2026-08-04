@@ -40,6 +40,10 @@ jobs:
       - name: Unit tests
         run: python -m pytest -v tests/unit_tests
 
+      - name: Evaluation integration tests
+        run: python -m pytest -v tests/eval
+        timeout-minutes: 15
+
   c-drive-tests:
     name: C Drive Tests
     runs-on: ubuntu-latest
@@ -120,40 +124,6 @@ jobs:
       - name: Smoke golden test
         run: docker run --rm pufferdrive-smoke
         timeout-minutes: 30
-
-  smoke-replay:
-    name: Smoke Replay HTML
-    runs-on: ubuntu-latest
-    env:
-      PUFFER_CPU: 1
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
-          sudo rm -rf ~/.cache/pip /tmp/* /var/tmp/*
-
-      - name: Install pufferlib
-        env:
-          TMPDIR: ${{ runner.temp }}/build
-          PIP_NO_CACHE_DIR: 1
-        run: |
-          sudo apt-get update && sudo apt-get install -y build-essential cmake
-          python -m pip install -U pip pytest
-          pip install -e . --no-cache-dir
-          python setup.py build_ext --inplace --force
-
-      - name: Replay HTML test
-        run: python -m pytest -v tests/smoke_tests/test_validation_replay_html.py
-        timeout-minutes: 20
 
   perf-tests:
     name: Smoke Performance Test
