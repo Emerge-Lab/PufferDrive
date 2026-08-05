@@ -15,7 +15,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_fast_0008
+export RUN_NAME=k_fast_0000
 echo ${RUN_NAME}
 
 # Seed each array task deterministically: 1000 * array task id
@@ -46,7 +46,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    eval.validation_gigaflow.render_backend=obs_html \
     train.seed=${SEED} \
     tb=True
 
