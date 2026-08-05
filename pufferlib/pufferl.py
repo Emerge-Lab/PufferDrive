@@ -1269,9 +1269,6 @@ class WandbLogger:
         self.wandb.run.log_artifact(artifact)
 
     def upload_config(self, config_yaml_path):
-        # The run's fully-resolved config (defaults + program config + CLI
-        # overrides + git metadata), uploaded as a run file so the exact
-        # training configuration can be downloaded and reused verbatim.
         self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
 
     def close(self, model_path, early_stop):
