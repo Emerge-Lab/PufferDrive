@@ -561,10 +561,26 @@ class PuffeRL:
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-        # TODO fix multi-gpu bug
-        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
-        if adv_weights is not None:
-            mb_adv = adv_weights * mb_adv
+        with torch.no_grad():
+            if torch.distributed.is_initialized():
+                # This mean computation assumes that all GPUs use the same batch size. This is currently guaranteed.
+                world_size = torch.distributed.get_world_size()
+                # Distributed mean
+                advantage_mean = mb_adv.mean()
+                torch.distributed.all_reduce(advantage_mean, op=torch.distributed.ReduceOp.SUM)
+                advantage_mean = advantage_mean / world_size
+
+                advantage_std = torch.sum(torch.square(mb_adv - advantage_mean))
+                torch.distributed.all_reduce(advantage_std, op=torch.distributed.ReduceOp.SUM)
+                advantage_std = advantage_std / (world_size * torch.numel(mb_adv) - 1)  # -1 is bessel's correction
+                advantage_std = torch.sqrt(advantage_std)
+            else:
+                advantage_mean = mb_adv.mean()
+                advantage_std = mb_adv.std()
+
+            mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
+            if adv_weights is not None:
+                mb_adv = adv_weights * mb_adv
 
         pg_loss1 = -mb_adv * ratio
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
