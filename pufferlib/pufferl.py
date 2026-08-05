@@ -719,33 +719,45 @@ class PuffeRL:
         valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
         valid_abs_adv = flat_advantages[valid_idx].abs()
 
-        ewma_beta = config["adv_filter_ewma_beta"]
-        current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
-        self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
-        threshold = config["adv_filter_threshold_scale"] * self.ema_max
-
-        keep_mask = valid_abs_adv >= threshold
-        keep_idx = valid_idx[keep_mask]
-        num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
-
-        if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-            # Synchronize the number of kept transitions in multi-GPU setting to keep synchronization
-            kept_tensor = torch.tensor([num_kept], device=device)
-            torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
-            min_num_kept = kept_tensor.item()
-            if num_kept > min_num_kept:
-                if min_num_kept == 0:
-                    keep_idx = keep_idx[:0]
-                else:
-                    top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
-                    keep_idx = keep_idx[top_idx]
-
-        kept_fraction = num_kept / max(num_valid, 1)
-        losses["filter_threshold"] = threshold
-        losses["ema_max"] = self.ema_max
         losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(total_transitions, 1))
-        losses["kept_fraction"] = kept_fraction
-        losses["filtered_fraction"] = 1.0 - kept_fraction
+
+        if config["adv_filter_enabled"]:
+            ewma_beta = config["adv_filter_ewma_beta"]
+            current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
+            self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
+            threshold = config["adv_filter_threshold_scale"] * self.ema_max
+
+            keep_mask = valid_abs_adv >= threshold
+            keep_idx = valid_idx[keep_mask]
+            num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
+
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                # Filtering keeps a different count per rank, so trim to the global
+                # minimum to keep the number of minibatches synchronized
+                kept_tensor = torch.tensor([num_kept], device=device)
+                torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
+                min_num_kept = kept_tensor.item()
+                if num_kept > min_num_kept:
+                    if min_num_kept == 0:
+                        keep_idx = keep_idx[:0]
+                    else:
+                        top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
+                        keep_idx = keep_idx[top_idx]
+
+            kept_fraction = num_kept / max(num_valid, 1)
+            losses["filter_threshold"] = threshold
+            losses["ema_max"] = self.ema_max
+            losses["kept_fraction"] = kept_fraction
+            losses["filtered_fraction"] = 1.0 - kept_fraction
+        else:
+            keep_idx = valid_idx
+
+        if config["min_batch_size"] is not None:
+            num_missing = config["min_batch_size"] - keep_idx.numel()
+            if num_missing > 0 and keep_idx.numel() > 0:
+                # Repeat random elements of keep_idx until min_batch_size is reached
+                pad_idx = torch.randint(keep_idx.numel(), (num_missing,), device=keep_idx.device)
+                keep_idx = torch.cat([keep_idx, keep_idx[pad_idx]])
 
         self.optimizer.zero_grad()
         total_minibatches = 0

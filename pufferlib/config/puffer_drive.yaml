@@ -231,6 +231,8 @@ train:
   checkpoint_interval: 50
   # batch_size = num_workers * num_agents *  bptt_horizon
   batch_size: auto
+  # Lower bound on the batch size in transitions. Null means no lower bound.
+  min_batch_size: null
   minibatch_size: 65536
   # Accumulate gradients above this size
   max_minibatch_size: 65536
@@ -242,6 +244,8 @@ train:
   vtrace_c_clip: 1
   adv_sampling_prio_alpha: 0.8499999999999999
   adv_sampling_prio_beta0: 0.8499999999999999
+  # Drop transitions whose |advantage| is below adv_filter_threshold_scale * EMA of the batch max
+  adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
   adv_filter_threshold_scale: 0.01
   # Rendering options
