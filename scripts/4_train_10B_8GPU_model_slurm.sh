@@ -38,6 +38,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME}_${SEED} \
+    run_name=${RUN_NAME}_${SEED} \
     train.total_timesteps=10000000000 \
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
