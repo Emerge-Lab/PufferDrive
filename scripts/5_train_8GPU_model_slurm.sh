@@ -42,18 +42,19 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
-    train.max_minibatch_size=524288 \
-    train.minibatch_size=524288 \
+    train.max_minibatch_size=262144 \
+    train.minibatch_size=262144 \
     train.precision=bfloat16 \
-    train.min_batch_size=2097152 \
+    env.num_agents=512 \
+    train.min_batch_size=1048576 \
     policy.action_type=discrete \
     env.action_type=continuous \
     train.adv_filter_enabled=False \
     train.seed=${SEED} \
     tb=True
 
-# 2097152 = 1024 * 16 * 128
-# 524288 = 2097152 / 4
+# 1048576 = 512 * 16 * 128
+# 262144 = 1048576 / 4
 
 end=$(date +%s)
 runtime=$((end-start))
