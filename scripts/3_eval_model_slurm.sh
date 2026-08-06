@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=train_puffer
+#SBATCH --job-name=eval_puffer
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
@@ -19,13 +19,11 @@ MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0006/puffer_drive_nht7
 
 source .venv/bin/activate
 .venv/bin/puffer eval puffer_drive carla \
-    eval.render_scenarios=true \
     eval.action_selection=mean \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH}
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
-    eval.render_scenarios=true \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     eval.action_selection=mean \
     eval.output_name=${RUN_NAME} \

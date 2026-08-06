@@ -56,7 +56,6 @@ srun torchrun \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.reward_conditioning=False \
     train.seed=0 \
     tb=True
 
