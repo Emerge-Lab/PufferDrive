@@ -75,6 +75,8 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_score",
     "multi_lane_time",
     "speed_limit_compliance",
+    "total_distance_travelled_sum",
+    "total_infraction_count",
 }
 
 
@@ -461,7 +463,7 @@ class PuffeRL:
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return self.stats
+        return pufferlib.utils.reduce_environment_metrics(self.stats)
 
     @record
     def train(self):
@@ -777,14 +779,7 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        for k in list(self.stats.keys()):
-            v = self.stats[k]
-            try:
-                v = np.mean(v)
-            except:
-                del self.stats[k]
-
-            self.stats[k] = v
+        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
