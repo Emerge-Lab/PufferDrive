@@ -2,7 +2,7 @@
 #SBATCH --job-name train_puffer
 #SBATCH --ntasks 1
 #SBATCH --nodes 1
-#SBATCH --time 1-00:00
+#SBATCH --time 2-00:00
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
