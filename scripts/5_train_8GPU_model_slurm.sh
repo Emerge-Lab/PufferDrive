@@ -6,19 +6,20 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_exp_0000/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_exp_0000/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_exp_0001/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_exp_0001/log_%a_%A.err
 #SBATCH --partition dev
+#SBATCH --array=0-2
 
 # print info about current job
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_exp_0000
+export RUN_NAME=k_exp_0001
 echo ${RUN_NAME}
 
 # Seed each array task deterministically: 1000 * array task id
-SEED=$((1000 * SLURM_ARRAY_TASK_ID))
+SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
 # TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
@@ -42,18 +43,19 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
-    train.max_minibatch_size=131072 \
-    train.minibatch_size=131072 \
+    train.max_minibatch_size=196608 \
+    train.minibatch_size=196608 \
     train.precision=bfloat16 \
-    env.num_agents=256 \
-    train.min_batch_size=524288 \
+    env.num_agents=192 \
+    train.min_batch_size=786432 \
+    train.bptt_horizon=256 \
     policy.action_type=discrete \
     env.action_type=continuous \
     train.adv_filter_enabled=False \
     train.seed=${SEED} \
     tb=True
 
-# 524288 = 256 * 16 * 128
+# 786432 = 192 * 16 * 256
 # 131072 = 524288 / 4
 
 end=$(date +%s)
