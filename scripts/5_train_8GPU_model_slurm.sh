@@ -52,6 +52,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     policy.action_type=discrete \
     env.action_type=continuous \
     train.adv_filter_enabled=False \
+    train.evaluation_benchmarks=carla_fast \
     train.seed=${SEED} \
     tb=True
 

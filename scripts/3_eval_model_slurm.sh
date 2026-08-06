@@ -6,16 +6,16 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=125G
 #SBATCH --cpus-per-task=18
-#SBATCH --output=/home/bjaeger/PufferDrive/experiments/k_scaled_0006/puffer_drive_nht7wfsc/eval2/eval_nuPlan_%a_%A.out
-#SBATCH --error=/home/bjaeger/PufferDrive/experiments/k_scaled_0006/puffer_drive_nht7wfsc/eval2/eval_nuPlan_%a_%A.err
+#SBATCH --output=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/eval/eval_nuPlan_%a_%A.out
+#SBATCH --error=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/eval/eval_nuPlan_%a_%A.err
 #SBATCH --partition=dev
 
 # print info about current job
 echo "START TIME: $(date)"
 start=`date +%s`
 
-RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0006/puffer_drive_nht7wfsc/eval2
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_scaled_0006/puffer_drive_nht7wfsc/models/model_puffer_drive_007451.pt
+RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/eval
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/best_models/best_trainer_state_020950.pt
 
 source .venv/bin/activate
 .venv/bin/puffer eval puffer_drive carla \

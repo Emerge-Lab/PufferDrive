@@ -56,6 +56,7 @@ srun torchrun \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
+    train.evaluation_benchmarks=carla_fast \
     train.seed=0 \
     tb=True
 
