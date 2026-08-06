@@ -23,6 +23,8 @@ start=$(date +%s)
 export RUN_NAME=k_scaled_0006
 echo ${RUN_NAME}
 
+export SEED=1000
+
 # Thread limit limits CPU thrashing across worker environments
 export NUMEXPR_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -45,9 +47,9 @@ srun torchrun \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
-    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME} \
+    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}_${SEED} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
-    train.name=${RUN_NAME} \
+    train.name=${RUN_NAME}_${SEED} \
     run_name=${RUN_NAME}_${SEED} \
     train.total_timesteps=1000000000000 \
     vec.num_envs=16 \
@@ -57,7 +59,7 @@ srun torchrun \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
-    train.seed=0 \
+    train.seed=${SEED} \
     tb=True
 
 # train.learning_rate=0.004 \

@@ -513,7 +513,7 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+                model_dir = self.config["data_dir"]
                 model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
 
                 if model_files:
@@ -859,9 +859,9 @@ class PuffeRL:
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
             return
         model_path = self.save_checkpoint()
-        run_id = self.logger.run_id
-        run_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
-        path = os.path.join(run_dir, f"{self.config['env']}_{run_id}.pt")
+        # Fixed, configurable filename so a follow-up eval job can reference the final
+        # model without knowing which epoch training stopped at.
+        path = os.path.join(self.config["data_dir"], self.config["final_model_name"])
         shutil.copy(model_path, path)
         return path
 
@@ -870,7 +870,7 @@ class PuffeRL:
             return
 
         run_id = self.logger.run_id
-        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        path = self.config["data_dir"]
         if not os.path.exists(path):
             os.makedirs(path)
 
@@ -1229,7 +1229,7 @@ def downsample(data_list, num_points):
 
 class NoLogger:
     def __init__(self, args, run_id=None):
-        self.run_id = run_id or str(int(time.time()))
+        self.run_id = run_id or args["run_name"]
 
     def log(self, logs, step):
         pass
@@ -1251,6 +1251,8 @@ class NeptuneLogger:
             capture_stderr=False,
             capture_traceback=False,
             with_id=load_id,
+            # Neptune's resume-by-name key, mirroring the wandb id above.
+            custom_run_id=None if load_id else args["run_name"],
             mode=mode,
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
@@ -1282,9 +1284,11 @@ class WandbLogger:
     def __init__(self, args, load_id=None, resume="allow"):
         import wandb
 
+        # run_name is the run id: with resume="allow" wandb attaches to the
+        # existing run when one already carries this id, and creates it otherwise.
         wandb.init(
-            id=load_id or wandb.util.generate_id(),
-            name=args.get("run_name") or None,
+            id=load_id or args["run_name"],
+            name=args["run_name"],
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
@@ -1398,7 +1402,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
-        experiment_dir = os.path.dirname(args["load_model_path"])
+        experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
         config_yaml_path = os.path.join(experiment_dir, "config.yaml")
         KEYS_OF_INTEREST = {
             "action_type",
@@ -1439,6 +1443,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 for k, v in yaml_config["env"].items():
                     if k in KEYS_OF_INTEREST:
                         args["env"][k] = v
+        else:
+            print(
+                f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "
+                "policy/observation architecture instead of the checkpoint's."
+            )
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     if "LOCAL_RANK" in os.environ:
@@ -1478,27 +1487,38 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         elif args["wandb"]:
             logger = WandbLogger(args)
         elif args["tb"]:
-            date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-            experiment_dir = os.path.join(args["train"]["data_dir"], rf"{env_name}_" + date_time)
             logger = TensorBoardLogger(
-                run_id=date_time,
-                experiment_dir=experiment_dir,
+                run_id=args["run_name"],
+                experiment_dir=args["train"]["data_dir"],
             )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
-    if args["train"].get("resume_state_path"):
-        pufferl.load_training_state(args["train"]["resume_state_path"])
+    # A run is identified by its name, and its directory is train.data_dir. Relaunching
+    # the same run therefore finds its own trainer_state.pt and continues from it rather
+    # than overwriting the checkpoints already in that directory. An explicit
+    # resume_state_path or load_model_path still wins.
+    resume_state_path = args["train"].get("resume_state_path")
+    if not resume_state_path and not args.get("load_model_path"):
+        run_state_path = os.path.join(args["train"]["data_dir"], "trainer_state.pt")
+        if os.path.exists(run_state_path):
+            print(f"Run '{args['run_name']}' already exists in {args['train']['data_dir']}; resuming it.")
+            resume_state_path = run_state_path
+
+    if resume_state_path:
+        pufferl.load_training_state(resume_state_path)
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
     # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
     if args.get("load_model_path"):
-        trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
+        trainer_state_path = os.path.join(drive_benchmark.resolve_run_dir(args["load_model_path"]), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
-            tstate = torch.load(trainer_state_path, map_location=train_config["device"])
+            # weights_only=False as in load_training_state: the state carries the
+            # numpy scalars of the saved RNG state, not just tensors.
+            tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
@@ -1509,8 +1529,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         else:
             print(f"No trainer_state.pt next to {args['load_model_path']}; starting optimizer fresh.")
 
-    path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
-    _save_experiment_config(args, path)
+    # Only rank 0 writes config.yaml; every rank writing it raced on the same file
+    # (and, before the run directory was train.data_dir, littered one directory per rank).
+    path = args["train"]["data_dir"]
+    if is_rank0:
+        _save_experiment_config(args, path)
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
@@ -1651,7 +1674,7 @@ def eval(
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
     if eval_output_dir is None:
-        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+        run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, "eval")
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")

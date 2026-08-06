@@ -26,7 +26,6 @@ source .venv/bin/activate
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    vec.num_envs=16 \
     eval.action_selection=mean \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH}

@@ -12,7 +12,9 @@ max_runs: 200
 wandb: false
 wandb_project: pufferlib
 wandb_group: debug
-run_name: null
+# Unique run identifier. Doubles as the logger run id, so relaunching with the
+# same run_name and train.data_dir resumes that run instead of starting a new one.
+run_name: default_run
 neptune: false
 neptune_name: pufferai
 neptune_project: ablations
@@ -200,6 +202,8 @@ train:
   name: pufferai
   project: ablations
   seed: 42
+  # Filename of the final model copy written into train.data_dir when training ends.
+  final_model_name: final_model.pt
   # Null disables evaluation during training.
   evaluation_interval_epochs: null
   # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single

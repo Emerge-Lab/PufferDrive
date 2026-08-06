@@ -35,7 +35,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
-    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME} \
+    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}_${SEED} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME}_${SEED} \
     run_name=${RUN_NAME}_${SEED} \

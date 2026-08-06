@@ -10,7 +10,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
     Args:
         config: Configuration dictionary containing data_dir, env, and render settings
         vecenv: Vectorized environment with driver_env attribute
-        logger: Logger object with run_id and optional wandb attribute
+        logger: Logger object with an optional wandb attribute
         epoch: Current training epoch
         global_step: Current global training step
         bin_path: Path to the exported .bin model weights file
@@ -22,8 +22,7 @@ def render_videos(config, vecenv, logger, epoch, global_step, bin_path):
         print(f"Binary weights file does not exist: {bin_path}")
         return
 
-    run_id = logger.run_id
-    model_dir = os.path.join(config["data_dir"], f"{config['env']}_{run_id}")
+    model_dir = config["data_dir"]
 
     # Now call the C rendering function
     try:

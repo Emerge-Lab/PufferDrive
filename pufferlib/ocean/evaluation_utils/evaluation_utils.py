@@ -31,6 +31,18 @@ def _require_mapping(value, label):
     return value
 
 
+def resolve_run_dir(model_path):
+    """Run directory holding a checkpoint's config.yaml.
+
+    Checkpoints sit either at the run root (train.final_model_name) or one level
+    down in models/ and best_models/, so accept both instead of assuming a depth.
+    """
+    checkpoint_dir = os.path.dirname(os.path.abspath(model_path))
+    if os.path.isfile(os.path.join(checkpoint_dir, "config.yaml")):
+        return checkpoint_dir
+    return os.path.dirname(checkpoint_dir)
+
+
 def _load_yaml_mapping(path, label):
     if not isinstance(path, (str, os.PathLike)) or not os.path.isfile(path):
         raise pufferlib.APIUsageError(f"{label.capitalize()} not found: {path}")
@@ -185,7 +197,7 @@ def load_checkpoint_architecture(args):
     model_path = args["load_model_path"]
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
+    config_path = os.path.join(resolve_run_dir(model_path), "config.yaml")
     checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
 
     merged = copy.deepcopy(args)

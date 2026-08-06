@@ -526,8 +526,12 @@ def _run_training(tmp_path, benchmark_config_path, run_id, evaluation_enabled):
     _seed_training()
     logger = RecordingLogger(run_id)
     args = _training_args(tmp_path, benchmark_config_path, evaluation_enabled)
+    # The run directory is train.data_dir, so each run needs its own; sharing one
+    # would make the second run resume the first instead of training from scratch.
+    run_dir = tmp_path / run_id
+    args["train"]["data_dir"] = str(run_dir)
+    args["run_name"] = run_id
     pufferl.train("puffer_drive", args=args, logger=logger)
-    run_dir = tmp_path / f"puffer_drive_{run_id}"
     trainer_state = torch.load(run_dir / "trainer_state.pt", map_location="cpu", weights_only=False)
     return run_dir, trainer_state, logger
 
