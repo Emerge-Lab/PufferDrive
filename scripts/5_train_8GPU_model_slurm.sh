@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_exp_0001/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_exp_0001/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-2
 

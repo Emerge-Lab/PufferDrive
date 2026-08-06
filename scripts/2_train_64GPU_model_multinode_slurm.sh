@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 144
 #SBATCH --mem=1007G
 #SBATCH --time 3-00:00
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/k_scaled_0006/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/k_scaled_0006/log_%a_%A.err
+#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
+#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
 
 # Set up PyTorch Distributed Rendezvous parameters from Slurm variables
@@ -20,10 +20,20 @@ echo "Master node: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Total nodes: ${WORLD_SIZE}"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0006
+export SEED=1000
+
+export RUN_NAME=k_scaled_0006_${SEED}
 echo ${RUN_NAME}
 
-export SEED=1000
+export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+echo ${DATA_DIR}
+
+# Name the training run writes its final model under, so the eval steps below can
+# find it without knowing the last epoch number. Passed to train as
+# train.final_model_name so the two can never disagree.
+export FINAL_MODEL_NAME=final_model.pt
+export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
+echo ${MODEL_PATH}
 
 # Thread limit limits CPU thrashing across worker environments
 export NUMEXPR_NUM_THREADS=1
@@ -47,20 +57,55 @@ srun torchrun \
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
-    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}_${SEED} \
+    train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
-    train.name=${RUN_NAME}_${SEED} \
-    run_name=${RUN_NAME}_${SEED} \
-    train.total_timesteps=1000000000000 \
+    train.name=${RUN_NAME} \
+    run_name=${RUN_NAME} \
+    train.total_timesteps=500000000000 \
     vec.num_envs=16 \
     +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
-    train.max_minibatch_size=131072 \
-    train.minibatch_size=131072 \
+    train.max_minibatch_size=196608 \
+    train.minibatch_size=196608 \
     train.precision=bfloat16 \
+    env.num_agents=192 \
+    train.min_batch_size=786432 \
+    train.bptt_horizon=256 \
+    policy.action_type=discrete \
+    env.action_type=continuous \
+    train.adv_filter_enabled=False \
     train.evaluation_benchmarks=carla_fast \
+    train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
+
+# Only evaluate a run that actually finished, otherwise the eval jobs below would
+# score a stale final_model.pt from an earlier attempt (or fail on a missing one).
+# srun blocks until every node's task exits, so this is the whole run's status.
+TRAIN_STATUS=$?
+if [ ${TRAIN_STATUS} -ne 0 ]; then
+    echo "Training exited with status ${TRAIN_STATUS}; skipping evaluation."
+    exit ${TRAIN_STATUS}
+fi
+if [ ! -f ${MODEL_PATH} ]; then
+    echo "Training finished but ${MODEL_PATH} is missing; skipping evaluation."
+    exit 1
+fi
+
+# No srun: evaluation is a single-node job, run here on the batch host rather than
+# once per allocated node.
+echo "Training done, evaluating ${MODEL_PATH}"
+.venv/bin/puffer eval puffer_drive carla \
+    vec.num_envs=16 \
+    eval.action_selection=mean \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH}
+
+.venv/bin/puffer eval puffer_drive nuplan_single \
+    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.action_selection=mean \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH}
 
 # train.learning_rate=0.004 \
 
