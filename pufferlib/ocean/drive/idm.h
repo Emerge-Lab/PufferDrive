@@ -1,7 +1,6 @@
 #ifndef PUFFERLIB_OCEAN_DRIVE_IDM_H
 #define PUFFERLIB_OCEAN_DRIVE_IDM_H
 
-#define IDM_MINIMUM_LEAD_DISTANCE 0.1f
 #define IDM_MIN_SPACING 1.0f
 #define IDM_SAFE_TIME_HEADWAY 1.5f
 #define IDM_MAX_ACCEL 1.0f
@@ -52,7 +51,7 @@ static inline void idm_update_best_leader(
     float gap,
     float leader_speed) {
     if (gap < 0.0f) {
-        gap = IDM_MINIMUM_LEAD_DISTANCE;
+        gap = IDM_MIN_SPACING;
     }
     if (gap >= best->gap) {
         return;
@@ -61,7 +60,7 @@ static inline void idm_update_best_leader(
     best->has_leader = 1;
     best->leader_agent_idx = leader_agent_idx;
     best->is_traffic_light = is_traffic_light;
-    best->gap = fmaxf(gap, IDM_MINIMUM_LEAD_DISTANCE);
+    best->gap = fmaxf(gap, IDM_MIN_SPACING);
     best->leader_speed = fmaxf(0.0f, leader_speed);
 }
 
@@ -390,7 +389,7 @@ static int idm_sample_hits_projected_agent(Drive *env, const Agent *sample, int 
     }
 
     Agent projected = *other;
-    float end_s = idm_projected_footprint_length(other);
+    float end_s = fmaxf(0.0f, other->sim_speed_signed) * IDM_SAFE_TIME_HEADWAY;
     for (float s = IDM_ROUTE_SAMPLE_DS; s <= end_s + 1e-4f; s += IDM_ROUTE_SAMPLE_DS) {
         projected = *other;
         if (!idm_set_projected_agent_pose(env, &projected, projection, s)) {
@@ -539,7 +538,7 @@ static float idm_compute_acceleration(Drive *env, Agent *agent, IDMLeader leader
                     current_speed * IDM_SAFE_TIME_HEADWAY
                         + current_speed * (current_speed - leader.leader_speed)
                             / (2.0f * sqrtf(IDM_MAX_ACCEL * IDM_MAX_DECEL)));
-        float lead_dist = fmaxf(leader.gap, IDM_MINIMUM_LEAD_DISTANCE);
+        float lead_dist = fmaxf(leader.gap, IDM_MIN_SPACING);
         leader_term = (s_star / lead_dist) * (s_star / lead_dist);
     }
 

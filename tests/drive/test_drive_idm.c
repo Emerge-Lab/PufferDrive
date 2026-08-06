@@ -20,7 +20,7 @@ static int test_leader_defaults_and_update(void) {
     idm_update_best_leader(&leader, 3, 0, -1.0f, -5.0f);
     EXPECT_EQ_INT(leader.has_leader, 1);
     EXPECT_EQ_INT(leader.leader_agent_idx, 3);
-    EXPECT_NEAR(leader.gap, IDM_MINIMUM_LEAD_DISTANCE, 1e-5f);
+    EXPECT_NEAR(leader.gap, IDM_MIN_SPACING, 1e-5f);
     EXPECT_NEAR(leader.leader_speed, 0.0f, 1e-5f);
 
     idm_update_best_leader(&leader, 4, 0, 10.0f, 3.0f);
@@ -28,7 +28,7 @@ static int test_leader_defaults_and_update(void) {
     idm_update_best_leader(&leader, 5, 1, 0.05f, 7.0f);
     EXPECT_EQ_INT(leader.leader_agent_idx, 5);
     EXPECT_EQ_INT(leader.is_traffic_light, 1);
-    EXPECT_NEAR(leader.gap, IDM_MINIMUM_LEAD_DISTANCE, 1e-5f);
+    EXPECT_NEAR(leader.gap, IDM_MIN_SPACING, 1e-5f);
     EXPECT_NEAR(leader.leader_speed, 7.0f, 1e-5f);
     return 0;
 }
