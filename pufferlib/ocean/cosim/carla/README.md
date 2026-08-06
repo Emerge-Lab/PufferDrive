@@ -90,26 +90,47 @@ to the goal), larger spacings — training samples
 and do not cause wrong turns at forks. Requires the town bin to carry a lane
 graph (all `carla/opendrive__Town*.bin` do).
 
-## Running all 36 longest6 routes in parallel
+## Slurm launch (verified 2026-08-06)
 
-The same pattern as CaRL's `evaluate_routes_slurm.py` (one job per route file,
-one CARLA server per job, aggregate at the end) works by launching
-`run_leaderboard.sh` once per split route with a distinct port and output:
+One self-contained sbatch per route: the job gets its own GPU, starts its own
+CARLA server, runs the evaluator, and writes `result.json` + videos under
+`$RUNDIR`. Single route (e.g. longest6 route 5, the shortest at ~686 m):
 
 ```bash
+PD=/scratch/yw4142/PufferDrive_cosim
+CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
+RUNDIR=/scratch/yw4142/runs/cosim_lb_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RUNDIR"
+sbatch -A torch_pr_355_tandon_advanced -p l40s_public --gres=gpu:1 -c 8 --mem=64G -t 02:00:00 \
+  --job-name=cosim_r5 --output="$RUNDIR/slurm.out" --error="$RUNDIR/slurm.out" \
+  --wrap "CKPT=$CKPT ROUTES_SUBSET=5 OUT=$RUNDIR/result.json \
+bash $PD/pufferlib/ocean/cosim/carla/run_leaderboard.sh"
+```
+
+### All 36 longest6 routes in parallel
+
+Same pattern as CaRL's `evaluate_routes_slurm.py` (one job per split route,
+one CARLA server per job, aggregate at the end). Distinct `CARLA_PORT`s guard
+against two jobs landing on the same node:
+
+```bash
+PD=/scratch/yw4142/PufferDrive_cosim
+CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
 SPLIT=/scratch/yw4142/CaRL/CARLA/custom_leaderboard/leaderboard/data/longest6_split
+BASE=/scratch/yw4142/runs/cosim_lb_parallel_$(date +%Y%m%d_%H%M%S)
 for i in $(seq -w 0 35); do
-  ROUTES=$SPLIT/longest6_$i.xml ROUTES_SUBSET= \
-  CARLA_PORT=$((2000 + 10#$i * 4)) \
-  OUT=/scratch/yw4142/runs/cosim_lb_parallel/route_$i/result.json \
-  sbatch --gres=gpu:1 --wrap "bash pufferlib/ocean/cosim/carla/run_leaderboard.sh"
+  RUNDIR=$BASE/route_$i; mkdir -p "$RUNDIR"
+  sbatch -A torch_pr_355_tandon_advanced -p l40s_public --gres=gpu:1 -c 8 --mem=64G -t 04:00:00 \
+    --job-name=cosim_r$i --output="$RUNDIR/slurm.out" --error="$RUNDIR/slurm.out" \
+    --wrap "CKPT=$CKPT ROUTES=$SPLIT/longest6_$i.xml ROUTES_SUBSET= \
+CARLA_PORT=$((2000 + 10#$i * 4)) OUT=$RUNDIR/result.json \
+bash $PD/pufferlib/ocean/cosim/carla/run_leaderboard.sh"
 done
 # aggregate: CaRL's tools/result_parser.py over the per-route result.json files
 ```
 
-Each instance needs its own GPU (CARLA rendering) and a few ports of headroom
-between `CARLA_PORT` values. CaRL's script additionally monitors and resubmits
-crashed routes — worth porting if crash rates matter.
+CaRL's script additionally monitors and resubmits crashed routes — worth
+porting if crash rates matter.
 
 ## Features not obtainable from CARLA
 
