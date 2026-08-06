@@ -40,7 +40,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn \
+torchrun --standalone --nnodes=1 --nproc-per-node=1 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
     wandb_project=nightly-multi-long \
