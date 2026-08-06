@@ -602,7 +602,7 @@ static int nuplan_idm_sample_hits_projected_agent(Drive *env, const Agent *sampl
     }
 
     Agent projected = *other;
-    float end_s = nuplan_idm_projected_footprint_length(other);
+    float end_s = fmaxf(0.0f, other->sim_speed_signed) * NUPLAN_IDM_SAFE_TIME_HEADWAY;
     for (float s = IDM_ROUTE_SAMPLE_DS; s <= end_s + 1e-4f; s += IDM_ROUTE_SAMPLE_DS) {
         projected = *other;
         if (!nuplan_idm_set_projected_agent_pose(env, &projected, projection, s)) {
