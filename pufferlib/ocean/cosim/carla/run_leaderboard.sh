@@ -47,7 +47,7 @@ fi
 set -u
 
 : "${CKPT:?set CKPT=/path/to/model_xxx.pt (or CKPT=dummy for the wiring test)}"
-PD=/scratch/yw4142/PufferDrive_nightly
+PD=${PD:-/scratch/yw4142/PufferDrive_cosim}
 CARL_PY=/scratch/yw4142/conda_envs/carl/bin/python
 CARLA_ROOT=/scratch/yw4142/CaRL/CARLA/carla
 CARL_WORK_DIR=/scratch/yw4142/CaRL/CARLA
@@ -64,6 +64,9 @@ export COSIM_DEBUG_CARLA_VIEW=${COSIM_DEBUG_CARLA_VIEW-"$(dirname "$OUT")/carla_
 
 export CARLA_ROOT CARL_WORK_DIR
 export PYTHONPATH="$PD:$CARL_WORK_DIR/original_leaderboard/leaderboard:$CARL_WORK_DIR/original_leaderboard/scenario_runner:$CARLA_ROOT/PythonAPI/carla:${PYTHONPATH:-}"
+# route_scenario.py globs $SCENARIO_RUNNER_ROOT/srunner/scenarios/*.py to
+# discover scenario classes; leaderboard_agent.py refuses to start without it.
+export SCENARIO_RUNNER_ROOT="$CARL_WORK_DIR/original_leaderboard/scenario_runner"
 
 "$CARLA_ROOT/CarlaUE4.sh" -RenderOffScreen -nosound -carla-rpc-port="$CARLA_PORT" &
 SERVER_PID=$!
@@ -88,9 +91,13 @@ if [ $up -ne 0 ]; then
 fi
 echo "[run_leaderboard] CARLA server ready (pid $SERVER_PID, port $CARLA_PORT)"
 
+# Distinct traffic-manager port per instance (default 8000 collides when two
+# CARLA servers share a node, killing one evaluator with an rpc bind error).
+TM_PORT=${TM_PORT:-$((CARLA_PORT + 6000))}
 ARGS=(--routes "$ROUTES"
       --agent "$PD/pufferlib/ocean/cosim/carla/leaderboard_agent.py"
-      --agent-config "$CKPT" --checkpoint "$OUT" --track MAP --port "$CARLA_PORT")
+      --agent-config "$CKPT" --checkpoint "$OUT" --track MAP --port "$CARLA_PORT"
+      --traffic-manager-port "$TM_PORT")
 [ -n "$ROUTES_SUBSET" ] && ARGS+=(--routes-subset "$ROUTES_SUBSET")
 
 echo "[run_leaderboard] routes=$ROUTES subset=${ROUTES_SUBSET:-<all>} ckpt=$CKPT out=$OUT"

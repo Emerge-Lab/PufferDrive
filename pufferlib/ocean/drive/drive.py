@@ -751,15 +751,27 @@ class Drive(pufferlib.PufferEnv):
         timestep (states length == num_traffic_elements)."""
         binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
 
-    def set_agent_goals(self, agent_idx, gx, gy, gz):
+    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
         """set an agent's goal waypoints (e.g. the ego's route) in world
-        coords (C subtracts world_mean)."""
+        coords (C subtracts world_mean). Each waypoint is snapped to its
+        nearest route-aligned drivable lane (find_goal_lane) so the GPS
+        lane-distance observation columns stay live when the map carries a
+        lane graph; waypoints off the drivable network keep lane -1
+        (columns zero-filled). gdir_x/gdir_y: per-waypoint local route travel
+        direction (need not be normalized) used to reject crossing-road lanes
+        at junctions; omit (or pass zeros) to snap by distance alone."""
+        gx = np.ascontiguousarray(gx, dtype=np.float32)
+        if gdir_x is None or gdir_y is None:
+            gdir_x = np.zeros_like(gx)
+            gdir_y = np.zeros_like(gx)
         binding.vec_set_agent_goals(
             self.c_envs,
             int(agent_idx),
-            np.ascontiguousarray(gx, dtype=np.float32),
+            gx,
             np.ascontiguousarray(gy, dtype=np.float32),
             np.ascontiguousarray(gz, dtype=np.float32),
+            np.ascontiguousarray(gdir_x, dtype=np.float32),
+            np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
     # ───────────────────────────────────────
 

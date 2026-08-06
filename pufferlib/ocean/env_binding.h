@@ -1171,8 +1171,8 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 5) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 5 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 7 arguments");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);
@@ -1183,15 +1183,20 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     PyObject *gx_arr = PyTuple_GetItem(args, 2);
     PyObject *gy_arr = PyTuple_GetItem(args, 3);
     PyObject *gz_arr = PyTuple_GetItem(args, 4);
-    if (!PyArray_Check(gx_arr) || !PyArray_Check(gy_arr) || !PyArray_Check(gz_arr)) {
+    PyObject *gdx_arr = PyTuple_GetItem(args, 5);
+    PyObject *gdy_arr = PyTuple_GetItem(args, 6);
+    if (!PyArray_Check(gx_arr) || !PyArray_Check(gy_arr) || !PyArray_Check(gz_arr)
+        || !PyArray_Check(gdx_arr) || !PyArray_Check(gdy_arr)) {
         PyErr_SetString(PyExc_TypeError, "goal arrays must be NumPy arrays");
         return NULL;
     }
     float *gx = (float *) PyArray_DATA((PyArrayObject *) gx_arr);
     float *gy = (float *) PyArray_DATA((PyArrayObject *) gy_arr);
     float *gz = (float *) PyArray_DATA((PyArrayObject *) gz_arr);
+    float *gdx = (float *) PyArray_DATA((PyArrayObject *) gdx_arr);
+    float *gdy = (float *) PyArray_DATA((PyArrayObject *) gdy_arr);
     int num_wp = (int) PyArray_SIZE((PyArrayObject *) gx_arr);
-    c_set_agent_goals((Drive *) vec->envs[0], agent_idx, num_wp, gx, gy, gz);
+    c_set_agent_goals((Drive *) vec->envs[0], agent_idx, num_wp, gx, gy, gz, gdx, gdy);
     Py_RETURN_NONE;
 }
 
@@ -1540,6 +1545,11 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "INFRACTION_BEHAVIOR_REMOVE", INFRACTION_BEHAVIOR_REMOVE);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_GIGAFLOW", SIMULATION_MODE_GIGAFLOW);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_REPLAY", SIMULATION_MODE_REPLAY);
+    // Ego obs normalizations (obs[0] * MAX_SPEED = sim_speed_signed m/s,
+    // obs[4] * ACCEL_LONG_NORM = accel_long m/s^2); co-sim reads the shadow ego's
+    // post-step speed/accel intent back out of the observation row.
+    PyModule_AddObject(m, "MAX_SPEED", PyFloat_FromDouble(MAX_SPEED));
+    PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
     PyModule_AddIntConstant(m, "ACTION_TYPE_DISCRETE", ACTION_TYPE_DISCRETE);
     PyModule_AddIntConstant(m, "ACTION_TYPE_CONTINUOUS", ACTION_TYPE_CONTINUOUS);
     PyModule_AddIntConstant(m, "DYNAMICS_MODEL_CLASSIC", DYNAMICS_MODEL_CLASSIC);

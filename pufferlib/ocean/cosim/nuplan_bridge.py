@@ -44,10 +44,13 @@ _NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": 2, "GREEN": 3, "UNKNOWN": 0}
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 
-# Env/obs layout the carla_combined gigaflow policy expects at eval time (same
-# role as CARLA_ARCH in cosim/carla/world_sync.py). Override per-checkpoint via
-# the planner's `env_overrides` when the training config differs.
+# Env/obs layout the carla_combined gigaflow policy expects at eval time (a
+# fallback for shadow_env_kwargs' checkpoint-config adoption, see
+# cosim/arch.py -- only used for keys the checkpoint config doesn't set, i.e.
+# chiefly the no-checkpoint dummy run). Override per-checkpoint via the
+# planner's `env_overrides` when the training config differs.
 DEFAULT_ARCH = dict(
+    goal_source="map",  # reset-time goals are throwaway; "map" keeps reset fast
     num_goals=3,
     obs_slots_lane_n=80,
     obs_slots_boundary_n=40,
@@ -67,7 +70,6 @@ DEFAULT_ARCH = dict(
     reward_conditioning=True,
     goal_speed=20.0,  # reward conditioning: arrive at goals at up to 20 m/s
     goal_radius=6.0,
-    target_type="static",
     dynamics_model="jerk",
     dt=0.1,  # lockstep with nuPlan's 10 Hz planner interval
 )

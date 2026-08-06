@@ -203,26 +203,31 @@ class PufferDrivePlanner(AbstractPlanner):
                 entries[str(e.id)] = (float(p0.x), float(p0.y))
         return nb.match_connectors_to_stop_lines(entries, self._transform, stop_line_centers)
 
-    def _resolve_arch(self, cfg: Dict) -> Dict:
-        """Shadow-env config: the checkpoint's training env section decides
-        every observation-layout / dynamics key (encoding parity with how the
-        policy was trained), DEFAULT_ARCH fills the gaps, `env_overrides` wins.
-        Train-time observation dropout is disabled at eval, like the CARLA side."""
-        import inspect
+    def _resolve_arch(self, cfg: Dict, bin_path: Path) -> Dict:
+        """Shadow-env Drive kwargs: the checkpoint's training env section
+        decides every Drive-accepted key, the clean-eval profile is applied on
+        top (see cosim/arch.py), DEFAULT_ARCH fills the no-checkpoint gaps,
+        `env_overrides` wins -- except for the structural co-sim keys (map/
+        pool wiring), which are not overridable."""
+        from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 
-        accepted = set(inspect.signature(Drive.__init__).parameters)
-        adopted = {
-            k: v for k, v in cfg.get("env", {}).items()
-            if k in accepted and not k.startswith("obs_dropout")
-            and (k.startswith("obs_") or k in (
-                "num_goals", "dynamics_model", "target_type",
-                "reward_conditioning", "goal_radius", "goal_speed", "dt"))
-        }
-        # Train-time route-goal modes this checkout lacks (e.g. "dijkstra")
-        # don't matter here: the planner feeds explicit route goals every step.
-        if adopted.get("target_type") not in ("static", "dynamic"):
-            adopted.pop("target_type", None)
-        return {**DEFAULT_ARCH, **adopted, **self._env_overrides}
+        return shadow_env_kwargs(
+            cfg,
+            defaults=DEFAULT_ARCH,
+            overrides={
+                **self._env_overrides,
+                "map_dir": str(bin_path), "num_maps": 1, "num_agents": self._num_agents,
+                "scenario_length": 1_000_000, "resample_frequency": 0,
+                # External sim owns the episode: a training-config
+                # termination_mode=1 would c_reset() the pool (ego included)
+                # once parked FAR_AWAY slots latch under "stop" behaviors.
+                "termination_mode": 0,
+                # Enforcement off (flags still fire): in one endless episode a
+                # "stop" latch is permanent and would freeze the ego for good.
+                "collision_behavior": "ignore", "offroad_behavior": "ignore",
+                "traffic_light_behavior": "ignore",
+            },
+        )
 
     @property
     def _dummy(self) -> bool:
@@ -242,17 +247,12 @@ class PufferDrivePlanner(AbstractPlanner):
 
         cfg = ({} if self._dummy else
                yaml.safe_load(open(Path(self._checkpoint_path).resolve().parents[1] / "config.yaml")))
-        self._arch = self._resolve_arch(cfg)
 
         bin_path, self._transform, stop_centers, self._num_traffic = self._resolve_map_bin()
         self._connector_map = self._match_traffic_lights(stop_centers, ex, ey)
 
-        self._env = Drive(
-            map_dir=str(bin_path), num_maps=1, num_agents=self._num_agents,
-            simulation_mode="gigaflow", control_mode="control_vehicles",
-            scenario_length=1_000_000, resample_frequency=0, goal_source="map",
-            **self._arch,
-        )
+        self._arch = self._resolve_arch(cfg, bin_path)
+        self._env = Drive(**self._arch)
         self._env.reset()
 
         if self._dummy:
@@ -351,11 +351,16 @@ class PufferDrivePlanner(AbstractPlanner):
                < self._arch["goal_radius"]):
             self._goal_cursor += 1
         k = self._arch["num_goals"]
-        sel = goals[[min(self._goal_cursor + i, len(goals) - 1) for i in range(k)]]
+        indices = [min(self._goal_cursor + i, len(goals) - 1) for i in range(k)]
+        sel = goals[indices]
         self._last_goal_xy = (sel[:, 0].copy(), sel[:, 1].copy())
+        # Local route direction per goal (previous goal -> goal; ~goal_spacing
+        # apart, adequate at nuPlan's 20 m spacing) for route-aligned lane snapping.
+        dir_sel = np.array([goals[i] - goals[max(i - 1, 0)] for i in indices], np.float32)
         env.set_agent_goals(0, sel[:, 0].astype(np.float32).copy(),
                             sel[:, 1].astype(np.float32).copy(),
-                            np.zeros(k, np.float32))
+                            np.zeros(k, np.float32),
+                            dir_sel[:, 0].copy(), dir_sel[:, 1].copy())
 
     # --- planning -------------------------------------------------------------
     def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
@@ -407,9 +412,12 @@ class PufferDrivePlanner(AbstractPlanner):
         nx_, ny_ = self._transform.bin_to_loc(float(state["x"][0]), float(state["y"][0]))
         nh = float(state["heading"][0])
 
-        # speed from displacement (get_global_agent_state carries no velocity)
-        dx, dy = nx_ - ego_state.center.x, ny_ - ego_state.center.y
-        speed = math.hypot(dx, dy) / dt
+        # speed = the shadow ego's POST-STEP velocity state (ego obs column 0),
+        # not displacement/dt, which halves the intent during acceleration and
+        # makes the closed loop crawl (see WorldSync.integrate).
+        from pufferlib.ocean.drive import binding as drive_binding
+
+        speed = float(np.asarray(self._env.observations)[0, 0]) * drive_binding.MAX_SPEED
         v0 = ego_state.dynamic_car_state.center_velocity_2d.x
         yaw_rate = _angle_diff(nh, float(ego_state.center.heading)) / dt
 

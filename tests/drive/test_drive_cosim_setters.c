@@ -110,15 +110,46 @@ static int test_set_traffic_light_states_skips_out_of_range_or_missing_states(vo
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// c_set_agent_states
+// ---------------------------------------------------------------------------
+
+static int test_set_agent_states_teleport_resets_prev_pose(void) {
+    // An externally-set pose is a teleport: prev_* must follow it. If prev stays at
+    // the old pose, every prev-based swept check (find_lane_and_offroad's road-edge
+    // crossing, compute_metrics' goal-reach segment) sweeps the whole gap and fires
+    // spuriously -- observed as an on-lane teleported ego always classified offroad
+    // with dead lane observations.
+    Drive env = {0};
+    Agent agent = drive_test_agent(500.0f, 500.0f, 1.0f);
+    agent.prev_x = 500.0f;
+    agent.prev_y = 500.0f;
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    int idx[1] = {0};
+    float x[1] = {10.0f}, y[1] = {20.0f}, z[1] = {0.0f}, h[1] = {0.5f};
+    float vx[1] = {1.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
+    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al);
+
+    EXPECT_NEAR(agent.prev_x, agent.sim_x, 1e-6f);
+    EXPECT_NEAR(agent.prev_y, agent.sim_y, 1e-6f);
+    EXPECT_NEAR(agent.prev_cos_heading, agent.cos_heading, 1e-6f);
+    EXPECT_NEAR(agent.prev_sin_heading, agent.sin_heading, 1e-6f);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // c_set_agent_goals
 // ---------------------------------------------------------------------------
 
 static int test_set_agent_goals_sets_positions_lane_and_count(void) {
-    // Externally-set goals must land in the bin frame (world_mean subtracted), carry no lane index
-    // (list_goal_lane = -1, the same "no GPS lane-distance" convention as GOAL_SOURCE_GT), report an
-    // accurate goal_count, and reset the current_goal_* window to slot 0 -- all fields that used to be
-    // left stale from whatever a previous internal goal generation wrote.
+    // Externally-set goals must land in the bin frame (world_mean subtracted), report an accurate
+    // goal_count, and reset the current_goal_* window to slot 0 -- all fields that used to be left
+    // stale from whatever a previous internal goal generation wrote. With no grid map (as here),
+    // goal->lane snapping (find_goal_lane) must degrade to list_goal_lane = -1, the "no GPS
+    // lane-distance" convention shared with GOAL_SOURCE_GT -- never read a NULL grid.
     Drive env = {0};
     env.world_mean_x = 100.0f;
     env.world_mean_y = 200.0f;
@@ -131,7 +162,9 @@ static int test_set_agent_goals_sets_positions_lane_and_count(void) {
     float gx[3] = {110.0f, 130.0f, 150.0f};
     float gy[3] = {205.0f, 215.0f, 225.0f};
     float gz[3] = {1.0f, 2.0f, 3.0f};
-    c_set_agent_goals(&env, 0, 3, gx, gy, gz);
+    float gdx[3] = {1.0f, 1.0f, 1.0f};
+    float gdy[3] = {0.0f, 0.0f, 0.0f};
+    c_set_agent_goals(&env, 0, 3, gx, gy, gz, gdx, gdy);
 
     EXPECT_EQ_INT(agent.goal_count, 3);
     EXPECT_EQ_INT(agent.current_goal_idx, 0);
@@ -158,12 +191,14 @@ static int test_set_agent_goals_caps_at_max_goals(void) {
 
     int requested = MAX_GOALS + 5;
     float gx[MAX_GOALS + 5], gy[MAX_GOALS + 5], gz[MAX_GOALS + 5];
+    float gdir[MAX_GOALS + 5];
     for (int w = 0; w < requested; w++) {
         gx[w] = (float) w;
         gy[w] = (float) w;
         gz[w] = 0.0f;
+        gdir[w] = 0.0f;
     }
-    c_set_agent_goals(&env, 0, requested, gx, gy, gz);
+    c_set_agent_goals(&env, 0, requested, gx, gy, gz, gdir, gdir);
 
     EXPECT_EQ_INT(agent.goal_count, MAX_GOALS);
     EXPECT_EQ_INT(agent.list_goal_lane[MAX_GOALS - 1], -1);
@@ -178,8 +213,8 @@ static int test_set_agent_goals_out_of_range_agent_idx_is_noop(void) {
     env.agents = &agent;
     env.num_total_agents = 1;
 
-    float gx[1] = {1.0f}, gy[1] = {1.0f}, gz[1] = {1.0f};
-    c_set_agent_goals(&env, 5, 1, gx, gy, gz); // agent_idx out of range
+    float gx[1] = {1.0f}, gy[1] = {1.0f}, gz[1] = {1.0f}, gdir[1] = {0.0f};
+    c_set_agent_goals(&env, 5, 1, gx, gy, gz, gdir, gdir); // agent_idx out of range
 
     EXPECT_EQ_INT(agent.goal_count, 5);
     return 0;
@@ -191,6 +226,7 @@ int main(void) {
     RUN_TEST(test_set_agent_sizes_skips_out_of_range_index);
     RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_skips_out_of_range_or_missing_states);
+    RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
     RUN_TEST(test_set_agent_goals_caps_at_max_goals);
     RUN_TEST(test_set_agent_goals_out_of_range_agent_idx_is_noop);

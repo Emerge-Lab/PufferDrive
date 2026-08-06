@@ -49,7 +49,7 @@ set -u
 
 : "${CKPT:?set CKPT=/path/to/model_xxx.pt (or CKPT=dummy for the wiring test)}"
 PY=/scratch/yw4142/venvs/pufferdrive/bin/python
-PD=/scratch/yw4142/PufferDrive_nightly
+PD=${PD:-/scratch/yw4142/PufferDrive_cosim}
 export NUPLAN_DATA_ROOT=${NUPLAN_DATA_ROOT:-/scratch/yw4142/datasets/ad/nuplan}
 export NUPLAN_MAPS_ROOT=${NUPLAN_MAPS_ROOT:-/scratch/yw4142/datasets/ad/nuplan/maps-gpkg}
 export NUPLAN_EXP_ROOT=${NUPLAN_EXP_ROOT:-/scratch/yw4142/runs/nuplan_exp}

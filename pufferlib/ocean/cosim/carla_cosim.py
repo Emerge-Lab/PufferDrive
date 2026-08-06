@@ -38,10 +38,10 @@ import numpy as np
 
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim import carla_bridge as cb
-from pufferlib.ocean.cosim.carla import world_sync as ws
+from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 # carla_scenarios imports carla at module scope (it's pure CARLA-actor
-# manipulation, unlike this module's carla_bridge/world_sync deps) and is
-# only used inside main() below, so it's imported there too.
+# manipulation, unlike this module's carla_bridge deps) and is only used
+# inside main() below, so it's imported there too.
 
 DEFAULT_ROUTES = "/scratch/yw4142/CaRL/PlanT/data/longest6.xml"
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
@@ -131,30 +131,6 @@ def build_carla(client, town, route_wps, num_background, dt_sub):
     return world, tm, ego, bg, lights
 
 
-def map_lights_to_bin(lights, transform, town_bin, num_traffic):
-    """Map each CARLA traffic light to a bin traffic-element index by nearest
-    stop-line / location (transformed into the bin frame)."""
-    import data_utils.mirror_map_bin as mbin
-
-    data = mbin.read_bin(Path(town_bin))
-    tl_pos = []  # bin-frame position per traffic element
-    for t in data["traffic"]:
-        sx = 0.5 * (t["stop_line"][0] + t["stop_line"][3])
-        sy = 0.5 * (t["stop_line"][1] + t["stop_line"][4])
-        tl_pos.append((sx, sy))
-    tl_pos = np.array(tl_pos) if tl_pos else np.zeros((0, 2))
-    mapping = []  # mapping[i] = bin element idx for lights[i]
-    for lt in lights:
-        loc = lt.get_transform().location
-        bx, by = transform.loc_to_bin(loc.x, loc.y)
-        if len(tl_pos):
-            j = int(((tl_pos[:, 0] - bx) ** 2 + (tl_pos[:, 1] - by) ** 2).argmin())
-        else:
-            j = -1
-        mapping.append(j)
-    return mapping, num_traffic
-
-
 def read_background(bg_actors, transform):
     idx, x, y, z, h, vx, vy, yaw_rate, accel_long = [], [], [], [], [], [], [], [], []
     for j, a in enumerate(bg_actors):
@@ -232,13 +208,15 @@ def _route_goal_xy(cmap, cx, cy, route_yaw_deg):
 def build_route_goals(dense_route, transform, cmap, spacing=20.0):
     """Fixed sequence of lane-centered goals along the WHOLE route, one every
     `spacing` m, each snapped to a DIRECTION-MATCHED driving lane, in the bin frame.
-    Returns an (N, 3) array (x, y, z). The ego marches through these via a cursor
-    that only advances on arrival (GOAL_RADIUS_M) — goals do not float with the ego."""
+    Returns an (N, 5) array (x, y, z, dir_x, dir_y) where dir_* is the local route
+    travel direction at the goal (bin frame), consumed by set_agent_goals' lane
+    snapping. The ego marches through these via a cursor that only advances on
+    arrival (GOAL_RADIUS_M) — goals do not float with the ego."""
     def goal_at(i):
         d = dense_route[i] - dense_route[i - 1]
         route_yaw = np.degrees(np.arctan2(d[1], d[0]))  # route travel direction (CARLA frame)
         gx, gy, gz = _route_goal_xy(cmap, dense_route[i][0], dense_route[i][1], route_yaw)
-        return (*transform.loc_to_bin(gx, gy), gz)
+        return (*transform.loc_to_bin(gx, gy), gz, d[0], -d[1])  # y flips into the bin frame
 
     goals, next_at, cum = [], spacing, 0.0
     for i in range(1, len(dense_route)):
@@ -252,10 +230,11 @@ def build_route_goals(dense_route, transform, cmap, spacing=20.0):
 
 def select_goals(route_goals, cursor, num=3):
     """The next `num` goals from the cursor (clamped at the route's end), as
-    (gx, gy, gz) arrays for set_agent_goals."""
+    (gx, gy, gz, gdir_x, gdir_y) arrays for set_agent_goals."""
     idx = [min(cursor + k, len(route_goals) - 1) for k in range(num)]
     sel = route_goals[idx]
-    return sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy()
+    return (sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(),
+            sel[:, 3].copy(), sel[:, 4].copy())
 
 
 def attach_chase_camera(world, ego, w=960, h=540):
@@ -360,7 +339,8 @@ def main():
     ap.add_argument("--route-id", type=int, default=0)
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--num-background", type=int, default=30)
-    ap.add_argument("--num-agents", type=int, default=64)
+    ap.add_argument("--num-agents", type=int, default=None,
+                    help="shadow agent pool (default: the checkpoint's max_agents_per_env, else 64)")
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--carla-host", default="localhost")
     ap.add_argument("--carla-port", type=int, default=2000)
@@ -385,19 +365,33 @@ def main():
     dt = args.dt if args.dt is not None else ((cfg or {}).get("env", {}).get("dt", DEFAULT_DT))
     sub_ticks = args.sub_ticks or max(1, round(dt / 0.1))  # CARLA at 0.1s, PufferDrive at dt
 
-    # PufferDrive env (gigaflow spawns an agent pool; agent 0 = ego, rest = background).
-    env = Drive(
-        map_dir=town_bin, num_maps=1, num_agents=args.num_agents,
-        simulation_mode="gigaflow", control_mode="control_vehicles",
-        scenario_length=1_000_000, resample_frequency=0,
-        # The co-sim sets the ego's goals from the route and overwrites all
-        # background agents each tick, so gigaflow's reset-time goals are
-        # throwaway. goal_source="map" places them at random drivable points
-        # (no lane-graph routing), which keeps reset fast even when a patched
-        # bin has had non-driving lanes retyped out of the routable network.
-        goal_source="map",
-        **ws.resolve_arch(cfg, dt=dt),
-    )
+    # Shadow agent pool: the checkpoint's per-env training cap by default, so
+    # binding.shared builds exactly one gigaflow C env (the co-sim setters only
+    # address env 0).
+    num_agents = args.num_agents or int(((cfg or {}).get("env") or {}).get("max_agents_per_env", 64))
+
+    # PufferDrive env (gigaflow spawns an agent pool; agent 0 = ego, rest =
+    # background). Env kwargs come from the checkpoint's config.yaml with the
+    # clean-eval profile applied on top (see cosim/arch.py); goal_source="map"
+    # is only the no-checkpoint fallback -- reset-time goals are throwaway (the
+    # co-sim sets the ego's from the route and overwrites all background agents
+    # each tick), and "map" keeps reset independent of the routable lane network.
+    env = Drive(**shadow_env_kwargs(
+        cfg,
+        defaults=dict(goal_source="map"),
+        overrides=dict(
+            map_dir=town_bin, num_maps=1, num_agents=num_agents,
+            scenario_length=1_000_000, resample_frequency=0, dt=dt,
+            # External sim owns the episode: a training-config
+            # termination_mode=1 would c_reset() the pool (ego included) once
+            # the parked FAR_AWAY slots latch under "stop" infraction behaviors.
+            termination_mode=0,
+            # Enforcement off (flags still fire): in one endless episode a
+            # "stop" latch is permanent and would freeze the ego for good.
+            collision_behavior="ignore", offroad_behavior="ignore",
+            traffic_light_behavior="ignore",
+        ),
+    ))
     obs, _ = env.reset()
     obs = np.asarray(obs)
     n_active = int(env.num_agents)
@@ -422,12 +416,12 @@ def main():
     client.set_timeout(60.0)
     world, tm, ego, bg, lights = build_carla(client, town, route_wps, args.num_background, 0.1)
     cmap = world.get_map()
-    transform = cb.CarlaTransform(town, offset=cb.town_offset(cmap, town_bin))
+    transform = cb.CarlaTransform(town, offset=cb.town_offset(town_bin))
     _bin_lanes = cb._bin_lane_points(town_bin)  # bin lane points (== global frame) for diagnostics
     dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_cursor = 0  # index of the current (not-yet-reached) route goal
-    light_map, num_traffic = map_lights_to_bin(lights, transform, town_bin, len(lights))
+    light_map, num_traffic = cb.map_lights_to_bin(lights, transform, town_bin)
     print(f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}")
 
     car_bps = [b for b in world.get_blueprint_library().filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4]
@@ -442,8 +436,8 @@ def main():
     ego_ext = ego.bounding_box.extent  # match the ego to its CARLA blueprint box (static)
     env.set_agent_sizes(np.array([0], np.int32),
                         np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32))
-    gx, gy, gz = select_goals(route_goals, goal_cursor)
-    env.set_agent_goals(0, gx, gy, gz)
+    gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
+    env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
     bg_idx, *_ = (read_background(bg, transform))
     surplus = np.arange(1 + len(bg), n_active, dtype=np.int32)
     if len(surplus):
@@ -496,17 +490,18 @@ def main():
             env.set_agent_states(sp, zf, zf, zf, zz, zz, zz, zz, zz)
         states = np.zeros(num_traffic, np.int32)
         for li, lt in enumerate(lights):
-            j = light_map[li]
-            if 0 <= j < num_traffic:
-                states[j] = cb.carla_light_to_puffer(lt.get_state())
+            state = cb.carla_light_to_puffer(lt.get_state())
+            for j in light_map[li]:
+                if 0 <= j < num_traffic:
+                    states[j] = state
         env.set_traffic_light_states(states)
         # advance the goal cursor only once the ego actually reaches the current goal
         ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
         while (goal_cursor < len(route_goals) - 1
                and np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby) < GOAL_RADIUS_M):
             goal_cursor += 1
-        gx, gy, gz = select_goals(route_goals, goal_cursor)
-        env.set_agent_goals(0, gx, gy, gz)
+        gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
+        env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
         obs = np.asarray(env.recompute_observations())
 
         if bev is not None:

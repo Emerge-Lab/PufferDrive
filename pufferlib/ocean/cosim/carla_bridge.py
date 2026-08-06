@@ -10,9 +10,22 @@ CARLA towns, stored in a y-flipped, per-town-translated frame. Empirically
     bin_vx      =  carla_vx
     bin_vy      = -carla_vy
 
-`(tx, ty)` is the town's georeference offset; it's recovered at runtime by ICP-
-aligning the loaded CARLA map's road points to the bin's lane points (so we never
-depend on stale constants). Precomputed values are cached as a fallback.
+`(tx, ty)` is the town's georeference offset -- a hardcoded constant per town
+(TOWN_OFFSETS below), not computed at runtime. History: this used to be
+recovered on the fly by ICP-aligning the loaded CARLA map's road points to the
+bin's lane points, on the theory that computing it fresh beats trusting a
+possibly-stale constant. In practice ICP's local gradient descent (start =
+centroid delta, refine by nearest-heading-bucket matching) silently settled a
+few meters from the true optimum for Town04/Town06 -- close enough that
+aggregate alignment stats still looked fine, but consistently off by about a
+lane width, so CARLA-synced background agents rendered off-lane in PufferDrive.
+The fix that actually worked: a brute-force (tx, ty) grid search minimizing
+median nearest-neighbor distance from transformed CARLA waypoints to bin lane
+points (coarse then refined).
+For Town6, TWO independently geometry-refined Town06 candidates -- (-150.1,
+113.35) from the py123d arrow match, and (-150.93, 109.40) -- both scored
+dramatically WORSE on a full longest6 Town06 leaderboard sweep than the
+original (-150.93, 111.40).
 
 The PufferDrive env additionally subtracts its own `world_mean` inside
 `set_agent_states`/`set_agent_goals`, so the values produced here are in the
@@ -26,13 +39,15 @@ import numpy as np
 
 import data_utils.mirror_map_bin as _mbin
 
-# Corrected per-town offsets
+# Verified per-town offsets -- see the module docstring for how these were
+# derived and why they're hardcoded instead of computed on the fly.
 TOWN_OFFSETS = {
     "Town01": (-204.34, 148.75),
     "Town02": (-93.70, 213.06),
     "Town03": (-43.56, -4.60),
-    "Town04": (-10.98, -7.49),
+    "Town04": (-13.73, -10.49),
     "Town05": (49.04, 0.95),
+    "Town06": (-150.93, 111.40),
     "Town10HD": (8.13, 32.98),
 }
 
@@ -46,71 +61,23 @@ def bin_path_for_town(town: str) -> str:
 
 def _bin_lane_points(bin_path: str) -> np.ndarray:
     """All lane-polyline (x, y) points from a bin (type 0..9 == lanes)."""
-    return _bin_lane_points_headings(bin_path)[0]
-
-def _bin_lane_points_headings(bin_path: str):
-    """Lane-polyline points and per-point headings from a bin (type 0..9)."""
     data = _mbin.read_bin(Path(bin_path))
-    pts, hds = [], []
+    pts = []
     for road in data["roads"]:
         if 0 <= road["type"] <= 9:
             pts.extend(zip(road["x"], road["y"]))
-            hds.extend(road["headings"])
-    return np.asarray(pts, dtype=np.float64), np.asarray(hds, dtype=np.float64)
-
-HEADING_OCTANTS = 8  # ICP heading-match granularity (45 deg buckets)
+    return np.asarray(pts, dtype=np.float64)
 
 
-def compute_town_offset(carla_map, bin_path: str, sample_m: float = 2.0, iters: int = 10):
-    """Recover (tx, ty) by ICP-aligning CARLA driving waypoints to the bin
-    lanes, with the y-flip reflection fixed. Matches only heading-compatible
-    lane points (waypoint travel direction within ~67 deg of the bin lane):
-    plain nearest-neighbor ICP can lock onto the opposite-direction lane of a
-    two-way road and converge with a stable one-lane lateral bias (observed
-    +2.59 m on Town01's east-west roads). Returns (tx, ty)."""
-    wps = carla_map.generate_waypoints(sample_m)
-    C = np.array([[w.transform.location.x, w.transform.location.y] for w in wps], dtype=np.float64)
-    CH = np.array([-math.radians(w.transform.rotation.yaw) for w in wps], dtype=np.float64)
-    B, BH = _bin_lane_points_headings(bin_path)
-    TC = C * np.array([1.0, -1.0])  # y-flip (headings already flipped via -yaw)
-
-    # Bucket bin points by heading octant; a waypoint in octant o may match
-    # octants o-1..o+1 (+-67.5 deg), which excludes the opposite direction.
-    bin_oct = np.round(BH / (2.0 * np.pi / HEADING_OCTANTS)).astype(int) % HEADING_OCTANTS
-    wp_oct = np.round(CH / (2.0 * np.pi / HEADING_OCTANTS)).astype(int) % HEADING_OCTANTS
-    cand = [np.where((bin_oct == (o - 1) % HEADING_OCTANTS)
-                     | (bin_oct == o)
-                     | (bin_oct == (o + 1) % HEADING_OCTANTS))[0] for o in range(HEADING_OCTANTS)]
-
-    t = B.mean(0) - TC.mean(0)
-    sub = slice(None, None, 2)
-    P0, PO = TC[sub], wp_oct[sub]
-    for _ in range(iters):
-        P = P0 + t
-        res = np.zeros_like(P)
-        for o in range(HEADING_OCTANTS):
-            m = PO == o
-            if not m.any() or not len(cand[o]):
-                continue
-            Bo = B[cand[o]]
-            idx = ((P[m, None, 0] - Bo[None, :, 0]) ** 2
-                   + (P[m, None, 1] - Bo[None, :, 1]) ** 2).argmin(1)
-            res[m] = Bo[idx] - P[m]
-        t = t + res.mean(0)
-    return float(t[0]), float(t[1])
-
-
-def town_offset(carla_map, bin_path: str):
-    """Exact CARLA<->bin (tx, ty) from the bin's stored centroid when present
-    (bin = original - centroid, and CARLA = original y-flipped, so the offset is
-    just -centroid_xy). Falls back to ICP alignment for legacy bins that don't
-    carry a centroid. The stored-centroid path is exact and deterministic; ICP is
-    biased because it aligns the bin's full lane set to CARLA's driving-only
-    waypoints, so prefer the stored value."""
+def town_offset(bin_path: str):
+    """CARLA<->bin (tx, ty): the bin's stored centroid when present (bin =
+    original - centroid, and CARLA = original y-flipped, so the offset is just
+    -centroid_xy)."""
     centroid = _mbin.read_bin(Path(bin_path)).get("centroid")
     if centroid is not None:
         return (-float(centroid[0]), -float(centroid[1]))
-    return compute_town_offset(carla_map, bin_path)
+    town = Path(bin_path).stem.split("__")[-1]
+    return TOWN_OFFSETS[town]
 
 
 class CarlaTransform:
@@ -167,3 +134,82 @@ def carla_light_to_puffer(state) -> int:
         carla.TrafficLightState.Off: 4,
         carla.TrafficLightState.Unknown: 0,
     }.get(state, 0)
+
+
+LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance (see below)
+
+def map_lights_to_bin(lights, transform, town_bin):
+    """mapping[i] = list of bin traffic-element indices controlled by lights[i].
+
+    Semantic matching: each of the light's STOP WAYPOINTS is snapped to its bin
+    LANE (nearest drivable-lane segment -- stop lines lie ON lane segments, so
+    this is a near-zero-distance match), then lane -> element via the bin's
+    controlled_lanes. Geometry-only alternatives mis-bind systematically: the
+    light's own transform is the pole across the junction, and stop-line-to-
+    stop-line matching is off by ~9 m in these bins while adjacent approaches
+    are only 15-25 m apart.
+
+    CARLA's stop waypoints sit at the junction ENTRY, up to ~10 m past the
+    bin's controlled-lane stub, so each waypoint is walked backward along its
+    own lane until a controlled lane resolves (0/36 raw matches without this).
+
+    Returns (mapping, num_traffic_elements); the state array passed to
+    set_traffic_light_states is sized to the bin's element count."""
+    import data_utils.mirror_map_bin as mbin
+
+    data = mbin.read_bin(Path(town_bin))
+    seg_start, seg_end, seg_lane = [], [], []
+    for road in data["roads"]:
+        if not (0 <= road["type"] <= 9):
+            continue
+        xs, ys = np.asarray(road["x"]), np.asarray(road["y"])
+        for k in range(len(xs) - 1):
+            seg_start.append((xs[k], ys[k]))
+            seg_end.append((xs[k + 1], ys[k + 1]))
+            seg_lane.append(road["id"])
+    seg_start = np.array(seg_start).reshape(-1, 2)
+    seg_end = np.array(seg_end).reshape(-1, 2)
+    seg_lane = np.array(seg_lane, dtype=int)
+    element_of_lane = {}
+    for element_idx, t in enumerate(data["traffic"]):
+        for lane_id in t.get("controlled_lanes", ()):
+            element_of_lane.setdefault(int(lane_id), []).append(element_idx)
+
+    def controlling_elements_near(px, py):
+        d = seg_end - seg_start
+        length_sq = np.maximum((d ** 2).sum(1), 1e-9)
+        t = np.clip(((px - seg_start[:, 0]) * d[:, 0] + (py - seg_start[:, 1]) * d[:, 1]) / length_sq, 0.0, 1.0)
+        dist = np.hypot(px - (seg_start[:, 0] + t * d[:, 0]), py - (seg_start[:, 1] + t * d[:, 1]))
+        lane_best = {}
+        for j in np.nonzero(dist <= LIGHT_LANE_MATCH_MAX_DIST_M)[0]:
+            lane_id = int(seg_lane[j])
+            if dist[j] < lane_best.get(lane_id, np.inf):
+                lane_best[lane_id] = float(dist[j])
+        for lane_id in sorted(lane_best, key=lane_best.get):
+            controlling = element_of_lane.get(lane_id, [])
+            if controlling:
+                return controlling
+        return []
+
+    walk_back_steps_m = (0.0, 3.0, 6.0, 10.0, 15.0)
+    mapping = []
+    for lt in lights:
+        element_indices = []
+        for wp in lt.get_stop_waypoints():
+            if not len(seg_lane):
+                continue
+            controlling = []
+            for back_m in walk_back_steps_m:
+                probe = wp
+                if back_m > 0.0:
+                    prev = wp.previous(back_m)
+                    if not prev:
+                        continue
+                    probe = prev[0]
+                bx, by = transform.loc_to_bin(probe.transform.location.x, probe.transform.location.y)
+                controlling = controlling_elements_near(bx, by)
+                if controlling:
+                    break
+            element_indices.extend(controlling)
+        mapping.append(sorted(set(element_indices)))
+    return mapping, len(data["traffic"])
