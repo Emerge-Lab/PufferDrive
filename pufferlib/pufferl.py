@@ -1431,6 +1431,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     train_seed = args["train"]["seed"]
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
+    # DDP: identical seeds would make every rank roll out identical trajectories.
+    # Wide stride so per-env seeds (env_idx + seed in vec_reset) never collide across ranks.
+    train_seed += int(os.environ.get("LOCAL_RANK", 0)) * 100_000
+    args["train"]["seed"] = train_seed
     torch.manual_seed(train_seed)
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv, env_name)
