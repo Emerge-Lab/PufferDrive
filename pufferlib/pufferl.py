@@ -77,6 +77,11 @@ HIDDEN_DASHBOARD_METRICS = {
     "speed_limit_compliance",
 }
 
+# Metric key prefixes for benchmark results. Training evaluation logs a step series;
+# a standalone eval writes run-level summaries, so the two never share a key.
+TRAINING_EVAL_KEY_PREFIX = "eval_"
+EVAL_WANDB_KEY_PREFIX = "final_eval_"
+
 
 def torch_device(device):
     if isinstance(device, int):
@@ -1289,7 +1294,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow"):
+    def __init__(self, args, load_id=None, resume="allow", upload_config=True):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1302,7 +1307,7 @@ class WandbLogger:
             allow_val_change=True,
             save_code=False,
             resume=resume,
-            config=args,
+            config=args if upload_config else None,
             tags=[args["tag"]] if args["tag"] is not None else [],
             settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
         )
@@ -1312,6 +1317,16 @@ class WandbLogger:
 
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
+
+    def log_summary(self, logs):
+        """Record run-level scalars. Unlike log(), carries no step, so a job that runs
+        after training cannot collide with the step history training already wrote."""
+        for key, value in logs.items():
+            self.wandb.run.summary[key] = value
+
+    def finish(self):
+        """End the wandb session without the model upload and early_stop that close() adds."""
+        self.wandb.finish()
 
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
@@ -1676,6 +1691,8 @@ def eval(
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
+
+    report_to_wandb = bool(args["wandb"]) and not use_training_config
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
     if use_training_config:
         if policy is None:
@@ -1686,6 +1703,10 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+
+    wandb_run_identity = (
+        drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
+    )
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, "eval")
@@ -1789,7 +1810,28 @@ def eval(
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
             )
+
+    if wandb_run_identity is not None:
+        report_eval_to_wandb(args, benchmark_results, wandb_run_identity)
     return benchmark_results
+
+
+def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
+    """Attach standalone eval results to the wandb run that trained the checkpoint."""
+    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, EVAL_WANDB_KEY_PREFIX)
+    if not metrics:
+        print("No evaluation metrics to report to wandb.")
+        return
+
+    run_args = copy.copy(args)
+    run_args.update(wandb_run_identity)
+    
+    logger = WandbLogger(run_args, resume="must", upload_config=False)
+    try:
+        logger.log_summary(metrics)
+    finally:
+        logger.finish()
+    print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
 
 
 def sweep(args=None, env_name=None):
@@ -2165,15 +2207,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        metrics = {}
-        for benchmark_name, benchmark_result in benchmark_results.items():
-            summary = benchmark_result["summary"]
-            if summary is None:
-                continue
-            prefix = f"eval_{benchmark_name}"
-            metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
-            metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
-            metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+        metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, TRAINING_EVAL_KEY_PREFIX)
         if metrics:
             logger.log(metrics, global_step)
         return benchmark_results

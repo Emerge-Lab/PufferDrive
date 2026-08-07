@@ -220,6 +220,37 @@ def load_checkpoint_architecture(args):
     merged["train"]["use_rnn"] = merged["rnn_name"] is not None
     return merged, config_path
 
+CHECKPOINT_RUN_IDENTITY_KEYS = ("run_name", "wandb_project", "wandb_group")
+
+
+def load_checkpoint_run_identity(config_path):
+    """Resolve the tracker run a checkpoint belongs to from its training config."""
+    checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
+    identity = {}
+    for key in CHECKPOINT_RUN_IDENTITY_KEYS:
+        value = checkpoint_config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise pufferlib.APIUsageError(
+                f"Checkpoint config {config_path} is missing a usable {key}; cannot attach eval "
+                "results to the training run"
+            )
+        identity[key] = value
+    return identity
+
+
+def summarize_benchmark_metrics(benchmark_results, key_prefix):
+    """Flatten benchmark results into one scalar metric dict for the experiment logger."""
+    metrics = {}
+    for benchmark_name, benchmark_result in benchmark_results.items():
+        summary = benchmark_result["summary"]
+        if summary is None:
+            continue
+        prefix = f"{key_prefix}{benchmark_name}"
+        metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
+        metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
+        metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+    return metrics
+
 
 def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the fixed benchmark evaluation overrides."""
