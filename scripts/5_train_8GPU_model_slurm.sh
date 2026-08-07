@@ -64,7 +64,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.seed=${SEED} \
     train.adam_eps=0.00001 \
     train.adam_weight_decay=0.0 \
-    train.learning_rate: 0.00025 \
+    train.learning_rate=0.00025 \
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
