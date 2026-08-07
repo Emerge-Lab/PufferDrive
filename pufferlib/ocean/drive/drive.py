@@ -133,10 +133,10 @@ class Drive(pufferlib.PufferEnv):
         obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
         partner_blindness_trigger_prob=0.1,
-        partner_blindness_duration=10,
+        partner_blindness_duration_seconds=1.0,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
-        phantom_braking_duration=10,
+        phantom_braking_duration_seconds=1.0,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -268,10 +268,10 @@ class Drive(pufferlib.PufferEnv):
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
-        self.partner_blindness_duration = int(partner_blindness_duration)
+        self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds) // self.dt
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
-        self.phantom_braking_duration = int(phantom_braking_duration)
+        self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds) // self.dt
         self.partner_features = binding.PARTNER_FEATURES
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
@@ -568,10 +568,10 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
-            "partner_blindness_duration": self.partner_blindness_duration,
+            "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
-            "phantom_braking_duration": self.phantom_braking_duration,
+            "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
         }
 
     def _sample_init_step(self):

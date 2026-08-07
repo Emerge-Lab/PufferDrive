@@ -134,10 +134,10 @@ void demo() {
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
         .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
-        .partner_blindness_duration = conf.partner_blindness_duration,
+        .partner_blindness_duration = (int) ceilf(conf.partner_blindness_duration_seconds / conf.dt),
         .phantom_braking_prob = conf.phantom_braking_prob,
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
-        .phantom_braking_duration = conf.phantom_braking_duration,
+        .phantom_braking_duration = (int) ceilf(conf.phantom_braking_duration_seconds / conf.dt),
     };
     env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
     env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
@@ -262,10 +262,10 @@ void performance_test() {
         .traffic_control_scope = conf.traffic_control_scope,
         .partner_blindness_prob = conf.partner_blindness_prob,
         .partner_blindness_trigger_prob = conf.partner_blindness_trigger_prob,
-        .partner_blindness_duration = conf.partner_blindness_duration,
+        .partner_blindness_duration = (int) ceilf(conf.partner_blindness_duration_seconds / conf.dt),
         .phantom_braking_prob = conf.phantom_braking_prob,
         .phantom_braking_trigger_prob = conf.phantom_braking_trigger_prob,
-        .phantom_braking_duration = conf.phantom_braking_duration,
+        .phantom_braking_duration = (int) ceilf(conf.phantom_braking_duration_seconds / conf.dt),
 
     };
     env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);

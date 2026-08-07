@@ -3640,7 +3640,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    // Partner blindness: zero partner obs for a window of steps once triggered
+    // Partner blindness: zero partner obs for the configured duration once triggered
     int partner_blindness_active = 0;
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;

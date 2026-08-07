@@ -1908,10 +1908,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
-    env->partner_blindness_duration = (int) unpack(kwargs, "partner_blindness_duration");
+    env->partner_blindness_duration = (int) unpack(kwargs, "partner_blindness_duration_seconds");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
-    env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
+    env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration_seconds");
 
     init(env);
     return 0;
