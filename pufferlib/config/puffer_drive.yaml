@@ -43,7 +43,7 @@ env:
   min_agents_per_env: 1
   max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
-  action_type: continuous
+  action_type: discrete
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
@@ -193,7 +193,6 @@ policy:
   critic_num_layers: 1
   # Dual or shared actor-critic backbone
   shared_network: false
-  action_type: discrete
 rnn:
   input_size: 512
   hidden_size: 512
@@ -283,8 +282,6 @@ eval:
   capture_observations: false
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
-  # Options: sample | mode | mean
-  action_selection: mode
 controlled_exp:
   train:
     # [sweep.train.learning_rate]
