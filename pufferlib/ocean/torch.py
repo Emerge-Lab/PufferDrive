@@ -330,8 +330,36 @@ class Drive(nn.Module):
         backbone_layer_norm: bool,
         shared_network: bool,
         mask_padded_features: bool,
+        action_type: str,
     ):
         super().__init__()
+
+        if env.dynamics_model_flag == binding.DYNAMICS_MODEL_JERK:
+            action_long_values, action_lat_values = binding.JERK_LONG, binding.JERK_LAT
+        elif env.dynamics_model_flag == binding.DYNAMICS_MODEL_CLASSIC:
+            action_long_values, action_lat_values = binding.ACCELERATION_VALUES, binding.STEERING_VALUES
+        else:
+            raise ValueError(f"Unsupported dynamics model: {env.dynamics_model}")
+
+        action_long = torch.tensor(action_long_values, dtype=torch.float32)
+        action_lat = torch.tensor(action_lat_values, dtype=torch.float32)
+
+        long_norm = torch.where(
+            action_long < 0.0,
+            action_long / -action_long[0],
+            action_long / action_long[-1],
+        )
+        lat_norm = action_lat / action_lat[-1]
+        self.register_buffer("action_long_norm", long_norm, persistent=False)
+        self.register_buffer("action_lat_norm", lat_norm, persistent=False)
+
+        # Joint continuous-action table: row k = the [-1,1] (long, lat) for discrete class k,
+        # where k = long_idx * num_lat + lat_idx (matches drive.h decode).
+        num_lat = lat_norm.numel()
+        num_classes = long_norm.numel() * num_lat
+        k = torch.arange(num_classes)
+        action_table = torch.stack([long_norm[k // num_lat], lat_norm[k % num_lat]], dim=-1)  # [num_classes, 2]
+        self.register_buffer("action_table", action_table, persistent=False)
 
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
@@ -367,11 +395,11 @@ class Drive(nn.Module):
             self.critic_backbone = DriveBackbone(**backbone_args)
 
         # Setup action and value heads
-        self.is_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+        self.is_continuous = action_type == "continuous"
         if self.is_continuous:
             self.atn_dim = (env.single_action_space.shape[0],) * 2
         else:
-            self.atn_dim = env.single_action_space.nvec.tolist()
+            self.atn_dim = [self.action_long_norm.numel() * self.action_lat_norm.numel()]
 
         # n-layer MLP for actor head (num_layers = number of hidden layers)
         backbone_out_dim = self.actor_backbone.out_dim
@@ -454,3 +482,10 @@ class Drive(nn.Module):
         value = self.critic_head(hidden)
 
         return action, value
+
+    def discrete_actions_to_continuous(self, actions):
+        return self.action_table[actions.long()]
+
+    def discrete_probs_to_continuous_mean(self, probs):
+        # probs: [..., num_classes] -> [..., 2]  (E[cont | probs])
+        return probs @ self.action_table.to(probs.dtype)

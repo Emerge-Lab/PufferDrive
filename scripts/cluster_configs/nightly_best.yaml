@@ -9,6 +9,7 @@
 
 # Full training scale. The defaults are sized to run on-premise for dev;
 # the scale knobs for a real training run live here.
+policy.action_type: discrete
 env.num_agents: 3200
 vec.num_envs: 40
 train.minibatch_size: 256000
