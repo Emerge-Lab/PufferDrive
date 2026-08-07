@@ -162,6 +162,10 @@ class DriveEnvConfig:
     phantom_braking_prob: float = MISSING
     phantom_braking_trigger_prob: float = MISSING
     phantom_braking_duration_seconds: float = MISSING
+    dynamics_noise_long_std: float = MISSING
+    dynamics_noise_lat_std: float = MISSING
+    dynamics_noise_speed_std: float = MISSING
+    dynamics_noise_heading_std: float = MISSING
 
 
 # env_name -> structured schema for the `env` section. Envs without an entry

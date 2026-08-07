@@ -30,6 +30,10 @@ env:
   partner_blindness_trigger_prob: 0.0
   phantom_braking_prob: 0.0
   phantom_braking_trigger_prob: 0.0
+  dynamics_noise_long_std: 0.0
+  dynamics_noise_lat_std: 0.0
+  dynamics_noise_speed_std: 0.0
+  dynamics_noise_heading_std: 0.0
   termination_mode: 0
 
 benchmarks:

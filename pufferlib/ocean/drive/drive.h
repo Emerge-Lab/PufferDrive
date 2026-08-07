@@ -291,6 +291,10 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
+    float dynamics_noise_long_std;
+    float dynamics_noise_lat_std;
+    float dynamics_noise_speed_std;
+    float dynamics_noise_heading_std;
     // Logging
     Log log;
     Log *logs;
@@ -406,6 +410,14 @@ static void begin_episode_rng(Drive *env) {
         env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
     }
     env->rng_state = env->episode_seed;
+}
+
+static float sample_normal(unsigned int *rng_state, float mean, float std) {
+    // Box-Muller transform on the seeded uniform stream
+    float u1 = sample_uniform(rng_state, 0.0f, 1.0f);
+    float u2 = sample_uniform(rng_state, 0.0f, 1.0f);
+    float z = sqrtf(-2.0f * logf(u1 + 1e-12f)) * cosf(2.0f * (float) M_PI * u2);
+    return mean + std * z;
 }
 
 static inline void clear_agent_motion(Agent *agent) {
@@ -4047,6 +4059,13 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             steering *= STEERING_VALUES[8];
         }
 
+        if (env->dynamics_noise_long_std > 0.0f) {
+            acceleration += sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_long_std);
+        }
+        if (env->dynamics_noise_lat_std > 0.0f) {
+            steering += sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_lat_std);
+        }
+
         if (phantom_braking_active) {
             acceleration = ACCELERATION_VALUES[0]; // max braking
             steering = 0.0f;
@@ -4072,7 +4091,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 acceleration = 0.0f;
             }
         }
-        speed = clip(speed, -MAX_SPEED, MAX_SPEED);
+        speed = clip(speed, -2.0f, MAX_SPEED);
         // Compute yaw rate
         float beta = atanf(REAR_AXLE_RATIO * tanf(steering));
         // New heading
@@ -4129,6 +4148,13 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
             // Symmetric scaling for lateral jerk
             j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
+        }
+
+        if (env->dynamics_noise_long_std > 0.0f) {
+            j_long += sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_long_std);
+        }
+        if (env->dynamics_noise_lat_std > 0.0f) {
+            j_lat += sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_lat_std);
         }
 
         if (phantom_braking_active) {
@@ -4238,6 +4264,22 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = a_long_new;
         agent->accel_lat = a_lat_new;
         agent->steering_angle = new_steering_angle;
+    }
+
+    // Process (state) noise: perturb integrated speed & heading, re-derive dependents
+    if (env->dynamics_noise_speed_std > 0.0f || env->dynamics_noise_heading_std > 0.0f) {
+        float speed = clip(
+            agent->sim_speed_signed + sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_speed_std),
+            -2.0f,
+            MAX_SPEED);
+        float heading = normalize_heading(
+            agent->sim_heading + sample_normal(&env->rng_state, 0.0f, env->dynamics_noise_heading_std));
+        agent->sim_heading = heading;
+        agent->cos_heading = cosf(heading);
+        agent->sin_heading = sinf(heading);
+        agent->sim_vx = speed * agent->cos_heading;
+        agent->sim_vy = speed * agent->sin_heading;
+        update_agent_speed(agent);
     }
 
     update_agent_z(env, agent);

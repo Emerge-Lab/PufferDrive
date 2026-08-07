@@ -137,6 +137,10 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
+        dynamics_noise_long_std=0.0,
+        dynamics_noise_lat_std=0.0,
+        dynamics_noise_speed_std=0.0,
+        dynamics_noise_heading_std=0.0,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -272,6 +276,10 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds) // self.dt
+        self.dynamics_noise_long_std = float(dynamics_noise_long_std)
+        self.dynamics_noise_lat_std = float(dynamics_noise_lat_std)
+        self.dynamics_noise_speed_std = float(dynamics_noise_speed_std)
+        self.dynamics_noise_heading_std = float(dynamics_noise_heading_std)
         self.partner_features = binding.PARTNER_FEATURES
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
@@ -572,6 +580,10 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
+            "dynamics_noise_long_std": self.dynamics_noise_long_std,
+            "dynamics_noise_lat_std": self.dynamics_noise_lat_std,
+            "dynamics_noise_speed_std": self.dynamics_noise_speed_std,
+            "dynamics_noise_heading_std": self.dynamics_noise_heading_std,
         }
 
     def _sample_init_step(self):

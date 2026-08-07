@@ -167,6 +167,11 @@ env:
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
+  # Random dynamics perturbations (jerk model) - gaussian noise added to the dynamics at each step
+  dynamics_noise_long_std: 0.0
+  dynamics_noise_lat_std: 0.0
+  dynamics_noise_speed_std: 0.0
+  dynamics_noise_heading_std: 0.0
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128

@@ -1912,6 +1912,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration_seconds");
+    env->dynamics_noise_long_std = (float) unpack(kwargs, "dynamics_noise_long_std");
+    env->dynamics_noise_lat_std = (float) unpack(kwargs, "dynamics_noise_lat_std");
+    env->dynamics_noise_speed_std = (float) unpack(kwargs, "dynamics_noise_speed_std");
+    env->dynamics_noise_heading_std = (float) unpack(kwargs, "dynamics_noise_heading_std");
 
     init(env);
     return 0;
