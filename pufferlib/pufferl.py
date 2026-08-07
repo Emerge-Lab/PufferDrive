@@ -1376,6 +1376,16 @@ def _global_agent_steps(pufferl):
     return int(pufferl.global_step * world_size)
 
 
+def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
+    """Deterministic per-rank (torch_seed, env_seed): DDP ranks share weights, so identical seeds
+    would collect duplicate experience. global_rank is torchrun's global RANK, not LOCAL_RANK."""
+    torch_seed = train_seed * world_size + global_rank
+    env_seed = vec_seed
+    if env_seed is not None:
+        env_seed = int(np.random.SeedSequence([env_seed, train_seed, global_rank]).generate_state(1)[0])
+    return torch_seed, env_seed
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
@@ -1425,19 +1435,22 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                         args["env"][k] = v
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    global_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
     if "LOCAL_RANK" in os.environ:
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", "29500")
         local_rank = int(os.environ["LOCAL_RANK"])
-        print(f"rank: {local_rank}, MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
+        print(f"rank: {global_rank} (local {local_rank}), MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
-    torch.manual_seed(train_seed)
-    vecenv = vecenv or load_env(env_name, args)
+
+    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
+    torch.manual_seed(torch_seed)
+    vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
@@ -2233,12 +2246,15 @@ def _render_eval_failures(
     }
 
 
-def load_env(env_name, args):
+def load_env(env_name, args, seed=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
+    vec_kwargs = dict(args["vec"])
+    if seed is not None:
+        vec_kwargs["seed"] = seed
+    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
 def load_policy(args, vecenv, env_name=""):
