@@ -1060,7 +1060,17 @@ HTML_TEMPLATE = """<!doctype html>
       const stopTime = initialSpeed <= 0 ? 0 : brakingDelay + initialSpeed / Math.max(deceleration, 1e-6);
       const targetStopSampleTime = firstRolloutSampleAtOrAfter(stopTime, dt);
       const observedCollisionTime = stepsBack * dt;
-      const rolloutEndTime = Math.max(targetStopSampleTime, observedCollisionTime);
+      const adversary = collision.adversary;
+      const adversaryHeading = Number(adversary.heading || 0);
+      const adversarySignedSpeed = Number(adversary.vx || 0) * Math.cos(adversaryHeading) +
+        Number(adversary.vy || 0) * Math.sin(adversaryHeading);
+      const adversaryStopTime = Math.abs(adversarySignedSpeed) / Math.max(deceleration, 1e-6);
+      const rolloutUntilAdversaryStop = Number(constants.rollout_until_adversary_stop || 0) > 0;
+      const adversaryStopSampleTime = observedCollisionTime + firstRolloutSampleAtOrAfter(adversaryStopTime, dt);
+      const rolloutEndTime = Math.max(
+        targetStopSampleTime,
+        rolloutUntilAdversaryStop ? adversaryStopSampleTime : observedCollisionTime
+      );
       const reaction = [];
       const braking = [];
       const targetPointAt = tau => {
@@ -1080,7 +1090,6 @@ HTML_TEMPLATE = """<!doctype html>
       appendDistinct(braking, targetStop);
       const brakingStart = stopTime > brakingDelay ? targetPointAt(brakingDelay) : null;
 
-      const adversary = collision.adversary;
       const adversaryTrajectory = [];
       for (let i = 0; i < frames.length; i++) {
         const timestep = Number(episodeTimesteps[i]);
@@ -1103,20 +1112,17 @@ HTML_TEMPLATE = """<!doctype html>
           y: Number(adversary.y),
           heading: Number(adversary.heading || 0),
         });
-        const heading = Number(adversary.heading || 0);
-        const signedSpeed = Number(adversary.vx || 0) * Math.cos(heading) + Number(adversary.vy || 0) * Math.sin(heading);
-        const adversaryStopTime = Math.abs(signedSpeed) / Math.max(deceleration, 1e-6);
         const postCollisionDuration = Math.max(0, rolloutEndTime - observedCollisionTime);
         const postCollisionSteps = Math.round(postCollisionDuration / dt);
         for (let extensionStep = 1; extensionStep <= postCollisionSteps; extensionStep++) {
           const time = Math.min(extensionStep * dt, adversaryStopTime);
-          const distance = signedSpeed === 0
+          const distance = adversarySignedSpeed === 0
             ? 0
-            : signedSpeed * time - Math.sign(signedSpeed) * 0.5 * deceleration * time * time;
+            : adversarySignedSpeed * time - Math.sign(adversarySignedSpeed) * 0.5 * deceleration * time * time;
           appendDistinct(adversaryTrajectory, {
-            x: Number(adversary.x) + distance * Math.cos(heading),
-            y: Number(adversary.y) + distance * Math.sin(heading),
-            heading,
+            x: Number(adversary.x) + distance * Math.cos(adversaryHeading),
+            y: Number(adversary.y) + distance * Math.sin(adversaryHeading),
+            heading: adversaryHeading,
           });
         }
       }

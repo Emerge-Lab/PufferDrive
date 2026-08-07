@@ -142,9 +142,9 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_traffic_light=0.5,
         adv_reward_weight_drive=0.5,
         adv_target_offroad_reward=0.0,
-        adv_target_collision_reward=0.5,
+        adv_target_collision_reward=0.25,
         adv_target_collision_reward_use_responsibility=False,
-        adv_target_failure_reward=0.0,
+        adv_target_failure_reward=1.0,
         adv_target_avoidability_reward=0.0,
         adv_target_detection_reward=0.0,
         adv_target_time_reward_tau=2.0,
@@ -235,7 +235,7 @@ class Drive(pufferlib.PufferEnv):
         emit_completed_episodes=False,
         enable_map_cache=True,
         adv_target_hit_unavoidable_penalty=None,
-        adv_target_hit_unavoidable_behavior=None,
+        adv_target_hit_unavoidable_behavior=2,
     ):
         self.dt = dt
         self.pdm_horizon = float(pdm_horizon)

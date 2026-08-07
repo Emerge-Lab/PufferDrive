@@ -1593,6 +1593,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
             "route_sample_spacing", debug->route_sample_spacing);
         if (constants != NULL) {
             assign_to_dict(constants, "reaction_window_half_width_seconds", debug->reaction_window_half_width_seconds);
+            assign_to_dict(constants, "rollout_until_adversary_stop", (float)debug->rollout_until_adversary_stop);
         }
         PyObject *classification =
             Py_BuildValue("{s:f,s:i,s:i,s:i}", "t_brake", debug->last_avoidable_braking_seconds_before_collision,

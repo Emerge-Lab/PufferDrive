@@ -79,8 +79,9 @@
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
-// Target rollout includes up to 8s of immediate maximum braking.
-#define TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS 81
+// Full counterfactual horizon: up to 8s of target history before impact, followed
+// by up to 8s for the collision adversary to brake to a full stop.
+#define TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS (TARGET_TRAJECTORY_HISTORY_LEN + TARGET_AVOIDABILITY_MAX_EXT_STEPS)
 #define NO_AVOIDABLE_BRAKING_TIME (-1.0f)    // no braking within history avoids the crash
 #define AVOIDABLE_BRAKING_TIME_UNSET (-2.0f) // per-episode "not yet computed" sentinel
 #define DANGER_TTC_MARGIN_SECONDS 0.1f
@@ -244,6 +245,7 @@ typedef struct {
     float reaction_time_seconds;
     float reaction_window_half_width_seconds;
     float braking_rollout_delay_seconds;
+    int rollout_until_adversary_stop;
     int max_extension_steps;
     int max_rollout_steps;
     float ttc_margin_seconds;
@@ -3212,13 +3214,13 @@ static int collision_check(Drive *env, int agent_idx, float *collision_normal_x,
 }
 
 // Adversary's future path under max braking + constant heading, from the collision moment
-// (index 0 = current pose) until it stops. Only x/y vary; heading, z and dimensions stay at
-// the adversary's current values, so callers rebuild a pose via `Agent sample = *adversary;
-// sample.sim_x = ext.x[j]; sample.sim_y = ext.y[j];`.
+// (index 0 = current pose) until it stops. Position and signed speed vary; heading, z and
+// dimensions stay at the adversary's current values.
 typedef struct {
     int num_steps; // valid poses in [0, num_steps); >= 1
     float x[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
     float y[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+    float speed_signed[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
 } AdversaryBrakeTrajectory;
 
 // Fills `out` with the adversary braking to a stop at TARGET_AVOIDABILITY_BRAKE_DECEL along
@@ -3236,6 +3238,7 @@ static inline void build_adversary_brake_trajectory(const Agent *adversary, floa
         float d = v0 * t - copysignf(0.5f * decel * t * t, v0);
         out->x[j] = adversary->sim_x + d * adversary->cos_heading;
         out->y[j] = adversary->sim_y + d * adversary->sin_heading;
+        out->speed_signed[j] = copysignf(fmaxf(0.0f, fabsf(v0) - decel * t), v0);
         out->num_steps++;
         if (j * dt >= stop_time) {
             break; // fully stopped; further steps would just repeat this pose
@@ -3345,7 +3348,9 @@ target_braking_collision_diagnostic(Drive *env, int target_agent_idx, int collis
     float decel = TARGET_AVOIDABILITY_BRAKE_DECEL;
     float stop_time = v0 / decel;
     int stop_step = (int)ceilf(stop_time / env->dt - 1e-6f);
-    int rollout_horizon_step = steps_back > stop_step ? steps_back : stop_step;
+    int adversary_stop_step = collision_adversary_brake_trajectory->num_steps - 1;
+    int adversary_stop_rollout_step = steps_back + adversary_stop_step;
+    int rollout_horizon_step = adversary_stop_rollout_step > stop_step ? adversary_stop_rollout_step : stop_step;
     if (rollout_horizon_step >= TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS) {
         rollout_horizon_step = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS - 1;
     }
@@ -3395,6 +3400,11 @@ target_braking_collision_diagnostic(Drive *env, int target_agent_idx, int collis
                     }
                     adversary_sample.sim_x = collision_adversary_brake_trajectory->x[brake_idx];
                     adversary_sample.sim_y = collision_adversary_brake_trajectory->y[brake_idx];
+                    adversary_sample.sim_speed_signed = collision_adversary_brake_trajectory->speed_signed[brake_idx];
+                    adversary_sample.sim_speed = fabsf(adversary_sample.sim_speed_signed);
+                    adversary_sample.sim_vx = adversary_sample.sim_speed_signed * adversary_sample.cos_heading;
+                    adversary_sample.sim_vy = adversary_sample.sim_speed_signed * adversary_sample.sin_heading;
+                    adversary_sample.stopped = adversary_sample.sim_speed <= 1e-6f;
                 } else {
                     adversary_sample.sim_x += adversary_sample.sim_vx * post_collision_seconds;
                     adversary_sample.sim_y += adversary_sample.sim_vy * post_collision_seconds;
@@ -3447,6 +3457,7 @@ static float last_avoidable_braking_seconds_before_collision(Drive *env, int tar
         debug->reaction_time_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
         debug->reaction_window_half_width_seconds = TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
         debug->braking_rollout_delay_seconds = 0.0f;
+        debug->rollout_until_adversary_stop = 1;
         debug->max_extension_steps = TARGET_AVOIDABILITY_MAX_EXT_STEPS;
         debug->max_rollout_steps = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS;
         debug->ttc_margin_seconds = DANGER_TTC_MARGIN_SECONDS;
@@ -6711,10 +6722,10 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus - env->adv_target_hit_unavoidable_penalty;
     }
 
-    // Margin-based collision shaping is disabled until the new reward is defined.
-    // bonus += env->adv_target_collision_reward * target_collision_margin_shaping(env);
     if (target_collision_is_genuine_failure(env)) {
         bonus += env->adv_target_failure_reward;
+    } else if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
+        bonus += env->adv_target_collision_reward;
     }
     if (env->target_hit_at_fault_this_step) {
         bonus += env->adv_target_hit_at_fault_bonus;
