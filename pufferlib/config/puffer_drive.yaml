@@ -281,9 +281,7 @@ eval:
   capture_observations: false
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
-  # Policy action selection during eval: sample | mode | mean.
-  # mode = argmax; mean = probability-weighted continuous action
-  # (mean requires a discrete policy on a continuous env).
+  # Options: sample | mode | mean
   action_selection: mode
 controlled_exp:
   train:
