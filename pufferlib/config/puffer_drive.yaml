@@ -192,7 +192,6 @@ policy:
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete
-
 rnn:
   input_size: 512
   hidden_size: 512

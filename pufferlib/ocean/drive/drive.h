@@ -4121,6 +4121,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             j_long = JERK_LONG[0]; // max braking jerk
             j_lat = 0.0f;
         }
+
         // Get dynamic conditioning coefficients
         float c_throttle = agent->reward_coefs[REWARD_COEF_THROTTLE];
         float c_steer = agent->reward_coefs[REWARD_COEF_STEER];
