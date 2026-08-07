@@ -183,11 +183,7 @@ static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.0
 #define MAX_ENTITIES_PER_CELL 30
 #define ROAD_QUERY_ENTITY_COUNT (MAX_ENTITIES_PER_CELL * 25) // 5x5 cell neighborhood
 // Used only for CONTROL_MODE_SDC_ONLY's on-the-fly road-obs neighbor scan (see
-// write_road_obs): a single active agent per env queries its vision_range
-// window directly instead of it being precomputed for every grid cell, so a
-// generous per-query cap costs nothing extra in steady-state memory. Sized
-// well above obs_slots_lane_n + obs_slots_boundary_n to leave margin for
-// scanned entities that get filtered out by type or exact range.
+// write_road_obs):
 #define SDC_ROAD_QUERY_ENTITY_COUNT 2048
 
 // 5x5 cell neighborhood swept by a road query, centered on the agent's cell
