@@ -15,7 +15,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-# Seed each array task deterministically: 1000 * array task id
+# Seed each array task deterministically: 1000 + 1000 * array task id
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
@@ -25,9 +25,6 @@ echo ${RUN_NAME}
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
-# Name the training run writes its final model under, so the eval steps below can
-# find it without knowing the last epoch number. Passed to train as
-# train.final_model_name so the two can never disagree.
 export FINAL_MODEL_NAME=final_model.pt
 export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
 echo ${MODEL_PATH}

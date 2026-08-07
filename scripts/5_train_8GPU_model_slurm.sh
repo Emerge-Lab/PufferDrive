@@ -15,12 +15,20 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_exp_0002
-echo ${RUN_NAME}
-
-# Seed each array task deterministically: 1000 * array task id
+# Seed each array task deterministically: 1000 + 1000 * array task id
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
+
+export RUN_NAME=k_exp_0002_${SEED}
+echo ${RUN_NAME}
+
+export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+echo ${DATA_DIR}
+
+export FINAL_MODEL_NAME=final_model.pt
+export MODEL_PATH=${DATA_DIR}/${FINAL_MODEL_NAME}
+echo ${MODEL_PATH}
+
 
 # TODO could try to tune these. 1 Is probably best since Puffer parallelizes across all cores.
 export NUMEXPR_NUM_THREADS=1
@@ -35,10 +43,10 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     wandb=True \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
-    train.data_dir=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}_${SEED} \
+    train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
-    train.name=${RUN_NAME}_${SEED} \
-    run_name=${RUN_NAME}_${SEED} \
+    train.name=${RUN_NAME} \
+    run_name=${RUN_NAME} \
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
@@ -52,11 +60,37 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     env.action_type=continuous \
     train.adv_filter_enabled=False \
     train.evaluation_benchmarks=carla_fast \
+    train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
 
+# Only evaluate a run that actually finished, otherwise the eval jobs below would
+# score a stale final_model.pt from an earlier attempt (or fail on a missing one).
+TRAIN_STATUS=$?
+if [ ${TRAIN_STATUS} -ne 0 ]; then
+    echo "Training exited with status ${TRAIN_STATUS}; skipping evaluation."
+    exit ${TRAIN_STATUS}
+fi
+if [ ! -f ${MODEL_PATH} ]; then
+    echo "Training finished but ${MODEL_PATH} is missing; skipping evaluation."
+    exit 1
+fi
+
 # 786432 = 192 * 16 * 256
 # 131072 = 524288 / 4
+
+echo "Training done, evaluating ${MODEL_PATH}"
+.venv/bin/puffer eval puffer_drive carla \
+    vec.num_envs=16 \
+    eval.action_selection=mean \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH}
+
+.venv/bin/puffer eval puffer_drive nuplan_single \
+    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.action_selection=mean \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH}
 
 end=$(date +%s)
 runtime=$((end-start))

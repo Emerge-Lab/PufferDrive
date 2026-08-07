@@ -106,8 +106,6 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH}
 
-# train.learning_rate=0.004 \
-
 
 end=$(date +%s)
 runtime=$((end-start))

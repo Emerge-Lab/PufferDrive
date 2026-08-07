@@ -17,12 +17,12 @@ start=`date +%s`
 export RUN_NAME=k_fast_0001_1000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_fast_0001_1000/final_model.pt
 
-# source .venv/bin/activate
-# .venv/bin/puffer eval puffer_drive carla \
-#   vec.num_envs=16 \
-#    eval.action_selection=mean \
-#    eval.output_name=${RUN_NAME} \
-#    load_model_path=${MODEL_PATH}
+source .venv/bin/activate
+.venv/bin/puffer eval puffer_drive carla \
+    vec.num_envs=16 \
+    eval.action_selection=mean \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH}
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
@@ -30,7 +30,7 @@ MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_fast_0001_1000/final_model.pt
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH}
 
-#
+
 end=`date +%s`
 runtime=$((end-start))
 echo "END TIME: $(date)"
