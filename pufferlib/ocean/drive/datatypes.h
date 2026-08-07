@@ -139,6 +139,7 @@ struct Agent {
     float reward_coefs[NUM_REWARD_COEFS];
 
     int phantom_braking_counter;     // >0 means currently phantom braking
+    int partner_blindness_counter;   // >0 means currently blind to partners
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
 };

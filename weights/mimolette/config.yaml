@@ -55,7 +55,7 @@ env:
   offroad_behavior: 1
   partner_blindness_prob: 0.02
   partner_blindness_trigger_prob: 0.03
-  phantom_braking_duration: 10
+  phantom_braking_duration_seconds: 3.0
   phantom_braking_prob: 0.02
   phantom_braking_trigger_prob: 0.03
   resample_frequency: 256000

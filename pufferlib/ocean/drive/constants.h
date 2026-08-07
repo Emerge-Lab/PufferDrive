@@ -136,12 +136,6 @@ static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
-// Discrete action space, DYNAMICS_MODEL_JERK
-// These are the values used in the action discretization of the GIGAFLOW models. Potentially we might need to tune them
-// for real car deployments. The limits should be set such that the model is forced to drive comfortably while still
-// being able to control the car sufficiently as to drive well. The MIN limit for longetudinal (break) is much lower,
-// such that the car can execute uncomfortable breaking behaviors in order to avoid collisions. Jerk action space (for
-// JERK dynamics model)
 #define NUM_JERK_LONG_ACTIONS 4
 #define NUM_JERK_LAT_ACTIONS 3
 static const float JERK_LONG[NUM_JERK_LONG_ACTIONS] = {-15.0f, -4.0f, 0.0f, 4.0f};

@@ -334,11 +334,9 @@ class Drive(nn.Module):
     ):
         super().__init__()
 
-        # Action discretization tables come from the sim (drive.h, exposed by the
-        # C binding) so the policy's decoding can never drift from the env's.
-        if env.dynamics_model == "jerk":
+        if env.dynamics_model_flag == binding.DYNAMICS_MODEL_JERK:
             action_long_values, action_lat_values = binding.JERK_LONG, binding.JERK_LAT
-        elif env.dynamics_model == "classic":
+        elif env.dynamics_model_flag == binding.DYNAMICS_MODEL_CLASSIC:
             action_long_values, action_lat_values = binding.ACCELERATION_VALUES, binding.STEERING_VALUES
         else:
             raise ValueError(f"Unsupported dynamics model: {env.dynamics_model}")
@@ -346,10 +344,6 @@ class Drive(nn.Module):
         action_long = torch.tensor(action_long_values, dtype=torch.float32)
         action_lat = torch.tensor(action_lat_values, dtype=torch.float32)
 
-        # Precompute the [-1, 1] continuous action per discrete choice by inverting the
-        # sim's continuous scaling (drive.h). Constant → done once. Longitudinal is
-        # asymmetric (braking / |t[0]|, accel / t[-1]); lateral symmetric. The symmetric
-        # classic table collapses both branches to / t[-1].
         long_norm = torch.where(
             action_long < 0.0,
             action_long / -action_long[0],
