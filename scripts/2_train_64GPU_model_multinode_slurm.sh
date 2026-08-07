@@ -43,7 +43,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-
+python setup.py build_ext --inplace --force
 # Execute torchrun across all nodes using srun
 srun torchrun \
     --nnodes=${SLURM_JOB_NUM_NODES} \

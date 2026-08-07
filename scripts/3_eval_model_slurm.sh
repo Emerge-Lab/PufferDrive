@@ -18,6 +18,7 @@ export RUN_NAME=k_fast_0001_1000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_fast_0001_1000/final_model.pt
 
 source .venv/bin/activate
+python setup.py build_ext --inplace --force
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
     eval.action_selection=mean \
