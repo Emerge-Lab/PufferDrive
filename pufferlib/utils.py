@@ -6,9 +6,7 @@ import subprocess
 import numpy as np
 
 
-def reduce_environment_metrics(metric_lists, sum_keys=None):
-    sum_keys = set() if sum_keys is None else set(sum_keys)
-
+def reduce_environment_metrics(metric_lists):
     # Preserve raw sums and sample counts so log batches with different numbers
     # of completed episodes contribute with the correct weight.
     local_metrics = {}
@@ -23,7 +21,7 @@ def reduce_environment_metrics(metric_lists, sum_keys=None):
     for key, (value_sum, value_count) in local_metrics.items():
         if key in ("total_distance_travelled_sum", "total_infraction_count"):
             continue
-        reduced_metrics[key] = value_sum if key in sum_keys else value_sum / max(value_count, 1)
+        reduced_metrics[key] = value_sum / max(value_count, 1)
 
     if total_distance is not None and total_infractions is not None:
         reduced_metrics["total_distance_travelled"] = total_distance[0]
