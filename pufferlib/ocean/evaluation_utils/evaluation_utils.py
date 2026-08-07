@@ -7,6 +7,7 @@ import pandas as pd
 import yaml
 
 import pufferlib
+import pufferlib.utils
 
 
 MAX_C_SEED = 2**31 - 1
@@ -300,11 +301,13 @@ def _build_eval_report(episode_summaries, num_scenarios):
     lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
     df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
 
-    metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
+    numeric_metrics = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number])
+    metric_lists = {key: numeric_metrics[key].dropna().tolist() for key in numeric_metrics}
+    metric_means = pufferlib.utils.reduce_environment_metrics(metric_lists)
     summary = {
         "num_scenarios": num_scenarios,
         "num_episodes": int(len(df)),
-        "metrics_mean": {key: float(value) for key, value in metric_means.items()},
+        "metrics_mean": metric_means,
     }
     return df, summary
 
