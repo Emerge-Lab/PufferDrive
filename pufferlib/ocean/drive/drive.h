@@ -2801,7 +2801,17 @@ void init(Drive *env) {
             / GRID_CELL_SIZE);
         env->grid_map->vision_range = 2 * vision_half_range + 1;
         init_neighbor_offsets(env);
-        cache_neighbor_offsets(env);
+        if (env->control_mode == CONTROL_MODE_SDC_ONLY) {
+            // SDC-only has exactly one active agent per env reading this cache,
+            // so precomputing it for every grid cell is a poor trade: it costs
+            // O(grid_cells * vision_range^2) memory to save an O(vision_range^2)
+            // scan on the single agent that needs it each step. write_road_obs
+            // runs that scan on the fly instead (see get_neighbors_entities).
+            env->grid_map->neighbor_cache_entities = NULL;
+            env->grid_map->neighbor_cache_count = NULL;
+        } else {
+            cache_neighbor_offsets(env);
+        }
         if (env->use_map_cache) {
             // Transfer the just-built geometry into a shared, ref-counted entry that
             // this env borrows (ref_count starts at 1).
@@ -2933,10 +2943,13 @@ void c_close(Drive *env) {
         free(env->grid_map->cell_entities_count);
         free(env->grid_map->grid_index_drivable);
         free(env->neighbor_offsets);
-        for (int i = 0; i < grid_cell_count; i++) {
-            free(env->grid_map->neighbor_cache_entities[i]);
+        // NULL for CONTROL_MODE_SDC_ONLY, which never builds this cache (see init()).
+        if (env->grid_map->neighbor_cache_entities != NULL) {
+            for (int i = 0; i < grid_cell_count; i++) {
+                free(env->grid_map->neighbor_cache_entities[i]);
+            }
+            free(env->grid_map->neighbor_cache_entities);
         }
-        free(env->grid_map->neighbor_cache_entities);
         free(env->grid_map->neighbor_cache_count);
         free(env->grid_map);
         free_lane_graph(&env->lane_graph);
@@ -3726,9 +3739,26 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     int grid_idx = get_grid_index(env, ego->sim_x, ego->sim_y);
     int neighbor_count = 0;
     const GridMapEntity *neighbor_entities = NULL;
+    GridMapEntity sdc_entity_buffer[SDC_ROAD_QUERY_ENTITY_COUNT];
     if (!(grid_idx < 0 || grid_idx >= (env->grid_map->grid_cols * env->grid_map->grid_rows))) {
-        neighbor_count = env->grid_map->neighbor_cache_count[grid_idx];
-        neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
+        if (env->control_mode == CONTROL_MODE_SDC_ONLY) {
+            // No precomputed per-cell cache in this mode (see init()): this is
+            // the only active agent reading it, so scan its vision_range window
+            // on the fly instead of paying for every grid cell up front.
+            int vision_cell_count = env->grid_map->vision_range * env->grid_map->vision_range;
+            neighbor_count = get_neighbors_entities(
+                env,
+                ego->sim_x,
+                ego->sim_y,
+                sdc_entity_buffer,
+                SDC_ROAD_QUERY_ENTITY_COUNT,
+                (const int (*)[2]) env->neighbor_offsets,
+                vision_cell_count);
+            neighbor_entities = sdc_entity_buffer;
+        } else {
+            neighbor_count = env->grid_map->neighbor_cache_count[grid_idx];
+            neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
+        }
     }
 
     // GPS lane-distance features

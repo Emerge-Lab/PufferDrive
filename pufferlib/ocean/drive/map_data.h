@@ -748,10 +748,13 @@ static void free_shared_map_data(struct SharedMapData *shared) {
     free(shared->grid_map->cells);
     free(shared->grid_map->cell_entities_count);
     free(shared->grid_map->grid_index_drivable);
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(shared->grid_map->neighbor_cache_entities[i]);
+    // NULL for CONTROL_MODE_SDC_ONLY, which never builds this cache (see init()).
+    if (shared->grid_map->neighbor_cache_entities != NULL) {
+        for (int i = 0; i < grid_cell_count; i++) {
+            free(shared->grid_map->neighbor_cache_entities[i]);
+        }
+        free(shared->grid_map->neighbor_cache_entities);
     }
-    free(shared->grid_map->neighbor_cache_entities);
     free(shared->grid_map->neighbor_cache_count);
     free(shared->grid_map);
     free(shared->neighbor_offsets);
