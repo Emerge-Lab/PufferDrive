@@ -411,6 +411,7 @@ def _write_training_benchmark(tmp_path):
         scenario_length=TRAIN_HORIZON,
         max_agents_per_env=TRAIN_AGENTS_PER_ENV,
         control_mode="control_vehicles",
+        use_neighbor_cache=1,
     )
 
 
