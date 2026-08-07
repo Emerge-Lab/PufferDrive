@@ -25,6 +25,13 @@ def _drive_env_keys():
     return set(inspect.signature(Drive.__init__).parameters) - {"self"}
 
 
+def _merge_benchmark_environment(base_environment, shared_environment, benchmark_environment):
+    environment = copy.deepcopy(base_environment)
+    environment.update(copy.deepcopy(shared_environment))
+    environment.update(copy.deepcopy(benchmark_environment))
+    return environment
+
+
 def _require_mapping(value, label):
     if not isinstance(value, dict):
         raise pufferlib.APIUsageError(f"{label} must be a mapping")
@@ -124,28 +131,33 @@ def load_benchmark_config(config_path, selected_names):
 
     resolved_benchmarks = []
     for name in selected_names:
-        benchmark = configured_benchmarks[name]
-        simulation_mode = benchmark.get("simulation_mode")
+        benchmark = copy.deepcopy(configured_benchmarks[name])
+        benchmark_environment = benchmark["env"]
+        simulation_mode = benchmark_environment["simulation_mode"]
         if simulation_mode not in ("gigaflow", "replay"):
             raise pufferlib.APIUsageError(f"Benchmark {name} simulation_mode must be 'gigaflow' or 'replay'")
         seed = benchmark.get("seed")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_C_SEED:
             raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
-        scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
-        num_maps = _positive_int(benchmark.get("num_maps"), f"Benchmark {name} num_maps")
-        control_mode = benchmark.get("control_mode")
+        scenario_length = _positive_int(
+            benchmark_environment["scenario_length"],
+            f"Benchmark {name} env.scenario_length",
+        )
+        num_maps = _positive_int(benchmark_environment["num_maps"], f"Benchmark {name} env.num_maps")
+        control_mode = benchmark_environment["control_mode"]
         if not isinstance(control_mode, str) or not control_mode:
-            raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
-        max_agents_per_env = benchmark.get("max_agents_per_env")
+            raise pufferlib.APIUsageError(f"Benchmark {name} env.control_mode must be a non-empty string")
+        max_agents_per_env = benchmark_environment.get("max_agents_per_env")
         is_single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
         if max_agents_per_env is not None or not is_single_agent_replay:
-            max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} max_agents_per_env")
+            _positive_int(max_agents_per_env, f"Benchmark {name} env.max_agents_per_env")
 
-        map_dir = benchmark.get("map_dir")
+        map_dir = benchmark_environment["map_dir"]
         if not isinstance(map_dir, str) or not map_dir:
-            raise pufferlib.APIUsageError(f"Benchmark {name} map_dir must be a non-empty path")
+            raise pufferlib.APIUsageError(f"Benchmark {name} env.map_dir must be a non-empty path")
         map_dir = os.path.abspath(map_dir)
+        benchmark_environment["map_dir"] = map_dir
         if not os.path.isdir(map_dir) and not (os.path.isfile(map_dir) and map_dir.endswith(".bin")):
             raise pufferlib.APIUsageError(f"Benchmark {name} map path does not exist: {map_dir}")
 
@@ -164,19 +176,15 @@ def load_benchmark_config(config_path, selected_names):
                 f"{available_map_count} maps"
             )
 
-        resolved_benchmarks.append(
+        benchmark.update(
             {
                 "name": name,
-                "simulation_mode": simulation_mode,
+                "env": benchmark_environment,
                 "seed": seed,
                 "num_scenarios": num_scenarios,
-                "num_maps": num_maps,
-                "max_agents_per_env": max_agents_per_env,
-                "scenario_length": scenario_length,
-                "control_mode": control_mode,
-                "map_dir": map_dir,
             }
         )
+        resolved_benchmarks.append(benchmark)
     return environment_config, resolved_benchmarks
 
 
@@ -204,10 +212,10 @@ def load_checkpoint_architecture(args):
 
 
 def build_benchmark_args(base_args, benchmark, environment_config):
-    """Apply the fixed benchmark evaluation overrides."""
+    """Layer shared and benchmark environment settings over the base configuration."""
     args = copy.deepcopy(base_args)
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
-    max_agents_per_env = benchmark["max_agents_per_env"]
+    max_agents_per_env = benchmark["env"].get("max_agents_per_env")
     if max_agents_per_env is not None and eval_agent_count < max_agents_per_env:
         raise pufferlib.APIUsageError(
             f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
@@ -216,20 +224,7 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
-    args["env"].update(copy.deepcopy(environment_config))
-    args["env"].update(
-        {
-            "num_agents": eval_agent_count,
-            "simulation_mode": benchmark["simulation_mode"],
-            "map_dir": benchmark["map_dir"],
-            "num_maps": benchmark["num_maps"],
-            "scenario_length": benchmark["scenario_length"],
-            "resample_frequency": benchmark["scenario_length"],
-            "control_mode": benchmark["control_mode"],
-        }
-    )
-    if max_agents_per_env is not None:
-        args["env"]["max_agents_per_env"] = max_agents_per_env
+    args["env"] = _merge_benchmark_environment(args["env"], environment_config, benchmark["env"])
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 
