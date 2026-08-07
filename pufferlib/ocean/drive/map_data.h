@@ -735,6 +735,9 @@ static void map_cache_insert(struct SharedMapData *entry) {
 }
 
 static void free_grid_map(GridMap *grid_map) {
+    if (grid_map == NULL) {
+        return;
+    }
     int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         free(grid_map->cells[grid_index]);

@@ -2024,7 +2024,6 @@ static void add_log(Drive *env) {
     for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
         ((float *) &env->log)[field_idx] += ((float *) &episode_log)[field_idx];
     }
-
     env->log_episode_seed = env->episode_seed;
 }
 
@@ -3316,6 +3315,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
     }
 
+    // Update cumulative metrics
     agent->distance_since_spawn += agent->sim_speed * env->dt;
     agent_log->avg_speed_per_agent += agent->sim_speed;
 

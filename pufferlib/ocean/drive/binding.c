@@ -1803,7 +1803,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             break;
         }
     }
-
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
