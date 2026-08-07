@@ -20,7 +20,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - **Data:** flat struct arrays + integer indices. No nested ownership / `**` unless the map/grid truly needs it.
 - **Loops bounded:** iterate known counts; every `while` needs an explicit max-iteration counter.
 - **Named constants for all magic values** (`GRID_CELL_SIZE`, `DEFAULT_TTC`); never raw `15.0f`/`64` in logic. Centralize enum-like mode constants near the top.
-- **Comments: default none, hard max 1 line.** Code must be readable without them. Write one only for a non-obvious invariant, unit/frame convention, or a "why not the obvious thing" (good: `// reward flags mutually exclusive`, `// angles in ego frame, radians`). Banned: restating what the line does, multi-line explanations, rationale/history essays, cross-file pointers (`// see drive.h`), section headers (`// 1. Encoders`), docstrings on self-evident functions. If it needs a paragraph, rename things until it doesn't. Never add a comment to a line the request didn't already change.
+- **Comments explain invariants, not syntax** (good: "reward flags mutually exclusive"). Code readable without comments.
 - **Check non-void returns when correctness depends on it** (loading, init, map/grid build, spawning).
 - **Zero compiler warnings** — warnings are bugs until proven otherwise.
 - **Perf:** zero Python overhead in C hot paths; no malloc/free in `c_step`, obs gen, collision, reward.

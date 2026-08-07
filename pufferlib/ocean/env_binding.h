@@ -1313,28 +1313,6 @@ static PyMethodDef methods[]
 // Module definition
 static PyModuleDef module = {PyModuleDef_HEAD_INIT, "binding", NULL, -1, methods};
 
-// Publish a C float table as an immutable Python tuple so policy code reads the
-// sim's values instead of copying them. Returns 0 on success, -1 on failure.
-static int add_float_table_constant(PyObject *module_obj, const char *name, const float *values, int value_count) {
-    PyObject *table = PyTuple_New(value_count);
-    if (table == NULL) {
-        return -1;
-    }
-    for (int i = 0; i < value_count; i++) {
-        PyObject *value = PyFloat_FromDouble((double) values[i]);
-        if (value == NULL) {
-            Py_DECREF(table);
-            return -1;
-        }
-        PyTuple_SET_ITEM(table, i, value);
-    }
-    if (PyModule_AddObject(module_obj, name, table) < 0) {
-        Py_DECREF(table);
-        return -1;
-    }
-    return 0;
-}
-
 PyMODINIT_FUNC PyInit_binding(void) {
     import_array();
     PyObject *m = PyModule_Create(&module); // Changed variable name from 'module' to 'm'
@@ -1396,16 +1374,6 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ONLY_CONTROLLED", INIT_MODE_CREATE_ONLY_CONTROLLED);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
-
-    // Action discretization tables: the policy decodes discrete actions with the
-    // exact values the sim uses, so the two can never drift apart.
-    if (add_float_table_constant(m, "JERK_LONG", JERK_LONG, NUM_JERK_LONG_ACTIONS) < 0
-        || add_float_table_constant(m, "JERK_LAT", JERK_LAT, NUM_JERK_LAT_ACTIONS) < 0
-        || add_float_table_constant(m, "ACCELERATION_VALUES", ACCELERATION_VALUES, NUM_ACCELERATION_ACTIONS) < 0
-        || add_float_table_constant(m, "STEERING_VALUES", STEERING_VALUES, NUM_STEERING_ACTIONS) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
 
     return m;
 }

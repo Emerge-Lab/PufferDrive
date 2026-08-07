@@ -67,7 +67,6 @@ policy.backbone_num_layers: 2
 policy.actor_num_layers: 0
 policy.critic_num_layers: 0
 policy.shared_network: true
-policy.action_type: discrete
 
 # Training: short schedule, small minibatch, compiled
 train.total_timesteps: 1_000_000_000

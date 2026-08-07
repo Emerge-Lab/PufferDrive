@@ -12,6 +12,8 @@ wandb
 .ruff_cache
 
 benchmark*/
+!pufferlib/ocean/benchmark/
+!pufferlib/ocean/benchmark/**
 runs*/
 weights/
 checkpoints/

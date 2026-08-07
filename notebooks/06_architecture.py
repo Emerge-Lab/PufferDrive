@@ -40,7 +40,6 @@ ENCODER_LAYER_NORM = True
 BACKBONE_ACTIVATION = "gelu"
 BACKBONE_LAYER_NORM = False
 MASK_PADDED_FEATURES = False
-ACTION_TYPE = "discrete"
 
 env, obs, info = make_drive_env()
 
@@ -65,7 +64,6 @@ policy = DrivePolicy(
     backbone_layer_norm=BACKBONE_LAYER_NORM,
     shared_network=SHARED_NETWORK,
     mask_padded_features=MASK_PADDED_FEATURES,
-    action_type=ACTION_TYPE,
 ).to(device)
 
 print(f"Device: {device}")
@@ -521,7 +519,6 @@ POLICY_DEFAULTS = {
     "backbone_layer_norm": False,
     "shared_network": True,
     "mask_padded_features": False,
-    "action_type": "discrete",
 }
 
 results = []
