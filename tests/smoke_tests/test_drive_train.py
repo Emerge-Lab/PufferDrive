@@ -57,7 +57,6 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pufferlib.pufferl import PuffeRL, load_config, load_env, load_policy
-from pufferlib.utils import reduce_environment_metrics
 
 SEED = 42
 EPOCHS = 2  # small: CI emulates the CPU under QEMU where torch is ~30x slower
@@ -208,7 +207,11 @@ def _capture_metrics(pufferl):
 
     losses = {k: float(v) for k, v in pufferl.losses.items() if _is_number(v)}
 
-    env_means = reduce_environment_metrics(env_acc)
+    env_means = {}
+    for k, vals in env_acc.items():
+        nums = [x for x in vals if _is_number(x)]
+        if nums and len(nums) == len(vals):
+            env_means[k] = float(np.mean(nums))
 
     return losses, env_means
 
