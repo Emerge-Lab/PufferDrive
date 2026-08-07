@@ -1206,6 +1206,9 @@ class NoLogger:
     def log(self, logs, step):
         pass
 
+    def upload_config(self, config_yaml_path):
+        pass
+
     def close(self, model_path, early_stop):
         pass
 
@@ -1238,6 +1241,9 @@ class NeptuneLogger:
 
     def upload_model(self, model_path):
         self.neptune["model"].track_files(model_path)
+
+    def upload_config(self, config_yaml_path):
+        self.neptune["config_yaml"].upload(config_yaml_path)
 
     def close(self, model_path, early_stop):
         self.neptune["early_stop"] = early_stop
@@ -1278,6 +1284,9 @@ class WandbLogger:
         artifact.add_file(model_path)
         self.wandb.run.log_artifact(artifact)
 
+    def upload_config(self, config_yaml_path):
+        self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
+
     def close(self, model_path, early_stop):
         self.wandb.run.summary["early_stop"] = early_stop
         if self.should_upload_model:
@@ -1308,6 +1317,9 @@ class TensorBoardLogger:
         for key, value in logs.items():
             if isinstance(value, (int, float)):
                 self.local_writer.add_scalar(key, value, step)
+
+    def upload_config(self, config_yaml_path):
+        pass
 
     def close(self, model_path, early_stop):
         self.local_writer.close()
@@ -1483,6 +1495,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
+    pufferl.logger.upload_config(os.path.join(path, "config.yaml"))
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
