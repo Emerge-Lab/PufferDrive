@@ -182,6 +182,7 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
+        use_neighbor_cache=1,
     )
     args = _standalone_eval_args(benchmark_config_path)
     multiprocessing_calls = []
