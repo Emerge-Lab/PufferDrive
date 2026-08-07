@@ -17,8 +17,8 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version != 6:
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=6.")
+    if schema_version != 7:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=7.")
 
     required_top_level = ("metadata", "agent_arrays", "traffic_arrays", "episode_timesteps")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
@@ -579,8 +579,9 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">Did Target Run Red Light</span><span class="meta-value" id="meta-run-light"></span></div>
         <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
-        <div class="meta-item"><span class="meta-label">first_t_detect</span><span class="meta-value" id="meta-first-t-detect"></span></div>
         <div class="meta-item"><span class="meta-label">last_t_brake</span><span class="meta-value" id="meta-last-t-brake"></span></div>
+        <div class="meta-item"><span class="meta-label">Reaction Window</span><span class="meta-value" id="meta-reaction-window"></span></div>
+        <div class="meta-item"><span class="meta-label">Collision Outcome</span><span class="meta-value" id="meta-collision-outcome"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
         <div class="meta-item"><span class="meta-label">Episode</span><span class="meta-value" id="meta-episode"></span></div>
@@ -730,6 +731,7 @@ HTML_TEMPLATE = """<!doctype html>
         sortDir: Number(params.get('dir') || '-1') >= 0 ? 1 : -1,
         replayOnly: params.get('replay') === '1',
         failuresOnly: params.get('failures') === '1',
+        outcomeOnly: params.get('outcome') || '',
         offroadOnly: params.get('offroad') === '1',
         atFaultOnly: params.get('atfault') === '1',
         search: (params.get('q') || '').toLowerCase(),
@@ -742,6 +744,7 @@ HTML_TEMPLATE = """<!doctype html>
       params.set('dir', String(state.sortDir));
       if (state.replayOnly) params.set('replay', '1');
       if (state.failuresOnly) params.set('failures', '1');
+      if (state.outcomeOnly) params.set('outcome', state.outcomeOnly);
       if (state.offroadOnly) params.set('offroad', '1');
       if (state.atFaultOnly) params.set('atfault', '1');
       if (state.search) params.set('q', state.search);
@@ -759,6 +762,12 @@ HTML_TEMPLATE = """<!doctype html>
       const items = (navigation.episodes || []).filter(item => {
         if (state.replayOnly && !item.href) return false;
         if (state.failuresOnly && !metricEnabled(item, 'did_target_fail')) return false;
+        if (state.outcomeOnly === 'target_failure' &&
+            !metricEnabled(item, 'target_collision_target_failure_rate')) return false;
+        if (state.outcomeOnly === 'unavoidable' &&
+            !metricEnabled(item, 'target_collision_unavoidable_rate')) return false;
+        if (state.outcomeOnly === 'adversary_forced' &&
+            !metricEnabled(item, 'target_collision_adversary_forced_rate')) return false;
         if (state.offroadOnly && !metricEnabled(item, 'did_target_offroad')) return false;
         if (state.atFaultOnly && !atFaultEnabled(item)) return false;
         if (state.search && !JSON.stringify(item).toLowerCase().includes(state.search)) return false;
@@ -811,13 +820,19 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById('meta-impact-zone').innerText = summaryValue('target_collision_impact_zone_label', 'none');
       document.getElementById('meta-collision-severity').innerText = formatMetric(summaryValue('target_collision_severity', 0));
       document.getElementById('meta-collision-responsibility').innerText = formatMetric(summaryValue('target_collision_responsibility', 0));
-      const detectionTimes = (avoidability && avoidability.detection_times) || {};
-      document.getElementById('meta-first-t-detect').innerText = formatSeconds(
-        detectionTimes.combined_seconds_before_collision
-      );
-      document.getElementById('meta-last-t-brake').innerText = formatSeconds(
-        detectionTimes.target_last_avoidable_braking_seconds_before_collision
-      );
+      const classification = (avoidability && avoidability.classification) || {};
+      const tBrake = Number(classification.t_brake);
+      document.getElementById('meta-last-t-brake').innerText = formatSeconds(tBrake);
+      const reactionCheck = computeReactionWindowDanger();
+      document.getElementById('meta-reaction-window').innerText = reactionCheck.available
+        ? `[${reactionCheck.minimum.toFixed(2)}, ${reactionCheck.maximum.toFixed(2)}]s · ` +
+          `${reactionCheck.dangerous ? 'danger' : 'safe'} · ${reactionCheck.samples} sample(s)`
+        : 'n/a';
+      let collisionOutcome = 'not classified';
+      if (Number(classification.unavoidable || 0) > 0) collisionOutcome = 'unavoidable';
+      else if (Number(classification.genuine_target_failure || 0) > 0) collisionOutcome = 'genuine target failure';
+      else if (Number(classification.adversary_forced || 0) > 0) collisionOutcome = 'adversary-forced';
+      document.getElementById('meta-collision-outcome').innerText = collisionOutcome;
       document.getElementById('meta-made-progress').innerText = Number(summaryValue('did_target_make_progress', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-at-fault').innerText = Number(summaryValue('did_target_have_at_fault_collision', 0) || 0) > 0 ? 'yes' : 'no';
       document.getElementById('meta-goals').innerText = String(summaryValue('target_num_goals_reached', 0));
@@ -1154,7 +1169,11 @@ HTML_TEMPLATE = """<!doctype html>
 
     function detectorPair() {
       if (!hasAvoidability || replayMode !== 'avoidability') return null;
-      const frame = currentDisplayFrame();
+      return detectorPairForFrame(currentDisplayFrame());
+    }
+
+    function detectorPairForFrame(frame) {
+      if (!avoidability || !avoidability.collision) return null;
       const collision = avoidability.collision;
       const target = findAgentById(frame, Number(collision.target_agent_index));
       const adversary = findAgentById(frame, Number(collision.collision_adversary_index));
@@ -1382,6 +1401,37 @@ HTML_TEMPLATE = """<!doctype html>
       };
     }
 
+    function computeReactionWindowDanger() {
+      const classification = (avoidability && avoidability.classification) || {};
+      const constants = (avoidability && avoidability.constants) || {};
+      const collision = avoidability && avoidability.collision;
+      const tBrake = Number(classification.t_brake);
+      if (!collision || !(tBrake > 0)) {
+        return {available: false, dangerous: false, samples: 0, minimum: null, maximum: null};
+      }
+
+      const dt = Number(constants.dt || 0.1);
+      const reactionTime = Number(constants.reaction_time_seconds || 1.0);
+      const halfWidth = Number(constants.reaction_window_half_width_seconds || 0.2);
+      const minimum = tBrake + reactionTime - halfWidth;
+      const maximum = tBrake + reactionTime + halfWidth;
+      const collisionTimestep = Number(collision.collision_timestep);
+      let samples = 0;
+      for (let i = 0; i < frames.length; i++) {
+        const stepsBack = collisionTimestep - Number(episodeTimesteps[i]);
+        if (stepsBack < 1) continue;
+        const secondsBeforeCollision = stepsBack * dt;
+        if (secondsBeforeCollision < minimum - 1e-5 || secondsBeforeCollision > maximum + 1e-5) continue;
+        const pair = detectorPairForFrame(frames[i]);
+        if (!pair) continue;
+        samples += 1;
+        if (computeTTCOverlay(pair).dangerous || computeLateralBuffer(pair).dangerous) {
+          return {available: true, dangerous: true, samples, minimum, maximum};
+        }
+      }
+      return {available: true, dangerous: false, samples, minimum, maximum};
+    }
+
     function updateAvoidabilitySelection() {
       reactionSelection = Number(reactionSlider.value || 0);
       if (reactionSelection === 0) {
@@ -1560,10 +1610,8 @@ HTML_TEMPLATE = """<!doctype html>
     function drawLateralBufferOverlay(bufferResult) {
       const color = bufferResult.dangerous ? '#dc2626' : '#16a34a';
       drawDetectorPose(bufferResult.expandedTarget, color, [7, 4]);
-      const detectionTimes = avoidability.detection_times || {};
-      const firstDetection = detectionTimes.lateral_buffer_seconds_before_collision;
       bufferBadge.className = bufferResult.dangerous ? 'detector-badge danger' : 'detector-badge';
-      bufferBadge.innerText = `BUFFER ${bufferResult.dangerous ? 'DANGER' : 'SAFE'} · b=${bufferResult.buffer.toFixed(2)}m/side · intrusion=${bufferResult.intrusionSpeed.toFixed(2)}m/s · first=${formatSeconds(firstDetection)}`;
+      bufferBadge.innerText = `BUFFER ${bufferResult.dangerous ? 'DANGER' : 'SAFE'} · b=${bufferResult.buffer.toFixed(2)}m/side · intrusion=${bufferResult.intrusionSpeed.toFixed(2)}m/s`;
     }
 
     function drawTTCOverlay(ttc) {
@@ -2052,24 +2100,28 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "target_collision_impact_zone",
         "target_collision_responsibility",
         "target_collision_severity",
+        "genuine_target_failure",
+        "unavoidable",
+        "adversary_forced",
         "target_collision_target_failure_rate",
         "target_collision_unavoidable_rate",
         "target_collision_adversary_forced_rate",
-        "t_detect",
         "t_brake",
-        "t_margin",
         "target_episode_return",
         "target_episode_length",
         "has_replay",
     ]
-    derived_columns = {"t_detect", "t_brake", "t_margin"}
+    derived_columns = {"genuine_target_failure", "unavoidable", "adversary_forced", "t_brake"}
     existing_columns = [col for col in preferred_columns if col in episodes_df.columns or col in derived_columns]
     for row in episodes_df.to_dict(orient="records"):
         replay_html = render_lookup.get(row.get("episode_id"))
         out = {key: _safe_value(row.get(key)) for key in existing_columns}
-        out["t_detect"] = _safe_first(row, "t_detect", "target_first_time_detected")
+        out["genuine_target_failure"] = _safe_first(
+            row, "genuine_target_failure", "target_collision_target_failure_rate"
+        )
+        out["unavoidable"] = _safe_first(row, "unavoidable", "target_collision_unavoidable_rate")
+        out["adversary_forced"] = _safe_first(row, "adversary_forced", "target_collision_adversary_forced_rate")
         out["t_brake"] = _safe_first(row, "t_brake", "target_mean_last_avoidable_braking_seconds_before_collision")
-        out["t_margin"] = _safe_first(row, "t_detect_minus_t_brake", "target_mean_detection_braking_margin_seconds")
         if "target_collision_impact_zone" in out:
             out["target_collision_impact_zone"] = (
                 f"{_impact_zone_label(out['target_collision_impact_zone'])}"

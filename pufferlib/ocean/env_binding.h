@@ -763,15 +763,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
             float target_last_avoidable_braking_seconds_before_collision =
                 env->log.target_last_avoidable_braking_seconds_before_collision;
             float target_avoidable_by_braking_collision_count = env->log.target_avoidable_by_braking_collision_count;
-            float target_detection_braking_margin_seconds = env->log.target_detection_braking_margin_seconds;
-            float target_detection_braking_margin_valid_count = env->log.target_detection_braking_margin_valid_count;
-            float target_first_time_detected_ttc = env->log.target_first_time_detected_ttc;
-            float target_first_time_detected_ttc_valid_count = env->log.target_first_time_detected_ttc_valid_count;
-            float target_first_time_detected_lat_rss = env->log.target_first_time_detected_lat_rss;
-            float target_first_time_detected_lat_rss_valid_count =
-                env->log.target_first_time_detected_lat_rss_valid_count;
-            float target_first_time_detected = env->log.target_first_time_detected;
-            float target_first_time_detected_valid_count = env->log.target_first_time_detected_valid_count;
             float adversaries_collision_count = env->log.adversaries_collision_count;
             float adversaries_collision_severity = env->log.adversaries_collision_severity;
             float adversaries_collision_responsibility = env->log.adversaries_collision_responsibility;
@@ -835,29 +826,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                         ? target_last_avoidable_braking_seconds_before_collision /
                               target_avoidable_by_braking_collision_count
                         : NO_AVOIDABLE_BRAKING_TIME;
-                env->log.target_detection_braking_margin_seconds =
-                    target_detection_braking_margin_valid_count > 0.0f
-                        ? target_detection_braking_margin_seconds / target_detection_braking_margin_valid_count
-                        : FIRST_DETECTED_NOT_DETECTED;
-                env->log.target_first_time_detected_ttc =
-                    target_first_time_detected_ttc_valid_count > 0.0f
-                        ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
-                        : FIRST_DETECTED_NOT_DETECTED;
-                env->log.target_first_time_detected_lat_rss =
-                    target_first_time_detected_lat_rss_valid_count > 0.0f
-                        ? target_first_time_detected_lat_rss / target_first_time_detected_lat_rss_valid_count
-                        : FIRST_DETECTED_NOT_DETECTED;
-                env->log.target_first_time_detected =
-                    target_first_time_detected_valid_count > 0.0f
-                        ? target_first_time_detected / target_first_time_detected_valid_count
-                        : FIRST_DETECTED_NOT_DETECTED;
             }
             env->log.target_collision_count = target_collision_count;
             env->log.target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
-            env->log.target_detection_braking_margin_valid_count = target_detection_braking_margin_valid_count;
-            env->log.target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
-            env->log.target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
-            env->log.target_first_time_detected_valid_count = target_first_time_detected_valid_count;
 
             if (adversaries_collision_count > 0.0f) {
                 env->log.adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
@@ -1064,14 +1035,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
         float target_last_avoidable_braking_seconds_before_collision =
             aggregate.target_last_avoidable_braking_seconds_before_collision;
         float target_avoidable_by_braking_collision_count = aggregate.target_avoidable_by_braking_collision_count;
-        float target_detection_braking_margin_seconds = aggregate.target_detection_braking_margin_seconds;
-        float target_detection_braking_margin_valid_count = aggregate.target_detection_braking_margin_valid_count;
-        float target_first_time_detected_ttc = aggregate.target_first_time_detected_ttc;
-        float target_first_time_detected_ttc_valid_count = aggregate.target_first_time_detected_ttc_valid_count;
-        float target_first_time_detected_lat_rss = aggregate.target_first_time_detected_lat_rss;
-        float target_first_time_detected_lat_rss_valid_count = aggregate.target_first_time_detected_lat_rss_valid_count;
-        float target_first_time_detected = aggregate.target_first_time_detected;
-        float target_first_time_detected_valid_count = aggregate.target_first_time_detected_valid_count;
         float adversaries_collision_count = aggregate.adversaries_collision_count;
         float adversaries_collision_severity = aggregate.adversaries_collision_severity;
         float adversaries_collision_responsibility = aggregate.adversaries_collision_responsibility;
@@ -1138,29 +1101,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
                     ? target_last_avoidable_braking_seconds_before_collision /
                           target_avoidable_by_braking_collision_count
                     : NO_AVOIDABLE_BRAKING_TIME;
-            aggregate.target_detection_braking_margin_seconds =
-                target_detection_braking_margin_valid_count > 0.0f
-                    ? target_detection_braking_margin_seconds / target_detection_braking_margin_valid_count
-                    : FIRST_DETECTED_NOT_DETECTED;
-            aggregate.target_first_time_detected_ttc =
-                target_first_time_detected_ttc_valid_count > 0.0f
-                    ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
-                    : FIRST_DETECTED_NOT_DETECTED;
-            aggregate.target_first_time_detected_lat_rss =
-                target_first_time_detected_lat_rss_valid_count > 0.0f
-                    ? target_first_time_detected_lat_rss / target_first_time_detected_lat_rss_valid_count
-                    : FIRST_DETECTED_NOT_DETECTED;
-            aggregate.target_first_time_detected =
-                target_first_time_detected_valid_count > 0.0f
-                    ? target_first_time_detected / target_first_time_detected_valid_count
-                    : FIRST_DETECTED_NOT_DETECTED;
         }
         aggregate.target_collision_count = target_collision_count;
         aggregate.target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
-        aggregate.target_detection_braking_margin_valid_count = target_detection_braking_margin_valid_count;
-        aggregate.target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
-        aggregate.target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
-        aggregate.target_first_time_detected_valid_count = target_first_time_detected_valid_count;
 
         if (adversaries_collision_count > 0.0f) {
             aggregate.adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;

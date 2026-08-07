@@ -72,10 +72,10 @@
 // collision" analysis, evaluated over the per-agent rolling trajectory history
 // (trajectory_hist_*, see Agent in datatypes.h; TARGET_TRAJECTORY_HISTORY_LEN there).
 #define TARGET_AVOIDABILITY_BRAKE_DECEL 5.0f // m/s^2 braking magnitude (matches planner max braking)
-// Required detection-to-braking margin; this is not simulated inside the braking rollout.
+// Nominal reaction time and symmetric tolerance for checking whether danger was
+// observable near the last braking opportunity.
 #define TARGET_AVOIDABILITY_REACTION_TIME_SECONDS 1.0f
-// One decade of reward growth per four seconds of detection-to-braking margin.
-#define TARGET_MARGIN_SHAPING_SECONDS_PER_DECADE 4.0f
+#define TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS 0.2f
 // Max poses in a full braking rollout to a stop: ceil(MAX_SPEED / DECEL / dt=0.1) + 1 = 81
 // (index 0 is the current pose). Bounds the fixed-size adversary extension array.
 #define TARGET_AVOIDABILITY_MAX_EXT_STEPS 81
@@ -83,16 +83,15 @@
 #define TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS 81
 #define NO_AVOIDABLE_BRAKING_TIME (-1.0f)    // no braking within history avoids the crash
 #define AVOIDABLE_BRAKING_TIME_UNSET (-2.0f) // per-episode "not yet computed" sentinel
-#define FIRST_DETECTED_NOT_DETECTED (-1.0f)
-#define FIRST_DETECTED_TTC_MARGIN_SECONDS 0.1f
+#define DANGER_TTC_MARGIN_SECONDS 0.1f
 // Covers the largest TTC danger threshold at dt=0.1:
 // reaction + MAX_SPEED / TARGET_AVOIDABILITY_BRAKE_DECEL + margin = 1 + 40 / 5 + 0.1 = 9.1s.
-#define FIRST_DETECTED_TTC_MAX_STEPS 92
-#define FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS 1.0f
-#define FIRST_DETECTED_LAT_BUFFER_BASE_METERS 0.2f
-#define FIRST_DETECTED_LAT_BUFFER_RESPONSE_TIME_SECONDS 0.0f
-#define FIRST_DETECTED_LAT_BUFFER_DECEL_MPS2 0.8f
-#define FIRST_DETECTED_LAT_BUFFER_MAX_METERS 2.0f
+#define DANGER_TTC_MAX_PROJECTION_STEPS 92
+#define DANGER_ROUTE_SAMPLE_SPACING_METERS 1.0f
+#define DANGER_LAT_BUFFER_BASE_METERS 0.2f
+#define DANGER_LAT_BUFFER_RESPONSE_TIME_SECONDS 0.0f
+#define DANGER_LAT_BUFFER_DECEL_MPS2 0.8f
+#define DANGER_LAT_BUFFER_MAX_METERS 2.0f
 
 // Optional, bounded diagnostics captured for the first target collision in an episode.
 // These buffers are allocated at environment initialization only when compact replay
@@ -243,6 +242,7 @@ typedef struct {
     float dt;
     float braking_deceleration;
     float reaction_time_seconds;
+    float reaction_window_half_width_seconds;
     float braking_rollout_delay_seconds;
     int max_extension_steps;
     int max_rollout_steps;
@@ -255,13 +255,10 @@ typedef struct {
     float route_sample_spacing;
     int target_route_length;
     int target_route[MAX_ROUTE_LENGTH];
-    float straight_ttc_detection_seconds_before_collision;
-    float route_ttc_detection_seconds_before_collision;
-    float effective_ttc_detection_seconds_before_collision;
-    float ttc_detection_seconds_before_collision;
-    float lateral_buffer_detection_seconds_before_collision;
-    float combined_detection_seconds_before_collision;
     float last_avoidable_braking_seconds_before_collision;
+    int genuine_target_failure;
+    int adversary_forced;
+    int unavoidable;
     int candidate_count;
     AvoidabilityCandidateDebug candidates[AVOIDABILITY_DEBUG_MAX_CANDIDATES];
 } AvoidabilityDebug;
@@ -343,14 +340,6 @@ struct Log {
     float target_collision_target_failure_rate;
     float target_last_avoidable_braking_seconds_before_collision;
     float target_avoidable_by_braking_collision_count;
-    float target_detection_braking_margin_seconds;
-    float target_detection_braking_margin_valid_count;
-    float target_first_time_detected_ttc;
-    float target_first_time_detected_ttc_valid_count;
-    float target_first_time_detected_lat_rss;
-    float target_first_time_detected_lat_rss_valid_count;
-    float target_first_time_detected;
-    float target_first_time_detected_valid_count;
     float adversaries_collision_count;
     float adversaries_collision_severity;
     float adversaries_collision_responsibility;
@@ -566,9 +555,7 @@ struct Drive {
     float target_collision_other_stopped_episode;
     float target_collision_other_removed_episode;
     float target_last_avoidable_braking_seconds_before_collision;
-    float target_first_time_detected_ttc_episode;
-    float target_first_time_detected_lat_rss_episode;
-    float target_first_time_detected_episode;
+    int target_reaction_window_danger_episode;
     int capture_avoidability_debug;
     AvoidabilityDebug *avoidability_debug;
     AvoidabilityDebug *completed_avoidability_debug;
@@ -763,14 +750,6 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float target_last_avoidable_braking_seconds_before_collision =
         log->target_last_avoidable_braking_seconds_before_collision;
     float target_avoidable_by_braking_collision_count = log->target_avoidable_by_braking_collision_count;
-    float target_detection_braking_margin_seconds = log->target_detection_braking_margin_seconds;
-    float target_detection_braking_margin_valid_count = log->target_detection_braking_margin_valid_count;
-    float target_first_time_detected_ttc = log->target_first_time_detected_ttc;
-    float target_first_time_detected_ttc_valid_count = log->target_first_time_detected_ttc_valid_count;
-    float target_first_time_detected_lat_rss = log->target_first_time_detected_lat_rss;
-    float target_first_time_detected_lat_rss_valid_count = log->target_first_time_detected_lat_rss_valid_count;
-    float target_first_time_detected = log->target_first_time_detected;
-    float target_first_time_detected_valid_count = log->target_first_time_detected_valid_count;
     float adversaries_collision_count = log->adversaries_collision_count;
     float adversaries_collision_severity = log->adversaries_collision_severity;
     float adversaries_collision_responsibility = log->adversaries_collision_responsibility;
@@ -832,28 +811,9 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
             target_avoidable_by_braking_collision_count > 0.0f
                 ? target_last_avoidable_braking_seconds_before_collision / target_avoidable_by_braking_collision_count
                 : NO_AVOIDABLE_BRAKING_TIME;
-        log->target_detection_braking_margin_seconds =
-            target_detection_braking_margin_valid_count > 0.0f
-                ? target_detection_braking_margin_seconds / target_detection_braking_margin_valid_count
-                : FIRST_DETECTED_NOT_DETECTED;
-        log->target_first_time_detected_ttc =
-            target_first_time_detected_ttc_valid_count > 0.0f
-                ? target_first_time_detected_ttc / target_first_time_detected_ttc_valid_count
-                : FIRST_DETECTED_NOT_DETECTED;
-        log->target_first_time_detected_lat_rss =
-            target_first_time_detected_lat_rss_valid_count > 0.0f
-                ? target_first_time_detected_lat_rss / target_first_time_detected_lat_rss_valid_count
-                : FIRST_DETECTED_NOT_DETECTED;
-        log->target_first_time_detected = target_first_time_detected_valid_count > 0.0f
-                                              ? target_first_time_detected / target_first_time_detected_valid_count
-                                              : FIRST_DETECTED_NOT_DETECTED;
     }
     log->target_collision_count = target_collision_count;
     log->target_avoidable_by_braking_collision_count = target_avoidable_by_braking_collision_count;
-    log->target_detection_braking_margin_valid_count = target_detection_braking_margin_valid_count;
-    log->target_first_time_detected_ttc_valid_count = target_first_time_detected_ttc_valid_count;
-    log->target_first_time_detected_lat_rss_valid_count = target_first_time_detected_lat_rss_valid_count;
-    log->target_first_time_detected_valid_count = target_first_time_detected_valid_count;
 
     if (adversaries_collision_count > 0.0f) {
         log->adversaries_collision_severity = adversaries_collision_severity / adversaries_collision_count;
@@ -3485,28 +3445,23 @@ static float last_avoidable_braking_seconds_before_collision(Drive *env, int tar
         debug->dt = env->dt;
         debug->braking_deceleration = TARGET_AVOIDABILITY_BRAKE_DECEL;
         debug->reaction_time_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
+        debug->reaction_window_half_width_seconds = TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
         debug->braking_rollout_delay_seconds = 0.0f;
         debug->max_extension_steps = TARGET_AVOIDABILITY_MAX_EXT_STEPS;
         debug->max_rollout_steps = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS;
-        debug->ttc_margin_seconds = FIRST_DETECTED_TTC_MARGIN_SECONDS;
-        debug->ttc_max_projection_steps = FIRST_DETECTED_TTC_MAX_STEPS;
-        debug->lateral_buffer_base_distance = FIRST_DETECTED_LAT_BUFFER_BASE_METERS;
-        debug->lateral_buffer_response_time_seconds = FIRST_DETECTED_LAT_BUFFER_RESPONSE_TIME_SECONDS;
-        debug->lateral_buffer_deceleration = FIRST_DETECTED_LAT_BUFFER_DECEL_MPS2;
-        debug->lateral_buffer_max_distance = FIRST_DETECTED_LAT_BUFFER_MAX_METERS;
-        debug->route_sample_spacing = FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS;
+        debug->ttc_margin_seconds = DANGER_TTC_MARGIN_SECONDS;
+        debug->ttc_max_projection_steps = DANGER_TTC_MAX_PROJECTION_STEPS;
+        debug->lateral_buffer_base_distance = DANGER_LAT_BUFFER_BASE_METERS;
+        debug->lateral_buffer_response_time_seconds = DANGER_LAT_BUFFER_RESPONSE_TIME_SECONDS;
+        debug->lateral_buffer_deceleration = DANGER_LAT_BUFFER_DECEL_MPS2;
+        debug->lateral_buffer_max_distance = DANGER_LAT_BUFFER_MAX_METERS;
+        debug->route_sample_spacing = DANGER_ROUTE_SAMPLE_SPACING_METERS;
         debug->target_route_length =
             target->route != NULL ? (target->route_length < MAX_ROUTE_LENGTH ? target->route_length : MAX_ROUTE_LENGTH)
                                   : 0;
         for (int route_idx = 0; route_idx < debug->target_route_length; route_idx++) {
             debug->target_route[route_idx] = target->route[route_idx];
         }
-        debug->straight_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
-        debug->route_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
-        debug->effective_ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
-        debug->ttc_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
-        debug->lateral_buffer_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
-        debug->combined_detection_seconds_before_collision = FIRST_DETECTED_NOT_DETECTED;
         debug->last_avoidable_braking_seconds_before_collision = NO_AVOIDABLE_BRAKING_TIME;
     }
 
@@ -3526,14 +3481,6 @@ static float last_avoidable_braking_seconds_before_collision(Drive *env, int tar
     }
     return NO_AVOIDABLE_BRAKING_TIME;
 }
-
-typedef struct {
-    float straight_ttc_seconds_before_collision;
-    float route_ttc_seconds_before_collision;
-    float ttc_seconds_before_collision;
-    float lateral_buffer_seconds_before_collision;
-    float combined_seconds_before_collision;
-} FirstTimeDetectedResult;
 
 static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back) {
     int history_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
@@ -3568,10 +3515,9 @@ static float pairwise_lateral_safety_buffer(const Agent *target, const Agent *ad
         intrusion_speed = fmaxf(0.0f, relative_lateral_velocity * direction_toward_target);
     }
 
-    float lateral_buffer = FIRST_DETECTED_LAT_BUFFER_BASE_METERS +
-                           intrusion_speed * FIRST_DETECTED_LAT_BUFFER_RESPONSE_TIME_SECONDS +
-                           intrusion_speed * intrusion_speed / (2.0f * FIRST_DETECTED_LAT_BUFFER_DECEL_MPS2);
-    return fminf(FIRST_DETECTED_LAT_BUFFER_MAX_METERS, lateral_buffer);
+    float lateral_buffer = DANGER_LAT_BUFFER_BASE_METERS + intrusion_speed * DANGER_LAT_BUFFER_RESPONSE_TIME_SECONDS +
+                           intrusion_speed * intrusion_speed / (2.0f * DANGER_LAT_BUFFER_DECEL_MPS2);
+    return fminf(DANGER_LAT_BUFFER_MAX_METERS, lateral_buffer);
 }
 
 static float pairwise_obb_ttc_constant_velocity(const Agent *target, const Agent *adversary, float dt,
@@ -3580,7 +3526,7 @@ static float pairwise_obb_ttc_constant_velocity(const Agent *target, const Agent
     Agent adversary_sample = *adversary;
     target_sample.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
 
-    for (int future_step = 0; future_step < FIRST_DETECTED_TTC_MAX_STEPS; future_step++) {
+    for (int future_step = 0; future_step < DANGER_TTC_MAX_PROJECTION_STEPS; future_step++) {
         float future_time_seconds = future_step * dt;
         if (future_time_seconds >= danger_threshold_seconds) {
             return INFINITY;
@@ -3600,7 +3546,7 @@ static float pairwise_obb_ttc_constant_velocity(const Agent *target, const Agent
     return INFINITY;
 }
 
-static bool first_detected_lateral_buffer_is_dangerous(const Agent *target, const Agent *adversary) {
+static bool lateral_buffer_is_dangerous(const Agent *target, const Agent *adversary) {
     Agent expanded_target = *target;
     Agent adversary_sample = *adversary;
     expanded_target.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
@@ -3608,63 +3554,43 @@ static bool first_detected_lateral_buffer_is_dangerous(const Agent *target, cons
            check_obb_collision(&expanded_target, &adversary_sample);
 }
 
-static FirstTimeDetectedResult compute_first_time_detected(Drive *env, int target_agent_idx, int other_agent_idx) {
+static bool target_adversary_pair_is_dangerous(Drive *env, const Agent *target, const Agent *adversary) {
+    float ttc_danger_threshold_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS +
+                                         target->sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL +
+                                         DANGER_TTC_MARGIN_SECONDS;
+    float straight_ttc = pairwise_obb_ttc_constant_velocity(target, adversary, env->dt, ttc_danger_threshold_seconds);
+    float route_ttc = pairwise_obb_ttc_route(env, target, adversary, ttc_danger_threshold_seconds, NULL, NULL, NULL);
+    return fminf(straight_ttc, route_ttc) < ttc_danger_threshold_seconds ||
+           lateral_buffer_is_dangerous(target, adversary);
+}
+
+static bool danger_exists_in_reaction_window(Drive *env, int target_agent_idx, int other_agent_idx,
+                                             float braking_seconds_before_collision) {
+    if (braking_seconds_before_collision <= 0.0f) {
+        return false;
+    }
+
     Agent *target = &env->agents[target_agent_idx];
     Agent *adversary = &env->agents[other_agent_idx];
     int history_count = target->trajectory_hist_count < adversary->trajectory_hist_count
                             ? target->trajectory_hist_count
                             : adversary->trajectory_hist_count;
-    FirstTimeDetectedResult result = {
-        FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED,
-        FIRST_DETECTED_NOT_DETECTED, FIRST_DETECTED_NOT_DETECTED,
-    };
+    float window_center = braking_seconds_before_collision + TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
+    float window_min = window_center - TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
+    float window_max = window_center + TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
 
-    for (int steps_back = history_count; steps_back >= 1; steps_back--) {
+    for (int steps_back = 1; steps_back <= history_count; steps_back++) {
         float seconds_before_collision = steps_back * env->dt;
+        if (seconds_before_collision < window_min - 1e-5f || seconds_before_collision > window_max + 1e-5f) {
+            continue;
+        }
         Agent target_sample = trajectory_history_agent_sample(target, steps_back);
         Agent adversary_sample = trajectory_history_agent_sample(adversary, steps_back);
-
-        if (result.straight_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED ||
-            result.route_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED ||
-            result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED) {
-            float ttc_danger_threshold_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS +
-                                                 target_sample.sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL +
-                                                 FIRST_DETECTED_TTC_MARGIN_SECONDS;
-            float straight_ttc = pairwise_obb_ttc_constant_velocity(&target_sample, &adversary_sample, env->dt,
-                                                                    ttc_danger_threshold_seconds);
-            float route_ttc = pairwise_obb_ttc_route(env, &target_sample, &adversary_sample,
-                                                     ttc_danger_threshold_seconds, NULL, NULL, NULL);
-            float ttc_seconds = fminf(straight_ttc, route_ttc);
-            if (result.straight_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
-                straight_ttc < ttc_danger_threshold_seconds) {
-                result.straight_ttc_seconds_before_collision = seconds_before_collision;
-            }
-            if (result.route_ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
-                route_ttc < ttc_danger_threshold_seconds) {
-                result.route_ttc_seconds_before_collision = seconds_before_collision;
-            }
-            if (result.ttc_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
-                ttc_seconds < ttc_danger_threshold_seconds) {
-                result.ttc_seconds_before_collision = seconds_before_collision;
-            }
-        }
-
-        if (result.lateral_buffer_seconds_before_collision == FIRST_DETECTED_NOT_DETECTED &&
-            first_detected_lateral_buffer_is_dangerous(&target_sample, &adversary_sample)) {
-            result.lateral_buffer_seconds_before_collision = seconds_before_collision;
-        }
-
-        if (result.ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
-            result.straight_ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
-            result.route_ttc_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED &&
-            result.lateral_buffer_seconds_before_collision != FIRST_DETECTED_NOT_DETECTED) {
-            break;
+        if (target_adversary_pair_is_dangerous(env, &target_sample, &adversary_sample)) {
+            return true;
         }
     }
-
-    result.combined_seconds_before_collision =
-        fmaxf(result.ttc_seconds_before_collision, result.lateral_buffer_seconds_before_collision);
-    return result;
+    return false;
 }
 
 static bool is_adversarial_agent(Drive *env, int agent_idx) {
@@ -4091,18 +4017,9 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME) {
                 episode_log->target_collision_unavoidable_rate += 1.0f;
             } else if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
-                if (env->target_first_time_detected_episode > 0.0f) {
-                    float detection_braking_margin = env->target_first_time_detected_episode -
-                                                     env->target_last_avoidable_braking_seconds_before_collision;
-                    episode_log->target_detection_braking_margin_seconds += detection_braking_margin;
-                    episode_log->target_detection_braking_margin_valid_count += 1.0f;
-                    if (detection_braking_margin >= TARGET_AVOIDABILITY_REACTION_TIME_SECONDS - 1e-5f) {
-                        episode_log->target_collision_target_failure_rate += 1.0f;
-                    } else {
-                        episode_log->target_collision_adversary_forced_rate += 1.0f;
-                    }
+                if (env->target_reaction_window_danger_episode) {
+                    episode_log->target_collision_target_failure_rate += 1.0f;
                 } else {
-                    // Braking could avoid the collision, but the danger was never detected.
                     episode_log->target_collision_adversary_forced_rate += 1.0f;
                 }
             }
@@ -4110,18 +4027,6 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
                 episode_log->target_last_avoidable_braking_seconds_before_collision +=
                     env->target_last_avoidable_braking_seconds_before_collision;
                 episode_log->target_avoidable_by_braking_collision_count += 1.0f;
-            }
-            if (env->target_first_time_detected_ttc_episode > 0.0f) {
-                episode_log->target_first_time_detected_ttc += env->target_first_time_detected_ttc_episode;
-                episode_log->target_first_time_detected_ttc_valid_count += 1.0f;
-            }
-            if (env->target_first_time_detected_lat_rss_episode > 0.0f) {
-                episode_log->target_first_time_detected_lat_rss += env->target_first_time_detected_lat_rss_episode;
-                episode_log->target_first_time_detected_lat_rss_valid_count += 1.0f;
-            }
-            if (env->target_first_time_detected_episode > 0.0f) {
-                episode_log->target_first_time_detected += env->target_first_time_detected_episode;
-                episode_log->target_first_time_detected_valid_count += 1.0f;
             }
         }
 
@@ -5602,25 +5507,15 @@ static void compute_metrics(Drive *env, int agent_idx) {
                 env->target_last_avoidable_braking_seconds_before_collision == AVOIDABLE_BRAKING_TIME_UNSET) {
                 env->target_last_avoidable_braking_seconds_before_collision =
                     last_avoidable_braking_seconds_before_collision(env, target_agent_idx, other_idx);
-                FirstTimeDetectedResult first_time_detected =
-                    compute_first_time_detected(env, target_agent_idx, other_idx);
-                env->target_first_time_detected_ttc_episode = first_time_detected.ttc_seconds_before_collision;
-                env->target_first_time_detected_lat_rss_episode =
-                    first_time_detected.lateral_buffer_seconds_before_collision;
-                env->target_first_time_detected_episode = first_time_detected.combined_seconds_before_collision;
+                env->target_reaction_window_danger_episode = danger_exists_in_reaction_window(
+                    env, target_agent_idx, other_idx, env->target_last_avoidable_braking_seconds_before_collision);
                 if (env->avoidability_debug != NULL && env->avoidability_debug->valid) {
-                    env->avoidability_debug->straight_ttc_detection_seconds_before_collision =
-                        first_time_detected.straight_ttc_seconds_before_collision;
-                    env->avoidability_debug->route_ttc_detection_seconds_before_collision =
-                        first_time_detected.route_ttc_seconds_before_collision;
-                    env->avoidability_debug->effective_ttc_detection_seconds_before_collision =
-                        first_time_detected.ttc_seconds_before_collision;
-                    env->avoidability_debug->ttc_detection_seconds_before_collision =
-                        first_time_detected.ttc_seconds_before_collision;
-                    env->avoidability_debug->lateral_buffer_detection_seconds_before_collision =
-                        first_time_detected.lateral_buffer_seconds_before_collision;
-                    env->avoidability_debug->combined_detection_seconds_before_collision =
-                        first_time_detected.combined_seconds_before_collision;
+                    float t_brake = env->target_last_avoidable_braking_seconds_before_collision;
+                    env->avoidability_debug->unavoidable = t_brake == NO_AVOIDABLE_BRAKING_TIME;
+                    env->avoidability_debug->genuine_target_failure =
+                        t_brake > 0.0f && env->target_reaction_window_danger_episode;
+                    env->avoidability_debug->adversary_forced =
+                        t_brake > 0.0f && !env->target_reaction_window_danger_episode;
                 }
             }
             if (target_agent_idx >= 0 && other_idx >= 0 && is_at_fault_collision(env, target_agent_idx, other_idx)) {
@@ -6733,7 +6628,7 @@ static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent
                         *out_closing_speed = closing_speed;
                     return closing_speed > 0.0f ? next_sample / closing_speed : INFINITY;
                 }
-                next_sample += FIRST_DETECTED_ROUTE_SAMPLE_SPACING_METERS;
+                next_sample += DANGER_ROUTE_SAMPLE_SPACING_METERS;
             }
             traveled += usable_len;
             if (next_sample > max_distance)
@@ -6793,30 +6688,11 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
 
 static inline int target_collision_is_genuine_failure(const Drive *env) {
     return env->target_last_avoidable_braking_seconds_before_collision > 0.0f &&
-           env->target_first_time_detected_episode > 0.0f &&
-           env->target_first_time_detected_episode - env->target_last_avoidable_braking_seconds_before_collision >=
-               TARGET_AVOIDABILITY_REACTION_TIME_SECONDS - 1e-5f;
+           env->target_reaction_window_danger_episode;
 }
 
 static inline int target_collision_is_unavoidable(const Drive *env) {
     return env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME;
-}
-
-// Smooth collision-quality signal based only on
-// m = t_detect - t_brake:
-//     phi(m) = min(1, 10 ^ ((m - reaction_time) / 4)).
-// If the danger was never detected, t_detect is conservatively treated as zero:
-// the collision remains learnable, but receives only the low-margin tail.
-static inline float target_collision_margin_shaping(const Drive *env) {
-    float t_brake = env->target_last_avoidable_braking_seconds_before_collision;
-    if (t_brake <= 0.0f) {
-        return 0.0f;
-    }
-
-    float t_detect = fmaxf(0.0f, env->target_first_time_detected_episode);
-    float margin = t_detect - t_brake;
-    float exponent = (margin - TARGET_AVOIDABILITY_REACTION_TIME_SECONDS) / TARGET_MARGIN_SHAPING_SECONDS_PER_DECADE;
-    return fminf(1.0f, powf(10.0f, exponent));
 }
 
 static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *target_terms) {
@@ -6835,7 +6711,8 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus - env->adv_target_hit_unavoidable_penalty;
     }
 
-    bonus += env->adv_target_collision_reward * target_collision_margin_shaping(env);
+    // Margin-based collision shaping is disabled until the new reward is defined.
+    // bonus += env->adv_target_collision_reward * target_collision_margin_shaping(env);
     if (target_collision_is_genuine_failure(env)) {
         bonus += env->adv_target_failure_reward;
     }
@@ -6865,9 +6742,7 @@ void c_reset(Drive *env) {
         env->agents[i].trajectory_hist_count = 0;
     }
     env->target_last_avoidable_braking_seconds_before_collision = AVOIDABLE_BRAKING_TIME_UNSET;
-    env->target_first_time_detected_ttc_episode = FIRST_DETECTED_NOT_DETECTED;
-    env->target_first_time_detected_lat_rss_episode = FIRST_DETECTED_NOT_DETECTED;
-    env->target_first_time_detected_episode = FIRST_DETECTED_NOT_DETECTED;
+    env->target_reaction_window_danger_episode = 0;
     if (env->avoidability_debug != NULL) {
         memset(env->avoidability_debug, 0, sizeof(*env->avoidability_debug));
     }
