@@ -54,6 +54,9 @@ class RecordingLogger:
     def log(self, metrics, step):
         self.calls.append((metrics, step))
 
+    def upload_config(self, config_yaml_path):
+        pass
+
     def close(self, model_path, early_stop):
         self.model_path = model_path
         self.early_stop = early_stop
