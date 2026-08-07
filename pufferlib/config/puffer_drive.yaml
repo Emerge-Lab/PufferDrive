@@ -230,6 +230,7 @@ train:
   adam_beta1: 0.9
   adam_beta2: 0.999
   adam_eps: 1.0e-08
+  adam_weight_decay: 0.01
   data_dir: experiments
   resume_state_path: null
   checkpoint_interval: 50

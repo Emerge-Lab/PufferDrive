@@ -41,7 +41,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     run_name=${RUN_NAME}_${SEED} \
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
-    +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \

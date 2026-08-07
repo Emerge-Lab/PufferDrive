@@ -246,6 +246,7 @@ class PuffeRL:
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
+                weight_decay=config["adam_weight_decay"],
             )
         elif config["optimizer"] == "adamw":
             optimizer = torch.optim.AdamW(
@@ -253,6 +254,7 @@ class PuffeRL:
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
+                weight_decay=config["adam_weight_decay"],
             )
         elif config["optimizer"] == "muon":
             import heavyball

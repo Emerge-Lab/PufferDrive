@@ -15,7 +15,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_exp_0001
+export RUN_NAME=k_exp_0002
 echo ${RUN_NAME}
 
 # Seed each array task deterministically: 1000 * array task id
@@ -41,7 +41,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     run_name=${RUN_NAME}_${SEED} \
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
-    +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
     train.max_minibatch_size=196608 \
     train.minibatch_size=196608 \

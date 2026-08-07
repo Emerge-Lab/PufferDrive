@@ -63,7 +63,6 @@ srun torchrun \
     run_name=${RUN_NAME} \
     train.total_timesteps=500000000000 \
     vec.num_envs=16 \
-    +eval.map_dir=/home/bjaeger/data/nuPlan/PufferDrive \
     train.compile=True \
     train.max_minibatch_size=196608 \
     train.minibatch_size=196608 \

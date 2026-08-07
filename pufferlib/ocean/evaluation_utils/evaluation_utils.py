@@ -153,6 +153,11 @@ def load_benchmark_config(config_path, selected_names):
         is_single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
         if max_agents_per_env is not None or not is_single_agent_replay:
             max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} max_agents_per_env")
+        max_scenarios_per_batch = benchmark.get("max_scenarios_per_batch")
+        if max_scenarios_per_batch is not None:
+            max_scenarios_per_batch = _positive_int(
+                max_scenarios_per_batch, f"Benchmark {name} max_scenarios_per_batch"
+            )
 
         map_dir = benchmark.get("map_dir")
         if not isinstance(map_dir, str) or not map_dir:
@@ -184,6 +189,7 @@ def load_benchmark_config(config_path, selected_names):
                 "num_scenarios": num_scenarios,
                 "num_maps": num_maps,
                 "max_agents_per_env": max_agents_per_env,
+                "max_scenarios_per_batch": max_scenarios_per_batch,
                 "scenario_length": scenario_length,
                 "control_mode": control_mode,
                 "map_dir": map_dir,
@@ -238,6 +244,7 @@ def build_benchmark_args(base_args, benchmark, environment_config):
             "scenario_length": benchmark["scenario_length"],
             "resample_frequency": benchmark["scenario_length"],
             "control_mode": benchmark["control_mode"],
+            "max_scenarios_per_batch": benchmark["max_scenarios_per_batch"],
         }
     )
     if max_agents_per_env is not None:

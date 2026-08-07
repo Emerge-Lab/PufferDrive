@@ -14,7 +14,7 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-RESULTS_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/eval
+export RUN_NAME=k_exp_0000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0000/puffer_drive_8um75rpq/best_models/best_trainer_state_020950.pt
 
 source .venv/bin/activate
@@ -30,7 +30,7 @@ source .venv/bin/activate
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH}
 
-#     
+#
 end=`date +%s`
 runtime=$((end-start))
 echo "END TIME: $(date)"
