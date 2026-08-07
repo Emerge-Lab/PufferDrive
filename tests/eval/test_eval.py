@@ -86,6 +86,7 @@ def _write_benchmark_config(
     scenario_length,
     max_agents_per_env,
     control_mode,
+    use_neighbor_cache,
 ):
     output_path.write_text(
         yaml.safe_dump(
@@ -108,7 +109,7 @@ def _write_benchmark_config(
                         "scenario_length": scenario_length,
                         "max_agents_per_env": max_agents_per_env,
                         "control_mode": control_mode,
-                        "use_neighbor_cache": 1,
+                        "use_neighbor_cache": use_neighbor_cache,
                     }
                 ],
             },
