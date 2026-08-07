@@ -42,6 +42,7 @@ benchmarks:
     scenario_length: 6000
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/carla
+    use_neighbor_cache: 1
 
   - name: carla_fast
     seed: 42
@@ -52,6 +53,7 @@ benchmarks:
     scenario_length: 200
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/carla
+    use_neighbor_cache: 1
 
   - name: womd_multi
     seed: 42
@@ -62,6 +64,7 @@ benchmarks:
     scenario_length: 91
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+    use_neighbor_cache: 0
 
   - name: womd_single
     seed: 42
@@ -72,6 +75,7 @@ benchmarks:
     scenario_length: 91
     control_mode: control_sdc_only
     map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+    use_neighbor_cache: 0
 
   - name: nuplan_multi
     seed: 42
