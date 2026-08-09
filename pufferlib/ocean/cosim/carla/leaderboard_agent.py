@@ -39,6 +39,7 @@ Environment variables:
                                route (the exact obs + policy outputs the ego saw)
 """
 
+import json
 import math
 import os
 import re
@@ -66,7 +67,6 @@ INFRACTION_CLIP_SECONDS = 5.0
 INFRACTION_MIN_SEPARATION_M = 10.0
 
 FAR_AWAY = 1.0e6  # park unused shadow-env agent slots out of observation range
-EGO_LIGHT_OVERRIDE_RANGE_M = 45.0  # ground-truth ego-light override reach (see _read_light_states)
 # Shadow-env metrics_array indices (datatypes.h): collision/offroad/red-light flags.
 EGO_INFRACTION_METRICS = {"collision": 0, "offroad": 1, "red_light": 2}
 
@@ -173,6 +173,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.obs_html_dir = os.environ.get("COSIM_OBS_HTML", None)
         self.obs_html_max_steps = int(os.environ.get("COSIM_OBS_HTML_MAX_STEPS", "800"))
         self._obs_html = None
+        # Per-policy-step CSV of the ego's current goal vs the lane
+        # find_goal_lane snapped it to (goal_lane_idx from env.get_state()):
+        # lane direction, lane-to-goal distance, dot vs the route direction
+        # used at snap time -- diagnoses whether the goal feature is guiding
+        # toward a real, correctly-directed lane. Off unless set.
+        self.debug_goal_lane_dir = os.environ.get("COSIM_DEBUG_GOAL_LANE", None)
+        self._goal_lane_debug_file = None
+        self._road_data = None
 
         self.step = -1
         self.initialized = False
@@ -244,6 +252,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         read-only with respect to CARLA."""
         self.vehicle = CarlaDataProvider.get_hero_actor()
         self.world = self.vehicle.get_world()
+        self.cmap = self.world.get_map()
         town = CarlaDataProvider.get_map().name.split("/")[-1]
         self.tick_dt = float(self.world.get_settings().fixed_delta_seconds)  # 0.05 @ 20 Hz
         self.action_repeat = max(1, round(self.dt / self.tick_dt))
@@ -261,14 +270,38 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         import data_utils.mirror_map_bin as mbin
 
-        bin_traffic = mbin.read_bin(Path(self.town_bin))["traffic"]
+        bin_data = mbin.read_bin(Path(self.town_bin))
+        bin_traffic = bin_data["traffic"]
         self.stop_line_centers = np.array(
             [[0.5 * (t["stop_line"][0] + t["stop_line"][3]),
               0.5 * (t["stop_line"][1] + t["stop_line"][4])] for t in bin_traffic]
         ).reshape(-1, 2)
 
+        if self.debug_goal_lane_dir:
+            # road_elements[i] in the C sim <-> data["roads"][i] here: both
+            # read the bin's road records off disk in the same sequential
+            # order, so goal_lane_idx (a road_elements index) is directly
+            # usable against this list.
+            self._road_data = bin_data["roads"]
+            Path(self.debug_goal_lane_dir).mkdir(parents=True, exist_ok=True)
+            self._goal_lane_debug_file = open(Path(self.debug_goal_lane_dir) / f"{self.video_tag}.csv", "w")
+            self._goal_lane_debug_file.write(
+                "step,ego_x,ego_y,goal_x,goal_y,gdir_x,gdir_y,goal_lane_idx,"
+                "lane_dir_dot_route,lane_dist_to_goal_m\n")
+
         self.lights = list(self.world.get_actors().filter("traffic.traffic_light"))
         self.light_map, self.num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
+        # The stable label for "which bin element(s) is this CARLA light": its
+        # actor id -> its light_map[] entry, the SAME table the base pass in
+        # _read_light_states writes from. The ego-governance override below
+        # looks up through this table instead of an independent geometric
+        # nearest-stop-line search, so the two can never disagree about which
+        # bin element represents a given real light (see module history: an
+        # independent override search picked a different element than
+        # light_map for ~5% of lights in Town04/Town06 -- consistently wrong
+        # right after the ego crosses the stop line and CARLA drops
+        # get_traffic_light(), when the override was the only correct source).
+        self.light_index_by_id = {lt.id: li for li, lt in enumerate(self.lights)}
         self.last_light_states = np.zeros(self.num_traffic, np.int32)
 
         wheelbase, max_steer = read_vehicle_geometry(self.vehicle)
@@ -356,6 +389,15 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self):
+        """Ground truth for every mapped bin traffic element, from CARLA's
+        live light states via the stable light_index_by_id -> light_map
+        table (see _init_on_first_step). The ego-governance override
+        (get_traffic_light(), CARLA's own answer for which light currently
+        controls the ego) re-asserts through that SAME table -- it cannot
+        pick a different bin element than the base pass already assigned
+        this light, so the two can never disagree once the ego crosses the
+        stop line and CARLA drops governance (the base pass keeps writing
+        the correct element either way)."""
         states = np.zeros(self.num_traffic, np.int32)
         for li, lt in enumerate(self.lights):
             state = cb.carla_light_to_puffer(lt.get_state())
@@ -363,16 +405,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 if 0 <= j < self.num_traffic:
                     states[j] = state
         ego_light = self.vehicle.get_traffic_light()
-        if ego_light is not None and len(self.stop_line_centers):
-            ex, ey, _, heading, *_ = self.transform.actor_state_to_bin(self.vehicle)
-            dx = self.stop_line_centers[:, 0] - ex
-            dy = self.stop_line_centers[:, 1] - ey
-            dist = np.hypot(dx, dy)
-            ahead = (dx * np.cos(heading) + dy * np.sin(heading)) > 0.0
-            candidates = np.nonzero(ahead & (dist <= EGO_LIGHT_OVERRIDE_RANGE_M))[0]
-            if len(candidates):
-                j = int(candidates[dist[candidates].argmin()])
-                states[j] = cb.carla_light_to_puffer(ego_light.get_state())
+        if ego_light is not None:
+            li = self.light_index_by_id.get(ego_light.id)
+            if li is not None:
+                state = cb.carla_light_to_puffer(ego_light.get_state())
+                for j in self.light_map[li]:
+                    if 0 <= j < self.num_traffic:
+                        states[j] = state
         return states
 
     def _sync_ego_from_carla(self, zero_velocity=False):
@@ -421,7 +460,43 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         ]
         self.env.set_agent_goals(0, sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(),
                                  sel[:, 3].copy(), sel[:, 4].copy())
+        if self._goal_lane_debug_file is not None:
+            self._write_goal_lane_debug_row(ebx, eby, sel[0])
         return np.asarray(self.env.recompute_observations())
+
+    def _write_goal_lane_debug_row(self, ebx, eby, current_goal):
+        """One CSV row: the CURRENT goal (window slot 0, current_goal_idx after
+        the reset in c_set_agent_goals) vs the lane find_goal_lane snapped it
+        to -- that lane's direction (nearest segment to the goal, mirroring
+        find_goal_lane's own point-to-segment search) dotted against the route
+        direction used at snap time, and the snap distance. dot < 0 means the
+        snapped lane runs opposite the route (oncoming lane); a large snap
+        distance means no nearby lane passed find_goal_lane's gates at all."""
+        gx, gy, _, gdir_x, gdir_y = current_goal
+        state = self.env.get_state()
+        scenario = state[0] if isinstance(state, list) else state
+        ego_agent = (scenario.get("agents") or [{}])[0]
+        lane_idx = int(ego_agent.get("goal_lane_idx", -1))
+        dot, dist = float("nan"), float("nan")
+        if lane_idx >= 0 and self._road_data is not None and lane_idx < len(self._road_data):
+            road = self._road_data[lane_idx]
+            xs, ys = np.asarray(road["x"], dtype=np.float64), np.asarray(road["y"], dtype=np.float64)
+            if len(xs) >= 2:
+                seg_dx, seg_dy = xs[1:] - xs[:-1], ys[1:] - ys[:-1]
+                seg_len = np.hypot(seg_dx, seg_dy)
+                seg_len_safe = np.where(seg_len > 1e-6, seg_len, 1.0)
+                t = np.clip(((gx - xs[:-1]) * seg_dx + (gy - ys[:-1]) * seg_dy) / (seg_len_safe ** 2), 0.0, 1.0)
+                px, py = xs[:-1] + t * seg_dx, ys[:-1] + t * seg_dy
+                d = np.hypot(gx - px, gy - py)
+                k = int(np.argmin(d))
+                dist = float(d[k])
+                route_norm = math.hypot(gdir_x, gdir_y)
+                if seg_len[k] > 1e-6 and route_norm > 1e-6:
+                    dot = float((gdir_x * seg_dx[k] + gdir_y * seg_dy[k]) / (seg_len[k] * route_norm))
+        self._goal_lane_debug_file.write(
+            f"{self.step},{ebx:.2f},{eby:.2f},{gx:.2f},{gy:.2f},{gdir_x:.3f},{gdir_y:.3f},"
+            f"{lane_idx},{dot:.3f},{dist:.2f}\n")
+        self._goal_lane_debug_file.flush()
 
     def _carla_integrate(self, actions):
         """Step the shadow env ONCE (one policy step == one shadow tick).
@@ -442,6 +517,19 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         if self.dynamics_source == "pufferdrive":
             ex, ey = self.transform.bin_to_loc(float(after["x"][0]), float(after["y"][0]))
+            # Query CARLA's own live road mesh height at the teleport point --
+            # NOT the shadow env's sim_z (bin lane-point z, averaged over
+            # nearby geometry): on a graded road that average can straddle two
+            # decks of a multi-level interchange and land the body mid-
+            # structure, which is WORSE than a flat guess (measured: switching
+            # to sim_z took Town03/04 road-collision counts from single digits
+            # to 20-100+ per route). get_waypoint's snapped z is guaranteed to
+            # match the mesh CARLA is actually colliding the body against, the
+            # same source carla_cosim.py's _route_goal_xy already trusts for
+            # goal z. Falls back to sim_z only off the drivable network (rare
+            # mid-route; e.g. briefly cutting a corner).
+            wp = self.cmap.get_waypoint(carla.Location(x=ex, y=ey))
+            ez = wp.transform.location.z if wp is not None else float(after["z"][0])
             # Zero the physics body's velocity/angular velocity BEFORE the
             # teleport: a physics-active actor carries whatever momentum it
             # had into the new position, and CARLA's collision resolver reacts
@@ -451,14 +539,14 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self.vehicle.set_target_velocity(zero)
             self.vehicle.set_target_angular_velocity(zero)
             self.vehicle.set_transform(carla.Transform(
-                carla.Location(x=ex, y=ey, z=0.3), carla.Rotation(yaw=target_yaw_deg)))
+                carla.Location(x=ex, y=ey, z=ez), carla.Rotation(yaw=target_yaw_deg)))
             yaw_rad = math.radians(target_yaw_deg)
             self.vehicle.set_target_velocity(
                 carla.Vector3D(x=speed_after * math.cos(yaw_rad), y=speed_after * math.sin(yaw_rad), z=0.0))
             yaw_rate_deg_s = _wrap_deg(target_yaw_deg - self._last_target_yaw_deg) / self.dt
             self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_rate_deg_s))
             self._last_target_yaw_deg = target_yaw_deg
-            self._display = [ex, ey, target_yaw_deg, speed_after, yaw_rate_deg_s, accel_after]
+            self._display = [ex, ey, ez, target_yaw_deg, speed_after, yaw_rate_deg_s, accel_after]
             return speed_after, target_yaw_deg  # logged, not chased (see run_step)
 
         target_speed = speed_after + max(accel_after, 0.0) * self.speed_intent_extension_s
@@ -596,6 +684,17 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             "obs_norm_veh_length_m": float(env.obs_norm_veh_length_m),
             "obs_norm_road_seg_length_m": float(env.obs_norm_road_seg_length_m),
             "obs_norm_road_seg_width_m": float(env.obs_norm_road_seg_width_m),
+            # Column-offset bookkeeping for decoding the raw obs array
+            # directly (see the .npz side-dump below): ego block, optional
+            # reward-coef block, then num_goals*3 goal-offset columns
+            # (write_reward_target_obs, ego-frame rel_x/rel_y/rel_z), then
+            # partner slots, then lane slots (each ending in the two GPS
+            # lane-distance columns from write_road_obs).
+            "ego_features": int(env.ego_features),
+            "num_reward_coefs": int(env.num_reward_coefs),
+            "goal_dim": int(env.goal_dim),
+            "partner_features": int(env.partner_features),
+            "lane_features": int(env.lane_features),
         }
         replay = {
             "schema": "obs_html_compact_v1",
@@ -621,6 +720,15 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         out = str(Path(self.obs_html_dir) / f"{self.video_tag}.html")
         viz.generate_interactive_replay(oh["scenario"], replay, filename=out)
         print(f"[puffer_agent] wrote obs_html viewer ({len(frames['obs'])} frames) -> {out}")
+
+        # Raw-array side dump: the exact same obs/agent_f32 the HTML viewer
+        # renders, saved for offline decoding (verify the goal offset and GPS
+        # lane-distance columns the policy actually sees, straight from the
+        # obs array -- not this script's own external Python-side bookkeeping).
+        npz_out = str(Path(self.obs_html_dir) / f"{self.video_tag}.npz")
+        np.savez(npz_out, obs=replay["obs"], agent_f32=replay["agent_f32"],
+                 env_cfg_json=np.array(json.dumps(env_cfg)))
+        print(f"[puffer_agent] wrote obs_html raw arrays -> {npz_out}")
 
     def _write_telemetry_row(self, ego_action):
         """One CSV row per policy step: what the loop commanded vs achieved,
@@ -702,7 +810,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             # with the shadow env's own accel/yaw-rate so the CARLA ego moves
             # smoothly at tick rate instead of jumping once per policy step.
             if self.step % self.action_repeat and self._display is not None:
-                x, y, yaw_deg, speed, yaw_rate_deg_s, accel_long = self._display
+                x, y, z, yaw_deg, speed, yaw_rate_deg_s, accel_long = self._display
                 new_speed = speed + accel_long * self.tick_dt
                 # zero-crossing snap, mirroring the shadow dynamics (drive.h):
                 # a held braking accel must not creep the display backward.
@@ -711,9 +819,15 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 yaw_rad = math.radians(yaw_deg)
                 x += speed * math.cos(yaw_rad) * self.tick_dt
                 y += speed * math.sin(yaw_rad) * self.tick_dt
-                self._display = [x, y, yaw_deg, speed, yaw_rate_deg_s, accel_long]
+                # Re-query CARLA's live road height each tick (see
+                # _carla_integrate's ez) rather than holding it: physics runs
+                # -- and can collide -- on every tick, not just policy ticks,
+                # so a stale z here is just as scoring-relevant as at sync.
+                wp = self.cmap.get_waypoint(carla.Location(x=x, y=y))
+                z = wp.transform.location.z if wp is not None else z
+                self._display = [x, y, z, yaw_deg, speed, yaw_rate_deg_s, accel_long]
                 self.vehicle.set_transform(carla.Transform(
-                    carla.Location(x=x, y=y, z=0.3), carla.Rotation(yaw=yaw_deg)))
+                    carla.Location(x=x, y=y, z=z), carla.Rotation(yaw=yaw_deg)))
             return carla.VehicleControl()
 
         # Controller runs every tick against the latest CARLA state, chasing the
@@ -735,6 +849,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             print(f"[puffer_agent] wrote CARLA chase-cam video for route {self.video_tag}")
         if self.telemetry_file is not None:
             self.telemetry_file.close()
+        if self._goal_lane_debug_file is not None:
+            self._goal_lane_debug_file.close()
         if self._obs_html is not None:
             self._write_obs_html()
         self.env.close()

@@ -4310,6 +4310,7 @@ void c_set_traffic_light_states(Drive *env, const int *states) {
 // CROSSING road's (9% of Town01 route goals measured), which points the GPS features
 // down the wrong road exactly where a turn decision happens.
 #define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject > 45 deg divergence mod 180
+#define GOAL_LANE_ALIGN_COS_MIN 0.0f      // cos(90 deg): reject lanes not generally co-directional
 static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_dir_x, float route_dir_y) {
     if (env->grid_map == NULL || get_grid_index(env, goal_x, goal_y) == -1) {
         return -1;
@@ -4343,9 +4344,15 @@ static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_di
         float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
         if (use_alignment_gate && seg_length_sq > 1e-6f) {
             float seg_length = sqrtf(seg_length_sq);
-            float cross = route_dir_x * (seg_dy / seg_length) - route_dir_y * (seg_dx / seg_length);
+            float seg_dir_x = seg_dx / seg_length;
+            float seg_dir_y = seg_dy / seg_length;
+            float cross = route_dir_x * seg_dir_y - route_dir_y * seg_dir_x;
             if (fabsf(cross) > GOAL_LANE_ALIGN_SIN_LIMIT) {
                 continue; // crossing road's lane, not the route's
+            }
+            float dot = route_dir_x * seg_dir_x + route_dir_y * seg_dir_y;
+            if (dot < GOAL_LANE_ALIGN_COS_MIN) {
+                continue; // oncoming lane (mirror-image direction of the route), not the route's
             }
         }
         float to_goal_x = goal_x - seg_start_x;

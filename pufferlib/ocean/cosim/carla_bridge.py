@@ -137,6 +137,71 @@ def carla_light_to_puffer(state) -> int:
 
 
 LIGHT_LANE_MATCH_MAX_DIST_M = 12.0  # measured Town01 controlled-lane stub distance (see below)
+JUNCTION_CLUSTER_M = 60.0  # stop lines this close are treated as one junction (outlier repair, see below)
+# An assigned light farther from its junction cluster-mates' lights than this
+# multiple of the cluster-mates' own spread is a wrong-junction match.
+OUTLIER_SPREAD_MULTIPLE = 2.0
+OUTLIER_MIN_SPREAD_M = 5.0  # floor for tiny/degenerate clusters (e.g. two lights a few meters apart)
+
+
+def _cluster_by_proximity(points, keys, radius_m):
+    """Single-linkage clustering of `keys` by `points[key]` proximity <= radius_m.
+    Returns {cluster_root_key: [member_keys]}. points: {key: (x, y)}."""
+    parent = {k: k for k in keys}
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for i, k1 in enumerate(keys):
+        for k2 in keys[i + 1:]:
+            if np.hypot(*(np.subtract(points[k1], points[k2]))) <= radius_m:
+                root1, root2 = find(k1), find(k2)
+                if root1 != root2:
+                    parent[root1] = root2
+    clusters = {}
+    for k in keys:
+        clusters.setdefault(find(k), []).append(k)
+    return clusters
+
+
+def _drop_junction_outliers(mapping, lights, transform, stop_centers):
+    """(light_idx, element_idx) pairs to remove from `mapping`: elements whose
+    assigned light sits far outside where its junction cluster-mates' lights
+    actually are -- see map_lights_to_bin's docstring."""
+    element_light = {}
+    for li, elements in enumerate(mapping):
+        for j in elements:
+            element_light.setdefault(j, []).append(li)
+    element_light = {j: v[0] for j, v in element_light.items() if len(v) == 1}  # single-owner only
+    if len(element_light) < 3:
+        return set()
+
+    stop_center_of = {j: tuple(stop_centers[j]) for j in element_light}
+    clusters = _cluster_by_proximity(stop_center_of, sorted(element_light), JUNCTION_CLUSTER_M)
+
+    to_drop = set()
+    for elements in clusters.values():
+        if len(elements) < 3:
+            continue
+        light_pos = {}
+        for j in elements:
+            loc = lights[element_light[j]].get_location()
+            light_pos[j] = np.array(transform.loc_to_bin(loc.x, loc.y))
+        for j in elements:
+            others = np.array([light_pos[j2] for j2 in elements if j2 != j])
+            centroid = others.mean(axis=0)
+            dist_to_centroid = float(np.hypot(*(light_pos[j] - centroid)))
+            spread = 0.0
+            for a in range(len(others)):
+                for b in range(a + 1, len(others)):
+                    spread = max(spread, float(np.hypot(*(others[a] - others[b]))))
+            if dist_to_centroid > OUTLIER_SPREAD_MULTIPLE * max(spread, OUTLIER_MIN_SPREAD_M):
+                to_drop.add((element_light[j], j))
+    return to_drop
+
 
 def map_lights_to_bin(lights, transform, town_bin):
     """mapping[i] = list of bin traffic-element indices controlled by lights[i].
@@ -152,6 +217,21 @@ def map_lights_to_bin(lights, transform, town_bin):
     CARLA's stop waypoints sit at the junction ENTRY, up to ~10 m past the
     bin's controlled-lane stub, so each waypoint is walked backward along its
     own lane until a controlled lane resolves (0/36 raw matches without this).
+
+    A second pass then repairs occasional wrong-junction matches: the walk-back
+    above resolves per light independently, and for a small number of lights
+    per town it lands on a bin element geometrically nowhere near that light
+    (measured: Town04 light 0 -> an element 44 m away, Town06 light 5 -> 34 m
+    away, while every OTHER approach in each of those same junctions matched
+    within its own junction's ~15-20 m span). Elements never collide (two
+    lights never claim the same one), so nothing else catches this -- the
+    element just silently carries a confidently wrong state forever. Fix:
+    cluster single-owner elements by stop-line proximity (one cluster ~= one
+    junction), and within each cluster of >=3, drop any element whose
+    assigned light sits far outside where the cluster's OTHER lights actually
+    are. A dropped element goes unmapped (state stays UNKNOWN) rather than
+    guessing a replacement -- no other candidate light contests these, so
+    there's nothing to reassign to with confidence.
 
     Returns (mapping, num_traffic_elements); the state array passed to
     set_traffic_light_states is sized to the bin's element count."""
@@ -212,4 +292,12 @@ def map_lights_to_bin(lights, transform, town_bin):
                     break
             element_indices.extend(controlling)
         mapping.append(sorted(set(element_indices)))
+
+    stop_centers = np.array(
+        [[0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
+         for t in data["traffic"]]
+    ).reshape(-1, 2)
+    for light_idx, element_idx in _drop_junction_outliers(mapping, lights, transform, stop_centers):
+        mapping[light_idx].remove(element_idx)
+
     return mapping, len(data["traffic"])
