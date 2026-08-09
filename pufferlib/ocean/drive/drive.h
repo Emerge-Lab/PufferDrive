@@ -3283,7 +3283,8 @@ void c_set_agent_states(
         agent->accel_lat = agent->sim_speed_signed * agent->yaw_rate;
         refresh_lane_association(env, agent); // current_lane_idx / lane-dist / lane-angle for the new pose
 
-        // seconds_stopped is intentionally left untouched: c_step already updates it once per tick, before this overwrite runs, so redoing it here would double-count.
+        // seconds_stopped is intentionally left untouched: c_step already updates it once per tick, before this
+        // overwrite runs, so redoing it here would double-count.
     }
 }
 
@@ -3297,7 +3298,7 @@ void c_set_agent_sizes(Drive *env, int count, const int *idx, const float *lengt
         Agent *agent = &env->agents[agent_idx];
         agent->sim_length = length[k];
         agent->sim_width = width[k];
-        update_agent_radius(agent);      // collision broad-phase uses this; stale radius under/over-detects hits
+        update_agent_radius(agent); // collision broad-phase uses this; stale radius under/over-detects hits
         agent->wheelbase = 0.6f * agent->sim_length; // matches spawn/log-replay sizing (see move_expert)
     }
 }
@@ -3384,8 +3385,14 @@ static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_di
 }
 
 void c_set_agent_goals(
-    Drive *env, int agent_idx, int num_wp,
-    const float *gx, const float *gy, const float *gz, const float *gdir_x, const float *gdir_y) {
+    Drive *env,
+    int agent_idx,
+    int num_wp,
+    const float *gx,
+    const float *gy,
+    const float *gz,
+    const float *gdir_x,
+    const float *gdir_y) {
     if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
         return;
     }
@@ -3399,8 +3406,8 @@ void c_set_agent_goals(
         agent->list_goal_z[w] = gz[w];
         // Snap each waypoint to its nearest route-aligned drivable lane so the GPS
         // lane-distance features work for external routes.
-        agent->list_goal_lane[w] = find_goal_lane(
-            env, agent->list_goal_x[w], agent->list_goal_y[w], gdir_x[w], gdir_y[w]);
+        agent->list_goal_lane[w]
+            = find_goal_lane(env, agent->list_goal_x[w], agent->list_goal_y[w], gdir_x[w], gdir_y[w]);
     }
     agent->goal_count = num_wp;
     agent->current_goal_idx = 0;
