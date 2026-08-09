@@ -102,19 +102,21 @@ class TestCosimConfigContract(unittest.TestCase):
 
 class TestShadowEnvKwargs(unittest.TestCase):
     def test_clean_eval_matches_benchmark_profile(self):
-        """cosim/arch.py duplicates the benchmark's clean-eval macro so the
-        co-sim venvs never import the training stack; the two must stay
-        identical."""
-        from pufferlib.ocean.benchmark.manager import CLEAN_EVAL_OVERRIDES as bench_overrides
+        """cosim/arch.py duplicates the benchmark profile's noise/light keys so
+        the co-sim venvs never import the training stack; each mirrored key
+        must match pufferlib/config/evaluation/benchmark.yaml."""
         from pufferlib.ocean.cosim.arch import CLEAN_EVAL_OVERRIDES as cosim_overrides
 
-        self.assertEqual(
-            bench_overrides,
-            cosim_overrides,
-            "cosim/arch.py CLEAN_EVAL_OVERRIDES drifted from "
-            "benchmark/manager.py CLEAN_EVAL_OVERRIDES; the shadow env must run "
-            "the same clean-eval profile as the repo's own evaluations.",
-        )
+        benchmark_yaml = REPO_ROOT / "pufferlib" / "config" / "evaluation" / "benchmark.yaml"
+        bench_env = yaml.safe_load(benchmark_yaml.read_text())["env"]
+        for key, value in cosim_overrides.items():
+            self.assertEqual(
+                bench_env.get(key),
+                value,
+                f"cosim/arch.py CLEAN_EVAL_OVERRIDES['{key}'] drifted from "
+                "config/evaluation/benchmark.yaml; the shadow env must run "
+                "the same clean-eval profile as the repo's own evaluations.",
+            )
 
     def test_clean_eval_overrides_beat_checkpoint_config(self):
         """A checkpoint trained WITH observation noise must still evaluate

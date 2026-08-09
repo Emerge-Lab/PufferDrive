@@ -602,7 +602,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         obs = self._adapt_obs_for_policy(obs)
         with torch.no_grad():
             logits, value = self.policy.forward_eval(torch.as_tensor(obs).to(self.device))
-            action, _, entropy = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+            action, _, entropy, _ = pufferlib.pytorch.sample_logits(
+                logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE)
         actions = action.cpu().numpy().reshape(self.num_agents, -1).astype(np.int32)
         aux = {}
         if self._obs_html is not None:

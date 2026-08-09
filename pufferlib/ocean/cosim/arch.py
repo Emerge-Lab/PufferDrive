@@ -11,9 +11,9 @@ import inspect
 
 from pufferlib.ocean.drive.drive import Drive
 
-# Mirror of pufferlib.ocean.benchmark.manager.CLEAN_EVAL_OVERRIDES, duplicated
-# so the co-sim venvs (CARLA cp310 / nuPlan) never import the training stack;
-# tests/unit_tests/test_cosim_config_contract.py pins the two dicts equal.
+# Mirror of the noise/light keys in pufferlib/config/evaluation/benchmark.yaml,
+# duplicated so the co-sim venvs (CARLA cp310 / nuPlan) never import the training
+# stack; tests/unit_tests/test_cosim_config_contract.py pins the two equal.
 # Train-time observation noise is disabled, and traffic_light_behavior="stop"
 # keeps the benchmark's red-light semantics: a shadow-detected violation
 # latches the ego stopped (drive.h apply_infraction_behavior).
@@ -21,6 +21,7 @@ CLEAN_EVAL_OVERRIDES = {
     "obs_dropout_lane": 0.0,
     "obs_dropout_boundary": 0.0,
     "partner_blindness_prob": 0.0,
+    "partner_blindness_trigger_prob": 0.0,
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
     "traffic_light_behavior": "stop",

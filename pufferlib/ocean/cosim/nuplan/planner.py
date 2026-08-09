@@ -380,7 +380,12 @@ class PufferDrivePlanner(AbstractPlanner):
         else:
             with torch.no_grad():
                 logits, _ = self._policy.forward_eval(torch.as_tensor(obs).to(self._device))
-                action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=self._deterministic)
+                action, _, _, _ = pufferlib.pytorch.sample_logits(
+                    logits,
+                    action_selection=pufferlib.pytorch.ACTION_SELECT_MODE
+                    if self._deterministic
+                    else pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+                )
             act = action.cpu().numpy().reshape(self._env.num_agents, -1).astype(np.int32)
 
         self._env.step(act)  # integrates the ego one dt; background is re-synced next call

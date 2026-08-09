@@ -458,7 +458,8 @@ def main():
 
             with torch.no_grad():
                 logits, _ = policy.forward_eval(torch.as_tensor(obs).to(args.device))
-                action, _, _ = pufferlib.pytorch.sample_logits(logits, deterministic=True)
+                action, _, _, _ = pufferlib.pytorch.sample_logits(
+                    logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE)
                 act = action.cpu().numpy().reshape(n_active, -1).astype(np.int32)
         else:
             act = dummy_action
