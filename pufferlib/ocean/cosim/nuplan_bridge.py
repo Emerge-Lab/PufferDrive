@@ -96,8 +96,7 @@ def _polyline_heading(xy: np.ndarray) -> np.ndarray:
     return np.append(h, h[-1] if len(h) else 0.0).astype(np.float32)
 
 
-def _road_entry(road_id: int, road_type: int, xy: np.ndarray,
-                entry=None, exit_=None, speed_limit=-1.0) -> dict:
+def _road_entry(road_id: int, road_type: int, xy: np.ndarray, entry=None, exit_=None, speed_limit=-1.0) -> dict:
     """One road element in mirror_map_bin's dict schema."""
     xy = np.asarray(xy, dtype=np.float32)
     S = len(xy)
@@ -238,8 +237,10 @@ def read_bin_geometry(bin_path: Path) -> dict:
         origin = (float(centroid[0]), float(centroid[1]))
 
     centers = np.array(
-        [[0.5 * (t["stop_line"][0] + t["stop_line"][3]),
-          0.5 * (t["stop_line"][1] + t["stop_line"][4])] for t in data["traffic"]],
+        [
+            [0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
+            for t in data["traffic"]
+        ],
         dtype=np.float64,
     ).reshape(-1, 2)
 
@@ -254,12 +255,16 @@ def read_bin_geometry(bin_path: Path) -> dict:
             ego_t0 = (float(xs[0]), float(ys[0]), float(hs[0]))
             ego_traj = np.stack([xs, ys], axis=1)
 
-    return {"origin": origin, "stop_line_centers": centers,
-            "num_traffic": len(centers), "ego_t0": ego_t0, "ego_traj": ego_traj}
+    return {
+        "origin": origin,
+        "stop_line_centers": centers,
+        "num_traffic": len(centers),
+        "ego_t0": ego_t0,
+        "ego_traj": ego_traj,
+    }
 
 
-def fit_translation(src: np.ndarray, ref: np.ndarray, init=None,
-                    iterations: int = 50, max_points: int = 2000):
+def fit_translation(src: np.ndarray, ref: np.ndarray, init=None, iterations: int = 50, max_points: int = 2000):
     """Translation-only alignment of two samplings of the SAME physical curve
     (e.g. a bin's centered ego trajectory vs the log's UTM ego trajectory):
     find t minimizing nearest-neighbor distance from src + t onto ref.
@@ -305,8 +310,11 @@ def read_bin_lane_points(bin_path: Path, max_points: int = 200_000) -> np.ndarra
     bin-side point cloud for whole-city origin registration. Uniformly
     subsampled to max_points."""
     data = _mbin.read_bin(Path(bin_path))
-    pts = [np.stack([np.asarray(r["x"], np.float64), np.asarray(r["y"], np.float64)], axis=1)
-           for r in data["roads"] if 0 <= r["type"] <= 9]
+    pts = [
+        np.stack([np.asarray(r["x"], np.float64), np.asarray(r["y"], np.float64)], axis=1)
+        for r in data["roads"]
+        if 0 <= r["type"] <= 9
+    ]
     if not pts:
         raise ValueError(f"{bin_path}: no lane elements to register against")
     out = np.concatenate(pts)
@@ -340,8 +348,9 @@ def coarse_translation_vote(src: np.ndarray, ref: np.ndarray, grid: float = 5.0)
     return np.median(near, axis=0)
 
 
-def match_connectors_to_stop_lines(connector_entries: dict, transform: NuPlanTransform,
-                                   stop_line_centers: np.ndarray, max_dist_m: float = 10.0) -> dict:
+def match_connectors_to_stop_lines(
+    connector_entries: dict, transform: NuPlanTransform, stop_line_centers: np.ndarray, max_dist_m: float = 10.0
+) -> dict:
     """Geometric traffic-light mapping, the runtime replacement for the
     `.tl.json` sidecar (works for any bin source). `connector_entries` maps
     lane_connector_id(str) -> (x, y) entry point in nuPlan map coordinates.
@@ -354,7 +363,7 @@ def match_connectors_to_stop_lines(connector_entries: dict, transform: NuPlanTra
         bx, by = transform.loc_to_bin(x, y)
         d2 = (stop_line_centers[:, 0] - bx) ** 2 + (stop_line_centers[:, 1] - by) ** 2
         j = int(d2.argmin())
-        if d2[j] <= max_dist_m ** 2:
+        if d2[j] <= max_dist_m**2:
             mapping[str(cid)] = j
     return mapping
 
@@ -367,15 +376,27 @@ def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first
         bx, by = transform.loc_to_bin(obj.center.x, obj.center.y)
         v = getattr(obj, "velocity", None)
         idx.append(first_slot + j)
-        x.append(bx); y.append(by); z.append(0.0); h.append(float(obj.center.heading))
+        x.append(bx)
+        y.append(by)
+        z.append(0.0)
+        h.append(float(obj.center.heading))
         vx.append(float(v.x) if v is not None else 0.0)
         vy.append(float(v.y) if v is not None else 0.0)
         tp.append(_NUPLAN_AGENT_TYPE.get(obj.tracked_object_type.name, 1))
-        ln.append(float(obj.box.length)); wd.append(float(obj.box.width))
-    return (np.array(idx, np.int32), np.array(x, np.float32), np.array(y, np.float32),
-            np.array(z, np.float32), np.array(h, np.float32), np.array(vx, np.float32),
-            np.array(vy, np.float32), np.array(tp, np.int32),
-            np.array(ln, np.float32), np.array(wd, np.float32))
+        ln.append(float(obj.box.length))
+        wd.append(float(obj.box.width))
+    return (
+        np.array(idx, np.int32),
+        np.array(x, np.float32),
+        np.array(y, np.float32),
+        np.array(z, np.float32),
+        np.array(h, np.float32),
+        np.array(vx, np.float32),
+        np.array(vy, np.float32),
+        np.array(tp, np.int32),
+        np.array(ln, np.float32),
+        np.array(wd, np.float32),
+    )
 
 
 def traffic_light_states(traffic_light_data, connector_map: dict, num_traffic: int) -> np.ndarray:

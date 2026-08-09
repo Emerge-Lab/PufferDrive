@@ -8,9 +8,9 @@ Evaluate a PufferDrive-trained policy with **CaRL's unmodified `original_leaderb
 
 Zero changes to CaRL. The leaderboard imports any agent file via `--agent`, so the whole integration is this package:
 
-- `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `PufferAgent`). 
+- `leaderboard_agent.py` — `AutonomousAgent` subclass (entry point `PufferAgent`).
   Loads a PufferDrive checkpoint, builds the shadow `Drive` env from the checkpoint's config, and every `dt / tick_dt` ticks: overwrites ALL shadow agents (ego included) from CARLA ground truth (ego pose/velocity, nearest vehicles+walkers with true bounding boxes, traffic-light states, route goals from the leaderboard's dense global plan), recomputes observations, runs the policy, integrates one dt to produce a target (speed, yaw), and returns a `carla.VehicleControl` every tick. Get `sensor.camera.rgb` chase cam via `sensors()` — the leaderboard's own standard sensor mechanism, so this doesn't touch the read-only-w.r.t.-CARLA contract; frames stream straight to an mp4 writer rather than buffering in memory, unlike the PufferDrive-side `COSIM_DEBUG_BEV` video.
-- `controller.py` — `TrackingController`: 
+- `controller.py` — `TrackingController`:
   convert that shadow-env kinematic target into actual throttle/brake/steer at CARLA's native tick rate
 
 All shadow-env assumptions about the model (observation layout, dynamics model, dt, goal

@@ -48,9 +48,17 @@ def _wrap_deg(d):
 
 
 class TrackingController:
-    def __init__(self, wheelbase_m=2.85, max_steer_rad=math.radians(70.0), horizon_s=0.1,
-                 kp_speed=0.7, ki_speed=0.15, kp_brake=0.5, max_throttle=0.75,
-                 stop_speed=0.1):
+    def __init__(
+        self,
+        wheelbase_m=2.85,
+        max_steer_rad=math.radians(70.0),
+        horizon_s=0.1,
+        kp_speed=0.7,
+        ki_speed=0.15,
+        kp_brake=0.5,
+        max_throttle=0.75,
+        stop_speed=0.1,
+    ):
         # stop_speed must sit BELOW the first integrated target speed of a
         # jerk-dynamics launch from rest (~j*dt^2, ~0.36 m/s at dt=0.3),
         # otherwise the brake-hold swallows the ramp-up: ego never moves, the
@@ -84,8 +92,7 @@ class TrackingController:
             self._integral = 0.0
         elif err >= 0.0:
             self._integral = float(np.clip(self._integral + err * tick_dt, 0.0, 2.0))
-            throttle = float(np.clip(self.kp_speed * err + self.ki_speed * self._integral,
-                                     0.0, self.max_throttle))
+            throttle = float(np.clip(self.kp_speed * err + self.ki_speed * self._integral, 0.0, self.max_throttle))
         else:
             self._integral = 0.0
             brake = float(np.clip(-self.kp_brake * err, 0.0, 1.0))
@@ -108,7 +115,9 @@ class TrackingController:
         se = np.abs(np.array(self._speed_errors))
         ye = np.degrees(np.abs(np.array(self._yaw_errors)))
         return {
-            "speed_err_mean": float(se.mean()), "speed_err_max": float(se.max()),
-            "yaw_err_mean": float(ye.mean()), "yaw_err_max": float(ye.max()),
+            "speed_err_mean": float(se.mean()),
+            "speed_err_max": float(se.max()),
+            "yaw_err_mean": float(ye.mean()),
+            "yaw_err_max": float(ye.max()),
             "ticks": len(se),
         }

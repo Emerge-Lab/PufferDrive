@@ -130,8 +130,7 @@ class TestShadowEnvKwargs(unittest.TestCase):
             self.assertEqual(
                 kwargs.get(key),
                 value,
-                f"'{key}' from the checkpoint config leaked past the clean-eval "
-                f"profile into the co-sim shadow env.",
+                f"'{key}' from the checkpoint config leaked past the clean-eval profile into the co-sim shadow env.",
             )
 
     def test_int_infraction_behaviors_normalize_to_strings(self):

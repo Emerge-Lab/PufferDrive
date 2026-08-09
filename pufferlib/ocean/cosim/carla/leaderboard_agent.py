@@ -61,6 +61,7 @@ from pufferlib.ocean.cosim.carla.controller import TrackingController, read_vehi
 def _wrap_deg(d):
     return (d + 180.0) % 360.0 - 180.0
 
+
 # Rolling chase-cam window kept for COSIM_RECORD_INFRACTIONS clips, and the
 # minimum ego travel between two logged infractions (suppresses re-triggering
 INFRACTION_CLIP_SECONDS = 5.0
@@ -85,6 +86,7 @@ def get_entry_point():
 def clean_policy_state_dict(state_dict):
     """Strip torch.compile / DDP prefixes (wandb, neptune, the _C kernel, ...)
     from the leaderboard's evaluation environment."""
+
     def clean(key):
         while key.startswith(("module.", "_orig_mod.")):
             key = key.split(".", 1)[1]
@@ -197,21 +199,32 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
     def sensors(self):
         if not self.debug_carla_view_dir and not self.record_infractions_dir:
             return []
-        return [{"type": "sensor.camera.rgb", "id": CARLA_VIEW_SENSOR_ID,
-                 "width": CARLA_VIEW_WIDTH, "height": CARLA_VIEW_HEIGHT, "fov": CARLA_VIEW_FOV,
-                 **CARLA_VIEW_TRANSFORM}]
+        return [
+            {
+                "type": "sensor.camera.rgb",
+                "id": CARLA_VIEW_SENSOR_ID,
+                "width": CARLA_VIEW_WIDTH,
+                "height": CARLA_VIEW_HEIGHT,
+                "fov": CARLA_VIEW_FOV,
+                **CARLA_VIEW_TRANSFORM,
+            }
+        ]
 
     def _load_policy_and_env(self, town_bin):
         arch = shadow_env_kwargs(
             self.cfg,
             overrides=dict(
-                map_dir=town_bin, num_maps=1, num_agents=self.num_agents,
-                scenario_length=10_000_000, resample_frequency=0,
+                map_dir=town_bin,
+                num_maps=1,
+                num_agents=self.num_agents,
+                scenario_length=10_000_000,
+                resample_frequency=0,
                 termination_mode=0,
                 # Enforcement off (detection flags still fire): in one endless
                 # episode a "stop" latch is permanent and fires only AFTER
                 # CARLA scored the infraction (route 5 froze 320 s -> DNF).
-                collision_behavior="ignore", offroad_behavior="ignore",
+                collision_behavior="ignore",
+                offroad_behavior="ignore",
                 traffic_light_behavior="ignore",
             ),
         )
@@ -237,8 +250,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self._boundary_feat_ckpt = int(bw.shape[1])
             env_for_policy = copy.copy(self.env)
             env_for_policy.boundary_features = self._boundary_feat_ckpt
-            print(f"[puffer_agent] checkpoint uses {self._boundary_feat_ckpt} boundary features "
-                  f"(env emits {self.env.boundary_features}); stripping zero-padded columns")
+            print(
+                f"[puffer_agent] checkpoint uses {self._boundary_feat_ckpt} boundary features "
+                f"(env emits {self.env.boundary_features}); stripping zero-padded columns"
+            )
 
         policy_cls = getattr(drive_torch, self.cfg.get("policy_name", "Drive"))
         self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
@@ -265,16 +280,21 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self._sync_ego_from_carla(zero_velocity=True)
             self._last_target_yaw_deg = self.vehicle.get_transform().rotation.yaw
         self.route_goals = route_goals_from_plan(
-            self.dense_global_plan_world_coord, self.transform,
-            min_goal_spacing=self.min_goal_spacing, max_goal_spacing=self.max_goal_spacing)
+            self.dense_global_plan_world_coord,
+            self.transform,
+            min_goal_spacing=self.min_goal_spacing,
+            max_goal_spacing=self.max_goal_spacing,
+        )
 
         import data_utils.mirror_map_bin as mbin
 
         bin_data = mbin.read_bin(Path(self.town_bin))
         bin_traffic = bin_data["traffic"]
         self.stop_line_centers = np.array(
-            [[0.5 * (t["stop_line"][0] + t["stop_line"][3]),
-              0.5 * (t["stop_line"][1] + t["stop_line"][4])] for t in bin_traffic]
+            [
+                [0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
+                for t in bin_traffic
+            ]
         ).reshape(-1, 2)
 
         if self.debug_goal_lane_dir:
@@ -286,8 +306,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             Path(self.debug_goal_lane_dir).mkdir(parents=True, exist_ok=True)
             self._goal_lane_debug_file = open(Path(self.debug_goal_lane_dir) / f"{self.video_tag}.csv", "w")
             self._goal_lane_debug_file.write(
-                "step,ego_x,ego_y,goal_x,goal_y,gdir_x,gdir_y,goal_lane_idx,"
-                "lane_dir_dot_route,lane_dist_to_goal_m\n")
+                "step,ego_x,ego_y,goal_x,goal_y,gdir_x,gdir_y,goal_lane_idx,lane_dir_dot_route,lane_dist_to_goal_m\n"
+            )
 
         self.lights = list(self.world.get_actors().filter("traffic.traffic_light"))
         self.light_map, self.num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
@@ -324,9 +344,21 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 "scenario": scenario,
                 "agent_cap": int(scenario["num_total_agents"]),
                 "traffic_cap": max(int(scenario["num_traffic_elements"]), 1),
-                "frames": {key: [] for key in (
-                    "agent_f32", "agent_i32", "metrics_f32", "puffer_f32",
-                    "traffic_i16", "obs", "raw_action", "value", "entropy", "policy_probs")},
+                "frames": {
+                    key: []
+                    for key in (
+                        "agent_f32",
+                        "agent_i32",
+                        "metrics_f32",
+                        "puffer_f32",
+                        "traffic_i16",
+                        "obs",
+                        "raw_action",
+                        "value",
+                        "entropy",
+                        "policy_probs",
+                    )
+                },
             }
 
         if self.debug_carla_view_dir:
@@ -335,14 +367,16 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             Path(self.debug_carla_view_dir).mkdir(parents=True, exist_ok=True)
             out = str(Path(self.debug_carla_view_dir) / f"{self.video_tag}.mp4")
             self.carla_view_writer = imageio.get_writer(
-                out, fps=round(1.0 / self.tick_dt), codec="libx264", macro_block_size=1)
+                out, fps=round(1.0 / self.tick_dt), codec="libx264", macro_block_size=1
+            )
 
         if self.telemetry_dir:
             Path(self.telemetry_dir).mkdir(parents=True, exist_ok=True)
             self.telemetry_file = open(Path(self.telemetry_dir) / f"{self.video_tag}.csv", "w")
             self.telemetry_file.write(
                 "step,current_speed,target_speed,ego_action,goal_cursor,goal_dist_m,"
-                "near_light_dist_m,near_light_state,infr_collision,infr_offroad,infr_red\n")
+                "near_light_dist_m,near_light_state,infr_collision,infr_offroad,infr_red\n"
+            )
 
         if self.record_infractions_dir:
             from collections import deque
@@ -353,8 +387,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self.infraction_counter = 0
             self.last_infraction_location = self.vehicle.get_location()
 
-        print(f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} "
-              f"action_repeat={self.action_repeat} route_goals={len(self.route_goals)}")
+        print(
+            f"[puffer_agent] town={town} tick_dt={self.tick_dt} dt={self.dt} "
+            f"action_repeat={self.action_repeat} route_goals={len(self.route_goals)}"
+        )
         self.initialized = True
 
     # --- shadow-env sync (read-only w.r.t. CARLA) --------------------------
@@ -362,7 +398,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
     def _nearby_actors(self):
         ego_loc = self.vehicle.get_location()
         actors = [
-            a for a in self.world.get_actors()
+            a
+            for a in self.world.get_actors()
             if a.id != self.vehicle.id and ("vehicle" in a.type_id or "walker.pedestrian" in a.type_id)
         ]
         actors.sort(key=lambda a: a.get_location().distance(ego_loc))
@@ -373,19 +410,33 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         for j, a in enumerate(actors):
             idx.append(1 + j)  # agent 0 = ego; others fill 1..M
             bx, by, bz, bh, bvx, bvy, byr, bal = self.transform.actor_state_to_bin(a)
-            x.append(bx); y.append(by); z.append(bz); h.append(bh); vx.append(bvx); vy.append(bvy)
-            yaw_rate.append(byr); accel_long.append(bal)
-        return (np.array(idx, np.int32), np.array(x, np.float32), np.array(y, np.float32),
-                np.array(z, np.float32), np.array(h, np.float32),
-                np.array(vx, np.float32), np.array(vy, np.float32),
-                np.array(yaw_rate, np.float32), np.array(accel_long, np.float32))
+            x.append(bx)
+            y.append(by)
+            z.append(bz)
+            h.append(bh)
+            vx.append(bvx)
+            vy.append(bvy)
+            yaw_rate.append(byr)
+            accel_long.append(bal)
+        return (
+            np.array(idx, np.int32),
+            np.array(x, np.float32),
+            np.array(y, np.float32),
+            np.array(z, np.float32),
+            np.array(h, np.float32),
+            np.array(vx, np.float32),
+            np.array(vy, np.float32),
+            np.array(yaw_rate, np.float32),
+            np.array(accel_long, np.float32),
+        )
 
     def _read_sizes(self, actors):
         idx, length, width = [], [], []
         for j, a in enumerate(actors):
             idx.append(1 + j)
             ext = a.bounding_box.extent
-            length.append(max(2.0 * ext.x, 0.1)); width.append(max(2.0 * ext.y, 0.1))
+            length.append(max(2.0 * ext.x, 0.1))
+            width.append(max(2.0 * ext.y, 0.1))
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self):
@@ -423,8 +474,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.env.set_agent_states(np.array([0], np.int32), *[np.array([v], np.float32) for v in ego_state])
         ego_ext = self.vehicle.bounding_box.extent
         self.env.set_agent_sizes(
-            np.array([0], np.int32),
-            np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32))
+            np.array([0], np.int32), np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32)
+        )
 
     def _sync_carla(self):
         """Overwrite the shadow env's background agents/lights (+ ego, only in
@@ -451,15 +502,18 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         # Route goals: advance the cursor only once the ego actually reaches
         # the current goal, then feed the next few goals.
-        while (self.goal_cursor < len(self.route_goals) - 1
-               and np.hypot(self.route_goals[self.goal_cursor, 0] - ebx,
-                            self.route_goals[self.goal_cursor, 1] - eby) < self.goal_radius):
+        while (
+            self.goal_cursor < len(self.route_goals) - 1
+            and np.hypot(self.route_goals[self.goal_cursor, 0] - ebx, self.route_goals[self.goal_cursor, 1] - eby)
+            < self.goal_radius
+        ):
             self.goal_cursor += 1
         sel = self.route_goals[
             [min(self.goal_cursor + k, len(self.route_goals) - 1) for k in range(self.env.num_goals)]
         ]
-        self.env.set_agent_goals(0, sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(),
-                                 sel[:, 3].copy(), sel[:, 4].copy())
+        self.env.set_agent_goals(
+            0, sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(), sel[:, 3].copy(), sel[:, 4].copy()
+        )
         if self._goal_lane_debug_file is not None:
             self._write_goal_lane_debug_row(ebx, eby, sel[0])
         return np.asarray(self.env.recompute_observations())
@@ -485,7 +539,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 seg_dx, seg_dy = xs[1:] - xs[:-1], ys[1:] - ys[:-1]
                 seg_len = np.hypot(seg_dx, seg_dy)
                 seg_len_safe = np.where(seg_len > 1e-6, seg_len, 1.0)
-                t = np.clip(((gx - xs[:-1]) * seg_dx + (gy - ys[:-1]) * seg_dy) / (seg_len_safe ** 2), 0.0, 1.0)
+                t = np.clip(((gx - xs[:-1]) * seg_dx + (gy - ys[:-1]) * seg_dy) / (seg_len_safe**2), 0.0, 1.0)
                 px, py = xs[:-1] + t * seg_dx, ys[:-1] + t * seg_dy
                 d = np.hypot(gx - px, gy - py)
                 k = int(np.argmin(d))
@@ -495,7 +549,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                     dot = float((gdir_x * seg_dx[k] + gdir_y * seg_dy[k]) / (seg_len[k] * route_norm))
         self._goal_lane_debug_file.write(
             f"{self.step},{ebx:.2f},{eby:.2f},{gx:.2f},{gy:.2f},{gdir_x:.3f},{gdir_y:.3f},"
-            f"{lane_idx},{dot:.3f},{dist:.2f}\n")
+            f"{lane_idx},{dot:.3f},{dist:.2f}\n"
+        )
         self._goal_lane_debug_file.flush()
 
     def _carla_integrate(self, actions):
@@ -538,11 +593,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
             self.vehicle.set_target_velocity(zero)
             self.vehicle.set_target_angular_velocity(zero)
-            self.vehicle.set_transform(carla.Transform(
-                carla.Location(x=ex, y=ey, z=ez), carla.Rotation(yaw=target_yaw_deg)))
+            self.vehicle.set_transform(
+                carla.Transform(carla.Location(x=ex, y=ey, z=ez), carla.Rotation(yaw=target_yaw_deg))
+            )
             yaw_rad = math.radians(target_yaw_deg)
             self.vehicle.set_target_velocity(
-                carla.Vector3D(x=speed_after * math.cos(yaw_rad), y=speed_after * math.sin(yaw_rad), z=0.0))
+                carla.Vector3D(x=speed_after * math.cos(yaw_rad), y=speed_after * math.sin(yaw_rad), z=0.0)
+            )
             yaw_rate_deg_s = _wrap_deg(target_yaw_deg - self._last_target_yaw_deg) / self.dt
             self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_rate_deg_s))
             self._last_target_yaw_deg = target_yaw_deg
@@ -572,8 +629,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if not agents:
             return {name: 0.0 for name in EGO_INFRACTION_METRICS}
         metrics = agents[0].get("metrics_array") or []
-        return {name: float(metrics[idx]) if idx < len(metrics) else 0.0
-                for name, idx in EGO_INFRACTION_METRICS.items()}
+        return {
+            name: float(metrics[idx]) if idx < len(metrics) else 0.0 for name, idx in EGO_INFRACTION_METRICS.items()
+        }
 
     # --- policy + capture ---------------------------------------------------
 
@@ -585,9 +643,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         env = self.env
         n_slots = env.obs_slots_boundary_kept
         feat_env, feat_ckpt = env.boundary_features, self._boundary_feat_ckpt
-        b0 = (env.ego_features + env.num_reward_coefs + env.goal_dim
-              + env.obs_slots_partners_n * env.partner_features
-              + env.obs_slots_lane_kept * env.lane_features)
+        b0 = (
+            env.ego_features
+            + env.num_reward_coefs
+            + env.goal_dim
+            + env.obs_slots_partners_n * env.partner_features
+            + env.obs_slots_lane_kept * env.lane_features
+        )
         b1 = b0 + n_slots * feat_env
         obs = np.asarray(obs)
         boundary = obs[:, b0:b1].reshape(obs.shape[0], n_slots, feat_env)[:, :, :feat_ckpt]
@@ -603,7 +665,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         with torch.no_grad():
             logits, value = self.policy.forward_eval(torch.as_tensor(obs).to(self.device))
             action, _, entropy, _ = pufferlib.pytorch.sample_logits(
-                logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE)
+                logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE
+            )
         actions = action.cpu().numpy().reshape(self.num_agents, -1).astype(np.int32)
         aux = {}
         if self._obs_html is not None:
@@ -727,8 +790,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # lane-distance columns the policy actually sees, straight from the
         # obs array -- not this script's own external Python-side bookkeeping).
         npz_out = str(Path(self.obs_html_dir) / f"{self.video_tag}.npz")
-        np.savez(npz_out, obs=replay["obs"], agent_f32=replay["agent_f32"],
-                 env_cfg_json=np.array(json.dumps(env_cfg)))
+        np.savez(npz_out, obs=replay["obs"], agent_f32=replay["agent_f32"], env_cfg_json=np.array(json.dumps(env_cfg)))
         print(f"[puffer_agent] wrote obs_html raw arrays -> {npz_out}")
 
     def _write_telemetry_row(self, ego_action):
@@ -744,12 +806,16 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             j = int(d2.argmin())
             near_dist, near_state = float(np.sqrt(d2[j])), int(self.last_light_states[j])
         flags = self._ego_infractions()
-        current_speed = (float(np.asarray(self.env.observations)[0, 0]) * self._max_speed()
-                         if self.dynamics_source == "pufferdrive" else self.vehicle.get_velocity().length())
+        current_speed = (
+            float(np.asarray(self.env.observations)[0, 0]) * self._max_speed()
+            if self.dynamics_source == "pufferdrive"
+            else self.vehicle.get_velocity().length()
+        )
         self.telemetry_file.write(
             f"{self.step},{current_speed:.3f},{self.target[0]:.3f},"
             f"{ego_action},{self.goal_cursor},{goal_dist:.1f},{near_dist:.1f},{near_state},"
-            f"{flags['collision']:.0f},{flags['offroad']:.0f},{flags['red_light']:.0f}\n")
+            f"{flags['collision']:.0f},{flags['offroad']:.0f},{flags['red_light']:.0f}\n"
+        )
 
     def _maybe_save_infraction_clip(self):
         """Dump the rolling chase-cam buffer as one mp4 when the shadow env
@@ -764,10 +830,12 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             return
         import imageio
 
-        out = str(Path(self.record_infractions_dir)
-                  / f"{self.video_tag}_{'_'.join(fired)}_{self.infraction_counter:02d}.mp4")
-        imageio.mimwrite(out, list(self.infraction_buffer), fps=round(1.0 / self.tick_dt),
-                         codec="libx264", macro_block_size=1)
+        out = str(
+            Path(self.record_infractions_dir) / f"{self.video_tag}_{'_'.join(fired)}_{self.infraction_counter:02d}.mp4"
+        )
+        imageio.mimwrite(
+            out, list(self.infraction_buffer), fps=round(1.0 / self.tick_dt), codec="libx264", macro_block_size=1
+        )
         print(f"[puffer_agent] infraction {fired} -> {out}")
         self.infraction_counter += 1
         self.last_infraction_location = location
@@ -792,10 +860,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 # capture the SYNCED state (CARLA truth), before integrate()
                 # extrapolates every agent one dt past it
                 cur = self.goal_cursor
-                goals = self.route_goals[cur:cur + 3]
-                self.bev.capture(self.env.get_global_agent_state(), ego_idx=0,
-                                 goals=(goals[:, 0], goals[:, 1]),
-                                 light_states=self.last_light_states)
+                goals = self.route_goals[cur : cur + 3]
+                self.bev.capture(
+                    self.env.get_global_agent_state(),
+                    ego_idx=0,
+                    goals=(goals[:, 0], goals[:, 1]),
+                    light_states=self.last_light_states,
+                )
             actions, aux = self._policy_actions(obs)
             if self._obs_html is not None and len(self._obs_html["frames"]["obs"]) < self.obs_html_max_steps:
                 self._capture_obs_html_frame(obs, actions, aux)
@@ -827,8 +898,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
                 wp = self.cmap.get_waypoint(carla.Location(x=x, y=y))
                 z = wp.transform.location.z if wp is not None else z
                 self._display = [x, y, z, yaw_deg, speed, yaw_rate_deg_s, accel_long]
-                self.vehicle.set_transform(carla.Transform(
-                    carla.Location(x=x, y=y, z=z), carla.Rotation(yaw=yaw_deg)))
+                self.vehicle.set_transform(carla.Transform(carla.Location(x=x, y=y, z=z), carla.Rotation(yaw=yaw_deg)))
             return carla.VehicleControl()
 
         # Controller runs every tick against the latest CARLA state, chasing the
@@ -841,8 +911,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
     def destroy(self, results=None):
         if not self.initialized:
             return
-        print(f"[puffer_agent] route done: goals {self.goal_cursor + 1}/{len(self.route_goals)}, "
-              f"tracking {self.controller.stats()}")
+        print(
+            f"[puffer_agent] route done: goals {self.goal_cursor + 1}/{len(self.route_goals)}, "
+            f"tracking {self.controller.stats()}"
+        )
         if self.bev is not None and self.bev.frames:
             self.bev.save()
         if self.carla_view_writer is not None:

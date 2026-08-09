@@ -793,6 +793,7 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(gdir_x, dtype=np.float32),
             np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
+
     # ───────────────────────────────────────
 
     def get_ground_truth_trajectories(self):

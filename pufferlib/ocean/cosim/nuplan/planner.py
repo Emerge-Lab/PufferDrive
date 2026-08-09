@@ -27,6 +27,7 @@ def clean_policy_state_dict(state_dict):
     """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
     avoid importing the training stack (wandb, neptune, the _C kernel, ...)
     inside the evaluation environment."""
+
     def clean(key):
         while key.startswith(("module.", "_orig_mod.")):
             key = key.split(".", 1)[1]
@@ -157,9 +158,7 @@ class PufferDrivePlanner(AbstractPlanner):
         import shapely
 
         stops = self._gpkg_layer("stop_polygons").geometry.centroid
-        init = nb.coarse_translation_vote(
-            stop_line_centers, np.stack([stops.x.to_numpy(), stops.y.to_numpy()], axis=1)
-        )
+        init = nb.coarse_translation_vote(stop_line_centers, np.stack([stops.x.to_numpy(), stops.y.to_numpy()], axis=1))
         lane_utm = shapely.get_coordinates(self._gpkg_layer("baseline_paths").geometry.values)
         t, resid = nb.fit_translation(nb.read_bin_lane_points(bin_path), lane_utm, init=init)
         if resid > 0.5:
@@ -175,16 +174,21 @@ class PufferDrivePlanner(AbstractPlanner):
                 break
             except OSError:
                 continue
-        print(f"[pufferdrive_planner] registered {bin_path.name}: "
-              f"origin=({t[0]:.2f}, {t[1]:.2f}) resid={resid * 100:.1f} cm")
+        print(
+            f"[pufferdrive_planner] registered {bin_path.name}: "
+            f"origin=({t[0]:.2f}, {t[1]:.2f}) resid={resid * 100:.1f} cm"
+        )
         return nb.NuPlanTransform(t[0], t[1])
 
     def _resolve_map_bin(self):
         """-> (bin_path, NuPlanTransform, stop_line_centers, num_traffic)."""
         city_bin = self._find_city_bin()
         geo = nb.read_bin_geometry(city_bin)
-        tf = (nb.NuPlanTransform(*geo["origin"]) if geo["origin"] is not None
-              else self._city_bin_origin(city_bin, geo["stop_line_centers"]))
+        tf = (
+            nb.NuPlanTransform(*geo["origin"])
+            if geo["origin"] is not None
+            else self._city_bin_origin(city_bin, geo["stop_line_centers"])
+        )
         return city_bin, tf, geo["stop_line_centers"], geo["num_traffic"]
 
     def _match_traffic_lights(self, stop_line_centers: np.ndarray, ex: float, ey: float) -> Dict[str, int]:
@@ -216,15 +220,19 @@ class PufferDrivePlanner(AbstractPlanner):
             defaults=DEFAULT_ARCH,
             overrides={
                 **self._env_overrides,
-                "map_dir": str(bin_path), "num_maps": 1, "num_agents": self._num_agents,
-                "scenario_length": 1_000_000, "resample_frequency": 0,
+                "map_dir": str(bin_path),
+                "num_maps": 1,
+                "num_agents": self._num_agents,
+                "scenario_length": 1_000_000,
+                "resample_frequency": 0,
                 # External sim owns the episode: a training-config
                 # termination_mode=1 would c_reset() the pool (ego included)
                 # once parked FAR_AWAY slots latch under "stop" behaviors.
                 "termination_mode": 0,
                 # Enforcement off (flags still fire): in one endless episode a
                 # "stop" latch is permanent and would freeze the ego for good.
-                "collision_behavior": "ignore", "offroad_behavior": "ignore",
+                "collision_behavior": "ignore",
+                "offroad_behavior": "ignore",
                 "traffic_light_behavior": "ignore",
             },
         )
@@ -245,8 +253,11 @@ class PufferDrivePlanner(AbstractPlanner):
         init = self._initialization
         ex, ey = float(ego_state.center.x), float(ego_state.center.y)
 
-        cfg = ({} if self._dummy else
-               yaml.safe_load(open(Path(self._checkpoint_path).resolve().parents[1] / "config.yaml")))
+        cfg = (
+            {}
+            if self._dummy
+            else yaml.safe_load(open(Path(self._checkpoint_path).resolve().parents[1] / "config.yaml"))
+        )
 
         bin_path, self._transform, stop_centers, self._num_traffic = self._resolve_map_bin()
         self._connector_map = self._match_traffic_lights(stop_centers, ex, ey)
@@ -280,9 +291,9 @@ class PufferDrivePlanner(AbstractPlanner):
 
         # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint
-        self._env.set_agent_sizes(np.array([0], np.int32),
-                                  np.array([fp.length], np.float32),
-                                  np.array([fp.width], np.float32))
+        self._env.set_agent_sizes(
+            np.array([0], np.int32), np.array([fp.length], np.float32), np.array([fp.width], np.float32)
+        )
 
         if self._debug_bev_dir:
             from datetime import datetime
@@ -298,8 +309,10 @@ class PufferDrivePlanner(AbstractPlanner):
             self._debug_bev_dir.mkdir(parents=True, exist_ok=True)
             self._bev = BEVRenderer(str(bin_path), str(self._debug_bev_dir / f"{tag}.mp4"))
 
-        print(f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
-              f"{self._num_traffic} goals={len(goals)}")
+        print(
+            f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
+            f"{self._num_traffic} goals={len(goals)}"
+        )
 
     # --- world sync -----------------------------------------------------------
     def _sync(self, ego_state: EgoState, detections: DetectionsTracks, traffic_light_data) -> None:
@@ -316,12 +329,17 @@ class PufferDrivePlanner(AbstractPlanner):
         vx_g = v_local.x * math.cos(h) - v_local.y * math.sin(h)
         vy_g = v_local.x * math.sin(h) + v_local.y * math.cos(h)
         ex, ey = tf.loc_to_bin(ego_state.center.x, ego_state.center.y)
-        env.set_agent_states(np.array([0], np.int32),
-                             np.array([ex], np.float32), np.array([ey], np.float32),
-                             np.array([0.0], np.float32), np.array([h], np.float32),
-                             np.array([vx_g], np.float32), np.array([vy_g], np.float32),
-                             np.array([float(dcs.angular_velocity)], np.float32),
-                             np.array([float(dcs.center_acceleration_2d.x)], np.float32))
+        env.set_agent_states(
+            np.array([0], np.int32),
+            np.array([ex], np.float32),
+            np.array([ey], np.float32),
+            np.array([0.0], np.float32),
+            np.array([h], np.float32),
+            np.array([vx_g], np.float32),
+            np.array([vy_g], np.float32),
+            np.array([float(dcs.angular_velocity)], np.float32),
+            np.array([float(dcs.center_acceleration_2d.x)], np.float32),
+        )
 
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
@@ -346,9 +364,10 @@ class PufferDrivePlanner(AbstractPlanner):
 
         # route goals: cursor advances only on arrival (like the CARLA side)
         goals = self._route_goals
-        while (self._goal_cursor < len(goals) - 1
-               and np.hypot(goals[self._goal_cursor, 0] - ex, goals[self._goal_cursor, 1] - ey)
-               < self._arch["goal_radius"]):
+        while (
+            self._goal_cursor < len(goals) - 1
+            and np.hypot(goals[self._goal_cursor, 0] - ex, goals[self._goal_cursor, 1] - ey) < self._arch["goal_radius"]
+        ):
             self._goal_cursor += 1
         k = self._arch["num_goals"]
         indices = [min(self._goal_cursor + i, len(goals) - 1) for i in range(k)]
@@ -357,10 +376,14 @@ class PufferDrivePlanner(AbstractPlanner):
         # Local route direction per goal (previous goal -> goal; ~goal_spacing
         # apart, adequate at nuPlan's 20 m spacing) for route-aligned lane snapping.
         dir_sel = np.array([goals[i] - goals[max(i - 1, 0)] for i in indices], np.float32)
-        env.set_agent_goals(0, sel[:, 0].astype(np.float32).copy(),
-                            sel[:, 1].astype(np.float32).copy(),
-                            np.zeros(k, np.float32),
-                            dir_sel[:, 0].copy(), dir_sel[:, 1].copy())
+        env.set_agent_goals(
+            0,
+            sel[:, 0].astype(np.float32).copy(),
+            sel[:, 1].astype(np.float32).copy(),
+            np.zeros(k, np.float32),
+            dir_sel[:, 0].copy(),
+            dir_sel[:, 1].copy(),
+        )
 
     # --- planning -------------------------------------------------------------
     def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
@@ -392,8 +415,12 @@ class PufferDrivePlanner(AbstractPlanner):
 
         if self._bev is not None:
             try:
-                self._bev.capture(self._env.get_global_agent_state(), ego_idx=0,
-                                  goals=self._last_goal_xy, light_states=self._last_light_states)
+                self._bev.capture(
+                    self._env.get_global_agent_state(),
+                    ego_idx=0,
+                    goals=self._last_goal_xy,
+                    light_states=self._last_light_states,
+                )
                 # AbstractPlanner has no close()/destroy() hook, so save at the
                 # scenario's last planning iteration instead (BEVRenderer
                 # buffers frames in memory until .save(), like the CARLA-side

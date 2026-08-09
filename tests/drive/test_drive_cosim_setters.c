@@ -110,7 +110,6 @@ static int test_set_traffic_light_states_skips_out_of_range_or_missing_states(vo
     return 0;
 }
 
-
 // ---------------------------------------------------------------------------
 // c_set_agent_states
 // ---------------------------------------------------------------------------

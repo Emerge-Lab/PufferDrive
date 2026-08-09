@@ -50,10 +50,12 @@ DEFAULT_VEHICLE_LENGTH_M = 4.5  # fallback size for a parked/dead actor slot (ou
 DEFAULT_VEHICLE_WIDTH_M = 2.0
 EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
 
+
 def clean_policy_state_dict(state_dict):
     """Strip torch.compile / DDP prefixes. Inlined from pufferlib.pufferl to
     avoid importing the training stack (wandb, neptune, the _C kernel, ...) in
     the co-sim environment — same as cosim/carla/leaderboard_agent.py."""
+
     def clean(key):
         while key.startswith(("module.", "_orig_mod.")):
             key = key.split(".", 1)[1]
@@ -140,11 +142,25 @@ def read_background(bg_actors, transform):
         else:  # TM may remove a vehicle; park its PufferDrive slot out of range
             bx = by = bz = FAR_AWAY
             bh = bvx = bvy = byr = bal = 0.0
-        x.append(bx); y.append(by); z.append(bz); h.append(bh); vx.append(bvx); vy.append(bvy)
-        yaw_rate.append(byr); accel_long.append(bal)
-    return (np.array(idx, np.int32), np.array(x, np.float32), np.array(y, np.float32),
-            np.array(z, np.float32), np.array(h, np.float32), np.array(vx, np.float32), np.array(vy, np.float32),
-            np.array(yaw_rate, np.float32), np.array(accel_long, np.float32))
+        x.append(bx)
+        y.append(by)
+        z.append(bz)
+        h.append(bh)
+        vx.append(bvx)
+        vy.append(bvy)
+        yaw_rate.append(byr)
+        accel_long.append(bal)
+    return (
+        np.array(idx, np.int32),
+        np.array(x, np.float32),
+        np.array(y, np.float32),
+        np.array(z, np.float32),
+        np.array(h, np.float32),
+        np.array(vx, np.float32),
+        np.array(vy, np.float32),
+        np.array(yaw_rate, np.float32),
+        np.array(accel_long, np.float32),
+    )
 
 
 def read_actor_sizes(actors):
@@ -156,9 +172,11 @@ def read_actor_sizes(actors):
         idx.append(1 + j)
         if a is not None and a.is_alive:
             ext = a.bounding_box.extent
-            length.append(2.0 * ext.x); width.append(2.0 * ext.y)
+            length.append(2.0 * ext.x)
+            width.append(2.0 * ext.y)
         else:
-            length.append(DEFAULT_VEHICLE_LENGTH_M); width.append(DEFAULT_VEHICLE_WIDTH_M)
+            length.append(DEFAULT_VEHICLE_LENGTH_M)
+            width.append(DEFAULT_VEHICLE_WIDTH_M)
     return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
 
@@ -212,6 +230,7 @@ def build_route_goals(dense_route, transform, cmap, spacing=20.0):
     travel direction at the goal (bin frame), consumed by set_agent_goals' lane
     snapping. The ego marches through these via a cursor that only advances on
     arrival (GOAL_RADIUS_M) — goals do not float with the ego."""
+
     def goal_at(i):
         d = dense_route[i] - dense_route[i - 1]
         route_yaw = np.degrees(np.arctan2(d[1], d[0]))  # route travel direction (CARLA frame)
@@ -233,8 +252,7 @@ def select_goals(route_goals, cursor, num=3):
     (gx, gy, gz, gdir_x, gdir_y) arrays for set_agent_goals."""
     idx = [min(cursor + k, len(route_goals) - 1) for k in range(num)]
     sel = route_goals[idx]
-    return (sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(),
-            sel[:, 3].copy(), sel[:, 4].copy())
+    return (sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(), sel[:, 3].copy(), sel[:, 4].copy())
 
 
 def attach_chase_camera(world, ego, w=960, h=540):
@@ -298,8 +316,7 @@ class BEVRenderer:
             if abs(x - ex) > self.span or abs(y - ey) > self.span:
                 continue  # surplus agents parked far away
             h, L, W = float(agents["heading"][i]), float(agents["length"][i]), float(agents["width"][i])
-            rect = Rectangle((-L / 2, -W / 2), L, W, color="red" if i == ego_idx else "tab:blue",
-                             alpha=0.95, zorder=3)
+            rect = Rectangle((-L / 2, -W / 2), L, W, color="red" if i == ego_idx else "tab:blue", alpha=0.95, zorder=3)
             rect.set_transform(mtransforms.Affine2D().rotate(h).translate(x, y) + ax.transData)
             ax.add_patch(rect)
         if goals is not None:
@@ -339,21 +356,32 @@ def main():
     ap.add_argument("--route-id", type=int, default=0)
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--num-background", type=int, default=30)
-    ap.add_argument("--num-agents", type=int, default=None,
-                    help="shadow agent pool (default: the checkpoint's max_agents_per_env, else 64)")
+    ap.add_argument(
+        "--num-agents",
+        type=int,
+        default=None,
+        help="shadow agent pool (default: the checkpoint's max_agents_per_env, else 64)",
+    )
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--carla-host", default="localhost")
     ap.add_argument("--carla-port", type=int, default=2000)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--sub-ticks", type=int, default=None)  # default: round(dt / 0.1)
-    ap.add_argument("--dt", type=float, default=None,
-                    help="ego dynamics dt (default: the checkpoint's training dt, else 0.1)")
+    ap.add_argument(
+        "--dt", type=float, default=None, help="ego dynamics dt (default: the checkpoint's training dt, else 0.1)"
+    )
     ap.add_argument("--render", default=None, help="output mp4 path for a top-down BEV render")
     ap.add_argument("--bev-span", type=float, default=70.0, help="BEV half-window in meters")
-    ap.add_argument("--carla-view", default=None,
-                    help="output mp4 path for a CARLA chase-camera view (needs CARLA -RenderOffScreen)")
-    ap.add_argument("--town-bin", default=None,
-                    help="override the town .bin (e.g. a shoulder-retyped variant); default: repo carla bin")
+    ap.add_argument(
+        "--carla-view",
+        default=None,
+        help="output mp4 path for a CARLA chase-camera view (needs CARLA -RenderOffScreen)",
+    )
+    ap.add_argument(
+        "--town-bin",
+        default=None,
+        help="override the town .bin (e.g. a shoulder-retyped variant); default: repo carla bin",
+    )
     args = ap.parse_args()
 
     town, route_wps = parse_route(args.routes, args.route_id)
@@ -376,22 +404,29 @@ def main():
     # is only the no-checkpoint fallback -- reset-time goals are throwaway (the
     # co-sim sets the ego's from the route and overwrites all background agents
     # each tick), and "map" keeps reset independent of the routable lane network.
-    env = Drive(**shadow_env_kwargs(
-        cfg,
-        defaults=dict(goal_source="map"),
-        overrides=dict(
-            map_dir=town_bin, num_maps=1, num_agents=num_agents,
-            scenario_length=1_000_000, resample_frequency=0, dt=dt,
-            # External sim owns the episode: a training-config
-            # termination_mode=1 would c_reset() the pool (ego included) once
-            # the parked FAR_AWAY slots latch under "stop" infraction behaviors.
-            termination_mode=0,
-            # Enforcement off (flags still fire): in one endless episode a
-            # "stop" latch is permanent and would freeze the ego for good.
-            collision_behavior="ignore", offroad_behavior="ignore",
-            traffic_light_behavior="ignore",
-        ),
-    ))
+    env = Drive(
+        **shadow_env_kwargs(
+            cfg,
+            defaults=dict(goal_source="map"),
+            overrides=dict(
+                map_dir=town_bin,
+                num_maps=1,
+                num_agents=num_agents,
+                scenario_length=1_000_000,
+                resample_frequency=0,
+                dt=dt,
+                # External sim owns the episode: a training-config
+                # termination_mode=1 would c_reset() the pool (ego included) once
+                # the parked FAR_AWAY slots latch under "stop" infraction behaviors.
+                termination_mode=0,
+                # Enforcement off (flags still fire): in one endless episode a
+                # "stop" latch is permanent and would freeze the ego for good.
+                collision_behavior="ignore",
+                offroad_behavior="ignore",
+                traffic_light_behavior="ignore",
+            ),
+        )
+    )
     obs, _ = env.reset()
     obs = np.asarray(obs)
     n_active = int(env.num_agents)
@@ -422,23 +457,29 @@ def main():
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
     goal_cursor = 0  # index of the current (not-yet-reached) route goal
     light_map, num_traffic = cb.map_lights_to_bin(lights, transform, town_bin)
-    print(f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}")
+    print(
+        f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}"
+    )
 
-    car_bps = [b for b in world.get_blueprint_library().filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4]
+    car_bps = [
+        b for b in world.get_blueprint_library().filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4
+    ]
     walker_bps = list(world.get_blueprint_library().filter("walker.pedestrian.*"))
     scenario_mgr = carla_scenarios.ScenarioManager(
-        carla_scenarios.parse_scenarios(args.routes, args.route_id), world, tm, car_bps, walker_bps)
+        carla_scenarios.parse_scenarios(args.routes, args.route_id), world, tm, car_bps, walker_bps
+    )
     print(f"[cosim] {len(scenario_mgr.scenarios)} scenarios loaded (ControlLoss skipped)")
 
     # --- init sync: ego pose + size + goals; background; park surplus agents ---
     ego_state = transform.actor_state_to_bin(ego)
     env.set_agent_states(np.array([0], np.int32), *[np.array([v], np.float32) for v in ego_state])
     ego_ext = ego.bounding_box.extent  # match the ego to its CARLA blueprint box (static)
-    env.set_agent_sizes(np.array([0], np.int32),
-                        np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32))
+    env.set_agent_sizes(
+        np.array([0], np.int32), np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32)
+    )
     gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
     env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
-    bg_idx, *_ = (read_background(bg, transform))
+    bg_idx, *_ = read_background(bg, transform)
     surplus = np.arange(1 + len(bg), n_active, dtype=np.int32)
     if len(surplus):
         z6 = np.full(len(surplus), FAR_AWAY, np.float32)
@@ -459,7 +500,8 @@ def main():
             with torch.no_grad():
                 logits, _ = policy.forward_eval(torch.as_tensor(obs).to(args.device))
                 action, _, _, _ = pufferlib.pytorch.sample_logits(
-                    logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE)
+                    logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE
+                )
                 act = action.cpu().numpy().reshape(n_active, -1).astype(np.int32)
         else:
             act = dummy_action
@@ -469,8 +511,7 @@ def main():
         # teleport CARLA ego to the ego's new pose
         ex, ey = transform.bin_to_loc(float(ego_bin["x"][0]), float(ego_bin["y"][0]))
         eyaw = transform.bin_heading_to_yaw(float(ego_bin["heading"][0]))
-        ego.set_transform(carla.Transform(carla.Location(x=ex, y=ey, z=0.3),
-                                           carla.Rotation(yaw=eyaw)))
+        ego.set_transform(carla.Transform(carla.Location(x=ex, y=ey, z=0.3), carla.Rotation(yaw=eyaw)))
         scenario_mgr.tick(ego.get_location())  # trigger/spawn hazards near the ego
         cam_img = None
         for _ in range(sub_ticks):
@@ -498,8 +539,10 @@ def main():
         env.set_traffic_light_states(states)
         # advance the goal cursor only once the ego actually reaches the current goal
         ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
-        while (goal_cursor < len(route_goals) - 1
-               and np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby) < GOAL_RADIUS_M):
+        while (
+            goal_cursor < len(route_goals) - 1
+            and np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby) < GOAL_RADIUS_M
+        ):
             goal_cursor += 1
         gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
         env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
@@ -517,8 +560,12 @@ def main():
             wp = cmap.get_waypoint(ego.get_location())  # nearest drivable lane center
             lat = ego.get_location().distance(wp.transform.location) if wp else -1.0
             onroad = cmap.get_waypoint(ego.get_location(), project_to_road=False) is not None
-            bin_off = float(np.min(np.hypot(_bin_lanes[:, 0] - ebx, _bin_lanes[:, 1] - eby))) if len(_bin_lanes) else -1.0
-            print(f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f})  carla_off={lat:.1f}m onroad={onroad}  bin_off={bin_off:.1f}m  goal0={gd:.0f}m[{goal_cursor}/{len(route_goals)}] light={ls}  scn={scenario_mgr.active_count()}")
+            bin_off = (
+                float(np.min(np.hypot(_bin_lanes[:, 0] - ebx, _bin_lanes[:, 1] - eby))) if len(_bin_lanes) else -1.0
+            )
+            print(
+                f"[cosim] step {step}: ego carla=({ex:.1f},{ey:.1f})  carla_off={lat:.1f}m onroad={onroad}  bin_off={bin_off:.1f}m  goal0={gd:.0f}m[{goal_cursor}/{len(route_goals)}] light={ls}  scn={scenario_mgr.active_count()}"
+            )
 
     # cleanup
     if bev is not None:
@@ -535,16 +582,19 @@ def main():
     # actor" (std::terminate in the TM worker thread).
     if cam is not None and cam.is_alive:
         cam.stop()
-    tm_vehicles = [a for a in [*bg, *scenario_mgr.alive_actors()]
-                   if a is not None and a.is_alive and "vehicle" in a.type_id]
-    client.apply_batch_sync(
-        [carla.command.SetAutopilot(a.id, False, tm.get_port()) for a in tm_vehicles], True)
+    tm_vehicles = [
+        a for a in [*bg, *scenario_mgr.alive_actors()] if a is not None and a.is_alive and "vehicle" in a.type_id
+    ]
+    client.apply_batch_sync([carla.command.SetAutopilot(a.id, False, tm.get_port()) for a in tm_vehicles], True)
     world.tick()  # let the TM observe the detach before anything is destroyed
     scenario_mgr.cleanup()
     client.apply_batch_sync(
-        [carla.command.DestroyActor(a) for a in [cam, ego, *bg] if a is not None and a.is_alive], True)
+        [carla.command.DestroyActor(a) for a in [cam, ego, *bg] if a is not None and a.is_alive], True
+    )
     world.tick()
-    s = world.get_settings(); s.synchronous_mode = False; world.apply_settings(s)
+    s = world.get_settings()
+    s.synchronous_mode = False
+    world.apply_settings(s)
     tm.set_synchronous_mode(False)
     print("[cosim] done")
 

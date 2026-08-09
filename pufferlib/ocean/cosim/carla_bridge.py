@@ -156,7 +156,7 @@ def _cluster_by_proximity(points, keys, radius_m):
         return k
 
     for i, k1 in enumerate(keys):
-        for k2 in keys[i + 1:]:
+        for k2 in keys[i + 1 :]:
             if np.hypot(*(np.subtract(points[k1], points[k2]))) <= radius_m:
                 root1, root2 = find(k1), find(k2)
                 if root1 != root2:
@@ -257,7 +257,7 @@ def map_lights_to_bin(lights, transform, town_bin):
 
     def controlling_elements_near(px, py):
         d = seg_end - seg_start
-        length_sq = np.maximum((d ** 2).sum(1), 1e-9)
+        length_sq = np.maximum((d**2).sum(1), 1e-9)
         t = np.clip(((px - seg_start[:, 0]) * d[:, 0] + (py - seg_start[:, 1]) * d[:, 1]) / length_sq, 0.0, 1.0)
         dist = np.hypot(px - (seg_start[:, 0] + t * d[:, 0]), py - (seg_start[:, 1] + t * d[:, 1]))
         lane_best = {}
@@ -294,8 +294,10 @@ def map_lights_to_bin(lights, transform, town_bin):
         mapping.append(sorted(set(element_indices)))
 
     stop_centers = np.array(
-        [[0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
-         for t in data["traffic"]]
+        [
+            [0.5 * (t["stop_line"][0] + t["stop_line"][3]), 0.5 * (t["stop_line"][1] + t["stop_line"][4])]
+            for t in data["traffic"]
+        ]
     ).reshape(-1, 2)
     for light_idx, element_idx in _drop_junction_outliers(mapping, lights, transform, stop_centers):
         mapping[light_idx].remove(element_idx)

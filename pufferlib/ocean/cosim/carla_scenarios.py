@@ -31,8 +31,16 @@ def parse_scenarios(xml_path, route_id):
         tp = s.find("trigger_point")
         if tp is None:
             continue
-        out.append(dict(type=s.get("type"), name=s.get("name"), x=float(tp.get("x")),
-                        y=float(tp.get("y")), z=float(tp.get("z")), yaw=float(tp.get("yaw"))))
+        out.append(
+            dict(
+                type=s.get("type"),
+                name=s.get("name"),
+                x=float(tp.get("x")),
+                y=float(tp.get("y")),
+                z=float(tp.get("z")),
+                yaw=float(tp.get("yaw")),
+            )
+        )
     return out
 
 
@@ -95,13 +103,12 @@ class DynamicObjectCrossing(Scenario):
     """A pedestrian crosses the road in front of the ego at the trigger."""
 
     def _spawn(self):
-        fx, fy = _fwd(self.spec["yaw"])      # ego forward at the trigger
-        lx, ly = -fy, fx                     # left of forward
+        fx, fy = _fwd(self.spec["yaw"])  # ego forward at the trigger
+        lx, ly = -fy, fx  # left of forward
         loc = self.trigger_loc()
-        ahead, side = 6.0, 4.5               # a bit ahead, offset to one side
+        ahead, side = 6.0, 4.5  # a bit ahead, offset to one side
         sx, sy = loc.x + fx * ahead + lx * side, loc.y + fy * ahead + ly * side
-        w = self.world.try_spawn_actor(self.walker_bps[0],
-                                       carla.Transform(carla.Location(x=sx, y=sy, z=loc.z + 1.0)))
+        w = self.world.try_spawn_actor(self.walker_bps[0], carla.Transform(carla.Location(x=sx, y=sy, z=loc.z + 1.0)))
         if w is None:
             self.done = True
             return
@@ -110,7 +117,7 @@ class DynamicObjectCrossing(Scenario):
         w.apply_control(carla.WalkerControl(direction=self._dir, speed=2.0))
 
     def _behave(self):
-        if self._t > 60:                     # ~6 s crossing, then stop + finish
+        if self._t > 60:  # ~6 s crossing, then stop + finish
             if self.alive():
                 self.actors[0].apply_control(carla.WalkerControl(speed=0.0))
             self.done = True
@@ -126,7 +133,7 @@ class JunctionVehicle(Scenario):
         cmap = self.world.get_map()
         wp = cmap.get_waypoint(self.trigger_loc())
         jwp = wp
-        for _ in range(25):                  # walk forward to the next junction
+        for _ in range(25):  # walk forward to the next junction
             nxt = jwp.next(2.0)
             if not nxt:
                 break
@@ -140,7 +147,7 @@ class JunctionVehicle(Scenario):
         spawn_wp = None
         for entry, _exit in jwp.get_junction().get_waypoints(carla.LaneType.Driving):
             d = entry.transform.get_forward_vector()
-            if d.x * fx + d.y * fy < 0.3:    # cross or oncoming (not the ego's direction)
+            if d.x * fx + d.y * fy < 0.3:  # cross or oncoming (not the ego's direction)
                 back = entry.previous(12.0)
                 spawn_wp = back[0] if back else entry
                 break
@@ -160,7 +167,7 @@ class JunctionVehicle(Scenario):
         self.actors = [v]
 
     def _behave(self):
-        if self._t > 120:                    # cleared the junction; leave it as ambient TM traffic
+        if self._t > 120:  # cleared the junction; leave it as ambient TM traffic
             self.done = True
 
 
