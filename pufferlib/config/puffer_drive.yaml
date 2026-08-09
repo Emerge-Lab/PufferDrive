@@ -43,7 +43,7 @@ env:
   min_agents_per_env: 1
   max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
-  action_type: discrete
+  action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
@@ -159,12 +159,14 @@ env:
   partner_blindness_prob: 0.02
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
+  # Duration in seconds of partner blindness once triggered
+  partner_blindness_duration_seconds: 3.0
   # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
   phantom_braking_prob: 0.02
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
-  # Duration (in steps) of phantom braking once triggered
-  phantom_braking_duration: 10
+  # Duration in seconds of phantom braking once triggered
+  phantom_braking_duration_seconds: 3.0
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
@@ -191,6 +193,7 @@ policy:
   critic_num_layers: 1
   # Dual or shared actor-critic backbone
   shared_network: false
+  action_type: discrete
 rnn:
   input_size: 512
   hidden_size: 512
@@ -198,6 +201,10 @@ train:
   name: pufferai
   project: ablations
   seed: 42
+  # Null disables evaluation during training.
+  evaluation_interval_epochs: null
+  # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
+  evaluation_benchmarks: carla_fast
   torch_deterministic: false
   cpu_offload: false
   device: cuda
@@ -256,155 +263,28 @@ sweep:
   metric: score
   goal: maximize
   downsample: 10
-# ===========================================================================
-# Evaluation suites
-#
-# Each [eval.<name>] section is one Evaluator instance. EvalManager discovers
-# them via auto-discovery (any section under [eval] with a `type` field).
-# Sections without a `type` field are templates — referenced from other
-# sections via `inherits = "<template_name>"`.
-#
-# Field reference:
-# type           — registered evaluator class (multi_scenario, behavior_class,
-# human_replay, wosac)
-# enabled        — true|false
-# interval       — epochs between runs (0 disables)
-# mode           — "inline" (block training) | "subprocess" (spawn process)
-# inherits       — pull defaults from another section, recursively
-# clean          — true → zero perturbations + dropout + enforce red lights
-# render         — true → capture mp4(s) during rollout
-# render_views   — list of camera views: sim_state, bev, topdown_sim, bev_all
-# env.<key>      — any [env] override (dotted key)
-# eval.<key>     — evaluator-specific knob (e.g. num_scenarios)
-# vec.<key>      — any [vec] override
-# ===========================================================================
-mine:
-  # Failure-mining workflow. `puffer mine_failures puffer_drive ...`
-  # rolls a trained policy out N times and writes compact-replay HTML
-  # for episodes whose episode_return is strictly below score_threshold.
-  output_dir: ''
-  num_episodes: 100
-  score_threshold: -inf
-  render: 'true'
+# Catalog-defined evaluation and replay rendering settings.
 eval:
-  # ---------------------------------------------------------------------------
-  # Multi-scenario validation eval. validation_defaults holds the shared
-  # clean-eval env + fixed eval reward weights; the replay / gigaflow sections
-  # add their sim-specific map set and agent layout. Each sweeps 250 scenarios,
-  # ignores traffic lights, and disables reward randomization so metrics are
-  # comparable across checkpoints. Both write a per-episode CSV and a coverage
-  # report (episode_metrics/).
-  # ---------------------------------------------------------------------------
-  validation_defaults:
-    enabled: 'true'
-    interval: 250
-    mode: inline
-    clean: 'true'
-    env:
-      eval_mode: 1
-      collision_behavior: stop
-      offroad_behavior: stop
-      traffic_light_behavior: ignore
-      reward_randomization: false
-      termination_mode: 0
-      num_agents: 1024
-      goal_regen_mode: finite
-      goal_source: route
-      goal_speed: 3.0
-      reward_collision: 3.0
-      reward_offroad: 3.0
-      reward_stop_line: 1.0
-      reward_goal: 1.0
-      reward_overspeed: 0.05
-      reward_comfort: 0.05
-      reward_velocity: 0.0025
-      reward_lane_align: 0.025
-      reward_lane_center: 0.0038
-      reward_timestep: 2.5e-05
-      reward_reverse: 0.005
-      reward_ade: 0.0
-      obs_dropout_lane: 0.0
-      obs_dropout_boundary: 0.0
-      obs_slots_lane_n: 80
-      obs_slots_boundary_n: 80
-    eval:
-      num_scenarios: 250
-      export_episode_csv: 'true'
-      verify_coverage: 'true'
-  validation_replay:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'false'
-    render: 'true'
-    render_backend: obs_html
-    env:
-      simulation_mode: replay
-      control_mode: control_sdc_only
-      map_dir: data/nuplan_mini_val
-      num_maps: 250
-      max_agents_per_env: 64
-      scenario_length: 200
-      resample_frequency: 200
-    eval:
-      render_num_scenarios: 5
-      render_max_steps: 200
-  validation_gigaflow:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'true'
-    render: 'false'
-    render_backend: obs_html
-    render_views: [sim_state, bev]
-    env:
-      simulation_mode: gigaflow
-      map_dir: pufferlib/resources/drive/binaries/carla
-      num_maps: 8
-      num_agents: 1024
-      min_agents_per_env: 40
-      max_agents_per_env: 40
-      scenario_length: 500
-      resample_frequency: 500
-    eval:
-      render_num_scenarios: 8
-      render_max_steps: 300
-  dnf_triage:
-    inherits: validation_defaults
-    type: multi_scenario
-    enabled: 'false'
-    render: 'true'
-    render_backend: obs_html
-    env:
-      simulation_mode: gigaflow
-      map_dir: pufferlib/resources/drive/binaries/carla/opendrive__Town10HD.bin
-      num_maps: 1
-      min_agents_per_env: 1
-      max_agents_per_env: 1
-      scenario_length: 500
-      resample_frequency: 500
-    eval:
-      num_scenarios: 32
-      render_num_scenarios: 16
-      render_max_steps: 300
-  # ---------------------------------------------------------------------------
-  # Optional: WOSAC realism eval. Off by default.
-  # ---------------------------------------------------------------------------
-  wosac:
-    type: wosac
-    enabled: 'false'
-    interval: 500
-    mode: subprocess
-    clean: 'true'
-    render: 'false'
-    env:
-      control_mode: control_wosac
-      init_mode: create_all_valid
-      init_step: 10
-      goal_radius: 2.0
-    eval:
-      wosac_num_rollouts: 32
-      wosac_num_agents: 256
-      wosac_sanity_check: 'false'
-      wosac_aggregate_results: 'true'
+  num_agents: 128
+  # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
+  max_sdc_replay_workers: 4
+  benchmark_config: pufferlib/config/evaluation/benchmark.yaml
+  benchmarks: null
+  output_name: null
+  # Capture and render every scenario during the standard benchmark pass.
+  render_scenarios: false
+  # Render scenarios where any configured metric is positive.
+  # Use all_infractions for every infraction type; null disables it.
+  render_filter: null
+  # Maximum failures rendered per benchmark; null renders every failure.
+  max_rendered_failures: null
+  # Existing episode metrics CSV to replay without running the benchmark first.
+  failure_replay_csv: null
+  capture_observations: false
+  observation_replay_wave_size: 16
+  observation_replay_writer_count: 4
+  # Options: sample | mode | mean
+  action_selection: mode
 controlled_exp:
   train:
     # [sweep.train.learning_rate]

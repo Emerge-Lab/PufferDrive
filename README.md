@@ -131,67 +131,42 @@ torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train p
 
 ## Eval
 
-All evaluation runs through the unified `Evaluator`/`EvalManager` pipeline.
-`eval.<name>` sections in `puffer_drive.yaml` define each evaluator; the same
-ones run inline during training and standalone here.
-
-The default device is CUDA; on a machine without it (e.g. a Mac) add `train.device=cpu`.
-
-```bash
-# Run a named evaluator on a checkpoint (config from eval.<name>)
-puffer eval puffer_drive --evaluator validation_gigaflow \
-  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt
-
-# Ad-hoc: pick by simulation + override scale from the CLI
-puffer eval puffer_drive --eval_simulation replay \
-  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 250 --render 1
-
-# Render the agent's observations (interactive HTML)
-puffer eval puffer_drive --eval_simulation gigaflow \
-  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
-  --num_scenarios 10 --render 1 --render-backend obs_html
-```
-
-(`--evaluator`, `--eval_simulation`, `--num_scenarios`, `--render`, and
-`--render-backend` are per-invocation eval flags consumed before config
-loading; everything else uses Hydra `key=value` overrides.)
-
-**For the full guide see [`docs/evaluation.md`](docs/evaluation.md).**
-
-## Failure mining
-
-Roll a trained policy out against a scenario suite, capture per-episode compact replays for episodes whose `episode_return` falls below a threshold, render each one as an interactive HTML page, and produce a sortable cross-episode index. Useful for triaging what a policy fails at after a long training run.
+The eval command loads one or more named benchmarks from the benchmark YAML and
+writes per-episode metrics for each benchmark. Benchmark selection is mandatory;
+eval does not choose one implicitly. The default device is CUDA; on a machine
+without it add `train.device=cpu`.
 
 ```bash
-puffer mine_failures puffer_drive \
-    load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000123.pt \
-    mine.output_dir=./failure_mining/puffer_drive_xxxx \
-    mine.num_episodes=200 \
-    mine.score_threshold=-10.0
+# Run the CARLA YAML benchmark and render every evaluated scenario
+puffer eval puffer_drive carla \
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  eval.render_scenarios=true \
+  eval.capture_observations=false
 ```
 
-Config keys (under `mine:` in `puffer_drive.yaml` or `mine.<key>=<value>` on the CLI):
+Scenario renders are captured during the benchmark pass and written as
+interactive HTML with retained `.replay.zlib` files. To render only episodes
+where `offroad_rate > 0` instead:
 
-| Key | Default | Notes |
-|---|---|---|
-| `output_dir` | `./failure_mining/<env_name>` | Where replays, CSV, and HTML output go |
-| `num_episodes` | `100` | Total episodes to roll out |
-| `score_threshold` | `-inf` | `episode_return < threshold` → flagged as failure; replay written to disk. With `-inf`, no failures are flagged and no replays are persisted. |
-| `render` | `True` | Render each captured replay to HTML + write `index.html` via `mining_viz` |
-
-`env.*` overrides apply (e.g. `env.simulation_mode=gigaflow` to mine on procedural scenarios). Single vec env, sequential rollout — no per-worker map pinning yet. On a machine without CUDA add `train.device=cpu vec.backend=Serial` (the default vec config assumes cluster core counts).
-
-**Output structure** (under `output_dir`):
-
-```
-episodes.csv                 # one row per episode, all summary metrics
-replays/episode_NNNNNN.replay.zlib   # only for failures (above-threshold episodes are not persisted)
-renders/episode_NNNNNN.html  # one viewer page per failure
-renders/index.html           # sortable index of all episodes
+```bash
+puffer eval puffer_drive carla \
+  load_model_path=experiments/puffer_drive_xxxx/models/model_puffer_drive_000500.pt \
+  eval.render_filter=offroad_rate \
+  eval.max_rendered_failures=10 \
+  eval.capture_observations=false
 ```
 
-Open `renders/index.html` in a browser to triage. The index page filters by "failures only" / "replays only" and sorts by any metric column. Each row links to the per-episode viewer with the scene's full 2D animation.
+Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
+Evaluation outputs are written under
+`eval/<benchmark>[_<output_name>]/<timestamp>/`. The benchmark seed and effective
+worker count are saved in the
+resolved configuration: repeated runs with both unchanged produce the same
+map/seed rows. Filtered renders replay the exact map and seed recorded by the
+metrics pass. Set `eval.failure_replay_csv=<path/to/episode_metrics.csv>` with a
+non-null `eval.render_filter` to skip the standard benchmark pass and filter an
+existing report directly. See [docs/evaluation.md](docs/evaluation.md) for the
+benchmark schema, filtered replay and all-scenario rendering flows, outputs, and
+training integration.
 
 ## Nightly runs and the regression report
 

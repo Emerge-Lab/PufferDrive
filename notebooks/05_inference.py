@@ -24,7 +24,8 @@ import torch.nn.functional as F
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.torch import Drive as DrivePolicy
-from pufferlib.pytorch import sample_logits
+from pufferlib.pytorch import sample_logits, ACTION_SELECT_MODE, ACTION_SELECT_SAMPLE
+import pufferlib.spaces
 from notebooks.notebook_utils import COEF_NAMES, EGO_LABELS, MAP_DIR, load_notebook_config, zero_actions
 
 CHECKPOINT_PATH = ""
@@ -32,6 +33,7 @@ ENV_NAME = "puffer_drive"
 
 config = load_notebook_config(CHECKPOINT_PATH, ENV_NAME)
 config["env"]["num_agents"] = 64
+config["env"]["max_agents_per_env"] = 64
 config["env"]["num_maps"] = 8
 config["env"]["eval_mode"] = 1
 config["env"]["map_dir"] = MAP_DIR
@@ -54,8 +56,9 @@ if CHECKPOINT_PATH:
     policy.load_state_dict(sd)
     print(f"Loaded checkpoint: {CHECKPOINT_PATH}")
 
-is_continuous = policy.is_continuous
-ACT_SHAPE = (N, len(env.single_action_space.nvec)) if not is_continuous else (N, env.single_action_space.shape[0])
+is_continuous = policy.is_continuous  # policy output space
+env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)  # env action space
+ACT_SHAPE = (N, env.single_action_space.shape[0]) if env_continuous else (N, len(env.single_action_space.nvec))
 
 print(f"Policy on {device}, params: {sum(p.numel() for p in policy.parameters()):,}")
 print(f"Obs shape: {obs.shape}, Action space: {env.single_action_space}")
@@ -76,8 +79,10 @@ with torch.no_grad():
     logits_list, value = policy(obs_tensor)
 
 # Sample actions
-action, logprob, ent = sample_logits(logits_list)
-action_det, _, _ = sample_logits(logits_list, deterministic=True)
+action, logprob, ent, cont_action = sample_logits(logits_list, env_continuous=env_continuous, policy=policy)
+action_det, _, _, _ = sample_logits(
+    logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy
+)
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
 print(f"Entropy: mean={ent.mean():.4f}, std={ent.std():.4f}")
@@ -121,7 +126,7 @@ rew_cond = config["env"].get("reward_conditioning", False)
 n_tgt_wp = config["env"].get("num_goals", 3)
 
 
-def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
+def run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE, horizon=HORIZON):
     obs, _ = env.reset(seed=42)
     N = env.num_agents
 
@@ -143,7 +148,9 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         obs_t = torch.FloatTensor(obs).to(device)
         with torch.no_grad():
             logits_list, val = policy(obs_t)
-            act, logp, entr = sample_logits(logits_list, deterministic=deterministic)
+            act, logp, entr, cont_act = sample_logits(
+                logits_list, action_selection=action_selection, env_continuous=env_continuous, policy=policy
+            )
 
         buffers["obs"][t] = obs
         buffers["actions"][t] = act.cpu().numpy().reshape(N) if act.dim() > 1 else act.cpu().numpy()
@@ -156,8 +163,12 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
         buffers["positions_x"][t] = gstate["x"]
         buffers["positions_y"][t] = gstate["y"]
 
-        # Step env
-        env_actions = act.cpu().numpy().reshape(ACT_SHAPE)
+        # Step env. A discrete policy on a continuous env steps with the decoded
+        # continuous action; otherwise the (discrete or continuous) action itself.
+        if env_continuous and not is_continuous:
+            env_actions = cont_act.cpu().numpy().reshape(N, -1)
+        else:
+            env_actions = act.cpu().numpy().reshape(ACT_SHAPE)
         obs, rew, term, trunc, info = env.step(env_actions)
         buffers["rewards"][t] = rew
         buffers["terminals"][t] = term
@@ -167,9 +178,9 @@ def run_rollout(env, policy, deterministic=False, horizon=HORIZON):
 
 
 print("Running stochastic rollout...")
-buf_stoch = run_rollout(env, policy, deterministic=False)
+buf_stoch = run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE)
 print("Running deterministic rollout...")
-buf_det = run_rollout(env, policy, deterministic=True)
+buf_det = run_rollout(env, policy, action_selection=ACTION_SELECT_MODE)
 
 for name, buf in [("Stochastic", buf_stoch), ("Deterministic", buf_det)]:
     print(f"\n--- {name} ---")
@@ -190,7 +201,6 @@ sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_A
 print(dyn_model, tgt_type, rew_cond, n_tgt_wp)
 img = plot_observation(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -227,7 +237,6 @@ ego_features_over_time = []
 for t in range(HORIZON):
     ego, *_ = unpack_obs(
         buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0],
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -277,7 +286,6 @@ sample_t = min(50, HORIZON - 1)
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -465,7 +473,6 @@ def unpack_all_timesteps(bufs, agent_idx):
         ob = bufs["obs"][t : t + 1, agent_idx : agent_idx + 1][0]
         ego, tgt, part, lane, bnd, tfc = unpack_obs(
             ob,
-            goal_regen_mode=tgt_type,
             reward_conditioning=rew_cond,
             num_goals=n_tgt_wp,
             obs_slots_partners_n=env.obs_slots_partners_n,
@@ -543,7 +550,6 @@ for t in range(HORIZON):
     ob = buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
     _, _, part, _, _, _ = unpack_obs(
         ob,
-        goal_regen_mode=tgt_type,
         reward_conditioning=rew_cond,
         num_goals=n_tgt_wp,
         obs_slots_partners_n=env.obs_slots_partners_n,
@@ -571,7 +577,6 @@ plt.show()
 sample_obs = buf_stoch["obs"][sample_t : sample_t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]
 ego, target, partners, lanes, boundaries, traffic_controls = unpack_obs(
     sample_obs,
-    goal_regen_mode=tgt_type,
     reward_conditioning=rew_cond,
     num_goals=n_tgt_wp,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -1049,7 +1054,7 @@ plt.show()
 
 # %%
 # Compute action probs over time for tracked agent (stochastic rollout)
-n_actions = env.single_action_space.nvec[0] if not is_continuous else 1
+n_actions = policy.atn_dim[0] if not is_continuous else 1
 action_probs_time = np.zeros((HORIZON, n_actions))
 for t in range(HORIZON):
     obs_t = torch.FloatTensor(buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]).to(device)

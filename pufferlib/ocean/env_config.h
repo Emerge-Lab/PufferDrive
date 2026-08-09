@@ -71,9 +71,10 @@ typedef struct {
     float obs_range_road_side_m;
     float partner_blindness_prob;
     float partner_blindness_trigger_prob;
+    float partner_blindness_duration_seconds;
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
-    int phantom_braking_duration;
+    float phantom_braking_duration_seconds;
 } env_init_config;
 
 // Shared "ignore"/"stop"/"remove" enum for the collision/offroad/traffic-light
@@ -273,12 +274,14 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->partner_blindness_prob = atof(value);
     } else if (MATCH("env", "partner_blindness_trigger_prob")) {
         env_config->partner_blindness_trigger_prob = atof(value);
+    } else if (MATCH("env", "partner_blindness_duration_seconds")) {
+        env_config->partner_blindness_duration_seconds = atof(value);
     } else if (MATCH("env", "phantom_braking_prob")) {
         env_config->phantom_braking_prob = atof(value);
     } else if (MATCH("env", "phantom_braking_trigger_prob")) {
         env_config->phantom_braking_trigger_prob = atof(value);
-    } else if (MATCH("env", "phantom_braking_duration")) {
-        env_config->phantom_braking_duration = atoi(value);
+    } else if (MATCH("env", "phantom_braking_duration_seconds")) {
+        env_config->phantom_braking_duration_seconds = atof(value);
     } else {
         return 0; // Unknown section/name, indicate failure to handle
     }

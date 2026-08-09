@@ -9,6 +9,7 @@
 
 # Full training scale. The defaults are sized to run on-premise for dev;
 # the scale knobs for a real training run live here.
+policy.action_type: discrete
 env.num_agents: 3200
 vec.num_envs: 40
 train.minibatch_size: 256000
@@ -19,9 +20,9 @@ train.compile: true
 train.total_timesteps: 10_000_000_000
 train.checkpoint_interval: 500
 
-# validation_gigaflow (CARLA sweep) runs inline; validation_replay needs
-# nuPlan bins not used in this nightly.
-eval.validation_replay.enabled: 0
+# Run the catalog-defined fast CARLA evaluation every 100 training epochs.
+train.evaluation_interval_epochs: 100
+train.evaluation_benchmarks: carla_fast
 
 # W&B — group has no space (submit_cluster.py joins the inner command
 # without quoting arg values). Launchers (launch_nightly_best.sh and

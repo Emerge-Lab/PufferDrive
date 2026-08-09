@@ -4,7 +4,6 @@
 
 import contextlib
 import copy
-import numbers
 import warnings
 
 import pandas as pd
@@ -36,11 +35,12 @@ import torch.distributed
 from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
+from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
-import pufferlib.viz
 from pufferlib.config_schema import ENV_SCHEMAS
 
 
@@ -75,6 +75,8 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_score",
     "multi_lane_time",
     "speed_limit_compliance",
+    "total_distance_travelled_sum",
+    "total_infraction_count",
 }
 
 
@@ -127,8 +129,17 @@ class PuffeRL:
 
         # Vecenv info
         vecenv.async_reset(seed)
+
+        self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
-        atn_space = vecenv.single_action_space
+        # Custom policy attributes live on the base module, not the DDP/compile wrapper.
+        unwrapped_policy = base_policy(policy)
+        if self.env_continuous and not unwrapped_policy.is_continuous:
+            action_shape = (len(unwrapped_policy.atn_dim),)
+            action_dtype = torch.int32
+        else:
+            action_shape = vecenv.single_action_space.shape
+            action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
@@ -170,9 +181,9 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
-            *atn_space.shape,
+            *action_shape,
             device=device,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+            dtype=action_dtype,
         )
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
@@ -301,8 +312,6 @@ class PuffeRL:
         self.losses = {}
         self.best_score = -float("inf")
         self.ema_max = 0.0
-        # Set later via PuffeRL.attach_eval_manager (before evaluate() fires).
-        self._eval_manager = None
 
         # Dashboard
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
@@ -398,7 +407,9 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+                )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -441,10 +452,6 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
-
             profile("eval_misc", epoch)
             for i in info:
                 for k, v in pufferlib.unroll_nested_dict(i):
@@ -456,14 +463,22 @@ class PuffeRL:
                         self.stats[k].append(v)
 
             profile("env", epoch)
-            self.vecenv.send(action)
+
+            if self.env_continuous and not self.uncompiled_policy.is_continuous:
+                cont_action = cont_action.cpu().numpy()
+                self.vecenv.send(cont_action.squeeze(0))
+            else:
+                action = action.cpu().numpy()
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
+                self.vecenv.send(action)
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return self.stats
+        return pufferlib.utils.reduce_environment_metrics(self.stats)
 
     @record
     def train(self):
@@ -527,29 +542,6 @@ class PuffeRL:
                     except Exception as e:
                         print(f"Failed to export model weights: {e}")
 
-        # All evaluation is now driven by the unified EvalManager. Each
-        # eval.<name> section in puffer_drive.yaml is one evaluator instance;
-        # the manager fires any whose interval divides this epoch. See
-        # docs/eval_unification.md for the design.
-        # Under DDP, only rank 0 runs eval — every rank has identical
-        # weights so duplicating the rollout wastes memory + compute,
-        # and parallel mp4 writes from N ranks race on filenames. Other
-        # ranks block on the next allreduce until rank 0 rejoins.
-        is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
-        if self._eval_manager is not None and is_rank0:
-            # Subprocess evals load the policy from disk. Save the latest
-            # checkpoint first so they see this epoch's weights, not the
-            # last save_checkpoint() from `checkpoint_interval`.
-            if self._eval_manager.has_subprocess_evals_at(self.epoch):
-                self.save_checkpoint()
-            self._eval_manager.maybe_run(
-                epoch=self.epoch,
-                policy=self.uncompiled_policy,
-                env_name=self.config["env"],
-                logger=self.logger,
-                global_step=self.agent_steps,
-            )
-
         return logs
 
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
@@ -559,7 +551,7 @@ class PuffeRL:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
         newvalue = newvalue.float()
-        _, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+        _, newlogprob, entropy, _ = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
         newlogprob = newlogprob.float().view_as(mb_logprobs)
         newvalue = newvalue.view_as(mb_returns)
@@ -571,6 +563,7 @@ class PuffeRL:
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+        # TODO fix multi-gpu bug
         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
         if adv_weights is not None:
             mb_adv = adv_weights * mb_adv
@@ -802,14 +795,7 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        for k in list(self.stats.keys()):
-            v = self.stats[k]
-            try:
-                v = np.mean(v)
-            except:
-                del self.stats[k]
-
-            self.stats[k] = v
+        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -1215,6 +1201,9 @@ class NoLogger:
     def log(self, logs, step):
         pass
 
+    def upload_config(self, config_yaml_path):
+        pass
+
     def close(self, model_path, early_stop):
         pass
 
@@ -1247,6 +1236,9 @@ class NeptuneLogger:
 
     def upload_model(self, model_path):
         self.neptune["model"].track_files(model_path)
+
+    def upload_config(self, config_yaml_path):
+        self.neptune["config_yaml"].upload(config_yaml_path)
 
     def close(self, model_path, early_stop):
         self.neptune["early_stop"] = early_stop
@@ -1287,6 +1279,9 @@ class WandbLogger:
         artifact.add_file(model_path)
         self.wandb.run.log_artifact(artifact)
 
+    def upload_config(self, config_yaml_path):
+        self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
+
     def close(self, model_path, early_stop):
         self.wandb.run.summary["early_stop"] = early_stop
         if self.should_upload_model:
@@ -1317,6 +1312,9 @@ class TensorBoardLogger:
         for key, value in logs.items():
             if isinstance(value, (int, float)):
                 self.local_writer.add_scalar(key, value, step)
+
+    def upload_config(self, config_yaml_path):
+        pass
 
     def close(self, model_path, early_stop):
         self.local_writer.close()
@@ -1368,8 +1366,14 @@ def _save_experiment_config(args, path):
         yaml.dump(config, f)
 
 
+def _global_agent_steps(pufferl):
+    world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    return int(pufferl.global_step * world_size)
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
+    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1466,10 +1470,6 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     if args["train"].get("resume_state_path"):
         pufferl.load_training_state(args["train"]["resume_state_path"])
 
-    from pufferlib.ocean.benchmark.manager import EvalManager
-
-    pufferl._eval_manager = EvalManager.from_config(args, run_id=logger.run_id if logger else None)
-
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
     # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
@@ -1490,10 +1490,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
+    pufferl.logger.upload_config(os.path.join(path, "config.yaml"))
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
+    last_training_evaluation_epoch = None
 
     while pufferl.global_step < train_config["total_timesteps"]:
         if is_cuda_device(train_config["device"]):
@@ -1516,6 +1518,19 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
             raise
+
+        if training_evaluation_scheduled and pufferl.epoch % args["train"]["evaluation_interval_epochs"] == 0:
+            last_training_evaluation_epoch = pufferl.epoch
+            if is_rank0:
+                run_training_evaluation(
+                    env_name=env_name,
+                    args=args,
+                    policy=pufferl.uncompiled_policy,
+                    logger=pufferl.logger,
+                    epoch=pufferl.epoch,
+                    global_step=_global_agent_steps(pufferl),
+                    run_dir=path,
+                )
 
         if logs is not None:
             should_stop_early = False
@@ -1544,21 +1559,15 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     #     stats = pufferl.evaluate()
     #     i += 1
 
-    # Force every enabled evaluator to fire once at shutdown, regardless
-    # of whether `epoch % interval == 0` lines up. Restores the
-    # `epoch % interval == 0 or done_training` semantics from the legacy
-    # eval pipeline — without this the final epoch's metrics get dropped
-    # whenever total_timesteps lands off-cycle. Rank-0 only under DDP
-    # for the same reasons as the in-loop call above.
-    is_rank0 = (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0
-    if pufferl._eval_manager is not None and is_rank0:
-        pufferl._eval_manager.maybe_run(
-            epoch=pufferl.epoch,
+    if training_evaluation_scheduled and last_training_evaluation_epoch != pufferl.epoch and is_rank0:
+        run_training_evaluation(
+            env_name=env_name,
+            args=args,
             policy=pufferl.uncompiled_policy,
-            env_name=pufferl.config["env"],
             logger=pufferl.logger,
-            global_step=pufferl.agent_steps,
-            force=True,
+            epoch=pufferl.epoch,
+            global_step=_global_agent_steps(pufferl),
+            run_dir=path,
         )
 
     logs = pufferl.mean_and_log()
@@ -1571,334 +1580,160 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
-# Env keys that define the observation / action layout a checkpoint was trained
-# with. They must match at eval or the policy unpacks the obs at the wrong
-# offsets, so they come from the checkpoint — unlike the eval-policy env config
-# (sim mode, maps, rewards, behaviors), which the [eval.<name>] section owns.
-_ARCH_ENV_KEYS = (
-    # action / dynamics
-    "action_type",
-    "dynamics_model",
-    "trajectory_prediction_length",
-    "num_trajectory_scaling_factors",
-    "trajectory_scaling_factors",
-    # observation token counts + scope
-    "obs_slots_partners_n",
-    "obs_slots_lane_n",
-    "obs_slots_boundary_n",
-    "obs_lane_stride",
-    "obs_boundary_stride",
-    "obs_slots_traffic_controls_n",
-    "obs_dropout_lane",
-    "obs_dropout_boundary",
-    "traffic_control_scope",
-    "reward_conditioning",
-    # target / goal representation
-    "goal_source",
-    "goal_regen_mode",
-    "num_goals",
-    "min_goal_spacing",
-    "max_goal_spacing",
-    "obs_goal_lane_distance",
-    # observation normalization scales + spatial extent — the policy was
-    # trained against these, so wrong values feed it mis-scaled / clipped obs.
-    "obs_norm_xy_offset_m",
-    "obs_norm_goal_offset_m",
-    "obs_norm_veh_length_m",
-    "obs_norm_veh_width_m",
-    "obs_norm_road_seg_length_m",
-    "obs_norm_road_seg_width_m",
-    "obs_range_traffic_control_m",
-    "obs_range_partner_m",
-    "obs_range_road_front_m",
-    "obs_range_road_behind_m",
-    "obs_range_road_side_m",
-)
-
-
-def _merge_checkpoint_arch(args, model_path):
-    """Adopt a checkpoint's architecture from its sibling config.yaml.
-
-    A standalone eval may load a checkpoint whose network shape or observation
-    layout differs from puffer_drive.yaml. The training run writes config.yaml next to
-    models/, so pull from it before the policy/env are built:
-      - policy.*, rnn.*, policy_name, rnn_name (+ derived use_rnn) — the net,
-        else load_state_dict mismatches.
-      - the obs/action-layout env keys (_ARCH_ENV_KEYS) — else the eval env
-        packs observations the policy can't unpack.
-    The eval-policy env config (simulation_mode, map_dir, num_*, rewards,
-    behaviors) is intentionally left to the [eval.<name>] section.
-    """
-    config_yaml_path = os.path.join(os.path.dirname(os.path.dirname(model_path)), "config.yaml")
-    if not os.path.exists(config_yaml_path):
-        return args
-    with open(config_yaml_path) as f:
-        yaml_config = yaml.safe_load(f) or {}
-    for section in ("policy", "rnn"):
-        if isinstance(yaml_config.get(section), dict):
-            args.setdefault(section, {}).update(yaml_config[section])
-    for key in ("rnn_name", "policy_name"):
-        if key in yaml_config:
-            args[key] = yaml_config[key]
-    args.setdefault("train", {})["use_rnn"] = args.get("rnn_name") is not None
-    env_cfg = yaml_config.get("env", {})
-    if isinstance(env_cfg, dict):
-        args.setdefault("env", {})
-        for key in _ARCH_ENV_KEYS:
-            if key in env_cfg:
-                args["env"][key] = env_cfg[key]
-    print(f"[eval] merged policy/rnn + obs-layout config from {config_yaml_path}")
-    return args
-
-
 def eval(
     env_name,
     args=None,
-    vecenv=None,
     policy=None,
-    evaluator_name=None,
-    out_path=None,
-    global_step=None,
-    epoch=None,
-    eval_simulation=None,
-    num_scenarios=None,
-    render=None,
-    render_backend=None,
-    num_maps=None,
+    eval_output_dir=None,
+    eval_output_subdir=None,
+    use_training_config=False,
+    benchmark_names=None,
 ):
-    """Run a single named evaluator from puffer_drive.yaml.
-
-    Standalone form: `puffer eval puffer_drive --evaluator <name>`. The
-    evaluator's config (env/vec overrides, render flag, etc.) comes from
-    the [eval.<name>] section. Loads the policy from `--load-model-path`.
-
-    Ad-hoc form: instead of `--evaluator`, pass `--eval_simulation
-    gigaflow|replay` to pick `validation_<sim>`. Either way, the simple
-    flags `--num_scenarios`, `--render`, `--render-backend`, `--num_maps`
-    override the chosen evaluator's config for this run (only when passed),
-    so a checkpoint can be evaluated at an arbitrary scale from the CLI
-    without editing puffer_drive.yaml.
-
-    Subprocess form: `--out <json>` writes the result dict to a JSON file
-    so the parent EvalManager can read structured metrics back without
-    parsing stdout. `--global-step` and `--epoch` flow through so render
-    mp4 filenames carry the right `_epoch{E}_step{N}` tag (otherwise
-    every subprocess invocation would write `_epoch0_step0.mp4` and
-    successive epochs would silently overwrite each other on disk).
-    """
-    from pufferlib.ocean.benchmark.manager import EvalManager
-
+    """Run configured benchmarks or replay failures from an existing CSV."""
+    cli_overrides = list(sys.argv[1:]) if args is None else []
+    if any(override.split("=", 1)[0] == "env.num_agents" for override in cli_overrides):
+        raise pufferlib.APIUsageError("Use eval.num_agents to configure evaluation agent count")
     args = args or load_config(env_name)
-
-    # When evaluating a checkpoint, adopt its network architecture from the
-    # training run's sibling config.yaml so the policy is built to match the
-    # weights regardless of what puffer_drive.yaml currently says.
-    if args.get("load_model_path"):
-        _merge_checkpoint_arch(args, args["load_model_path"])
-
-    if evaluator_name is None:
-        evaluator_name = args.get("evaluator")
-    if evaluator_name is None and eval_simulation:
-        evaluator_name = f"validation_{eval_simulation}"
-    if evaluator_name is None:
+    eval_config = args["eval"]
+    benchmark_config_path = eval_config["benchmark_config"]
+    selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
+    eval_config["benchmarks"] = selected_benchmarks
+    output_name = eval_config["output_name"]
+    render_scenarios = eval_config["render_scenarios"]
+    render_filter = eval_config["render_filter"]
+    max_rendered_failures = eval_config["max_rendered_failures"]
+    failure_replay_csv = eval_config["failure_replay_csv"]
+    max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
+    valid_action_selections = (
+        pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+        pufferlib.pytorch.ACTION_SELECT_MODE,
+        pufferlib.pytorch.ACTION_SELECT_MEAN,
+    )
+    if eval_config["action_selection"] not in valid_action_selections:
         raise pufferlib.APIUsageError(
-            "puffer eval requires --evaluator <name> (or --eval_simulation gigaflow|replay); "
-            "named eval.<name> sections live in puffer_drive.yaml"
+            f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
+        )
+    if render_scenarios and failure_replay_csv is not None:
+        raise pufferlib.APIUsageError(
+            "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
+            "with eval.failure_replay_csv"
+        )
+    if failure_replay_csv is not None and render_filter is None:
+        raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
+    environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
+    if use_training_config:
+        if policy is None:
+            raise pufferlib.APIUsageError("Training evaluation requires the live policy")
+        base_args = copy.deepcopy(args)
+        environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
+        environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
+        checkpoint_config_path = None
+    else:
+        base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+    if eval_output_dir is None:
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+        eval_output_dir = os.path.join(run_dir, "eval")
+    if eval_output_subdir is None:
+        eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
+    failure_replay_output_dir = None
+    if failure_replay_csv is not None:
+        failure_replay_csv = os.path.abspath(failure_replay_csv)
+        if not os.path.isfile(failure_replay_csv):
+            raise pufferlib.APIUsageError(
+                f"eval.failure_replay_csv must reference an existing CSV file: {failure_replay_csv}"
+            )
+        failure_replay_output_dir = os.path.dirname(failure_replay_csv)
+    benchmark_results = {}
+    evaluation_policy_cache = {"policy": policy}
+    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
+    for benchmark in benchmarks:
+        run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
+        run_args = OmegaConf.to_container(
+            OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
+            resolve=True,
+        )
+        run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
+            run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
+        output_directory_name = benchmark["name"]
+        if output_name is not None:
+            output_directory_name = f"{output_directory_name}_{output_name}"
+        if failure_replay_output_dir is not None:
+            benchmark_output_dir = failure_replay_output_dir
+            resolved_benchmark_output_dir = os.path.join(benchmark_output_dir, "failures")
+            os.makedirs(resolved_benchmark_output_dir, exist_ok=True)
+        else:
+            benchmark_output_dir = os.path.join(eval_output_dir, output_directory_name)
+            benchmark_output_dir = os.path.join(benchmark_output_dir, eval_output_subdir)
+            os.makedirs(benchmark_output_dir)
+            resolved_benchmark_output_dir = benchmark_output_dir
+        drive_benchmark.write_resolved_benchmark_config(
+            run_args,
+            benchmark,
+            benchmark_config_path,
+            checkpoint_config_path,
+            os.path.join(resolved_benchmark_output_dir, "resolved_benchmark.yaml"),
         )
 
-    # Derive a default render output dir from the model path when none is set.
-    # experiments/puffer_drive_e6guw2wv/models/model.pt → benchmark/puffer_e6guw2wv
-    if not args.get("render_results_dir") and not args.get("eval_results_dir"):
-        load_model_path = args.get("load_model_path")
-        if load_model_path:
-            exp_name = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(load_model_path))))
-            run_id = exp_name.removeprefix(f"{env_name}_")
-            args["render_results_dir"] = os.path.join("benchmark", f"puffer_{run_id}")
-
-    manager = EvalManager.from_config(args)
-    target = next((e for e in manager.evaluators if e.name == evaluator_name), None)
-    if target is None:
-        raise KeyError(f"No [eval.{evaluator_name}] section found. Known: {[e.name for e in manager.evaluators]}")
-
-    # Ad-hoc CLI overrides applied to the chosen evaluator for this run.
-    # The evaluator reads self.config / self.render at rollout time, so
-    # mutating them here takes effect without touching puffer_drive.yaml.
-    if num_scenarios is not None:
-        target.config.setdefault("eval", {})["num_scenarios"] = int(num_scenarios)
-    if num_maps is not None:
-        target.config.setdefault("env", {})["num_maps"] = int(num_maps)
-    if render is not None:
-        target.render = bool(render)
-    if render_backend is not None:
-        target.config["render_backend"] = render_backend
-
-    # Build a fresh vecenv inside the manager via the evaluator's overrides.
-    # Policy can come from a checkpoint (load_model_path) or be passed in.
-    if policy is None:
-        # Need a probe vecenv just to construct the policy with the right
-        # obs/action spaces. Use the matching evaluator's env_overrides so
-        # the obs shape matches what the rollout will see.
-        probe_args = manager._build_eval_args(target, env_name=env_name, global_step=None)
-        probe_vec = load_env(env_name, probe_args)
-        policy = load_policy(probe_args, probe_vec, env_name)
-        probe_vec.close()
-
-    result = manager.run_one_by_name(
-        evaluator_name,
-        policy=policy,
-        env_name=env_name,
-        logger=None,
-        global_step=global_step,
-        epoch=epoch,
-    )
-
-    print("EVAL_RESULT_JSON_START")
-    import json
-
-    print(json.dumps({"name": evaluator_name, "metrics": result.metrics}))
-    print("EVAL_RESULT_JSON_END")
-
-    if out_path:
-        with open(out_path, "w") as f:
-            json.dump(
-                {"name": evaluator_name, "metrics": result.metrics, "frames": [str(p) for p in result.frames]},
-                f,
+        np.random.seed(run_args["train"]["seed"])
+        if failure_replay_csv is not None:
+            benchmark_results[benchmark["name"]] = _render_eval_failures(
+                env_name,
+                run_args,
+                benchmark,
+                failure_replay_csv,
+                benchmark_output_dir,
+                policy,
+                eval_config["capture_observations"],
+                max_rendered_failures,
+                evaluation_policy_cache=evaluation_policy_cache,
             )
+            continue
 
-    return result.metrics
+        num_scenarios = run_args["num_scenarios"]
+        num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
+        worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
+            run_args,
+            num_scenarios,
+            num_workers,
+            run_args["env"]["scenario_length"],
+            capture_replay=render_scenarios,
+        )
+        print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
+        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None
+        summaries = _run_eval_rollout(
+            run_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            f"Evaluating {benchmark['name']}",
+            num_scenarios,
+            policy=policy,
+            replay_output_dir=replay_output_dir,
+            capture_observations=render_scenarios and eval_config["capture_observations"],
+            evaluation_policy_cache=evaluation_policy_cache,
+        )
+        summary = drive_benchmark._write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
+        benchmark_results[benchmark["name"]] = {
+            "episodes": summaries,
+            "summary": summary,
+        }
 
-
-def mine_failures(env_name, args=None):
-    """Roll out a trained policy against a fixed scenario suite, capture per-
-    episode compact replays + summaries, and produce a sortable HTML index.
-
-    Config keys (under `mine.` or via CLI flags):
-      - mine.output_dir (default: f"./failure_mining/{env_name}")
-      - mine.num_episodes (default: 100)
-      - mine.score_threshold (default: -inf, i.e. capture every episode;
-        episodes with `episode_return` strictly below this threshold are
-        flagged as failures and have their replay bundle written to disk)
-      - mine.render (default: True; render each captured replay to HTML and
-        write a top-level index.html via mining_viz)
-
-    Other args reused from training/eval: load_model_path, env.*, policy_name,
-    train.device, vec.* (only num_envs is meaningful here; mining always uses
-    a single vec env).
-    """
-    import csv
-    import pandas as pd
-
-    from pufferlib import mining_viz
-
-    args = args or load_config(env_name)
-    mine_cfg = args.get("mine") or {}
-    output_dir = mine_cfg.get("output_dir") or f"./failure_mining/{env_name}"
-    num_episodes = int(mine_cfg.get("num_episodes", 100))
-    score_threshold = float(mine_cfg.get("score_threshold", float("-inf")))
-    do_render = bool(mine_cfg.get("render", True))
-
-    env_kwargs = dict(args["env"])
-    env_kwargs["capture_compact_replay"] = True
-    env_kwargs["emit_completed_episodes"] = True
-    env_kwargs["eval_mode"] = env_kwargs.get("eval_mode", 1)
-    env_kwargs["resample_frequency"] = 0
-    # Mining is sequential: one vec env, walk episodes one batch at a time.
-    vec_kwargs = dict(args["vec"])
-    vec_kwargs.setdefault("num_envs", 1)
-    vec_kwargs.setdefault("num_workers", 1)
-    vec_kwargs.setdefault("batch_size", vec_kwargs["num_envs"])
-
-    package = args["package"]
-    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
-    env_module = importlib.import_module(module_name)
-    make_env = env_module.env_creator(env_name)
-    vecenv = pufferlib.vector.make(make_env, env_kwargs=env_kwargs, **vec_kwargs)
-
-    policy = load_policy({**args, "env": env_kwargs}, vecenv, env_name)
-    policy.eval()
-
-    device = args["train"]["device"]
-    if isinstance(device, int):
-        device = torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
-
-    replay_dir = os.path.join(output_dir, "replays")
-    render_dir = os.path.join(output_dir, "renders") if do_render else None
-    os.makedirs(replay_dir, exist_ok=True)
-    if render_dir is not None:
-        os.makedirs(render_dir, exist_ok=True)
-
-    rows = []
-    next_episode_id = 0
-    seed = args.get("train", {}).get("seed") or 0
-    if hasattr(vecenv, "async_reset"):
-        vecenv.async_reset(seed=seed)
-    obs_arr, *_ = vecenv.recv()
-    pbar_total = num_episodes
-    pbar_done = 0
-    print(f"[mine_failures] target episodes={num_episodes} output={output_dir} score_threshold={score_threshold}")
-    while pbar_done < num_episodes:
-        with torch.no_grad():
-            o_t = torch.as_tensor(obs_arr).to(device)
-            state = {"reward": None, "done": None, "env_id": None, "mask": None}
-            logits, _ = policy.forward_eval(o_t, state)
-            action, _, _ = pufferlib.pytorch.sample_logits(logits)
-            action = action.cpu().numpy()
-            if action.ndim == 1 and len(vecenv.single_action_space.shape) >= 1:
-                action = action.reshape(-1, *vecenv.single_action_space.shape)
-        vecenv.send(action)
-        obs_arr, _, _, _, infos, *_ = vecenv.recv()
-        for info in infos:
-            if not isinstance(info, dict):
-                continue
-            if info.get("summary_type") != "completed_episode":
-                continue
-            episode_id = next_episode_id
-            next_episode_id += 1
-            bundle_bytes = info.pop("compact_replay_bundle", None)
-            row = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in info.items()}
-            row["episode_id"] = episode_id
-            row["avg_distance_per_infraction"] = float(row.get("total_distance_travelled", 0.0)) / max(
-                1.0, float(row.get("total_infractions", 0.0))
+        if render_scenarios:
+            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir)
+        elif render_filter is not None:
+            _render_eval_failures(
+                env_name,
+                run_args,
+                benchmark,
+                os.path.join(benchmark_output_dir, "episode_metrics.csv"),
+                benchmark_output_dir,
+                policy,
+                eval_config["capture_observations"],
+                max_rendered_failures,
+                evaluation_policy_cache=evaluation_policy_cache,
             )
-            row["failed"] = 1 if row.get("episode_return", 0.0) < score_threshold else 0
-            row["has_replay"] = 0
-            row["replay_path"] = None
-            if bundle_bytes is not None and row["failed"]:
-                replay_path = os.path.join(replay_dir, f"episode_{episode_id:06d}.replay.zlib")
-                with open(replay_path, "wb") as f:
-                    f.write(bundle_bytes)
-                row["has_replay"] = 1
-                row["replay_path"] = replay_path
-            rows.append(row)
-            pbar_done += 1
-            if pbar_done >= num_episodes:
-                break
-
-    vecenv.close()
-
-    episodes_df = pd.DataFrame(rows)
-    csv_path = os.path.join(output_dir, "episodes.csv")
-    episodes_df.to_csv(csv_path, index=False)
-    print(
-        f"[mine_failures] wrote {csv_path} ({len(rows)} episodes, {int(episodes_df['failed'].sum())} failures captured)"
-    )
-
-    if do_render and render_dir is not None:
-        render_lookup = {}
-        rendered = 0
-        for row in rows:
-            if not row.get("has_replay"):
-                continue
-            ep_id = int(row["episode_id"])
-            out_html = os.path.join(render_dir, f"episode_{ep_id:06d}.html")
-            mining_viz.render_compact_replay_html(row["replay_path"], out_html, render_context={"summary": row})
-            render_lookup[ep_id] = os.path.relpath(out_html, render_dir)
-            rendered += 1
-        index_path = os.path.join(render_dir, "index.html")
-        mining_viz.generate_failure_index(episodes_df, render_lookup, index_path)
-        print(f"[mine_failures] rendered {rendered} replays + index at {index_path}")
-
-    return episodes_df
+    return benchmark_results
 
 
 def sweep(args=None, env_name=None):
@@ -2058,6 +1893,341 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
+def _run_eval_rollout(
+    args,
+    env_name,
+    worker_env_kwargs,
+    total_steps,
+    desc,
+    expected_episodes,
+    policy=None,
+    recorded_agents_per_batch=None,
+    replay_output_dir=None,
+    capture_observations=False,
+    episode_id_offset=0,
+    evaluation_policy_cache=None,
+):
+    """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
+    num_workers = len(worker_env_kwargs)
+    package = args["package"]
+    module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
+    env_module = importlib.import_module(module_name)
+    make_env = env_module.env_creator(env_name)
+    vecenv = pufferlib.vector.make(
+        [make_env] * num_workers,
+        env_args=[[]] * num_workers,
+        env_kwargs=worker_env_kwargs,
+        backend="Multiprocessing",
+        num_envs=num_workers,
+        num_workers=num_workers,
+        batch_size=num_workers,
+        seed=args["vec"]["seed"],
+    )
+    scenario_progress = None
+    try:
+        agents_per_batch = vecenv.agents_per_batch
+        inference_agents_per_batch = recorded_agents_per_batch or agents_per_batch
+        if agents_per_batch > inference_agents_per_batch:
+            raise pufferlib.APIUsageError(
+                f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
+                f"CSV policy batch of {inference_agents_per_batch}. Reduce num_agents or the replay worker count."
+            )
+        if agents_per_batch < inference_agents_per_batch:
+            print(
+                f"Padding policy inference from {agents_per_batch} to "
+                f"{inference_agents_per_batch} agents to preserve the recorded batch shape"
+            )
+
+        rollout_seed = args["train"]["seed"]
+        torch.manual_seed(rollout_seed)
+        if evaluation_policy_cache is None:
+            evaluation_policy_cache = {"policy": policy}
+        policy = evaluation_policy_cache["policy"]
+        if policy is None:
+            policy = load_policy(args, vecenv, env_name)
+            evaluation_policy_cache["policy"] = policy
+        policy.eval()
+        if "policy_forward_eval" not in evaluation_policy_cache:
+            policy_forward_eval = policy.forward_eval
+            eval_sample_logits = pufferlib.pytorch.sample_logits
+            if args["train"]["compile"]:
+                compile_kwargs = {
+                    "mode": args["train"]["compile_mode"],
+                    "fullgraph": args["train"]["compile_fullgraph"],
+                }
+                policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
+                eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
+            evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
+            evaluation_policy_cache["sample_logits"] = eval_sample_logits
+        policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
+        eval_sample_logits = evaluation_policy_cache["sample_logits"]
+        # A discrete policy on a continuous env emits a discrete class that the
+        # policy's own table maps back to the continuous action the env expects.
+        action_selection = args["eval"]["action_selection"]
+        uncompiled_policy = base_policy(policy)
+        env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
+        discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
+        device = torch_device(args["train"]["device"])
+        use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+        if use_bfloat16 and not torch.cuda.is_bf16_supported():
+            raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+        eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
+        obs, _ = vecenv.reset(rollout_seed)
+        padding_agent_count = inference_agents_per_batch - agents_per_batch
+        policy_obs_tensor = None
+        if padding_agent_count:
+            policy_obs_tensor = torch.zeros(
+                (inference_agents_per_batch, *obs.shape[1:]),
+                dtype=torch.as_tensor(obs).dtype,
+                device=device,
+            )
+        recurrent_state = None
+        if args["train"].get("use_rnn", False):
+            recurrent_state = {
+                "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
+                "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
+            }
+
+        capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
+        replay_capture = None
+        if replay_output_dir is not None:
+            replay_capture = drive_eval_replay.EvalReplayCapture(
+                args,
+                policy,
+                replay_output_dir,
+                capture_observations,
+                num_workers,
+                agents_per_batch,
+                capture_batch_steps,
+                episode_id_offset,
+            )
+
+        episode_summaries = []
+        scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
+        for _ in range(total_steps):
+            with torch.no_grad(), eval_amp_context:
+                environment_obs_tensor = torch.as_tensor(obs, device=device)
+                if padding_agent_count:
+                    policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                else:
+                    policy_obs_tensor = environment_obs_tensor
+                if recurrent_state is None:
+                    logits, value = policy_forward_eval(policy_obs_tensor)
+                else:
+                    logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
+                action, logprob, entropy, cont_action = eval_sample_logits(
+                    logits,
+                    action_selection=action_selection,
+                    env_continuous=env_continuous,
+                    policy=uncompiled_policy,
+                )
+                if discrete_policy_on_continuous_env:
+                    # raw_action stays the discrete class (what the replay logs record),
+                    # while the env is stepped with its continuous counterpart.
+                    raw_action = action[:agents_per_batch].cpu().numpy()
+                    continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
+                    action = continuous_actions[:agents_per_batch].float().cpu().numpy()
+                else:
+                    raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                    action = raw_action
+            if isinstance(logits, torch.distributions.Normal):
+                action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+
+            if replay_capture is not None:
+                replay_capture.capture_frame(
+                    obs,
+                    policy_obs_tensor,
+                    raw_action,
+                    action,
+                    logits,
+                    value,
+                    logprob,
+                    entropy,
+                )
+
+            obs, _, terminals, truncations, infos = vecenv.step(action)
+            if recurrent_state is not None:
+                finished_agent_mask = torch.as_tensor(
+                    np.logical_or(terminals, truncations),
+                    dtype=torch.bool,
+                    device=device,
+                ).reshape(agents_per_batch, 1)
+                recurrent_state["lstm_h"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+                recurrent_state["lstm_c"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+            for worker_info in infos:
+                worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
+                for item in worker_items:
+                    if not isinstance(item, dict) or item.get("summary_type") != "evaluation_episode":
+                        continue
+                    if replay_capture is not None:
+                        replay_capture.queue_replay(item, len(episode_summaries))
+                    else:
+                        item.pop("replay_environment_bundle", None)
+                    item["agents_per_batch"] = inference_agents_per_batch
+                    episode_summaries.append(item)
+                    if len(episode_summaries) <= expected_episodes:
+                        scenario_progress.update(1)
+
+            if replay_capture is not None and replay_capture.pending_count:
+                scenario_progress.set_postfix_str(f"writing {replay_capture.pending_count} replays")
+                replay_capture.write_pending()
+                scenario_progress.set_postfix_str("")
+
+            if len(episode_summaries) >= expected_episodes:
+                break
+    finally:
+        if scenario_progress is not None:
+            scenario_progress.close()
+        vecenv.close()
+    if len(episode_summaries) != expected_episodes:
+        print(
+            f"WARNING: Evaluation expected {expected_episodes} episode summaries, "
+            f"but received {len(episode_summaries)}. Writing the available results.",
+            file=sys.stderr,
+        )
+    return episode_summaries
+
+
+def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, run_dir):
+    """Run the configured evaluator and log its means on the training run."""
+    eval_args = copy.deepcopy(args)
+    eval_args["eval"]["benchmarks"] = eval_args["train"]["evaluation_benchmarks"]
+    eval_args["eval"]["render_scenarios"] = False
+    eval_args["eval"]["render_filter"] = None
+    eval_args["eval"]["failure_replay_csv"] = None
+    eval_output_dir = os.path.join(run_dir, "eval", "training")
+    eval_output_subdir = f"epoch_{epoch:06d}_step_{global_step}"
+
+    rng_state = capture_rng_state()
+    policy_was_training = bool(getattr(policy, "training", False))
+    try:
+        benchmark_results = eval(
+            env_name=env_name,
+            args=eval_args,
+            policy=policy,
+            eval_output_dir=eval_output_dir,
+            eval_output_subdir=eval_output_subdir,
+            use_training_config=True,
+        )
+        metrics = {}
+        for benchmark_name, benchmark_result in benchmark_results.items():
+            summary = benchmark_result["summary"]
+            if summary is None:
+                continue
+            prefix = f"eval_{benchmark_name}"
+            metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
+            metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
+            metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+        if metrics:
+            logger.log(metrics, global_step)
+        return benchmark_results
+    except Exception:
+        print(f"\n[training eval] Evaluation failed at epoch {epoch}; continuing training:")
+        traceback.print_exc()
+        return {}
+    finally:
+        if hasattr(policy, "train"):
+            policy.train(policy_was_training)
+        restore_rng_state({"rng_state": rng_state})
+
+
+def _render_eval_failures(
+    env_name,
+    run_args,
+    benchmark,
+    metrics_path,
+    benchmark_output_dir,
+    policy,
+    capture_observations,
+    max_rendered_failures,
+    evaluation_policy_cache=None,
+):
+    configured_render_filter = run_args["eval"]["render_filter"]
+    selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
+    if max_rendered_failures is not None:
+        selected_rows = selected_rows.head(max_rendered_failures).copy()
+    failures_dir = os.path.join(benchmark_output_dir, "failures")
+    os.makedirs(failures_dir, exist_ok=True)
+    selected_path = os.path.join(failures_dir, "selected_failures.csv")
+    selected_rows.to_csv(selected_path, index=False)
+    if selected_rows.empty:
+        print(f"No failures matched for benchmark {benchmark['name']}; wrote {selected_path}")
+        return {"episodes": [], "summary": None}
+
+    map_indices = drive_benchmark._resolve_map_indices(
+        run_args["env"]["map_dir"],
+        selected_rows["map_name"].tolist(),
+    )
+    seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
+    pairs = list(zip(map_indices, seeds))
+    failure_args = copy.deepcopy(run_args)
+    configured_worker_count = failure_args["vec"]["num_envs"]
+    if configured_worker_count <= 0:
+        raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
+    replay_wave_size = len(pairs)
+    if capture_observations:
+        observation_replay_wave_size = run_args["eval"]["observation_replay_wave_size"]
+        if (
+            isinstance(observation_replay_wave_size, bool)
+            or not isinstance(observation_replay_wave_size, int)
+            or observation_replay_wave_size <= 0
+        ):
+            raise pufferlib.APIUsageError(
+                "eval.observation_replay_wave_size must be a positive integer when rendering observations"
+            )
+        replay_wave_size = min(
+            len(pairs),
+            configured_worker_count,
+            observation_replay_wave_size,
+        )
+        replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
+        if replay_agent_capacity <= 0:
+            raise pufferlib.APIUsageError("Failure rendering requires max_agents_per_env > 0")
+        failure_args["env"]["num_agents"] = replay_agent_capacity
+    replay_output_dir = os.path.join(failures_dir, "replays")
+    os.makedirs(replay_output_dir, exist_ok=True)
+    agents_per_batch_values = selected_rows["agents_per_batch"].unique()
+    if len(agents_per_batch_values) != 1:
+        raise pufferlib.APIUsageError("Benchmark failure rows must contain exactly one agents_per_batch value")
+    recorded_agents_per_batch = int(agents_per_batch_values[0])
+    summaries = []
+    replay_wave_count = (len(pairs) + replay_wave_size - 1) // replay_wave_size
+    for replay_wave_idx, replay_pair_start in enumerate(range(0, len(pairs), replay_wave_size)):
+        replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
+        num_workers = min(configured_worker_count, len(replay_pairs))
+        failure_args["vec"]["num_envs"] = num_workers
+        worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
+            failure_args,
+            replay_pairs,
+            num_workers,
+            failure_args["env"]["scenario_length"],
+        )
+        replay_desc = f"Rendering {benchmark['name']} failures"
+        if replay_wave_count > 1:
+            replay_desc += f" (wave {replay_wave_idx + 1}/{replay_wave_count})"
+        wave_summaries = _run_eval_rollout(
+            failure_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            replay_desc,
+            len(replay_pairs),
+            policy=policy,
+            recorded_agents_per_batch=recorded_agents_per_batch,
+            replay_output_dir=replay_output_dir,
+            capture_observations=capture_observations,
+            episode_id_offset=len(summaries),
+            evaluation_policy_cache=evaluation_policy_cache,
+        )
+        summaries.extend(wave_summaries)
+    summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
+    drive_eval_replay._render_eval_replays(summaries, failures_dir)
+    return {
+        "episodes": summaries,
+        "summary": summary,
+    }
+
+
 def load_env(env_name, args):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -2149,7 +2319,7 @@ def load_config(env_name, config_dir=None):
 
 
 def main():
-    err = "Usage: puffer [train, eval, mine_failures, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2158,82 +2328,10 @@ def main():
     if mode == "train":
         train(env_name=env_name)
     elif mode == "eval":
-        # Pull eval-specific argv before load_config consumes them. These
-        # aren't registered as configparser-style dotted keys because
-        # they're per-invocation, not per-config-section.
-        evaluator_name = None
-        out_path = None
-        global_step = None
-        epoch = None
-        # Ad-hoc overrides for the chosen evaluator (None = not passed, so the
-        # [eval.<name>] section value stands). Pulled from argv here rather
-        # than registered in load_config so we can tell "passed" from
-        # "default" and only override when the user actually set them.
-        eval_simulation = None
-        render_backend = None
-        num_scenarios = None
-        render = None
-        num_maps = None
-        scalar_flags = {
-            "--num-scenarios": "num_scenarios",
-            "--num_scenarios": "num_scenarios",
-            "--render": "render",
-            "--num-maps": "num_maps",
-            "--num_maps": "num_maps",
-        }
-        str_flags = {
-            "--eval-simulation": "eval_simulation",
-            "--eval_simulation": "eval_simulation",
-            "--render-backend": "render_backend",
-            "--render_backend": "render_backend",
-        }
-        str_overrides = {}
-        overrides = {}
-        i = 0
-        while i < len(sys.argv):
-            arg = sys.argv[i]
-            if arg == "--evaluator" and i + 1 < len(sys.argv):
-                evaluator_name = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--out" and i + 1 < len(sys.argv):
-                out_path = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--global-step" and i + 1 < len(sys.argv):
-                global_step = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            if arg == "--epoch" and i + 1 < len(sys.argv):
-                epoch = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            if arg in str_flags and i + 1 < len(sys.argv):
-                str_overrides[str_flags[arg]] = sys.argv[i + 1]
-                del sys.argv[i : i + 2]
-                continue
-            if arg in scalar_flags and i + 1 < len(sys.argv):
-                overrides[scalar_flags[arg]] = int(sys.argv[i + 1])
-                del sys.argv[i : i + 2]
-                continue
-            i += 1
-        eval_simulation = str_overrides.get("eval_simulation")
-        render_backend = str_overrides.get("render_backend")
-        num_scenarios = overrides.get("num_scenarios")
-        render = overrides.get("render")
-        num_maps = overrides.get("num_maps")
-        eval(
-            env_name=env_name,
-            evaluator_name=evaluator_name,
-            out_path=out_path,
-            global_step=global_step,
-            epoch=epoch,
-            eval_simulation=eval_simulation,
-            num_scenarios=num_scenarios,
-            render=render,
-            render_backend=render_backend,
-            num_maps=num_maps,
-        )
+        if len(sys.argv) < 2:
+            raise pufferlib.APIUsageError("Usage: puffer eval [env_name] [benchmark_name] [optional args]")
+        benchmark_name = sys.argv.pop(1)
+        eval(env_name=env_name, benchmark_names=benchmark_name)
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":
@@ -2244,8 +2342,6 @@ def main():
         profile(env_name=env_name)
     elif mode == "export":
         export(env_name=env_name)
-    elif mode in ("mine_failures", "mine-failures"):
-        mine_failures(env_name=env_name)
     else:
         raise pufferlib.APIUsageError(err)
 

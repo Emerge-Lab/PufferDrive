@@ -50,11 +50,11 @@ TREND_METRICS = [
     "environment/avg_speed_per_agent",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "validation_gigaflow/score",
-    "validation_gigaflow/episode_return",
-    "validation_gigaflow/collision_rate",
-    "validation_gigaflow/offroad_rate",
-    "validation_gigaflow/avg_distance_per_infraction",
+    "eval_carla_fast/score",
+    "eval_carla_fast/episode_return",
+    "eval_carla_fast/collision_rate",
+    "eval_carla_fast/offroad_rate",
+    "eval_carla_fast/avg_distance_per_infraction",
 ]
 FINALS_METRICS = [
     "environment/score",
@@ -64,9 +64,9 @@ FINALS_METRICS = [
     "environment/num_goals_reached",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "validation_gigaflow/score",
-    "validation_gigaflow/collision_rate",
-    "validation_gigaflow/avg_distance_per_infraction",
+    "eval_carla_fast/score",
+    "eval_carla_fast/collision_rate",
+    "eval_carla_fast/avg_distance_per_infraction",
 ]
 CURVE_METRICS = [
     "environment/score",

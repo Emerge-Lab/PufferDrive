@@ -6,7 +6,7 @@ https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_
 
 import torch
 
-from pufferlib.ocean.benchmark.geometry_utils import (
+from pufferlib.ocean.evaluation_utils.wosac.geometry_utils import (
     get_2d_box_corners,
     cross_product_2d,
     dot_product_2d,

@@ -61,7 +61,6 @@ plt.show()
 # %%
 ego, target, partners, lanes, boundaries, traffic = unpack_obs(
     obs[:1],
-    goal_regen_mode=env.goal_regen_mode,
     reward_conditioning=env.reward_conditioning,
     num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
@@ -276,7 +275,6 @@ plt.show()
 # %%
 img = plot_observation(
     obs[:1],
-    goal_regen_mode=env.goal_regen_mode,
     reward_conditioning=env.reward_conditioning,
     num_goals=env.num_goals,
     obs_slots_partners_n=env.obs_slots_partners_n,
