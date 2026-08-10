@@ -159,9 +159,10 @@ class DriveEnvConfig:
     obs_range_traffic_control_m: float = MISSING
     partner_blindness_prob: float = MISSING
     partner_blindness_trigger_prob: float = MISSING
+    partner_blindness_duration_seconds: float = MISSING
     phantom_braking_prob: float = MISSING
     phantom_braking_trigger_prob: float = MISSING
-    phantom_braking_duration: int = MISSING
+    phantom_braking_duration_seconds: float = MISSING
 
 
 # env_name -> structured schema for the `env` section. Envs without an entry

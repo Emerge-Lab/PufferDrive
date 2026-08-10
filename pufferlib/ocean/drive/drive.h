@@ -290,6 +290,7 @@ struct Drive {
     // Robustness
     float partner_blindness_prob;
     float partner_blindness_trigger_prob;
+    int partner_blindness_duration;
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
@@ -445,6 +446,7 @@ static void reset_agent_state(Agent *agent) {
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
     agent->phantom_braking_counter = 0;
+    agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
 }
@@ -2041,6 +2043,7 @@ static inline void sample_erratic_flags(Drive *env, Agent *agent) {
         ? 1
         : 0;
     agent->phantom_braking_counter = 0;
+    agent->partner_blindness_counter = 0;
 }
 
 static void generate_reward_coefs(Drive *env, Agent *agent) {
@@ -3634,7 +3637,18 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
-    if (ego->is_blind_partner && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+    // Partner blindness: zero partner obs for the configured duration once triggered
+    int partner_blindness_active = 0;
+    if (ego->partner_blindness_counter > 0) {
+        ego->partner_blindness_counter--;
+        partner_blindness_active = 1;
+    } else if (
+        ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
+        && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
+        ego->partner_blindness_counter = env->partner_blindness_duration - 1;
+        partner_blindness_active = 1;
+    }
+    if (partner_blindness_active) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;

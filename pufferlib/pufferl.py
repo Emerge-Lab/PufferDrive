@@ -75,6 +75,8 @@ HIDDEN_DASHBOARD_METRICS = {
     "multi_lane_score",
     "multi_lane_time",
     "speed_limit_compliance",
+    "total_distance_travelled_sum",
+    "total_infraction_count",
 }
 
 
@@ -127,8 +129,17 @@ class PuffeRL:
 
         # Vecenv info
         vecenv.async_reset(seed)
+
+        self.env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         obs_space = vecenv.single_observation_space
-        atn_space = vecenv.single_action_space
+        # Custom policy attributes live on the base module, not the DDP/compile wrapper.
+        unwrapped_policy = base_policy(policy)
+        if self.env_continuous and not unwrapped_policy.is_continuous:
+            action_shape = (len(unwrapped_policy.atn_dim),)
+            action_dtype = torch.int32
+        else:
+            action_shape = vecenv.single_action_space.shape
+            action_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[vecenv.single_action_space.dtype]
         total_agents = vecenv.num_agents
         self.total_agents = total_agents
 
@@ -170,9 +181,9 @@ class PuffeRL:
         self.actions = torch.zeros(
             segments,
             horizon,
-            *atn_space.shape,
+            *action_shape,
             device=device,
-            dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype],
+            dtype=action_dtype,
         )
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
@@ -396,7 +407,9 @@ class PuffeRL:
 
                 logits, value = self.policy.forward_eval(o_device, state)
                 logits = logits_to_float(logits)
-                action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
+                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
+                )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -439,10 +452,6 @@ class PuffeRL:
                     self.free_idx += num_full
                     self.full_rows += num_full
 
-                action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
-                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
-
             profile("eval_misc", epoch)
             for i in info:
                 for k, v in pufferlib.unroll_nested_dict(i):
@@ -454,14 +463,22 @@ class PuffeRL:
                         self.stats[k].append(v)
 
             profile("env", epoch)
-            self.vecenv.send(action)
+
+            if self.env_continuous and not self.uncompiled_policy.is_continuous:
+                cont_action = cont_action.cpu().numpy()
+                self.vecenv.send(cont_action.squeeze(0))
+            else:
+                action = action.cpu().numpy()
+                if isinstance(logits, torch.distributions.Normal):
+                    action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
+                self.vecenv.send(action)
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
         self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
-        return self.stats
+        return pufferlib.utils.reduce_environment_metrics(self.stats)
 
     @record
     def train(self):
@@ -534,7 +551,7 @@ class PuffeRL:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
         newvalue = newvalue.float()
-        _, newlogprob, entropy = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
+        _, newlogprob, entropy, _ = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
         newlogprob = newlogprob.float().view_as(mb_logprobs)
         newvalue = newvalue.view_as(mb_returns)
@@ -546,6 +563,7 @@ class PuffeRL:
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
+        # TODO fix multi-gpu bug
         mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
         if adv_weights is not None:
             mb_adv = adv_weights * mb_adv
@@ -777,14 +795,7 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        for k in list(self.stats.keys()):
-            v = self.stats[k]
-            try:
-                v = np.mean(v)
-            except:
-                del self.stats[k]
-
-            self.stats[k] = v
+        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -1190,6 +1201,9 @@ class NoLogger:
     def log(self, logs, step):
         pass
 
+    def upload_config(self, config_yaml_path):
+        pass
+
     def close(self, model_path, early_stop):
         pass
 
@@ -1222,6 +1236,9 @@ class NeptuneLogger:
 
     def upload_model(self, model_path):
         self.neptune["model"].track_files(model_path)
+
+    def upload_config(self, config_yaml_path):
+        self.neptune["config_yaml"].upload(config_yaml_path)
 
     def close(self, model_path, early_stop):
         self.neptune["early_stop"] = early_stop
@@ -1262,6 +1279,9 @@ class WandbLogger:
         artifact.add_file(model_path)
         self.wandb.run.log_artifact(artifact)
 
+    def upload_config(self, config_yaml_path):
+        self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
+
     def close(self, model_path, early_stop):
         self.wandb.run.summary["early_stop"] = early_stop
         if self.should_upload_model:
@@ -1292,6 +1312,9 @@ class TensorBoardLogger:
         for key, value in logs.items():
             if isinstance(value, (int, float)):
                 self.local_writer.add_scalar(key, value, step)
+
+    def upload_config(self, config_yaml_path):
+        pass
 
     def close(self, model_path, early_stop):
         self.local_writer.close()
@@ -1467,6 +1490,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
     _save_experiment_config(args, path)
+    pufferl.logger.upload_config(os.path.join(path, "config.yaml"))
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
@@ -1580,6 +1604,15 @@ def eval(
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
     max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
+    valid_action_selections = (
+        pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+        pufferlib.pytorch.ACTION_SELECT_MODE,
+        pufferlib.pytorch.ACTION_SELECT_MEAN,
+    )
+    if eval_config["action_selection"] not in valid_action_selections:
+        raise pufferlib.APIUsageError(
+            f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
+        )
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
             "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
@@ -1928,6 +1961,12 @@ def _run_eval_rollout(
             evaluation_policy_cache["sample_logits"] = eval_sample_logits
         policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
         eval_sample_logits = evaluation_policy_cache["sample_logits"]
+        # A discrete policy on a continuous env emits a discrete class that the
+        # policy's own table maps back to the continuous action the env expects.
+        action_selection = args["eval"]["action_selection"]
+        uncompiled_policy = base_policy(policy)
+        env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
+        discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
         device = torch_device(args["train"]["device"])
         use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
@@ -1976,9 +2015,21 @@ def _run_eval_rollout(
                     logits, value = policy_forward_eval(policy_obs_tensor)
                 else:
                     logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
-                action, logprob, entropy = eval_sample_logits(logits, deterministic=True)
-                raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
-                action = raw_action
+                action, logprob, entropy, cont_action = eval_sample_logits(
+                    logits,
+                    action_selection=action_selection,
+                    env_continuous=env_continuous,
+                    policy=uncompiled_policy,
+                )
+                if discrete_policy_on_continuous_env:
+                    # raw_action stays the discrete class (what the replay logs record),
+                    # while the env is stepped with its continuous counterpart.
+                    raw_action = action[:agents_per_batch].cpu().numpy()
+                    continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
+                    action = continuous_actions[:agents_per_batch].float().cpu().numpy()
+                else:
+                    raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                    action = raw_action
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
 

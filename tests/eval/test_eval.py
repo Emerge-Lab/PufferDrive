@@ -53,6 +53,9 @@ class RecordingLogger:
     def log(self, metrics, step):
         self.calls.append((metrics, step))
 
+    def upload_config(self, config_yaml_path):
+        pass
+
     def close(self, model_path, early_stop):
         self.model_path = model_path
         self.early_stop = early_stop
@@ -242,6 +245,52 @@ def test_multiprocess_eval_dispatches_all_scenarios_and_maps(carla_evaluation):
         "opendrive__Town03",
         "opendrive__Town04",
     }
+    assert {
+        "avg_distance_per_infraction",
+        "total_distance_travelled_sum",
+        "total_infraction_count",
+    }.issubset(metrics.columns)
+    expected_episode_average = metrics["total_distance_travelled_sum"] / metrics["total_infraction_count"].clip(
+        lower=1.0
+    )
+    np.testing.assert_allclose(metrics["avg_distance_per_infraction"], expected_episode_average)
+
+    metric_summary = summary["metrics_mean"]
+    expected_global_average = metrics["total_distance_travelled_sum"].sum() / max(
+        metrics["total_infraction_count"].sum(), 1.0
+    )
+    assert metric_summary["total_distance_travelled"] == pytest.approx(metrics["total_distance_travelled_sum"].sum())
+    assert metric_summary["total_infractions"] == pytest.approx(metrics["total_infraction_count"].sum())
+    assert metric_summary["avg_distance_per_infraction"] == pytest.approx(expected_global_average)
+
+
+def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
+    episode_summaries = [
+        {
+            "map_name": "town01.bin",
+            "seed": 1,
+            "collision_rate": 0.0,
+            "avg_distance_per_infraction": 100.0,
+            "total_distance_travelled_sum": 100.0,
+            "total_infraction_count": 1.0,
+        },
+        {
+            "map_name": "town02.bin",
+            "seed": 2,
+            "collision_rate": 1.0,
+            "avg_distance_per_infraction": 10.0,
+            "total_distance_travelled_sum": 100.0,
+            "total_infraction_count": 10.0,
+        },
+    ]
+
+    metrics, summary = drive_benchmark._build_eval_report(episode_summaries, num_scenarios=2)
+
+    assert metrics["avg_distance_per_infraction"].tolist() == [100.0, 10.0]
+    assert summary["metrics_mean"]["collision_rate"] == 0.5
+    assert summary["metrics_mean"]["total_distance_travelled"] == 200.0
+    assert summary["metrics_mean"]["total_infractions"] == 11.0
+    assert summary["metrics_mean"]["avg_distance_per_infraction"] == pytest.approx(200.0 / 11.0)
 
 
 def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):

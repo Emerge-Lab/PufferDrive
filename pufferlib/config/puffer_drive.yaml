@@ -43,7 +43,7 @@ env:
   min_agents_per_env: 1
   max_agents_per_env: 120
   # Actions type - options: "discrete", "continuous"
-  action_type: discrete
+  action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Time delta between steps in seconds
@@ -161,12 +161,14 @@ env:
   partner_blindness_prob: 0.02
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
+  # Duration in seconds of partner blindness once triggered
+  partner_blindness_duration_seconds: 3.0
   # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
   phantom_braking_prob: 0.02
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
-  # Duration (in steps) of phantom braking once triggered
-  phantom_braking_duration: 10
+  # Duration in seconds of phantom braking once triggered
+  phantom_braking_duration_seconds: 3.0
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
@@ -193,6 +195,7 @@ policy:
   critic_num_layers: 1
   # Dual or shared actor-critic backbone
   shared_network: false
+  action_type: discrete
 rnn:
   input_size: 512
   hidden_size: 512
@@ -282,6 +285,8 @@ eval:
   capture_observations: false
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
+  # Options: sample | mode | mean
+  action_selection: mode
 controlled_exp:
   train:
     # [sweep.train.learning_rate]
