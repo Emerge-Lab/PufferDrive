@@ -739,7 +739,10 @@ class PuffeRL:
 
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, permutation.numel(), self.minibatch_size):
+            # Filtering leaves an arbitrary count, so drop the short tail rather than
+            # normalizing advantages over a handful of transitions.
+            num_full_minibatches = permutation.numel() // self.minibatch_size
+            for start in range(0, num_full_minibatches * self.minibatch_size, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
