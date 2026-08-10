@@ -46,10 +46,10 @@ benchmarks:
   - name: carla_fast
     seed: 42
     simulation_mode: gigaflow
-    num_scenarios: 10
+    num_scenarios: 250
     num_maps: 8
     max_agents_per_env: 50
-    scenario_length: 200
+    scenario_length: 500
     control_mode: control_vehicles
     map_dir: pufferlib/resources/drive/binaries/carla
 
