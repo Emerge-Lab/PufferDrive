@@ -756,7 +756,7 @@ class PuffeRL:
                         top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
                         keep_idx = keep_idx[top_idx]
 
-            kept_fraction = num_kept / max(num_valid, 1)
+            kept_fraction = keep_idx.numel() / max(num_valid, 1)
             losses["filter_threshold"] = threshold
             losses["ema_max"] = self.ema_max
             losses["kept_fraction"] = kept_fraction
