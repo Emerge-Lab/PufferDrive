@@ -102,14 +102,16 @@ def _write_benchmark_config(
                     {
                         "name": name,
                         "seed": SEED,
-                        "simulation_mode": simulation_mode,
-                        "map_dir": str(map_dir),
-                        "num_maps": num_maps,
                         "num_scenarios": num_scenarios,
-                        "scenario_length": scenario_length,
-                        "max_agents_per_env": max_agents_per_env,
-                        "control_mode": control_mode,
-                        "use_neighbor_cache": use_neighbor_cache,
+                        "env": {
+                            "simulation_mode": simulation_mode,
+                            "map_dir": str(map_dir),
+                            "num_maps": num_maps,
+                            "scenario_length": scenario_length,
+                            "max_agents_per_env": max_agents_per_env,
+                            "control_mode": control_mode,
+                            "use_neighbor_cache": use_neighbor_cache,
+                        },
                     }
                 ],
             },
