@@ -129,6 +129,9 @@ class PuffeRL:
 
         # Reproducibility
         seed = config["seed"]
+        # Decorrelate reset streams across DDP ranks for envs that honor reset(seed).
+        if seed is not None and torch.distributed.is_initialized():
+            seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 
         # Vecenv info
         vecenv.async_reset(seed)
@@ -1551,6 +1554,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     if resume_state_path:
         pufferl.load_training_state(resume_state_path)
+        # The checkpoint carries rank 0's RNG streams (save_checkpoint is rank-0 only);
+        # re-decorrelate the other ranks or post-resume action sampling re-synchronizes.
+        if global_rank != 0:
+            torch.manual_seed(int(np.random.SeedSequence([torch_seed, pufferl.epoch]).generate_state(1)[0]))
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
