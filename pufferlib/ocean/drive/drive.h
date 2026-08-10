@@ -140,6 +140,7 @@ struct GridMap {
     int *neighbor_cache_count;
     int *grid_index_drivable;
     int num_drivable_grid_cell;
+    int total_entities;
     GridMapEntity **cells;
     GridMapEntity **neighbor_cache_entities;
 };
@@ -200,8 +201,10 @@ struct Drive {
     int num_traffic_elements;
     struct LaneGraph lane_graph;
     GridMap *grid_map;
+    GridMapEntity *obs_neighbor_scratch;
     int *neighbor_offsets;
     int use_map_cache;
+    int use_neighbor_cache;
     struct SharedMapData *shared_map;
     float world_mean_x;
     float world_mean_y;
@@ -2025,7 +2028,6 @@ static void add_log(Drive *env) {
     for (int field_idx = 0; field_idx < num_log_fields; field_idx++) {
         ((float *) &env->log)[field_idx] += ((float *) &episode_log)[field_idx];
     }
-
     env->log_episode_seed = env->episode_seed;
 }
 
@@ -2806,7 +2808,6 @@ void init(Drive *env) {
             / GRID_CELL_SIZE);
         env->grid_map->vision_range = 2 * vision_half_range + 1;
         init_neighbor_offsets(env);
-        cache_neighbor_offsets(env);
         if (env->use_map_cache) {
             // Transfer the just-built geometry into a shared, ref-counted entry that
             // this env borrows (ref_count starts at 1).
@@ -2824,6 +2825,12 @@ void init(Drive *env) {
             map_cache_insert(entry);
             env->shared_map = entry;
         }
+    }
+    if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
+        cache_neighbor_offsets(env);
+    }
+    if (!env->use_neighbor_cache) {
+        env->obs_neighbor_scratch = (GridMapEntity *) malloc(env->grid_map->total_entities * sizeof(GridMapEntity));
     }
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
@@ -2930,23 +2937,12 @@ void c_close(Drive *env) {
             free_road_element(&env->road_elements[i]);
         }
         free(env->road_elements);
-        int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
-        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-            free(env->grid_map->cells[grid_index]);
-        }
-        free(env->grid_map->cells);
-        free(env->grid_map->cell_entities_count);
-        free(env->grid_map->grid_index_drivable);
         free(env->neighbor_offsets);
-        for (int i = 0; i < grid_cell_count; i++) {
-            free(env->grid_map->neighbor_cache_entities[i]);
-        }
-        free(env->grid_map->neighbor_cache_entities);
-        free(env->grid_map->neighbor_cache_count);
-        free(env->grid_map);
+        free_grid_map(env->grid_map);
         free_lane_graph(&env->lane_graph);
     }
 
+    free(env->obs_neighbor_scratch);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
     free(env->objects_of_interest);
@@ -3324,6 +3320,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
     }
 
+    // Update cumulative metrics
     agent->distance_since_spawn += agent->sim_speed * env->dt;
     agent_log->avg_speed_per_agent += agent->sim_speed;
 
@@ -3743,8 +3740,21 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
     int neighbor_count = 0;
     const GridMapEntity *neighbor_entities = NULL;
     if (!(grid_idx < 0 || grid_idx >= (env->grid_map->grid_cols * env->grid_map->grid_rows))) {
-        neighbor_count = env->grid_map->neighbor_cache_count[grid_idx];
-        neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
+        if (env->use_neighbor_cache) {
+            neighbor_count = env->grid_map->neighbor_cache_count[grid_idx];
+            neighbor_entities = env->grid_map->neighbor_cache_entities[grid_idx];
+        } else {
+            // Same spiral order as the cache build, so obs are bit-identical to the cached path.
+            neighbor_count = get_neighbors_entities(
+                env,
+                ego->sim_x,
+                ego->sim_y,
+                env->obs_neighbor_scratch,
+                env->grid_map->total_entities,
+                (const int (*)[2]) env->neighbor_offsets,
+                env->grid_map->vision_range * env->grid_map->vision_range);
+            neighbor_entities = env->obs_neighbor_scratch;
+        }
     }
 
     // GPS lane-distance features
@@ -4174,6 +4184,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Zero-crossing: snap to 0 when crossing zero
         if (signed_v * v_new < 0) {
             v_new = 0.0f;
+            a_long_new = 0.0f;
+            a_lat_new = 0.0f;
         } else {
             v_new = clip(v_new, -2.0f, MAX_SPEED);
         }

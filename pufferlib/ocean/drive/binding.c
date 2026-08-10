@@ -1804,7 +1804,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             break;
         }
     }
-
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
@@ -1843,6 +1842,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
+    env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
     env->init_seed = (unsigned int) unpack(kwargs, "seed");
     rng_seed(&env->seed_stream_rng, env->init_seed);
