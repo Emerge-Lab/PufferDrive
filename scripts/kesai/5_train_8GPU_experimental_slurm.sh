@@ -36,6 +36,7 @@ export MKL_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 source .venv/bin/activate
 
@@ -63,6 +64,7 @@ if [ "${BUILD_STATUS}" -ne 0 ]; then
     exit 1
 fi
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
@@ -75,10 +77,10 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=196608 \
+    train.max_minibatch_size=98304 \
     train.minibatch_size=196608 \
     train.precision=bfloat16 \
-    env.num_agents=1536 \
+    env.num_agents=1024 \
     policy.action_type=discrete \
     env.action_type=continuous \
     train.evaluation_benchmarks=carla_fast \
