@@ -1,6 +1,6 @@
 {
   "env": {
-    "avg_distance_per_infraction": 11.652713274145599,
+    "avg_distance_per_infraction": 12.26463147676908,
     "avg_speed_per_agent": 1.3747441177738124,
     "collision_rate": 0.011199567458945615,
     "comfort_violation_count": 0.6526833839457611,
@@ -28,8 +28,8 @@
     "reward_components/timestep": -8.012855822267613e-05,
     "reward_components/velocity": 0.00019470069981190167,
     "score": 0.0,
-    "total_distance_travelled": 19303.431358337402,
-    "total_infractions": 1656.561086177826,
+    "total_distance_travelled": 1594.4020919799805,
+    "total_infractions": 130.0,
     "velocity_progress_sum": 0.019867269547078115
   },
   "losses": {
