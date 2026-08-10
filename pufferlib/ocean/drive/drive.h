@@ -4,6 +4,7 @@
 #include "datatypes.h"
 #include "error.h"
 #include "raylib.h"
+#include "rng.h"
 #include "raymath.h"
 #include "rlgl.h"
 
@@ -298,8 +299,9 @@ struct Drive {
     // Seed
     int eval_episode_done;
     int use_exact_episode_seed;
-    unsigned int rng_state;
-    unsigned int seed_stream_state;
+    Rng rng_state;
+    Rng seed_stream_rng;
+    unsigned int init_seed;
     unsigned int episode_seed;
     unsigned int log_episode_seed;
     // Runtime
@@ -383,17 +385,17 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
-static float sample_uniform(unsigned int *rng_state, float min_val, float max_val) {
-    return min_val + ((float) rand_r(rng_state) / (float) RAND_MAX) * (max_val - min_val);
+static float sample_uniform(Rng *rng_state, float min_val, float max_val) {
+    return min_val + rng_uniform_f32(rng_state) * (max_val - min_val);
 }
 
-static float sample_log_uniform(unsigned int *rng_state, float min_val, float max_val) {
+static float sample_log_uniform(Rng *rng_state, float min_val, float max_val) {
     return expf(sample_uniform(rng_state, logf(min_val), logf(max_val)));
 }
 
-static float sample_mixed_uniform(unsigned int *rng_state, float a) {
+static float sample_mixed_uniform(Rng *rng_state, float a) {
     // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
-    if ((float) rand_r(rng_state) / (float) RAND_MAX < 0.5f) {
+    if (rng_uniform_f32(rng_state) < 0.5f) {
         return sample_uniform(rng_state, 1.0f / a, 1.0f);
     }
     return sample_uniform(rng_state, 1.0f, a);
@@ -401,11 +403,11 @@ static float sample_mixed_uniform(unsigned int *rng_state, float a) {
 
 static void begin_episode_rng(Drive *env) {
     if (env->use_exact_episode_seed) {
-        env->episode_seed = env->seed_stream_state;
+        env->episode_seed = env->init_seed;
     } else {
-        env->episode_seed = (unsigned int) rand_r(&env->seed_stream_state);
+        env->episode_seed = (unsigned int) rng_next(&env->seed_stream_rng);
     }
-    env->rng_state = env->episode_seed;
+    rng_seed(&env->rng_state, env->episode_seed);
 }
 
 static inline void clear_agent_motion(Agent *agent) {
@@ -683,7 +685,7 @@ static void update_agent_z(Drive *env, Agent *agent) {
 }
 
 static int pick_random_exit_lane(
-    unsigned int *rng_state,
+    Rng *rng_state,
     RoadMapElement *road_elements,
     int lane_idx,
     const int *route,
@@ -719,9 +721,9 @@ static int pick_random_exit_lane(
     }
     // Prefer an exit not yet in the route to avoid looping; fall back to any exit when all are visited.
     if (num_fresh_exits > 0) {
-        return fresh_exits[rand_r(rng_state) % num_fresh_exits];
+        return fresh_exits[rng_below(rng_state, num_fresh_exits)];
     }
-    return exits[rand_r(rng_state) % num_exits];
+    return exits[rng_below(rng_state, num_exits)];
 }
 
 // ========================================
@@ -1092,7 +1094,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     // not by following a path.
 
     // Pick a uniform drivable grid cell, then collect every drivable lane entity inside it.
-    int drivable_cell_list_idx = rand_r(&env->rng_state) % env->grid_map->num_drivable_grid_cell;
+    int drivable_cell_list_idx = rng_below(&env->rng_state, env->grid_map->num_drivable_grid_cell);
     int grid_cell_idx = env->grid_map->grid_index_drivable[drivable_cell_list_idx];
     GridMapEntity drivable_lane_candidates[MAX_ENTITIES_PER_CELL];
     int candidate_count = 0;
@@ -1107,7 +1109,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     }
 
     // Seed pose: a uniformly chosen drivable lane and the polyline vertex that landed in this cell.
-    GridMapEntity seed_entity = drivable_lane_candidates[rand_r(&env->rng_state) % candidate_count];
+    GridMapEntity seed_entity = drivable_lane_candidates[rng_below(&env->rng_state, candidate_count)];
     int seed_lane_idx = seed_entity.entity_idx;
     RoadMapElement *seed_lane = &env->road_elements[seed_lane_idx];
     float seed_x = seed_lane->x[seed_entity.geometry_idx];
@@ -1117,7 +1119,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
         = compute_lane_progress(seed_lane, seed_x, seed_y, cosf(seed_heading), sinf(seed_heading), true, NULL);
 
     // Random goal count in [1, num_goals], each at its own sampled forward spacing.
-    int requested_goal_count = 1 + rand_r(&env->rng_state) % env->num_goals;
+    int requested_goal_count = 1 + rng_below(&env->rng_state, env->num_goals);
     float goal_spacings_meters[MAX_GOALS];
     for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
         goal_spacings_meters[goal_idx] = sample_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
@@ -2164,7 +2166,7 @@ static void generate_traffic_light_states(Drive *env) {
         int cycle_length = steps_green + steps_yellow + steps_red;
 
         // Random phase offset
-        int offset = rand_r(&env->rng_state) % cycle_length;
+        int offset = rng_below(&env->rng_state, cycle_length);
 
         // Fill states: GREEN -> YELLOW -> RED -> repeat
         for (int t = 0; t < fill_steps; t++) {
@@ -2291,7 +2293,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
         int chosen_lane_idx = -1;
 
-        int list_idx = rand_r(&env->rng_state) % env->grid_map->num_drivable_grid_cell;
+        int list_idx = rng_below(&env->rng_state, env->grid_map->num_drivable_grid_cell);
         int grid_idx = env->grid_map->grid_index_drivable[list_idx];
 
         GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
@@ -2309,7 +2311,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        GridMapEntity chosen_entity = cell_candidates[rand_r(&env->rng_state) % candidate_count];
+        GridMapEntity chosen_entity = cell_candidates[rng_below(&env->rng_state, candidate_count)];
         chosen_lane_idx = chosen_entity.entity_idx;
 
         start_lane_idx = chosen_lane_idx;
@@ -3082,7 +3084,7 @@ void c_get_road_edge_polylines(Drive *env, float *x_out, float *y_out, int *leng
 // ========================================
 
 static void subsample_road_observation_rows(
-    unsigned int *rng_state,
+    Rng *rng_state,
     float *buffer,
     int collected_count,
     int keep_count,
@@ -3093,7 +3095,7 @@ static void subsample_road_observation_rows(
     float tmp[feature_count];
     for (int sample_idx = 0; sample_idx < keep_count; sample_idx++) {
         int remaining = collected_count - sample_idx;
-        int swap_idx = (remaining > 1) ? sample_idx + (rand_r(rng_state) % remaining) : sample_idx;
+        int swap_idx = (remaining > 1) ? sample_idx + rng_below(rng_state, remaining) : sample_idx;
         if (swap_idx == sample_idx) {
             continue;
         }

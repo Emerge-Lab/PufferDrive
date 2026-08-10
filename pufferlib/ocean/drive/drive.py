@@ -594,7 +594,7 @@ class Drive(pufferlib.PufferEnv):
 
     @property
     def random_seed(self):
-        return int(self.rng.integers(0, 2**24))
+        return int(self.rng.integers(0, 2**31))
 
     def reset(self, seed=None):
         binding.vec_reset(self.c_envs)

@@ -1621,7 +1621,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         return NULL;
     }
 
-    srand(seed);
+    Rng shared_rng;
+    rng_seed(&shared_rng, (unsigned int) seed);
 
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
@@ -1679,7 +1680,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 } else {
                     // Now the range is guaranteed to be positive.
                     int range = current_upper_bound - current_lower_bound + 1;
-                    count = current_lower_bound + (rand() % range);
+                    count = current_lower_bound + rng_below(&shared_rng, range);
                 }
             }
             agent_counts[env_count++] = count;
@@ -1693,7 +1694,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
             offset += agent_counts[i];
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));
@@ -1732,7 +1733,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 s_map_counter += 1;
             }
         } else {
-            map_id = rand() % num_maps;
+            map_id = rng_below(&shared_rng, num_maps);
         }
 
         const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
@@ -1843,7 +1844,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->eval_episode_done = 0;
-    env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
+    env->init_seed = (unsigned int) unpack(kwargs, "seed");
+    rng_seed(&env->seed_stream_rng, env->init_seed);
     env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
