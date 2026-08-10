@@ -2059,6 +2059,8 @@ static void add_log(Drive *env) {
         }
     }
 
+    // Keeps env->log valid for C-side readers, which never reach the Python vec_prepare_log.
+    prepare_log(env);
     env->log_episode_seed = env->episode_seed;
 }
 
