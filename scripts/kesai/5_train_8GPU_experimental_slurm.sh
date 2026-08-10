@@ -77,7 +77,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=98304 \
+    train.max_minibatch_size=196608 \
     train.minibatch_size=196608 \
     train.precision=bfloat16 \
     env.num_agents=1024 \
