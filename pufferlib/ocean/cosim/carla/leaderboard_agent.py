@@ -256,6 +256,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             )
 
         policy_cls = getattr(drive_torch, self.cfg.get("policy_name", "Drive"))
+        # pre-3.0 checkpoints keep action_type only in the env section
+        self.cfg["policy"].setdefault("action_type", self.cfg["env"]["action_type"])
         self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
         self.policy.load_state_dict(sd)
         self.policy.eval()

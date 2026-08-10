@@ -438,6 +438,8 @@ def main():
         import torch
         import pufferlib.ocean.torch as drive_torch
 
+        # pre-3.0 checkpoints keep action_type only in the env section
+        cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
         policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(env, **cfg["policy"]).to(args.device)
         sd = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
         policy.load_state_dict(clean_policy_state_dict(sd))

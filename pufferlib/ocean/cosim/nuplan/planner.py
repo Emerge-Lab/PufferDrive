@@ -269,6 +269,8 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._dummy:
             self._policy = None
         else:
+            # pre-3.0 checkpoints keep action_type only in the env section
+            cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
             policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **cfg["policy"])
             sd = torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
             policy.load_state_dict(clean_policy_state_dict(sd))
