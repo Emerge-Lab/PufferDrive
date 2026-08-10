@@ -32,17 +32,23 @@ os.environ.setdefault("WANDB_BASE_URL", "https://api.wandb.ai")
 import wandb
 
 ENTITY = "emerge_"
-PROJECTS = ["nightly-multi", "nightly-single"]
+PROJECTS = ["nightly-multi", "nightly-single", "nightly-multi-long"]
 TREND_PROJECT = "nightly-trends"
 NIGHT_ZERO = datetime.date(2026, 7, 4)
-# One day before the first night, so the first point is visible: with a
-# single night logged the wall-time autorange spans [0, 2x], which renders
-# as the year 1969.
-NIGHT_ZERO_TS = 1783051200.0
+# The multi-agent nightlies started logging eval_carla_fast on this night; earlier ones have no eval keys.
+EVAL_START = datetime.date(2026, 8, 3)
+# The single-agent nightly runs no evaluation, so it gets no eval panels.
+EVAL_PROJECTS = ("nightly-multi", "nightly-multi-long")
 REPORT_URL = "https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ=="
 
-TREND_METRICS = [
-    "environment/score",
+
+def axis_start(night):
+    # One day before the first plotted night: a lone point makes the wall-time autorange render as 1969.
+    start = night - datetime.timedelta(days=1)
+    return datetime.datetime.combine(start, datetime.time()).timestamp()
+
+
+TRAIN_TREND_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
@@ -50,26 +56,27 @@ TREND_METRICS = [
     "environment/avg_speed_per_agent",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "eval_carla_fast/score",
+]
+EVAL_TREND_METRICS = [
     "eval_carla_fast/episode_return",
     "eval_carla_fast/collision_rate",
     "eval_carla_fast/offroad_rate",
     "eval_carla_fast/avg_distance_per_infraction",
 ]
-FINALS_METRICS = [
-    "environment/score",
+TREND_METRICS = TRAIN_TREND_METRICS + EVAL_TREND_METRICS
+TRAIN_FINALS_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
     "environment/num_goals_reached",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "eval_carla_fast/score",
+]
+EVAL_FINALS_METRICS = [
     "eval_carla_fast/collision_rate",
     "eval_carla_fast/avg_distance_per_infraction",
 ]
 CURVE_METRICS = [
-    "environment/score",
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
@@ -135,18 +142,21 @@ def trend_section(wr, project):
         name=f"{project} trend runs",
         filters=f'group == "{project}"',
     )
-    panels = [
-        wr.LinePlot(
+
+    def line(metric, first_night):
+        return wr.LinePlot(
             x="_timestamp",
-            y=[m],
+            y=[metric],
             groupby="group",
             groupby_aggfunc="mean",
             groupby_rangefunc="stderr",
-            range_x=(NIGHT_ZERO_TS, None),
-            title=m,
+            range_x=(axis_start(first_night), None),
+            title=metric,
         )
-        for m in FINALS_METRICS
-    ]
+
+    panels = [line(m, NIGHT_ZERO) for m in TRAIN_FINALS_METRICS]
+    if project in EVAL_PROJECTS:
+        panels += [line(m, EVAL_START) for m in EVAL_TREND_METRICS]
     return [
         wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
         wr.P(
@@ -160,6 +170,9 @@ def trend_section(wr, project):
 
 def finals_section(wr, project):
     runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
+    metrics = list(TRAIN_FINALS_METRICS)
+    if project in EVAL_PROJECTS:
+        metrics += EVAL_FINALS_METRICS
     panels = [
         wr.BarPlot(
             metrics=[m],
@@ -168,7 +181,7 @@ def finals_section(wr, project):
             groupby_rangefunc="stderr",
             title=f"{m} - final per night (mean over seeds)",
         )
-        for m in FINALS_METRICS
+        for m in metrics
     ]
     return [
         wr.H1(f"{project}: nightly finals"),
