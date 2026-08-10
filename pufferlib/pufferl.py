@@ -1334,7 +1334,8 @@ class WandbLogger:
         self.wandb.run.log_artifact(artifact)
 
     def upload_config(self, config_yaml_path):
-        self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
+        # no-op: wandb.init(config=...) covers this.
+        pass
 
     def close(self, model_path, early_stop):
         self.wandb.run.summary["early_stop"] = early_stop
