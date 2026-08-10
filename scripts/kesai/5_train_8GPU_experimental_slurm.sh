@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0004_${SEED}
+export RUN_NAME=k_exp_0005_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -43,7 +43,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
     wandb_project=nightly-multi-long \
-    wandb_group=emerge_ \
+    wandb_group=kesai \
     train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
@@ -51,15 +51,12 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=196608 \
-    train.minibatch_size=196608 \
+    train.max_minibatch_size=131072 \
+    train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.num_agents=192 \
-    train.min_batch_size=786432 \
-    train.bptt_horizon=256 \
+    env.num_agents=2048 \
     policy.action_type=discrete \
     env.action_type=continuous \
-    train.adv_filter_enabled=False \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
