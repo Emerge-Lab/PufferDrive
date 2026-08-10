@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0005_${SEED}
+export RUN_NAME=k_exp_0006_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -51,8 +51,8 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=131072 \
-    train.minibatch_size=131072 \
+    train.max_minibatch_size=262144 \
+    train.minibatch_size=262144 \
     train.precision=bfloat16 \
     env.num_agents=2048 \
     policy.action_type=discrete \
