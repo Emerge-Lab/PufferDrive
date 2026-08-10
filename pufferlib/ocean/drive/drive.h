@@ -1936,6 +1936,10 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
 // agent regardless of that agent's completion frequency. Does not reset the
 // slots: emissions between completions repeat the previous values.
 static void prepare_log(Drive *env) {
+    // Raw interval totals, not per-agent gauges: they accumulate until vec_log emits and zeroes them,
+    // so summing them across emissions yields the global totals avg_distance_per_infraction needs.
+    float interval_distance_travelled = env->log.total_distance_travelled;
+    float interval_infraction_count = env->log.total_infractions;
     memset(&env->log, 0, sizeof(Log));
     int num_keys = sizeof(Log) / sizeof(float);
     int num_with_data = 0;
@@ -1951,6 +1955,8 @@ static void prepare_log(Drive *env) {
         num_with_data++;
     }
     env->log.n = (float) num_with_data;
+    env->log.total_distance_travelled = interval_distance_travelled;
+    env->log.total_infractions = interval_infraction_count;
 }
 
 static void add_log(Drive *env) {
@@ -1984,9 +1990,9 @@ static void add_log(Drive *env) {
         if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
             episode_log.dnf_rate = 1.0f;
         }
-        episode_log.total_distance_travelled = agent->distance_since_spawn;
+        env->log.total_distance_travelled += agent->distance_since_spawn;
         if (total_infractions > 0) {
-            episode_log.total_infractions = 1.0f;
+            env->log.total_infractions += 1.0f;
         }
         float displacement_error = env->logs[i].avg_displacement_error;
         episode_log.avg_displacement_error = displacement_error;
