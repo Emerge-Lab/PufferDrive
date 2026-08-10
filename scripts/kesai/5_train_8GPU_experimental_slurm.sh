@@ -78,7 +78,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.max_minibatch_size=196608 \
     train.minibatch_size=196608 \
     train.precision=bfloat16 \
-    env.num_agents=2048 \
+    env.num_agents=1536 \
     policy.action_type=discrete \
     env.action_type=continuous \
     train.evaluation_benchmarks=carla_fast \
