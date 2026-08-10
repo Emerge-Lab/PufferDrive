@@ -31,6 +31,7 @@ typedef struct {
     int offroad_behavior;
     int traffic_light_behavior;
     int use_map_cache;
+    int use_neighbor_cache;
     float dt;
     int goal_regen_mode;
     int goal_source;
@@ -125,6 +126,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->traffic_light_behavior = parse_infraction_behavior(name, value);
     } else if (MATCH("env", "use_map_cache")) {
         env_config->use_map_cache = atoi(value);
+    } else if (MATCH("env", "use_neighbor_cache")) {
+        env_config->use_neighbor_cache = atoi(value);
     } else if (MATCH("env", "goal_regen_mode")) {
         if (strcmp(value, "\"finite\"") == 0 || strcmp(value, "finite") == 0) {
             env_config->goal_regen_mode = 0; // GOAL_REGEN_FINITE
