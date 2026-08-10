@@ -49,8 +49,7 @@ static void add_entity_to_grid(
 }
 
 static void init_grid_map(Drive *env) {
-    env->grid_map = (GridMap *) malloc(sizeof(GridMap));
-    env->grid_map->num_drivable_grid_cell = 0;
+    env->grid_map = (GridMap *) calloc(1, sizeof(GridMap));
 
     float top_left_x = 0.0f, top_left_y = 0.0f, bottom_right_x = 0.0f, bottom_right_y = 0.0f;
     bool first_valid_point = false;
@@ -97,6 +96,9 @@ static void init_grid_map(Drive *env) {
     env->grid_map->cell_entities_count = (int *) calloc(grid_cell_count, sizeof(int));
     // First pass to count entities in each grid cell
     for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road_grid_candidate(env->road_elements[i].type)) {
+            continue;
+        }
         RoadMapElement *element = &env->road_elements[i];
         for (int j = 0; j < element->segment_size - 1; j++) {
             float x_center = (element->x[j] + element->x[j + 1]) / 2;
@@ -112,11 +114,15 @@ static void init_grid_map(Drive *env) {
     int *cell_entities_insert_index = (int *) calloc(grid_cell_count, sizeof(int));
     for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
         int count = env->grid_map->cell_entities_count[grid_index];
+        env->grid_map->total_entities += count;
         env->grid_map->cells[grid_index] = (GridMapEntity *) calloc(count, sizeof(GridMapEntity));
     }
     // Track which grid cells have drivable lanes
     bool *drivable_grid_seen = (bool *) calloc(grid_cell_count, sizeof(bool));
     for (int i = 0; i < env->num_road_elements; i++) {
+        if (!is_road_grid_candidate(env->road_elements[i].type)) {
+            continue;
+        }
         RoadMapElement *element = &env->road_elements[i];
         int obs_stride = 1;
         if (is_road_lane(element->type)) {
@@ -280,10 +286,7 @@ static int get_neighbors_entities(
         int count = env->grid_map->cell_entities_count[neighbor_idx];
         // Add entities from this cell to the list
         for (int j = 0; j < count && entity_list_count < max_size; j++) {
-            entity_list[entity_list_count].entity_idx = env->grid_map->cells[neighbor_idx][j].entity_idx;
-            entity_list[entity_list_count].geometry_idx = env->grid_map->cells[neighbor_idx][j].geometry_idx;
-            entity_list[entity_list_count].valid_for_obs = env->grid_map->cells[neighbor_idx][j].valid_for_obs;
-            entity_list_count += 1;
+            entity_list[entity_list_count++] = env->grid_map->cells[neighbor_idx][j];
         }
     }
     return entity_list_count;
@@ -731,8 +734,29 @@ static void map_cache_insert(struct SharedMapData *entry) {
     g_map_cache[g_map_cache_count++] = entry;
 }
 
+static void free_grid_map(GridMap *grid_map) {
+    if (grid_map == NULL) {
+        return;
+    }
+    int grid_cell_count = grid_map->grid_cols * grid_map->grid_rows;
+    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+        free(grid_map->cells[grid_index]);
+    }
+    free(grid_map->cells);
+    free(grid_map->cell_entities_count);
+    free(grid_map->grid_index_drivable);
+    if (grid_map->neighbor_cache_entities != NULL) {
+        for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
+            free(grid_map->neighbor_cache_entities[grid_index]);
+        }
+    }
+    free(grid_map->neighbor_cache_entities);
+    free(grid_map->neighbor_cache_count);
+    free(grid_map);
+}
+
 // Free a shared geometry entry and everything it owns, and clear its cache slot.
-// Mirrors the owned-geometry branch of c_close. Only call in the building process.
+// Only call in the building process.
 static void free_shared_map_data(struct SharedMapData *shared) {
     if (shared == NULL) {
         return;
@@ -741,19 +765,7 @@ static void free_shared_map_data(struct SharedMapData *shared) {
         free_road_element(&shared->road_elements[i]);
     }
     free(shared->road_elements);
-    int grid_cell_count = shared->grid_map->grid_cols * shared->grid_map->grid_rows;
-    for (int grid_index = 0; grid_index < grid_cell_count; grid_index++) {
-        free(shared->grid_map->cells[grid_index]);
-    }
-    free(shared->grid_map->cells);
-    free(shared->grid_map->cell_entities_count);
-    free(shared->grid_map->grid_index_drivable);
-    for (int i = 0; i < grid_cell_count; i++) {
-        free(shared->grid_map->neighbor_cache_entities[i]);
-    }
-    free(shared->grid_map->neighbor_cache_entities);
-    free(shared->grid_map->neighbor_cache_count);
-    free(shared->grid_map);
+    free_grid_map(shared->grid_map);
     free(shared->neighbor_offsets);
     free_lane_graph(&shared->lane_graph);
     free(shared->map_name);

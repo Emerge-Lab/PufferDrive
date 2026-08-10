@@ -89,6 +89,7 @@ def _write_benchmark_config(
     scenario_length,
     max_agents_per_env,
     control_mode,
+    use_neighbor_cache,
 ):
     output_path.write_text(
         yaml.safe_dump(
@@ -104,13 +105,16 @@ def _write_benchmark_config(
                     {
                         "name": name,
                         "seed": SEED,
-                        "simulation_mode": simulation_mode,
-                        "map_dir": str(map_dir),
-                        "num_maps": num_maps,
                         "num_scenarios": num_scenarios,
-                        "scenario_length": scenario_length,
-                        "max_agents_per_env": max_agents_per_env,
-                        "control_mode": control_mode,
+                        "env": {
+                            "simulation_mode": simulation_mode,
+                            "map_dir": str(map_dir),
+                            "num_maps": num_maps,
+                            "scenario_length": scenario_length,
+                            "max_agents_per_env": max_agents_per_env,
+                            "control_mode": control_mode,
+                            "use_neighbor_cache": use_neighbor_cache,
+                        },
                     }
                 ],
             },
@@ -183,6 +187,7 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
+        use_neighbor_cache=1,
     )
     args = _standalone_eval_args(benchmark_config_path)
     multiprocessing_calls = []
@@ -459,6 +464,7 @@ def _write_training_benchmark(tmp_path):
         scenario_length=TRAIN_HORIZON,
         max_agents_per_env=TRAIN_AGENTS_PER_ENV,
         control_mode="control_vehicles",
+        use_neighbor_cache=1,
     )
 
 
