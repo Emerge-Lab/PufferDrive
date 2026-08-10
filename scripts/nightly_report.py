@@ -14,8 +14,7 @@ This tool folds those into a nightly regression view:
   report [--create] Rewrite the report's layout: which panels exist and how
                     they aggregate, per nightly project — (1) trend line
                     panels over the trend runs (x = the night, y = mean
-                    across seeds with stderr bands); (2) bar charts of
-                    finals grouped by night; (3) per-night mean training
+                    across seeds with stderr bands); (2) per-night mean training
                     curves. Panels are live queries, so new data appears
                     without rerunning this — only rerun it to change the
                     panel set (e.g. after editing TREND_METRICS et al.).
@@ -66,16 +65,12 @@ EVAL_TREND_METRICS = [
     "eval_carla_fast/avg_distance_per_infraction",
 ]
 TREND_METRICS = TRAIN_TREND_METRICS + EVAL_TREND_METRICS
-TRAIN_FINALS_METRICS = [
+TRAIN_PANEL_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
     "environment/avg_distance_per_infraction",
     "SPS",
-]
-EVAL_FINALS_METRICS = [
-    "eval_carla_fast/collision_rate",
-    "eval_carla_fast/avg_distance_per_infraction",
 ]
 CURVE_METRICS = [
     "environment/episode_return",
@@ -195,7 +190,7 @@ def trend_section(wr, project):
             title=metric,
         )
 
-    panels = [line(m, NIGHT_ZERO) for m in TRAIN_FINALS_METRICS]
+    panels = [line(m, NIGHT_ZERO) for m in TRAIN_PANEL_METRICS]
     if project in EVAL_PROJECTS:
         panels += [line(m, EVAL_START) for m in EVAL_TREND_METRICS]
     panels = layout_panels(wr, panels)
@@ -206,29 +201,6 @@ def trend_section(wr, project):
             "its night's midnight). Trend runs live in the nightly-trends "
             "project and are rebuilt by this script at each nightly launch."
         ),
-        wr.PanelGrid(runsets=[runset], panels=panels),
-    ]
-
-
-def finals_section(wr, project):
-    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
-    metrics = list(TRAIN_FINALS_METRICS)
-    if project in EVAL_PROJECTS:
-        metrics += EVAL_FINALS_METRICS
-    panels = [
-        wr.BarPlot(
-            metrics=[m],
-            groupby="group",
-            groupby_aggfunc="mean",
-            groupby_rangefunc="stderr",
-            title=f"{m} - final per night (mean over seeds)",
-        )
-        for m in metrics
-    ]
-    panels = layout_panels(wr, panels)
-    return [
-        wr.H1(f"{project}: nightly finals"),
-        wr.P("One bar per night (run group): mean over seeds of the final logged value, with stderr."),
         wr.PanelGrid(runsets=[runset], panels=panels),
     ]
 
@@ -272,8 +244,6 @@ def make_report(create):
     blocks = []
     for project in PROJECTS:
         blocks += trend_section(wr, project)
-    for project in PROJECTS:
-        blocks += finals_section(wr, project)
     for project in PROJECTS:
         blocks += curves_section(wr, project)
     report.blocks = blocks
