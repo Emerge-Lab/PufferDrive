@@ -18,6 +18,10 @@
 #   CHALLENGES  space-separated challenge list. Default: both
 #             "closed_loop_nonreactive_agents_pufferdrive
 #              closed_loop_reactive_agents_pufferdrive" (log-replay + IDM).
+#   THREADS_PER_NODE  caps worker.threads_per_node. ray_distributed sizes its
+#             pool from the NODE's cpu count (128 on cs), not the slurm
+#             allocation -- 128 nuPlan workers OOMed a 160G job in 34 min
+#             (2026-08-09); size this to job_mem / ~12G per worker.
 #   WORKER    nuPlan worker config. Default: unset -> falls through to the
 #             devkit's own default (ray_distributed), matching
 #             scripts/eval/sim_pufferdrive.sh's established convention for a
@@ -65,6 +69,7 @@ DEBUG_BEV=${COSIM_DEBUG_BEV:-1}
 EXTRA_ARGS=()
 [ "$DEBUG_BEV" = "1" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.debug_bev_dir=$GROUP/bev")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
+[ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
 
 cd "$PD"
