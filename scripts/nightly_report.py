@@ -55,7 +55,6 @@ TRAIN_TREND_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
-    "environment/num_goals_reached",
     "environment/avg_speed_per_agent",
     "environment/avg_distance_per_infraction",
     "SPS",
@@ -71,7 +70,6 @@ TRAIN_FINALS_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
-    "environment/num_goals_reached",
     "environment/avg_distance_per_infraction",
     "SPS",
 ]
