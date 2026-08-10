@@ -221,6 +221,7 @@ def load_checkpoint_architecture(args):
     merged["train"]["use_rnn"] = merged["rnn_name"] is not None
     return merged, config_path
 
+
 CHECKPOINT_RUN_IDENTITY_KEYS = ("run_name", "wandb_project", "wandb_group")
 
 

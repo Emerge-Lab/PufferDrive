@@ -1841,7 +1841,7 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
 
     run_args = copy.copy(args)
     run_args.update(wandb_run_identity)
-    
+
     logger = WandbLogger(run_args, resume="must", upload_config=False)
     try:
         logger.log_summary(metrics)
