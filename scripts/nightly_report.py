@@ -5,11 +5,7 @@ This tool folds those into a nightly regression view:
 
   update (default)  Refresh the report's data: rebuild the per-seed trend
                     runs in the nightly-trends project from the nightly
-                    runs' final metric values, except SPS, which is
-                    averaged over the run. The launchers run this at
-                    every submission, before that night's runs have
-                    reported anything, so a night only lands here on the
-                    next launch; run it by hand to pull one in sooner.
+                    runs' final metric values.
 
   report [--create] Rewrite the report's layout: which panels exist and how
                     they aggregate, per nightly project — (1) trend line
