@@ -1329,6 +1329,10 @@ class WandbLogger:
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
         artifact.add_file(model_path)
+        # Ship the config with the weights; load_checkpoint_architecture reads it off disk.
+        config_path = os.path.join(drive_benchmark.resolve_run_dir(model_path), "config.yaml")
+        if os.path.isfile(config_path):
+            artifact.add_file(config_path)
         self.wandb.run.log_artifact(artifact)
 
     def upload_config(self, config_yaml_path):
@@ -1415,7 +1419,6 @@ def _save_experiment_config(args, path):
     with open(config_yaml_path, "w") as f:
         # Convert defaultdict to dict for cleaner output
         config = json.loads(json.dumps(args))
-        config["git"] = _get_git_metadata()
         yaml.dump(config, f)
 
 
@@ -1517,6 +1520,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
         model.forward_eval = policy.forward_eval
         policy = model.to(local_rank)
+
+    # Set before the logger so the run config the logger uploads carries it too.
+    args["git"] = _get_git_metadata()
 
     # Under DDP only rank 0 owns the run logger; other ranks keep logger=None,
     # which PuffeRL wraps in a NoLogger. Without this gate every rank calls
