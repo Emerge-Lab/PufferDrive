@@ -86,6 +86,33 @@ CURVE_METRICS = [
 ]
 
 
+WIDE_METRIC = "avg_distance_per_infraction"
+GRID_WIDTH = 24
+PANEL_WIDTH = 8
+PANEL_HEIGHT = 6
+WIDE_PANEL_HEIGHT = 10
+
+
+def layout_panels(wr, panels):
+    # Panels carry a default layout that stacks them 3-up; assign explicit slots so the
+    # wide metric gets a full-width row of its own above the rest.
+    wide = [panel for panel in panels if WIDE_METRIC in panel.title]
+    rest = [panel for panel in panels if WIDE_METRIC not in panel.title]
+    next_y = 0
+    for panel in wide:
+        panel.layout = wr.Layout(x=0, y=next_y, w=GRID_WIDTH, h=WIDE_PANEL_HEIGHT)
+        next_y += WIDE_PANEL_HEIGHT
+    per_row = GRID_WIDTH // PANEL_WIDTH
+    for index, panel in enumerate(rest):
+        panel.layout = wr.Layout(
+            x=(index % per_row) * PANEL_WIDTH,
+            y=next_y + (index // per_row) * PANEL_HEIGHT,
+            w=PANEL_WIDTH,
+            h=PANEL_HEIGHT,
+        )
+    return wide + rest
+
+
 def night_of(run):
     if not run.group:
         return None
@@ -171,6 +198,7 @@ def trend_section(wr, project):
     panels = [line(m, NIGHT_ZERO) for m in TRAIN_FINALS_METRICS]
     if project in EVAL_PROJECTS:
         panels += [line(m, EVAL_START) for m in EVAL_TREND_METRICS]
+    panels = layout_panels(wr, panels)
     return [
         wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
         wr.P(
@@ -197,6 +225,7 @@ def finals_section(wr, project):
         )
         for m in metrics
     ]
+    panels = layout_panels(wr, panels)
     return [
         wr.H1(f"{project}: nightly finals"),
         wr.P("One bar per night (run group): mean over seeds of the final logged value, with stderr."),
