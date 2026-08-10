@@ -43,7 +43,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
     wandb_project=nightly-multi-long \
-    wandb_group=emerge_ \
+    wandb_group="$(date +%Y-%m-%d)" \
     train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
