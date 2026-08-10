@@ -14,8 +14,8 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-export RUN_NAME=k_exp_0003_1000
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0003_1000/final_model.pt
+export RUN_NAME=k_exp_0003_2000
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0003_2000/final_model.pt
 
 source .venv/bin/activate
 python setup.py build_ext --inplace --force
