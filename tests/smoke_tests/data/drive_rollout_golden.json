@@ -25,6 +25,8 @@
     "reward_components/timestep": -8.48334472850963e-05,
     "reward_components/velocity": 0.00021989875261039873,
     "score": 0.0,
+    "total_distance_travelled_sum": 86.0845121027349,
+    "total_infraction_count": 7.274725274725275,
     "velocity_progress_sum": 0.02138940526868452
   },
   "meta": {
