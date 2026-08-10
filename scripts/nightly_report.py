@@ -5,9 +5,11 @@ This tool folds those into a nightly regression view:
 
   update (default)  Refresh the report's data: rebuild the per-seed trend
                     runs in the nightly-trends project from the nightly
-                    runs' final metric values. The launchers run this at
-                    every submission; run it by hand to pull in a night
-                    that finished since.
+                    runs' final metric values, except SPS, which is
+                    averaged over the run. The launchers run this at
+                    every submission, before that night's runs have
+                    reported anything, so a night only lands here on the
+                    next launch; run it by hand to pull one in sooner.
 
   report [--create] Rewrite the report's layout: which panels exist and how
                     they aggregate, per nightly project — (1) trend line
@@ -39,6 +41,7 @@ NIGHT_ZERO = datetime.date(2026, 7, 4)
 EVAL_START = datetime.date(2026, 8, 3)
 # The single-agent nightly runs no evaluation, so it gets no eval panels.
 EVAL_PROJECTS = ("nightly-multi", "nightly-multi-long")
+SPS_SAMPLES = 500
 REPORT_URL = "https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ=="
 
 
@@ -94,6 +97,15 @@ def night_of(run):
         return None
 
 
+def mean_sps(run):
+    # Skips the zeros pufferl logs whenever no steps elapsed since the previous log.
+    rows = run.history(keys=["SPS"], pandas=False, samples=SPS_SAMPLES)
+    values = [row["SPS"] for row in rows if row.get("SPS")]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def update_trends():
     api = wandb.Api()
     for project in PROJECTS:
@@ -130,6 +142,10 @@ def update_trends():
                 for metric in TREND_METRICS:
                     if metric in run.summary:
                         row[metric] = run.summary[metric]
+                # summary SPS is the last logged value, which is 0 for every run that trained to completion
+                sps = mean_sps(run)
+                if sps is not None:
+                    row["SPS"] = sps
                 trend.log(row, step=night_index)
                 print(f"{project} seed{seed} night {night_index} ({night}): {len(row) - 1} metrics")
             trend.finish()
