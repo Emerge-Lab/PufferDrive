@@ -79,6 +79,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
+    train.evaluation_interval_epochs=250 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True

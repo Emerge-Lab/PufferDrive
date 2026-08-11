@@ -84,6 +84,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     policy.action_type=discrete \
     env.action_type=continuous \
     train.evaluation_benchmarks=carla_fast \
+    train.evaluation_interval_epochs=250 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     train.adam_eps=0.00001 \

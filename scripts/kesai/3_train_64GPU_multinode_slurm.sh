@@ -74,6 +74,7 @@ srun torchrun \
     env.action_type=continuous \
     train.adv_filter_enabled=False \
     train.evaluation_benchmarks=carla_fast \
+    train.evaluation_interval_epochs=250 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
