@@ -17,26 +17,6 @@ CLOSE = 4
 MAIN = 5
 INFO = 6
 
-# Driver busy-wait tuning. Spins are cheapest when a result is already there, so
-# a wait only starts tracking itself after the fast path misses. It then spins
-# hot -- covering any normal step -- before falling back to a poll. The poll is
-# short because the sleep is not what costs: a liveness check is one waitpid per
-# worker (~1.3us each), so it runs on its own much slower cadence.
-FAST_PATH_SPINS = 64
-HOT_SPIN_SECONDS = 0.5
-IDLE_POLL_SECONDS = 0.0001
-LIVENESS_CHECK_SECONDS = 0.01
-
-
-def _return_freed_heap_to_os():
-    """glibc parks large frees in its arena, so RSS -- what cgroup limits and the
-    OOM killer count -- stays at peak until trimmed. Only worth calling after
-    freeing something the process will not allocate again. No-op off glibc."""
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):
-        pass
-
 
 def recv_precheck(vecenv):
     if vecenv.flag != RECV:
@@ -277,33 +257,6 @@ def _worker_process(
             semaphores[worker_idx] = MAIN
 
 
-class _DriverWait:
-    """One driver busy-wait, ticked once per turn of the loop.
-
-    Spins hot while a step is in flight, then polls so a long wait stops burning
-    a core, and rechecks worker liveness on a slower cadence so a wait that can
-    never end raises instead of hanging forever.
-    """
-
-    def __init__(self, vecenv):
-        self.vecenv = vecenv
-        self.start = time.time()
-        self.last_liveness_check = self.start
-        self.backoff = False
-
-    def tick(self):
-        now = time.time()
-        if not self.backoff:
-            self.backoff = now - self.start > HOT_SPIN_SECONDS
-            if not self.backoff:
-                return
-        time.sleep(IDLE_POLL_SECONDS)
-        if now - self.last_liveness_check < LIVENESS_CHECK_SECONDS:
-            return
-        self.last_liveness_check = now
-        self.vecenv._check_workers_alive()
-
-
 class Multiprocessing:
     """Runs environments in parallel using multiprocessing
 
@@ -391,15 +344,9 @@ class Multiprocessing:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
 
-        # Everything above is all the driver env was built for, and the workers
-        # each build their own. Release it now, as Serial does with its
-        # configuration env, so the parent does not hold a whole extra worker's
-        # worth of environments for the run's lifetime. The object stays bound:
-        # driver_env is public and its config attributes outlive close(). Done
-        # before forking so the children never inherit the pages.
+        # Close driver env 0 after setup is done and args are read to free memory (which can be significant in the case of nuPlan evals).
         agents_per_env = driver_env.num_agents
         driver_env.close()
-        _return_freed_heap_to_os()
 
         from multiprocessing import RawArray
 
@@ -475,32 +422,9 @@ class Multiprocessing:
         self.ready_workers = []
         self.waiting_workers = []
 
-    def _check_workers_alive(self):
-        """Raise if a worker exited. It answers through shared memory, so a dead
-        one leaves a semaphore nobody will ever set."""
-        for worker_idx, process in enumerate(self.processes):
-            exitcode = process.exitcode
-            if exitcode is None:
-                continue
-            if exitcode == -9:
-                reason = "signal 9, which is almost always the OOM killer: lower the worker count "
-                reason += "or the number of environments each worker holds"
-            elif exitcode < 0:
-                reason = f"signal {-exitcode}"
-            else:
-                reason = f"exit code {exitcode}; its traceback is on stderr"
-            raise pufferlib.APIUsageError(f"Environment worker {worker_idx} died ({reason}) and cannot return results.")
-
     def recv(self):
         recv_precheck(self)
-        spins = 0
-        wait = None
         while True:
-            spins += 1
-            if spins > FAST_PATH_SPINS:
-                wait = wait or _DriverWait(self)
-                wait.tick()
-
             # Bandaid patch for new experience buffer desync
             if self.sync_traj:
                 worker = self.waiting_workers[0]
@@ -515,14 +439,6 @@ class Multiprocessing:
                     self.ready_workers.append(worker)
                 else:
                     self.waiting_workers.append(worker)
-
-            if sem >= MAIN:
-                # Only one worker is inspected per turn, so a batch takes one
-                # turn per worker to assemble. A result landing means the rest
-                # are landing too, so drop back to the fast path rather than
-                # pay the poll once per worker.
-                spins = 0
-                wait = None
 
             if sem == INFO:
                 self.infos[worker] = self.recv_pipes[worker].recv()
@@ -605,9 +521,7 @@ class Multiprocessing:
 
     def async_reset(self, seed=0):
         # Flush any waiting workers
-        wait = _DriverWait(self)
         while self.waiting_workers:
-            wait.tick()
             worker = self.waiting_workers.pop(0)
             sem = self.buf["semaphores"][worker]
             if sem >= MAIN:
