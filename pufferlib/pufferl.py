@@ -775,9 +775,12 @@ class PuffeRL:
         total_minibatches = 0
         pending_minibatches = 0
 
+        # final minibatch can be partial due to advantage filtering or invalid agents. Drop the last mini-batch if is is partial.
+        full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, permutation.numel(), self.minibatch_size):
+            for start in range(0, full_minibatch_transitions, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
