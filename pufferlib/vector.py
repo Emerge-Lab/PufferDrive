@@ -1,7 +1,6 @@
 # TODO: Check actions passed to envs are right shape? On first call at least
 
 
-import ctypes
 import numpy as np
 import time
 import psutil
