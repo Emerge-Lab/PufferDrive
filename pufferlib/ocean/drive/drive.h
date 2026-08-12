@@ -3257,12 +3257,7 @@ void c_set_agent_states(
         agent->sim_heading = heading[k];
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
-        // An externally-set pose is a TELEPORT: the stale prev pose (last touched by
-        // c_step's copy_pose_to_prev) does not connect to it, and every prev-based
-        // swept check -- find_lane_and_offroad's road-edge crossing (via
-        // refresh_lane_association below) and compute_metrics' goal-reach segment --
-        // would sweep the whole gap and fire spuriously (measured: an on-lane
-        // teleported ego always classified offroad, lane obs dead).
+        // Teleport: reset prev pose now, else prev-based swept checks (offroad crossing, goal-reach) sweep the gap and fire spuriously.
         copy_pose_to_prev(agent);
         agent->sim_vx = vx[k];
         agent->sim_vy = vy[k];
