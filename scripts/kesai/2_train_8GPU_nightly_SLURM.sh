@@ -9,7 +9,7 @@
 #SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-7
+#SBATCH --array=0-2
 
 # print info about current job
 echo "START TIME: $(date)"
@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0009_${SEED}
+export RUN_NAME=k_exp_0011_${SEED}
 #k_nightly_0008_
 echo ${RUN_NAME}
 
@@ -82,6 +82,9 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
+    env.goal_speed=1000 \
+    env.goal_source=route \
+    env.max_goal_spacing=60 \
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
