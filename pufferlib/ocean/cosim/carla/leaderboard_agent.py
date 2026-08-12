@@ -58,10 +58,6 @@ from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 from pufferlib.ocean.cosim.carla.controller import TrackingController, read_vehicle_geometry
 
 
-def _wrap_deg(d):
-    return (d + 180.0) % 360.0 - 180.0
-
-
 # Rolling chase-cam window kept for COSIM_RECORD_INFRACTIONS clips, and the
 # minimum ego travel between two logged infractions (suppresses re-triggering
 INFRACTION_CLIP_SECONDS = 5.0
@@ -238,10 +234,12 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         import torch
         import pufferlib.ocean.torch as drive_torch
 
-        sd = clean_policy_state_dict(torch.load(self.checkpoint, map_location=self.device, weights_only=False))
+        policy_state_dict = clean_policy_state_dict(
+            torch.load(self.checkpoint, map_location=self.device, weights_only=False)
+        )
         env_for_policy = self.env
         self._boundary_feat_ckpt = None
-        bw = sd.get("actor_backbone.boundary_encoder.0.weight")
+        bw = policy_state_dict.get("actor_backbone.boundary_encoder.0.weight")
         if bw is not None and bw.shape[1] < env_for_policy.boundary_features:
             # Older checkpoints emit fewer boundary features than this drive.h
             # (e.g. 7 vs 9 -- two zero-padded GPS columns were added later).
@@ -259,7 +257,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         # pre-3.0 checkpoints keep action_type only in the env section
         self.cfg["policy"].setdefault("action_type", self.cfg["env"]["action_type"])
         self.policy = policy_cls(env_for_policy, **self.cfg["policy"]).to(self.device)
-        self.policy.load_state_dict(sd)
+        self.policy.load_state_dict(policy_state_dict)
         self.policy.eval()
         print(f"[puffer_agent] loaded policy from {self.checkpoint}")
 
@@ -300,10 +298,8 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         ).reshape(-1, 2)
 
         if self.debug_goal_lane_dir:
-            # road_elements[i] in the C sim <-> data["roads"][i] here: both
-            # read the bin's road records off disk in the same sequential
-            # order, so goal_lane_idx (a road_elements index) is directly
-            # usable against this list.
+            # goal_lane_idx comes from road_elements[] in the C file; bin_data["roads"]
+            # is the same bin read in the same order, so it's usable as-is.
             self._road_data = bin_data["roads"]
             Path(self.debug_goal_lane_dir).mkdir(parents=True, exist_ok=True)
             self._goal_lane_debug_file = open(Path(self.debug_goal_lane_dir) / f"{self.video_tag}.csv", "w")
@@ -312,18 +308,12 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             )
 
         self.lights = list(self.world.get_actors().filter("traffic.traffic_light"))
-        self.light_map, self.num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
-        # The stable label for "which bin element(s) is this CARLA light": its
-        # actor id -> its light_map[] entry, the SAME table the base pass in
-        # _read_light_states writes from. The ego-governance override below
-        # looks up through this table instead of an independent geometric
-        # nearest-stop-line search, so the two can never disagree about which
-        # bin element represents a given real light (see module history: an
-        # independent override search picked a different element than
-        # light_map for ~5% of lights in Town04/Town06 -- consistently wrong
-        # right after the ego crosses the stop line and CARLA drops
-        # get_traffic_light(), when the override was the only correct source).
-        self.light_index_by_id = {lt.id: li for li, lt in enumerate(self.lights)}
+        light_map, self.num_traffic = cb.map_lights_to_bin(self.lights, self.transform, self.town_bin)
+        # One id -> bin-indices table, reused by both passes in
+        # _read_light_states, so they can't disagree on which bin element a
+        # given light maps to (a prior independent geometric lookup for the
+        # ego-governance pass picked the wrong element ~5% of the time).
+        self.light_bin_indices_by_id = {lt.id: light_map[li] for li, lt in enumerate(self.lights)}
         self.last_light_states = np.zeros(self.num_traffic, np.int32)
 
         wheelbase, max_steer = read_vehicle_geometry(self.vehicle)
@@ -442,29 +432,20 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         return (np.array(idx, np.int32), np.array(length, np.float32), np.array(width, np.float32))
 
     def _read_light_states(self):
-        """Ground truth for every mapped bin traffic element, from CARLA's
-        live light states via the stable light_index_by_id -> light_map
-        table (see _init_on_first_step). The ego-governance override
-        (get_traffic_light(), CARLA's own answer for which light currently
-        controls the ego) re-asserts through that SAME table -- it cannot
-        pick a different bin element than the base pass already assigned
-        this light, so the two can never disagree once the ego crosses the
-        stop line and CARLA drops governance (the base pass keeps writing
-        the correct element either way)."""
+        """Ground truth for every mapped bin traffic element, via the
+        precomputed light_bin_indices_by_id table (see _init_on_first_step)."""
         states = np.zeros(self.num_traffic, np.int32)
-        for li, lt in enumerate(self.lights):
+        for lt in self.lights:
             state = cb.carla_light_to_puffer(lt.get_state())
-            for j in self.light_map[li]:
+            for j in self.light_bin_indices_by_id[lt.id]:
                 if 0 <= j < self.num_traffic:
                     states[j] = state
         ego_light = self.vehicle.get_traffic_light()
-        if ego_light is not None:
-            li = self.light_index_by_id.get(ego_light.id)
-            if li is not None:
-                state = cb.carla_light_to_puffer(ego_light.get_state())
-                for j in self.light_map[li]:
-                    if 0 <= j < self.num_traffic:
-                        states[j] = state
+        if ego_light is not None and ego_light.id in self.light_bin_indices_by_id:
+            state = cb.carla_light_to_puffer(ego_light.get_state())
+            for j in self.light_bin_indices_by_id[ego_light.id]:
+                if 0 <= j < self.num_traffic:
+                    states[j] = state
         return states
 
     def _sync_ego_from_carla(self, zero_velocity=False):
@@ -602,7 +583,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             self.vehicle.set_target_velocity(
                 carla.Vector3D(x=speed_after * math.cos(yaw_rad), y=speed_after * math.sin(yaw_rad), z=0.0)
             )
-            yaw_rate_deg_s = _wrap_deg(target_yaw_deg - self._last_target_yaw_deg) / self.dt
+            yaw_rate_deg_s = cb.wrap_deg_180(target_yaw_deg - self._last_target_yaw_deg) / self.dt
             self.vehicle.set_target_angular_velocity(carla.Vector3D(x=0.0, y=0.0, z=yaw_rate_deg_s))
             self._last_target_yaw_deg = target_yaw_deg
             self._display = [ex, ey, ez, target_yaw_deg, speed_after, yaw_rate_deg_s, accel_after]

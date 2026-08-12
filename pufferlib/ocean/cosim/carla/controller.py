@@ -18,6 +18,8 @@ import math
 import carla
 import numpy as np
 
+from pufferlib.ocean.cosim.carla_bridge import wrap_deg_180
+
 
 def read_vehicle_geometry(vehicle):
     """(wheelbase_m, max_steer_rad) from the vehicle's physics parameters
@@ -41,10 +43,6 @@ def read_vehicle_geometry(vehicle):
         return wheelbase, math.radians(max_steer_deg)
     except Exception:
         return 2.85, math.radians(70.0)
-
-
-def _wrap_deg(d):
-    return (d + 180.0) % 360.0 - 180.0
 
 
 class TrackingController:
@@ -98,7 +96,7 @@ class TrackingController:
             brake = float(np.clip(-self.kp_brake * err, 0.0, 1.0))
 
         # --- lateral ---
-        yaw_err_rad = math.radians(_wrap_deg(target_yaw_deg - current_yaw_deg))
+        yaw_err_rad = math.radians(wrap_deg_180(target_yaw_deg - current_yaw_deg))
         self._yaw_errors.append(yaw_err_rad)
         desired_yaw_rate = yaw_err_rad / self.horizon
         # Kinematic bicycle: yaw_rate = v / L * tan(steer_angle)

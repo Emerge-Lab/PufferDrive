@@ -59,6 +59,11 @@ def bin_path_for_town(town: str) -> str:
     return str(_BIN_DIR / f"opendrive__{town}.bin")
 
 
+def wrap_deg_180(d):
+    """Wrap a degree value (e.g. a yaw difference) to (-180, 180]."""
+    return (d + 180.0) % 360.0 - 180.0
+
+
 def _bin_lane_points(bin_path: str) -> np.ndarray:
     """All lane-polyline (x, y) points from a bin (type 0..9 == lanes)."""
     data = _mbin.read_bin(Path(bin_path))
