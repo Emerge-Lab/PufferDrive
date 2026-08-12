@@ -74,6 +74,12 @@ EXTRA_ARGS=()
 
 cd "$PD"
 declare -A STATUS
+# main_callback below omits metric_summary_callback (PDF histograms): it
+# crashes on a read-only numpy array from pyarrow-backed parquet columns in
+# this nuplan-devkit checkout (nuboard_histogram_utils.py), which aborts the
+# whole main_callback chain and skips csv_main_callback -- the actual
+# results. csv_main_callback reads aggregator parquet files directly and
+# doesn't need metric_summary_callback's output.
 for CHALLENGE in $CHALLENGES; do
     echo "[run_nuplan_planner] challenge=$CHALLENGE split=$SPLIT group=$GROUP"
     "$PY" "$NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py" \
@@ -84,7 +90,7 @@ for CHALLENGE in $CHALLENGES; do
         planner=pufferdrive_planner \
         planner.pufferdrive_planner.checkpoint_path="$CKPT" \
         callback="[simulation_log_callback, carl_visualization_callback]" \
-        main_callback="[time_callback, metric_file_callback, metric_aggregator_callback, metric_summary_callback, csv_main_callback]" \
+        main_callback="[time_callback, metric_file_callback, metric_aggregator_callback, csv_main_callback]" \
         hydra.searchpath="[pkg://pufferlib.ocean.cosim.nuplan.config, pkg://carl_nuplan.planning.script.config.common, pkg://carl_nuplan.planning.script.config.simulation, pkg://nuplan.planning.script.config.common, pkg://nuplan.planning.script.experiments]" \
         group="$GROUP" \
         "${EXTRA_ARGS[@]}"
