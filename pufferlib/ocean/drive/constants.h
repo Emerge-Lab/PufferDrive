@@ -136,13 +136,18 @@ static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
-// Discrete action space, DYNAMICS_MODEL_JERK
-static const float JERK_LONG[4] = {-15.0f, -4.0f, 0.0f, 4.0f};
-static const float JERK_LAT[3] = {-4.0f, 0.0f, 4.0f};
+#define NUM_JERK_LONG_ACTIONS 4
+#define NUM_JERK_LAT_ACTIONS 3
+static const float JERK_LONG[NUM_JERK_LONG_ACTIONS] = {-15.0f, -4.0f, 0.0f, 4.0f};
+static const float JERK_LAT[NUM_JERK_LAT_ACTIONS] = {-4.0f, 0.0f, 4.0f};
 
 // Discrete action space, DYNAMICS_MODEL_CLASSIC
-static const float ACCELERATION_VALUES[7] = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
-static const float STEERING_VALUES[9] = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
+#define NUM_ACCELERATION_ACTIONS 7
+#define NUM_STEERING_ACTIONS 9
+static const float ACCELERATION_VALUES[NUM_ACCELERATION_ACTIONS]
+    = {-4.0000f, -2.6670f, -1.3330f, -0.0000f, 1.3330f, 2.6670f, 4.0000f};
+static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
+    = {-0.667f, -0.500f, -0.333f, -0.167f, 0.000f, 0.167f, 0.333f, 0.500f, 0.667f};
 
 // =====================================================================================
 // 4. GEOMETRY & COLLISION

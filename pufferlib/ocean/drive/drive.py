@@ -71,6 +71,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         use_map_cache=0,
+        use_neighbor_cache=1,
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
@@ -95,6 +96,7 @@ class Drive(pufferlib.PufferEnv):
         init_step_min_horizon=20,
         eval_mode=0,
         num_eval_scenarios=16,
+        max_scenarios_per_batch=None,
         eval_map_indices=None,
         eval_scenario_seeds=None,
         init_mode="create_all_valid",
@@ -133,13 +135,16 @@ class Drive(pufferlib.PufferEnv):
         obs_dropout_boundary=0.0,
         partner_blindness_prob=0.0,
         partner_blindness_trigger_prob=0.1,
+        partner_blindness_duration_seconds=1.0,
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
-        phantom_braking_duration=10,
+        phantom_braking_duration_seconds=1.0,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
+        if reward_randomization and not reward_conditioning:
+            raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.compute_eval_metrics = compute_eval_metrics
@@ -206,6 +211,9 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
+        if use_neighbor_cache not in (0, 1):
+            raise ValueError(f"use_neighbor_cache must be 0 (off) or 1 (on). Got: {use_neighbor_cache}")
+        self.use_neighbor_cache = use_neighbor_cache
         self.dynamics_model = dynamics_model
         if dynamics_model == "classic":
             self.dynamics_model_flag = binding.DYNAMICS_MODEL_CLASSIC
@@ -215,6 +223,9 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
+        if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
+            raise ValueError(f"max_scenarios_per_batch must be >= 1 or None. Got: {max_scenarios_per_batch}")
+        self.max_scenarios_per_batch = max_scenarios_per_batch
         self.eval_map_indices = eval_map_indices
         self.eval_scenario_seeds = eval_scenario_seeds
         if self.eval_map_indices is not None:
@@ -267,9 +278,10 @@ class Drive(pufferlib.PufferEnv):
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
+        self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds) // self.dt
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
-        self.phantom_braking_duration = int(phantom_braking_duration)
+        self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds) // self.dt
         self.partner_features = binding.PARTNER_FEATURES
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
@@ -420,13 +432,7 @@ class Drive(pufferlib.PufferEnv):
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
-        # Calculate dynamic batch size for Eval + Replay mode
-        self.current_num_eval_scenarios = self.num_eval_scenarios
-        if self.eval_mode:
-            self.current_num_eval_scenarios = min(
-                self.num_eval_scenarios,
-                self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
-            )
+        self.current_num_eval_scenarios = self._next_eval_batch_size()
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
@@ -515,6 +521,7 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "use_map_cache": self.use_map_cache,
+            "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
             "min_goal_spacing": self.min_goal_spacing,
             "max_goal_spacing": self.max_goal_spacing,
@@ -566,9 +573,10 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_boundary_kept": self.obs_slots_boundary_kept,
             "partner_blindness_prob": self.partner_blindness_prob,
             "partner_blindness_trigger_prob": self.partner_blindness_trigger_prob,
+            "partner_blindness_duration_seconds": self.partner_blindness_duration_seconds,
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
-            "phantom_braking_duration": self.phantom_braking_duration,
+            "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
         }
 
     def _sample_init_step(self):
@@ -577,6 +585,19 @@ class Drive(pufferlib.PufferEnv):
             return self.init_step
         upper = self.scenario_length - self.init_step_min_horizon
         return int(self.rng.integers(0, upper))
+
+    def _next_eval_batch_size(self):
+        """Scenarios the next eval batch instantiates: whatever is left of this
+        worker's map window, clamped by max_scenarios_per_batch. The clamp bounds
+        peak memory, since each scenario in a batch is a live C env owning its
+        map geometry (hundreds of MB on large maps)."""
+        if not self.eval_mode:
+            return self.num_eval_scenarios
+        consumed = self.starting_map_counter - self.starting_map_counter_init
+        remaining = self.num_eval_scenarios - consumed
+        if self.max_scenarios_per_batch is not None and remaining > self.max_scenarios_per_batch:
+            return self.max_scenarios_per_batch
+        return remaining
 
     @property
     def random_seed(self):
@@ -620,13 +641,7 @@ class Drive(pufferlib.PufferEnv):
                         if self.capture_replay:
                             summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
                         info.append(summary)
-                # Calculate dynamic batch size for Eval + Replay mode
-                self.current_num_eval_scenarios = self.num_eval_scenarios
-                if self.eval_mode:
-                    self.current_num_eval_scenarios = min(
-                        self.num_eval_scenarios,
-                        self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
-                    )
+                self.current_num_eval_scenarios = self._next_eval_batch_size()
                 if self.current_num_eval_scenarios == 0:
                     self._eval_exhausted = True
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)

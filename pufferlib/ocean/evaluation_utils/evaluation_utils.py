@@ -7,6 +7,7 @@ import pandas as pd
 import yaml
 
 import pufferlib
+import pufferlib.utils
 
 
 MAX_C_SEED = 2**31 - 1
@@ -29,6 +30,18 @@ def _require_mapping(value, label):
     if not isinstance(value, dict):
         raise pufferlib.APIUsageError(f"{label} must be a mapping")
     return value
+
+
+def resolve_run_dir(model_path):
+    """Run directory holding a checkpoint's config.yaml.
+
+    Checkpoints sit either at the run root (train.final_model_name) or one level
+    down in models/ and best_models/, so accept both instead of assuming a depth.
+    """
+    checkpoint_dir = os.path.dirname(os.path.abspath(model_path))
+    if os.path.isfile(os.path.join(checkpoint_dir, "config.yaml")):
+        return checkpoint_dir
+    return os.path.dirname(checkpoint_dir)
 
 
 def _load_yaml_mapping(path, label):
@@ -125,26 +138,34 @@ def load_benchmark_config(config_path, selected_names):
     resolved_benchmarks = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
-        simulation_mode = benchmark.get("simulation_mode")
+        benchmark_environment_config = _require_mapping(benchmark.get("env"), f"Benchmark {name} env")
+        unknown_env_keys = set(benchmark_environment_config) - _drive_env_keys()
+        if unknown_env_keys:
+            raise pufferlib.APIUsageError(
+                f"Benchmark {name} has unsupported environment keys: {', '.join(sorted(unknown_env_keys))}"
+            )
+        simulation_mode = benchmark_environment_config.get("simulation_mode")
         if simulation_mode not in ("gigaflow", "replay"):
-            raise pufferlib.APIUsageError(f"Benchmark {name} simulation_mode must be 'gigaflow' or 'replay'")
+            raise pufferlib.APIUsageError(f"Benchmark {name} env simulation_mode must be 'gigaflow' or 'replay'")
         seed = benchmark.get("seed")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_C_SEED:
             raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
-        scenario_length = _positive_int(benchmark.get("scenario_length"), f"Benchmark {name} scenario_length")
-        num_maps = _positive_int(benchmark.get("num_maps"), f"Benchmark {name} num_maps")
-        control_mode = benchmark.get("control_mode")
+        num_maps = _positive_int(benchmark_environment_config.get("num_maps"), f"Benchmark {name} env num_maps")
+        control_mode = benchmark_environment_config.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
-            raise pufferlib.APIUsageError(f"Benchmark {name} control_mode must be a non-empty string")
-        max_agents_per_env = benchmark.get("max_agents_per_env")
+            raise pufferlib.APIUsageError(f"Benchmark {name} env control_mode must be a non-empty string")
+        max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
         is_single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
         if max_agents_per_env is not None or not is_single_agent_replay:
-            max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} max_agents_per_env")
+            max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} env max_agents_per_env")
+        max_scenarios_per_batch = benchmark_environment_config.get("max_scenarios_per_batch")
+        if max_scenarios_per_batch is not None:
+            _positive_int(max_scenarios_per_batch, f"Benchmark {name} env max_scenarios_per_batch")
 
-        map_dir = benchmark.get("map_dir")
+        map_dir = benchmark_environment_config.get("map_dir")
         if not isinstance(map_dir, str) or not map_dir:
-            raise pufferlib.APIUsageError(f"Benchmark {name} map_dir must be a non-empty path")
+            raise pufferlib.APIUsageError(f"Benchmark {name} env map_dir must be a non-empty path")
         map_dir = os.path.abspath(map_dir)
         if not os.path.isdir(map_dir) and not (os.path.isfile(map_dir) and map_dir.endswith(".bin")):
             raise pufferlib.APIUsageError(f"Benchmark {name} map path does not exist: {map_dir}")
@@ -164,17 +185,16 @@ def load_benchmark_config(config_path, selected_names):
                 f"{available_map_count} maps"
             )
 
+        resolved_environment_config = copy.deepcopy(benchmark_environment_config)
+        resolved_environment_config["map_dir"] = map_dir
+        if max_agents_per_env is None:
+            resolved_environment_config.pop("max_agents_per_env", None)
         resolved_benchmarks.append(
             {
                 "name": name,
-                "simulation_mode": simulation_mode,
                 "seed": seed,
                 "num_scenarios": num_scenarios,
-                "num_maps": num_maps,
-                "max_agents_per_env": max_agents_per_env,
-                "scenario_length": scenario_length,
-                "control_mode": control_mode,
-                "map_dir": map_dir,
+                "env": resolved_environment_config,
             }
         )
     return environment_config, resolved_benchmarks
@@ -185,7 +205,7 @@ def load_checkpoint_architecture(args):
     model_path = args["load_model_path"]
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
+    config_path = os.path.join(resolve_run_dir(model_path), "config.yaml")
     checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
 
     merged = copy.deepcopy(args)
@@ -203,11 +223,44 @@ def load_checkpoint_architecture(args):
     return merged, config_path
 
 
+CHECKPOINT_RUN_IDENTITY_KEYS = ("run_name", "wandb_project", "wandb_group")
+
+
+def load_checkpoint_run_identity(config_path):
+    """Resolve the tracker run a checkpoint belongs to from its training config."""
+    checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
+    identity = {}
+    for key in CHECKPOINT_RUN_IDENTITY_KEYS:
+        value = checkpoint_config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise pufferlib.APIUsageError(
+                f"Checkpoint config {config_path} is missing a usable {key}; cannot attach eval "
+                "results to the training run"
+            )
+        identity[key] = value
+    return identity
+
+
+def summarize_benchmark_metrics(benchmark_results, key_prefix):
+    """Flatten benchmark results into one scalar metric dict for the experiment logger."""
+    metrics = {}
+    for benchmark_name, benchmark_result in benchmark_results.items():
+        summary = benchmark_result["summary"]
+        if summary is None:
+            continue
+        prefix = f"{key_prefix}{benchmark_name}"
+        metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
+        metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
+        metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+    return metrics
+
+
 def build_benchmark_args(base_args, benchmark, environment_config):
-    """Apply the fixed benchmark evaluation overrides."""
+    """Apply the benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
-    max_agents_per_env = benchmark["max_agents_per_env"]
+    benchmark_environment_config = benchmark["env"]
+    max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
     if max_agents_per_env is not None and eval_agent_count < max_agents_per_env:
         raise pufferlib.APIUsageError(
             f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
@@ -217,19 +270,9 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
     args["env"].update(copy.deepcopy(environment_config))
-    args["env"].update(
-        {
-            "num_agents": eval_agent_count,
-            "simulation_mode": benchmark["simulation_mode"],
-            "map_dir": benchmark["map_dir"],
-            "num_maps": benchmark["num_maps"],
-            "scenario_length": benchmark["scenario_length"],
-            "resample_frequency": benchmark["scenario_length"],
-            "control_mode": benchmark["control_mode"],
-        }
-    )
-    if max_agents_per_env is not None:
-        args["env"]["max_agents_per_env"] = max_agents_per_env
+    args["env"].update(copy.deepcopy(benchmark_environment_config))
+    args["env"]["num_agents"] = eval_agent_count
+    args["env"]["resample_frequency"] = benchmark_environment_config["scenario_length"]
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 
@@ -300,11 +343,13 @@ def _build_eval_report(episode_summaries, num_scenarios):
     lead_cols = [col for col in ("map_name", "scenario_id") if col in df.columns]
     df = df[lead_cols + [col for col in df.columns if col not in lead_cols]]
 
-    metric_means = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number]).mean().to_dict()
+    numeric_metrics = df.drop(columns=["seed"], errors="ignore").select_dtypes(include=[np.number])
+    metric_lists = {key: numeric_metrics[key].dropna().tolist() for key in numeric_metrics}
+    metric_means = pufferlib.utils.reduce_environment_metrics(metric_lists)
     summary = {
         "num_scenarios": num_scenarios,
         "num_episodes": int(len(df)),
-        "metrics_mean": {key: float(value) for key, value in metric_means.items()},
+        "metrics_mean": metric_means,
     }
     return df, summary
 

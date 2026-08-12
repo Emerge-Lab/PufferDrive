@@ -5,15 +5,12 @@ This tool folds those into a nightly regression view:
 
   update (default)  Refresh the report's data: rebuild the per-seed trend
                     runs in the nightly-trends project from the nightly
-                    runs' final metric values. The launchers run this at
-                    every submission; run it by hand to pull in a night
-                    that finished since.
+                    runs' final metric values.
 
   report [--create] Rewrite the report's layout: which panels exist and how
                     they aggregate, per nightly project — (1) trend line
                     panels over the trend runs (x = the night, y = mean
-                    across seeds with stderr bands); (2) bar charts of
-                    finals grouped by night; (3) per-night mean training
+                    across seeds with stderr bands); (2) per-night mean training
                     curves. Panels are live queries, so new data appears
                     without rerunning this — only rerun it to change the
                     panel set (e.g. after editing TREND_METRICS et al.).
@@ -32,50 +29,79 @@ os.environ.setdefault("WANDB_BASE_URL", "https://api.wandb.ai")
 import wandb
 
 ENTITY = "emerge_"
-PROJECTS = ["nightly-multi", "nightly-single"]
+PROJECTS = ["nightly-multi", "nightly-single", "nightly-multi-long"]
 TREND_PROJECT = "nightly-trends"
 NIGHT_ZERO = datetime.date(2026, 7, 4)
-# One day before the first night, so the first point is visible: with a
-# single night logged the wall-time autorange spans [0, 2x], which renders
-# as the year 1969.
-NIGHT_ZERO_TS = 1783051200.0
+# The multi-agent nightlies started logging eval_carla_fast on this night; earlier ones have no eval keys.
+EVAL_START = datetime.date(2026, 8, 3)
+# The single-agent nightly runs no evaluation, so it gets no eval panels.
+EVAL_PROJECTS = ("nightly-multi", "nightly-multi-long")
+SPS_SAMPLES = 500
 REPORT_URL = "https://wandb.ai/emerge_/nightly-multi/reports/PufferDrive-Nightlies--VmlldzoxNzQxNzI4NQ=="
 
-TREND_METRICS = [
-    "environment/score",
+
+def axis_start(night):
+    # One day before the first plotted night: a lone point makes the wall-time autorange render as 1969.
+    start = night - datetime.timedelta(days=1)
+    return datetime.datetime.combine(start, datetime.time()).timestamp()
+
+
+TRAIN_TREND_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
-    "environment/num_goals_reached",
     "environment/avg_speed_per_agent",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "eval_carla_fast/score",
+]
+EVAL_TREND_METRICS = [
     "eval_carla_fast/episode_return",
     "eval_carla_fast/collision_rate",
     "eval_carla_fast/offroad_rate",
     "eval_carla_fast/avg_distance_per_infraction",
 ]
-FINALS_METRICS = [
-    "environment/score",
+TREND_METRICS = TRAIN_TREND_METRICS + EVAL_TREND_METRICS
+TRAIN_PANEL_METRICS = [
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
-    "environment/num_goals_reached",
     "environment/avg_distance_per_infraction",
     "SPS",
-    "eval_carla_fast/score",
-    "eval_carla_fast/collision_rate",
-    "eval_carla_fast/avg_distance_per_infraction",
 ]
 CURVE_METRICS = [
-    "environment/score",
     "environment/episode_return",
     "environment/collision_rate",
     "environment/offroad_rate",
     "SPS",
     "losses/entropy",
 ]
+
+
+WIDE_METRIC = "avg_distance_per_infraction"
+GRID_WIDTH = 24
+PANEL_WIDTH = 8
+PANEL_HEIGHT = 6
+WIDE_PANEL_HEIGHT = 10
+
+
+def layout_panels(wr, panels):
+    # Panels carry a default layout that stacks them 3-up; assign explicit slots so the
+    # wide metric gets a full-width row of its own above the rest.
+    wide = [panel for panel in panels if WIDE_METRIC in panel.title]
+    rest = [panel for panel in panels if WIDE_METRIC not in panel.title]
+    next_y = 0
+    for panel in wide:
+        panel.layout = wr.Layout(x=0, y=next_y, w=GRID_WIDTH, h=WIDE_PANEL_HEIGHT)
+        next_y += WIDE_PANEL_HEIGHT
+    per_row = GRID_WIDTH // PANEL_WIDTH
+    for index, panel in enumerate(rest):
+        panel.layout = wr.Layout(
+            x=(index % per_row) * PANEL_WIDTH,
+            y=next_y + (index // per_row) * PANEL_HEIGHT,
+            w=PANEL_WIDTH,
+            h=PANEL_HEIGHT,
+        )
+    return wide + rest
 
 
 def night_of(run):
@@ -85,6 +111,15 @@ def night_of(run):
         return datetime.datetime.strptime(run.group, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def mean_sps(run):
+    # Skips the zeros pufferl logs whenever no steps elapsed since the previous log.
+    rows = run.history(keys=["SPS"], pandas=False, samples=SPS_SAMPLES)
+    values = [row["SPS"] for row in rows if row.get("SPS")]
+    if not values:
+        return None
+    return sum(values) / len(values)
 
 
 def update_trends():
@@ -123,6 +158,10 @@ def update_trends():
                 for metric in TREND_METRICS:
                     if metric in run.summary:
                         row[metric] = run.summary[metric]
+                # summary SPS is the last logged value, which is 0 for every run that trained to completion
+                sps = mean_sps(run)
+                if sps is not None:
+                    row["SPS"] = sps
                 trend.log(row, step=night_index)
                 print(f"{project} seed{seed} night {night_index} ({night}): {len(row) - 1} metrics")
             trend.finish()
@@ -135,18 +174,22 @@ def trend_section(wr, project):
         name=f"{project} trend runs",
         filters=f'group == "{project}"',
     )
-    panels = [
-        wr.LinePlot(
+
+    def line(metric, first_night):
+        return wr.LinePlot(
             x="_timestamp",
-            y=[m],
+            y=[metric],
             groupby="group",
             groupby_aggfunc="mean",
             groupby_rangefunc="stderr",
-            range_x=(NIGHT_ZERO_TS, None),
-            title=m,
+            range_x=(axis_start(first_night), None),
+            title=metric,
         )
-        for m in FINALS_METRICS
-    ]
+
+    panels = [line(m, NIGHT_ZERO) for m in TRAIN_PANEL_METRICS]
+    if project in EVAL_PROJECTS:
+        panels += [line(m, EVAL_START) for m in EVAL_TREND_METRICS]
+    panels = layout_panels(wr, panels)
     return [
         wr.H1(f"{project}: nightly trend (mean over seeds, stderr bands)"),
         wr.P(
@@ -154,25 +197,6 @@ def trend_section(wr, project):
             "its night's midnight). Trend runs live in the nightly-trends "
             "project and are rebuilt by this script at each nightly launch."
         ),
-        wr.PanelGrid(runsets=[runset], panels=panels),
-    ]
-
-
-def finals_section(wr, project):
-    runset = wr.Runset(entity=ENTITY, project=project, name=f"{project} (all nights)")
-    panels = [
-        wr.BarPlot(
-            metrics=[m],
-            groupby="group",
-            groupby_aggfunc="mean",
-            groupby_rangefunc="stderr",
-            title=f"{m} - final per night (mean over seeds)",
-        )
-        for m in FINALS_METRICS
-    ]
-    return [
-        wr.H1(f"{project}: nightly finals"),
-        wr.P("One bar per night (run group): mean over seeds of the final logged value, with stderr."),
         wr.PanelGrid(runsets=[runset], panels=panels),
     ]
 
@@ -216,8 +240,6 @@ def make_report(create):
     blocks = []
     for project in PROJECTS:
         blocks += trend_section(wr, project)
-    for project in PROJECTS:
-        blocks += finals_section(wr, project)
     for project in PROJECTS:
         blocks += curves_section(wr, project)
     report.blocks = blocks

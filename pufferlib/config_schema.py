@@ -97,6 +97,7 @@ class DriveEnvConfig:
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
     use_map_cache: int = MISSING
+    use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING
     resample_frequency: int = MISSING
     termination_mode: int = MISSING
@@ -158,9 +159,10 @@ class DriveEnvConfig:
     obs_range_traffic_control_m: float = MISSING
     partner_blindness_prob: float = MISSING
     partner_blindness_trigger_prob: float = MISSING
+    partner_blindness_duration_seconds: float = MISSING
     phantom_braking_prob: float = MISSING
     phantom_braking_trigger_prob: float = MISSING
-    phantom_braking_duration: int = MISSING
+    phantom_braking_duration_seconds: float = MISSING
 
 
 # env_name -> structured schema for the `env` section. Envs without an entry

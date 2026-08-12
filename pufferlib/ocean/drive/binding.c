@@ -1803,7 +1803,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             break;
         }
     }
-
     if (total_agent_count >= num_agents) {
         total_agent_count = num_agents;
     }
@@ -1842,6 +1841,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
+    env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
     env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
     env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
@@ -1908,9 +1908,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
+    env->partner_blindness_duration = (int) unpack(kwargs, "partner_blindness_duration_seconds");
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
-    env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration");
+    env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration_seconds");
 
     init(env);
     return 0;
@@ -1987,7 +1988,8 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "score", log->score);
     assign_to_dict(dict, "avg_speed_per_agent", log->avg_speed_per_agent);
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
-
+    assign_to_dict(dict, "total_distance_travelled_sum", total_distance_travelled);
+    assign_to_dict(dict, "total_infraction_count", total_infractions);
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
