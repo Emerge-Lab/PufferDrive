@@ -853,8 +853,10 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         for pool_name in ("pool_partner", "pool_lane", "pool_boundary", "pool_traffic"):
             if frames.get(pool_name):
                 replay[pool_name] = np.stack(frames[pool_name])
+        zlib_path = str(Path(self.obs_html_dir) / f"{self.video_tag}.replay.zlib")
         out = str(Path(self.obs_html_dir) / f"{self.video_tag}.html")
-        viz.generate_interactive_replay(oh["scenario"], replay, filename=out)
+        viz.save_interactive_replay_zlib(oh["scenario"], replay, zlib_path)
+        viz.render_interactive_replay_zlib(zlib_path, out)
         print(f"[puffer_agent] wrote obs_html viewer ({len(frames['obs'])} frames) -> {out}")
 
         # Raw-array side dump: the exact same obs/agent_f32 the HTML viewer
