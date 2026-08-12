@@ -7,8 +7,7 @@
 #     srun --jobid=<gpu job> --overlap bash run_leaderboard.sh
 #
 # Required env:
-#   CKPT           PufferDrive checkpoint .pt, or "dummy" for the no-policy
-#                  constant-forward-jerk wiring test.
+#   CKPT           PufferDrive checkpoint .pt (experiment dir or models/*.pt file)
 # Optional env:
 #   ROUTES         routes xml. Default: one longest6 split route (Town01).
 #   ROUTES_SUBSET  route id within ROUTES. Default: 0. Set to empty
@@ -46,7 +45,7 @@ if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
 fi
 set -u
 
-: "${CKPT:?set CKPT=/path/to/model_xxx.pt (or CKPT=dummy for the wiring test)}"
+: "${CKPT:?set CKPT=/path/to/model_xxx.pt}"
 PD=${PD:-/scratch/yw4142/PufferDrive_cosim}
 CARL_PY=/scratch/yw4142/conda_envs/carl/bin/python
 CARLA_ROOT=/scratch/yw4142/CaRL/CARLA/carla
