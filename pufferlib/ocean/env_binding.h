@@ -1022,6 +1022,130 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// ── Co-simulation external-state setters (mirror vec_get_global_agent_state) ──
+// Co-sim runs a single env (num_envs == 1); these operate on vec->envs[0].
+static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 10) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 10 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *x_arr = PyTuple_GetItem(args, 2);
+    PyObject *y_arr = PyTuple_GetItem(args, 3);
+    PyObject *z_arr = PyTuple_GetItem(args, 4);
+    PyObject *heading_arr = PyTuple_GetItem(args, 5);
+    PyObject *vx_arr = PyTuple_GetItem(args, 6);
+    PyObject *vy_arr = PyTuple_GetItem(args, 7);
+    PyObject *yaw_rate_arr = PyTuple_GetItem(args, 8);
+    PyObject *accel_long_arr = PyTuple_GetItem(args, 9);
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr)
+        || !PyArray_Check(heading_arr) || !PyArray_Check(vx_arr) || !PyArray_Check(vy_arr)
+        || !PyArray_Check(yaw_rate_arr) || !PyArray_Check(accel_long_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All arrays must be NumPy arrays");
+        return NULL;
+    }
+    int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    float *x = (float *) PyArray_DATA((PyArrayObject *) x_arr);
+    float *y = (float *) PyArray_DATA((PyArrayObject *) y_arr);
+    float *z = (float *) PyArray_DATA((PyArrayObject *) z_arr);
+    float *heading = (float *) PyArray_DATA((PyArrayObject *) heading_arr);
+    float *vx = (float *) PyArray_DATA((PyArrayObject *) vx_arr);
+    float *vy = (float *) PyArray_DATA((PyArrayObject *) vy_arr);
+    float *yaw_rate = (float *) PyArray_DATA((PyArrayObject *) yaw_rate_arr);
+    float *accel_long = (float *) PyArray_DATA((PyArrayObject *) accel_long_arr);
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    c_set_agent_states((Drive *) vec->envs[0], count, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long);
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_agent_sizes(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_sizes requires 4 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *length_arr = PyTuple_GetItem(args, 2);
+    PyObject *width_arr = PyTuple_GetItem(args, 3);
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(length_arr) || !PyArray_Check(width_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All arrays must be NumPy arrays");
+        return NULL;
+    }
+    int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    float *length = (float *) PyArray_DATA((PyArrayObject *) length_arr);
+    float *width = (float *) PyArray_DATA((PyArrayObject *) width_arr);
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    c_set_agent_sizes((Drive *) vec->envs[0], count, idx, length, width);
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        compute_observations((Drive *) vec->envs[i]);
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_traffic_light_states requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *states_arr = PyTuple_GetItem(args, 1);
+    if (!PyArray_Check(states_arr)) {
+        PyErr_SetString(PyExc_TypeError, "states must be a NumPy array");
+        return NULL;
+    }
+    int *states = (int *) PyArray_DATA((PyArrayObject *) states_arr);
+    c_set_traffic_light_states((Drive *) vec->envs[0], states);
+    Py_RETURN_NONE;
+}
+
+static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_goals requires 7 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    PyObject *gx_arr = PyTuple_GetItem(args, 2);
+    PyObject *gy_arr = PyTuple_GetItem(args, 3);
+    PyObject *gz_arr = PyTuple_GetItem(args, 4);
+    PyObject *gdx_arr = PyTuple_GetItem(args, 5);
+    PyObject *gdy_arr = PyTuple_GetItem(args, 6);
+    if (!PyArray_Check(gx_arr) || !PyArray_Check(gy_arr) || !PyArray_Check(gz_arr) || !PyArray_Check(gdx_arr)
+        || !PyArray_Check(gdy_arr)) {
+        PyErr_SetString(PyExc_TypeError, "goal arrays must be NumPy arrays");
+        return NULL;
+    }
+    float *gx = (float *) PyArray_DATA((PyArrayObject *) gx_arr);
+    float *gy = (float *) PyArray_DATA((PyArrayObject *) gy_arr);
+    float *gz = (float *) PyArray_DATA((PyArrayObject *) gz_arr);
+    float *gdx = (float *) PyArray_DATA((PyArrayObject *) gdx_arr);
+    float *gdy = (float *) PyArray_DATA((PyArrayObject *) gdy_arr);
+    int num_wp = (int) PyArray_SIZE((PyArrayObject *) gx_arr);
+    c_set_agent_goals((Drive *) vec->envs[0], agent_idx, num_wp, gx, gy, gz, gdx, gdy);
+    Py_RETURN_NONE;
+}
+
 static PyObject *get_ground_truth_trajectories(PyObject *self, PyObject *args) {
     if (PyTuple_Size(args) != 7) {
         PyErr_SetString(PyExc_TypeError, "get_ground_truth_trajectories requires 7 arguments");
@@ -1294,6 +1418,23 @@ static PyMethodDef methods[]
        {"shared", (PyCFunction) my_shared, METH_VARARGS | METH_KEYWORDS, "Shared state"},
        {"get_global_agent_state", get_global_agent_state, METH_VARARGS, "Get global agent state"},
        {"vec_get_global_agent_state", vec_get_global_agent_state, METH_VARARGS, "Get agent state from vectorized env"},
+       {"vec_set_agent_states",
+        vec_set_agent_states,
+        METH_VARARGS,
+        "Overwrite agent states from an external source (co-sim)"},
+       {"vec_set_agent_sizes",
+        vec_set_agent_sizes,
+        METH_VARARGS,
+        "Overwrite agent bounding-box sizes from an external source (co-sim)"},
+       {"vec_recompute_observations",
+        vec_recompute_observations,
+        METH_VARARGS,
+        "Recompute observations without stepping (co-sim)"},
+       {"vec_set_traffic_light_states",
+        vec_set_traffic_light_states,
+        METH_VARARGS,
+        "Override traffic light states (co-sim)"},
+       {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
        {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
        {"vec_get_global_ground_truth_trajectories",
         vec_get_global_ground_truth_trajectories,
@@ -1384,6 +1525,11 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "INFRACTION_BEHAVIOR_REMOVE", INFRACTION_BEHAVIOR_REMOVE);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_GIGAFLOW", SIMULATION_MODE_GIGAFLOW);
     PyModule_AddIntConstant(m, "SIMULATION_MODE_REPLAY", SIMULATION_MODE_REPLAY);
+    // Ego obs normalizations (obs[0] * MAX_SPEED = sim_speed_signed m/s,
+    // obs[4] * ACCEL_LONG_NORM = accel_long m/s^2); co-sim reads the shadow ego's
+    // post-step speed/accel intent back out of the observation row.
+    PyModule_AddObject(m, "MAX_SPEED", PyFloat_FromDouble(MAX_SPEED));
+    PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
     PyModule_AddIntConstant(m, "ACTION_TYPE_DISCRETE", ACTION_TYPE_DISCRETE);
     PyModule_AddIntConstant(m, "ACTION_TYPE_CONTINUOUS", ACTION_TYPE_CONTINUOUS);
     PyModule_AddIntConstant(m, "DYNAMICS_MODEL_CLASSIC", DYNAMICS_MODEL_CLASSIC);

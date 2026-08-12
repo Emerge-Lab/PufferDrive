@@ -207,6 +207,9 @@ static const int ROAD_OFFSETS[25][2]
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
 #define GT_GOAL_RADIUS_M 6.0f
+// Max snap distance from an externally-set (co-sim) goal waypoint to its lane; route goals are
+// already lane-centered upstream, so anything farther is off the drivable network -> no lane.
+#define GOAL_LANE_SNAP_MAX_DIST_M 6.0f
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 
 // =====================================================================================

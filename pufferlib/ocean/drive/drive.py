@@ -738,6 +738,76 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
+    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long):
+        """Co-sim: overwrite the sim state of agents at global indices `idx`
+        (e.g. CARLA background) with world-frame pose/velocity. The C side
+        subtracts world_mean, recaches heading trig and recomputes speed.
+        `yaw_rate` (rad/s) and `accel_long` (m/s^2) must come from the external
+        sim's own physics (e.g. CARLA's get_angular_velocity()/get_acceleration(),
+        nuPlan's EgoState.dynamic_car_state) -- not finite-differenced here, since
+        this agent's previous state may already have been overwritten this tick by
+        env.step()'s own dynamics before this call runs."""
+        binding.vec_set_agent_states(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(x, dtype=np.float32),
+            np.ascontiguousarray(y, dtype=np.float32),
+            np.ascontiguousarray(z, dtype=np.float32),
+            np.ascontiguousarray(heading, dtype=np.float32),
+            np.ascontiguousarray(vx, dtype=np.float32),
+            np.ascontiguousarray(vy, dtype=np.float32),
+            np.ascontiguousarray(yaw_rate, dtype=np.float32),
+            np.ascontiguousarray(accel_long, dtype=np.float32),
+        )
+
+    # ── Co-simulation external-state setters ─────────────────────────────────────
+    def set_agent_sizes(self, idx, length, width):
+        """overwrite the bounding-box length/width (meters) of agents at
+        global indices `idx`, so the ego observes/collides against a CARLA
+        actor's true size instead of the gigaflow-spawned default."""
+        binding.vec_set_agent_sizes(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(length, dtype=np.float32),
+            np.ascontiguousarray(width, dtype=np.float32),
+        )
+
+    def recompute_observations(self):
+        """recompute observations from current state without stepping
+        dynamics or advancing the timestep (call after set_agent_states)."""
+        binding.vec_recompute_observations(self.c_envs)
+        return self.observations
+
+    def set_traffic_light_states(self, states):
+        """override each traffic-light element's state at the current
+        timestep (states length == num_traffic_elements)."""
+        binding.vec_set_traffic_light_states(self.c_envs, np.ascontiguousarray(states, dtype=np.int32))
+
+    def set_agent_goals(self, agent_idx, gx, gy, gz, gdir_x=None, gdir_y=None):
+        """set an agent's goal waypoints (e.g. the ego's route) in world
+        coords (C subtracts world_mean). Each waypoint is snapped to its
+        nearest route-aligned drivable lane (find_goal_lane) so the GPS
+        lane-distance observation columns stay live when the map carries a
+        lane graph; waypoints off the drivable network keep lane -1
+        (columns zero-filled). gdir_x/gdir_y: per-waypoint local route travel
+        direction (need not be normalized) used to reject crossing-road lanes
+        at junctions; omit (or pass zeros) to snap by distance alone."""
+        gx = np.ascontiguousarray(gx, dtype=np.float32)
+        if gdir_x is None or gdir_y is None:
+            gdir_x = np.zeros_like(gx)
+            gdir_y = np.zeros_like(gx)
+        binding.vec_set_agent_goals(
+            self.c_envs,
+            int(agent_idx),
+            gx,
+            np.ascontiguousarray(gy, dtype=np.float32),
+            np.ascontiguousarray(gz, dtype=np.float32),
+            np.ascontiguousarray(gdir_x, dtype=np.float32),
+            np.ascontiguousarray(gdir_y, dtype=np.float32),
+        )
+
+    # ───────────────────────────────────────
+
     def get_ground_truth_trajectories(self):
         """Get ground truth trajectories for all active agents.
 
