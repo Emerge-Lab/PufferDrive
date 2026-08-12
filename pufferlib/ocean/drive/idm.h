@@ -98,10 +98,6 @@ static int idm_traffic_light_controls_lane(TrafficControlElement *traffic, int l
     return 0;
 }
 
-static inline int idm_is_stop_light_obstacle_state(int state) {
-    return state == TRAFFIC_CONTROL_STATE_RED || state == TRAFFIC_CONTROL_STATE_YELLOW;
-}
-
 static IDMLaneProjection idm_project_to_route_lanes(Drive *env, Agent *agent);
 static float idm_lane_segment_size(RoadMapElement *lane, int seg_idx);
 
@@ -198,7 +194,8 @@ static int idm_sample_hits_red_light(Drive *env, Agent *sample, int lane_idx) {
         if (env->timestep < 0 || env->timestep >= traffic->state_size || traffic->states == NULL) {
             continue;
         }
-        if (!idm_is_stop_light_obstacle_state(traffic->states[env->timestep])) {
+        int traffic_state = traffic->states[env->timestep];
+        if (!(traffic_state == TRAFFIC_CONTROL_STATE_RED || traffic_state == TRAFFIC_CONTROL_STATE_YELLOW)) {
             continue;
         }
 
@@ -305,13 +302,6 @@ static inline void idm_snap_sample_to_rail(Agent *limited_sample, const Agent *r
     limited_sample->prev_sin_heading = rail_sample->prev_sin_heading;
 }
 
-static inline int idm_limited_sample_reached_rail(const Agent *limited_sample, const Agent *rail_sample) {
-    float dx = limited_sample->sim_x - rail_sample->sim_x;
-    float dy = limited_sample->sim_y - rail_sample->sim_y;
-    float dz = limited_sample->sim_z - rail_sample->sim_z;
-    return dx * dx + dy * dy + dz * dz <= IDM_LATERAL_SNAP_THRESHOLD_METERS * IDM_LATERAL_SNAP_THRESHOLD_METERS;
-}
-
 static inline void idm_propagate_limited_route_sample(
     Agent *limited_sample,
     const Agent *rail_sample,
@@ -343,7 +333,10 @@ static inline void idm_propagate_limited_route_sample(
     limited_sample->prev_cos_heading = limited_sample->cos_heading;
     limited_sample->prev_sin_heading = limited_sample->sin_heading;
 
-    if (idm_limited_sample_reached_rail(limited_sample, rail_sample)) {
+    float dx = limited_sample->sim_x - rail_sample->sim_x;
+    float dy = limited_sample->sim_y - rail_sample->sim_y;
+    float dz = limited_sample->sim_z - rail_sample->sim_z;
+    if (dx * dx + dy * dy + dz * dz <= IDM_LATERAL_SNAP_THRESHOLD_METERS * IDM_LATERAL_SNAP_THRESHOLD_METERS) {
         *merged_to_path = 1;
         idm_snap_sample_to_rail(limited_sample, rail_sample);
     }
