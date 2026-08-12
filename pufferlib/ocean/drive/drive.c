@@ -143,6 +143,7 @@ void demo() {
     env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
     env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
+    rng_seed(&env.seed_stream_rng, env.init_seed);
     allocate(&env);
     c_reset(&env);
     c_render(&env, 0);
@@ -281,6 +282,7 @@ void performance_test() {
     clock_gettime(CLOCK_MONOTONIC, &ts_total_start);
 
     clock_gettime(CLOCK_MONOTONIC, &ts_init_start);
+    rng_seed(&env.seed_stream_rng, env.init_seed);
     allocate(&env);
     c_reset(&env);
     clock_gettime(CLOCK_MONOTONIC, &ts_init_end);

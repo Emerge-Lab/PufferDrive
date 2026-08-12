@@ -131,7 +131,7 @@ class PuffeRL:
 
         # Reproducibility
         seed = config["seed"]
-        # Decorrelate reset streams across DDP ranks for envs that honor reset(seed).
+        # Decorrelate reset streams across DDP ranks
         if seed is not None and torch.distributed.is_initialized():
             seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 

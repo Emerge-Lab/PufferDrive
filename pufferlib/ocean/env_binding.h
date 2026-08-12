@@ -1,5 +1,6 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
+#include <stdint.h>
 
 // Forward declarations for env-specific functions supplied by user
 static int my_log(PyObject *dict, Env *env, Log *log, float n);
@@ -25,6 +26,15 @@ static int my_put(Env *env, PyObject *args, PyObject *kwargs);
 #ifndef MY_PUT
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     return 0;
+}
+#endif
+
+// Re-derive an env's RNG streams from a fresh seed before reset
+static void my_reseed(Env *env, uint64_t seed);
+#ifndef MY_RESEED
+static void my_reseed(Env *env, uint64_t seed) {
+    (void) env;
+    (void) seed;
 }
 #endif
 
@@ -154,10 +164,10 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_TypeError, "seed must be an integer");
         return NULL;
     }
-    int seed = PyLong_AsLong(seed_arg);
-
-    // Assumes each process has the same number of environments
-    srand(seed);
+    long long seed = PyLong_AsLongLong(seed_arg);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
 
     // If kwargs is NULL, create a new dictionary
     if (kwargs == NULL) {
@@ -167,7 +177,7 @@ static PyObject *env_init(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
 
     // Add the seed to kwargs
-    PyObject *py_seed = PyLong_FromLong(seed);
+    PyObject *py_seed = PyLong_FromLongLong(seed);
     if (PyDict_SetItemString(kwargs, "seed", py_seed) < 0) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to set seed in kwargs");
         Py_DECREF(py_seed);
@@ -435,7 +445,6 @@ static PyObject *vec_init(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Assumes each process has the same number of environments
         int env_seed = i + seed * vec->num_envs;
-        srand(env_seed);
 
         // Add the seed to kwargs for this environment
         PyObject *py_seed = PyLong_FromLong(env_seed);
@@ -494,14 +503,31 @@ static PyObject *vectorize(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_reset(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 1) {
-        PyErr_SetString(PyExc_TypeError, "vec_reset requires 1 argument");
+    Py_ssize_t num_args = PyTuple_Size(args);
+    if (num_args != 1 && num_args != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_reset requires 1 or 2 arguments");
         return NULL;
     }
 
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
         return NULL;
+    }
+
+    PyObject *seeds = num_args == 2 ? PyTuple_GetItem(args, 1) : NULL;
+    if (seeds != NULL && seeds != Py_None) {
+        if (!PyList_Check(seeds) || PyList_Size(seeds) != vec->num_envs) {
+            PyErr_Format(PyExc_ValueError, "vec_reset seeds must be a list with one entry per env (%d)", vec->num_envs);
+            return NULL;
+        }
+        for (int i = 0; i < vec->num_envs; i++) {
+            long long seed = PyLong_AsLongLong(PyList_GetItem(seeds, i));
+            if (PyErr_Occurred() || seed < 0) {
+                PyErr_SetString(PyExc_ValueError, "vec_reset seeds must be non-negative 63-bit integers");
+                return NULL;
+            }
+            my_reseed(vec->envs[i], (uint64_t) seed);
+        }
     }
 
     for (int i = 0; i < vec->num_envs; i++) {
