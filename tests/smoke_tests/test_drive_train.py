@@ -73,8 +73,10 @@ GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "data", "drive_smoke_golde
 RTOL = float(os.environ.get("SMOKE_RTOL", "2e-2"))
 LOOSE_RTOL = float(os.environ.get("SMOKE_LOOSE_RTOL", "8e-2"))
 ATOL = float(os.environ.get("SMOKE_ATOL", "1e-3"))
-# Metrics that are sums/EMAs of many floats -> host-FP-sensitive; checked loosely.
-LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return"})
+LOOSE_ATOL = float(os.environ.get("SMOKE_LOOSE_ATOL", "5e-3"))
+# Metrics that are sums/EMAs/near-zero means of many floats -> host-FP-sensitive;
+# checked loosely. old_approx_kl is E[-logratio] ~ 0, so it needs the loose ATOL.
+LOOSE_KEYS = frozenset({"value_loss", "ema_max", "episode_return", "old_approx_kl"})
 
 # Env metrics we expect a random policy to exercise within the run.
 SANITY_KEYS = ("collision_rate", "offroad_rate")
@@ -217,19 +219,21 @@ def _is_number(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
-def _nan_eq(a, b, rtol):
+def _nan_eq(a, b, rtol, atol):
     if np.isnan(a) and np.isnan(b):
         return True
-    return bool(np.isclose(a, b, rtol=rtol, atol=ATOL))
+    return bool(np.isclose(a, b, rtol=rtol, atol=atol))
 
 
 def _compare(label, actual, expected):
     mismatches = []
     for key, exp in expected.items():
-        rtol = LOOSE_RTOL if key in LOOSE_KEYS else RTOL
+        loose = key in LOOSE_KEYS
+        rtol = LOOSE_RTOL if loose else RTOL
+        atol = LOOSE_ATOL if loose else ATOL
         if key not in actual:
             mismatches.append(f"  {label}/{key}: MISSING (expected {exp})")
-        elif not _nan_eq(actual[key], exp, rtol):
+        elif not _nan_eq(actual[key], exp, rtol, atol):
             mismatches.append(f"  {label}/{key}: {actual[key]!r} != expected {exp!r}")
     return mismatches
 

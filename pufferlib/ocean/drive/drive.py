@@ -96,6 +96,7 @@ class Drive(pufferlib.PufferEnv):
         init_step_min_horizon=20,
         eval_mode=0,
         num_eval_scenarios=16,
+        max_scenarios_per_batch=None,
         eval_map_indices=None,
         eval_scenario_seeds=None,
         init_mode="create_all_valid",
@@ -222,6 +223,9 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
+        if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
+            raise ValueError(f"max_scenarios_per_batch must be >= 1 or None. Got: {max_scenarios_per_batch}")
+        self.max_scenarios_per_batch = max_scenarios_per_batch
         self.eval_map_indices = eval_map_indices
         self.eval_scenario_seeds = eval_scenario_seeds
         if self.eval_map_indices is not None:
@@ -428,13 +432,7 @@ class Drive(pufferlib.PufferEnv):
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
-        # Calculate dynamic batch size for Eval + Replay mode
-        self.current_num_eval_scenarios = self.num_eval_scenarios
-        if self.eval_mode:
-            self.current_num_eval_scenarios = min(
-                self.num_eval_scenarios,
-                self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
-            )
+        self.current_num_eval_scenarios = self._next_eval_batch_size()
 
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
@@ -588,6 +586,19 @@ class Drive(pufferlib.PufferEnv):
         upper = self.scenario_length - self.init_step_min_horizon
         return int(self.rng.integers(0, upper))
 
+    def _next_eval_batch_size(self):
+        """Scenarios the next eval batch instantiates: whatever is left of this
+        worker's map window, clamped by max_scenarios_per_batch. The clamp bounds
+        peak memory, since each scenario in a batch is a live C env owning its
+        map geometry (hundreds of MB on large maps)."""
+        if not self.eval_mode:
+            return self.num_eval_scenarios
+        consumed = self.starting_map_counter - self.starting_map_counter_init
+        remaining = self.num_eval_scenarios - consumed
+        if self.max_scenarios_per_batch is not None and remaining > self.max_scenarios_per_batch:
+            return self.max_scenarios_per_batch
+        return remaining
+
     @property
     def random_seed(self):
         return int(self.rng.integers(0, 2**24))
@@ -630,13 +641,7 @@ class Drive(pufferlib.PufferEnv):
                         if self.capture_replay:
                             summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
                         info.append(summary)
-                # Calculate dynamic batch size for Eval + Replay mode
-                self.current_num_eval_scenarios = self.num_eval_scenarios
-                if self.eval_mode:
-                    self.current_num_eval_scenarios = min(
-                        self.num_eval_scenarios,
-                        self.num_eval_scenarios + self.starting_map_counter_init - self.starting_map_counter,
-                    )
+                self.current_num_eval_scenarios = self._next_eval_batch_size()
                 if self.current_num_eval_scenarios == 0:
                     self._eval_exhausted = True
                     return (self.observations, self.rewards, self.terminals, self.truncations, info)

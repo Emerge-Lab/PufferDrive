@@ -79,6 +79,11 @@ HIDDEN_DASHBOARD_METRICS = {
     "total_infraction_count",
 }
 
+# Metric key prefixes for benchmark results. Training evaluation logs a step series;
+# a standalone eval writes run-level summaries, so the two never share a key.
+TRAINING_EVAL_KEY_PREFIX = "eval_"
+EVAL_WANDB_KEY_PREFIX = "final_eval_"
+
 
 def torch_device(device):
     if isinstance(device, int):
@@ -126,6 +131,9 @@ class PuffeRL:
 
         # Reproducibility
         seed = config["seed"]
+        # Decorrelate reset streams across DDP ranks for envs that honor reset(seed).
+        if seed is not None and torch.distributed.is_initialized():
+            seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 
         # Vecenv info
         vecenv.async_reset(seed)
@@ -248,6 +256,7 @@ class PuffeRL:
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
+                weight_decay=config["adam_weight_decay"],
             )
         elif config["optimizer"] == "adamw":
             optimizer = torch.optim.AdamW(
@@ -255,6 +264,7 @@ class PuffeRL:
                 lr=config["learning_rate"],
                 betas=(config["adam_beta1"], config["adam_beta2"]),
                 eps=config["adam_eps"],
+                weight_decay=config["adam_weight_decay"],
             )
         elif config["optimizer"] == "muon":
             import heavyball
@@ -515,7 +525,7 @@ class PuffeRL:
             self.msg = f"Checkpoint saved at update {self.epoch}"
 
             if self.render and self.epoch % self.render_interval == 0:
-                model_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{self.logger.run_id}")
+                model_dir = self.config["data_dir"]
                 model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
 
                 if model_files:
@@ -563,10 +573,26 @@ class PuffeRL:
             approx_kl = ((ratio - 1) - logratio).mean()
             clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
 
-        # TODO fix multi-gpu bug
-        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
-        if adv_weights is not None:
-            mb_adv = adv_weights * mb_adv
+        with torch.no_grad():
+            if torch.distributed.is_initialized():
+                # This mean computation assumes that all GPUs use the same batch size. This is currently guaranteed.
+                world_size = torch.distributed.get_world_size()
+                # Distributed mean
+                advantage_mean = mb_adv.mean()
+                torch.distributed.all_reduce(advantage_mean, op=torch.distributed.ReduceOp.SUM)
+                advantage_mean = advantage_mean / world_size
+
+                advantage_std = torch.sum(torch.square(mb_adv - advantage_mean))
+                torch.distributed.all_reduce(advantage_std, op=torch.distributed.ReduceOp.SUM)
+                advantage_std = advantage_std / (world_size * torch.numel(mb_adv) - 1)  # -1 is bessel's correction
+                advantage_std = torch.sqrt(advantage_std)
+            else:
+                advantage_mean = mb_adv.mean()
+                advantage_std = mb_adv.std()
+
+            mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
+            if adv_weights is not None:
+                mb_adv = adv_weights * mb_adv
 
         pg_loss1 = -mb_adv * ratio
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
@@ -705,41 +731,56 @@ class PuffeRL:
         valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
         valid_abs_adv = flat_advantages[valid_idx].abs()
 
-        ewma_beta = config["adv_filter_ewma_beta"]
-        current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
-        self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
-        threshold = config["adv_filter_threshold_scale"] * self.ema_max
-
-        keep_mask = valid_abs_adv >= threshold
-        keep_idx = valid_idx[keep_mask]
-        num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
-
-        if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
-            # Synchronize the number of kept transitions in multi-GPU setting to keep synchronization
-            kept_tensor = torch.tensor([num_kept], device=device)
-            torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
-            min_num_kept = kept_tensor.item()
-            if num_kept > min_num_kept:
-                if min_num_kept == 0:
-                    keep_idx = keep_idx[:0]
-                else:
-                    top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
-                    keep_idx = keep_idx[top_idx]
-
-        kept_fraction = num_kept / max(num_valid, 1)
-        losses["filter_threshold"] = threshold
-        losses["ema_max"] = self.ema_max
         losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(total_transitions, 1))
-        losses["kept_fraction"] = kept_fraction
-        losses["filtered_fraction"] = 1.0 - kept_fraction
+
+        if config["adv_filter_enabled"]:
+            ewma_beta = config["adv_filter_ewma_beta"]
+            current_max = valid_abs_adv.max().item() if valid_abs_adv.numel() > 0 else 0.0
+            self.ema_max = current_max if epoch == 0 else ewma_beta * current_max + (1 - ewma_beta) * self.ema_max
+            threshold = config["adv_filter_threshold_scale"] * self.ema_max
+
+            keep_mask = valid_abs_adv >= threshold
+            keep_idx = valid_idx[keep_mask]
+            num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
+
+            if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+                # Filtering keeps a different count per rank, so trim to the global
+                # minimum to keep the number of minibatches synchronized
+                kept_tensor = torch.tensor([num_kept], device=device)
+                torch.distributed.all_reduce(kept_tensor, op=torch.distributed.ReduceOp.MIN)
+                min_num_kept = kept_tensor.item()
+                if num_kept > min_num_kept:
+                    if min_num_kept == 0:
+                        keep_idx = keep_idx[:0]
+                    else:
+                        top_idx = torch.topk(valid_abs_adv[keep_mask], min_num_kept, largest=True, sorted=False).indices
+                        keep_idx = keep_idx[top_idx]
+
+            kept_fraction = keep_idx.numel() / max(num_valid, 1)
+            losses["filter_threshold"] = threshold
+            losses["ema_max"] = self.ema_max
+            losses["kept_fraction"] = kept_fraction
+            losses["filtered_fraction"] = 1.0 - kept_fraction
+        else:
+            keep_idx = valid_idx
+
+        if config["min_batch_size"] is not None:
+            num_missing = config["min_batch_size"] - keep_idx.numel()
+            if num_missing > 0 and keep_idx.numel() > 0:
+                # Repeat random elements of keep_idx until min_batch_size is reached
+                pad_idx = torch.randint(keep_idx.numel(), (num_missing,), device=keep_idx.device)
+                keep_idx = torch.cat([keep_idx, keep_idx[pad_idx]])
 
         self.optimizer.zero_grad()
         total_minibatches = 0
         pending_minibatches = 0
 
+        # final minibatch can be partial due to advantage filtering or invalid agents. Drop the last mini-batch if is is partial.
+        full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
-            for start in range(0, permutation.numel(), self.minibatch_size):
+            for start in range(0, full_minibatch_transitions, self.minibatch_size):
                 profile("train_copy", epoch)
                 mb_idx = permutation[start : start + self.minibatch_size]
                 if config["cpu_offload"]:
@@ -826,9 +867,9 @@ class PuffeRL:
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
             return
         model_path = self.save_checkpoint()
-        run_id = self.logger.run_id
-        run_dir = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
-        path = os.path.join(run_dir, f"{self.config['env']}_{run_id}.pt")
+        # Fixed, configurable filename so a follow-up eval job can reference the final
+        # model without knowing which epoch training stopped at.
+        path = os.path.join(self.config["data_dir"], self.config["final_model_name"])
         shutil.copy(model_path, path)
         return path
 
@@ -837,7 +878,7 @@ class PuffeRL:
             return
 
         run_id = self.logger.run_id
-        path = os.path.join(self.config["data_dir"], f"{self.config['env']}_{run_id}")
+        path = self.config["data_dir"]
         if not os.path.exists(path):
             os.makedirs(path)
 
@@ -1196,12 +1237,9 @@ def downsample(data_list, num_points):
 
 class NoLogger:
     def __init__(self, args, run_id=None):
-        self.run_id = run_id or str(int(time.time()))
+        self.run_id = run_id or args["run_name"]
 
     def log(self, logs, step):
-        pass
-
-    def upload_config(self, config_yaml_path):
         pass
 
     def close(self, model_path, early_stop):
@@ -1221,6 +1259,8 @@ class NeptuneLogger:
             capture_stderr=False,
             capture_traceback=False,
             with_id=load_id,
+            # Neptune's resume-by-name key, mirroring the wandb id above.
+            custom_run_id=None if load_id else args["run_name"],
             mode=mode,
             tags=[args["tag"]] if args["tag"] is not None else [],
         )
@@ -1237,9 +1277,6 @@ class NeptuneLogger:
     def upload_model(self, model_path):
         self.neptune["model"].track_files(model_path)
 
-    def upload_config(self, config_yaml_path):
-        self.neptune["config_yaml"].upload(config_yaml_path)
-
     def close(self, model_path, early_stop):
         self.neptune["early_stop"] = early_stop
         if self.should_upload_model:
@@ -1252,18 +1289,20 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow"):
+    def __init__(self, args, load_id=None, resume="allow", upload_config=True):
         import wandb
 
+        # run_name is the run id: with resume="allow" wandb attaches to the
+        # existing run when one already carries this id, and creates it otherwise.
         wandb.init(
-            id=load_id or wandb.util.generate_id(),
-            name=args.get("run_name") or None,
+            id=load_id or args["run_name"],
+            name=args["run_name"],
             project=args["wandb_project"],
             group=args["wandb_group"],
             allow_val_change=True,
             save_code=False,
             resume=resume,
-            config=args,
+            config=args if upload_config else None,
             tags=[args["tag"]] if args["tag"] is not None else [],
             settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
         )
@@ -1274,13 +1313,24 @@ class WandbLogger:
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
 
+    def log_summary(self, logs):
+        """Record run-level scalars. Unlike log(), carries no step, so a job that runs
+        after training cannot collide with the step history training already wrote."""
+        for key, value in logs.items():
+            self.wandb.run.summary[key] = value
+
+    def finish(self):
+        """End the wandb session without the model upload and early_stop that close() adds."""
+        self.wandb.finish()
+
     def upload_model(self, model_path):
         artifact = self.wandb.Artifact(self.run_id, type="model")
         artifact.add_file(model_path)
+        # Ship the config with the weights; load_checkpoint_architecture reads it off disk.
+        config_path = os.path.join(drive_benchmark.resolve_run_dir(model_path), "config.yaml")
+        if os.path.isfile(config_path):
+            artifact.add_file(config_path)
         self.wandb.run.log_artifact(artifact)
-
-    def upload_config(self, config_yaml_path):
-        self.wandb.save(config_yaml_path, base_path=os.path.dirname(config_yaml_path), policy="now")
 
     def close(self, model_path, early_stop):
         self.wandb.run.summary["early_stop"] = early_stop
@@ -1312,9 +1362,6 @@ class TensorBoardLogger:
         for key, value in logs.items():
             if isinstance(value, (int, float)):
                 self.local_writer.add_scalar(key, value, step)
-
-    def upload_config(self, config_yaml_path):
-        pass
 
     def close(self, model_path, early_stop):
         self.local_writer.close()
@@ -1362,7 +1409,6 @@ def _save_experiment_config(args, path):
     with open(config_yaml_path, "w") as f:
         # Convert defaultdict to dict for cleaner output
         config = json.loads(json.dumps(args))
-        config["git"] = _get_git_metadata()
         yaml.dump(config, f)
 
 
@@ -1371,13 +1417,23 @@ def _global_agent_steps(pufferl):
     return int(pufferl.global_step * world_size)
 
 
+def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
+    """Deterministic per-rank (torch_seed, env_seed): DDP ranks share weights, so identical seeds
+    would collect duplicate experience. global_rank is torchrun's global RANK, not LOCAL_RANK."""
+    torch_seed = train_seed * world_size + global_rank
+    env_seed = vec_seed
+    if env_seed is not None:
+        env_seed = int(np.random.SeedSequence([env_seed, train_seed, global_rank]).generate_state(1)[0])
+    return torch_seed, env_seed
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
-        experiment_dir = os.path.dirname(args["load_model_path"])
+        experiment_dir = drive_benchmark.resolve_run_dir(args["load_model_path"])
         config_yaml_path = os.path.join(experiment_dir, "config.yaml")
         KEYS_OF_INTEREST = {
             "action_type",
@@ -1418,21 +1474,29 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 for k, v in yaml_config["env"].items():
                     if k in KEYS_OF_INTEREST:
                         args["env"][k] = v
+        else:
+            print(
+                f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "
+                "policy/observation architecture instead of the checkpoint's."
+            )
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    global_rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
     if "LOCAL_RANK" in os.environ:
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
         master_addr = os.environ.get("MASTER_ADDR", "localhost")
         master_port = os.environ.get("MASTER_PORT", "29500")
         local_rank = int(os.environ["LOCAL_RANK"])
-        print(f"rank: {local_rank}, MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
+        print(f"rank: {global_rank} (local {local_rank}), MASTER_ADDR={master_addr}, MASTER_PORT={master_port}")
         torch.cuda.set_device(local_rank)
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
-    torch.manual_seed(train_seed)
-    vecenv = vecenv or load_env(env_name, args)
+
+    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, world_size, global_rank)
+    torch.manual_seed(torch_seed)
+    vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
 
     if "LOCAL_RANK" in os.environ:
@@ -1447,6 +1511,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         model.forward_eval = policy.forward_eval
         policy = model.to(local_rank)
 
+    # Set before the logger so the run config the logger uploads carries it too.
+    args["git"] = _get_git_metadata()
+
     # Under DDP only rank 0 owns the run logger; other ranks keep logger=None,
     # which PuffeRL wraps in a NoLogger. Without this gate every rank calls
     # wandb.init()/NeptuneLogger and you get world_size duplicate runs.
@@ -1457,27 +1524,42 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         elif args["wandb"]:
             logger = WandbLogger(args)
         elif args["tb"]:
-            date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-            experiment_dir = os.path.join(args["train"]["data_dir"], rf"{env_name}_" + date_time)
             logger = TensorBoardLogger(
-                run_id=date_time,
-                experiment_dir=experiment_dir,
+                run_id=args["run_name"],
+                experiment_dir=args["train"]["data_dir"],
             )
 
-    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}))
+    train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
-    if args["train"].get("resume_state_path"):
-        pufferl.load_training_state(args["train"]["resume_state_path"])
+    # A run is identified by its name, and its directory is train.data_dir. Relaunching
+    # the same run therefore finds its own trainer_state.pt and continues from it rather
+    # than overwriting the checkpoints already in that directory. An explicit
+    # resume_state_path or load_model_path still wins.
+    resume_state_path = args["train"].get("resume_state_path")
+    if not resume_state_path and not args.get("load_model_path"):
+        run_state_path = os.path.join(args["train"]["data_dir"], "trainer_state.pt")
+        if os.path.exists(run_state_path):
+            print(f"Run '{args['run_name']}' already exists in {args['train']['data_dir']}; resuming it.")
+            resume_state_path = run_state_path
+
+    if resume_state_path:
+        pufferl.load_training_state(resume_state_path)
+        # The checkpoint carries rank 0's RNG streams (save_checkpoint is rank-0 only);
+        # re-decorrelate the other ranks or post-resume action sampling re-synchronizes.
+        if global_rank != 0:
+            torch.manual_seed(int(np.random.SeedSequence([torch_seed, pufferl.epoch]).generate_state(1)[0]))
 
     # Restore optimizer state + step counters when resuming from a checkpoint.
     # save_checkpoint writes models/model_<env>_<epoch>.pt and trainer_state.pt
     # (sibling of models/) — so trainer_state.pt is one dir above the .pt path.
     if args.get("load_model_path"):
-        trainer_state_path = os.path.join(os.path.dirname(os.path.dirname(args["load_model_path"])), "trainer_state.pt")
+        trainer_state_path = os.path.join(drive_benchmark.resolve_run_dir(args["load_model_path"]), "trainer_state.pt")
         if os.path.exists(trainer_state_path):
             print(f"Resuming optimizer/step state from {trainer_state_path}")
-            tstate = torch.load(trainer_state_path, map_location=train_config["device"])
+            # weights_only=False as in load_training_state: the state carries the
+            # numpy scalars of the saved RNG state, not just tensors.
+            tstate = torch.load(trainer_state_path, map_location=train_config["device"], weights_only=False)
             pufferl.optimizer.load_state_dict(tstate["optimizer_state_dict"])
             pufferl.global_step = tstate.get("global_step", pufferl.global_step)
             pufferl.epoch = tstate.get("update", pufferl.epoch)
@@ -1488,9 +1570,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         else:
             print(f"No trainer_state.pt next to {args['load_model_path']}; starting optimizer fresh.")
 
-    path = os.path.join(args["train"]["data_dir"], f"{env_name}_{pufferl.logger.run_id}")
-    _save_experiment_config(args, path)
-    pufferl.logger.upload_config(os.path.join(path, "config.yaml"))
+    path = args["train"]["data_dir"]
+    if is_rank0:
+        _save_experiment_config(args, path)
 
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
@@ -1620,6 +1702,8 @@ def eval(
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
+
+    report_to_wandb = bool(args["wandb"]) and not use_training_config
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
     if use_training_config:
         if policy is None:
@@ -1630,8 +1714,12 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+
+    wandb_run_identity = (
+        drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
+    )
     if eval_output_dir is None:
-        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(base_args["load_model_path"])))
+        run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, "eval")
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1733,7 +1821,28 @@ def eval(
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
             )
+
+    if wandb_run_identity is not None:
+        report_eval_to_wandb(args, benchmark_results, wandb_run_identity)
     return benchmark_results
+
+
+def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
+    """Attach standalone eval results to the wandb run that trained the checkpoint."""
+    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, EVAL_WANDB_KEY_PREFIX)
+    if not metrics:
+        print("No evaluation metrics to report to wandb.")
+        return
+
+    run_args = copy.copy(args)
+    run_args.update(wandb_run_identity)
+
+    logger = WandbLogger(run_args, resume="must", upload_config=False)
+    try:
+        logger.log_summary(metrics)
+    finally:
+        logger.finish()
+    print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
 
 
 def sweep(args=None, env_name=None):
@@ -2109,15 +2218,7 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
             eval_output_subdir=eval_output_subdir,
             use_training_config=True,
         )
-        metrics = {}
-        for benchmark_name, benchmark_result in benchmark_results.items():
-            summary = benchmark_result["summary"]
-            if summary is None:
-                continue
-            prefix = f"eval_{benchmark_name}"
-            metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
-            metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
-            metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+        metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, TRAINING_EVAL_KEY_PREFIX)
         if metrics:
             logger.log(metrics, global_step)
         return benchmark_results
@@ -2228,12 +2329,15 @@ def _render_eval_failures(
     }
 
 
-def load_env(env_name, args):
+def load_env(env_name, args, seed=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
     make_env = env_module.env_creator(env_name)
-    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **args["vec"])
+    vec_kwargs = dict(args["vec"])
+    if seed is not None:
+        vec_kwargs["seed"] = seed
+    return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
 def load_policy(args, vecenv, env_name=""):

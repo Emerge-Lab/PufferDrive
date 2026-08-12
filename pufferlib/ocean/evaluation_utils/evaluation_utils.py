@@ -32,6 +32,18 @@ def _require_mapping(value, label):
     return value
 
 
+def resolve_run_dir(model_path):
+    """Run directory holding a checkpoint's config.yaml.
+
+    Checkpoints sit either at the run root (train.final_model_name) or one level
+    down in models/ and best_models/, so accept both instead of assuming a depth.
+    """
+    checkpoint_dir = os.path.dirname(os.path.abspath(model_path))
+    if os.path.isfile(os.path.join(checkpoint_dir, "config.yaml")):
+        return checkpoint_dir
+    return os.path.dirname(checkpoint_dir)
+
+
 def _load_yaml_mapping(path, label):
     if not isinstance(path, (str, os.PathLike)) or not os.path.isfile(path):
         raise pufferlib.APIUsageError(f"{label.capitalize()} not found: {path}")
@@ -146,7 +158,10 @@ def load_benchmark_config(config_path, selected_names):
         max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
         is_single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
         if max_agents_per_env is not None or not is_single_agent_replay:
-            _positive_int(max_agents_per_env, f"Benchmark {name} env max_agents_per_env")
+            max_agents_per_env = _positive_int(max_agents_per_env, f"Benchmark {name} env max_agents_per_env")
+        max_scenarios_per_batch = benchmark_environment_config.get("max_scenarios_per_batch")
+        if max_scenarios_per_batch is not None:
+            _positive_int(max_scenarios_per_batch, f"Benchmark {name} env max_scenarios_per_batch")
 
         map_dir = benchmark_environment_config.get("map_dir")
         if not isinstance(map_dir, str) or not map_dir:
@@ -190,7 +205,7 @@ def load_checkpoint_architecture(args):
     model_path = args["load_model_path"]
     if not isinstance(model_path, str) or not model_path.endswith(".pt") or not os.path.isfile(model_path):
         raise pufferlib.APIUsageError("Benchmark requires a valid load_model_path checkpoint")
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(model_path))), "config.yaml")
+    config_path = os.path.join(resolve_run_dir(model_path), "config.yaml")
     checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
 
     merged = copy.deepcopy(args)
@@ -206,6 +221,38 @@ def load_checkpoint_architecture(args):
         merged[key] = checkpoint_config[key]
     merged["train"]["use_rnn"] = merged["rnn_name"] is not None
     return merged, config_path
+
+
+CHECKPOINT_RUN_IDENTITY_KEYS = ("run_name", "wandb_project", "wandb_group")
+
+
+def load_checkpoint_run_identity(config_path):
+    """Resolve the tracker run a checkpoint belongs to from its training config."""
+    checkpoint_config = _load_yaml_mapping(config_path, "checkpoint config")
+    identity = {}
+    for key in CHECKPOINT_RUN_IDENTITY_KEYS:
+        value = checkpoint_config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise pufferlib.APIUsageError(
+                f"Checkpoint config {config_path} is missing a usable {key}; cannot attach eval "
+                "results to the training run"
+            )
+        identity[key] = value
+    return identity
+
+
+def summarize_benchmark_metrics(benchmark_results, key_prefix):
+    """Flatten benchmark results into one scalar metric dict for the experiment logger."""
+    metrics = {}
+    for benchmark_name, benchmark_result in benchmark_results.items():
+        summary = benchmark_result["summary"]
+        if summary is None:
+            continue
+        prefix = f"{key_prefix}{benchmark_name}"
+        metrics[f"{prefix}/num_scenarios"] = summary["num_scenarios"]
+        metrics[f"{prefix}/num_episodes"] = summary["num_episodes"]
+        metrics.update({f"{prefix}/{key}": value for key, value in summary["metrics_mean"].items()})
+    return metrics
 
 
 def build_benchmark_args(base_args, benchmark, environment_config):

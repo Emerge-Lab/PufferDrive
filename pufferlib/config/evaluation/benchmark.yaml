@@ -41,6 +41,7 @@ benchmarks:
       simulation_mode: gigaflow
       num_maps: 8
       max_agents_per_env: 50
+      max_scenarios_per_batch: null
       scenario_length: 6000
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
@@ -52,6 +53,7 @@ benchmarks:
       simulation_mode: gigaflow
       num_maps: 8
       max_agents_per_env: 50
+      max_scenarios_per_batch: null
       scenario_length: 500
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
@@ -63,6 +65,7 @@ benchmarks:
       simulation_mode: replay
       num_maps: 1000
       max_agents_per_env: 128
+      max_scenarios_per_batch: null
       scenario_length: 91
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
@@ -73,6 +76,7 @@ benchmarks:
     env:
       simulation_mode: replay
       num_maps: 1000
+      max_scenarios_per_batch: 16
       scenario_length: 91
       control_mode: control_sdc_only
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
@@ -84,6 +88,7 @@ benchmarks:
       simulation_mode: replay
       num_maps: 1000
       max_agents_per_env: 300
+      max_scenarios_per_batch: null
       scenario_length: 200
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/nuplan
@@ -96,6 +101,7 @@ benchmarks:
       simulation_mode: replay
       num_maps: 1000
       scenario_length: 200
+      max_scenarios_per_batch: 16
       control_mode: control_sdc_only
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0

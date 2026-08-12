@@ -14,6 +14,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 
@@ -53,9 +54,6 @@ class RecordingLogger:
     def log(self, metrics, step):
         self.calls.append((metrics, step))
 
-    def upload_config(self, config_yaml_path):
-        pass
-
     def close(self, model_path, early_stop):
         self.model_path = model_path
         self.early_stop = early_stop
@@ -90,6 +88,7 @@ def _write_benchmark_config(
     max_agents_per_env,
     control_mode,
     use_neighbor_cache,
+    max_scenarios_per_batch=None,
 ):
     output_path.write_text(
         yaml.safe_dump(
@@ -114,6 +113,7 @@ def _write_benchmark_config(
                             "max_agents_per_env": max_agents_per_env,
                             "control_mode": control_mode,
                             "use_neighbor_cache": use_neighbor_cache,
+                            "max_scenarios_per_batch": max_scenarios_per_batch,
                         },
                     }
                 ],
@@ -581,8 +581,12 @@ def _run_training(tmp_path, benchmark_config_path, run_id, evaluation_enabled):
     _seed_training()
     logger = RecordingLogger(run_id)
     args = _training_args(tmp_path, benchmark_config_path, evaluation_enabled)
+    # The run directory is train.data_dir, so each run needs its own; sharing one
+    # would make the second run resume the first instead of training from scratch.
+    run_dir = tmp_path / run_id
+    args["train"]["data_dir"] = str(run_dir)
+    args["run_name"] = run_id
     pufferl.train("puffer_drive", args=args, logger=logger)
-    run_dir = tmp_path / f"puffer_drive_{run_id}"
     trainer_state = torch.load(run_dir / "trainer_state.pt", map_location="cpu", weights_only=False)
     return run_dir, trainer_state, logger
 
@@ -646,3 +650,219 @@ def test_mid_training_evaluation_preserves_exact_training_state(tmp_path):
         7 * steps_per_epoch,
     ]
     assert all(metrics["eval_training_eval/num_episodes"] == 2 for metrics, _ in eval_log_calls)
+
+
+SDC_SCENARIO_COUNT = 8
+SDC_WORKER_COUNT = 2
+SDC_SCENARIO_LENGTH = 32
+SDC_MAX_AGENTS_PER_ENV = 64
+SDC_BATCH_CAP = 2
+
+
+@pytest.fixture(scope="module")
+def sdc_replay_map_dir(tmp_path_factory):
+    """A replay map dir with several distinctly named maps. The checked-in
+    fixture ships one, and a batch cap only bites when maps outnumber it, so copy
+    it under distinct names -- the name is what the map cache keys on."""
+    map_dir = tmp_path_factory.mktemp("sdc_replay_maps")
+    source_map = sorted(REPLAY_MAP_DIR.glob("*.bin"))[0]
+    map_bytes = source_map.read_bytes()
+    for scenario_idx in range(SDC_SCENARIO_COUNT):
+        (map_dir / f"nuplan__batch{scenario_idx:02d}.bin").write_bytes(map_bytes)
+    return map_dir
+
+
+def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
+    args = _load_config()
+    args["train"].update(
+        {
+            "seed": SEED,
+            "device": "cpu",
+            "compile": False,
+            "amp": False,
+            "torch_deterministic": True,
+        }
+    )
+    args["vec"].update(
+        {
+            "seed": SEED,
+            "num_envs": SDC_WORKER_COUNT,
+            "num_workers": SDC_WORKER_COUNT,
+        }
+    )
+    args["env"].update(
+        {
+            "num_agents": SDC_SCENARIO_COUNT,
+            "min_agents_per_env": 1,
+            "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
+            "num_maps": SDC_SCENARIO_COUNT,
+            "map_dir": str(map_dir),
+            "use_map_cache": 1,
+            "simulation_mode": "replay",
+            "control_mode": "control_sdc_only",
+            "scenario_length": SDC_SCENARIO_LENGTH,
+            "resample_frequency": SDC_SCENARIO_LENGTH,
+            "action_type": "discrete",
+            "dynamics_model": "classic",
+        }
+    )
+    _set_small_observation_config(args)
+    args["eval"].update(
+        {
+            "benchmark_config": str(benchmark_config_path),
+            "benchmarks": benchmark_name,
+            "num_agents": SDC_SCENARIO_COUNT,
+            "max_sdc_replay_workers": SDC_WORKER_COUNT,
+            "render_scenarios": False,
+            "render_filter": None,
+            "failure_replay_csv": None,
+            "capture_observations": False,
+        }
+    )
+    args["wandb"] = False
+    args["neptune"] = False
+    args["tb"] = False
+    return args
+
+
+def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch):
+    benchmark_config_path = _write_benchmark_config(
+        output_root / f"{benchmark_name}.yaml",
+        name=benchmark_name,
+        map_dir=map_dir,
+        simulation_mode="replay",
+        num_maps=SDC_SCENARIO_COUNT,
+        num_scenarios=SDC_SCENARIO_COUNT,
+        scenario_length=SDC_SCENARIO_LENGTH,
+        max_agents_per_env=None,
+        control_mode="control_sdc_only",
+        use_neighbor_cache=1,
+        max_scenarios_per_batch=max_scenarios_per_batch,
+    )
+    args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
+    pufferl.eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=ZeroPolicy(action_count=63),
+        eval_output_dir=str(output_root),
+        eval_output_subdir=benchmark_name,
+        use_training_config=True,
+        benchmark_names=benchmark_name,
+    )
+    return pd.read_csv(output_root / benchmark_name / benchmark_name / "episode_metrics.csv")
+
+
+def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
+    """The cap, not the num_agents budget, decides how many scenarios are live."""
+
+    def build(max_scenarios_per_batch):
+        return Drive(
+            num_agents=SDC_SCENARIO_COUNT,
+            num_maps=SDC_SCENARIO_COUNT,
+            map_dir=str(sdc_replay_map_dir),
+            simulation_mode="replay",
+            control_mode="control_sdc_only",
+            eval_mode=1,
+            num_eval_scenarios=SDC_SCENARIO_COUNT,
+            starting_map=0,
+            scenario_length=SDC_SCENARIO_LENGTH,
+            resample_frequency=SDC_SCENARIO_LENGTH,
+            min_agents_per_env=1,
+            max_agents_per_env=SDC_MAX_AGENTS_PER_ENV,
+            max_scenarios_per_batch=max_scenarios_per_batch,
+        )
+
+    uncapped = build(None)
+    try:
+        assert uncapped.num_envs == SDC_SCENARIO_COUNT
+    finally:
+        uncapped.close()
+
+    capped = build(SDC_BATCH_CAP)
+    try:
+        assert capped.num_envs == SDC_BATCH_CAP
+    finally:
+        capped.close()
+
+
+def test_batch_cap_rejects_non_positive_values(sdc_replay_map_dir):
+    with pytest.raises(ValueError, match="max_scenarios_per_batch"):
+        Drive(
+            num_agents=SDC_SCENARIO_COUNT,
+            num_maps=SDC_SCENARIO_COUNT,
+            map_dir=str(sdc_replay_map_dir),
+            simulation_mode="replay",
+            control_mode="control_sdc_only",
+            eval_mode=1,
+            num_eval_scenarios=SDC_SCENARIO_COUNT,
+            min_agents_per_env=1,
+            max_agents_per_env=SDC_MAX_AGENTS_PER_ENV,
+            max_scenarios_per_batch=0,
+        )
+
+
+def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):
+    """Smaller batches must still cover the window exactly once: nothing dropped
+    or replayed at a batch boundary.
+
+    Metrics are not compared against the uncapped run: binding.shared draws its
+    seed from the same stream as the per-env seeds, once per batch, so more
+    batches shift each scenario's seed. That predates the cap -- eval.num_agents
+    or the worker count already move seeds -- so runs are reproducible for a
+    fixed batch layout, not across layouts.
+    """
+    uncapped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_uncapped", None)
+    capped_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_capped", SDC_BATCH_CAP)
+
+    assert len(uncapped_metrics) == SDC_SCENARIO_COUNT
+    assert len(capped_metrics) == SDC_SCENARIO_COUNT
+    assert sorted(capped_metrics["map_name"]) == sorted(uncapped_metrics["map_name"])
+    assert capped_metrics["map_name"].nunique() == SDC_SCENARIO_COUNT
+    assert capped_metrics["seed"].nunique() == SDC_SCENARIO_COUNT
+
+
+def test_batch_cap_evaluation_is_reproducible(tmp_path, sdc_replay_map_dir):
+    """A capped layout re-run at the same settings reproduces itself exactly."""
+    first_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_capped_first", SDC_BATCH_CAP)
+    second_metrics = _run_sdc_eval(tmp_path, sdc_replay_map_dir, "sdc_capped_second", SDC_BATCH_CAP)
+    pd.testing.assert_frame_equal(first_metrics, second_metrics, check_exact=True, check_dtype=True)
+
+
+def test_policy_builds_from_the_released_driver_env(sdc_replay_map_dir):
+    """load_policy constructs the policy from vecenv.driver_env, which the
+    Multiprocessing backend releases once it has read the spaces off it. The
+    policy only reads Python config attributes, which outlive close() -- but
+    eval runs this path on every benchmark, so pin it."""
+    with patch.object(sys, "argv", ["pufferl.py"]):
+        args = pufferl.load_config("puffer_drive")
+    args["train"]["device"] = "cpu"
+    env_kwargs = {
+        "num_agents": SDC_SCENARIO_COUNT,
+        "num_maps": SDC_SCENARIO_COUNT,
+        "map_dir": str(sdc_replay_map_dir),
+        "simulation_mode": "replay",
+        "control_mode": "control_sdc_only",
+        "eval_mode": 1,
+        "num_eval_scenarios": SDC_SCENARIO_COUNT // SDC_WORKER_COUNT,
+        "scenario_length": SDC_SCENARIO_LENGTH,
+        "resample_frequency": SDC_SCENARIO_LENGTH,
+        "min_agents_per_env": 1,
+        "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
+        "max_scenarios_per_batch": SDC_BATCH_CAP,
+    }
+    args["env"].update(env_kwargs)
+    vecenv = pufferlib.vector.make(
+        [Drive] * SDC_WORKER_COUNT,
+        env_args=[[]] * SDC_WORKER_COUNT,
+        env_kwargs=[env_kwargs] * SDC_WORKER_COUNT,
+        backend="Multiprocessing",
+        num_envs=SDC_WORKER_COUNT,
+        num_workers=SDC_WORKER_COUNT,
+        batch_size=SDC_WORKER_COUNT,
+    )
+    try:
+        assert pufferl.load_policy(args, vecenv, "puffer_drive") is not None
+        obs, _ = vecenv.reset(SEED)
+        assert obs.shape[0] == vecenv.agents_per_batch
+    finally:
+        vecenv.close()
