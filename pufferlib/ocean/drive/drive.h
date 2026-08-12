@@ -3257,7 +3257,8 @@ void c_set_agent_states(
         agent->sim_heading = heading[k];
         agent->cos_heading = cosf(agent->sim_heading);
         agent->sin_heading = sinf(agent->sim_heading);
-        // Teleport: reset prev pose now, else prev-based swept checks (offroad crossing, goal-reach) sweep the gap and fire spuriously.
+        // Teleport: reset prev pose now, else prev-based swept checks (offroad crossing, goal-reach) sweep the gap and
+        // fire spuriously.
         copy_pose_to_prev(agent);
         agent->sim_vx = vx[k];
         agent->sim_vy = vy[k];
