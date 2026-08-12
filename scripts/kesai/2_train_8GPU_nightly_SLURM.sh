@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0008_${SEED}
+export RUN_NAME=k_exp_0009_${SEED}
 #k_nightly_0008_
 echo ${RUN_NAME}
 
