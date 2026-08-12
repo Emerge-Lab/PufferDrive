@@ -6716,10 +6716,9 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
         return bonus;
     }
 
-    // Physically unavoidable target collisions (including rear rams for which
-    // no historical braking start avoids impact) provide no learning signal.
+    // Physically unavoidable target collisions do not provide a shared bonus.
     if (target_collision_is_unavoidable(env)) {
-        return bonus - env->adv_target_hit_unavoidable_penalty;
+        return bonus;
     }
 
     if (target_collision_is_genuine_failure(env)) {
@@ -6918,6 +6917,10 @@ void c_step(Drive *env) {
 
             // Assign adversarial reward.
             reward_terms[i].adversarial = adversarial_bonus;
+            if (target_collision_is_unavoidable(env) &&
+                env->active_agent_indices[i] == env->target_hit_hitter_idx_this_step) {
+                reward_terms[i].adversarial -= env->adv_target_hit_unavoidable_penalty;
+            }
             // reward_terms[i].adversarial = 0.0f;
             // reward_terms[i].collision = 0.0f;
             // reward_terms[i].offroad = 0.0f;
