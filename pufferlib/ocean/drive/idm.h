@@ -14,10 +14,10 @@
 #define IDM_ROUTE_SAMPLE_DS 1.0f
 #define IDM_MAX_CANDIDATES 64
 #define IDM_LATERAL_SNAP_THRESHOLD 0.05f
-#define IDM_MAX_LATERAL_STEP 0.05f
+#define IDM_MAX_LATERAL_SPEED 0.5f
 #define IDM_LATERAL_STEP_RATIO 0.2f
 #define IDM_HEADING_SNAP_THRESHOLD 0.05f
-#define IDM_MAX_HEADING_STEP 0.05f
+#define IDM_MAX_HEADING_RATE 0.5f
 #define IDM_HEADING_STEP_RATIO 0.1f
 
 typedef struct {
@@ -229,7 +229,6 @@ static inline void idm_update_sample_agent_pose(Agent *sample, RoadMapElement *l
 }
 
 static inline void idm_limit_pose_toward_target(
-    Drive *env,
     const Agent *reference,
     float target_x,
     float target_y,
@@ -253,7 +252,7 @@ static inline void idm_limit_pose_toward_target(
 
     float positive_speed = fmaxf(0.0f, speed);
     float max_lateral_step
-        = fminf(IDM_MAX_LATERAL_STEP * duration / env->dt, positive_speed * duration * IDM_LATERAL_STEP_RATIO);
+        = fminf(IDM_MAX_LATERAL_SPEED * duration, positive_speed * duration * IDM_LATERAL_STEP_RATIO);
     if (fabsf(lateral_step) > IDM_LATERAL_SNAP_THRESHOLD && fabsf(lateral_step) > max_lateral_step) {
         lateral_step = clip(lateral_step, -max_lateral_step, max_lateral_step);
         *out_x = reference->sim_x + forward_step * forward_x + lateral_step * lateral_x;
@@ -265,8 +264,7 @@ static inline void idm_limit_pose_toward_target(
     *out_z = target_z;
 
     float heading_delta = compute_heading_diff(target_heading, reference->sim_heading);
-    float max_heading_step
-        = fminf(IDM_MAX_HEADING_STEP * duration / env->dt, positive_speed * duration * IDM_HEADING_STEP_RATIO);
+    float max_heading_step = fminf(IDM_MAX_HEADING_RATE * duration, positive_speed * duration * IDM_HEADING_STEP_RATIO);
     if (fabsf(heading_delta) > IDM_HEADING_SNAP_THRESHOLD && fabsf(heading_delta) > max_heading_step) {
         heading_delta = clip(heading_delta, -max_heading_step, max_heading_step);
         *out_heading = normalize_heading(reference->sim_heading + heading_delta);
@@ -296,7 +294,6 @@ static inline int idm_limited_sample_reached_rail(const Agent *limited_sample, c
 }
 
 static inline void idm_propagate_limited_route_sample(
-    Drive *env,
     Agent *limited_sample,
     const Agent *rail_sample,
     float ds,
@@ -309,7 +306,6 @@ static inline void idm_propagate_limited_route_sample(
 
     float duration = ds / fmaxf(speed, 1e-3f);
     idm_limit_pose_toward_target(
-        env,
         limited_sample,
         rail_sample->sim_x,
         rail_sample->sim_y,
@@ -456,7 +452,6 @@ static IDMLeader idm_find_leader_by_route_boxes(Drive *env, int ego_idx) {
             sample_t = clip(sample_t, 0.0f, 1.0f);
             idm_update_sample_agent_pose(&sample, lane, seg_idx, sample_t);
             idm_propagate_limited_route_sample(
-                env,
                 &limited_sample,
                 &sample,
                 next_sample_s - prev_sample_s,
@@ -772,7 +767,6 @@ static int idm_advance_along_route_lanes_limited(
     float target_heading = agent->sim_heading;
 
     idm_limit_pose_toward_target(
-        env,
         &reference,
         target_x,
         target_y,
