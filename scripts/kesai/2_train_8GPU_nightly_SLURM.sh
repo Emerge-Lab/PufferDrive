@@ -39,7 +39,31 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-python setup.py build_ext --inplace --force
+
+# Only task 0 builds; concurrent in-place builds race on shared NFS build files.
+BUILD_STATUS_FILE=/home/bjaeger/PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
+if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
+    python setup.py build_ext --inplace --force
+    BUILD_STATUS=$?
+    echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
+else
+    BUILD_WAIT_SECONDS=0
+    BUILD_TIMEOUT_SECONDS=1800
+    while [ ! -f ${BUILD_STATUS_FILE} ]; do
+        if [ ${BUILD_WAIT_SECONDS} -ge ${BUILD_TIMEOUT_SECONDS} ]; then
+            echo "Timed out after ${BUILD_TIMEOUT_SECONDS}s waiting for task 0 build; aborting."
+            exit 1
+        fi
+        sleep 10
+        BUILD_WAIT_SECONDS=$((BUILD_WAIT_SECONDS + 10))
+    done
+    BUILD_STATUS=$(cat ${BUILD_STATUS_FILE})
+fi
+if [ "${BUILD_STATUS}" -ne 0 ]; then
+    echo "C extension build failed with status ${BUILD_STATUS}; aborting."
+    exit 1
+fi
+
 torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
