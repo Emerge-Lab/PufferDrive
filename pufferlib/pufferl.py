@@ -82,7 +82,6 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
-EVAL_WANDB_KEY_PREFIX = "final_eval_"
 
 
 def torch_device(device):
@@ -1717,7 +1716,7 @@ def eval(
     )
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
-        eval_output_dir = os.path.join(run_dir, "eval")
+        eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
@@ -1820,13 +1819,13 @@ def eval(
             )
 
     if wandb_run_identity is not None:
-        report_eval_to_wandb(args, benchmark_results, wandb_run_identity)
+        report_eval_to_wandb(args, benchmark_results, wandb_run_identity, eval_config["output_dir_name"])
     return benchmark_results
 
 
-def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
+def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
     """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, EVAL_WANDB_KEY_PREFIX)
+    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
     if not metrics:
         print("No evaluation metrics to report to wandb.")
         return
