@@ -194,3 +194,53 @@ def test_eval_rejects_invalid_action_selection():
 
     with pytest.raises(pufferlib.APIUsageError):
         pufferl.eval(env_name="puffer_drive", args=_eval_args("banana"))
+
+
+# --------------------------------------------------------------------------
+# Drive's mean must be exact in physical units despite the piecewise decode
+# --------------------------------------------------------------------------
+def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
+    import pufferlib.ocean.torch as ocean_torch
+    import pufferlib.pufferl as pufferl
+    from pufferlib.ocean.drive import binding
+    from pufferlib.ocean.drive.drive import Drive as DriveEnv
+
+    monkeypatch.setattr(sys, "argv", ["puffer"])
+    args = pufferl.load_config("puffer_drive")
+    env = DriveEnv(
+        num_agents=64,
+        map_dir="pufferlib/resources/drive/binaries/carla",
+        num_maps=1,
+        scenario_length=200,
+        dynamics_model="jerk",
+        action_type="continuous",
+    )
+    try:
+        policy = ocean_torch.Drive(env, **args["policy"])
+
+        num_lat = len(binding.JERK_LAT)
+        lat_zero_idx = binding.JERK_LAT.index(0.0)
+        brake_class = 0 * num_lat + lat_zero_idx
+        accel_class = (len(binding.JERK_LONG) - 1) * num_lat + lat_zero_idx
+        probs = torch.zeros(1, len(binding.JERK_LONG) * num_lat)
+        probs[0, brake_class] = 0.5
+        probs[0, accel_class] = 0.5
+
+        normalized = policy.discrete_probs_to_continuous_mean(probs)
+        # Decode exactly as drive.h move_dynamics does for continuous actions.
+        long_norm = float(normalized[0, 0])
+        long_scale = -binding.JERK_LONG[0] if long_norm < 0 else binding.JERK_LONG[-1]
+        expected_long_jerk = 0.5 * binding.JERK_LONG[0] + 0.5 * binding.JERK_LONG[-1]
+        assert long_norm * long_scale == pytest.approx(expected_long_jerk, abs=1e-6)
+        assert float(normalized[0, 1]) == pytest.approx(0.0, abs=1e-6)
+
+        # A one-hot distribution must still map to the exact normalized table row.
+        one_hot = torch.zeros_like(probs)
+        one_hot[0, brake_class] = 1.0
+        assert torch.allclose(
+            policy.discrete_probs_to_continuous_mean(one_hot),
+            policy.action_table[brake_class].unsqueeze(0),
+            atol=1e-6,
+        )
+    finally:
+        env.close()
