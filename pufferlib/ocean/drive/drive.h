@@ -6561,8 +6561,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 #include "idm.h"
 #include "pdm.h"
 
-// Route-aware TTC for one target/adversary pair. The target is swept along the
-// collision-time route centerline while the adversary box stays at its observed pose.
+// Route-aware TTC for one target/adversary pair. The target moves at constant speed
+// along its collision-time route while the adversary keeps constant world velocity.
 static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent *adversary,
                                     float danger_threshold_seconds, float *out_route_gap,
                                     float *out_adversary_route_speed, float *out_closing_speed) {
@@ -6574,8 +6574,7 @@ static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent
         *out_closing_speed = 0.0f;
 
     float target_speed = fmaxf(0.0f, target->sim_speed);
-    float max_distance = target_speed * danger_threshold_seconds;
-    if (target_speed <= 0.0f || max_distance <= 0.0f || target->route == NULL || target->route_length <= 0) {
+    if (target_speed <= 0.0f || target->route == NULL || target->route_length <= 0) {
         return INFINITY;
     }
 
@@ -6589,9 +6588,9 @@ static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent
     }
 
     Agent swept_target = *target;
-    Agent stationary_adversary = *adversary;
+    Agent moving_adversary = *adversary;
     swept_target.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
-    float next_sample = 0.0f;
+    int future_step = 0;
     float traveled = 0.0f;
 
     for (int route_idx = projection.route_idx; route_idx < target->route_length; route_idx++) {
@@ -6614,8 +6613,14 @@ static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent
                 route_idx == projection.route_idx && seg_idx == projection.segment_idx ? projection.t : 0.0f;
             float usable_len = (1.0f - seg_start_t) * seg_len;
 
-            while (next_sample <= max_distance && next_sample <= traveled + usable_len + 1e-5f) {
-                float local_distance = fmaxf(0.0f, next_sample - traveled);
+            while (future_step < DANGER_TTC_MAX_PROJECTION_STEPS) {
+                float future_time_seconds = future_step * env->dt;
+                if (future_time_seconds >= danger_threshold_seconds)
+                    return INFINITY;
+                float target_distance = target_speed * future_time_seconds;
+                if (target_distance > traveled + usable_len + 1e-5f)
+                    break;
+                float local_distance = fmaxf(0.0f, target_distance - traveled);
                 float t = seg_start_t + local_distance / seg_len;
                 t = clip(t, seg_start_t, 1.0f);
                 swept_target.sim_x = lane->x[seg_idx] + t * dx;
@@ -6624,26 +6629,26 @@ static float pairwise_obb_ttc_route(Drive *env, const Agent *target, const Agent
                 swept_target.sim_heading = atan2f(dy, dx);
                 swept_target.cos_heading = cosf(swept_target.sim_heading);
                 swept_target.sin_heading = sinf(swept_target.sim_heading);
+                moving_adversary.sim_x = adversary->sim_x + adversary->sim_vx * future_time_seconds;
+                moving_adversary.sim_y = adversary->sim_y + adversary->sim_vy * future_time_seconds;
 
-                if (check_z_collision_possibility(&swept_target, &stationary_adversary) &&
-                    check_obb_collision(&swept_target, &stationary_adversary)) {
+                if (check_z_collision_possibility(&swept_target, &moving_adversary) &&
+                    check_obb_collision(&swept_target, &moving_adversary)) {
                     float tangent_x = dx / seg_len;
                     float tangent_y = dy / seg_len;
-                    float adversary_speed = fmaxf(0.0f, adversary->sim_vx * tangent_x + adversary->sim_vy * tangent_y);
+                    float adversary_speed = adversary->sim_vx * tangent_x + adversary->sim_vy * tangent_y;
                     float closing_speed = target_speed - adversary_speed;
                     if (out_route_gap != NULL)
-                        *out_route_gap = next_sample;
+                        *out_route_gap = target_distance;
                     if (out_adversary_route_speed != NULL)
                         *out_adversary_route_speed = adversary_speed;
                     if (out_closing_speed != NULL)
                         *out_closing_speed = closing_speed;
-                    return closing_speed > 0.0f ? next_sample / closing_speed : INFINITY;
+                    return future_time_seconds;
                 }
-                next_sample += DANGER_ROUTE_SAMPLE_SPACING_METERS;
+                future_step++;
             }
             traveled += usable_len;
-            if (next_sample > max_distance)
-                return INFINITY;
         }
     }
     return INFINITY;

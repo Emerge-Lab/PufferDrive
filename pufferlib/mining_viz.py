@@ -1395,17 +1395,18 @@ HTML_TEMPLATE = """<!doctype html>
     function computeRouteTTC(pair, threshold, expandedTarget) {
       const route = (avoidability && avoidability.target_route_lane_indices) || [];
       const projection = route.length ? projectTargetToCapturedRoute(pair.target) : null;
-      const spacing = Number((avoidability.constants || {}).route_sample_spacing || 1.0);
+      const constants = (avoidability && avoidability.constants) || {};
+      const dt = Number(constants.dt || 0.1);
+      const maxSteps = Number(constants.ttc_max_projection_steps || 92);
       const targetSpeed = speedOfAgent(pair.target);
-      const maximumDistance = targetSpeed * threshold;
       const routePath = [];
       const none = {
         ttc: null, routeGap: null, adversaryRouteSpeed: null, closingSpeed: null,
         routePath, targetPose: null, adversaryPose: pair.adversary,
       };
-      if (!projection || targetSpeed <= 0 || maximumDistance <= 0 || spacing <= 0) return none;
+      if (!projection || targetSpeed <= 0) return none;
 
-      let nextSample = 0;
+      let futureStep = 0;
       let traveled = 0;
       for (let routeIndex = projection.routeIndex; routeIndex < route.length; routeIndex++) {
         const lane = roadElements[Number(route[routeIndex])];
@@ -1423,30 +1424,34 @@ HTML_TEMPLATE = """<!doctype html>
           const segmentStartT = routeIndex === projection.routeIndex && segmentIndex === projection.segmentIndex
             ? projection.t : 0;
           const usableLength = (1 - segmentStartT) * segmentLength;
-          while (nextSample <= maximumDistance && nextSample <= traveled + usableLength + 1e-5) {
-            const localDistance = Math.max(0, nextSample - traveled);
+          while (futureStep < maxSteps) {
+            const futureTime = futureStep * dt;
+            if (futureTime >= threshold) return none;
+            const targetDistance = targetSpeed * futureTime;
+            if (targetDistance > traveled + usableLength + 1e-5) break;
+            const localDistance = Math.max(0, targetDistance - traveled);
             const t = Math.max(segmentStartT, Math.min(1, segmentStartT + localDistance / segmentLength));
             const heading = Math.atan2(dy, dx);
             const targetPose = {
               ...expandedTarget,
               x: x0 + t * dx, y: y0 + t * dy, z: z0 + t * dz, heading,
             };
+            const adversaryPose = projectedPose(pair.adversary, futureTime);
             routePath.push({x: targetPose.x, y: targetPose.y});
-            if (verticalOverlap(targetPose, pair.adversary) && obbOverlap(targetPose, pair.adversary)) {
+            if (verticalOverlap(targetPose, adversaryPose) && obbOverlap(targetPose, adversaryPose)) {
               const tangentX = dx / segmentLength, tangentY = dy / segmentLength;
-              const adversaryRouteSpeed = Math.max(0,
-                Number(pair.adversary.vx || 0) * tangentX + Number(pair.adversary.vy || 0) * tangentY);
+              const adversaryRouteSpeed =
+                Number(pair.adversary.vx || 0) * tangentX + Number(pair.adversary.vy || 0) * tangentY;
               const closingSpeed = targetSpeed - adversaryRouteSpeed;
               return {
-                ttc: closingSpeed > 0 ? nextSample / closingSpeed : null,
-                routeGap: nextSample, adversaryRouteSpeed, closingSpeed,
-                routePath, targetPose, adversaryPose: pair.adversary,
+                ttc: futureTime,
+                routeGap: targetDistance, adversaryRouteSpeed, closingSpeed,
+                routePath, targetPose, adversaryPose,
               };
             }
-            nextSample += spacing;
+            futureStep += 1;
           }
           traveled += usableLength;
-          if (nextSample > maximumDistance) return none;
         }
       }
       return none;
