@@ -42,7 +42,7 @@ source .venv/bin/activate
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
 BUILD_STATUS_FILE=/home/bjaeger/nightly_PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
 if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
-    bash scripts/kesai/build_ext_if_changed.sh
+    bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/nightly_PufferDrive
     BUILD_STATUS=$?
     echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
 else
@@ -80,7 +80,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
-    train.seed=${SEED}
+    train.seed=${SEED} \
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would

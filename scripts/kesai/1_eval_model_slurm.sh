@@ -19,7 +19,7 @@ export RUN_NAME=k_exp_0009_7000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh || exit 1
+bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
     eval.output_name=${RUN_NAME} \
