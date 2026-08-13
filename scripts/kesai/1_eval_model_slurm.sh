@@ -14,7 +14,7 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-export RUN_NAME=k_exp_0009_3000
+export RUN_NAME=k_exp_0009_7000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
