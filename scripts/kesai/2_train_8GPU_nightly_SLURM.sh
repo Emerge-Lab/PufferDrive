@@ -19,8 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0011_${SEED}
-#k_nightly_0008_
+export RUN_NAME=k_nightly_"$(date +%Y-%m-%d)"_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -81,10 +80,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
-    train.seed=${SEED} \
-    env.goal_speed=1000 \
-    env.goal_source=route \
-    env.max_goal_spacing=60 \
+    train.seed=${SEED}
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
