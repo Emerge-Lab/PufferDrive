@@ -14,8 +14,8 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-export RUN_NAME=k_exp_0009_1000
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0009_1000/final_model.pt
+export RUN_NAME=k_exp_0009_2000
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh || exit 1
