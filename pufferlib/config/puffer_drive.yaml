@@ -297,7 +297,7 @@ eval:
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
   # Options: sample | mode | mean
-  action_selection: mode
+  action_selection: mean
 controlled_exp:
   train:
     # [sweep.train.learning_rate]
