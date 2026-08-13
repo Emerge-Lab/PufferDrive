@@ -6,8 +6,8 @@
 #SBATCH --gres gpu:8
 #SBATCH --mem=1007G
 #SBATCH --cpus-per-task 144
-#SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
-#SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
+#SBATCH --output /home/bjaeger/nightly_PufferDrive/experiments/logs/log_%a_%A.out
+#SBATCH --error /home/bjaeger/nightly_PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
 #SBATCH --array=0-2
 
@@ -22,7 +22,7 @@ echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 export RUN_NAME=k_nightly_"$(date +%Y-%m-%d)"_${SEED}
 echo ${RUN_NAME}
 
-export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
+export DATA_DIR=/home/bjaeger/nightly_PufferDrive/experiments/${RUN_NAME}
 echo ${DATA_DIR}
 
 export FINAL_MODEL_NAME=final_model.pt
@@ -40,7 +40,7 @@ export OMP_NUM_THREADS=1
 source .venv/bin/activate
 
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
-BUILD_STATUS_FILE=/home/bjaeger/PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
+BUILD_STATUS_FILE=/home/bjaeger/nightly_PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
 if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
     bash scripts/kesai/build_ext_if_changed.sh
     BUILD_STATUS=$?
@@ -69,7 +69,7 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     wandb_project=nightly-multi-long \
     wandb_group="$(date +%Y-%m-%d)" \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
+    env.map_dir=/home/bjaeger/nightly_PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=100000000000 \
@@ -103,7 +103,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    env.map_dir=/home/shared/data/nuPlan/nightly_PufferDrive \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
