@@ -601,10 +601,15 @@ class Drive(pufferlib.PufferEnv):
 
     @property
     def random_seed(self):
-        return int(self.rng.integers(0, 2**24))
+        # 63-bit: stays exact through int64 (CSV, numpy) and the C binding's PyLong_AsLongLong
+        return int(self.rng.integers(0, 2**63, dtype=np.int64))
 
     def reset(self, seed=None):
-        binding.vec_reset(self.c_envs)
+        if seed is not None and not self.use_exact_episode_seed:
+            self.rng = np.random.default_rng(seed)
+            binding.vec_reset(self.c_envs, [self.random_seed for _ in range(self.num_envs)])
+        else:
+            binding.vec_reset(self.c_envs)
         self.tick = 0
         self.truncations[:] = 0
         if self.capture_replay:

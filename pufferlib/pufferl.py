@@ -131,7 +131,7 @@ class PuffeRL:
 
         # Reproducibility
         seed = config["seed"]
-        # Decorrelate reset streams across DDP ranks for envs that honor reset(seed).
+        # Decorrelate reset streams across DDP ranks
         if seed is not None and torch.distributed.is_initialized():
             seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 
@@ -775,8 +775,11 @@ class PuffeRL:
         total_minibatches = 0
         pending_minibatches = 0
 
-        # final minibatch can be partial due to advantage filtering or invalid agents. Drop the last mini-batch if is is partial.
-        full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+        # Disabled for now: dropping the partial final minibatch means zero optimizer
+        # steps (silently) whenever fewer than minibatch_size transitions survive the
+        # advantage filter, which permanently freezes a plateaued policy.
+        # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+        full_minibatch_transitions = keep_idx.numel()
 
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
