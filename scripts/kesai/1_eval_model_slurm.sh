@@ -22,16 +22,12 @@ source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh || exit 1
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
-    eval.action_selection=mode \
-    eval.output_dir_name=eval_mode \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.action_selection=mode \
-    eval.output_dir_name=eval_mode \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
