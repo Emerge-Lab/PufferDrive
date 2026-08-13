@@ -4511,6 +4511,7 @@ def render_mined_failures(env_name, args=None, quiet=False):
     for idx, record in enumerate(replay_records):
         output_path = os.path.join(render_dir, f"episode_{record['episode_id']:06d}.html")
         render_context = {
+            "episode_id": record["episode_id"],
             "navigation": {
                 "index_html": "index.html",
                 "prev_html": replay_records[idx - 1]["href"] if idx > 0 else None,

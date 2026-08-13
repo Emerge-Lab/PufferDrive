@@ -227,23 +227,23 @@ HTML_TEMPLATE = """<!doctype html>
   <title>__TITLE__</title>
   <style>
     :root {
-      --bg: #eef1f5;
-      --panel: rgba(255,255,255,0.92);
-      --text: #1f2933;
-      --muted: #5b6570;
-      --border: rgba(31,41,51,0.12);
-      --accent: #1261a0;
-      --target: #d64545;
-      --stopped: #f39c12;
-      --active: #2a7fff;
-      --inactive: #95a5a6;
+      --bg: #20262d;
+      --panel: rgba(42,49,58,0.96);
+      --text: #edf2f7;
+      --muted: #aeb8c4;
+      --border: rgba(255,255,255,0.12);
+      --accent: #62b6ed;
+      --target: #f05252;
+      --stopped: #f59e0b;
+      --active: #3b82f6;
+      --inactive: #8995a3;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--text);
-      background: linear-gradient(180deg, #f7f9fc 0%, #e7edf4 100%);
+      background: linear-gradient(180deg, #282f37 0%, #1d2228 100%);
     }
     .layout {
       display: grid;
@@ -256,7 +256,7 @@ HTML_TEMPLATE = """<!doctype html>
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(28,38,51,0.08);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.22);
       backdrop-filter: blur(8px);
     }
     .sidebar { padding: 18px; }
@@ -272,8 +272,8 @@ HTML_TEMPLATE = """<!doctype html>
     .meta-item {
       padding: 10px 12px;
       border-radius: 12px;
-      background: rgba(18,97,160,0.05);
-      border: 1px solid rgba(18,97,160,0.08);
+      background: rgba(98,182,237,0.07);
+      border: 1px solid rgba(98,182,237,0.10);
     }
     .meta-label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
     .meta-value { display: block; margin-top: 4px; font-size: 16px; font-weight: 600; }
@@ -281,11 +281,11 @@ HTML_TEMPLATE = """<!doctype html>
       margin: 14px 0 16px;
       padding: 14px 16px;
       border-radius: 16px;
-      background: linear-gradient(135deg, rgba(18,97,160,0.16), rgba(18,97,160,0.04));
-      border: 1px solid rgba(18,97,160,0.18);
+      background: linear-gradient(135deg, rgba(98,182,237,0.18), rgba(98,182,237,0.05));
+      border: 1px solid rgba(98,182,237,0.22);
     }
-    .drive-weight-card .meta-label { color: #365f7e; }
-    .drive-weight-card .meta-value { font-size: 28px; color: #0f4c81; letter-spacing: -0.03em; }
+    .drive-weight-card .meta-label { color: #a7d8f5; }
+    .drive-weight-card .meta-value { font-size: 28px; color: #d8effd; letter-spacing: -0.03em; }
     .controls {
       display: grid;
       gap: 12px;
@@ -298,7 +298,7 @@ HTML_TEMPLATE = """<!doctype html>
       gap: 4px;
       padding: 4px;
       border-radius: 12px;
-      background: rgba(31,41,51,0.06);
+      background: rgba(255,255,255,0.06);
     }
     .mode-toggle button {
       border: 0;
@@ -307,9 +307,9 @@ HTML_TEMPLATE = """<!doctype html>
       font-weight: 650;
     }
     .mode-toggle button.active {
-      background: white;
+      background: #39424d;
       color: var(--accent);
-      box-shadow: 0 2px 8px rgba(31,41,51,0.12);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
     }
     .mode-toggle button:disabled {
       cursor: not-allowed;
@@ -317,31 +317,41 @@ HTML_TEMPLATE = """<!doctype html>
     }
     .observed-controls, .avoidability-controls { display: grid; gap: 12px; }
     .avoidability-controls[hidden], .observed-controls[hidden] { display: none; }
+    .detection-controls, .braking-controls { display: grid; gap: 12px; }
+    .detection-controls[hidden], .braking-controls[hidden] { display: none; }
     .avoidability-result {
       padding: 11px 12px;
       border-radius: 12px;
       border: 1px solid rgba(39,174,96,0.18);
       background: rgba(39,174,96,0.08);
-      color: #226a47;
+      color: #86efac;
       font-size: 13px;
       line-height: 1.35;
     }
     .avoidability-result.failed {
       border-color: rgba(214,69,69,0.18);
       background: rgba(214,69,69,0.08);
-      color: #8f2d2d;
+      color: #fca5a5;
     }
     .avoidability-result.reference {
       border-color: rgba(18,97,160,0.18);
       background: rgba(18,97,160,0.07);
-      color: #0f4c81;
+      color: #93c5fd;
     }
     .avoidability-result strong { display: block; margin-bottom: 3px; }
+    .rollout-markers {
+      padding: 9px 10px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
     .detector-toggles { display: flex; gap: 8px; }
     .detector-toggle {
       flex: 1;
       color: var(--muted);
-      background: rgba(31,41,51,0.04);
+      background: rgba(255,255,255,0.05);
     }
     .detector-toggle.active {
       color: var(--accent);
@@ -364,16 +374,16 @@ HTML_TEMPLATE = """<!doctype html>
       padding: 7px 10px;
       border-radius: 999px;
       border: 1px solid rgba(22,163,74,0.3);
-      background: rgba(240,253,244,0.94);
-      color: #166534;
+      background: rgba(20,83,45,0.94);
+      color: #bbf7d0;
       font-size: 12px;
       font-weight: 750;
       box-shadow: 0 3px 12px rgba(31,41,51,0.1);
     }
     .detector-badge.danger {
       border-color: rgba(220,38,38,0.35);
-      background: rgba(254,242,242,0.95);
-      color: #991b1b;
+      background: rgba(127,29,29,0.95);
+      color: #fecaca;
     }
     .nav {
       display: grid;
@@ -393,7 +403,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
     button, select {
       border: 1px solid var(--border);
-      background: white;
+      background: #343c46;
       color: var(--text);
       border-radius: 10px;
       padding: 8px 12px;
@@ -446,7 +456,7 @@ HTML_TEMPLATE = """<!doctype html>
       padding: 10px 12px;
       border-radius: 12px;
       border: 1px solid var(--border);
-      background: rgba(255,255,255,0.72);
+      background: rgba(255,255,255,0.05);
     }
     .episode-link.active {
       border-color: rgba(18,97,160,0.35);
@@ -464,11 +474,11 @@ HTML_TEMPLATE = """<!doctype html>
       font-size: 11px;
       font-weight: 700;
       background: rgba(39,174,96,0.12);
-      color: #226a47;
+      color: #86efac;
     }
     .badge.fail {
       background: rgba(214,69,69,0.12);
-      color: #8f2d2d;
+      color: #fca5a5;
     }
     .viewer-head {
       display: flex;
@@ -496,7 +506,7 @@ HTML_TEMPLATE = """<!doctype html>
       min-height: 540px;
       border-radius: 16px;
       border: 1px solid var(--border);
-      background: #fbfcfe;
+      background: #303840;
       display: block;
     }
     .pill {
@@ -508,11 +518,11 @@ HTML_TEMPLATE = """<!doctype html>
       font-size: 13px;
       font-weight: 600;
       background: rgba(214,69,69,0.1);
-      color: #8f2d2d;
+      color: #fca5a5;
     }
     .pill.ok {
       background: rgba(39,174,96,0.12);
-      color: #226a47;
+      color: #86efac;
     }
     @media (max-width: 1280px) {
       .layout {
@@ -551,18 +561,43 @@ HTML_TEMPLATE = """<!doctype html>
           </div>
         </div>
         <div id="avoidability-controls" class="avoidability-controls" hidden>
-          <span class="meta-label">Brake start</span>
-          <div class="controls-row">
-            <span>0.0s</span>
-            <input id="reaction-slider" type="range" min="0" max="0" value="0" step="1">
-            <span id="reaction-label">collision</span>
+          <div class="mode-toggle" aria-label="Avoidability view">
+            <button id="detection-phase" class="active" type="button">Detection window</button>
+            <button id="braking-phase" type="button">Braking rollout</button>
           </div>
-          <div id="avoidability-result" class="avoidability-result reference">
-            <strong>Observed collision</strong>
+          <div id="detection-controls" class="detection-controls">
+            <span class="meta-label">Recorded detection sample</span>
+            <div class="controls-row">
+              <button id="detection-play" type="button">Play</button>
+              <input id="detection-slider" type="range" min="0" max="0" value="0" step="1">
+              <span id="detection-label">n/a</span>
+            </div>
+            <div id="detection-result" class="avoidability-result reference">
+              <strong>Detection window unavailable</strong>
+            </div>
+            <div id="detection-markers" class="rollout-markers"></div>
+            <div class="detector-toggles">
+              <button id="buffer-toggle" class="detector-toggle active" type="button" aria-pressed="true">Safety buffer</button>
+              <button id="ttc-toggle" class="detector-toggle active" type="button" aria-pressed="true">TTC</button>
+            </div>
           </div>
-          <div class="detector-toggles">
-            <button id="buffer-toggle" class="detector-toggle active" type="button" aria-pressed="true">Safety buffer</button>
-            <button id="ttc-toggle" class="detector-toggle active" type="button" aria-pressed="true">TTC</button>
+          <div id="braking-controls" class="braking-controls" hidden>
+            <span class="meta-label">Brake start</span>
+            <div class="controls-row">
+              <span>0.0s</span>
+              <input id="reaction-slider" type="range" min="0" max="0" value="0" step="1">
+              <span id="reaction-label">collision</span>
+            </div>
+            <div id="avoidability-result" class="avoidability-result reference">
+              <strong>Observed collision</strong>
+            </div>
+            <span class="meta-label">Counterfactual time</span>
+            <div class="controls-row">
+              <button id="rollout-play" type="button">Play</button>
+              <input id="rollout-slider" type="range" min="0" max="0" value="0" step="1">
+              <span id="rollout-label">t=0.0s</span>
+            </div>
+            <div id="rollout-markers" class="rollout-markers">Select a braking candidate.</div>
           </div>
         </div>
       </div>
@@ -580,7 +615,7 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="meta-item"><span class="meta-label">At-Fault Collision</span><span class="meta-value" id="meta-at-fault"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Responsibility</span><span class="meta-value" id="meta-collision-responsibility"></span></div>
         <div class="meta-item"><span class="meta-label">last_t_brake</span><span class="meta-value" id="meta-last-t-brake"></span></div>
-        <div class="meta-item"><span class="meta-label">Reaction Window</span><span class="meta-value" id="meta-reaction-window"></span></div>
+        <div class="meta-item"><span class="meta-label">Detection Window</span><span class="meta-value" id="meta-reaction-window"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Outcome</span><span class="meta-value" id="meta-collision-outcome"></span></div>
         <div class="meta-item"><span class="meta-label">Collision Severity</span><span class="meta-value" id="meta-collision-severity"></span></div>
         <div class="meta-item"><span class="meta-label">Map</span><span class="meta-value" id="meta-map"></span></div>
@@ -601,13 +636,13 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="legend-row"><span class="swatch" style="background: var(--active)"></span>Active adversary</div>
         <div class="legend-row"><span class="swatch" style="background: var(--inactive)"></span>Inactive / static</div>
         <div class="legend-row"><span class="swatch" style="background: var(--stopped)"></span>Stopped / crashed</div>
-        <div class="legend-row"><span class="swatch" style="background: #05a3c7"></span>Velocity vector</div>
+        <div class="legend-row"><span class="swatch" style="background: #22d3ee"></span>Velocity vector</div>
         <div class="legend-row"><span class="swatch" style="background: #f59e0b"></span>Pre-braking response (legacy traces)</div>
-        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target maximum braking</div>
-        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary projected trajectory</div>
-        <div class="legend-row"><span class="swatch" style="background: #dc2626"></span>Target stopped / impact pose</div>
-        <div class="legend-row"><span class="swatch" style="background: #0891b2"></span>Adversary rollout / impact pose</div>
-        <div class="legend-row"><span class="swatch" style="background: #111827"></span>Impact poses (rejected candidate)</div>
+        <div class="legend-row"><span class="swatch" style="background: #fb7185"></span>Target maximum braking</div>
+        <div class="legend-row"><span class="swatch" style="background: #22d3ee"></span>Adversary projected trajectory</div>
+        <div class="legend-row"><span class="swatch" style="background: #fb7185"></span>Target stopped / impact pose</div>
+        <div class="legend-row"><span class="swatch" style="background: #22d3ee"></span>Adversary rollout / impact pose</div>
+        <div class="legend-row"><span class="swatch" style="background: #c084fc"></span>Impact poses (secondary blocker)</div>
       </div>
     </aside>
     <main class="panel viewer">
@@ -654,9 +689,22 @@ HTML_TEMPLATE = """<!doctype html>
     const avoidabilityModeButton = document.getElementById('avoidability-mode');
     const observedControls = document.getElementById('observed-controls');
     const avoidabilityControls = document.getElementById('avoidability-controls');
+    const detectionPhaseButton = document.getElementById('detection-phase');
+    const brakingPhaseButton = document.getElementById('braking-phase');
+    const detectionControls = document.getElementById('detection-controls');
+    const brakingControls = document.getElementById('braking-controls');
+    const detectionPlay = document.getElementById('detection-play');
+    const detectionSlider = document.getElementById('detection-slider');
+    const detectionLabel = document.getElementById('detection-label');
+    const detectionResult = document.getElementById('detection-result');
+    const detectionMarkers = document.getElementById('detection-markers');
     const reactionSlider = document.getElementById('reaction-slider');
     const reactionLabel = document.getElementById('reaction-label');
     const avoidabilityResult = document.getElementById('avoidability-result');
+    const rolloutPlay = document.getElementById('rollout-play');
+    const rolloutSlider = document.getElementById('rollout-slider');
+    const rolloutLabel = document.getElementById('rollout-label');
+    const rolloutMarkers = document.getElementById('rollout-markers');
     const bufferToggle = document.getElementById('buffer-toggle');
     const ttcToggle = document.getElementById('ttc-toggle');
     const detectorHud = document.getElementById('detector-hud');
@@ -691,6 +739,14 @@ HTML_TEMPLATE = """<!doctype html>
     let observedFrameIndex = 0;
     let showLateralBuffer = true;
     let showTTC = true;
+    let rolloutStep = 0;
+    let rolloutPlaying = false;
+    let rolloutLastTimestamp = 0;
+    let avoidabilityPhase = 'detection';
+    let detectionSelection = 0;
+    let detectionPlaying = false;
+    let detectionLastTimestamp = 0;
+    let detectionSamplesCache = null;
 
 
     function summaryValue(key, fallback=null) {
@@ -824,10 +880,11 @@ HTML_TEMPLATE = """<!doctype html>
       const tBrake = Number(classification.t_brake);
       document.getElementById('meta-last-t-brake').innerText = formatSeconds(tBrake);
       const reactionCheck = computeReactionWindowDanger();
-      document.getElementById('meta-reaction-window').innerText = reactionCheck.available
-        ? `[${reactionCheck.minimum.toFixed(2)}, ${reactionCheck.maximum.toFixed(2)}]s · ` +
-          `${reactionCheck.dangerous ? 'danger' : 'safe'} · ${reactionCheck.samples} sample(s)`
-        : 'n/a';
+      document.getElementById('meta-reaction-window').innerText = reactionCheck.minimum == null
+        ? 'n/a'
+        : `${reactionCheck.maximumBeforeBraking.toFixed(2)} → ${reactionCheck.minimumBeforeBraking.toFixed(2)}s before brake · ` +
+          `${reactionCheck.available ? (reactionCheck.dangerous ? 'danger' : 'safe') : 'not sampled'} · ` +
+          `${reactionCheck.samples} sample(s)`;
       let collisionOutcome = 'not classified';
       if (Number(classification.unavoidable || 0) > 0) collisionOutcome = 'unavoidable';
       else if (Number(classification.genuine_target_failure || 0) > 0) collisionOutcome = 'genuine target failure';
@@ -962,8 +1019,38 @@ HTML_TEMPLATE = """<!doctype html>
       return base;
     }
 
+    function counterfactualDisplayFrame() {
+      const trajectories = selectedCounterfactualTrajectories();
+      if (!trajectories) return frames[frameIndex] || [];
+      const step = Math.min(rolloutStep, trajectories.effectiveEndStep);
+      const base = [...(frames[nearestFrameAtOrBefore(trajectories.startTimestep)] || [])];
+      const replacements = [trajectories.targetSamples[step], trajectories.adversarySamples[step]];
+      for (const agent of replacements) {
+        if (!agent) continue;
+        const existingIndex = base.findIndex(item => Number(item.id) === Number(agent.id));
+        if (existingIndex >= 0) base[existingIndex] = agent;
+        else base.push(agent);
+      }
+      if (trajectories.impact && step === trajectories.effectiveEndStep && !trajectories.impact.blockerIsOriginal) {
+        const blocker = candidateValue('blocking_agent', trajectories.candidateIndex, null);
+        const blockerAgent = agentFromSnapshot(blocker, false);
+        if (blockerAgent) {
+          blockerAgent.counterfactual = true;
+          const existingIndex = base.findIndex(item => Number(item.id) === Number(blockerAgent.id));
+          if (existingIndex >= 0) base[existingIndex] = blockerAgent;
+          else base.push(blockerAgent);
+        }
+      }
+      return base;
+    }
+
     function currentDisplayFrame() {
+      if (replayMode === 'avoidability' && avoidabilityPhase === 'detection') {
+        const sample = selectedDetectionWindowSample();
+        return sample ? frames[sample.frameIndex] || [] : collisionReferenceFrame();
+      }
       if (replayMode === 'avoidability' && reactionSelection === 0) return collisionReferenceFrame();
+      if (replayMode === 'avoidability') return counterfactualDisplayFrame();
       return frames[frameIndex] || [];
     }
 
@@ -973,12 +1060,18 @@ HTML_TEMPLATE = """<!doctype html>
         const timestep = Number(episodeTimesteps[i]);
         if (timestep < startTimestep || timestep >= collisionTimestep) continue;
         const agent = findAgentById(frames[i], agentId);
-        if (agent) points.push({x: Number(agent.x), y: Number(agent.y), heading: Number(agent.heading || 0)});
+        if (agent) points.push({
+          x: Number(agent.x),
+          y: Number(agent.y),
+          z: Number(agent.z || 0),
+          heading: Number(agent.heading || 0),
+        });
       }
       if (collisionSnapshot && collisionSnapshot.valid) {
         points.push({
           x: Number(collisionSnapshot.x),
           y: Number(collisionSnapshot.y),
+          z: Number(collisionSnapshot.z || 0),
           heading: Number(collisionSnapshot.heading || 0),
         });
       }
@@ -992,6 +1085,7 @@ HTML_TEMPLATE = """<!doctype html>
         return {
           x: points[0].x + distance * Math.cos(heading),
           y: points[0].y + distance * Math.sin(heading),
+          z: Number(points[0].z || 0),
           heading,
         };
       }
@@ -1005,6 +1099,7 @@ HTML_TEMPLATE = """<!doctype html>
           return {
             x: points[i].x + ratio * dx,
             y: points[i].y + ratio * dy,
+            z: Number(points[i].z || 0) + ratio * (Number(points[i + 1].z || 0) - Number(points[i].z || 0)),
             heading: segmentLength > 1e-6 ? Math.atan2(dy, dx) : Number(points[i].heading || 0),
           };
         }
@@ -1019,6 +1114,7 @@ HTML_TEMPLATE = """<!doctype html>
       return {
         x: points[last].x + overshoot * Math.cos(heading),
         y: points[last].y + overshoot * Math.sin(heading),
+        z: Number(points[last].z || 0),
         heading,
       };
     }
@@ -1033,8 +1129,41 @@ HTML_TEMPLATE = """<!doctype html>
       return Math.ceil(Math.max(0, time) / dt - 1e-9) * dt;
     }
 
+    function agentAtTimestep(agentId, timestep) {
+      for (let i = 0; i < episodeTimesteps.length; i++) {
+        if (Number(episodeTimesteps[i]) !== Number(timestep)) continue;
+        return findAgentById(frames[i], agentId);
+      }
+      return null;
+    }
+
+    function signedSpeedOfAgent(agent) {
+      const speed = speedOfAgent(agent);
+      const heading = Number(agent.heading || 0);
+      const alongHeading = Number(agent.vx || 0) * Math.cos(heading) + Number(agent.vy || 0) * Math.sin(heading);
+      return alongHeading < 0 ? -speed : speed;
+    }
+
+    function counterfactualAgent(base, point, signedSpeed, isTarget) {
+      const heading = Number(point.heading || 0);
+      return {
+        ...base,
+        id: Number(base.id),
+        is_target: isTarget,
+        x: Number(point.x),
+        y: Number(point.y),
+        z: Number(point.z == null ? base.z || 0 : point.z),
+        heading,
+        vx: signedSpeed * Math.cos(heading),
+        vy: signedSpeed * Math.sin(heading),
+        stopped: Math.abs(signedSpeed) <= 1e-6,
+        counterfactual: true,
+      };
+    }
+
     function selectedCounterfactualTrajectories() {
-      if (replayMode !== 'avoidability' || reactionSelection === 0 || !hasAvoidability) return null;
+      if (replayMode !== 'avoidability' || avoidabilityPhase !== 'braking' ||
+          reactionSelection === 0 || !hasAvoidability) return null;
       const candidateIndex = reactionSelection - 1;
       const stepsBack = Number(candidateValue('steps_back', candidateIndex, 0));
       const collision = avoidability.collision;
@@ -1059,82 +1188,70 @@ HTML_TEMPLATE = """<!doctype html>
       const initialSpeed = speedOfAgent(targetAtStart);
       const stopTime = initialSpeed <= 0 ? 0 : brakingDelay + initialSpeed / Math.max(deceleration, 1e-6);
       const targetStopSampleTime = firstRolloutSampleAtOrAfter(stopTime, dt);
+      const targetStopStep = Math.round(targetStopSampleTime / dt);
       const observedCollisionTime = stepsBack * dt;
       const adversary = collision.adversary;
       const adversaryHeading = Number(adversary.heading || 0);
-      const adversarySignedSpeed = Number(adversary.vx || 0) * Math.cos(adversaryHeading) +
-        Number(adversary.vy || 0) * Math.sin(adversaryHeading);
+      const adversarySignedSpeed = signedSpeedOfAgent(adversary);
       const adversaryStopTime = Math.abs(adversarySignedSpeed) / Math.max(deceleration, 1e-6);
       const rolloutUntilAdversaryStop = Number(constants.rollout_until_adversary_stop || 0) > 0;
       const adversaryStopSampleTime = observedCollisionTime + firstRolloutSampleAtOrAfter(adversaryStopTime, dt);
-      const rolloutEndTime = Math.max(
-        targetStopSampleTime,
-        rolloutUntilAdversaryStop ? adversaryStopSampleTime : observedCollisionTime
+      const adversaryStopStep = Math.round(adversaryStopSampleTime / dt);
+      const fullEndStep = Math.min(
+        maxRolloutSteps - 1,
+        Math.max(targetStopStep, rolloutUntilAdversaryStop ? adversaryStopStep : stepsBack)
       );
-      const reaction = [];
-      const braking = [];
+      const blockingRolloutStep = Number(candidateValue('blocking_rollout_step', candidateIndex, -1));
+      const effectiveEndStep = blockingRolloutStep >= 0 ? Math.min(blockingRolloutStep, fullEndStep) : fullEndStep;
+      const rolloutEndTime = effectiveEndStep * dt;
+
       const targetPointAt = tau => {
         const motionTime = Math.min(Math.max(0, tau), stopTime);
         const brakingTime = Math.max(0, motionTime - brakingDelay);
         const distance = initialSpeed * motionTime - 0.5 * deceleration * brakingTime * brakingTime;
         return sampleRail(targetRail, Math.max(0, distance));
       };
-      for (let rolloutStep = 0; rolloutStep < maxRolloutSteps; rolloutStep++) {
-        const tau = rolloutStep * dt;
-        if (tau > rolloutEndTime + 1e-6) break;
-        const point = targetPointAt(tau);
-        if (brakingDelay > 0 && tau <= brakingDelay + 1e-6) appendDistinct(reaction, point);
-        if (tau >= brakingDelay - 1e-6) appendDistinct(braking, point);
-      }
-      const targetStop = targetPointAt(stopTime);
-      appendDistinct(braking, targetStop);
-      const brakingStart = stopTime > brakingDelay ? targetPointAt(brakingDelay) : null;
 
-      const adversaryTrajectory = [];
-      for (let i = 0; i < frames.length; i++) {
-        const timestep = Number(episodeTimesteps[i]);
-        const relativeTime = (timestep - startTimestep) * dt;
-        if (timestep < startTimestep || timestep >= collisionTimestep || relativeTime > rolloutEndTime + 1e-6) {
-          continue;
-        }
-        const agent = findAgentById(frames[i], adversaryId);
-        if (agent) {
-          appendDistinct(adversaryTrajectory, {
-            x: Number(agent.x),
-            y: Number(agent.y),
-            heading: Number(agent.heading || 0),
-          });
-        }
-      }
-      if (rolloutEndTime >= observedCollisionTime - 1e-6) {
-        appendDistinct(adversaryTrajectory, {
-          x: Number(adversary.x),
-          y: Number(adversary.y),
-          heading: Number(adversary.heading || 0),
+      const targetSamples = [];
+      const adversarySamples = [];
+      for (let step = 0; step <= effectiveEndStep; step++) {
+        const tau = step * dt;
+        const targetPoint = targetPointAt(tau);
+        const brakingTime = Math.max(0, Math.min(tau, stopTime) - brakingDelay);
+        const targetSpeed = Math.max(0, initialSpeed - deceleration * brakingTime);
+        targetSamples.push({
+          ...counterfactualAgent(collision.target, targetPoint, targetSpeed, true),
+          braking: tau >= brakingDelay - 1e-6 && targetSpeed > 1e-6,
         });
-        const postCollisionDuration = Math.max(0, rolloutEndTime - observedCollisionTime);
-        const postCollisionSteps = Math.round(postCollisionDuration / dt);
-        for (let extensionStep = 1; extensionStep <= postCollisionSteps; extensionStep++) {
-          const time = Math.min(extensionStep * dt, adversaryStopTime);
-          const distance = adversarySignedSpeed === 0
-            ? 0
-            : adversarySignedSpeed * time - Math.sign(adversarySignedSpeed) * 0.5 * deceleration * time * time;
-          appendDistinct(adversaryTrajectory, {
+
+        if (step < stepsBack) {
+          const recorded = agentAtTimestep(adversaryId, startTimestep + step);
+          if (recorded) {
+            adversarySamples.push({...recorded, counterfactual: true, braking: false});
+            continue;
+          }
+        }
+        const extensionTime = Math.min(Math.max(0, step - stepsBack) * dt, adversaryStopTime);
+        const direction = adversarySignedSpeed < 0 ? -1 : 1;
+        const distance = adversarySignedSpeed * extensionTime -
+          direction * 0.5 * deceleration * extensionTime * extensionTime;
+        const extensionSpeed = direction * Math.max(0, Math.abs(adversarySignedSpeed) - deceleration * extensionTime);
+        adversarySamples.push({
+          ...counterfactualAgent(adversary, {
             x: Number(adversary.x) + distance * Math.cos(adversaryHeading),
             y: Number(adversary.y) + distance * Math.sin(adversaryHeading),
+            z: Number(adversary.z || 0),
             heading: adversaryHeading,
-          });
-        }
+          }, extensionSpeed, false),
+          braking: step >= stepsBack && Math.abs(extensionSpeed) > 1e-6,
+        });
       }
-      const adversaryAtRolloutEnd = adversaryTrajectory[adversaryTrajectory.length - 1] || null;
 
-      const blockingRolloutStep = Number(candidateValue('blocking_rollout_step', candidateIndex, -1));
       const blockingSnapshot = candidateValue('blocking_agent', candidateIndex, null);
       let impact = null;
       if (blockingRolloutStep >= 0 && blockingSnapshot && blockingSnapshot.valid) {
         const impactTime = blockingRolloutStep * dt;
-        const targetImpact = targetPointAt(impactTime);
-        targetImpact.speed = Math.max(0, initialSpeed - deceleration * Math.max(0, impactTime - brakingDelay));
+        const targetImpact = targetSamples[targetSamples.length - 1];
         impact = {
           time: impactTime,
           target: targetImpact,
@@ -1153,16 +1270,29 @@ HTML_TEMPLATE = """<!doctype html>
       }
 
       return {
-        reaction,
-        braking,
-        adversaryTrajectory,
-        adversaryAtRolloutEnd,
-        targetStop,
-        brakingStart,
+        candidateIndex,
+        stepsBack,
+        dt,
+        startTimestep,
+        targetSamples,
+        adversarySamples,
+        targetStop: targetSamples[Math.min(targetStopStep, effectiveEndStep)],
+        adversaryAtRolloutEnd: adversarySamples[adversarySamples.length - 1] || null,
+        brakingStart: targetSamples[0],
         reactionTime: brakingDelay,
         targetStopSampleTime,
+        targetStopStep,
+        adversaryStopSampleTime,
+        adversaryStopStep,
+        observedCollisionTime,
+        observedCollisionStep: stepsBack,
+        fullEndStep,
+        effectiveEndStep,
         rolloutEndTime,
         impact,
+        exitedEarly: blockingRolloutStep >= 0,
+        targetReachedStop: effectiveEndStep >= targetStopStep,
+        adversaryReachedStop: effectiveEndStep >= adversaryStopStep,
         targetDimensions: {length: Number(collision.target.length), width: Number(collision.target.width)},
         adversaryDimensions: {length: Number(adversary.length), width: Number(adversary.width)},
       };
@@ -1407,13 +1537,15 @@ HTML_TEMPLATE = """<!doctype html>
       };
     }
 
-    function computeReactionWindowDanger() {
+    function detectionWindowSamples() {
+      if (detectionSamplesCache !== null) return detectionSamplesCache;
       const classification = (avoidability && avoidability.classification) || {};
       const constants = (avoidability && avoidability.constants) || {};
       const collision = avoidability && avoidability.collision;
       const tBrake = Number(classification.t_brake);
       if (!collision || !(tBrake > 0)) {
-        return {available: false, dangerous: false, samples: 0, minimum: null, maximum: null};
+        detectionSamplesCache = [];
+        return detectionSamplesCache;
       }
 
       const dt = Number(constants.dt || 0.1);
@@ -1422,7 +1554,7 @@ HTML_TEMPLATE = """<!doctype html>
       const minimum = tBrake + reactionTime - halfWidth;
       const maximum = tBrake + reactionTime + halfWidth;
       const collisionTimestep = Number(collision.collision_timestep);
-      let samples = 0;
+      const samples = [];
       for (let i = 0; i < frames.length; i++) {
         const stepsBack = collisionTimestep - Number(episodeTimesteps[i]);
         if (stepsBack < 1) continue;
@@ -1430,22 +1562,212 @@ HTML_TEMPLATE = """<!doctype html>
         if (secondsBeforeCollision < minimum - 1e-5 || secondsBeforeCollision > maximum + 1e-5) continue;
         const pair = detectorPairForFrame(frames[i]);
         if (!pair) continue;
-        samples += 1;
-        if (computeTTCOverlay(pair).dangerous || computeLateralBuffer(pair).dangerous) {
-          return {available: true, dangerous: true, samples, minimum, maximum};
-        }
+        const ttc = computeTTCOverlay(pair);
+        const buffer = computeLateralBuffer(pair);
+        samples.push({
+          frameIndex: i,
+          timestep: Number(episodeTimesteps[i]),
+          stepsBack,
+          secondsBeforeCollision,
+          secondsBeforeBraking: secondsBeforeCollision - tBrake,
+          pair,
+          ttc,
+          buffer,
+          dangerous: ttc.dangerous || buffer.dangerous,
+          ttcDangerous: ttc.dangerous,
+          bufferDangerous: buffer.dangerous,
+        });
       }
-      return {available: true, dangerous: false, samples, minimum, maximum};
+      detectionSamplesCache = samples;
+      return detectionSamplesCache;
+    }
+
+    function selectedDetectionWindowSample() {
+      const samples = detectionWindowSamples();
+      if (!samples.length) return null;
+      detectionSelection = Math.min(Math.max(0, detectionSelection), samples.length - 1);
+      return samples[detectionSelection];
+    }
+
+    function computeReactionWindowDanger() {
+      const classification = (avoidability && avoidability.classification) || {};
+      const constants = (avoidability && avoidability.constants) || {};
+      const tBrake = Number(classification.t_brake);
+      if (!(tBrake > 0)) {
+        return {
+          available: false, dangerous: false, samples: 0, minimum: null, maximum: null,
+          minimumBeforeBraking: null, maximumBeforeBraking: null,
+        };
+      }
+      const reactionTime = Number(constants.reaction_time_seconds || 1.0);
+      const halfWidth = Number(constants.reaction_window_half_width_seconds || 0.2);
+      const samples = detectionWindowSamples();
+      return {
+        available: samples.length > 0,
+        dangerous: samples.some(sample => sample.dangerous),
+        samples: samples.length,
+        minimum: tBrake + reactionTime - halfWidth,
+        maximum: tBrake + reactionTime + halfWidth,
+        minimumBeforeBraking: reactionTime - halfWidth,
+        maximumBeforeBraking: reactionTime + halfWidth,
+      };
+    }
+
+    function stopDetectionPlayback() {
+      detectionPlaying = false;
+      detectionPlay.innerText = 'Play';
+      detectionLastTimestamp = 0;
+    }
+
+    function updateDetectionReadout() {
+      const samples = detectionWindowSamples();
+      if (!samples.length) {
+        detectionSelection = 0;
+        detectionSlider.max = 0;
+        detectionSlider.value = 0;
+        detectionSlider.disabled = true;
+        detectionPlay.disabled = true;
+        detectionLabel.innerText = 'n/a';
+        detectionResult.className = 'avoidability-result reference';
+        const reactionCheck = computeReactionWindowDanger();
+        if (reactionCheck.minimum == null) {
+          detectionResult.innerHTML = '<strong>No detection window</strong><code>t_brake</code> is unavailable for this collision.';
+          detectionMarkers.innerText = 'C does not run the detection-window check when no avoidable braking time exists.';
+        } else {
+          detectionResult.innerHTML = '<strong>Detection window not sampled</strong>No recorded target/hitter state falls inside the required history window.';
+          detectionMarkers.innerHTML =
+            `Required history: <strong>${reactionCheck.maximum.toFixed(2)}s → ` +
+            `${reactionCheck.minimum.toFixed(2)}s before collision</strong><br>` +
+            `C checked <strong>0 samples</strong>, so danger=false.`;
+        }
+        return;
+      }
+
+      detectionSelection = Math.min(Math.max(0, detectionSelection), samples.length - 1);
+      const sample = samples[detectionSelection];
+      frameIndex = sample.frameIndex;
+      detectionSlider.max = samples.length - 1;
+      detectionSlider.value = detectionSelection;
+      detectionSlider.disabled = false;
+      detectionPlay.disabled = samples.length <= 1;
+      detectionLabel.innerText = `${sample.secondsBeforeBraking.toFixed(1)}s before brake`;
+
+      const sources = [];
+      if (sample.ttcDangerous) sources.push(`TTC/${sample.ttc.winner}`);
+      if (sample.bufferDangerous) sources.push('lateral buffer');
+      const sourceText = sources.length ? sources.join(' + ') : 'none';
+      const effectiveTTC = sample.ttc.effectiveTTC == null ? '∞' : `${sample.ttc.effectiveTTC.toFixed(2)}s`;
+      detectionResult.className = sample.dangerous ? 'avoidability-result failed' : 'avoidability-result';
+      detectionResult.innerHTML =
+        `<strong>Sample ${detectionSelection + 1}/${samples.length} · ${sample.dangerous ? 'DANGER' : 'SAFE'} · source=${sourceText}</strong>` +
+        `${sample.secondsBeforeCollision.toFixed(2)}s before collision · ` +
+        `${sample.secondsBeforeBraking.toFixed(2)}s before braking · ` +
+        `effective TTC=${effectiveTTC} / threshold=${sample.ttc.threshold.toFixed(2)}s · ` +
+        `buffer=${sample.buffer.buffer.toFixed(2)}m/side`;
+
+      const anyDanger = samples.some(item => item.dangerous);
+      const cDanger = Number(((avoidability && avoidability.classification) || {}).genuine_target_failure || 0) > 0;
+      const matches = anyDanger === cDanger;
+      detectionMarkers.innerHTML =
+        `Window samples: <strong>${samples[0].secondsBeforeBraking.toFixed(2)}s → ` +
+        `${samples[samples.length - 1].secondsBeforeBraking.toFixed(2)}s before braking</strong><br>` +
+        `C classification: <strong>${cDanger ? 'danger' : 'safe'}</strong> · ` +
+        `renderer reconstruction: <strong>${anyDanger ? 'danger' : 'safe'}</strong> · ` +
+        `<strong>${matches ? 'MATCH' : 'MISMATCH'}</strong>`;
+    }
+
+    function updateDetectionSelection() {
+      stopDetectionPlayback();
+      detectionSelection = Number(detectionSlider.value || 0);
+      updateDetectionReadout();
+      draw();
+    }
+
+    function setAvoidabilityPhase(phase) {
+      stopDetectionPlayback();
+      stopRolloutPlayback();
+      avoidabilityPhase = phase;
+      detectionPhaseButton.classList.toggle('active', phase === 'detection');
+      brakingPhaseButton.classList.toggle('active', phase === 'braking');
+      detectionControls.hidden = phase !== 'detection';
+      brakingControls.hidden = phase !== 'braking';
+      if (phase === 'detection') {
+        detectionSelection = 0;
+        updateDetectionReadout();
+        draw();
+      } else {
+        reactionSlider.value = candidateSteps.length;
+        updateAvoidabilitySelection();
+      }
+    }
+
+    function stopRolloutPlayback() {
+      rolloutPlaying = false;
+      rolloutPlay.innerText = 'Play';
+      rolloutLastTimestamp = 0;
+    }
+
+    function updateRolloutReadout(trajectories) {
+      if (!trajectories) {
+        rolloutStep = 0;
+        rolloutSlider.min = 0;
+        rolloutSlider.max = 0;
+        rolloutSlider.value = 0;
+        rolloutSlider.disabled = true;
+        rolloutPlay.disabled = true;
+        rolloutLabel.innerText = 't=0.0s';
+        rolloutMarkers.innerText = 'Select a braking candidate.';
+        return;
+      }
+      rolloutStep = Math.min(Math.max(0, rolloutStep), trajectories.effectiveEndStep);
+      rolloutSlider.max = trajectories.effectiveEndStep;
+      rolloutSlider.value = rolloutStep;
+      rolloutSlider.disabled = false;
+      rolloutPlay.disabled = trajectories.effectiveEndStep === 0;
+      rolloutLabel.innerText = `t=${(rolloutStep * trajectories.dt).toFixed(1)} / ${trajectories.rolloutEndTime.toFixed(1)}s`;
+
+      const targetStatus = trajectories.targetReachedStop ? 'reached' : 'not reached';
+      const adversaryStatus = trajectories.adversaryReachedStop ? 'reached' : 'not reached';
+      const endStatus = trajectories.exitedEarly
+        ? `C exited at blocking collision · t=${trajectories.rolloutEndTime.toFixed(2)}s`
+        : `C completed joint-stop horizon · t=${trajectories.rolloutEndTime.toFixed(2)}s`;
+      rolloutMarkers.innerHTML =
+        `Observed impact: <strong>${trajectories.observedCollisionTime.toFixed(2)}s</strong><br>` +
+        `Target stop: <strong>${trajectories.targetStopSampleTime.toFixed(2)}s</strong> · ${targetStatus}<br>` +
+        `Hitter stop: <strong>${trajectories.adversaryStopSampleTime.toFixed(2)}s</strong> · ${adversaryStatus}<br>` +
+        endStatus;
+    }
+
+    function updateAvoidabilityResult(trajectories) {
+      if (!trajectories) return;
+      const candidateIndex = trajectories.candidateIndex;
+      const leadSeconds = trajectories.stepsBack * trajectories.dt;
+      const avoided = !!candidateValue('avoided', candidateIndex, false);
+      const originalBlock = !!candidateValue('collision_with_original_adversary', candidateIndex, false);
+      const secondaryBlock = !!candidateValue('at_fault_collision_with_other_adversary', candidateIndex, false);
+      let title = 'Avoided';
+      if (originalBlock) title = 'Rejected · original hitter';
+      else if (secondaryBlock) title = 'Rejected · secondary blocker';
+      else if (!avoided) title = 'Rejected';
+      const detail = trajectories.exitedEarly
+        ? `C terminated at rollout step ${trajectories.effectiveEndStep}, before the joint-stop horizon at step ${trajectories.fullEndStep}.`
+        : `C checked all samples through step ${trajectories.fullEndStep}, when both vehicles have stopped.`;
+      avoidabilityResult.className = avoided ? 'avoidability-result' : 'avoidability-result failed';
+      avoidabilityResult.innerHTML =
+        `<strong>${title} · braking ${leadSeconds.toFixed(1)}s before collision</strong>${detail}`;
     }
 
     function updateAvoidabilitySelection() {
+      stopRolloutPlayback();
       reactionSelection = Number(reactionSlider.value || 0);
+      rolloutStep = 0;
       if (reactionSelection === 0) {
         const collision = avoidability.collision;
         frameIndex = nearestFrameAtOrBefore(collision.collision_timestep);
         reactionLabel.innerText = 'collision';
         avoidabilityResult.className = 'avoidability-result reference';
         avoidabilityResult.innerHTML = '<strong>Observed collision · 0.0s</strong>';
+        updateRolloutReadout(null);
         draw();
         return;
       }
@@ -1457,20 +1779,9 @@ HTML_TEMPLATE = """<!doctype html>
       const collisionTimestep = Number(avoidability.collision.collision_timestep);
       frameIndex = nearestFrameAtOrBefore(collisionTimestep - stepsBack);
       reactionLabel.innerText = `${leadSeconds.toFixed(1)}s`;
-
-      const avoided = !!candidateValue('avoided', candidateIndex, false);
-      const originalBlock = !!candidateValue('collision_with_original_adversary', candidateIndex, false);
-      const secondaryBlock = !!candidateValue('at_fault_collision_with_other_adversary', candidateIndex, false);
-      let title = 'Avoided';
-      if (originalBlock) {
-        title = 'Rejected · original adversary';
-      } else if (secondaryBlock) {
-        title = 'Rejected · secondary blocker';
-      } else if (!avoided) {
-        title = 'Rejected';
-      }
-      avoidabilityResult.className = avoided ? 'avoidability-result' : 'avoidability-result failed';
-      avoidabilityResult.innerHTML = `<strong>${title} · ${leadSeconds.toFixed(1)}s before collision</strong>`;
+      const trajectories = selectedCounterfactualTrajectories();
+      updateAvoidabilityResult(trajectories);
+      updateRolloutReadout(trajectories);
       draw();
     }
 
@@ -1482,6 +1793,8 @@ HTML_TEMPLATE = """<!doctype html>
         playing = false;
         playToggle.innerText = 'Play';
       } else {
+        stopDetectionPlayback();
+        stopRolloutPlayback();
         frameIndex = observedFrameIndex;
       }
       replayMode = mode;
@@ -1490,14 +1803,14 @@ HTML_TEMPLATE = """<!doctype html>
       observedControls.hidden = mode !== 'observed';
       avoidabilityControls.hidden = mode !== 'avoidability';
       if (mode === 'avoidability') {
-        reactionSlider.value = candidateSteps.length;
-        updateAvoidabilitySelection();
+        setAvoidabilityPhase('detection');
       } else {
         draw();
       }
     }
 
     function isAgentBraking(agent) {
+      if (agent.counterfactual) return !!agent.braking || agent.stopped;
       if (frameIndex <= 0) return speedOfAgent(agent) < 0.1;
       const prev = findAgentById(frames[frameIndex - 1], agent.id);
       if (!prev) return speedOfAgent(agent) < 0.1;
@@ -1548,10 +1861,15 @@ HTML_TEMPLATE = """<!doctype html>
         if (xs.length < 2 || ys.length < 2) continue;
         const type = Number(elem.type || 0);
         let style = null;
-        if (type >= 1 && type <= 3) style = { color: '#d9dde3', width: 1.0, alpha: 0.9 };
-        else if (type >= 11 && type <= 18) style = { color: '#8f98a3', width: 0.7, alpha: 0.6 };
-        else if (type >= 21 && type <= 23) style = { color: '#2f3640', width: 0.8, alpha: 0.8 };
+        if (type >= 1 && type <= 3) style = { color: '#606b77', width: 0.8, alpha: 0.75, dash: [] };
+        else if (type === 11) style = { color: '#f3f4f6', width: 1.3, alpha: 0.95, dash: [8, 6] };
+        else if (type === 12 || type === 13) style = { color: '#f3f4f6', width: 1.3, alpha: 0.95, dash: [] };
+        else if (type === 14 || type === 15) style = { color: '#facc15', width: 1.4, alpha: 0.95, dash: [8, 6] };
+        else if (type >= 16 && type <= 18) style = { color: '#facc15', width: 1.4, alpha: 0.95, dash: [] };
+        else if (type >= 21 && type <= 23) style = { color: '#929ca7', width: 1.5, alpha: 0.8, dash: [] };
         if (!style) continue;
+        ctx.setLineDash(style.dash);
+        ctx.lineCap = style.dash.length ? 'butt' : 'round';
         ctx.beginPath();
         for (let i = 0; i < xs.length; i++) {
           const p = worldToCanvas(xs[i], ys[i]);
@@ -1562,6 +1880,7 @@ HTML_TEMPLATE = """<!doctype html>
         ctx.globalAlpha = style.alpha;
         ctx.lineWidth = style.width;
         ctx.stroke();
+        ctx.setLineDash([]);
         ctx.globalAlpha = 1.0;
       }
     }
@@ -1614,21 +1933,21 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     function drawLateralBufferOverlay(bufferResult) {
-      const color = bufferResult.dangerous ? '#dc2626' : '#16a34a';
+      const color = bufferResult.dangerous ? '#fb7185' : '#4ade80';
       drawDetectorPose(bufferResult.expandedTarget, color, [7, 4]);
       bufferBadge.className = bufferResult.dangerous ? 'detector-badge danger' : 'detector-badge';
       bufferBadge.innerText = `BUFFER ${bufferResult.dangerous ? 'DANGER' : 'SAFE'} · b=${bufferResult.buffer.toFixed(2)}m/side · intrusion=${bufferResult.intrusionSpeed.toFixed(2)}m/s`;
     }
 
     function drawTTCOverlay(ttc) {
-      const color = ttc.dangerous ? '#e11d48' : '#16a34a';
+      const color = ttc.dangerous ? '#fb7185' : '#4ade80';
       drawTrajectoryLine(ttc.targetPath, color, 2.2, [3, 4]);
       drawTrajectoryLine(ttc.adversaryPath, color, 2.2, [8, 4]);
       drawDetectorPose(ttc.targetPose, color);
       drawDetectorPose(ttc.adversaryPose, color, [6, 4]);
-      drawTrajectoryLine(ttc.route.routePath, '#7c3aed', 3.0);
-      if (ttc.route.targetPose) drawDetectorPose(ttc.route.targetPose, '#7c3aed');
-      if (ttc.route.targetPose) drawDetectorPose(ttc.route.adversaryPose, '#7c3aed', [6, 4]);
+      drawTrajectoryLine(ttc.route.routePath, '#c084fc', 3.0);
+      if (ttc.route.targetPose) drawDetectorPose(ttc.route.targetPose, '#c084fc');
+      if (ttc.route.targetPose) drawDetectorPose(ttc.route.adversaryPose, '#c084fc', [6, 4]);
       ttcBadge.className = ttc.dangerous ? 'detector-badge danger' : 'detector-badge';
       const seconds = value => value == null ? '∞' : `${value.toFixed(2)}s`;
       const meters = value => value == null ? 'n/a' : `${value.toFixed(2)}m`;
@@ -1641,6 +1960,10 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     function drawDetectorOverlays() {
+      if (replayMode !== 'avoidability' || avoidabilityPhase !== 'detection') {
+        detectorHud.hidden = true;
+        return;
+      }
       const pair = detectorPair();
       const visible = !!pair && (showLateralBuffer || showTTC);
       detectorHud.hidden = !visible;
@@ -1702,7 +2025,7 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.stroke();
       ctx.font = '600 11px ui-sans-serif, sans-serif';
       const textWidth = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillStyle = 'rgba(25,31,38,0.92)';
       ctx.fillRect(canvasPoint.x + 9, canvasPoint.y - 11 + labelOffsetY, textWidth + 8, 17);
       ctx.fillStyle = color;
       ctx.fillText(label, canvasPoint.x + 13, canvasPoint.y + 1 + labelOffsetY);
@@ -1728,7 +2051,7 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.save();
       ctx.font = '700 11px ui-sans-serif, sans-serif';
       const textWidth = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.fillStyle = 'rgba(25,31,38,0.94)';
       ctx.fillRect(canvasPoint.x + 9, canvasPoint.y - 11 + labelOffsetY, textWidth + 8, 17);
       ctx.fillStyle = color;
       ctx.fillText(label, canvasPoint.x + 13, canvasPoint.y + 1 + labelOffsetY);
@@ -1757,22 +2080,62 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.stroke();
       ctx.font = '700 11px ui-sans-serif, sans-serif';
       const textWidth = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.fillStyle = 'rgba(25,31,38,0.94)';
       ctx.fillRect(canvasPoint.x + 10, canvasPoint.y - 25, textWidth + 8, 17);
-      ctx.fillStyle = '#9f321f';
+      ctx.fillStyle = '#fca5a5';
       ctx.fillText(label, canvasPoint.x + 14, canvasPoint.y - 13);
       ctx.restore();
+    }
+
+    function drawIntermediatePose(agent, dimensions, color, alpha) {
+      if (!agent) return;
+      const center = worldToCanvas(agent.x, agent.y);
+      const length = Math.max(Number(dimensions.length || 0) * center.scale, 6);
+      const width = Math.max(Number(dimensions.width || 0) * center.scale, 4);
+      ctx.save();
+      ctx.translate(center.x, center.y);
+      ctx.rotate(-Number(agent.heading || 0));
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2;
+      ctx.fillRect(-length / 2, -width / 2, length, width);
+      ctx.strokeRect(-length / 2, -width / 2, length, width);
+      ctx.restore();
+    }
+
+    function drawIntermediatePositions(samples, dimensions, color, currentStep) {
+      let previous = null;
+      for (let step = 0; step < samples.length; step++) {
+        const sample = samples[step];
+        const unchanged = previous && Math.hypot(sample.x - previous.x, sample.y - previous.y) <= 1e-6;
+        previous = sample;
+        if (step === currentStep || unchanged) continue;
+        drawIntermediatePose(sample, dimensions, color, step < currentStep ? 0.22 : 0.09);
+      }
     }
 
     function drawAvoidabilityTrajectories() {
       const trajectories = selectedCounterfactualTrajectories();
       if (!trajectories) return;
-      drawTrajectoryLine(trajectories.adversaryTrajectory, '#0891b2', 2.6, [6, 5]);
-      drawTrajectoryLine(trajectories.reaction, '#f59e0b', 3.4, [8, 5]);
-      drawTrajectoryLine(trajectories.braking, '#dc2626', 3.8);
+      const currentStep = Math.min(rolloutStep, trajectories.effectiveEndStep);
+      drawTrajectoryLine(trajectories.adversarySamples, '#22d3ee', 2.6, [6, 5]);
+      drawTrajectoryLine(trajectories.targetSamples, '#fb7185', 3.8);
+      drawIntermediatePositions(
+        trajectories.adversarySamples,
+        trajectories.adversaryDimensions,
+        '#22d3ee',
+        currentStep
+      );
+      drawIntermediatePositions(
+        trajectories.targetSamples,
+        trajectories.targetDimensions,
+        '#fb7185',
+        currentStep
+      );
       drawBrakingStart(trajectories.brakingStart, trajectories.reactionTime);
       if (trajectories.impact) {
-        const blockerColor = trajectories.impact.blockerIsOriginal ? '#0891b2' : '#111827';
+        const blockerColor = trajectories.impact.blockerIsOriginal ? '#22d3ee' : '#c084fc';
         const blockerLabel = trajectories.impact.blockerIsOriginal
           ? `adversary at impact · t=${trajectories.impact.time.toFixed(2)}s`
           : `blocking agent ${trajectories.impact.blockerId} at impact · t=${trajectories.impact.time.toFixed(2)}s`;
@@ -1787,23 +2150,25 @@ HTML_TEMPLATE = """<!doctype html>
         drawImpactPose(
           trajectories.impact.target,
           trajectories.targetDimensions,
-          '#ef4444',
-          `impact target · ${trajectories.impact.target.speed.toFixed(2)} m/s`,
+          '#fb7185',
+          `impact target · ${speedOfAgent(trajectories.impact.target).toFixed(2)} m/s`,
           -29
         );
       } else {
-        drawStopPose(
-          trajectories.targetStop,
-          trajectories.targetDimensions,
-          '#dc2626',
-          `target stop sample · 0.0 m/s · t=${trajectories.targetStopSampleTime.toFixed(2)}s`,
-          -17
-        );
+        if (trajectories.targetReachedStop) {
+          drawStopPose(
+            trajectories.targetStop,
+            trajectories.targetDimensions,
+            '#fb7185',
+            `target stop · t=${trajectories.targetStopSampleTime.toFixed(2)}s`,
+            -17
+          );
+        }
         drawImpactPose(
           trajectories.adversaryAtRolloutEnd,
           trajectories.adversaryDimensions,
-          '#0891b2',
-          `adversary at rollout end · t=${trajectories.rolloutEndTime.toFixed(2)}s`,
+          '#22d3ee',
+          `hitter stop · t=${trajectories.adversaryStopSampleTime.toFixed(2)}s`,
           17,
           [7, 4]
         );
@@ -1832,7 +2197,7 @@ HTML_TEMPLATE = """<!doctype html>
       const endX = center.x + dx;
       const endY = center.y + dy;
       const angle = Math.atan2(dy, dx);
-      const color = agent.is_target ? '#ef4444' : '#05a3c7';
+      const color = agent.is_target ? '#fb7185' : '#22d3ee';
 
       ctx.save();
       ctx.strokeStyle = color;
@@ -1860,29 +2225,29 @@ HTML_TEMPLATE = """<!doctype html>
       const length = Math.max(agent.length * scale, 6);
       const width = Math.max(agent.width * scale, 4);
       const heading = Number(agent.heading || 0);
-      let fill = '#2a7fff';
-      if (agent.is_target) fill = '#d64545';
-      else if (!agent.active) fill = '#95a5a6';
-      if (agent.stopped) fill = '#f39c12';
+      let fill = '#3b82f6';
+      if (agent.is_target) fill = '#f05252';
+      else if (!agent.active) fill = '#8995a3';
+      if (agent.stopped) fill = '#f59e0b';
 
       ctx.save();
       ctx.translate(center.x, center.y);
       ctx.rotate(-heading);
+      const ghosted = replayMode === 'avoidability' && avoidabilityPhase === 'braking' && !agent.counterfactual;
+      ctx.globalAlpha = ghosted ? 0.18 : 1.0;
       ctx.fillStyle = fill;
-      ctx.strokeStyle = 'rgba(20,20,20,0.45)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.48)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.rect(-length / 2, -width / 2, length, width);
-      if (replayMode === 'avoidability') ctx.globalAlpha = 0.2;
       ctx.fill();
-      ctx.globalAlpha = 1.0;
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(length / 2, 0);
       ctx.lineTo(length / 2 - Math.max(width * 0.9, 6), width * 0.32);
       ctx.lineTo(length / 2 - Math.max(width * 0.9, 6), -width * 0.32);
       ctx.closePath();
-      ctx.fillStyle = replayMode === 'avoidability' ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.75)';
+      ctx.fillStyle = ghosted ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.75)';
       ctx.fill();
       if (isAgentBraking(agent)) {
         ctx.fillStyle = 'rgba(255,0,0,0.92)';
@@ -1896,12 +2261,12 @@ HTML_TEMPLATE = """<!doctype html>
       }
       ctx.restore();
 
-      drawVelocityVector(agent, center);
+      if (!ghosted) drawVelocityVector(agent, center);
       if (agent.id === selectedAgentId) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(center.x, center.y, Math.max(length, width) * 0.75, 0, Math.PI * 2);
-        ctx.strokeStyle = agent.is_target ? '#ef4444' : '#05a3c7';
+        ctx.strokeStyle = agent.is_target ? '#fb7185' : '#22d3ee';
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.restore();
@@ -1951,6 +2316,50 @@ HTML_TEMPLATE = """<!doctype html>
       requestAnimationFrame(tick);
     }
 
+    function rolloutTick(ts) {
+      if (!rolloutPlaying || replayMode !== 'avoidability') return;
+      const trajectories = selectedCounterfactualTrajectories();
+      if (!trajectories) {
+        stopRolloutPlayback();
+        return;
+      }
+      if (!rolloutLastTimestamp) rolloutLastTimestamp = ts;
+      const frameDuration = 1000 / (10 * speed);
+      if (ts - rolloutLastTimestamp >= frameDuration) {
+        rolloutStep += 1;
+        rolloutLastTimestamp = ts;
+        if (rolloutStep >= trajectories.effectiveEndStep) {
+          rolloutStep = trajectories.effectiveEndStep;
+          stopRolloutPlayback();
+        }
+        updateRolloutReadout(trajectories);
+        draw();
+      }
+      if (rolloutPlaying) requestAnimationFrame(rolloutTick);
+    }
+
+    function detectionTick(ts) {
+      if (!detectionPlaying || replayMode !== 'avoidability' || avoidabilityPhase !== 'detection') return;
+      const samples = detectionWindowSamples();
+      if (!samples.length) {
+        stopDetectionPlayback();
+        return;
+      }
+      if (!detectionLastTimestamp) detectionLastTimestamp = ts;
+      const frameDuration = 1000 / (10 * speed);
+      if (ts - detectionLastTimestamp >= frameDuration) {
+        detectionSelection += 1;
+        detectionLastTimestamp = ts;
+        if (detectionSelection >= samples.length - 1) {
+          detectionSelection = samples.length - 1;
+          stopDetectionPlayback();
+        }
+        updateDetectionReadout();
+        draw();
+      }
+      if (detectionPlaying) requestAnimationFrame(detectionTick);
+    }
+
     slider.max = Math.max(frames.length - 1, 0);
     slider.addEventListener('input', (e) => {
       frameIndex = Number(e.target.value || 0);
@@ -1958,6 +2367,46 @@ HTML_TEMPLATE = """<!doctype html>
       draw();
     });
     reactionSlider.addEventListener('input', updateAvoidabilitySelection);
+    detectionPhaseButton.addEventListener('click', () => setAvoidabilityPhase('detection'));
+    brakingPhaseButton.addEventListener('click', () => setAvoidabilityPhase('braking'));
+    detectionSlider.addEventListener('input', updateDetectionSelection);
+    detectionPlay.addEventListener('click', () => {
+      const samples = detectionWindowSamples();
+      if (samples.length <= 1) return;
+      if (detectionPlaying) {
+        stopDetectionPlayback();
+        return;
+      }
+      if (detectionSelection >= samples.length - 1) detectionSelection = 0;
+      detectionPlaying = true;
+      detectionPlay.innerText = 'Pause';
+      detectionLastTimestamp = 0;
+      updateDetectionReadout();
+      draw();
+      requestAnimationFrame(detectionTick);
+    });
+    rolloutSlider.addEventListener('input', (event) => {
+      stopRolloutPlayback();
+      rolloutStep = Number(event.target.value || 0);
+      const trajectories = selectedCounterfactualTrajectories();
+      updateRolloutReadout(trajectories);
+      draw();
+    });
+    rolloutPlay.addEventListener('click', () => {
+      const trajectories = selectedCounterfactualTrajectories();
+      if (!trajectories || trajectories.effectiveEndStep === 0) return;
+      if (rolloutPlaying) {
+        stopRolloutPlayback();
+        return;
+      }
+      if (rolloutStep >= trajectories.effectiveEndStep) rolloutStep = 0;
+      rolloutPlaying = true;
+      rolloutPlay.innerText = 'Pause';
+      rolloutLastTimestamp = 0;
+      updateRolloutReadout(trajectories);
+      draw();
+      requestAnimationFrame(rolloutTick);
+    });
     observedModeButton.addEventListener('click', () => setReplayMode('observed'));
     avoidabilityModeButton.addEventListener('click', () => setReplayMode('avoidability'));
     bufferToggle.addEventListener('click', () => {
@@ -2037,8 +2486,9 @@ HTML_TEMPLATE = """<!doctype html>
     setMeta();
     camera = createDefaultCamera();
     avoidabilityModeButton.disabled = !hasAvoidability;
-    avoidabilityModeButton.title = hasAvoidability ? 'Inspect C-recorded braking candidates' : 'No collision avoidability trace';
+    avoidabilityModeButton.title = hasAvoidability ? 'Inspect detection and C-recorded braking candidates' : 'No collision avoidability trace';
     reactionSlider.max = candidateSteps.length;
+    updateRolloutReadout(null);
     speedLabel.innerText = `${speed.toFixed(1)}x`;
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
@@ -2052,7 +2502,9 @@ def render_compact_replay_html(replay_path, output_path, render_context=None):
     replay_bundle = load_compact_replay(replay_path)
     payload = _build_render_payload(replay_bundle)
     render_context = render_context or {}
-    payload["metadata"]["episode_id"] = payload["metadata"].get("episode_id", Path(output_path).stem)
+    payload["metadata"]["episode_id"] = payload["metadata"].get(
+        "episode_id", render_context.get("episode_id", Path(output_path).stem)
+    )
     payload["navigation"] = render_context.get("navigation", {})
     payload["summary"] = _format_summary_for_render(render_context.get("summary", {}))
     title = f"{payload['metadata'].get('map_name', 'Replay')} | {payload['metadata'].get('scenario_id', 'episode')}"
@@ -2150,40 +2602,40 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Failure Index</title>
   <style>
-    body {{ margin: 0; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fb; color: #1f2933; }}
+    body {{ margin: 0; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #20262d; color: #edf2f7; }}
     .wrap {{ padding: 20px; max-width: 1600px; margin: 0 auto; }}
     .head {{ margin-bottom: 18px; }}
     .head h1 {{ margin: 0 0 6px; font-size: 28px; }}
-    .head p {{ margin: 0; color: #5b6570; }}
+    .head p {{ margin: 0; color: #aeb8c4; }}
     .controls {{ margin: 14px 0 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
-    input {{ border: 1px solid rgba(31,41,51,0.16); border-radius: 10px; padding: 8px 12px; min-width: 280px; }}
+    input {{ border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; padding: 8px 12px; min-width: 280px; background: #303840; color: #edf2f7; }}
     .toggle {{
-      border: 1px solid rgba(31,41,51,0.14);
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: 999px;
       padding: 8px 12px;
-      background: white;
+      background: #343c46;
       cursor: pointer;
       font-size: 13px;
-      color: #334155;
+      color: #d7dee7;
     }}
     .toggle.active {{
-      background: #1261a0;
+      background: #397faa;
       color: white;
-      border-color: #1261a0;
+      border-color: #62b6ed;
     }}
-    table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 28px rgba(28,38,51,0.08); }}
-    thead {{ background: #eaf0f6; }}
-    th, td {{ padding: 10px 12px; border-bottom: 1px solid rgba(31,41,51,0.08); text-align: left; font-size: 14px; }}
+    table {{ width: 100%; border-collapse: collapse; background: #2a313a; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 28px rgba(0,0,0,0.24); }}
+    thead {{ background: #343d47; }}
+    th, td {{ padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; font-size: 14px; }}
     th {{ cursor: pointer; user-select: none; }}
-    th.active {{ color: #1261a0; }}
-    th .sort-indicator {{ margin-left: 6px; color: #7b8794; font-size: 12px; }}
-    th.active .sort-indicator {{ color: #1261a0; }}
-    thead th {{ position: sticky; top: 0; z-index: 1; background: #eaf0f6; }}
-    .drive-weight-col {{ background: rgba(18,97,160,0.08); color: #0f4c81; font-weight: 700; }}
-    thead th.drive-weight-col {{ background: #dbeaf7; }}
-    tbody tr:hover {{ background: #f8fbff; }}
-    a {{ color: #1261a0; text-decoration: none; font-weight: 600; }}
-    .muted {{ color: #7b8794; }}
+    th.active {{ color: #62b6ed; }}
+    th .sort-indicator {{ margin-left: 6px; color: #8995a3; font-size: 12px; }}
+    th.active .sort-indicator {{ color: #62b6ed; }}
+    thead th {{ position: sticky; top: 0; z-index: 1; background: #343d47; }}
+    .drive-weight-col {{ background: rgba(98,182,237,0.08); color: #a7d8f5; font-weight: 700; }}
+    thead th.drive-weight-col {{ background: #354957; }}
+    tbody tr:hover {{ background: #333c46; }}
+    a {{ color: #62b6ed; text-decoration: none; font-weight: 600; }}
+    .muted {{ color: #8995a3; }}
   </style>
 </head>
 <body>
