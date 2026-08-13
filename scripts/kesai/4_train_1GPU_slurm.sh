@@ -37,7 +37,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-python setup.py build_ext --inplace --force
+bash scripts/kesai/build_ext_if_changed.sh || exit 1
 torchrun --standalone --nnodes=1 --nproc-per-node=1 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \

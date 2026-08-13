@@ -43,7 +43,7 @@ source .venv/bin/activate
 # Only task 0 builds; concurrent in-place builds race on shared NFS build files.
 BUILD_STATUS_FILE=/home/bjaeger/PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
 if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
-    python setup.py build_ext --inplace --force
+    bash scripts/kesai/build_ext_if_changed.sh
     BUILD_STATUS=$?
     echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
 else
