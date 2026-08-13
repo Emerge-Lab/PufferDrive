@@ -1316,12 +1316,6 @@ class WandbLogger:
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
 
-    def log_summary(self, logs):
-        """Record run-level scalars. Unlike log(), carries no step, so a job that runs
-        after training cannot collide with the step history training already wrote."""
-        for key, value in logs.items():
-            self.wandb.run.summary[key] = value
-
     def finish(self):
         """End the wandb session without the model upload and early_stop that close() adds."""
         self.wandb.finish()
@@ -1842,7 +1836,7 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
 
     logger = WandbLogger(run_args, resume="must", upload_config=False)
     try:
-        logger.log_summary(metrics)
+        logger.log(metrics, step=None)
     finally:
         logger.finish()
     print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
