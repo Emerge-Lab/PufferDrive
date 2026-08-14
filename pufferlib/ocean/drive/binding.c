@@ -1449,6 +1449,20 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(pf);
 
+            pf = PyFloat_FromDouble((double)t->heading);
+            if (!pf) {
+                Py_DECREF(traffic);
+                Py_DECREF(traffic_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(traffic, "heading", pf) < 0) {
+                Py_DECREF(pf);
+                Py_DECREF(traffic);
+                Py_DECREF(traffic_list);
+                return NULL;
+            }
+            Py_DECREF(pf);
+
             /* Controlled lanes array - validate pointer before access */
             if (t->controlled_lanes && t->num_controlled_lanes > 0) {
                 PyObject *ll = PyList_New(t->num_controlled_lanes);
@@ -1698,6 +1712,49 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
         if (!trace_ok) {
             return -1;
         }
+    }
+
+    if (summary->compliance_diagnostics.valid) {
+        ComplianceDiagnostics *compliance = &summary->compliance_diagnostics;
+        PyObject *trace = PyDict_New();
+        if (trace == NULL)
+            return -1;
+        assign_to_dict(trace, "valid", compliance->valid);
+        assign_to_dict(trace, "compliant", compliance->compliant);
+        assign_to_dict(trace, "hitter_agent_index", compliance->hitter_agent_index);
+        assign_to_dict(trace, "hitter_agent_id", compliance->hitter_agent_id);
+        assign_to_dict(trace, "collision_timestep", compliance->collision_timestep);
+        assign_to_dict(trace, "dt", compliance->dt);
+        assign_to_dict(trace, "window_seconds", compliance->window_seconds);
+        assign_to_dict(trace, "window_start_timestep", compliance->window_start_timestep);
+        assign_to_dict(trace, "window_sample_count", compliance->window_sample_count);
+        assign_to_dict(trace, "lane_sample_count", compliance->lane_sample_count);
+        assign_to_dict(trace, "lane_unavailable_sample_count", compliance->lane_unavailable_sample_count);
+        assign_to_dict(trace, "speed_limit_sample_count", compliance->speed_limit_sample_count);
+        assign_to_dict(trace, "speed_limit_unavailable_sample_count", compliance->speed_limit_unavailable_sample_count);
+        assign_to_dict(trace, "red_light_violation", compliance->red_light_violation);
+        assign_to_dict(trace, "wrong_way_violation", compliance->wrong_way_violation);
+        assign_to_dict(trace, "solid_line_violation", compliance->solid_line_violation);
+        assign_to_dict(trace, "speed_limit_violation", compliance->speed_limit_violation);
+        assign_to_dict(trace, "first_red_light_timestep", compliance->first_red_light_timestep);
+        assign_to_dict(trace, "first_wrong_way_timestep", compliance->first_wrong_way_timestep);
+        assign_to_dict(trace, "first_solid_line_timestep", compliance->first_solid_line_timestep);
+        assign_to_dict(trace, "first_speed_limit_timestep", compliance->first_speed_limit_timestep);
+        assign_to_dict(trace, "wrong_way_distance", compliance->wrong_way_distance);
+        assign_to_dict(trace, "max_speed_ratio", compliance->max_speed_ratio);
+        assign_to_dict(trace, "crossed_line_index", compliance->crossed_line_index);
+        assign_to_dict(trace, "crossed_line_segment_index", compliance->crossed_line_segment_index);
+        assign_to_dict(trace, "crossing_segment_start_x", compliance->crossing_segment_start_x);
+        assign_to_dict(trace, "crossing_segment_start_y", compliance->crossing_segment_start_y);
+        assign_to_dict(trace, "crossing_segment_end_x", compliance->crossing_segment_end_x);
+        assign_to_dict(trace, "crossing_segment_end_y", compliance->crossing_segment_end_y);
+        assign_to_dict(trace, "wrong_way_distance_threshold", COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD);
+        assign_to_dict(trace, "speed_limit_ratio_threshold", COMPLIANCE_SPEED_LIMIT_RATIO_THRESHOLD);
+        if (PyDict_SetItemString(dict, "compliance_diagnostics", trace) < 0) {
+            Py_DECREF(trace);
+            return -1;
+        }
+        Py_DECREF(trace);
     }
 
     assign_to_dict(dict, "n", summary->n);
