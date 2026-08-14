@@ -9,7 +9,6 @@
 #SBATCH --output=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
 #SBATCH --error=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
 #SBATCH --partition=dev
-#SBATCH --array=1-8
 
 # print info about current job
 echo "START TIME: $(date)"
