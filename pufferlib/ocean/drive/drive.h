@@ -257,6 +257,7 @@ struct Drive {
     float reward_ade;
     int reward_conditioning;
     int reward_randomization;
+    int reward_log_sampling;
     // Goals
     float goal_radius;
     float goal_speed;
@@ -333,6 +334,26 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
     {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
     {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
+    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
+    {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
+    {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
+    {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
+};
+
+static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
+    {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
+    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
+    {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
+    {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
+    {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5, 0.1)
+    {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
+    {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ logU(2.5e-4, 7.5e-3)
+    {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
+    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_REVERSE         α_reverse ~ logU(2.5e-4, 7.5e-3)
     {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
     {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
     {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
@@ -2070,11 +2091,12 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
             REWARD_COEF_OVERSPEED,
             REWARD_COEF_REVERSE,
         };
+        const RewardBound *bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
-            agent->reward_coefs[c] = REWARD_BOUNDS[c].log_scale
-                ? sample_log_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
-                : sample_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
+            agent->reward_coefs[c] = bounds[c].log_scale
+                ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
+                : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;

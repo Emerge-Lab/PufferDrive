@@ -114,6 +114,7 @@ env:
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
+  reward_log_sampling: false
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5

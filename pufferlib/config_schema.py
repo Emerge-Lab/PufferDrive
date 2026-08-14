@@ -122,6 +122,7 @@ class DriveEnvConfig:
     max_goal_spacing: float = MISSING
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
+    reward_log_sampling: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
     reward_offroad: float = MISSING

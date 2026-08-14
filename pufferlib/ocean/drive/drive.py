@@ -110,6 +110,7 @@ class Drive(pufferlib.PufferEnv):
         obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
+        reward_log_sampling=False,
         compute_eval_metrics=True,
         shared_network=True,
         obs_slots_lane_n=32,
@@ -147,6 +148,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
+        self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
@@ -555,6 +557,7 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
+            "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),

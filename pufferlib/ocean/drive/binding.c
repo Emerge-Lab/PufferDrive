@@ -1923,6 +1923,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
+    env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
