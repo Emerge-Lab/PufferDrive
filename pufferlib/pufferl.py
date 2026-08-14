@@ -890,6 +890,9 @@ class PuffeRL:
         model_path = os.path.join(models_dir, model_name)
         if not os.path.exists(model_path):
             torch.save(self.uncompiled_policy.state_dict(), model_path)
+        for old_model_path in glob.glob(os.path.join(models_dir, "model_*.pt")):
+            if old_model_path != model_path:
+                os.remove(old_model_path)
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
         new_best = current_score > self.best_score
@@ -920,6 +923,9 @@ class PuffeRL:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
+            for old_best_path in glob.glob(os.path.join(path, "best_models", "best_trainer_state_*.pt")):
+                if old_best_path != best_state_file:
+                    os.remove(old_best_path)
             print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
 
         return model_path
