@@ -8,6 +8,9 @@ Covered:
 - T3 (state persistence): two consecutive emissions with no new completions
   between them produce identical metric values, proving prepare_log no
   longer resets the per-agent EMAs.
+- T4 (unequal completion rates): with sub-envs truncating at different
+  timesteps, every emission still weights one term per agent. This is the
+  case T1-T3 cannot distinguish, since they run all agents in lockstep.
 """
 
 from pathlib import Path
@@ -40,6 +43,29 @@ def _make_env():
         report_interval=1,
         map_dir=str(MAP_DIR),
         log_ema_alpha=0.95,
+    )
+
+
+def _make_staggered_env():
+    """Sub-envs truncate on their own inactive-agent ratio, so they complete at
+    different timesteps instead of in lockstep."""
+    if not MAP_DIR.is_dir() or not any(MAP_DIR.glob("*.bin")):
+        pytest.skip(f"Drive map binaries not available at {MAP_DIR}")
+    return Drive(
+        num_agents=NUM_AGENTS,
+        num_maps=4,
+        min_agents_per_env=1,
+        max_agents_per_env=4,
+        scenario_length=40,
+        report_interval=1,
+        map_dir=str(MAP_DIR),
+        log_ema_alpha=0.95,
+        termination_mode=1,
+        offroad_behavior="remove",
+        collision_behavior="remove",
+        # Resampling rebuilds the envs and so discards the slots; keep it out of
+        # the measured window so only completion weighting is under test.
+        resample_frequency=100_000,
     )
 
 
@@ -117,5 +143,47 @@ def test_emissions_identical_when_no_new_completions():
             f"{key} changed without new completions: {log_a[key]} vs {log_b[key]} "
             "(prepare_log may be resetting per-agent state)"
         )
+
+    env.close()
+
+
+def test_population_size_is_agent_count_under_unequal_completion_rates():
+    """T4: the discriminating case. Sub-envs truncate independently here, so
+    completions arrive staggered rather than all at once. Completion-weighted
+    aggregation would make the emitted n track how many agents completed in
+    that interval; agent-weighted aggregation pins it to the number of agents
+    that have ever completed, which saturates at num_agents and stays there."""
+    env = _make_staggered_env()
+    env.reset(seed=0)
+
+    population_sizes = []
+    for _ in range(240):
+        _, _, _, _, info = env.step(np.zeros_like(env.actions))
+        logs = _log_dicts(info)
+        if logs:
+            population_sizes.append(logs[-1]["n"])
+
+    assert population_sizes, "Expected emissions once sub-envs began completing"
+
+    # Guard against the test silently degenerating into the lockstep regime T1-T3
+    # already cover: staggered completions make n climb through intermediate values.
+    warmup = [size for size in population_sizes if size < NUM_AGENTS]
+    assert len(set(warmup)) > 1, (
+        f"Expected staggered completions to grow the population gradually, saw {sorted(set(warmup))}; "
+        "sub-envs are completing in lockstep so this test is not exercising unequal completion rates"
+    )
+
+    assert max(population_sizes) == NUM_AGENTS, (
+        f"Population never reached the full agent count: max n={max(population_sizes)} of {NUM_AGENTS}"
+    )
+
+    # Monotonic and saturating: once an agent has completed it contributes to
+    # every later emission, whether or not it completed again.
+    saturation_idx = population_sizes.index(NUM_AGENTS)
+    after_saturation = population_sizes[saturation_idx:]
+    assert set(after_saturation) == {NUM_AGENTS}, (
+        f"n fell back below {NUM_AGENTS} after saturating: {sorted(set(after_saturation))}; "
+        "the emitted mean is weighted by completions in the interval, not by agent"
+    )
 
     env.close()

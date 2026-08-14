@@ -233,6 +233,10 @@ class Drive(pufferlib.PufferEnv):
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
+        # Outside [0, 1) the slot update stops being a convex combination: 1.0 pins every
+        # metric to its first episode, above 1.0 the slots diverge.
+        if not 0.0 <= log_ema_alpha < 1.0:
+            raise ValueError(f"log_ema_alpha must be in [0.0, 1.0). Got: {log_ema_alpha}")
         self.log_ema_alpha = log_ema_alpha
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
