@@ -4,8 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
 #SBATCH --gres=gpu:1
-#SBATCH --mem=250G
-#SBATCH --cpus-per-task=36
+#SBATCH --mem=125G
+#SBATCH --cpus-per-task=18
 #SBATCH --output=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
 #SBATCH --error=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
 #SBATCH --partition=dev
