@@ -103,7 +103,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
-    env.map_dir=/home/shared/data/nuPlan/nightly_PufferDrive \
+    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
