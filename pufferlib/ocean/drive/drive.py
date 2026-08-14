@@ -142,15 +142,17 @@ class Drive(pufferlib.PufferEnv):
         adv_reward_weight_traffic_light=0.5,
         adv_reward_weight_drive=0.5,
         adv_target_offroad_reward=0.0,
-        adv_target_collision_reward=0.25,
+        adv_target_collision_reward=0.5,
         adv_target_collision_reward_use_responsibility=False,
-        adv_target_failure_reward=1.0,
+        adv_target_failure_reward=2.0,
+        adv_compliant_bonus=1.5,
+        adv_genuine_compliant_bonus=6.5,
         adv_target_avoidability_reward=0.0,
         adv_target_detection_reward=0.0,
         adv_target_time_reward_tau=2.0,
         adv_target_hit_at_fault_bonus=0.0,
         adv_target_hit_low_responsibility_threshold=-1.0,
-        adv_target_hit_low_responsibility_penalty=0.0,
+        adv_target_hit_low_responsibility_penalty=0.5,
         adv_target_hit_low_responsibility_behavior=0,
         min_waypoint_spacing=20.0,
         max_waypoint_spacing=60.0,
@@ -271,6 +273,8 @@ class Drive(pufferlib.PufferEnv):
         self.adv_target_collision_reward = float(adv_target_collision_reward)
         self.adv_target_collision_reward_use_responsibility = bool(adv_target_collision_reward_use_responsibility)
         self.adv_target_failure_reward = float(adv_target_failure_reward)
+        self.adv_compliant_bonus = float(adv_compliant_bonus)
+        self.adv_genuine_compliant_bonus = float(adv_genuine_compliant_bonus)
         self.adv_target_avoidability_reward = float(adv_target_avoidability_reward)
         self.adv_target_detection_reward = float(adv_target_detection_reward)
         self.adv_target_time_reward_tau = float(adv_target_time_reward_tau)
@@ -917,6 +921,8 @@ class Drive(pufferlib.PufferEnv):
             "adv_target_collision_reward": self.adv_target_collision_reward,
             "adv_target_collision_reward_use_responsibility": self.adv_target_collision_reward_use_responsibility,
             "adv_target_failure_reward": self.adv_target_failure_reward,
+            "adv_compliant_bonus": self.adv_compliant_bonus,
+            "adv_genuine_compliant_bonus": self.adv_genuine_compliant_bonus,
             "adv_target_avoidability_reward": self.adv_target_avoidability_reward,
             "adv_target_detection_reward": self.adv_target_detection_reward,
             "adv_target_time_reward_tau": self.adv_target_time_reward_tau,

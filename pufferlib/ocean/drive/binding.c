@@ -2054,6 +2054,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adv_target_collision_reward_use_responsibility =
         (bool)unpack(kwargs, "adv_target_collision_reward_use_responsibility");
     env->adv_target_failure_reward = (float)unpack(kwargs, "adv_target_failure_reward");
+    env->adv_compliant_bonus = (float)unpack(kwargs, "adv_compliant_bonus");
+    env->adv_genuine_compliant_bonus = (float)unpack(kwargs, "adv_genuine_compliant_bonus");
     env->adv_target_avoidability_reward = (float)unpack(kwargs, "adv_target_avoidability_reward");
     env->adv_target_detection_reward = (float)unpack(kwargs, "adv_target_detection_reward");
     env->adv_target_time_reward_tau = (float)unpack(kwargs, "adv_target_time_reward_tau");

@@ -571,6 +571,8 @@ struct Drive {
     float adv_target_collision_reward;
     int adv_target_collision_reward_use_responsibility;
     float adv_target_failure_reward;
+    float adv_compliant_bonus;
+    float adv_genuine_compliant_bonus;
     float adv_target_avoidability_reward;
     float adv_target_detection_reward;
     float adv_target_time_reward_tau;
@@ -5414,8 +5416,12 @@ static void accumulate_compliance_sample(ComplianceDiagnostics *diagnostics, int
     }
 }
 
+static inline bool compliance_tracking_enabled(const Drive *env) {
+    return env->compute_eval_metrics || env->adv_compliant_bonus != 0.0f || env->adv_genuine_compliant_bonus != 0.0f;
+}
+
 static void record_hitter_compliance_diagnostics(Drive *env, int hitter_agent_idx) {
-    if (!env->compute_eval_metrics || env->compliance_diagnostics.valid || hitter_agent_idx < 0 ||
+    if (!compliance_tracking_enabled(env) || env->compliance_diagnostics.valid || hitter_agent_idx < 0 ||
         hitter_agent_idx >= env->num_agents)
         return;
 
@@ -5714,10 +5720,10 @@ static void compute_metrics(Drive *env, int agent_idx) {
         (float)(longitudinal_accel_violation + lateral_accel_violation + jerk_violation);
 
     bool compliance_red_light_violation = false;
-    if (env->max_traffic_control_observations || env->compute_eval_metrics) {
+    if (env->max_traffic_control_observations || compliance_tracking_enabled(env)) {
         compliance_red_light_violation = check_red_light_violation(env, agent_idx);
     }
-    if (env->compute_eval_metrics) {
+    if (compliance_tracking_enabled(env)) {
         record_compliance_sample(env, agent, best_candidate_entity_idx, best_candidate_lane_heading,
                                  compliance_red_light_violation, episode_started);
     }
@@ -6995,6 +7001,12 @@ static inline float compute_adversarial_target_bonus(Drive *env, RewardTerms *ta
     if (env->target_hit_at_fault_this_step) {
         bonus += env->adv_target_hit_at_fault_bonus;
     }
+    if (env->compliance_diagnostics.valid && env->compliance_diagnostics.compliant) {
+        bonus += env->adv_compliant_bonus;
+        if (target_collision_is_genuine_failure(env)) {
+            bonus += env->adv_genuine_compliant_bonus;
+        }
+    }
     return bonus;
 }
 
@@ -7127,7 +7139,7 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->num_agents; i++) {
         snapshot_previous_pose(&env->agents[i]);
         push_trajectory_history(&env->agents[i]);
-        if (env->compute_eval_metrics)
+        if (compliance_tracking_enabled(env))
             push_compliance_history(&env->agents[i]);
     }
 
