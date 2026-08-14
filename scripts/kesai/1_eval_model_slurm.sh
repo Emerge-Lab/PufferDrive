@@ -22,6 +22,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
     eval.render_scenarios=true \
+    eval.output_dir_name=eval_rendered \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
@@ -30,6 +31,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     eval.render_scenarios=true \
+    eval.output_dir_name=eval_rendered \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
