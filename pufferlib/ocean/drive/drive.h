@@ -353,6 +353,11 @@ struct Log {
     float did_target_fail;
     float did_target_make_progress;
     float did_target_have_at_fault_collision;
+    float did_target_have_genuine_non_compliant_collision;
+    float did_target_have_genuine_compliant_collision;
+    float did_target_have_unavoidable_collision;
+    float did_target_have_compliant_forced_collision;
+    float did_target_have_forced_non_compliant_collision;
     float target_num_goals_reached;
     float target_ttc_within_bound_rate;
     float target_progress_ratio;
@@ -738,6 +743,11 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
     float did_target_fail = log->did_target_fail;
     float did_target_make_progress = log->did_target_make_progress;
     float did_target_have_at_fault_collision = log->did_target_have_at_fault_collision;
+    float did_target_have_genuine_non_compliant_collision = log->did_target_have_genuine_non_compliant_collision;
+    float did_target_have_genuine_compliant_collision = log->did_target_have_genuine_compliant_collision;
+    float did_target_have_unavoidable_collision = log->did_target_have_unavoidable_collision;
+    float did_target_have_compliant_forced_collision = log->did_target_have_compliant_forced_collision;
+    float did_target_have_forced_non_compliant_collision = log->did_target_have_forced_non_compliant_collision;
     float adversaries_offroad_rate = log->adversaries_offroad_rate;
     float adversaries_collision_rate = log->adversaries_collision_rate;
     float adversaries_target_collision_rate = log->adversaries_target_collision_rate;
@@ -822,6 +832,12 @@ static inline void normalize_log_for_output(Log *log, float n, float target_n) {
         log->did_target_fail = did_target_fail / target_n;
         log->did_target_make_progress = did_target_make_progress / target_n;
         log->did_target_have_at_fault_collision = did_target_have_at_fault_collision / target_n;
+        log->did_target_have_genuine_non_compliant_collision =
+            did_target_have_genuine_non_compliant_collision / target_n;
+        log->did_target_have_genuine_compliant_collision = did_target_have_genuine_compliant_collision / target_n;
+        log->did_target_have_unavoidable_collision = did_target_have_unavoidable_collision / target_n;
+        log->did_target_have_compliant_forced_collision = did_target_have_compliant_forced_collision / target_n;
+        log->did_target_have_forced_non_compliant_collision = did_target_have_forced_non_compliant_collision / target_n;
         log->target_num_goals_reached = target_num_goals_reached / target_n;
         log->target_ttc_within_bound_rate = target_ttc_within_bound_rate / target_n;
         log->target_progress_ratio = target_progress_ratio / target_n;
@@ -4147,7 +4163,6 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             float target_progress_ratio = env->logs[0].progress_ratio;
             episode_log->target_progress_ratio += target_progress_ratio;
             episode_log->did_target_make_progress += (target_progress_ratio > 0.2f) ? 1.0f : 0.0f;
-            episode_log->did_target_have_at_fault_collision += env->logs[0].at_fault_collision_rate;
             episode_log->target_ttc_within_bound_rate += env->logs[0].ttc_within_bound_rate;
             episode_log->target_puffer_score += calculate_puffer_score(&env->logs[0], safe_timestep, env->dt);
         }
@@ -4166,13 +4181,26 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
             episode_log->target_collision_other_active += env->target_collision_other_active_episode;
             episode_log->target_collision_other_stopped += env->target_collision_other_stopped_episode;
             episode_log->target_collision_other_removed += env->target_collision_other_removed_episode;
+            bool compliance_available = env->compliance_diagnostics.valid;
+            bool hitter_compliant = compliance_available && env->compliance_diagnostics.compliant;
             if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME) {
                 episode_log->target_collision_unavoidable_rate += 1.0f;
+                episode_log->did_target_have_unavoidable_collision += 1.0f;
             } else if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
                 if (env->target_reaction_window_danger_episode) {
                     episode_log->target_collision_target_failure_rate += 1.0f;
+                    if (hitter_compliant) {
+                        episode_log->did_target_have_genuine_compliant_collision += 1.0f;
+                    } else if (compliance_available) {
+                        episode_log->did_target_have_genuine_non_compliant_collision += 1.0f;
+                    }
                 } else {
                     episode_log->target_collision_adversary_forced_rate += 1.0f;
+                    if (hitter_compliant) {
+                        episode_log->did_target_have_compliant_forced_collision += 1.0f;
+                    } else if (compliance_available) {
+                        episode_log->did_target_have_forced_non_compliant_collision += 1.0f;
+                    }
                 }
             }
             if (env->target_last_avoidable_braking_seconds_before_collision > 0.0f) {
@@ -4180,6 +4208,8 @@ static void build_episode_log_contributions(Drive *env, Log *episode_log) {
                     env->target_last_avoidable_braking_seconds_before_collision;
                 episode_log->target_avoidable_by_braking_collision_count += 1.0f;
             }
+            episode_log->did_target_have_at_fault_collision +=
+                env->target_hit_at_fault_count_episode > 0.0f ? 1.0f : 0.0f;
         }
 
         if (env->logs[0].offroad_rate > 0.0f) {

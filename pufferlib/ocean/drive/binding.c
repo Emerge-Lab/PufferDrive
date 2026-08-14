@@ -2187,6 +2187,14 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "did_target_fail", log->did_target_fail);
     assign_to_dict(dict, "did_target_make_progress", log->did_target_make_progress);
     assign_to_dict(dict, "did_target_have_at_fault_collision", log->did_target_have_at_fault_collision);
+    assign_to_dict(dict, "did_target_have_genuine_non_compliant_collision",
+                   log->did_target_have_genuine_non_compliant_collision);
+    assign_to_dict(dict, "did_target_have_genuine_compliant_collision",
+                   log->did_target_have_genuine_compliant_collision);
+    assign_to_dict(dict, "did_target_have_unavoidable_collision", log->did_target_have_unavoidable_collision);
+    assign_to_dict(dict, "did_target_have_compliant_forced_collision", log->did_target_have_compliant_forced_collision);
+    assign_to_dict(dict, "did_target_have_forced_non_compliant_collision",
+                   log->did_target_have_forced_non_compliant_collision);
     assign_to_dict(dict, "adversaries_offroad_rate", log->adversaries_offroad_rate);
     assign_to_dict(dict, "adversaries_collision_rate", log->adversaries_collision_rate);
     assign_to_dict(dict, "adversaries_target_collision_rate", log->adversaries_target_collision_rate);

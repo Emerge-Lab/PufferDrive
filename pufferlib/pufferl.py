@@ -174,11 +174,19 @@ def metric_log_key(metric_name):
         "adversaries_progress_ratio": "progress_ratio",
         "adversaries_puffer_score": "puffer_score",
     }
+    collision_metrics = {
+        "did_target_collide": "did_target_collide",
+        "did_target_have_genuine_non_compliant_collision": "genuine_non_compliant",
+        "did_target_have_genuine_compliant_collision": "genuine_compliant",
+        "did_target_have_unavoidable_collision": "unavoidable",
+        "did_target_have_compliant_forced_collision": "compliant_forced",
+        "did_target_have_forced_non_compliant_collision": "forced_not_compliant",
+        "did_target_have_at_fault_collision": "at_fault",
+    }
     overview_metrics = {
         "episode_length",
         "target_episode_length",
         "did_target_fail",
-        "did_target_collide",
         "did_target_offroad",
         "target_hit_responsibility",
         "target_hit_low_responsibility_rate",
@@ -194,6 +202,8 @@ def metric_log_key(metric_name):
         return f"target/{target_metrics[metric_name]}"
     if metric_name in adversaries_metrics:
         return f"adversaries/{adversaries_metrics[metric_name]}"
+    if metric_name in collision_metrics:
+        return f"collision/{collision_metrics[metric_name]}"
     if metric_name in overview_metrics:
         return f"overview/{metric_name}"
     return f"environment/{metric_name}"
