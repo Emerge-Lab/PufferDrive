@@ -9,7 +9,7 @@
 #SBATCH --output /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.out
 #SBATCH --error /home/bjaeger/PufferDrive/experiments/logs/log_%a_%A.err
 #SBATCH --partition dev
-#SBATCH --array=0-2
+#SBATCH --array=0-7
 
 # print info about current job
 echo "START TIME: $(date)"
@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0017_${SEED}
+export RUN_NAME=k_exp_0018_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -75,10 +75,10 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.learning_rate=0.004 \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
+    env.reward_log_sampling=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
