@@ -1341,6 +1341,30 @@ static bool check_segment_intersects_aabb(float p0[2], float p1[2], float half_l
     return true;
 }
 
+static bool check_segments_intersect(
+    float p0x,
+    float p0y,
+    float p1x,
+    float p1y,
+    float q0x,
+    float q0y,
+    float q1x,
+    float q1y) {
+    float d1x = p1x - p0x;
+    float d1y = p1y - p0y;
+    float d2x = q1x - q0x;
+    float d2y = q1y - q0y;
+    float denom = d1x * d2y - d1y * d2x;
+    if (fabsf(denom) < 1e-9f) {
+        return false; // parallel or degenerate segment: no crossing event
+    }
+    float sx = q0x - p0x;
+    float sy = q0y - p0y;
+    float t = (sx * d2y - sy * d2x) / denom;
+    float u = (sx * d1y - sy * d1x) / denom;
+    return t >= 0.0f && t <= 1.0f && u >= 0.0f && u <= 1.0f;
+}
+
 static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float by, Agent *agent) {
     // Segment AB is static; the box sweeps from prev to cur pose. Projecting AB into the box-local frame
     // at both poses makes the box a fixed origin-centered AABB and AB a quad with corners a_prev, b_prev,
@@ -1414,7 +1438,7 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
     return has_positive_cross != has_negative_cross;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation) {
+static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation, bool center_crossing) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -1468,7 +1492,20 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yell
         float ext_p1[2] = {tc->stop_line[0] - ext * sl_dx, tc->stop_line[1] - ext * sl_dy};
         float ext_p2[2] = {tc->stop_line[3] + ext * sl_dx, tc->stop_line[4] + ext * sl_dy};
 
-        if (check_segment_crosses_moving_box(ext_p1[0], ext_p1[1], ext_p2[0], ext_p2[1], agent)) {
+        // center_crossing matches nuPlan: only the center passing the line violates, bumper overhang does not
+        if (center_crossing) {
+            if (check_segments_intersect(
+                    ext_p1[0],
+                    ext_p1[1],
+                    ext_p2[0],
+                    ext_p2[1],
+                    agent->prev_x,
+                    agent->prev_y,
+                    agent->sim_x,
+                    agent->sim_y)) {
+                return true;
+            }
+        } else if (check_segment_crosses_moving_box(ext_p1[0], ext_p1[1], ext_p2[0], ext_p2[1], agent)) {
             return true;
         }
     }
@@ -1527,7 +1564,9 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
         return false;
     }
 
-    if (check_stop_line_crossing(env, agent, false)) {
+    // Replay is scored nuPlan-style (center crossing); gigaflow keeps the stricter box rule for training
+    bool center_crossing = env->simulation_mode == SIMULATION_MODE_REPLAY;
+    if (check_stop_line_crossing(env, agent, false, center_crossing)) {
         return true;
     }
 
@@ -2213,6 +2252,22 @@ static void generate_traffic_light_states(Drive *env) {
     }
 }
 
+static void replace_unknown_traffic_light_states(Drive *env) {
+    // Logged lights are UNKNOWN where perception had no detection; the policy only trains
+    // on RED/YELLOW/GREEN/OFF, so treat UNKNOWN as GREEN.
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || tc->states == NULL) {
+            continue;
+        }
+        for (int t = 0; t < tc->state_size; t++) {
+            if (tc->states[t] == TRAFFIC_CONTROL_STATE_UNKNOWN) {
+                tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
+            }
+        }
+    }
+}
+
 static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tmp_agent) {
     float min_safe_dist_sq = (tmp_agent->sim_length + 5.0f) * (tmp_agent->sim_length + 5.0f);
 
@@ -2380,7 +2435,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_stop_line_crossing(env, &tmp_agent, true)) {
+        if (check_stop_line_crossing(env, &tmp_agent, true, false)) {
             continue;
         }
 
@@ -2464,6 +2519,7 @@ static void set_start_position(Drive *env) {
                 agent->sim_length = agent->log_length[step];
                 agent->sim_width = agent->log_width[step];
                 agent->sim_height = agent->log_height[step];
+                update_agent_radius(agent);
                 continue;
             }
 
@@ -2631,8 +2687,10 @@ void set_active_agents(Drive *env) {
     for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
         Agent *agent = &env->agents[i];
 
-        // Skip if not valid at initialization
-        if (agent->log_valid[env->init_step] != 1 && !is_log_replay) {
+        int valid_at_init = agent->log_valid[env->init_step] == 1;
+        // Eval replay keeps late-appearing agents as replay background for scene fidelity
+        int keep_late_agent = env->eval_mode && env->init_mode != INIT_MODE_CREATE_ONLY_CONTROLLED;
+        if (!valid_at_init && !is_log_replay && !keep_late_agent) {
             continue;
         }
 
@@ -2655,7 +2713,7 @@ void set_active_agents(Drive *env) {
         env->num_agents++;
 
         // Determine if this agent should be policy-controlled
-        bool is_controlled = should_control_agent(env, i);
+        bool is_controlled = valid_at_init && should_control_agent(env, i);
 
         if (is_controlled) {
             active_agent_indices[env->active_agent_count] = i;
@@ -2666,8 +2724,8 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            int replay_by_default
-                = is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents;
+            int replay_by_default = is_log_replay || !valid_at_init || env->agents[i].mark_as_expert == 1
+                || env->active_agent_count == env->num_max_agents;
             env->agents[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
             if (env->agents[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
@@ -2705,6 +2763,30 @@ void set_active_agents(Drive *env) {
     return;
 }
 
+static bool insertion_overlaps_active_agent(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    for (int i = 0; i < env->active_agent_count; i++) {
+        int active_idx = env->active_agent_indices[i];
+        if (active_idx == agent_idx) {
+            continue;
+        }
+        Agent *active = &env->agents[active_idx];
+        if (active->sim_x == INVALID_POSITION || active->removed) {
+            continue;
+        }
+        float dx = active->sim_x - agent->sim_x;
+        float dy = active->sim_y - agent->sim_y;
+        float clearance = agent->radius + active->radius;
+        if (dx * dx + dy * dy > clearance * clearance) {
+            continue;
+        }
+        if (check_obb_collision(agent, active)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void move_expert(Drive *env, int agent_idx) {
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         printf("[GIGAFLOW ERROR] -> move_expert() called in GIGAFLOW mode\n");
@@ -2718,6 +2800,7 @@ void move_expert(Drive *env, int agent_idx) {
         invalidate_agent(agent);
         return;
     }
+    bool inserting = (agent->sim_x == INVALID_POSITION);
     agent->sim_x = agent->log_trajectory_x[t];
     agent->sim_y = agent->log_trajectory_y[t];
     agent->sim_z = agent->log_trajectory_z[t];
@@ -2745,6 +2828,11 @@ void move_expert(Drive *env, int agent_idx) {
         agent->prev_y = agent->log_trajectory_y[t - 1];
         agent->prev_cos_heading = cosf(agent->log_heading[t - 1]);
         agent->prev_sin_heading = sinf(agent->log_heading[t - 1]);
+    }
+
+    // Hold insertion while the logged pose overlaps a simulated agent (retried next step)
+    if (inserting && insertion_overlaps_active_agent(env, agent_idx)) {
+        invalidate_agent(agent);
     }
 }
 
@@ -2794,9 +2882,12 @@ void remove_bad_trajectories(Drive *env) {
             if (static_agent_idx != collided_with_indices[i]) {
                 continue;
             }
-            env->agents[static_agent_idx].log_trajectory_x[0] = INVALID_POSITION;
-            env->agents[static_agent_idx].log_trajectory_y[0] = INVALID_POSITION;
-            env->agents[static_agent_idx].log_valid[0] = 0;
+            Agent *bad_agent = &env->agents[static_agent_idx];
+            // Invalidate every step, else move_expert re-inserts the agent at the next valid one
+            for (int t = 0; t < bad_agent->trajectory_size; t++) {
+                bad_agent->log_valid[t] = 0;
+            }
+            invalidate_agent(bad_agent);
         }
     }
     env->timestep = 0;
@@ -2888,6 +2979,9 @@ void init(Drive *env) {
             }
         }
         generate_traffic_light_states(env);
+    }
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
+        replace_unknown_traffic_light_states(env);
     }
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
