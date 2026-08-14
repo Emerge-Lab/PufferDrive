@@ -107,6 +107,7 @@ void demo() {
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .traffic_light_behavior = conf.traffic_light_behavior,
+        .use_neighbor_cache = conf.use_neighbor_cache,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
         .goal_speed = conf.goal_speed,
@@ -142,6 +143,7 @@ void demo() {
     env.obs_slots_lane_kept = compute_effective_road_obs_count(env.obs_slots_lane_n, conf.obs_dropout_lane);
     env.obs_slots_boundary_kept = compute_effective_road_obs_count(env.obs_slots_boundary_n, conf.obs_dropout_boundary);
 
+    rng_seed(&env.seed_stream_rng, env.init_seed);
     allocate(&env);
     c_reset(&env);
     c_render(&env, 0);
@@ -234,6 +236,7 @@ void performance_test() {
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .traffic_light_behavior = conf.traffic_light_behavior,
+        .use_neighbor_cache = conf.use_neighbor_cache,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
         .goal_speed = conf.goal_speed,
@@ -279,6 +282,7 @@ void performance_test() {
     clock_gettime(CLOCK_MONOTONIC, &ts_total_start);
 
     clock_gettime(CLOCK_MONOTONIC, &ts_init_start);
+    rng_seed(&env.seed_stream_rng, env.init_seed);
     allocate(&env);
     c_reset(&env);
     clock_gettime(CLOCK_MONOTONIC, &ts_init_end);

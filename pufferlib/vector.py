@@ -343,6 +343,10 @@ class Multiprocessing:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
 
+        # Close driver env 0 after setup is done and args are read to free memory (which can be significant in the case of nuPlan evals).
+        agents_per_env = driver_env.num_agents
+        driver_env.close()
+
         from multiprocessing import RawArray
 
         # Mac breaks without setting fork... but setting it breaks sweeps on 2nd run
@@ -396,7 +400,7 @@ class Multiprocessing:
                     atn_shape,
                     atn_dtype,
                     envs_per_worker,
-                    driver_env.num_agents,
+                    agents_per_env,
                     num_workers,
                     i,
                     w_send_pipes[i],
@@ -547,7 +551,6 @@ class Multiprocessing:
         self.buf["notify"][:] = True
 
     def close(self):
-        self.driver_env.close()
         for p in self.processes:
             p.terminate()
 
