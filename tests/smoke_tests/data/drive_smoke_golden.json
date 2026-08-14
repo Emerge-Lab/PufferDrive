@@ -1,5 +1,8 @@
 {
   "env": {
+    "agent_weighted_distance_per_infraction": 11.734331180309427,
+    "agent_weighted_distance_travelled": 85.89256253735772,
+    "agent_weighted_infractions": 7.324183032430452,
     "avg_distance_per_infraction": 12.032092877288363,
     "avg_speed_per_agent": 1.3546471775605762,
     "collision_rate": 0.0009471982203680893,
