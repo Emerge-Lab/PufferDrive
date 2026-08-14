@@ -48,6 +48,8 @@ env:
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
+  # Jerk dynamics: Zero both accelerations when velocity crosses zero
+  reset_accel_on_stop: false
   # Time delta between steps in seconds
   dt: 0.3
   # Optional nonzero launch speed for gigaflow random spawns

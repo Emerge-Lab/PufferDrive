@@ -85,6 +85,7 @@ class Drive(pufferlib.PufferEnv):
         max_agents_per_env=64,
         action_type="discrete",
         dynamics_model="classic",
+        reset_accel_on_stop=False,
         simulation_mode="gigaflow",
         termination_mode=0,
         inactive_agent_threshold=0.4,
@@ -223,6 +224,7 @@ class Drive(pufferlib.PufferEnv):
             self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.reset_accel_on_stop = reset_accel_on_stop
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
@@ -504,6 +506,7 @@ class Drive(pufferlib.PufferEnv):
             "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
+            "reset_accel_on_stop": self.reset_accel_on_stop,
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,

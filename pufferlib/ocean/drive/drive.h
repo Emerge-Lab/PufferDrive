@@ -226,6 +226,7 @@ struct Drive {
     float dt;
     float spawn_initial_speed;
     int dynamics_model;
+    int reset_accel_on_stop;
     int init_mode;
     int control_mode;
     int collision_behavior;
@@ -4212,6 +4213,10 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Zero-crossing: snap to 0 when crossing zero
         if (signed_v * v_new < 0) {
             v_new = 0.0f;
+            if (env->reset_accel_on_stop) {
+                a_long_new = 0.0f;
+                a_lat_new = 0.0f;
+            }
         } else {
             v_new = clip(v_new, -2.0f, MAX_SPEED);
         }

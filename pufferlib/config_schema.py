@@ -91,6 +91,7 @@ class DriveEnvConfig:
     max_agents_per_env: int = MISSING
     action_type: ActionType = MISSING
     dynamics_model: DynamicsModel = MISSING
+    reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
