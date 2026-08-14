@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0016_${SEED}
+export RUN_NAME=k_exp_0017_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -75,15 +75,16 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
+    train.learning_rate=0.004 \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     train.final_model_name=${FINAL_MODEL_NAME} \
-    train.adam_weight_decay=0.0 \
     train.seed=${SEED} \
     tb=True
 
-#     train.learning_rate=0.00025 \
+#
+#    train.adam_weight_decay=0.0 \
 #     train.adam_eps=0.00001 \
 #    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
 #    env.num_maps=128 \
