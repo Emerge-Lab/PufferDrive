@@ -97,8 +97,14 @@ struct Log {
     float ttc_samples;
     float multi_lane_time;
     float multi_lane_score;
+    // Pooled over every episode completed in the interval; prepare_log keeps them
+    // out of the EMA so vec_log's zeroing makes them reset-on-consumption.
     float total_distance_travelled;
     float total_infractions;
+    // Same quantities as ordinary EMA slots, so their ratio weights one episode
+    // per agent instead of one per completion.
+    float agent_weighted_distance_travelled;
+    float agent_weighted_infractions;
     // Agent-only puffer display fields (for serialization)
     float no_at_fault;
     float no_offroad;
@@ -2005,6 +2011,8 @@ static void add_log(Drive *env) {
         if (total_infractions > 0) {
             env->log.total_infractions += 1.0f;
         }
+        episode_log.agent_weighted_distance_travelled = agent->distance_since_spawn;
+        episode_log.agent_weighted_infractions = (total_infractions > 0) ? 1.0f : 0.0f;
         float displacement_error = env->logs[i].avg_displacement_error;
         episode_log.avg_displacement_error = displacement_error;
         episode_log.episode_length = env->logs[i].episode_length;

@@ -6,12 +6,14 @@ Covered:
 - T2 (state persistence): two consecutive emissions with no new completions
   between them produce identical metric values, proving prepare_log no
   longer resets the per-agent EMAs.
-- T3 (unequal completion rates): with sub-envs truncating at different
+- T3 (two weightings agree in lockstep): the pooled fleet ratio and the
+  agent-weighted ratio coincide when agents complete equally often.
+- T4 (unequal completion rates): with sub-envs truncating at different
   timesteps, every emission still weights one term per agent.
 
 T1 runs all agents in lockstep, the regime where completion-weighted and
 agent-weighted aggregation agree, so it holds either way; it is here to pin
-the emission gate. T2 and T3 both fail against the completion-sum
+the emission gate. T2 and T4 both fail against the completion-sum
 implementation.
 """
 
@@ -126,8 +128,53 @@ def test_emissions_identical_when_no_new_completions():
     env.close()
 
 
+def test_pooled_and_agent_weighted_ratios_agree_in_lockstep():
+    """T3: avg_distance_per_infraction pools every completed episode;
+    agent_weighted_distance_per_infraction weights one episode per agent. Those
+    are the same quantity exactly when agents complete equally often, so in
+    lockstep they must agree. alpha=0 removes the EMA's time smoothing, leaving
+    the weighting as the only difference."""
+    if not MAP_DIR.is_dir() or not any(MAP_DIR.glob("*.bin")):
+        pytest.skip(f"Drive map binaries not available at {MAP_DIR}")
+    env = Drive(
+        num_agents=NUM_AGENTS,
+        num_maps=1,
+        min_agents_per_env=1,
+        max_agents_per_env=8,
+        scenario_length=40,
+        report_interval=1,
+        map_dir=str(MAP_DIR),
+        log_ema_alpha=0.0,
+        resample_frequency=100_000,
+    )
+    env.reset(seed=0)
+
+    pooled_distance = 0.0
+    pooled_infractions = 0.0
+    agent_weighted_ratios = []
+    for _ in range(400):
+        _, _, _, _, info = env.step(np.zeros_like(env.actions))
+        for log in _log_dicts(info):
+            # The pooled pair resets on every emission, so summing recovers the
+            # interval totals; the agent-weighted ratio is a gauge, so it averages.
+            pooled_distance += log["total_distance_travelled_sum"]
+            pooled_infractions += log["total_infraction_count"]
+            agent_weighted_ratios.append(log["agent_weighted_distance_per_infraction"])
+
+    assert pooled_infractions > 0, "Expected at least one infraction to exercise the ratio"
+    pooled_ratio = pooled_distance / pooled_infractions
+    agent_weighted_ratio = float(np.mean(agent_weighted_ratios))
+
+    assert agent_weighted_ratio == pytest.approx(pooled_ratio, rel=0.02), (
+        f"lockstep ratios diverged: pooled={pooled_ratio} agent_weighted={agent_weighted_ratio}; "
+        "with equal completion counts the two weightings must coincide"
+    )
+
+    env.close()
+
+
 def test_population_size_is_agent_count_under_unequal_completion_rates():
-    """T3: the discriminating case. Sub-envs truncate independently here, so
+    """T4: the discriminating case. Sub-envs truncate independently here, so
     completions arrive staggered rather than all at once. Completion-weighted
     aggregation would make the emitted n track how many agents completed in
     that interval; agent-weighted aggregation pins it to the number of agents

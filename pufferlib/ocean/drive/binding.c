@@ -2023,6 +2023,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+    float agent_weighted_distance_travelled = log->agent_weighted_distance_travelled * n;
+    float agent_weighted_infractions = log->agent_weighted_infractions * n;
+    float agent_weighted_distance_per_infraction
+        = agent_weighted_distance_travelled / fmaxf(1.0f, agent_weighted_infractions);
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -2041,6 +2045,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     assign_to_dict(dict, "total_distance_travelled_sum", total_distance_travelled);
     assign_to_dict(dict, "total_infraction_count", total_infractions);
+    assign_to_dict(dict, "agent_weighted_distance_per_infraction", agent_weighted_distance_per_infraction);
+    assign_to_dict(dict, "agent_weighted_distance_travelled", agent_weighted_distance_travelled);
+    assign_to_dict(dict, "agent_weighted_infractions", agent_weighted_infractions);
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
