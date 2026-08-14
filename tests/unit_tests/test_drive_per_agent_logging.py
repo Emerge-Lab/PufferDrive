@@ -3,14 +3,16 @@
 Covered:
 - T1 (gate): vec_log emits nothing while no agent has completed an episode;
   the first emission appears exactly when the scenario truncates.
-- T2 (steady-state n): after enough steps for every agent to complete at
-  least one episode, dict["n"] equals num_agents.
-- T3 (state persistence): two consecutive emissions with no new completions
+- T2 (state persistence): two consecutive emissions with no new completions
   between them produce identical metric values, proving prepare_log no
   longer resets the per-agent EMAs.
-- T4 (unequal completion rates): with sub-envs truncating at different
-  timesteps, every emission still weights one term per agent. This is the
-  case T1-T3 cannot distinguish, since they run all agents in lockstep.
+- T3 (unequal completion rates): with sub-envs truncating at different
+  timesteps, every emission still weights one term per agent.
+
+T1 runs all agents in lockstep, the regime where completion-weighted and
+agent-weighted aggregation agree, so it holds either way; it is here to pin
+the emission gate. T2 and T3 both fail against the completion-sum
+implementation.
 """
 
 from pathlib import Path
@@ -93,31 +95,8 @@ def test_gate_skips_emissions_until_first_completion():
     env.close()
 
 
-def test_steady_state_n_equals_num_agents():
-    """T2: once every agent has completed at least one episode, the emitted
-    n is the full population. With synced agents this is true from the first
-    emission onward."""
-    env = _make_env()
-    env.reset(seed=0)
-
-    # Run multiple scenarios so every agent has contributed.
-    last_log = None
-    for _ in range(4 * SCENARIO_LENGTH):
-        _, _, _, _, info = env.step(np.zeros_like(env.actions))
-        logs = _log_dicts(info)
-        if logs:
-            last_log = logs[-1]
-
-    assert last_log is not None, "Expected at least one emission across 4 scenarios"
-    assert last_log["n"] == NUM_AGENTS, (
-        f"Expected steady-state n={NUM_AGENTS}, got n={last_log['n']} (some agents missing from the population mean)"
-    )
-
-    env.close()
-
-
 def test_emissions_identical_when_no_new_completions():
-    """T3: prepare_log preserves per-agent EMA state across emissions. Two
+    """T2: prepare_log preserves per-agent EMA state across emissions. Two
     consecutive emissions with no intervening completions must produce
     bit-for-bit identical metric values."""
     env = _make_env()
@@ -148,7 +127,7 @@ def test_emissions_identical_when_no_new_completions():
 
 
 def test_population_size_is_agent_count_under_unequal_completion_rates():
-    """T4: the discriminating case. Sub-envs truncate independently here, so
+    """T3: the discriminating case. Sub-envs truncate independently here, so
     completions arrive staggered rather than all at once. Completion-weighted
     aggregation would make the emitted n track how many agents completed in
     that interval; agent-weighted aggregation pins it to the number of agents
@@ -165,8 +144,8 @@ def test_population_size_is_agent_count_under_unequal_completion_rates():
 
     assert population_sizes, "Expected emissions once sub-envs began completing"
 
-    # Guard against the test silently degenerating into the lockstep regime T1-T3
-    # already cover: staggered completions make n climb through intermediate values.
+    # Guard against the test silently degenerating into the lockstep regime T1
+    # already covers: staggered completions make n climb through intermediate values.
     warmup = [size for size in population_sizes if size < NUM_AGENTS]
     assert len(set(warmup)) > 1, (
         f"Expected staggered completions to grow the population gradually, saw {sorted(set(warmup))}; "
