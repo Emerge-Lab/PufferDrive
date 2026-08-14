@@ -1291,7 +1291,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow", upload_config=True):
+    def __init__(self, args, load_id=None, resume="allow", upload_config=True, disable_meta=False):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1306,7 +1306,7 @@ class WandbLogger:
             resume=resume,
             config=args if upload_config else None,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
+            settings=wandb.Settings(console="off", x_disable_meta=disable_meta),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
@@ -1833,7 +1833,7 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir
     run_args = copy.copy(args)
     run_args.update(wandb_run_identity)
 
-    logger = WandbLogger(run_args, resume="must", upload_config=False)
+    logger = WandbLogger(run_args, resume="must", upload_config=False, disable_meta=True)
     try:
         logger.log(metrics, step=None)
     finally:
