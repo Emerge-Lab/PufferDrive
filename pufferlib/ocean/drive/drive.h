@@ -1946,12 +1946,12 @@ static float calculate_puffer_score(Log *agent_log, float duration_steps, float 
 
 // Sum each agent's current EMA slot into env->log and set env->log.n to the
 // number of slots that have ever been seeded. vec_log divides by aggregate.n
-// downstream, producing a cross-agent population mean with one weight per
-// agent regardless of that agent's completion frequency. Does not reset the
+// to compute the per-agent logged values. Does not reset the
 // slots: emissions between completions repeat the previous values.
 static void prepare_log(Drive *env) {
-    // Raw interval totals, not per-agent gauges: they accumulate until vec_log emits and zeroes them,
-    // so summing them across emissions yields the global totals avg_distance_per_infraction needs.
+    // this specific metric is also computed in an episodic way
+    // in addition to a per-agent way so this one metric needs
+    // to be treated separately.
     float interval_distance_travelled = env->log.total_distance_travelled;
     float interval_infraction_count = env->log.total_infractions;
     memset(&env->log, 0, sizeof(Log));
@@ -2081,7 +2081,6 @@ static void add_log(Drive *env) {
         }
     }
 
-    // Keeps env->log valid for C-side readers, which never reach the Python vec_prepare_log.
     prepare_log(env);
     env->log_episode_seed = env->episode_seed;
 }
