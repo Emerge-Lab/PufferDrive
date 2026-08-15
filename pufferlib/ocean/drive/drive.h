@@ -97,12 +97,9 @@ struct Log {
     float ttc_samples;
     float multi_lane_time;
     float multi_lane_score;
-    // Pooled over every episode completed in the interval; prepare_log keeps them
-    // out of the EMA so vec_log's zeroing makes them reset-on-consumption.
     float total_distance_travelled;
     float total_infractions;
-    // Same quantities as ordinary EMA slots, so their ratio weights one episode
-    // per agent instead of one per completion.
+    // Used to compute average distance per infraction weighted per agent slot rather than per episode
     float agent_weighted_distance_travelled;
     float agent_weighted_infractions;
     // Agent-only puffer display fields (for serialization)
