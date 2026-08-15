@@ -318,7 +318,7 @@ struct Drive {
 typedef struct {
     float min_val;
     float max_val;
-    int log_scale;
+    int decade_scale;
 } RewardBound;
 
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
@@ -326,13 +326,13 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
     {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
-    {0.0f, 0.1f, 0},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
-    {2.5e-4f, 2.5e-2f, 0}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
+    {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ decadeU(1e-5, 0.1)
+    {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ decadeU(2.5e-4, 2.5e-2)
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
-    {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_LANE_CENTER     α_l-center ~ U(2.5e-4, 7.5e-3)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ decadeU(2.5e-4, 7.5e-3)
     {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
     {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
-    {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
+    {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_REVERSE         α_reverse ~ decadeU(2.5e-4, 7.5e-3)
     {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
     {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
     {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
@@ -392,8 +392,52 @@ static float sample_uniform(Rng *rng_state, float min_val, float max_val) {
     return min_val + rng_uniform_f32(rng_state) * (max_val - min_val);
 }
 
-static float sample_log_uniform(Rng *rng_state, float min_val, float max_val) {
-    return expf(sample_uniform(rng_state, logf(min_val), logf(max_val)));
+// Decades spanned by [min_val, max_val]. The top decade is the one containing values
+// below max_val, so a max_val that is itself a power of ten does not become a point mass.
+static void decade_bounds(float min_val, float max_val, int *decade_lo, int *decade_hi) {
+    *decade_lo = (int) floorf(log10f(min_val));
+    *decade_hi = (int) ceilf(log10f(max_val)) - 1;
+    if (*decade_hi < *decade_lo) {
+        *decade_hi = *decade_lo;
+    }
+}
+
+static void decade_span(float min_val, float max_val, int decade, float *lo, float *hi) {
+    *lo = fmaxf(min_val, powf(10.0f, (float) decade));
+    *hi = fminf(max_val, powf(10.0f, (float) (decade + 1)));
+}
+
+// Uniform over the exponent crossed with uniform over the coefficient: each decade gets
+// equal mass and values are uniform within it. Unlike log-uniform this keeps linear
+// resolution inside a decade while still reaching the small end of a wide range.
+static float sample_decade_uniform(Rng *rng_state, float min_val, float max_val) {
+    int decade_lo, decade_hi;
+    decade_bounds(min_val, max_val, &decade_lo, &decade_hi);
+    int decade_count = decade_hi - decade_lo + 1;
+    int decade = decade_lo + (int) (rng_uniform_f32(rng_state) * (float) decade_count);
+    if (decade > decade_hi) {
+        decade = decade_hi;
+    }
+    float lo, hi;
+    decade_span(min_val, max_val, decade, &lo, &hi);
+    return sample_uniform(rng_state, lo, hi);
+}
+
+// Quantile of coef under sample_decade_uniform, so reward conditioning stays even across [-1, 1].
+static float decade_uniform_quantile(float coef, float min_val, float max_val) {
+    int decade_lo, decade_hi;
+    decade_bounds(min_val, max_val, &decade_lo, &decade_hi);
+    int decade = (int) floorf(log10f(coef));
+    if (decade < decade_lo) {
+        decade = decade_lo;
+    }
+    if (decade > decade_hi) {
+        decade = decade_hi;
+    }
+    float lo, hi;
+    decade_span(min_val, max_val, decade, &lo, &hi);
+    float within = (hi > lo) ? (coef - lo) / (hi - lo) : 0.0f;
+    return ((float) (decade - decade_lo) + within) / (float) (decade_hi - decade_lo + 1);
 }
 
 static float sample_mixed_uniform(Rng *rng_state, float a) {
@@ -2072,8 +2116,8 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         };
         for (int i = 0; i < (int) (sizeof(random_coefs) / sizeof(random_coefs[0])); i++) {
             int c = random_coefs[i];
-            agent->reward_coefs[c] = REWARD_BOUNDS[c].log_scale
-                ? sample_log_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
+            agent->reward_coefs[c] = REWARD_BOUNDS[c].decade_scale
+                ? sample_decade_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val)
                 : sample_uniform(&env->rng_state, REWARD_BOUNDS[c].min_val, REWARD_BOUNDS[c].max_val);
         }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
@@ -3610,10 +3654,9 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
             float hi = REWARD_BOUNDS[coef_idx].max_val;
             float coef = ego->reward_coefs[coef_idx];
             float normalized_coef;
-            if (REWARD_BOUNDS[coef_idx].log_scale) {
-                // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
+            if (REWARD_BOUNDS[coef_idx].decade_scale) {
                 float clamped = fmaxf(lo, fminf(hi, coef));
-                normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
+                normalized_coef = decade_uniform_quantile(clamped, lo, hi);
             } else {
                 normalized_coef = (coef - lo) / ((hi - lo) + 1e-8f);
             }
