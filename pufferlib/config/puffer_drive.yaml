@@ -227,6 +227,8 @@ train:
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
+  # Exponential moving average of policy weights; 0 disables. Evaluation uses the shadow copy.
+  ema_decay: 0.0
   normalize_rewards: false
   ent_coef: 0.01
   # ---

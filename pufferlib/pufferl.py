@@ -42,6 +42,7 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 from pufferlib.config_schema import ENV_SCHEMAS
+from pufferlib.ema import EMA
 
 
 try:
@@ -249,6 +250,9 @@ class PuffeRL:
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
 
+        ema_decay = config.get("ema_decay", 0.0)
+        self.ema = EMA(self.uncompiled_policy, ema_decay) if ema_decay > 0.0 else None
+
         # Optimizer
         if config["optimizer"] == "adam":
             optimizer = torch.optim.Adam(
@@ -327,6 +331,11 @@ class PuffeRL:
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
+    @property
+    def eval_policy(self):
+        """Weights evaluation should use: the shadow copy when EMA is on."""
+        return self.ema.ema_model if self.ema is not None else self.uncompiled_policy
+
     def load_training_state(self, path):
         device = torch_device(self.config["device"])
         state = torch.load(path, map_location=device, weights_only=False)
@@ -339,6 +348,8 @@ class PuffeRL:
         policy_state = clean_policy_state_dict(policy_state)
         self.uncompiled_policy.load_state_dict(policy_state)
         self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        if self.ema is not None and state.get("ema_state_dict") is not None:
+            self.ema.load_state_dict(clean_policy_state_dict(state["ema_state_dict"]))
 
         if "scheduler_state_dict" in state:
             self.scheduler.load_state_dict(state["scheduler_state_dict"])
@@ -701,6 +712,8 @@ class PuffeRL:
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+                if self.ema is not None:
+                    self.ema.update()
 
         y_pred = self.values.flatten()
         y_true = returns.flatten()
@@ -819,12 +832,16 @@ class PuffeRL:
                     torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
                     self.optimizer.step()
                     self.optimizer.zero_grad()
+                    if self.ema is not None:
+                        self.ema.update()
                     pending_minibatches = 0
 
         if pending_minibatches > 0:
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
             self.optimizer.step()
             self.optimizer.zero_grad()
+            if self.ema is not None:
+                self.ema.update()
 
         if total_minibatches > 0:
             for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
@@ -890,7 +907,7 @@ class PuffeRL:
         model_name = f"model_{self.config['env']}_{self.epoch:06d}.pt"
         model_path = os.path.join(models_dir, model_name)
         if not os.path.exists(model_path):
-            torch.save(self.uncompiled_policy.state_dict(), model_path)
+            torch.save(self.eval_policy.state_dict(), model_path)
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
         new_best = current_score > self.best_score
@@ -900,6 +917,7 @@ class PuffeRL:
         state = {
             "state_version": 2,
             "policy_state_dict": self.uncompiled_policy.state_dict(),
+            "ema_state_dict": self.ema.state_dict() if self.ema is not None else None,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "global_step": self.global_step,
@@ -1610,7 +1628,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 run_training_evaluation(
                     env_name=env_name,
                     args=args,
-                    policy=pufferl.uncompiled_policy,
+                    policy=pufferl.eval_policy,
                     logger=pufferl.logger,
                     epoch=pufferl.epoch,
                     global_step=_global_agent_steps(pufferl),
@@ -1648,7 +1666,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         run_training_evaluation(
             env_name=env_name,
             args=args,
-            policy=pufferl.uncompiled_policy,
+            policy=pufferl.eval_policy,
             logger=pufferl.logger,
             epoch=pufferl.epoch,
             global_step=_global_agent_steps(pufferl),
