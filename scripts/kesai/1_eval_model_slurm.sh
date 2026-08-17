@@ -14,7 +14,7 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-export RUN_NAME=k_scaled_0009_1000
+export RUN_NAME=k_scaled_0008_1000
 MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
@@ -28,8 +28,8 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    #vec.num_envs=64 \
-    #eval.max_sdc_replay_workers=64 \
+    vec.num_envs=64 \
+    eval.max_sdc_replay_workers=64 \
     eval.output_dir_name=nuplan_fix_1 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
