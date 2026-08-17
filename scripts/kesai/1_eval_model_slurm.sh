@@ -22,8 +22,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=64 \
-    env.eval_use_carla_vehicle_dims=True \
-    env.eval_perceived_size_margin_m=0.0 \
+    num_scenarios=4000 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
