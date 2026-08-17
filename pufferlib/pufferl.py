@@ -2156,7 +2156,7 @@ def _run_eval_rollout(
                 else:
                     raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action
-            if isinstance(logits, torch.distributions.Normal):
+            if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
             _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
 

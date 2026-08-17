@@ -507,4 +507,5 @@ class Drive(nn.Module):
             mean_long / self.action_long_neg_scale,
             mean_long / self.action_long_pos_scale,
         )
-        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1)
+        # low-precision matmul can overshoot the [-1, 1] bounds by an epsilon
+        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1).clamp_(-1.0, 1.0)
