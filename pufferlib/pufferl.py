@@ -2004,6 +2004,20 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
+def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs):
+    if np.isfinite(batch_array).all():
+        return
+    rows_per_worker = batch_array.shape[0] // num_workers
+    bad_rows = np.unique(np.where(~np.isfinite(batch_array))[0])
+    bad_workers = sorted({int(row) // rows_per_worker for row in bad_rows})
+    details = ", ".join(
+        f"worker {w} (starting_map={worker_env_kwargs[w].get('starting_map')},"
+        f" num_eval_scenarios={worker_env_kwargs[w].get('num_eval_scenarios')})"
+        for w in bad_workers
+    )
+    raise pufferlib.APIUsageError(f"Non-finite {what} from {details} — scan the map set with data_utils/scan_map_bins.py")
+
+
 def _run_eval_rollout(
     args,
     env_name,
@@ -2084,6 +2098,7 @@ def _run_eval_rollout(
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
+        _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
         if padding_agent_count:
@@ -2143,6 +2158,7 @@ def _run_eval_rollout(
                     action = raw_action
             if isinstance(logits, torch.distributions.Normal):
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
                 replay_capture.capture_frame(
