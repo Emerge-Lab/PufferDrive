@@ -42,6 +42,7 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 from pufferlib.config_schema import ENV_SCHEMAS
+from pufferlib.value_distribution import find_value_distribution
 
 
 try:
@@ -121,6 +122,10 @@ def logits_to_float(logits):
     return tuple(l.float() for l in logits)
 
 
+PPO_AVERAGED_LOSS_KEYS = ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac")
+DISTRIBUTIONAL_LOSS_KEYS = ("value_target_clip_fraction", "value_expectation_mse")
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
         # Backend perf optimization
@@ -175,6 +180,18 @@ class PuffeRL:
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
         if precision == "bfloat16" and not config.get("amp", True):
             raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
+
+        self.value_distribution = find_value_distribution(unwrapped_policy)
+        self.averaged_loss_keys = PPO_AVERAGED_LOSS_KEYS
+        if self.value_distribution is not None:
+            if config["vf_clip_coef"] is not None:
+                raise pufferlib.APIUsageError(
+                    "A distributional value head does not support vf_clip_coef: set train.vf_clip_coef=null"
+                )
+            if config["use_rnn"]:
+                # LSTMWrapper.forward reshapes the head output to (batch, horizon)
+                raise pufferlib.APIUsageError("A distributional value head requires rnn_name=null")
+            self.averaged_loss_keys = PPO_AVERAGED_LOSS_KEYS + DISTRIBUTIONAL_LOSS_KEYS
 
         obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
 
@@ -450,7 +467,10 @@ class PuffeRL:
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.float()
                 self.truncations[batch_rows, l] = t.float()
-                self.values[batch_rows, l] = value.flatten().float()
+                if self.value_distribution is None:
+                    self.values[batch_rows, l] = value.flatten().float()
+                else:
+                    self.values[batch_rows, l] = self.value_distribution.expectation(value)
                 self.masks[batch_rows, l] = m
 
                 # Note: We are not yet handling masks in this version
@@ -564,7 +584,11 @@ class PuffeRL:
         _, newlogprob, entropy, _ = pufferlib.pytorch.sample_logits(logits, action=mb_actions)
 
         newlogprob = newlogprob.float().view_as(mb_logprobs)
-        newvalue = newvalue.view_as(mb_returns)
+        if self.value_distribution is None:
+            newvalue = newvalue.view_as(mb_returns)
+        else:
+            value_logits = newvalue
+            newvalue = self.value_distribution.expectation(value_logits).view_as(mb_returns)
         logratio = newlogprob - mb_logprobs
         ratio = logratio.exp()
 
@@ -598,7 +622,9 @@ class PuffeRL:
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
         pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-        if config["vf_clip_coef"] is not None:
+        if self.value_distribution is not None:
+            v_loss = self.value_distribution.cross_entropy(value_logits, mb_returns)
+        elif config["vf_clip_coef"] is not None:
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -config["vf_clip_coef"], config["vf_clip_coef"])
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
@@ -609,19 +635,20 @@ class PuffeRL:
         entropy_loss = entropy.mean()
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
 
-        return (
-            loss,
-            newvalue,
-            ratio,
-            {
-                "policy_loss": pg_loss.item(),
-                "value_loss": v_loss.item(),
-                "entropy": entropy_loss.item(),
-                "old_approx_kl": old_approx_kl.item(),
-                "approx_kl": approx_kl.item(),
-                "clipfrac": clipfrac.item(),
-            },
-        )
+        stats = {
+            "policy_loss": pg_loss.item(),
+            "value_loss": v_loss.item(),
+            "entropy": entropy_loss.item(),
+            "old_approx_kl": old_approx_kl.item(),
+            "approx_kl": approx_kl.item(),
+            "clipfrac": clipfrac.item(),
+        }
+        if self.value_distribution is not None:
+            with torch.no_grad():
+                stats["value_target_clip_fraction"] = self.value_distribution.clipped_fraction(mb_returns).item()
+                stats["value_expectation_mse"] = (0.5 * (newvalue - mb_returns).pow(2).mean()).item()
+
+        return loss, newvalue, ratio, stats
 
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
@@ -827,7 +854,7 @@ class PuffeRL:
             self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
+            for key in self.averaged_loss_keys:
                 losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]

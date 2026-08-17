@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import pufferlib
 import pufferlib.models
 from pufferlib.ocean.drive import binding
+from pufferlib.value_distribution import VALUE_DISTRIBUTION_OFF, make_binned_value_distribution
 
 from pufferlib.models import Default as Policy  # noqa: F401
 from pufferlib.models import Convolutional as Conv  # noqa: F401
@@ -331,6 +332,11 @@ class Drive(nn.Module):
         shared_network: bool,
         mask_padded_features: bool,
         action_type: str,
+        critic_distribution_mode: str = VALUE_DISTRIBUTION_OFF,
+        critic_num_bins: int = 101,
+        critic_support_min: float = -10.0,
+        critic_support_max: float = 10.0,
+        critic_hl_gauss_sigma_ratio: float = 0.75,
     ):
         super().__init__()
 
@@ -419,7 +425,15 @@ class Drive(nn.Module):
             critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
             critic_head_layers.append(nn.ReLU())
             critic_in = critic_hidden_size
-        critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
+        self.value_distribution = make_binned_value_distribution(
+            critic_distribution_mode,
+            critic_num_bins,
+            critic_support_min,
+            critic_support_max,
+            critic_hl_gauss_sigma_ratio,
+        )
+        critic_out = 1 if self.value_distribution is None else self.value_distribution.num_bins
+        critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_out), std=1))
         self.critic_head = nn.Sequential(*critic_head_layers)
 
     def forward(self, observations, state=None):

@@ -29,6 +29,7 @@ from pufferlib.config_schema import (
 )
 from pufferlib.ocean.drive import binding
 from pufferlib.pufferl import load_config
+from pufferlib.value_distribution import VALUE_DISTRIBUTION_OFF
 
 
 def _screaming_snake(name):
@@ -110,6 +111,18 @@ class TestConfigSchema(unittest.TestCase):
                     member.value,
                     f"binding.{const_name} != {enum_cls.__name__}.{member.name}.value",
                 )
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_distributional_critic_defaults_off(self):
+        args = load_config("puffer_drive")
+        self.assertEqual(args["policy"]["critic_distribution_mode"], VALUE_DISTRIBUTION_OFF)
+        self.assertIsNone(args["train"]["vf_clip_coef"])
+
+    @patch("sys.argv", ["pufferl.py", "policy.critic_distribution_mode=hl_gauss", "policy.critic_num_bins=201"])
+    def test_distributional_policy_override_composes(self):
+        args = load_config("puffer_drive")
+        self.assertEqual(args["policy"]["critic_distribution_mode"], "hl_gauss")
+        self.assertEqual(args["policy"]["critic_num_bins"], 201)
 
     def test_non_vehicle_controller_matches_controller_constants(self):
         """NonVehicleController reuses Controller's C constants; only its

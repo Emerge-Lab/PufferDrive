@@ -195,6 +195,14 @@ policy:
   # Critic head layer
   critic_hidden_size: 256
   critic_num_layers: 1
+  # Distributional critic - options: "off" (scalar MSE head), "two_hot", "hl_gauss"
+  critic_distribution_mode: "off"
+  # Bin support for the distributional critic; ignored when the mode is "off"
+  critic_num_bins: 101
+  critic_support_min: -10.0
+  critic_support_max: 10.0
+  # HL-Gauss target sigma as a multiple of the bin width
+  critic_hl_gauss_sigma_ratio: 0.75
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete
