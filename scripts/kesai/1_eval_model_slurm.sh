@@ -21,7 +21,7 @@ source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 .venv/bin/puffer eval puffer_drive carla \
-    vec.num_envs=128 \
+    vec.num_envs=64 \
     env.eval_perceived_size_margin_m=0.0 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
@@ -29,8 +29,8 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    vec.num_envs=128 \
-    eval.max_sdc_replay_workers=128 \
+    vec.num_envs=64 \
+    eval.max_sdc_replay_workers=64 \
     env.eval_perceived_size_margin_m=0.0 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
