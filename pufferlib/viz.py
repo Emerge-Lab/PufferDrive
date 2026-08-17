@@ -1477,7 +1477,8 @@ self.onmessage = async event => {
         }
         function updateUI(agent=null) {
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
-            document.getElementById('stepNow').textContent = f; document.getElementById('sld').value = f;
+            document.getElementById('stepNow').textContent = f;
+            if (!scrubbing) document.getElementById('sld').value = f;
             const hud = document.getElementById('hud-telemetry'), obsBox = document.getElementById('obs-container');
             if (followedId === null || !agent) { hud.style.display='none'; obsBox.style.display='none'; return; }
             hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'ego cam' : 'world cam';
@@ -1519,7 +1520,11 @@ self.onmessage = async event => {
             draw();
             requestAnimationFrame(loop);
         }
-        document.getElementById('sld').oninput = e => { step = +e.target.value; play=false; updateBtn(); draw(true); };
+        let scrubbing = false;
+        const sld = document.getElementById('sld');
+        sld.addEventListener('pointerdown', () => { scrubbing = true; play = false; updateBtn(); });
+        window.addEventListener('pointerup', () => { if (scrubbing) { scrubbing = false; draw(true); } });
+        sld.oninput = e => { step = +e.target.value; play=false; updateBtn(); draw(true); };
     </script>
 </body>
 </html>
