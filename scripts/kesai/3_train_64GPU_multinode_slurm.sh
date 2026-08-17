@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0009_${SEED}
+export RUN_NAME=k_scaled_0010_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -67,7 +67,6 @@ srun torchrun \
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    train.learning_rate=0.004 \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
@@ -90,13 +89,18 @@ fi
 # once per allocated node.
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/puffer eval puffer_drive carla \
-    vec.num_envs=16 \
+    vec.num_envs=64 \
+    num_scenarios=4000 \
+    eval.render_filter=all_infractions \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    vec.num_envs=64 \
+    eval.max_sdc_replay_workers=64 \
+    eval.render_filter=all_infractions \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
