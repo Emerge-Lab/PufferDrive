@@ -195,9 +195,11 @@ policy:
   # Actor head layer
   actor_hidden_size: 256
   actor_num_layers: 1
+  actor_head_layer_norm: false
   # Critic head layer
   critic_hidden_size: 256
   critic_num_layers: 1
+  critic_head_layer_norm: false
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete

@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0020_${SEED}
+export RUN_NAME=k_exp_0021_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -81,8 +81,11 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     train.learning_rate=0.004 \
+    policy.actor_head_layer_norm=True \
     policy.backbone_layer_norm=True \
     tb=True
+
+#     policy.critic_head_layer_norm=True \
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
 # score a stale final_model.pt from an earlier attempt (or fail on a missing one).
