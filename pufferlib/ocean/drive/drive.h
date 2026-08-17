@@ -1479,13 +1479,13 @@ static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yell
 }
 
 static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
-    // Violation = the front bumper crossing the stop line while red, as a one-step
-    // event; a car already past the line when the light turns red is never flagged.
-    float front_offset = 0.5f * agent->sim_length;
-    float front_x = agent->sim_x + front_offset * agent->cos_heading;
-    float front_y = agent->sim_y + front_offset * agent->sin_heading;
-    float prev_front_x = agent->prev_x + front_offset * agent->prev_cos_heading;
-    float prev_front_y = agent->prev_y + front_offset * agent->prev_sin_heading;
+    // Violation = the rear bumper crossing the stop line while red, as a one-step
+    // event (CARLA leaderboard convention: flagged once the car fully enters on red).
+    float rear_offset = -0.5f * agent->sim_length;
+    float rear_x = agent->sim_x + rear_offset * agent->cos_heading;
+    float rear_y = agent->sim_y + rear_offset * agent->sin_heading;
+    float prev_rear_x = agent->prev_x + rear_offset * agent->prev_cos_heading;
+    float prev_rear_y = agent->prev_y + rear_offset * agent->prev_sin_heading;
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -1522,14 +1522,14 @@ static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
             normal_x = -normal_x;
             normal_y = -normal_y;
         }
-        float s_prev = (prev_front_x - mid_x) * normal_x + (prev_front_y - mid_y) * normal_y;
-        float s_cur = (front_x - mid_x) * normal_x + (front_y - mid_y) * normal_y;
+        float s_prev = (prev_rear_x - mid_x) * normal_x + (prev_rear_y - mid_y) * normal_y;
+        float s_cur = (rear_x - mid_x) * normal_x + (rear_y - mid_y) * normal_y;
         if (!(s_prev < 0.0f && s_cur >= 0.0f)) {
             continue;
         }
         float crossing_frac = s_prev / (s_prev - s_cur);
-        float cross_x = prev_front_x + crossing_frac * (front_x - prev_front_x);
-        float cross_y = prev_front_y + crossing_frac * (front_y - prev_front_y);
+        float cross_x = prev_rear_x + crossing_frac * (rear_x - prev_rear_x);
+        float cross_y = prev_rear_y + crossing_frac * (rear_y - prev_rear_y);
         float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
         if (fabsf(lateral) <= 0.5f * STOP_LINE_EXTENSION_FACTOR * line_len) {
             return true;
@@ -1582,6 +1582,9 @@ static bool check_lane_change_red_light(Drive *env, Agent *agent) {
         if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
             continue;
         }
+        if (env->timestep < 1 || tc->states[env->timestep - 1] != TRAFFIC_CONTROL_STATE_RED) {
+            continue;
+        }
 
         for (int j = 0; j < tc->num_controlled_lanes; j++) {
             if (tc->controlled_lanes[j] != agent->current_lane_idx) {
@@ -1595,7 +1598,14 @@ static bool check_lane_change_red_light(Drive *env, Agent *agent) {
             if (dx * dx + dy * dy > STOP_LINE_DIST_SQ) {
                 continue;
             }
-            if (fabsf(compute_heading_diff(agent->sim_heading, tc->heading)) > STOP_LINE_HEADING_THRESHOLD) {
+            float line_dx = tc->stop_line[3] - tc->stop_line[0];
+            float line_dy = tc->stop_line[4] - tc->stop_line[1];
+            float normal_x = -line_dy, normal_y = line_dx;
+            if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
+                normal_x = -normal_x;
+                normal_y = -normal_y;
+            }
+            if ((agent_x - mid_x) * normal_x + (agent_y - mid_y) * normal_y < 0.0f) {
                 continue;
             }
 
