@@ -154,6 +154,8 @@ class DriveEnvConfig:
     obs_norm_veh_width_m: float = MISSING
     obs_norm_road_seg_length_m: float = MISSING
     obs_norm_road_seg_width_m: float = MISSING
+    eval_use_carla_vehicle_dims: bool = MISSING
+    eval_perceived_size_margin_m: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING
