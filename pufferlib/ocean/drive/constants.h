@@ -167,7 +167,6 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_MARGIN 0.2f
 
 // Agent-agent collision
-#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 

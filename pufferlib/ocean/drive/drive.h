@@ -1,6 +1,7 @@
 // _GNU_SOURCE is set via -D_GNU_SOURCE in setup.py's drive extension build
 // flags so GNU extensions (F_SETPIPE_SZ, writev, etc.) are visible regardless
 // of which header is included first.
+#include "carla_vehicle_dims.h"
 #include "datatypes.h"
 #include "error.h"
 #include "raylib.h"
@@ -285,6 +286,8 @@ struct Drive {
     float obs_norm_veh_width_m;
     float obs_norm_road_seg_length_m;
     float obs_norm_road_seg_width_m;
+    int eval_use_carla_vehicle_dims;
+    float eval_perceived_size_margin_m;
     float obs_range_traffic_control_m;
     float obs_range_partner_m;
     float obs_range_road_front_m;
@@ -2293,24 +2296,31 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    // Default vehicle dimensions
-    // length: [0.8, 7.0] m
-    // width: [0.8, 3.0] m
-    // width = min(width, length)
-    float spawn_length, spawn_width;
-    if (env->eval_mode) {
-        // Fixed size for eval mode
-        spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
-        spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
+    float spawn_length, spawn_width, spawn_height, spawn_wheelbase;
+    if (env->eval_mode && env->eval_use_carla_vehicle_dims) {
+        // Eval: uniform pick from the measured CARLA 0.9.15 vehicle fleet
+        const CarlaVehicleDims *vehicle_dims
+            = &CARLA_VEHICLE_DIMS[rng_below(&env->rng_state, CARLA_VEHICLE_DIMS_COUNT)];
+        spawn_length = vehicle_dims->length_m;
+        spawn_width = vehicle_dims->width_m;
+        spawn_height = vehicle_dims->height_m;
+        spawn_wheelbase = vehicle_dims->wheelbase_m;
     } else {
-        // Random size for training mode
-        spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
-        spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
+        if (env->eval_mode) {
+            // Legacy eval: uniform random car-sized boxes
+            spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
+            spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
+        } else {
+            // Training: random size
+            spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
+            spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
+        }
+        if (spawn_width > spawn_length) {
+            spawn_width = spawn_length;
+        }
+        spawn_height = 1.5f;
+        spawn_wheelbase = 0.6f * spawn_length;
     }
-    if (spawn_width > spawn_length) {
-        spawn_width = spawn_length;
-    }
-    float spawn_height = 1.5f; // Fixed height
 
     // Set spawn position on start lane
     float spawn_x, spawn_y, spawn_z, spawn_heading;
@@ -2406,7 +2416,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_height = spawn_height;
     update_agent_radius(agent);
     agent->sim_valid = 1;
-    agent->wheelbase = 0.6f * spawn_length;
+    agent->wheelbase = spawn_wheelbase;
     agent->current_lane_idx = start_lane_idx;
     float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
     agent->sim_vx = spawn_speed * agent->cos_heading;
@@ -3613,7 +3623,7 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
-    float perceived_margin = env->eval_mode ? 2.0f * EVAL_PERCEIVED_SIZE_MARGIN_M : 0.0f;
+    float perceived_margin = env->eval_mode ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;

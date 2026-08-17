@@ -1933,6 +1933,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
     env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
+    env->eval_use_carla_vehicle_dims = (int) unpack(kwargs, "eval_use_carla_vehicle_dims");
+    env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
