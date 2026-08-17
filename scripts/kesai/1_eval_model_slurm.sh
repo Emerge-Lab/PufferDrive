@@ -22,7 +22,6 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=128 \
-    env.eval_use_carla_vehicle_dims=False \
     env.eval_perceived_size_margin_m=0.0 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
@@ -37,7 +36,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-
+#     env.eval_use_carla_vehicle_dims=False \
 end=`date +%s`
 runtime=$((end-start))
 echo "END TIME: $(date)"
