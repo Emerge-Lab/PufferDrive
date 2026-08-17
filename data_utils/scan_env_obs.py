@@ -59,6 +59,8 @@ def main():
     if len(sys.argv) != 4:
         sys.exit(__doc__)
     resolved_path, start_idx, end_idx = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    if end_idx <= start_idx:
+        sys.exit(f"empty map range {start_idx}..{end_idx}")
     env_config = yaml.safe_load(open(resolved_path))["args"]["env"]
 
     bad_map_count = 0
