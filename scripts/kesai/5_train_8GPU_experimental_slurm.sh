@@ -78,16 +78,11 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.max_minibatch_size=131072 \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.reset_accel_on_stop=true \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.num_maps=128 \
     tb=True
-
-#
-#    train.adam_weight_decay=0.0 \
-#     train.adam_eps=0.00001 \
-#    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
-#    env.num_maps=128 \
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
 # score a stale final_model.pt from an earlier attempt (or fail on a missing one).
