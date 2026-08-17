@@ -2831,7 +2831,10 @@ void init(Drive *env) {
             fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env->map_name);
             return;
         }
-        init_grid_map(env);
+        if (init_grid_map(env) != 0) {
+            fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env->map_name);
+            return;
+        }
         int vision_half_range = (int) ceilf(
             fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
             / GRID_CELL_SIZE);

@@ -183,6 +183,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // =====================================================================================
 
 #define GRID_CELL_SIZE 5.0f
+#define MAX_GRID_CELL_COUNT 100000000
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
