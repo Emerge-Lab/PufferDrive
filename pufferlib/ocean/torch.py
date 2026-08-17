@@ -360,6 +360,12 @@ class Drive(nn.Module):
         k = torch.arange(num_classes)
         action_table = torch.stack([long_norm[k // num_lat], lat_norm[k % num_lat]], dim=-1)  # [num_classes, 2]
         self.register_buffer("action_table", action_table, persistent=False)
+        # The env decode is piecewise, so expectations must be taken in physical space, not normalized space.
+        action_table_physical = torch.stack([action_long[k // num_lat], action_lat[k % num_lat]], dim=-1)
+        self.register_buffer("action_table_physical", action_table_physical, persistent=False)
+        self.action_long_neg_scale = float(-action_long[0])
+        self.action_long_pos_scale = float(action_long[-1])
+        self.action_lat_scale = float(action_lat[-1])
 
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
@@ -487,5 +493,12 @@ class Drive(nn.Module):
         return self.action_table[actions.long()]
 
     def discrete_probs_to_continuous_mean(self, probs):
-        # probs: [..., num_classes] -> [..., 2]  (E[cont | probs])
-        return probs @ self.action_table.to(probs.dtype)
+        # probs: [..., num_classes] -> [..., 2]
+        mean_physical = probs @ self.action_table_physical.to(probs.dtype)
+        mean_long = mean_physical[..., 0]
+        mean_long_norm = torch.where(
+            mean_long < 0.0,
+            mean_long / self.action_long_neg_scale,
+            mean_long / self.action_long_pos_scale,
+        )
+        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1)

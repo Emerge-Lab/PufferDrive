@@ -82,7 +82,6 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
-EVAL_WANDB_KEY_PREFIX = "final_eval_"
 
 
 def torch_device(device):
@@ -1316,12 +1315,6 @@ class WandbLogger:
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
 
-    def log_summary(self, logs):
-        """Record run-level scalars. Unlike log(), carries no step, so a job that runs
-        after training cannot collide with the step history training already wrote."""
-        for key, value in logs.items():
-            self.wandb.run.summary[key] = value
-
     def finish(self):
         """End the wandb session without the model upload and early_stop that close() adds."""
         self.wandb.finish()
@@ -1723,7 +1716,7 @@ def eval(
     )
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
-        eval_output_dir = os.path.join(run_dir, "eval")
+        eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
@@ -1826,13 +1819,13 @@ def eval(
             )
 
     if wandb_run_identity is not None:
-        report_eval_to_wandb(args, benchmark_results, wandb_run_identity)
+        report_eval_to_wandb(args, benchmark_results, wandb_run_identity, eval_config["output_dir_name"])
     return benchmark_results
 
 
-def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
+def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
     """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, EVAL_WANDB_KEY_PREFIX)
+    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
     if not metrics:
         print("No evaluation metrics to report to wandb.")
         return
@@ -1842,7 +1835,7 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
 
     logger = WandbLogger(run_args, resume="must", upload_config=False)
     try:
-        logger.log_summary(metrics)
+        logger.log(metrics, step=None)
     finally:
         logger.finish()
     print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")

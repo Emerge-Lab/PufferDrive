@@ -166,6 +166,7 @@ def _standalone_eval_args(benchmark_config_path):
             "render_filter": None,
             "failure_replay_csv": None,
             "capture_observations": False,
+            "action_selection": "mode",
         }
     )
     args["wandb"] = False
@@ -384,6 +385,7 @@ def _replay_render_args():
     )
     _set_small_observation_config(args)
     args["eval"]["observation_replay_writer_count"] = 1
+    args["eval"]["action_selection"] = "mode"
     return args
 
 
@@ -717,6 +719,7 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "render_filter": None,
             "failure_replay_csv": None,
             "capture_observations": False,
+            "action_selection": "mode",
         }
     )
     args["wandb"] = False

@@ -282,6 +282,8 @@ eval:
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml
   benchmarks: null
   output_name: null
+  # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
+  output_dir_name: eval
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
   # Render scenarios where any configured metric is positive.
@@ -295,7 +297,7 @@ eval:
   observation_replay_wave_size: 16
   observation_replay_writer_count: 4
   # Options: sample | mode | mean
-  action_selection: mode
+  action_selection: mean
 controlled_exp:
   train:
     # [sweep.train.learning_rate]

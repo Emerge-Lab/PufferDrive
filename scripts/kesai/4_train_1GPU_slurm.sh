@@ -37,7 +37,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-bash scripts/kesai/build_ext_if_changed.sh || exit 1
+bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 torchrun --standalone --nnodes=1 --nproc-per-node=1 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
@@ -73,14 +73,12 @@ fi
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
-    eval.action_selection=mean \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.action_selection=mean \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
