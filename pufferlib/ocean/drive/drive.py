@@ -128,6 +128,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_veh_width_m=10.0,
         obs_norm_road_seg_length_m=5.0,
         obs_norm_road_seg_width_m=5.0,
+        obs_norm_z_m=10.0,
         eval_use_carla_vehicle_dims=False,
         eval_perceived_size_margin_m=0.1,
         obs_range_traffic_control_m=100.0,
@@ -267,6 +268,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
         self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
+        self.obs_norm_z_m = float(obs_norm_z_m)
         self.eval_use_carla_vehicle_dims = int(bool(eval_use_carla_vehicle_dims))
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
@@ -574,6 +576,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
             "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
+            "obs_norm_z_m": self.obs_norm_z_m,
             "eval_use_carla_vehicle_dims": self.eval_use_carla_vehicle_dims,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,

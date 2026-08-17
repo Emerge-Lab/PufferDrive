@@ -154,6 +154,7 @@ env:
   obs_norm_veh_width_m: 5.0
   obs_norm_road_seg_length_m: 10.0
   obs_norm_road_seg_width_m: 5.0
+  obs_norm_z_m: 10.0
   # --- Eval-only ---
   eval_use_carla_vehicle_dims: false
   eval_perceived_size_margin_m: 0.1

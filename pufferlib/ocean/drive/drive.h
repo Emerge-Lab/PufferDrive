@@ -286,6 +286,7 @@ struct Drive {
     float obs_norm_veh_width_m;
     float obs_norm_road_seg_length_m;
     float obs_norm_road_seg_width_m;
+    float obs_norm_z_m;
     int eval_use_carla_vehicle_dims;
     float eval_perceived_size_margin_m;
     float obs_range_traffic_control_m;
@@ -3765,7 +3766,7 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
             &rel_goal_y);
         obs[obs_idx++] = rel_goal_x / env->obs_norm_goal_offset_m;
         obs[obs_idx++] = rel_goal_y / env->obs_norm_goal_offset_m;
-        obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / Z_BUFFER;
+        obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / env->obs_norm_z_m;
     }
 
     return obs_idx;
@@ -3812,7 +3813,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         float dy = other->sim_y - ego->sim_y;
         float dz = other->sim_z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
-        if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m || fabsf(dz) > Z_BUFFER) {
+        if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m) {
             continue;
         }
         nearby_agents[nearby_count].index = index;
@@ -3853,7 +3854,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         project_vector_to_ego_frame(ego, other->cos_heading, other->sin_heading, &rel_heading_x, &rel_heading_y);
         obs[obs_idx++] = rel_x / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_y / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = nearby_agents[j].dz / Z_BUFFER;
+        obs[obs_idx++] = nearby_agents[j].dz / env->obs_norm_z_m;
         obs[obs_idx++] = other->sim_length / env->obs_norm_veh_length_m;
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
@@ -3955,7 +3956,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         if (rel_x < -env->obs_range_road_behind_m || rel_x > env->obs_range_road_front_m) {
             continue;
         }
-        if (fabsf(rel_y) > env->obs_range_road_side_m || fabsf(rel_z) > Z_BUFFER) {
+        if (fabsf(rel_y) > env->obs_range_road_side_m) {
             continue;
         }
 
@@ -3977,7 +3978,7 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         int feature_base = (*segment_count)++ * segment_features;
         segment_dest[feature_base] = rel_x / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
-        segment_dest[feature_base + 2] = rel_z / Z_BUFFER;
+        segment_dest[feature_base + 2] = rel_z / env->obs_norm_z_m;
         segment_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
         segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
         segment_dest[feature_base + 5] = rel_seg_dir_x;
@@ -4064,7 +4065,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
         float dy = mid_y - ego->sim_y;
         float dz = mid_z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
-        if (dist_sq > env->obs_range_traffic_control_m * env->obs_range_traffic_control_m || fabsf(dz) > Z_BUFFER) {
+        if (dist_sq > env->obs_range_traffic_control_m * env->obs_range_traffic_control_m) {
             continue;
         }
         visible_controls[visible_count].idx = j;
@@ -4106,7 +4107,7 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
         obs[obs_idx++] = rel_y1 / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_x2 / env->obs_norm_xy_offset_m;
         obs[obs_idx++] = rel_y2 / env->obs_norm_xy_offset_m;
-        obs[obs_idx++] = rel_z / Z_BUFFER;
+        obs[obs_idx++] = rel_z / env->obs_norm_z_m;
         obs[obs_idx++] = tc->type;
         obs[obs_idx++] = light_state;
         controls_written++;
