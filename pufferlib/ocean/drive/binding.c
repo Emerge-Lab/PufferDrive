@@ -26,13 +26,28 @@ static PyObject *map_cache_live_count_py(
     return PyLong_FromLong(live);
 }
 
+static void prepare_log(Drive *env);
+static PyObject *vec_prepare_log_py(PyObject *self __attribute__((unused)), PyObject *args);
+
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"vec_prepare_log", vec_prepare_log_py, METH_VARARGS, "Aggregate per-agent log EMAs into each env->log."}
 // clang-format on
 
 #include "../env_binding.h"
+
+static PyObject *vec_prepare_log_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    for (int i = 0; i < vec->num_envs; i++) {
+        prepare_log((Drive *) vec->envs[i]);
+    }
+    Py_RETURN_NONE;
+}
 
 // Seeds are 63-bit non-negative so they survive int64 round-trips (numpy, pandas, CSV).
 static int unpack_seed(PyObject *kwargs, uint64_t *seed_out) {
@@ -1925,6 +1940,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->log_ema_alpha = (float) unpack(kwargs, "log_ema_alpha");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
@@ -2007,6 +2023,10 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+    float agent_weighted_distance_travelled = log->agent_weighted_distance_travelled * n;
+    float agent_weighted_infractions = log->agent_weighted_infractions * n;
+    float agent_weighted_distance_per_infraction
+        = agent_weighted_distance_travelled / fmaxf(1.0f, agent_weighted_infractions);
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -2025,6 +2045,9 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "avg_distance_per_infraction", avg_distance_per_infraction);
     assign_to_dict(dict, "total_distance_travelled_sum", total_distance_travelled);
     assign_to_dict(dict, "total_infraction_count", total_infractions);
+    assign_to_dict(dict, "agent_weighted_distance_per_infraction", agent_weighted_distance_per_infraction);
+    assign_to_dict(dict, "agent_weighted_distance_travelled", agent_weighted_distance_travelled);
+    assign_to_dict(dict, "agent_weighted_infractions", agent_weighted_infractions);
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);

@@ -128,6 +128,11 @@ env:
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
   reward_ade: 0.0
+  # --- Logging ---
+  # EMA coefficient for per-agent log aggregation: on each completion,
+  # slot = alpha*slot + (1-alpha)*episode. 0 keeps only the newest episode;
+  # 0.707 has a half-life of ~2 episodes per agent.
+  log_ema_alpha: 0.707
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

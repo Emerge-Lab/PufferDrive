@@ -723,8 +723,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
-    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
-    float num_agents = (float) PyLong_AsLong(num_agents_arg);
     int num_keys = sizeof(Log) / sizeof(float);
 
     Log aggregate = {0};
@@ -737,8 +735,8 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
     PyObject *dict = PyDict_New();
 
-    // Only log if we have at least num_agents worth of data
-    if (aggregate.n < num_agents) {
+    // aggregate.n counts agent slots with data, not completions; n=0 would divide by zero below.
+    if (aggregate.n < 1) {
         return dict;
     }
 
