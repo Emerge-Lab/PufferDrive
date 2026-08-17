@@ -1411,7 +1411,8 @@ self.onmessage = async event => {
         let panelKey = null, refs = null, lastWarnKey = "";
         function ensurePanels() {
             // Panel structure is identical across agents/frames — build the DOM once, update textContent per frame.
-            const discrete = H.action_type === "discrete" && !!C.policy_probs;
+            // keyed on captured probs: a discrete policy on the continuous env still records them
+            const discrete = !!C.policy_probs;
             const actionDims = H.chunks.raw_action.shape.length > 2 ? H.chunks.raw_action.shape[2] : 1;
             const key = (discrete ? 'd' : 'c') + actionDims;
             if (refs && panelKey === key) return;
