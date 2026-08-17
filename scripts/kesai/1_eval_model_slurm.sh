@@ -9,6 +9,7 @@
 #SBATCH --output=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
 #SBATCH --error=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
 #SBATCH --partition=dev
+#SBATCH --array=1-8
 
 # print info about current job
 echo "START TIME: $(date)"
@@ -19,21 +20,15 @@ MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
 
 source .venv/bin/activate
 bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
-#.venv/bin/puffer eval puffer_drive carla \
-#    vec.num_envs=16 \
-#    eval.render_scenarios=true \
-#    eval.output_dir_name=eval_rendered \
-#    eval.capture_observations=true \
-#    eval.output_name=${RUN_NAME} \
-#    load_model_path=${MODEL_PATH} \
-#    wandb=True
+
+.venv/bin/puffer eval puffer_drive carla \
+    vec.num_envs=16 \
+    eval.output_name=${RUN_NAME} \
+    load_model_path=${MODEL_PATH} \
+    wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    #eval.render_scenarios=true \
-    eval.output_dir_name=eval_nuPlan2 \
-    #eval.capture_observations=true \
-    env.goal_source=gt \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True

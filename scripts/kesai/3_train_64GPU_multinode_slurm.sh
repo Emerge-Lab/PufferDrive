@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0007_${SEED}
+export RUN_NAME=k_scaled_0009_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -61,18 +61,13 @@ srun torchrun \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
-    train.total_timesteps=500000000000 \
+    train.total_timesteps=1000000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=196608 \
-    train.minibatch_size=196608 \
+    train.max_minibatch_size=131072 \
+    train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.num_agents=192 \
-    train.min_batch_size=786432 \
-    train.bptt_horizon=256 \
-    policy.action_type=discrete \
-    env.action_type=continuous \
-    train.adv_filter_enabled=False \
+    train.learning_rate=0.004 \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
