@@ -1,7 +1,6 @@
 // _GNU_SOURCE is set via -D_GNU_SOURCE in setup.py's drive extension build
 // flags so GNU extensions (F_SETPIPE_SZ, writev, etc.) are visible regardless
 // of which header is included first.
-#include "carla_vehicle_dims.h"
 #include "datatypes.h"
 #include "error.h"
 #include "raylib.h"
@@ -287,7 +286,6 @@ struct Drive {
     float obs_norm_road_seg_length_m;
     float obs_norm_road_seg_width_m;
     float obs_norm_z_m;
-    int eval_use_carla_vehicle_dims;
     float eval_perceived_size_margin_m;
     float obs_range_traffic_control_m;
     float obs_range_partner_m;
@@ -2388,31 +2386,21 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
 
-    float spawn_length, spawn_width, spawn_height, spawn_wheelbase;
-    if (env->eval_mode && env->eval_use_carla_vehicle_dims) {
-        // Eval: uniform pick from the measured CARLA 0.9.15 vehicle fleet
-        const CarlaVehicleDims *vehicle_dims
-            = &CARLA_VEHICLE_DIMS[rng_below(&env->rng_state, CARLA_VEHICLE_DIMS_COUNT)];
-        spawn_length = vehicle_dims->length_m;
-        spawn_width = vehicle_dims->width_m;
-        spawn_height = vehicle_dims->height_m;
-        spawn_wheelbase = vehicle_dims->wheelbase_m;
+    float spawn_length, spawn_width;
+    if (env->eval_mode) {
+        // Eval: uniform random car-sized boxes
+        spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
+        spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
     } else {
-        if (env->eval_mode) {
-            // Legacy eval: uniform random car-sized boxes
-            spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
-            spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
-        } else {
-            // Training: random size
-            spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
-            spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
-        }
-        if (spawn_width > spawn_length) {
-            spawn_width = spawn_length;
-        }
-        spawn_height = 1.5f;
-        spawn_wheelbase = 0.6f * spawn_length;
+        // Training: random size
+        spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
+        spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
     }
+    if (spawn_width > spawn_length) {
+        spawn_width = spawn_length;
+    }
+    float spawn_height = 1.5f;
+    float spawn_wheelbase = 0.6f * spawn_length;
 
     // Set spawn position on start lane
     float spawn_x, spawn_y, spawn_z, spawn_heading;
