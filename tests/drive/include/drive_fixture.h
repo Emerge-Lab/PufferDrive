@@ -113,6 +113,7 @@ static inline Drive drive_test_env_config(
     env.obs_norm_veh_width_m = 10.0f;
     env.obs_norm_road_seg_length_m = 5.0f;
     env.obs_norm_road_seg_width_m = 5.0f;
+    env.obs_norm_z_m = 10.0f;
     env.obs_range_traffic_control_m = 100.0f;
     env.obs_range_partner_m = 100.0f;
     env.obs_range_road_front_m = 120.0f;
