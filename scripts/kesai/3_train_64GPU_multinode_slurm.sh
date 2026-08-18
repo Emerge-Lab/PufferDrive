@@ -92,6 +92,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     vec.num_envs=64 \
     num_scenarios=4000 \
     eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
@@ -101,6 +102,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True

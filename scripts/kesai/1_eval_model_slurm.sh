@@ -33,6 +33,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
     eval.max_sdc_replay_workers=64 \
     env.goal_source=gt \
     eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
