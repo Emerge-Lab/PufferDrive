@@ -123,13 +123,12 @@ def emit_c_header(rows, path):
     for row in rows:
         lines.append(
             f'    {{"{row["id"]}", {row["length_m"]:.3f}f, {row["width_m"]:.3f}f,'
-            f' {row["height_m"]:.3f}f, {row["wheelbase_m"]:.3f}f}},'
+            f" {row['height_m']:.3f}f, {row['wheelbase_m']:.3f}f}},"
         )
     lines += [
         "};",
         "",
-        "#define CARLA_VEHICLE_DIMS_COUNT"
-        f" {len(rows)}",
+        f"#define CARLA_VEHICLE_DIMS_COUNT {len(rows)}",
         "",
     ]
     with open(path, "w") as f:

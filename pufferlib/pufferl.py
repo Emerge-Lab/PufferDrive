@@ -2015,7 +2015,9 @@ def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs
         f" num_eval_scenarios={worker_env_kwargs[w].get('num_eval_scenarios')})"
         for w in bad_workers
     )
-    raise pufferlib.APIUsageError(f"Non-finite {what} from {details} — scan the map set with data_utils/scan_map_bins.py")
+    raise pufferlib.APIUsageError(
+        f"Non-finite {what} from {details} — scan the map set with data_utils/scan_map_bins.py"
+    )
 
 
 def _run_eval_rollout(

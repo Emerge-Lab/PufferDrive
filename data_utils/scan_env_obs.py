@@ -39,7 +39,7 @@ def probe_map(env_config, map_idx):
         for step_idx in range(PROBE_STEPS + 1):
             finite_mask = np.isfinite(observations)
             nonfinite_count += int((~finite_mask).sum())
-            normalized_features = observations[:, : -VALID_COUNT_FEATURES]
+            normalized_features = observations[:, :-VALID_COUNT_FEATURES]
             normalized_finite = np.isfinite(normalized_features)
             if normalized_finite.any():
                 worst_abs = max(worst_abs, float(np.abs(normalized_features[normalized_finite]).max()))
