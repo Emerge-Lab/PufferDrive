@@ -95,12 +95,18 @@ def validate_training_evaluation_config(args):
     if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
         raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
 
-    load_benchmark_config(eval_config["benchmark_config"], evaluation_benchmarks)
+    load_benchmark_config(
+        eval_config["benchmark_config"], evaluation_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
+    )
     return True
 
 
-def load_benchmark_config(config_path, selected_names):
+def load_benchmark_config(config_path, selected_names, map_dir_override=None, num_scenarios_override=None):
     """Load the shared environment and selected benchmarks."""
+    if map_dir_override is not None and (not isinstance(map_dir_override, str) or not map_dir_override):
+        raise pufferlib.APIUsageError("eval.map_dir must be a non-empty path")
+    if num_scenarios_override is not None:
+        _positive_int(num_scenarios_override, "eval.num_scenarios")
     config = _load_yaml_mapping(config_path, "benchmark config")
     environment_config = _require_mapping(config.get("env"), "benchmark config env")
     unknown_env_keys = set(environment_config) - _drive_env_keys()
@@ -138,7 +144,11 @@ def load_benchmark_config(config_path, selected_names):
     resolved_benchmarks = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
+        if num_scenarios_override is not None:
+            benchmark = {**benchmark, "num_scenarios": num_scenarios_override}
         benchmark_environment_config = _require_mapping(benchmark.get("env"), f"Benchmark {name} env")
+        if map_dir_override is not None:
+            benchmark_environment_config = {**benchmark_environment_config, "map_dir": map_dir_override}
         unknown_env_keys = set(benchmark_environment_config) - _drive_env_keys()
         if unknown_env_keys:
             raise pufferlib.APIUsageError(

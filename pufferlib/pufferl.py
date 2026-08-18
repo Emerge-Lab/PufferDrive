@@ -1706,7 +1706,9 @@ def eval(
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config
-    environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
+    environment_config, benchmarks = drive_benchmark.load_benchmark_config(
+        benchmark_config_path, selected_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
+    )
     if use_training_config:
         if policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")

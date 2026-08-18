@@ -289,6 +289,10 @@ eval:
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml
   benchmarks: null
+  # Overrides env.map_dir of every selected benchmark; null keeps the benchmark's own map_dir.
+  map_dir: null
+  # Overrides num_scenarios of every selected benchmark; null keeps the benchmark's own count.
+  num_scenarios: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval
