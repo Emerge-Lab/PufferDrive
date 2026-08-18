@@ -229,6 +229,8 @@ train:
   max_grad_norm: 0.5
   normalize_rewards: false
   ent_coef: 0.01
+  # enable value bootstrap to simulate infinite time horizon
+  use_value_bootstrapping: true
   # ---
   adam_beta1: 0.9
   adam_beta2: 0.999
