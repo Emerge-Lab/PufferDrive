@@ -1705,7 +1705,7 @@ def eval(
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
 
-    report_to_wandb = bool(args["wandb"]) and not use_training_config
+    report_to_wandb = bool(args["wandb"]) and not use_training_config and failure_replay_csv is None
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(
         benchmark_config_path, selected_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
     )
