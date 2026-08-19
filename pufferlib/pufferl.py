@@ -1697,6 +1697,14 @@ def eval(
         raise pufferlib.APIUsageError(
             f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
         )
+    scenario_offset = eval_config["scenario_offset"]
+    if isinstance(scenario_offset, bool) or not isinstance(scenario_offset, int) or scenario_offset < 0:
+        raise pufferlib.APIUsageError("eval.scenario_offset must be a non-negative integer")
+    configured_output_subdir = eval_config["output_subdir"]
+    if configured_output_subdir is not None and (
+        not isinstance(configured_output_subdir, str) or not configured_output_subdir.strip()
+    ):
+        raise pufferlib.APIUsageError("eval.output_subdir must be a non-empty string or null")
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
             "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
@@ -1726,7 +1734,7 @@ def eval(
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
-        eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
+        eval_output_subdir = configured_output_subdir or datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
     if failure_replay_csv is not None:
         failure_replay_csv = os.path.abspath(failure_replay_csv)
@@ -1747,6 +1755,21 @@ def eval(
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
+        if scenario_offset:
+            if run_args["env"]["simulation_mode"] == "replay":
+                map_dir = run_args["env"]["map_dir"]
+                available_map_count = (
+                    1 if os.path.isfile(map_dir) else len([f for f in os.listdir(map_dir) if f.endswith(".bin")])
+                )
+                if scenario_offset + run_args["num_scenarios"] > available_map_count:
+                    raise pufferlib.APIUsageError(
+                        f"eval.scenario_offset ({scenario_offset}) plus num_scenarios "
+                        f"({run_args['num_scenarios']}) exceeds the {available_map_count} replay maps in {map_dir}"
+                    )
+            # Shard-unique seed: identical seeds make every shard re-draw the same scenarios.
+            shard_seed = (run_args["train"]["seed"] + scenario_offset) % (drive_benchmark.MAX_C_SEED + 1)
+            run_args["train"]["seed"] = shard_seed
+            run_args["vec"]["seed"] = shard_seed
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
@@ -1790,6 +1813,7 @@ def eval(
             num_workers,
             run_args["env"]["scenario_length"],
             capture_replay=render_scenarios,
+            scenario_offset=scenario_offset,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
         replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None

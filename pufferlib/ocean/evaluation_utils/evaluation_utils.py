@@ -287,11 +287,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     return args
 
 
-def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
+def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False, scenario_offset=0):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
-    next_map_idx = 0
+    next_map_idx = scenario_offset
     for worker_idx in range(num_workers):
         worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
         env_kwargs = copy.deepcopy(args["env"])

@@ -296,6 +296,10 @@ eval:
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval
+  # First global scenario index this process evaluates; used to shard one benchmark across GPUs.
+  scenario_offset: 0
+  # Fixed results subdir inside the benchmark output dir; null uses a timestamp.
+  output_subdir: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
   # Render scenarios where any configured metric is positive.

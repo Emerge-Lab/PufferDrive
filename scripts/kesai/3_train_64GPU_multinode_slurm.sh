@@ -88,10 +88,11 @@ fi
 # No srun: evaluation is a single-node job, run here on the batch host rather than
 # once per allocated node.
 echo "Training done, evaluating ${MODEL_PATH}"
-.venv/bin/puffer eval puffer_drive carla \
+.venv/bin/python scripts/parallel_eval.py carla \
+    --total-scenarios 40000 \
+    --num-gpus 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
-    vec.num_envs=64 \
-    num_scenarios=4000 \
+    vec.num_envs=16 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
