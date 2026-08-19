@@ -335,16 +335,17 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
     {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_LANE_CENTER     α_l-center ~ U(2.5e-4, 7.5e-3)
     {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
-    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
+    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity ~ U(0, 5e-3f)
     {2.5e-4f, 7.5e-3f, 0}, // REWARD_COEF_REVERSE         α_reverse ~ U(2.5e-4, 7.5e-3)
     {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
-    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
+    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep ~ U(0, 5e-5f)
     {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
 };
 
+// Meaning of the values: [min_range, max_range, use_log_scale]
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
@@ -355,10 +356,10 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.0f, 1.0f, 0},       // REWARD_COEF_VEL_ALIGN       α_vel-align ~ U(0, 1)
     {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_LANE_CENTER     α_l-center ~ logU(2.5e-4, 7.5e-3)
     {-0.5f, 0.5f, 0},      // REWARD_COEF_CENTER_BIAS     α_center-bias ~ U(-0.5, 0.5)
-    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity = 2.5e-3 (fixed)
+    {0.0f, 5e-3f, 0},      // REWARD_COEF_VELOCITY        α_velocity ~ U(0, 5e-3f)
     {2.5e-4f, 7.5e-3f, 1}, // REWARD_COEF_REVERSE         α_reverse ~ logU(2.5e-4, 7.5e-3)
     {0.0f, 1.0f, 0},       // REWARD_COEF_STOP_LINE       α_stop-line ~ U(0, 1)
-    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep = 2.5e-5 (fixed)
+    {0.0f, 5e-5f, 0},      // REWARD_COEF_TIMESTEP        α_timestep ~ U(0, 5e-5f)
     {0.0f, 1.0f, 0},       // REWARD_COEF_OVERSPEED       α_overspeed ~ U(0, 1)
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
@@ -1416,7 +1417,7 @@ static bool check_segment_crosses_moving_box(float ax, float ay, float bx, float
     return has_positive_cross != has_negative_cross;
 }
 
-static bool check_stop_line_crossing(Drive *env, Agent *agent, bool include_yellow_violation) {
+static bool check_agent_on_stop_line(Drive *env, Agent *agent, bool include_yellow_violation) {
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
 
@@ -2470,7 +2471,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_stop_line_crossing(env, &tmp_agent, true)) {
+        if (check_agent_on_stop_line(env, &tmp_agent, true)) {
             continue;
         }
 
