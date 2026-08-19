@@ -87,7 +87,7 @@ static int test_stationary_straddle_no_flag(void) {
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
     // the overlap check (spawn semantics) still sees the straddle
-    EXPECT_TRUE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
     return 0;
 }
 
