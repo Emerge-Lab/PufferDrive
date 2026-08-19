@@ -443,7 +443,7 @@ class PuffeRL:
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
                 # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0:
+                if l > 0 and config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
