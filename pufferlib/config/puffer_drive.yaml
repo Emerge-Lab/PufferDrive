@@ -237,6 +237,10 @@ train:
   max_grad_norm: 0.5
   normalize_rewards: false
   ent_coef: 0.01
+  # Linearly anneal ent_coef to ent_coef_final over the last (1 - start_frac) of training
+  ent_coef_anneal: false
+  ent_coef_final: 0.001
+  ent_coef_anneal_start_frac: 0.75
   # ---
   adam_beta1: 0.9
   adam_beta2: 0.999
@@ -264,6 +268,8 @@ train:
   adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
   adv_filter_threshold_scale: 0.01
+  # Also keep this random fraction of below-threshold transitions; 0 disables the leak
+  adv_filter_leak_fraction: 0.0
   # Rendering options
   render: false
   render_interval: 1000

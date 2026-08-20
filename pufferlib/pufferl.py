@@ -553,6 +553,18 @@ class PuffeRL:
 
         return logs
 
+    def _current_ent_coef(self):
+        config = self.config
+        ent_coef = config["ent_coef"]
+        if not config["ent_coef_anneal"]:
+            return ent_coef
+        progress = min(self.global_step / max(config["total_timesteps"], 1), 1.0)
+        start_frac = config["ent_coef_anneal_start_frac"]
+        if progress <= start_frac:
+            return ent_coef
+        anneal_frac = (progress - start_frac) / max(1.0 - start_frac, 1e-8)
+        return ent_coef + anneal_frac * (config["ent_coef_final"] - ent_coef)
+
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
@@ -606,7 +618,8 @@ class PuffeRL:
             v_loss = 0.5 * (newvalue - mb_returns) ** 2
             v_loss = v_loss.mean()
         entropy_loss = entropy.mean()
-        loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+        ent_coef = self._current_ent_coef()
+        loss = pg_loss + config["vf_coef"] * v_loss - ent_coef * entropy_loss
 
         return (
             loss,
@@ -616,6 +629,7 @@ class PuffeRL:
                 "policy_loss": pg_loss.item(),
                 "value_loss": v_loss.item(),
                 "entropy": entropy_loss.item(),
+                "ent_coef": ent_coef,
                 "old_approx_kl": old_approx_kl.item(),
                 "approx_kl": approx_kl.item(),
                 "clipfrac": clipfrac.item(),
@@ -739,6 +753,8 @@ class PuffeRL:
             threshold = config["adv_filter_threshold_scale"] * self.ema_max
 
             keep_mask = valid_abs_adv >= threshold
+            if config["adv_filter_leak_fraction"] > 0.0:
+                keep_mask |= torch.rand_like(valid_abs_adv) < config["adv_filter_leak_fraction"]
             keep_idx = valid_idx[keep_mask]
             num_valid, num_kept = valid_idx.numel(), keep_idx.numel()
 
@@ -826,7 +842,7 @@ class PuffeRL:
             self.optimizer.zero_grad()
 
         if total_minibatches > 0:
-            for key in ("policy_loss", "value_loss", "entropy", "old_approx_kl", "approx_kl", "clipfrac"):
+            for key in ("policy_loss", "value_loss", "entropy", "ent_coef", "old_approx_kl", "approx_kl", "clipfrac"):
                 losses[key] /= total_minibatches
 
         y_pred = flat_values[valid_idx]
