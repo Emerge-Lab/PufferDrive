@@ -293,6 +293,10 @@ eval:
   map_dir: null
   # Overrides num_scenarios of every selected benchmark; null keeps the benchmark's own count.
   num_scenarios: null
+  # Overrides env.reward_comfort of every selected benchmark; null keeps the benchmark's value.
+  reward_comfort: null
+  # Overrides env.reward_lane_center of every selected benchmark; null keeps the benchmark's value.
+  reward_lane_center: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

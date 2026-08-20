@@ -61,6 +61,12 @@ def _positive_int(value, label):
     return value
 
 
+def _non_negative_float(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise pufferlib.APIUsageError(f"{label} must be a non-negative number")
+    return float(value)
+
+
 def _resolve_map_indices(map_dir, map_names):
     """Map each logged map name back to its index in the sorted .bin map set."""
     if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
@@ -281,6 +287,10 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     args["vec"]["seed"] = seed
     args["env"].update(copy.deepcopy(environment_config))
     args["env"].update(copy.deepcopy(benchmark_environment_config))
+    for reward_key in ("reward_comfort", "reward_lane_center"):
+        reward_override = args["eval"].get(reward_key)
+        if reward_override is not None:
+            args["env"][reward_key] = _non_negative_float(reward_override, f"eval.{reward_key}")
     args["env"]["num_agents"] = eval_agent_count
     args["env"]["resample_frequency"] = benchmark_environment_config["scenario_length"]
     args["num_scenarios"] = benchmark["num_scenarios"]
