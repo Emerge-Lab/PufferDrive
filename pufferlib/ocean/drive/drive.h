@@ -74,7 +74,7 @@ struct Log {
     float red_light_violation_rate;
     float num_goals_reached;
     float comfort_violation_count;
-    float comfort_violation_timestep_count;
+    float comfort_violation_window_count;
     float velocity_progress_sum;
     float lane_center_rate;
     float lane_heading_aligned_rate;
@@ -478,6 +478,7 @@ static void reset_agent_state(Agent *agent) {
     agent->steering_angle = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
+    agent->comfort_violation_last_window_idx = -1;
     agent->phantom_braking_counter = 0;
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
@@ -2111,7 +2112,7 @@ static void add_log(Drive *env) {
         if (env->compute_eval_metrics) {
             env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
             env->logs[i].comfort_score = calculate_duration_scaled_violation_score(
-                env->logs[i].comfort_violation_timestep_count,
+                env->logs[i].comfort_violation_window_count,
                 env->logs[i].episode_length,
                 env->dt);
             calculate_puffer_score(&env->logs[i], env->logs[i].episode_length, env->dt);
@@ -3341,6 +3342,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
             float min_dist_sq = 1e18f;
             float closest_cross = 0.0f;
             for (int seg_idx = 0; seg_idx < num_segments; seg_idx++) {
+                if (fabsf(element->z[seg_idx] - agent->sim_z) > Z_BUFFER) {
+                    continue;
+                }
                 float seg_start_x = element->x[seg_idx];
                 float seg_start_y = element->y[seg_idx];
                 float seg_end_x = element->x[seg_idx + 1];
@@ -3682,8 +3686,15 @@ static void compute_rewards(Drive *env, int i) {
             agent_log->ttc_within_bound_rate = 1.0f;
         }
 
+        if (agent->metrics_array[COMFORT_VIOLATION_IDX] > 0.0f) {
+            int comfort_window_idx = (int) (agent_log->episode_length * env->dt / METRIC_SCORE_WINDOW_SECONDS);
+            if (comfort_window_idx != agent->comfort_violation_last_window_idx) {
+                agent->comfort_violation_last_window_idx = comfort_window_idx;
+                agent_log->comfort_violation_window_count += 1.0f;
+            }
+        }
         agent_log->comfort_score = calculate_duration_scaled_violation_score(
-            agent_log->comfort_violation_timestep_count,
+            agent_log->comfort_violation_window_count,
             agent_log->episode_length,
             env->dt);
     } else {

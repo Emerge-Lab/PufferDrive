@@ -109,6 +109,7 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
+    int comfort_violation_last_window_idx;
 
     // Goal positions
     float list_goal_x[MAX_GOALS];
