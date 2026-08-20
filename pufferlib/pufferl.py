@@ -510,7 +510,13 @@ class PuffeRL:
         logs = None
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
-        if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
+        should_log = done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25
+        if torch.distributed.is_initialized():
+            # mean_and_log gathers across ranks; the wall-clock gate must decide identically everywhere
+            should_log_flag = torch.tensor([1 if should_log else 0], device=config["device"], dtype=torch.int32)
+            torch.distributed.broadcast(should_log_flag, src=0)
+            should_log = bool(should_log_flag.item())
+        if should_log:
             self.losses = losses
             logs = self.mean_and_log()
             self.print_dashboard()
@@ -854,7 +860,28 @@ class PuffeRL:
 
     def mean_and_log(self):
         config = self.config
-        self.stats = pufferlib.utils.reduce_environment_metrics(self.stats)
+        env_metric_sums = pufferlib.utils.environment_metric_sums(self.stats)
+        losses = {k: float(v) for k, v in self.losses.items()}
+        if torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            rank_payloads = [None] * world_size
+            torch.distributed.all_gather_object(rank_payloads, (env_metric_sums, losses))
+            merged_env_sums = {}
+            loss_sums = {}
+            for rank_env_sums, rank_losses in rank_payloads:
+                for key, (value_sum, value_count) in rank_env_sums.items():
+                    entry = merged_env_sums.setdefault(key, [0.0, 0])
+                    entry[0] += value_sum
+                    entry[1] += value_count
+                for key, value in rank_losses.items():
+                    if value != value:  # skip NaN so one degenerate rank can't poison the mean
+                        continue
+                    entry = loss_sums.setdefault(key, [0.0, 0])
+                    entry[0] += value
+                    entry[1] += 1
+            env_metric_sums = merged_env_sums
+            losses = {key: total / count for key, (total, count) in loss_sums.items()}
+        self.stats = pufferlib.utils.finalize_environment_metrics(env_metric_sums)
 
         device = config["device"]
         agent_steps = int(dist_sum(self.global_step, device))
@@ -866,11 +893,8 @@ class PuffeRL:
             "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
             **{f"environment/{k}": v for k, v in self.stats.items()},
-            **{f"losses/{k}": v for k, v in self.losses.items()},
+            **{f"losses/{k}": v for k, v in losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
-            # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
-            # **{f'losses/{k}': dist_mean(v, device) for k, v in self.losses.items()},
-            # **{f'performance/{k}': dist_sum(v['elapsed'], device) for k, v in self.profile},
         }
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
