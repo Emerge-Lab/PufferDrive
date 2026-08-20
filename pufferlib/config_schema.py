@@ -91,6 +91,7 @@ class DriveEnvConfig:
     max_agents_per_env: int = MISSING
     action_type: ActionType = MISSING
     dynamics_model: DynamicsModel = MISSING
+    reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
@@ -122,6 +123,7 @@ class DriveEnvConfig:
     max_goal_spacing: float = MISSING
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
+    reward_log_sampling: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
     reward_offroad: float = MISSING
@@ -152,6 +154,8 @@ class DriveEnvConfig:
     obs_norm_veh_width_m: float = MISSING
     obs_norm_road_seg_length_m: float = MISSING
     obs_norm_road_seg_width_m: float = MISSING
+    obs_norm_z_m: float = MISSING
+    eval_perceived_size_margin_m: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING

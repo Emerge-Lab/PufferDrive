@@ -1411,7 +1411,8 @@ self.onmessage = async event => {
         let panelKey = null, refs = null, lastWarnKey = "";
         function ensurePanels() {
             // Panel structure is identical across agents/frames — build the DOM once, update textContent per frame.
-            const discrete = H.action_type === "discrete" && !!C.policy_probs;
+            // keyed on captured probs: a discrete policy on the continuous env still records them
+            const discrete = !!C.policy_probs;
             const actionDims = H.chunks.raw_action.shape.length > 2 ? H.chunks.raw_action.shape[2] : 1;
             const key = (discrete ? 'd' : 'c') + actionDims;
             if (refs && panelKey === key) return;
@@ -1477,7 +1478,8 @@ self.onmessage = async event => {
         }
         function updateUI(agent=null) {
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
-            document.getElementById('stepNow').textContent = f; document.getElementById('sld').value = f;
+            document.getElementById('stepNow').textContent = f;
+            if (!scrubbing) document.getElementById('sld').value = f;
             const hud = document.getElementById('hud-telemetry'), obsBox = document.getElementById('obs-container');
             if (followedId === null || !agent) { hud.style.display='none'; obsBox.style.display='none'; return; }
             hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'ego cam' : 'world cam';
@@ -1519,7 +1521,11 @@ self.onmessage = async event => {
             draw();
             requestAnimationFrame(loop);
         }
-        document.getElementById('sld').oninput = e => { step = +e.target.value; play=false; updateBtn(); draw(true); };
+        let scrubbing = false;
+        const sld = document.getElementById('sld');
+        sld.addEventListener('pointerdown', () => { scrubbing = true; play = false; updateBtn(); });
+        window.addEventListener('pointerup', () => { if (scrubbing) { scrubbing = false; draw(true); } });
+        sld.oninput = e => { step = +e.target.value; play=false; updateBtn(); draw(true); };
     </script>
 </body>
 </html>

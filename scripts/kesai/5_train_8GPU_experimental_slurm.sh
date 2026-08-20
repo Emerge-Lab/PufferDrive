@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0012_${SEED}
+export RUN_NAME=k_exp_0022_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -80,13 +80,11 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.precision=bfloat16 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
-    env.num_maps=128 \
+    train.learning_rate=0.004 \
+    policy.actor_head_layer_norm=True \
+    policy.backbone_layer_norm=True \
+    policy.critic_head_layer_norm=True \
     tb=True
-
-#     train.adam_eps=0.00001 \
-#    train.adam_weight_decay=0.0 \
-#    train.learning_rate=0.00025 \
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
 # score a stale final_model.pt from an earlier attempt (or fail on a missing one).
@@ -106,12 +104,16 @@ fi
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
+    eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
+    eval.render_filter=all_infractions \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True

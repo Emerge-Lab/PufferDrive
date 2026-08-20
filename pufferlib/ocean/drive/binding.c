@@ -1851,6 +1851,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->render_mode = (int) unpack(kwargs, "render_mode");
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
+    env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
@@ -1923,6 +1924,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
+    env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
@@ -1931,6 +1933,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
     env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
+    env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
+    env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");

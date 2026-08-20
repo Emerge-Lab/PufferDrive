@@ -167,7 +167,6 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_MARGIN 0.2f
 
 // Agent-agent collision
-#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 
@@ -183,6 +182,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // =====================================================================================
 
 #define GRID_CELL_SIZE 5.0f
+#define MAX_GRID_CELL_COUNT 100000000
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30

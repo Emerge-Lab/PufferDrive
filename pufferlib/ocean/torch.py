@@ -331,6 +331,8 @@ class Drive(nn.Module):
         shared_network: bool,
         mask_padded_features: bool,
         action_type: str,
+        actor_head_layer_norm: bool = False,
+        critic_head_layer_norm: bool = False,
     ):
         super().__init__()
 
@@ -413,6 +415,8 @@ class Drive(nn.Module):
         actor_in = backbone_out_dim
         for _ in range(actor_num_layers):
             actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_hidden_size)))
+            if actor_head_layer_norm:
+                actor_head_layers.append(nn.LayerNorm(actor_hidden_size))
             actor_head_layers.append(nn.ReLU())
             actor_in = actor_hidden_size
         actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, sum(self.atn_dim)), std=0.01))
@@ -423,6 +427,8 @@ class Drive(nn.Module):
         critic_in = backbone_out_dim
         for _ in range(critic_num_layers):
             critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
+            if critic_head_layer_norm:
+                critic_head_layers.append(nn.LayerNorm(critic_hidden_size))
             critic_head_layers.append(nn.ReLU())
             critic_in = critic_hidden_size
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
@@ -501,4 +507,5 @@ class Drive(nn.Module):
             mean_long / self.action_long_neg_scale,
             mean_long / self.action_long_pos_scale,
         )
-        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1)
+        # low-precision matmul can overshoot the [-1, 1] bounds by an epsilon
+        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1).clamp_(-1.0, 1.0)

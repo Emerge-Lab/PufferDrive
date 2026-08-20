@@ -890,6 +890,9 @@ class PuffeRL:
         model_path = os.path.join(models_dir, model_name)
         if not os.path.exists(model_path):
             torch.save(self.uncompiled_policy.state_dict(), model_path)
+        for old_model_path in glob.glob(os.path.join(models_dir, "model_*.pt")):
+            if old_model_path != model_path:
+                os.remove(old_model_path)
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
         new_best = current_score > self.best_score
@@ -920,6 +923,9 @@ class PuffeRL:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
+            for old_best_path in glob.glob(os.path.join(path, "best_models", "best_trainer_state_*.pt")):
+                if old_best_path != best_state_file:
+                    os.remove(old_best_path)
             print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
 
         return model_path
@@ -1291,7 +1297,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow", upload_config=True):
+    def __init__(self, args, load_id=None, resume="allow", upload_config=True, disable_meta=False):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1306,7 +1312,7 @@ class WandbLogger:
             resume=resume,
             config=args if upload_config else None,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
+            settings=wandb.Settings(console="off", x_disable_meta=disable_meta),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
@@ -1833,7 +1839,7 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir
     run_args = copy.copy(args)
     run_args.update(wandb_run_identity)
 
-    logger = WandbLogger(run_args, resume="must", upload_config=False)
+    logger = WandbLogger(run_args, resume="must", upload_config=False, disable_meta=True)
     try:
         logger.log(metrics, step=None)
     finally:
@@ -1998,6 +2004,20 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
+def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs):
+    if np.isfinite(batch_array).all():
+        return
+    rows_per_worker = batch_array.shape[0] // num_workers
+    bad_rows = np.unique(np.where(~np.isfinite(batch_array))[0])
+    bad_workers = sorted({int(row) // rows_per_worker for row in bad_rows})
+    details = ", ".join(
+        f"worker {w} (starting_map={worker_env_kwargs[w].get('starting_map')},"
+        f" num_eval_scenarios={worker_env_kwargs[w].get('num_eval_scenarios')})"
+        for w in bad_workers
+    )
+    raise pufferlib.APIUsageError(f"Non-finite {what} from {details}")
+
+
 def _run_eval_rollout(
     args,
     env_name,
@@ -2078,6 +2098,7 @@ def _run_eval_rollout(
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
+        _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
         if padding_agent_count:
@@ -2135,8 +2156,9 @@ def _run_eval_rollout(
                 else:
                     raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action
-            if isinstance(logits, torch.distributions.Normal):
+            if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
                 replay_capture.capture_frame(

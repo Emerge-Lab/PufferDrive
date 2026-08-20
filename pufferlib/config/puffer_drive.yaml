@@ -48,6 +48,8 @@ env:
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
+  # Jerk dynamics: Zero both accelerations when velocity crosses zero
+  reset_accel_on_stop: false
   # Time delta between steps in seconds
   dt: 0.3
   # Optional nonzero launch speed for gigaflow random spawns
@@ -114,6 +116,7 @@ env:
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
+  reward_log_sampling: false
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
@@ -151,6 +154,9 @@ env:
   obs_norm_veh_width_m: 5.0
   obs_norm_road_seg_length_m: 10.0
   obs_norm_road_seg_width_m: 5.0
+  obs_norm_z_m: 10.0
+  # --- Eval-only ---
+  eval_perceived_size_margin_m: 0.1
   # --- Observation ranges (meters, ego frame) ---
   obs_range_road_front_m: 200.0
   obs_range_road_behind_m: 60.0
@@ -192,9 +198,11 @@ policy:
   # Actor head layer
   actor_hidden_size: 256
   actor_num_layers: 1
+  actor_head_layer_norm: false
   # Critic head layer
   critic_hidden_size: 256
   critic_num_layers: 1
+  critic_head_layer_norm: false
   # Dual or shared actor-critic backbone
   shared_network: false
   action_type: discrete

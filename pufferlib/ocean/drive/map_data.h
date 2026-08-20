@@ -48,7 +48,7 @@ static void add_entity_to_grid(
     cell_entities_insert_index[grid_index] = count + 1;
 }
 
-static void init_grid_map(Drive *env) {
+static int init_grid_map(Drive *env) {
     env->grid_map = (GridMap *) calloc(1, sizeof(GridMap));
 
     float top_left_x = 0.0f, top_left_y = 0.0f, bottom_right_x = 0.0f, bottom_right_y = 0.0f;
@@ -89,9 +89,24 @@ static void init_grid_map(Drive *env) {
 
     float grid_width = bottom_right_x - top_left_x;
     float grid_height = top_left_y - bottom_right_y;
+    if (!first_valid_point || !isfinite(grid_width) || !isfinite(grid_height)) {
+        fprintf(stderr, "[ERROR] -> Map has no valid road geometry extent for grid\n");
+        return 1;
+    }
     env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
     env->grid_map->grid_rows = ceil(grid_height / GRID_CELL_SIZE);
-    int grid_cell_count = env->grid_map->grid_cols * env->grid_map->grid_rows;
+    long long grid_cell_count_wide = (long long) env->grid_map->grid_cols * (long long) env->grid_map->grid_rows;
+    if (env->grid_map->grid_cols < 1 || env->grid_map->grid_rows < 1 || grid_cell_count_wide > MAX_GRID_CELL_COUNT) {
+        fprintf(
+            stderr,
+            "[ERROR] -> Invalid grid dimensions %d x %d from map extent %.1f x %.1f\n",
+            env->grid_map->grid_cols,
+            env->grid_map->grid_rows,
+            grid_width,
+            grid_height);
+        return 1;
+    }
+    int grid_cell_count = (int) grid_cell_count_wide;
     env->grid_map->cells = (GridMapEntity **) calloc(grid_cell_count, sizeof(GridMapEntity *));
     env->grid_map->cell_entities_count = (int *) calloc(grid_cell_count, sizeof(int));
     // First pass to count entities in each grid cell
@@ -165,6 +180,7 @@ static void init_grid_map(Drive *env) {
     }
     free(drivable_grid_seen);
     free(cell_entities_insert_index);
+    return 0;
 }
 
 static void init_neighbor_offsets(Drive *env) {

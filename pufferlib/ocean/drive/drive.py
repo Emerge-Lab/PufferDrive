@@ -85,6 +85,7 @@ class Drive(pufferlib.PufferEnv):
         max_agents_per_env=64,
         action_type="discrete",
         dynamics_model="classic",
+        reset_accel_on_stop=False,
         simulation_mode="gigaflow",
         termination_mode=0,
         inactive_agent_threshold=0.4,
@@ -110,6 +111,7 @@ class Drive(pufferlib.PufferEnv):
         obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
+        reward_log_sampling=False,
         compute_eval_metrics=True,
         shared_network=True,
         obs_slots_lane_n=32,
@@ -126,6 +128,8 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_veh_width_m=10.0,
         obs_norm_road_seg_length_m=5.0,
         obs_norm_road_seg_width_m=5.0,
+        obs_norm_z_m=10.0,
+        eval_perceived_size_margin_m=0.1,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
         obs_range_road_front_m=120.0,
@@ -147,6 +151,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
+        self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
@@ -221,6 +226,7 @@ class Drive(pufferlib.PufferEnv):
             self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.reset_accel_on_stop = reset_accel_on_stop
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
@@ -261,6 +267,8 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
         self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
+        self.obs_norm_z_m = float(obs_norm_z_m)
+        self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
         self.obs_range_partner_m = float(obs_range_partner_m)
         self.obs_range_road_front_m = float(obs_range_road_front_m)
@@ -502,6 +510,7 @@ class Drive(pufferlib.PufferEnv):
             "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
+            "reset_accel_on_stop": self.reset_accel_on_stop,
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
@@ -555,6 +564,7 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
+            "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
@@ -564,6 +574,8 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
             "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
+            "obs_norm_z_m": self.obs_norm_z_m,
+            "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
