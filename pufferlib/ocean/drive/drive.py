@@ -79,6 +79,7 @@ class Drive(pufferlib.PufferEnv):
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
+        stagger_episode_starts=False,
         num_maps=100,
         num_agents=512,
         min_agents_per_env=32,
@@ -181,8 +182,10 @@ class Drive(pufferlib.PufferEnv):
             self.goal_regen_mode = binding.GOAL_REGEN_FINITE
         elif goal_regen_mode == "rolling":
             self.goal_regen_mode = binding.GOAL_REGEN_ROLLING
+        elif goal_regen_mode == "none":
+            self.goal_regen_mode = binding.GOAL_REGEN_NONE
         else:
-            raise ValueError(f"goal_regen_mode must be 'finite' or 'rolling'. Got: {goal_regen_mode}")
+            raise ValueError(f"goal_regen_mode must be 'finite', 'rolling', or 'none'. Got: {goal_regen_mode}")
         if goal_source == "route":
             self.goal_source = binding.GOAL_SOURCE_ROUTE
         elif goal_source == "map":
@@ -216,6 +219,7 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
+        self.stagger_episode_starts = bool(stagger_episode_starts)
         if use_neighbor_cache not in (0, 1):
             raise ValueError(f"use_neighbor_cache must be 0 (off) or 1 (on). Got: {use_neighbor_cache}")
         self.use_neighbor_cache = use_neighbor_cache
@@ -537,6 +541,7 @@ class Drive(pufferlib.PufferEnv):
             "num_goals": self.num_goals,
             "goal_regen_mode": self.goal_regen_mode,
             "goal_source": self.goal_source,
+            "stagger_episode_starts": self.stagger_episode_starts,
             "obs_goal_lane_distance": self.obs_goal_lane_distance,
             "obs_slots_lane_n": self.obs_slots_lane_n,
             "obs_slots_boundary_n": self.obs_slots_boundary_n,

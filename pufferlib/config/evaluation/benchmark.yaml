@@ -26,6 +26,8 @@ env:
   max_goal_spacing: 30.0
   obs_dropout_lane: 0.0
   obs_dropout_boundary: 0.0
+  # Paper evals observe up to 40 nearest agents; the pooled partner encoder is slot-count agnostic
+  obs_slots_partners_n: 40
   partner_blindness_prob: 0.0
   partner_blindness_trigger_prob: 0.0
   phantom_braking_prob: 0.0
@@ -42,7 +44,14 @@ benchmarks:
       num_maps: 8
       max_agents_per_env: 50
       max_scenarios_per_batch: null
-      scenario_length: 6000
+      scenario_length: 9000
+      dt: 0.066
+      goal_radius: 10.0
+      goal_speed: 3.0
+      goal_source: "map"
+      goal_regen_mode: "none"
+      min_goal_spacing: 20.0
+      max_goal_spacing: 200.0
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
 
@@ -54,7 +63,14 @@ benchmarks:
       num_maps: 8
       max_agents_per_env: 50
       max_scenarios_per_batch: null
-      scenario_length: 500
+      scenario_length: 750
+      dt: 0.066
+      goal_radius: 10.0
+      goal_speed: 3.0
+      goal_source: "map"
+      goal_regen_mode: "none"
+      min_goal_spacing: 20.0
+      max_goal_spacing: 200.0
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
 

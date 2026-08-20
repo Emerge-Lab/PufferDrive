@@ -75,6 +75,7 @@ class InitMode(Enum):
 class GoalRegen(Enum):
     finite = 0
     rolling = 1
+    none = 2
 
 
 class GoalSource(Enum):
@@ -101,6 +102,7 @@ class DriveEnvConfig:
     use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING
     resample_frequency: int = MISSING
+    stagger_episode_starts: bool = MISSING
     termination_mode: int = MISSING
     inactive_agent_threshold: float = MISSING
     terminate_on_goal: int = MISSING

@@ -1398,6 +1398,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "GOAL_REGEN_FINITE", GOAL_REGEN_FINITE);
     PyModule_AddIntConstant(m, "GOAL_REGEN_ROLLING", GOAL_REGEN_ROLLING);
+    PyModule_AddIntConstant(m, "GOAL_REGEN_NONE", GOAL_REGEN_NONE);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_ROUTE", GOAL_SOURCE_ROUTE);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_MAP", GOAL_SOURCE_MAP);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_GT", GOAL_SOURCE_GT);

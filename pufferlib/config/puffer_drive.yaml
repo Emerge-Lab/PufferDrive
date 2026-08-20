@@ -43,7 +43,7 @@ env:
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
-  max_agents_per_env: 120
+  max_agents_per_env: 150
   # Actions type - options: "discrete", "continuous"
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
@@ -55,19 +55,21 @@ env:
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
-  collision_behavior: stop
+  collision_behavior: ignore
   # Offroad behavior - options: "ignore", "stop", "remove"
-  offroad_behavior: stop
+  offroad_behavior: ignore
   # Traffic light behavior - options: "ignore", "stop", "remove"
-  traffic_light_behavior: stop
+  traffic_light_behavior: ignore
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
   use_neighbor_cache: 1
   # Number of steps before reset
-  scenario_length: 2560
+  scenario_length: 1200
   # Frequency of resampling scenario (in steps), 0 to disable
   resample_frequency: 256000
+  # Randomize each env's first-episode length so parallel envs reset on independent schedules
+  stagger_episode_starts: true
   # End of episode - options: 0 - scenario_length, 1 - early reset when too many agents are removed
   termination_mode: 1
   # Ratio of inactive agents (stopped/removed) that triggers early reset (used when termination_mode = 1)
@@ -98,8 +100,8 @@ env:
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
   # --- Goal / Target ---
-  # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
-  goal_regen_mode: "finite"
+  # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window), "none" (park at final goal)
+  goal_regen_mode: "none"
   # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
   goal_source: map
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
@@ -109,7 +111,7 @@ env:
   # Maximum speed at final waypoint to count goal reward
   goal_speed: 3.0
   # Number of target waypoints in the observation (including goal)
-  num_goals: 3
+  num_goals: 4
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
   max_goal_spacing: 200.0
@@ -139,7 +141,7 @@ env:
   # --- Observation slot counts ---
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
-  obs_slots_partners_n: 16
+  obs_slots_partners_n: 20
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.3

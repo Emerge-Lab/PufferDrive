@@ -1852,6 +1852,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
+    env->stagger_episode_starts = (bool) unpack(kwargs, "stagger_episode_starts");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");

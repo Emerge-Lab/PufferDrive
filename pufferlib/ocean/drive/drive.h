@@ -227,6 +227,8 @@ struct Drive {
     float spawn_initial_speed;
     int dynamics_model;
     int reset_accel_on_stop;
+    int stagger_episode_starts;
+    int first_episode_stagger_pending;
     int init_mode;
     int control_mode;
     int collision_behavior;
@@ -2076,7 +2078,7 @@ static void add_log(Drive *env) {
         int num_goals_reached = env->logs[i].num_goals_reached;
         episode_log.num_goals_reached += num_goals_reached;
         // Score: 1 per agent that reached its full goal set without being removed/stopped.
-        if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
+        if (num_goals_reached >= agent->goal_count && !agent->removed && !agent->stopped) {
             episode_log.score += 1.0f;
         }
         if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
@@ -2897,6 +2899,7 @@ void remove_bad_trajectories(Drive *env) {
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
+    env->first_episode_stagger_pending = 1;
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env) : NULL;
     if (shared != NULL) {
         // Cache hit: load only the per-env data (agents, traffic-control elements),
@@ -4415,6 +4418,15 @@ void c_reset(Drive *env) {
     env->timestep = env->init_step;
 
     begin_episode_rng(env);
+    if (env->first_episode_stagger_pending) {
+        env->first_episode_stagger_pending = 0;
+        int remaining_steps = env->scenario_length - env->timestep;
+        if (env->stagger_episode_starts && env->simulation_mode == SIMULATION_MODE_GIGAFLOW && !env->eval_mode
+            && remaining_steps > 1) {
+            // Shorten only the first episode so parallel envs keep desynchronized reset schedules
+            env->timestep += (int) rng_below(&env->rng_state, remaining_steps);
+        }
+    }
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
         int num_reset = 0;
@@ -4644,6 +4656,9 @@ void c_step(Drive *env) {
         if (env->goal_regen_mode == GOAL_REGEN_ROLLING) {
             regen = !roll_goals(env, agent);
         } else if (agent->current_goal_idx == agent->goal_count) {
+            if (env->goal_regen_mode == GOAL_REGEN_NONE) {
+                continue; // park at the final goal; reached-goal check requires current_goal_idx < goal_count
+            }
             regen = true;
         } else {
             agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];

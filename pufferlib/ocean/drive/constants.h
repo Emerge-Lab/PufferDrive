@@ -108,6 +108,7 @@
 // Goal set refresh policy
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
 #define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier
+#define GOAL_REGEN_NONE 2    // no refresh: agent parks at its final goal
 
 // Where goals are sampled from
 #define GOAL_SOURCE_ROUTE 0 // seed from the agent's own forward route
