@@ -92,7 +92,8 @@ echo "Training done, evaluating ${MODEL_PATH}"
     --total-scenarios 40000 \
     --num-gpus 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
-    vec.num_envs=16 \
+    vec.num_envs=64 \
+    vec.num_workers=16 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
