@@ -41,8 +41,6 @@ fi
     --num-nodes 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
     vec.num_envs=64 \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
@@ -54,8 +52,6 @@ fi
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
