@@ -1,8 +1,11 @@
-"""Shard one PufferDrive eval benchmark across GPUs and aggregate the results.
+"""Shard one PufferDrive eval benchmark across GPUs or nodes and aggregate the results.
 
-Each GPU runs an independent `puffer eval` process over a disjoint scenario
+Each shard runs an independent `puffer eval` process over a disjoint scenario
 window (eval.scenario_offset), then the per-shard episode_metrics.csv files are
 merged into a single report and optionally attached to the training wandb run.
+--num-gpus runs one shard per local GPU; --num-nodes runs one shard per node of
+the surrounding SLURM allocation (each claiming a full node's CPUs and one GPU
+via srun), so every shard gets its own node's cores.
 
 Usage (from the repo root, venv active):
     python scripts/parallel_eval.py carla \
@@ -28,7 +31,9 @@ def parse_arguments():
     parser.add_argument("benchmark", help="Benchmark name from the benchmark config, e.g. carla")
     parser.add_argument("--env-name", default="puffer_drive")
     parser.add_argument("--total-scenarios", type=int, required=True)
-    parser.add_argument("--num-gpus", type=int, required=True)
+    shard_group = parser.add_mutually_exclusive_group(required=True)
+    shard_group.add_argument("--num-gpus", type=int, help="Run one shard per local GPU")
+    shard_group.add_argument("--num-nodes", type=int, help="Run one shard per SLURM node via srun, 1 GPU each")
     arguments, overrides = parser.parse_known_args()
     for override in overrides:
         if override.startswith("--"):
@@ -57,11 +62,11 @@ def resolve_gpu_ids(num_gpus):
     return gpu_ids[:num_gpus]
 
 
-def plan_shards(total_scenarios, num_gpus):
-    scenarios_per_shard, remainder = divmod(total_scenarios, num_gpus)
+def plan_shards(total_scenarios, num_shards):
+    scenarios_per_shard, remainder = divmod(total_scenarios, num_shards)
     shards = []
     scenario_offset = 0
-    for shard_idx in range(num_gpus):
+    for shard_idx in range(num_shards):
         shard_scenario_count = scenarios_per_shard + (1 if shard_idx < remainder else 0)
         shards.append((scenario_offset, shard_scenario_count))
         scenario_offset += shard_scenario_count
@@ -77,10 +82,18 @@ def print_log_tail(log_path):
 
 def main():
     arguments, overrides = parse_arguments()
-    if arguments.num_gpus < 1:
-        raise SystemExit("--num-gpus must be at least 1")
-    if arguments.total_scenarios < arguments.num_gpus:
-        raise SystemExit("--total-scenarios must be at least --num-gpus")
+    use_srun = arguments.num_nodes is not None
+    num_shards = arguments.num_nodes if use_srun else arguments.num_gpus
+    if num_shards < 1:
+        raise SystemExit("--num-gpus/--num-nodes must be at least 1")
+    if arguments.total_scenarios < num_shards:
+        raise SystemExit("--total-scenarios must be at least the shard count")
+    if use_srun:
+        if "SLURM_JOB_ID" not in os.environ:
+            raise SystemExit("--num-nodes requires running inside a SLURM allocation")
+        cpus_per_shard = os.environ.get("SLURM_CPUS_PER_TASK")
+        if cpus_per_shard is None:
+            raise SystemExit("--num-nodes requires SLURM_CPUS_PER_TASK (set #SBATCH --cpus-per-task)")
     for override in overrides:
         if override.partition("=")[0] in RESERVED_OVERRIDE_KEYS:
             raise SystemExit(f"Override '{override}' is managed by parallel_eval.py; remove it")
@@ -103,8 +116,8 @@ def main():
     aggregate_dir = os.path.join(benchmark_dir, stamp)
     os.makedirs(aggregate_dir)
 
-    gpu_ids = resolve_gpu_ids(arguments.num_gpus)
-    shards = plan_shards(arguments.total_scenarios, arguments.num_gpus)
+    gpu_ids = None if use_srun else resolve_gpu_ids(num_shards)
+    shards = plan_shards(arguments.total_scenarios, num_shards)
     processes = []
     for shard_idx, (scenario_offset, shard_scenario_count) in enumerate(shards):
         shard_subdir = f"{stamp}_shard{shard_idx:02d}"
@@ -120,13 +133,27 @@ def main():
             f"eval.scenario_offset={scenario_offset}",
             f"eval.output_subdir={shard_subdir}",
         ]
-        shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
+        if use_srun:
+            # Full-node CPU request forces SLURM to place each shard step on its own node.
+            command = [
+                "srun",
+                "--nodes=1",
+                "--ntasks=1",
+                f"--cpus-per-task={cpus_per_shard}",
+                "--gres=gpu:1",
+                *command,
+            ]
+            shard_env = dict(os.environ)
+            placement = "own node via srun"
+        else:
+            shard_env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu_ids[shard_idx])
+            placement = f"GPU {gpu_ids[shard_idx]}"
         log_path = os.path.join(aggregate_dir, f"shard{shard_idx:02d}.log")
         log_file = open(log_path, "w")
         process = subprocess.Popen(command, env=shard_env, stdout=log_file, stderr=subprocess.STDOUT)
         processes.append((shard_idx, process, log_file, log_path, shard_subdir))
         print(
-            f"Shard {shard_idx}: GPU {gpu_ids[shard_idx]}, scenarios [{scenario_offset}, "
+            f"Shard {shard_idx}: {placement}, scenarios [{scenario_offset}, "
             f"{scenario_offset + shard_scenario_count}), log {log_path}"
         )
 
