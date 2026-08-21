@@ -319,6 +319,18 @@ class Drive(pufferlib.PufferEnv):
 
         self.single_observation_space = gymnasium.spaces.Box(low=-1, high=1, shape=(self.num_obs,), dtype=np.float32)
 
+        # Marks dims expected in [-1, 1] for obs-stat logging; excludes raw enum/count dims (one-hot/mask in the policy)
+        self.normalized_obs_mask = np.ones(self.num_obs, dtype=bool)
+        traffic_control_base = (
+            self.num_obs
+            - self.obs_valid_count_features
+            - self.obs_slots_traffic_controls_n * self.traffic_control_features
+        )
+        for slot_idx in range(self.obs_slots_traffic_controls_n):
+            slot_end = traffic_control_base + (slot_idx + 1) * self.traffic_control_features
+            self.normalized_obs_mask[slot_end - 2 : slot_end] = False
+        self.normalized_obs_mask[self.num_obs - self.obs_valid_count_features :] = False
+
         self.init_step = init_step
         # Per C environment randomized start point. When on, each parallel environment
         # starts the episode at a randomized point.

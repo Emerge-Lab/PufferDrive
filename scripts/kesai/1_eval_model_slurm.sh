@@ -23,8 +23,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 #.venv/bin/python scripts/parallel_eval.py carla \
 #    --total-scenarios 40000 \
 #    --num-gpus 8 \
-#    vec.num_envs=64 \
-#    vec.num_workers=16 \
+#    vec.num_envs=16 \
 #    eval.output_name=${RUN_NAME} \
 #    load_model_path=${MODEL_PATH} \
 #    wandb=True
