@@ -290,6 +290,13 @@ class PuffeRL:
 
         self.optimizer = optimizer
 
+        critic_params = [param for name, param in self.policy.named_parameters() if "critic" in name]
+        critic_param_ids = {id(param) for param in critic_params}
+        actor_params = [param for param in self.policy.parameters() if id(param) not in critic_param_ids]
+        self.separate_grad_clip = bool(config["separate_grad_clip"] and critic_params and actor_params)
+        self.actor_params = actor_params
+        self.critic_params = critic_params
+
         # Logging
         self.logger = logger
         if logger is None:
@@ -644,6 +651,14 @@ class PuffeRL:
             },
         )
 
+    def _clip_gradients(self, losses):
+        max_grad_norm = self.config["max_grad_norm"]
+        if self.separate_grad_clip:
+            losses["actor_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.actor_params, max_grad_norm).item()
+            losses["critic_grad_norm"] = torch.nn.utils.clip_grad_norm_(self.critic_params, max_grad_norm).item()
+        else:
+            losses["grad_norm"] = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_grad_norm).item()
+
     def _compute_advantages(self, ratio, rho_clip, c_clip):
         config = self.config
         device = config["device"]
@@ -719,7 +734,7 @@ class PuffeRL:
             profile("learn", epoch)
             loss.backward()
             if (mb + 1) % self.accumulate_minibatches == 0:
-                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                self._clip_gradients(losses)
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
@@ -839,13 +854,13 @@ class PuffeRL:
                 pending_minibatches += 1
 
                 if pending_minibatches >= self.accumulate_minibatches:
-                    torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+                    self._clip_gradients(losses)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     pending_minibatches = 0
 
         if pending_minibatches > 0:
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), config["max_grad_norm"])
+            self._clip_gradients(losses)
             self.optimizer.step()
             self.optimizer.zero_grad()
 

@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0017_${SEED}
+export RUN_NAME=k_scaled_0018_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -64,9 +64,10 @@ srun torchrun \
     train.total_timesteps=1000000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=131072 \
-    train.minibatch_size=131072 \
+    train.max_minibatch_size=65536 \
+    train.minibatch_size=65536 \
     train.precision=float32 \
+    train.separate_grad_clip=True \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
