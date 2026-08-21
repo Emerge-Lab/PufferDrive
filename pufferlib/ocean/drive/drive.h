@@ -3398,36 +3398,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         = (fabsf(agent->jerk_long) > COMFORT_JERK_THRESHOLD || fabsf(agent->jerk_lat) > COMFORT_JERK_THRESHOLD) ? 1 : 0;
     agent->metrics_array[COMFORT_VIOLATION_IDX] = (float) (accel_violation + jerk_violation);
 
-    // Handle terminal events - NOTE: move it elsewhere?
-    // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
-    // Order matters: offroad > collision > red_light.
-
-    // Priority 1: Handle offroad
-    if (is_offroad) {
-        agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
-        return;
-    }
-
-    // Priority 2: Handle vehicle collision
-    int car_collided_with_index = collision_check(env, agent_idx);
-    if (car_collided_with_index != -1) {
-        agent->metrics_array[COLLISION_IDX] = 1.0f;
-        if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
-            agent_log->at_fault_collision_rate = 1.0f;
-            agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
-        }
-        apply_infraction_behavior(agent, env->collision_behavior);
-        return;
-    }
-
-    // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
-        agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->traffic_light_behavior);
-        return;
-    }
-
     // Goal reaching: swept check against the step's motion segment (prev -> sim),
     // so a high dt cannot jump over the goal disc between two states.
     float distance_to_goal = compute_point_to_segment_distance(
@@ -3460,6 +3430,36 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     float goal_gt_z_dist = fabsf(agent->sim_z - agent->gt_goal_z);
     if (distance_to_goal_gt < GT_GOAL_RADIUS_M && goal_gt_z_dist < Z_BUFFER) {
         agent_log->reached_goal_gt = 1.0f;
+    }
+
+    // Handle terminal events - NOTE: move it elsewhere?
+    // IMPORTANT: early returns after offroad and collision enforce mutual exclusivity of terminal flags.
+    // Order matters: offroad > collision > red_light.
+
+    // Priority 1: Handle offroad
+    if (is_offroad) {
+        agent->metrics_array[OFFROAD_IDX] = 1.0f;
+        apply_infraction_behavior(agent, env->offroad_behavior);
+        return;
+    }
+
+    // Priority 2: Handle vehicle collision
+    int car_collided_with_index = collision_check(env, agent_idx);
+    if (car_collided_with_index != -1) {
+        agent->metrics_array[COLLISION_IDX] = 1.0f;
+        if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+            agent_log->at_fault_collision_rate = 1.0f;
+            agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
+        }
+        apply_infraction_behavior(agent, env->collision_behavior);
+        return;
+    }
+
+    // Priority 3: Handle red light violation
+    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
+        agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
+        apply_infraction_behavior(agent, env->traffic_light_behavior);
+        return;
     }
 }
 
@@ -4311,6 +4311,13 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
 #include "idm.h"
 
+static void update_agent_masks(Drive *env) {
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        env->masks[i] = (agent->stopped || agent->removed || agent->is_blind_partner || agent->is_phantom_braker) ? 0 : 1;
+    }
+}
+
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
@@ -4322,6 +4329,7 @@ void c_reset(Drive *env) {
             sample_erratic_flags(env, &env->agents[agent_idx]);
             compute_metrics(env, agent_idx, x);
         }
+        update_agent_masks(env);
         compute_observations(env);
         return;
     }
@@ -4376,6 +4384,7 @@ void c_reset(Drive *env) {
             generate_reward_coefs(env, agent);
             compute_metrics(env, agent_idx, x);
         }
+        update_agent_masks(env);
         compute_observations(env);
         return;
     }
@@ -4419,6 +4428,7 @@ void c_reset(Drive *env) {
         }
         compute_metrics(env, agent_idx, x);
     }
+    update_agent_masks(env);
     compute_observations(env);
 }
 
@@ -4435,16 +4445,7 @@ void c_step(Drive *env) {
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
 
-    // Update masks for stopped/removed agents
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
-        Agent *a = &env->agents[agent_idx];
-        if (a->stopped || a->removed || a->is_blind_partner || a->is_phantom_braker) {
-            env->masks[i] = 0;
-        } else {
-            env->masks[i] = 1;
-        }
-    }
+    update_agent_masks(env);
 
     env->timestep++;
 
