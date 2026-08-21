@@ -117,32 +117,48 @@ static int test_reward_terminal_components(void) {
     return 0;
 }
 
-static int test_reward_goal_speed_gating(void) {
-    Drive env;
-    Agent agent;
-    Log log;
-    int active[1];
-    float reward[1] = {0};
+static int test_final_goal_park_reward(void) {
+    srand(5);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    allocate(&env);
+    c_reset(&env);
+    EXPECT_EQ_INT(env.active_agent_count, 1);
+    env.goal_regen_mode = GOAL_REGEN_NONE;
+    env.reward_goal = 1.0f;
 
-    // GIGAFLOW: final waypoint reached above goal-speed → goal reward gated to 0
-    init_reward_env(&env, &agent, &log, active, reward);
-    reward[0] = 0.0f;
-    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
-    agent.current_goal_idx = agent.goal_count;
-    agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
-    agent.sim_speed = 10.0f;
-    compute_rewards(&env, 0);
-    EXPECT_NEAR(log.reward_goal, 0.0f, 1e-5f);
+    int agent_idx = env.active_agent_indices[0];
+    Agent *agent = &env.agents[agent_idx];
+    agent->current_goal_idx = agent->goal_count - 1;
+    agent->current_goal_x = agent->list_goal_x[agent->current_goal_idx];
+    agent->current_goal_y = agent->list_goal_y[agent->current_goal_idx];
+    agent->current_goal_z = agent->list_goal_z[agent->current_goal_idx];
+    agent->sim_x = agent->prev_x = agent->current_goal_x;
+    agent->sim_y = agent->prev_y = agent->current_goal_y;
+    agent->sim_z = agent->current_goal_z;
+    agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = 5.0f;
+    agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
 
-    // Same final waypoint but below goal-speed → full goal reward
-    init_reward_env(&env, &agent, &log, active, reward);
-    reward[0] = 0.0f;
-    agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
-    agent.current_goal_idx = agent.goal_count;
-    agent.reward_coefs[REWARD_COEF_GOAL_SPEED] = 3.0f;
-    agent.sim_speed = 1.0f;
+    // GIGAFLOW: crossing the final goal too fast neither pays nor forfeits it
+    agent->sim_speed = 10.0f;
+    compute_metrics(&env, agent_idx, 0);
+    EXPECT_NEAR(agent->metrics_array[REACHED_GOAL_IDX], 0.0f, 1e-6f);
+    EXPECT_EQ_INT(agent->current_goal_idx, agent->goal_count - 1);
+
+    // Parked inside the radius: pays every step, counted as reached once
+    agent->sim_speed = 1.0f;
+    env.rewards[0] = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
     compute_rewards(&env, 0);
-    EXPECT_NEAR(log.reward_goal, 2.0f, 1e-5f);
+    EXPECT_NEAR(env.logs[0].num_goals_reached, 1.0f, 1e-6f);
+    EXPECT_NEAR(env.logs[0].reward_goal, 1.0f, 1e-5f);
+
+    env.rewards[0] = 0.0f;
+    compute_metrics(&env, agent_idx, 0);
+    compute_rewards(&env, 0);
+    EXPECT_NEAR(env.logs[0].num_goals_reached, 1.0f, 1e-6f);
+    EXPECT_NEAR(env.logs[0].reward_goal, 2.0f, 1e-5f);
+
+    free_allocated(&env);
     return 0;
 }
 
@@ -169,7 +185,7 @@ int main(void) {
     RUN_TEST(test_observation_size_formula);
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
     RUN_TEST(test_reward_terminal_components);
-    RUN_TEST(test_reward_goal_speed_gating);
+    RUN_TEST(test_final_goal_park_reward);
     RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }

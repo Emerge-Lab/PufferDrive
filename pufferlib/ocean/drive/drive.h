@@ -329,7 +329,7 @@ typedef struct {
 
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
-    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
+    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      fixed to env->goal_speed; range only normalizes the obs
     {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
     {0.0f, 0.1f, 0},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
@@ -350,7 +350,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 // Meaning of the values: [min_range, max_range, use_log_scale]
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
-    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
+    {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      fixed to env->goal_speed; range only normalizes the obs
     {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
     {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5, 0.1)
@@ -2088,7 +2088,6 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     if (env->reward_randomization) {
         static const int random_coefs[] = {
             REWARD_COEF_GOAL_RADIUS,
-            REWARD_COEF_GOAL_SPEED,
             REWARD_COEF_COLLISION,
             REWARD_COEF_OFFROAD,
             REWARD_COEF_COMFORT,
@@ -2107,6 +2106,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                 ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
                 : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
+        agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
@@ -3408,8 +3408,19 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
-    if (agent->current_goal_idx < agent->goal_count && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
-        && goal_z_dist < Z_BUFFER) {
+    bool goal_in_reach = distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] && goal_z_dist < Z_BUFFER;
+    // GIGAFLOW final goal: never advanced past, pays every step the agent holds |v| < v_goal inside the radius
+    bool final_goal = env->goal_regen_mode == GOAL_REGEN_NONE && agent->goal_count > 0
+        && agent->current_goal_idx >= agent->goal_count - 1;
+    if (goal_in_reach && final_goal) {
+        if (agent->sim_speed < agent->reward_coefs[REWARD_COEF_GOAL_SPEED]) {
+            agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
+            if (agent->current_goal_idx < agent->goal_count) {
+                agent_log->num_goals_reached += 1;
+                agent->current_goal_idx++;
+            }
+        }
+    } else if (goal_in_reach && agent->current_goal_idx < agent->goal_count) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
@@ -3494,13 +3505,10 @@ static void compute_rewards(Drive *env, int i) {
         agent_log->reward_red_light += reward_red_light;
     }
 
-    // Goal reward
+    // Goal reward; the final-goal speed gate already lives in the reached-goal metric
     if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
-        bool final_waypoint = (agent->current_goal_idx == agent->goal_count);
-        bool speeding = (agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED]);
-        float reward_goal = (final_waypoint && speeding) ? 0.0f : env->reward_goal;
-        env->rewards[i] += reward_goal;
-        agent_log->reward_goal += reward_goal;
+        env->rewards[i] += env->reward_goal;
+        agent_log->reward_goal += env->reward_goal;
     }
 
     // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
@@ -4569,7 +4577,7 @@ void c_step(Drive *env) {
             regen = !roll_goals(env, agent);
         } else if (agent->current_goal_idx == agent->goal_count) {
             if (env->goal_regen_mode == GOAL_REGEN_NONE) {
-                continue; // park at the final goal; reached-goal check requires current_goal_idx < goal_count
+                continue; // park at the final goal
             }
             regen = true;
         } else {
