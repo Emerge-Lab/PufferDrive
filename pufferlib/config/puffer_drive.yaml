@@ -151,7 +151,7 @@ env:
   obs_boundary_stride: 1
   # --- Observation normalization ---
   # num_goals * max_goal_spacing; goals beyond this collapse to a unit direction vector
-  obs_norm_goal_offset_m: 600.0
+  obs_norm_goal_offset_m: 800.0
   obs_norm_xy_offset_m: 200.0
   obs_norm_veh_length_m: 10.0
   obs_norm_veh_width_m: 5.0
