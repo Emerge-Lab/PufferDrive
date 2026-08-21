@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0019_${SEED}
+export RUN_NAME=k_scaled_0020_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -72,7 +72,7 @@ srun torchrun \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     train.ent_coef_anneal=False \
-    train.adv_filter_leak_fraction=0.0 \
+    train.adv_filter_leak_fraction=0.05 \
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
