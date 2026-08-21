@@ -3675,8 +3675,11 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
             ego->list_goal_y[goal_idx],
             &rel_goal_x,
             &rel_goal_y);
-        obs[obs_idx++] = rel_goal_x / env->obs_norm_goal_offset_m;
-        obs[obs_idx++] = rel_goal_y / env->obs_norm_goal_offset_m;
+        // Goals beyond obs_norm_goal_offset_m collapse to a unit direction vector (keeps obs in [-1, 1])
+        float goal_distance = sqrtf(rel_goal_x * rel_goal_x + rel_goal_y * rel_goal_y);
+        float goal_norm = fmaxf(env->obs_norm_goal_offset_m, goal_distance);
+        obs[obs_idx++] = rel_goal_x / goal_norm;
+        obs[obs_idx++] = rel_goal_y / goal_norm;
         obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / env->obs_norm_z_m;
     }
 
@@ -3891,11 +3894,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 2] = rel_z / env->obs_norm_z_m;
         segment_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
-        segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
-        segment_dest[feature_base + 5] = rel_seg_dir_x;
-        segment_dest[feature_base + 6] = rel_seg_dir_y;
+        segment_dest[feature_base + 4] = rel_seg_dir_x;
+        segment_dest[feature_base + 5] = rel_seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
+            // Constant until the map format carries per-lane width
+            segment_dest[feature_base + 6] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
             float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
             if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
                 int lane_graph_idx = env->lane_graph.lane_to_graph_idx[entity_idx];
@@ -3910,10 +3914,6 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             }
             segment_dest[feature_base + 7] = goal_dist_abs;
             segment_dest[feature_base + 8] = goal_dist_rel;
-        } else {
-            // NOTE: Remove this with next model
-            segment_dest[feature_base + 7] = 0.0f;
-            segment_dest[feature_base + 8] = 0.0f;
         }
     }
 

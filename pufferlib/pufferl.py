@@ -308,6 +308,10 @@ class PuffeRL:
         # Initializations
         self.config = config
         self.vecenv = vecenv
+        normalized_obs_mask = getattr(vecenv.driver_env, "normalized_obs_mask", None)
+        self.normalized_obs_idx = None
+        if normalized_obs_mask is not None:
+            self.normalized_obs_idx = torch.as_tensor(np.flatnonzero(normalized_obs_mask), device=config["device"])
         self.epoch = 0
         self.global_step = 0
         self.agent_steps = 0
@@ -394,12 +398,10 @@ class PuffeRL:
             done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
 
-            # Obs distribution stats (max/min/mean across the batch and obs
-            # dims, appended per env step). Surfaces clipping / unbounded
-            # features / normalization regressions in wandb.
-            self.stats["obs/max"].append(o_device.max().item())
-            self.stats["obs/min"].append(o_device.min().item())
-            self.stats["obs/mean"].append(o_device.mean().item())
+            obs_stat_source = o_device if self.normalized_obs_idx is None else o_device[..., self.normalized_obs_idx]
+            self.stats["obs/max"].append(obs_stat_source.max().item())
+            self.stats["obs/min"].append(obs_stat_source.min().item())
+            self.stats["obs/mean"].append(obs_stat_source.mean().item())
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
