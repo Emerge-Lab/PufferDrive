@@ -1479,9 +1479,10 @@ static bool check_agent_on_stop_line(Drive *env, Agent *agent, bool include_yell
     return false;
 }
 
-static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
-    // Violation = the rear bumper crossing the stop line while red, as a one-step
-    // event (CARLA leaderboard convention: flagged once the car fully enters on red).
+static bool check_red_light_violation(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    // Rear bumper fully enters on red (CARLA convention); the laterally extended line
+    // cannot be driven around, and the heading gate exempts exiting/opposing traffic.
     float rear_offset = -0.5f * agent->sim_length;
     float rear_x = agent->sim_x + rear_offset * agent->cos_heading;
     float rear_y = agent->sim_y + rear_offset * agent->sin_heading;
@@ -1490,7 +1491,7 @@ static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
-        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || tc->num_controlled_lanes == 0) {
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
         }
         if (env->timestep >= tc->state_size) {
@@ -1503,10 +1504,14 @@ static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
         float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
         float dx = agent->sim_x - mid_x;
         float dy = agent->sim_y - mid_y;
-        if (dx * dx + dy * dy > STOP_LINE_DIST_SQ) {
+        if (dx * dx + dy * dy > RED_LIGHT_TRIGGER_DIST_SQ) {
             continue;
         }
-        if (fabsf(compute_heading_diff(agent->sim_heading, tc->heading)) > STOP_LINE_HEADING_THRESHOLD) {
+        float mid_z = (tc->stop_line[2] + tc->stop_line[5]) * 0.5f;
+        if (fabsf(agent->sim_z - mid_z) > Z_BUFFER) {
+            continue;
+        }
+        if (fabsf(compute_heading_diff(agent->sim_heading, tc->heading)) >= RED_LIGHT_ENTER_HEADING_THRESHOLD) {
             continue;
         }
 
@@ -1532,104 +1537,10 @@ static bool check_stop_line_crossing_event(Drive *env, Agent *agent) {
         float cross_x = prev_rear_x + crossing_frac * (rear_x - prev_rear_x);
         float cross_y = prev_rear_y + crossing_frac * (rear_y - prev_rear_y);
         float lateral = (cross_x - mid_x) * line_ux + (cross_y - mid_y) * line_uy;
-        if (fabsf(lateral) <= 0.5f * STOP_LINE_EXTENSION_FACTOR * line_len) {
+        if (fabsf(lateral) <= 0.5f * line_len + RED_LIGHT_LATERAL_EXTENSION_M) {
             return true;
         }
     }
-    return false;
-}
-
-static bool lane_has_traffic_light(Drive *env, int lane_idx) {
-    for (int i = 0; i < env->num_traffic_elements; i++) {
-        TrafficControlElement *tc = &env->traffic_elements[i];
-        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
-            continue;
-        }
-        for (int j = 0; j < tc->num_controlled_lanes; j++) {
-            if (tc->controlled_lanes[j] == lane_idx) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool check_lane_change_red_light(Drive *env, Agent *agent) {
-    if (agent->previous_lane_idx == agent->current_lane_idx) {
-        return false;
-    }
-    if (agent->previous_lane_idx == -1 || agent->current_lane_idx == -1) {
-        return false;
-    }
-    if (lane_has_traffic_light(env, agent->previous_lane_idx)) {
-        return false;
-    }
-
-    float agent_x = agent->sim_x;
-    float agent_y = agent->sim_y;
-
-    for (int i = 0; i < env->num_traffic_elements; i++) {
-        TrafficControlElement *tc = &env->traffic_elements[i];
-
-        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
-            continue;
-        }
-        if (tc->num_controlled_lanes == 0) {
-            continue;
-        }
-        if (env->timestep >= tc->state_size) {
-            continue;
-        }
-        if (tc->states[env->timestep] != TRAFFIC_CONTROL_STATE_RED) {
-            continue;
-        }
-        if (env->timestep < 1 || tc->states[env->timestep - 1] != TRAFFIC_CONTROL_STATE_RED) {
-            continue;
-        }
-
-        for (int j = 0; j < tc->num_controlled_lanes; j++) {
-            if (tc->controlled_lanes[j] != agent->current_lane_idx) {
-                continue;
-            }
-
-            float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;
-            float mid_y = (tc->stop_line[1] + tc->stop_line[4]) * 0.5f;
-            float dx = agent_x - mid_x;
-            float dy = agent_y - mid_y;
-            if (dx * dx + dy * dy > STOP_LINE_DIST_SQ) {
-                continue;
-            }
-            float line_dx = tc->stop_line[3] - tc->stop_line[0];
-            float line_dy = tc->stop_line[4] - tc->stop_line[1];
-            float normal_x = -line_dy, normal_y = line_dx;
-            if (normal_x * cosf(tc->heading) + normal_y * sinf(tc->heading) < 0.0f) {
-                normal_x = -normal_x;
-                normal_y = -normal_y;
-            }
-            if ((agent_x - mid_x) * normal_x + (agent_y - mid_y) * normal_y < 0.0f) {
-                continue;
-            }
-
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool check_red_light_violation(Drive *env, int agent_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    if (agent->current_lane_idx == -1) {
-        return false;
-    }
-
-    if (check_stop_line_crossing_event(env, agent)) {
-        return true;
-    }
-
-    if (check_lane_change_red_light(env, agent)) {
-        return true;
-    }
-
     return false;
 }
 

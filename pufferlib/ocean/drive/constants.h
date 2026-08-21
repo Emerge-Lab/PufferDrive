@@ -170,10 +170,15 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 
-// Stop line geometry
+// Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define STOP_LINE_HEADING_THRESHOLD (M_PI / 4.0f)
+
+// Red light violation detection
+#define RED_LIGHT_TRIGGER_DIST_SQ (30.0f * 30.0f)
+#define RED_LIGHT_LATERAL_EXTENSION_M 15.0f // Beyond each stop line endpoint, so the line cannot be driven around
+#define RED_LIGHT_ENTER_HEADING_THRESHOLD (M_PI / 2.0f)
 
 #define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
