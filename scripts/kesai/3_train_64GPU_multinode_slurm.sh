@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0013_${SEED}
+export RUN_NAME=k_scaled_0014_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
