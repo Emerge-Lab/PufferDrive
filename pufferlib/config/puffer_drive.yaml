@@ -236,6 +236,7 @@ train:
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
+  separate_grad_clip: true
   normalize_rewards: false
   ent_coef: 0.01
   # Linearly anneal ent_coef to ent_coef_final over the last (1 - start_frac) of training
