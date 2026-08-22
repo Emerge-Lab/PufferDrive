@@ -1153,6 +1153,15 @@ def dist_mean(value, device):
     return dist_sum(value, device) / torch.distributed.get_world_size()
 
 
+def shutdown_distributed():
+    if not torch.distributed.is_initialized():
+        return
+
+    # Every rank must be done with the shared buffers before any rank tears them down.
+    torch.distributed.barrier()
+    torch.distributed.destroy_process_group()
+
+
 def capture_rng_state():
     state = {
         "python": random.getstate(),
@@ -1701,6 +1710,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         all_logs.append(logs)
 
     pufferl.print_dashboard()
+    shutdown_distributed()
     model_path = pufferl.close()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
