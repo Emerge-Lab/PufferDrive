@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0023_${SEED}
+export RUN_NAME=k_scaled_0024_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -68,7 +68,7 @@ srun torchrun \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
-    train.adv_filter_leak_fraction=0.0 \
+    train.adv_filter_leak_fraction=0.05 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
