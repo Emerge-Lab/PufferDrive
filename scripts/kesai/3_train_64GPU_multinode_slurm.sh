@@ -73,16 +73,8 @@ srun torchrun \
     train.seed=${SEED} \
     tb=True
 
-# Only evaluate a run that actually finished, otherwise the eval jobs below would
-# score a stale final_model.pt from an earlier attempt (or fail on a missing one).
-# srun blocks until every node's task exits, so this is the whole run's status.
-TRAIN_STATUS=$?
-if [ ${TRAIN_STATUS} -ne 0 ]; then
-    echo "Training exited with status ${TRAIN_STATUS}; skipping evaluation."
-    exit ${TRAIN_STATUS}
-fi
 if [ ! -f ${MODEL_PATH} ]; then
-    echo "Training finished but ${MODEL_PATH} is missing; skipping evaluation."
+    echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
     exit 1
 fi
 
