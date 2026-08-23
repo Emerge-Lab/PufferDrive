@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0013_1000
+export RUN_NAME=k_scaled_0023_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -43,6 +43,8 @@ fi
     vec.num_envs=64 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
+    eval.reward_comfort=0.0 \
+    eval.reward_lane_center=0.0075 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
@@ -53,6 +55,8 @@ fi
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.render_filter=all_infractions \
+    eval.reward_comfort=0.0 \
+    eval.reward_lane_center=0.0075 \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
