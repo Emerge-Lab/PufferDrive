@@ -54,6 +54,8 @@ env:
   dt: 0.3
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
+  # Dynamics speed cap; must be <= MAX_SPEED (obs normalizer, 40). Gigaflow eval uses 20.
+  vehicle_max_speed_mps: 40.0
   # Collision behavior - options: "ignore", "stop", "remove"
   collision_behavior: stop
   # Offroad behavior - options: "ignore", "stop", "remove"
@@ -305,6 +307,11 @@ eval:
   reward_comfort: null
   # Overrides env.reward_lane_center of every selected benchmark; null keeps the benchmark's value.
   reward_lane_center: null
+  # Overrides env.dt of every selected benchmark, rescaling scenario_length to keep its simulated
+  # duration (e.g. 0.0667 = 15 Hz as in Gigaflow's self-play eval); null keeps the benchmark's value.
+  dt: null
+  # Overrides env.goal_radius of every selected benchmark; null keeps the benchmark's value.
+  goal_radius: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

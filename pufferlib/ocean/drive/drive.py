@@ -76,6 +76,7 @@ class Drive(pufferlib.PufferEnv):
         replay_worker_idx=0,
         dt=0.1,
         spawn_initial_speed=0.0,
+        vehicle_max_speed_mps=40.0,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -146,6 +147,11 @@ class Drive(pufferlib.PufferEnv):
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.vehicle_max_speed_mps = float(vehicle_max_speed_mps)
+        if not 0.0 < self.vehicle_max_speed_mps <= binding.MAX_SPEED:
+            raise ValueError(
+                f"vehicle_max_speed_mps must be in (0, {binding.MAX_SPEED}] (MAX_SPEED is the observation normalizer). Got: {vehicle_max_speed_mps}"
+            )
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
@@ -559,6 +565,7 @@ class Drive(pufferlib.PufferEnv):
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "vehicle_max_speed_mps": self.vehicle_max_speed_mps,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

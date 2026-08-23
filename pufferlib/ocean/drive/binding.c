@@ -1898,6 +1898,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->vehicle_max_speed_mps = (float) unpack(kwargs, "vehicle_max_speed_mps");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");

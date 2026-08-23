@@ -225,6 +225,7 @@ struct Drive {
     int init_step;
     float dt;
     float spawn_initial_speed;
+    float vehicle_max_speed_mps;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -2411,7 +2412,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_valid = 1;
     agent->wheelbase = spawn_wheelbase;
     agent->current_lane_idx = start_lane_idx;
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, MAX_SPEED);
+    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, env->vehicle_max_speed_mps);
     agent->sim_vx = spawn_speed * agent->cos_heading;
     agent->sim_vy = spawn_speed * agent->sin_heading;
     agent->yaw_rate = 0.0f;
@@ -4129,7 +4130,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 acceleration = 0.0f;
             }
         }
-        speed = clip(speed, -MAX_SPEED, MAX_SPEED);
+        speed = clip(speed, -env->vehicle_max_speed_mps, env->vehicle_max_speed_mps);
         // Compute yaw rate
         float beta = atanf(REAR_AXLE_RATIO * tanf(steering));
         // New heading
@@ -4234,7 +4235,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 a_lat_new = 0.0f;
             }
         } else {
-            v_new = clip(v_new, -2.0f, MAX_SPEED);
+            v_new = clip(v_new, -2.0f, env->vehicle_max_speed_mps);
         }
 
         // If phantom braking is active, prevent speed from going negative

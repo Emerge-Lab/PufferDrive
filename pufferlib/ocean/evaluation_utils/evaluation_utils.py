@@ -61,6 +61,12 @@ def _positive_int(value, label):
     return value
 
 
+def _positive_float(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise pufferlib.APIUsageError(f"{label} must be a positive number")
+    return float(value)
+
+
 def _non_negative_float(value, label):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         raise pufferlib.APIUsageError(f"{label} must be a non-negative number")
@@ -291,8 +297,19 @@ def build_benchmark_args(base_args, benchmark, environment_config):
         reward_override = args["eval"].get(reward_key)
         if reward_override is not None:
             args["env"][reward_key] = _non_negative_float(reward_override, f"eval.{reward_key}")
+    goal_radius_override = args["eval"].get("goal_radius")
+    if goal_radius_override is not None:
+        args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+    scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
+    dt_override = args["eval"].get("dt")
+    if dt_override is not None:
+        dt_override = _positive_float(dt_override, "eval.dt")
+        benchmark_dt = _positive_float(args["env"]["dt"], "env.dt")
+        scenario_length = max(1, int(round(scenario_length * benchmark_dt / dt_override)))
+        args["env"]["dt"] = dt_override
+        args["env"]["scenario_length"] = scenario_length
     args["env"]["num_agents"] = eval_agent_count
-    args["env"]["resample_frequency"] = benchmark_environment_config["scenario_length"]
+    args["env"]["resample_frequency"] = scenario_length
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 

@@ -89,6 +89,7 @@ static inline Drive drive_test_env_config(
     env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
     env.dt = 0.1f;
     env.spawn_initial_speed = 0.0f;
+    env.vehicle_max_speed_mps = 40.0f;
     env.scenario_length = 91;
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;

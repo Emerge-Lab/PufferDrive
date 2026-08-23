@@ -45,6 +45,8 @@ fi
     eval.capture_observations=true \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
+    eval.dt=0.0667 \
+    eval.goal_radius=10.0 \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
