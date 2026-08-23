@@ -692,7 +692,7 @@ def plot_observation(
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
         length = lane_obs[i][3] * rl2p
-        dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
+        dir_cos, dir_sin = lane_obs[i][4], lane_obs[i][5]
         # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
         color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -711,7 +711,7 @@ def plot_observation(
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
         length = boundary_obs[i][3] * rl2p
-        dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
+        dir_cos, dir_sin = boundary_obs[i][4], boundary_obs[i][5]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -1380,7 +1380,7 @@ self.onmessage = async event => {
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+4]*Q,obs[o+5]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
             const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
             const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
             const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
