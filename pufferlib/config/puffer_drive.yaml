@@ -312,6 +312,10 @@ eval:
   dt: null
   # Overrides env.goal_radius of every selected benchmark; null keeps the benchmark's value.
   goal_radius: null
+  # Overrides env.obs_slots_partners_n of every selected benchmark (e.g. 40 = Gigaflow's up-to-40
+  # closest observed agents); slots are max-pooled, so any checkpoint transfers. null keeps the
+  # checkpoint's value.
+  obs_slots_partners_n: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

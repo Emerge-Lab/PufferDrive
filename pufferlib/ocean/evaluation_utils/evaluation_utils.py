@@ -300,6 +300,9 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     goal_radius_override = args["eval"].get("goal_radius")
     if goal_radius_override is not None:
         args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+    partner_slots_override = args["eval"].get("obs_slots_partners_n")
+    if partner_slots_override is not None:
+        args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
     scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
     dt_override = args["eval"].get("dt")
     if dt_override is not None:
