@@ -1725,8 +1725,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
         all_logs.append(logs)
 
     pufferl.print_dashboard()
-    shutdown_distributed()
     model_path = pufferl.close()
+    shutdown_distributed()
     pufferl.logger.close(model_path, early_stop=False)
     return all_logs
 
