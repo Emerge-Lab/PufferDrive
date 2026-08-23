@@ -314,6 +314,8 @@ eval:
   goal_radius: null
   # Overrides env.goal_regen_mode ("finite" or "rolling") of every selected benchmark; null keeps the benchmark's value.
   goal_regen_mode: null
+  # Overrides env.goal_speed of every selected benchmark; null keeps the benchmark's value.
+  goal_speed: null
   # Overrides env.obs_slots_partners_n of every selected benchmark (e.g. 40 = Gigaflow's up-to-40
   # closest observed agents); slots are max-pooled, so any checkpoint transfers. null keeps the
   # checkpoint's value.

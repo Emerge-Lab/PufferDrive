@@ -46,12 +46,13 @@ fi
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
-    eval.goal_regen_mode=rolling \
     eval.goal_radius=10.0 \
-    eval.output_name=${RUN_NAME}_rolling \
+    eval.goal_speed=3.0 \
+    eval.output_name=${RUN_NAME}_3_goal_speed \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
+#     eval.goal_regen_mode=rolling \
 
 # No srun: single-node eval, run here on the batch host.
 .venv/bin/puffer eval puffer_drive nuplan_single \
