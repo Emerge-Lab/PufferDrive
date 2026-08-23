@@ -300,6 +300,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     goal_radius_override = args["eval"].get("goal_radius")
     if goal_radius_override is not None:
         args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+    goal_regen_mode_override = args["eval"].get("goal_regen_mode")
+    if goal_regen_mode_override is not None:
+        if goal_regen_mode_override not in ("finite", "rolling"):
+            raise pufferlib.APIUsageError('eval.goal_regen_mode must be "finite" or "rolling"')
+        args["env"]["goal_regen_mode"] = goal_regen_mode_override
     partner_slots_override = args["eval"].get("obs_slots_partners_n")
     if partner_slots_override is not None:
         args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
