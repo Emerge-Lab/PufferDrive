@@ -292,10 +292,10 @@ class Drive(pufferlib.PufferEnv):
         )
         self.partner_blindness_prob = float(partner_blindness_prob)
         self.partner_blindness_trigger_prob = float(partner_blindness_trigger_prob)
-        self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds) // self.dt
+        self.partner_blindness_duration_seconds = float(partner_blindness_duration_seconds)
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
-        self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds) // self.dt
+        self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
         self.partner_features = binding.PARTNER_FEATURES
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
