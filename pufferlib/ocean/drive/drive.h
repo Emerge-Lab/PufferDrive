@@ -302,6 +302,8 @@ struct Drive {
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
     int phantom_braking_freeze_steering;
+    float episode_partner_blindness_prob;
+    float episode_phantom_braking_prob;
     // Logging
     Log log;
     Log *logs;
@@ -445,6 +447,9 @@ static void begin_episode_rng(Drive *env) {
         env->episode_seed = rng_next(&env->seed_stream_rng) >> 1;
     }
     rng_seed(&env->rng_state, env->episode_seed);
+    // Per-episode perturbation rates: uniform in [0, configured max]
+    env->episode_partner_blindness_prob = sample_uniform(&env->rng_state, 0.0f, env->partner_blindness_prob);
+    env->episode_phantom_braking_prob = sample_uniform(&env->rng_state, 0.0f, env->phantom_braking_prob);
 }
 
 static inline void clear_agent_motion(Agent *agent) {
@@ -2134,12 +2139,12 @@ static void add_log(Drive *env) {
 // ========================================
 
 static inline void sample_erratic_flags(Drive *env, Agent *agent) {
-    agent->is_blind_partner = (env->partner_blindness_prob > 0.0f
-                               && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_prob)
+    agent->is_blind_partner = (env->episode_partner_blindness_prob > 0.0f
+                               && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->episode_partner_blindness_prob)
         ? 1
         : 0;
-    agent->is_phantom_braker
-        = (env->phantom_braking_prob > 0.0f && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_prob)
+    agent->is_phantom_braker = (env->episode_phantom_braking_prob > 0.0f
+                                && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->episode_phantom_braking_prob)
         ? 1
         : 0;
     agent->phantom_braking_counter = 0;

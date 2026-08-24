@@ -171,13 +171,13 @@ env:
   obs_range_traffic_control_m: 200.0
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
-  # Per-episode probability that an agent is blind to other agents for the whole episode
+  # Upper bound of the per-episode blind-agent rate; each episode draws its rate uniformly from [0, this]
   partner_blindness_prob: 0.02
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
-  # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
+  # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
   phantom_braking_prob: 0.02
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
