@@ -212,6 +212,7 @@ static const int ROAD_OFFSETS[25][2]
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
+#define GOAL_HEADING_MAX_ATTEMPTS 8
 #define GT_GOAL_RADIUS_M 6.0f
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 

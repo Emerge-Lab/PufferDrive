@@ -65,6 +65,7 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
+        goal_heading_max_deg=0.0,
         num_goals=3,
         goal_radius=2.0,
         collision_behavior="ignore",
@@ -181,6 +182,7 @@ class Drive(pufferlib.PufferEnv):
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
+        self.goal_heading_max_deg = goal_heading_max_deg
         if not 1 <= num_goals <= binding.MAX_GOALS:
             raise ValueError(f"num_goals must be in [1, {binding.MAX_GOALS}]. Got: {num_goals}")
         self.num_goals = num_goals
@@ -554,6 +556,7 @@ class Drive(pufferlib.PufferEnv):
             "goal_radius": self.goal_radius,
             "min_goal_spacing": self.min_goal_spacing,
             "max_goal_spacing": self.max_goal_spacing,
+            "goal_heading_max_deg": self.goal_heading_max_deg,
             "num_goals": self.num_goals,
             "goal_regen_mode": self.goal_regen_mode,
             "goal_source": self.goal_source,

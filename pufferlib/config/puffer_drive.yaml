@@ -115,6 +115,9 @@ env:
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
   max_goal_spacing: 200.0
+  # Map goal source only: max lane-heading change (deg) between successive waypoints, re-sampling spacing
+  # up to GOAL_HEADING_MAX_ATTEMPTS times (GIGAFLOW uses 60). 0 disables.
+  goal_heading_max_deg: 0.0
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true

@@ -265,6 +265,7 @@ struct Drive {
     float goal_speed;
     float min_goal_spacing;
     float max_goal_spacing;
+    float goal_heading_max_deg; // 0 disables the successive-waypoint heading constraint
     int num_goals;
     int goal_regen_mode;
     int goal_source;
@@ -779,7 +780,8 @@ static bool route_point_at_distance(
     float *out_z,
     int *out_lane_idx,
     int *out_cursor_idx,
-    float *out_s_on_lane) {
+    float *out_s_on_lane,
+    float *out_heading) {
     // Walk `distance_meters` forward from cursor `start_cursor_idx` (at arc-length start_s_on_lane) and return
     // the point there. The cursor's meaning depends on mode:
     //   route mode (route != NULL): start_cursor_idx indexes route[]; seed lane = route[start_cursor_idx].
@@ -829,6 +831,7 @@ static bool route_point_at_distance(
             *out_lane_idx = current_lane_idx;                                  // actual landed lane in road_elements
             *out_cursor_idx = (route != NULL) ? cursor_idx : current_lane_idx; // next start_cursor_idx
             *out_s_on_lane = target_s_meters;
+            *out_heading = lane->headings[start_vertex_idx];
             return true;
         }
 
@@ -852,12 +855,62 @@ static bool route_point_at_distance(
     return false;
 }
 
+static bool walk_to_next_goal(
+    Drive *env,
+    const int *route,
+    int route_length,
+    int cursor_idx,
+    float s_on_lane,
+    float spacing_meters,
+    float prev_heading,
+    float *out_x,
+    float *out_y,
+    float *out_z,
+    int *out_lane_idx,
+    int *out_cursor_idx,
+    float *out_s_on_lane,
+    float *out_heading) {
+    // One goal step forward. In free-roam mode with goal_heading_max_deg > 0, re-samples the spacing until the
+    // landed lane heading is within that angle of prev_heading; accepts the last attempt if none qualifies.
+    bool constrain_heading = route == NULL && env->goal_heading_max_deg > 0.0f;
+    float max_heading_delta_rad = env->goal_heading_max_deg * (float) M_PI / 180.0f;
+    for (int attempt_idx = 0; attempt_idx < GOAL_HEADING_MAX_ATTEMPTS; attempt_idx++) {
+        if (attempt_idx > 0) {
+            spacing_meters = sample_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
+        }
+        if (!route_point_at_distance(
+                env,
+                route,
+                route_length,
+                cursor_idx,
+                s_on_lane,
+                spacing_meters,
+                out_x,
+                out_y,
+                out_z,
+                out_lane_idx,
+                out_cursor_idx,
+                out_s_on_lane,
+                out_heading)) {
+            return false;
+        }
+        if (!constrain_heading) {
+            return true;
+        }
+        if (fabsf(normalize_heading(*out_heading - prev_heading)) <= max_heading_delta_rad) {
+            return true;
+        }
+    }
+    return true;
+}
+
 static int chain_goals(
     Drive *env,
     const int *route,
     int route_length,
     int start_lane_idx,
     float start_s_on_lane,
+    float start_heading,
     const float *goal_spacings_meters,
     int requested_goal_count,
     float *out_goal_x,
@@ -870,24 +923,27 @@ static int chain_goals(
     int placed_goal_count = 0;
     int carry_idx = start_lane_idx; // route index (route mode) or lane index (map mode) of the last landing
     float s_on_lane = start_s_on_lane;
+    float prev_heading = start_heading;
     for (int goal_idx = 0; goal_idx < requested_goal_count; goal_idx++) {
-        // carry_idx and s_on_lane are carried forward so each goal starts where the previous one landed.
-        float goal_x, goal_y, goal_z;
+        // carry_idx, s_on_lane and prev_heading are carried forward so each goal starts where the previous one landed.
+        float goal_x, goal_y, goal_z, landed_s_on_lane, landed_heading;
         int goal_lane;
         int next_cursor_idx;
-        if (!route_point_at_distance(
+        if (!walk_to_next_goal(
                 env,
                 route,
                 route_length,
                 carry_idx,
                 s_on_lane,
                 goal_spacings_meters[goal_idx],
+                prev_heading,
                 &goal_x,
                 &goal_y,
                 &goal_z,
                 &goal_lane,
                 &next_cursor_idx,
-                &s_on_lane)) {
+                &landed_s_on_lane,
+                &landed_heading)) {
             break;
         }
         out_goal_x[placed_goal_count] = goal_x;
@@ -897,6 +953,8 @@ static int chain_goals(
         placed_goal_count++;
         // Cursor is route index (route mode) or landed lane (free-roam); carry it to start the next goal.
         carry_idx = next_cursor_idx;
+        s_on_lane = landed_s_on_lane;
+        prev_heading = landed_heading;
     }
     return placed_goal_count;
 }
@@ -1052,6 +1110,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
         agent->route_length,
         base_route_idx,
         base_s_on_lane,
+        0.0f,
         goal_spacings_meters,
         env->num_goals,
         goal_x,
@@ -1092,6 +1151,7 @@ static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
             agent->route_length,
             0,
             new_base_s_on_lane,
+            0.0f,
             goal_spacings_meters,
             env->num_goals,
             goal_x,
@@ -1169,6 +1229,7 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
         0,
         seed_lane_idx,
         seed_s_on_lane,
+        seed_heading,
         goal_spacings_meters,
         requested_goal_count,
         goal_x,
@@ -1228,7 +1289,7 @@ static int roll_goals(Drive *env, Agent *agent) {
 
     // Walk one spacing forward to find the appended goal before touching the window.
     float spacing_meters = sample_uniform(&env->rng_state, env->min_goal_spacing, env->max_goal_spacing);
-    float next_x, next_y, next_z, next_s_on_lane;
+    float next_x, next_y, next_z, next_s_on_lane, next_heading;
     int next_lane_idx, next_cursor_idx; // next_cursor_idx unused: single-step append, no chaining
     if (!route_point_at_distance(
             env,
@@ -1242,7 +1303,8 @@ static int roll_goals(Drive *env, Agent *agent) {
             &next_z,
             &next_lane_idx,
             &next_cursor_idx,
-            &next_s_on_lane)) {
+            &next_s_on_lane,
+            &next_heading)) {
         return 0;
     }
 

@@ -77,6 +77,8 @@ srun torchrun \
     train.seed=${SEED} \
     tb=True
 
+# env.goal_heading_max_deg = 60.0 \
+
 if [ ! -f ${MODEL_PATH} ]; then
     echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
     exit 1

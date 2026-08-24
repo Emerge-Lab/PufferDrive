@@ -122,6 +122,7 @@ class DriveEnvConfig:
     num_goals: int = MISSING
     min_goal_spacing: float = MISSING
     max_goal_spacing: float = MISSING
+    goal_heading_max_deg: float = MISSING
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
     reward_log_sampling: bool = MISSING

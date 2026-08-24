@@ -1881,6 +1881,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
     env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
+    env->goal_heading_max_deg = (float) unpack(kwargs, "goal_heading_max_deg");
+    if (env->goal_heading_max_deg < 0.0f || env->goal_heading_max_deg > 180.0f) {
+        PyErr_Format(PyExc_ValueError, "goal_heading_max_deg must be in [0, 180]. Got: %d", (int) env->goal_heading_max_deg);
+        return -1;
+    }
     env->num_goals = (int) unpack(kwargs, "num_goals");
     if (env->num_goals < 1 || env->num_goals > MAX_GOALS) {
         PyErr_Format(PyExc_ValueError, "num_goals must be in [1, %d]. Got: %d", MAX_GOALS, env->num_goals);
