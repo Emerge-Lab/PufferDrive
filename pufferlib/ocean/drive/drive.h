@@ -300,6 +300,7 @@ struct Drive {
     float phantom_braking_prob;
     float phantom_braking_trigger_prob;
     int phantom_braking_duration;
+    int phantom_braking_freeze_steering;
     // Logging
     Log log;
     Log *logs;
@@ -4111,7 +4112,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         if (phantom_braking_active) {
             acceleration = ACCELERATION_VALUES[0]; // max braking
-            steering = 0.0f;
+            if (env->phantom_braking_freeze_steering) {
+                steering = 0.0f;
+            }
         }
 
         // Limit the steering rate similar to the jerk model
@@ -4195,7 +4198,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         if (phantom_braking_active) {
             j_long = JERK_LONG[0]; // max braking jerk
-            j_lat = 0.0f;
+            if (env->phantom_braking_freeze_steering) {
+                j_lat = 0.0f;
+            }
         }
 
         // Get dynamic conditioning coefficients

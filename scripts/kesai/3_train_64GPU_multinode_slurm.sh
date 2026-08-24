@@ -71,6 +71,7 @@ srun torchrun \
     train.adv_filter_leak_fraction=0.05 \
     env.partner_blindness_prob=0.05 \
     env.phantom_braking_prob=0.1 \
+    env.phantom_braking_freeze_steering=false \
     env.reset_accel_on_stop=false \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \

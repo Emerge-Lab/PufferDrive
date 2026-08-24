@@ -144,6 +144,7 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_prob=0.0,
         phantom_braking_trigger_prob=0.0,
         phantom_braking_duration_seconds=1.0,
+        phantom_braking_freeze_steering=True,
     ):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
@@ -296,6 +297,7 @@ class Drive(pufferlib.PufferEnv):
         self.phantom_braking_prob = float(phantom_braking_prob)
         self.phantom_braking_trigger_prob = float(phantom_braking_trigger_prob)
         self.phantom_braking_duration_seconds = float(phantom_braking_duration_seconds)
+        self.phantom_braking_freeze_steering = int(bool(phantom_braking_freeze_steering))
         self.partner_features = binding.PARTNER_FEATURES
         self.lane_features = binding.LANE_FEATURES
         self.boundary_features = binding.BOUNDARY_FEATURES
@@ -608,6 +610,7 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_prob": self.phantom_braking_prob,
             "phantom_braking_trigger_prob": self.phantom_braking_trigger_prob,
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
+            "phantom_braking_freeze_steering": self.phantom_braking_freeze_steering,
         }
 
     def _sample_init_step(self):

@@ -168,6 +168,7 @@ class DriveEnvConfig:
     phantom_braking_prob: float = MISSING
     phantom_braking_trigger_prob: float = MISSING
     phantom_braking_duration_seconds: float = MISSING
+    phantom_braking_freeze_steering: bool = MISSING
 
 
 # env_name -> structured schema for the `env` section. Envs without an entry

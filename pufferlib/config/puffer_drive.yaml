@@ -180,6 +180,8 @@ env:
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
+  # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
+  phantom_braking_freeze_steering: true
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
