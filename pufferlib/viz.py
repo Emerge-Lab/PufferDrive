@@ -77,6 +77,8 @@ METRIC_LABELS = [
 ]
 
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+OBS_QUANTIZE_FRAME_CHUNK = 64
+REPLAY_COMPRESSION_LEVEL = 3
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
 SIMULATOR_GOAL_RADIUS_METERS = 2.0
@@ -783,7 +785,7 @@ def plot_observation(
 
 def _pack_replay_binary(header, chunks):
     packed = {}
-    blob_parts = []
+    arrays = []
     offset = 0
     dtype_names = {
         np.dtype(np.float32): "float32",
@@ -794,21 +796,25 @@ def _pack_replay_binary(header, chunks):
     for name, arr in chunks.items():
         arr = np.ascontiguousarray(arr)
         dtype = dtype_names[arr.dtype]
-        raw = arr.tobytes()
-        packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": len(raw)}
-        blob_parts.append(raw)
-        offset += len(raw)
+        packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": arr.nbytes}
+        offset += arr.nbytes
         pad = (-offset) % 4
-        if pad:
-            blob_parts.append(b"\0" * pad)
-            offset += pad
+        arrays.append((arr, pad))
+        offset += pad
 
     header = dict(header)
     header["chunks"] = packed
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
-    payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
-    return zlib.compress(payload, level=3)
+    # Streamed so the uncompressed blob is never materialized alongside its copies
+    compressor = zlib.compressobj(level=REPLAY_COMPRESSION_LEVEL)
+    compressed_parts = [compressor.compress(struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad))]
+    for arr, pad in arrays:
+        compressed_parts.append(compressor.compress(memoryview(arr).cast("B")))
+        if pad:
+            compressed_parts.append(compressor.compress(b"\0" * pad))
+    compressed_parts.append(compressor.flush())
+    return b"".join(compressed_parts)
 
 
 def encode_interactive_replay(scenario, replay):
@@ -857,12 +863,20 @@ def encode_interactive_replay(scenario, replay):
     observation_scale_per_dim = None
     quantized_observations = None
     if replay.get("obs") is not None:
-        observations_f32 = np.asarray(replay["obs"], dtype=np.float32)
-        observation_scale_per_dim = np.ones(observations_f32.shape[2], dtype=np.float32)
-        if observations_f32.size:
-            observation_scale_per_dim = np.max(np.abs(observations_f32), axis=(0, 1)) / 32767.0
+        observations = np.asarray(replay["obs"])
+        observation_scale_per_dim = np.ones(observations.shape[2], dtype=np.float32)
+        if observations.size:
+            observation_abs_max = np.zeros(observations.shape[2], dtype=np.float32)
+            for frame_start in range(0, observations.shape[0], OBS_QUANTIZE_FRAME_CHUNK):
+                frame_chunk = observations[frame_start : frame_start + OBS_QUANTIZE_FRAME_CHUNK].astype(np.float32)
+                np.maximum(observation_abs_max, np.max(np.abs(frame_chunk), axis=(0, 1)), out=observation_abs_max)
+            observation_scale_per_dim = observation_abs_max / 32767.0
             observation_scale_per_dim[observation_scale_per_dim == 0.0] = 1.0
-        quantized_observations = np.round(observations_f32 / observation_scale_per_dim).astype(np.int16)
+        quantized_observations = np.empty(observations.shape, dtype=np.int16)
+        for frame_start in range(0, observations.shape[0], OBS_QUANTIZE_FRAME_CHUNK):
+            frame_slice = slice(frame_start, frame_start + OBS_QUANTIZE_FRAME_CHUNK)
+            frame_chunk = observations[frame_slice].astype(np.float32)
+            quantized_observations[frame_slice] = np.round(frame_chunk / observation_scale_per_dim).astype(np.int16)
 
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
@@ -958,8 +972,6 @@ def encode_interactive_replay(scenario, replay):
 
 
 def _render_interactive_replay_payload(compressed_payload, filename):
-    payload = base64.b64encode(compressed_payload).decode("ascii")
-
     html_template = """
 <!DOCTYPE html>
 <html data-theme="light">
@@ -1534,18 +1546,21 @@ self.onmessage = async event => {
 </body>
 </html>
     """
-    payload_chunks = "\n".join(
-        f'    <script type="application/octet-stream" class="payload-chunk">'
-        f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
-        for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
-    )
-    final_html = (
-        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
-        .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
-        .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
-    )
+    html_template = html_template.replace(
+        "__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":"))
+    ).replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+    html_head, html_tail = html_template.split("__PAYLOAD_CHUNKS__")
+    # Streamed per chunk: a whole-page string would be several copies of a multi-hundred-MB payload
+    raw_chunk_size = PAYLOAD_CHUNK_SIZE // 4 * 3
     with open(filename, "w") as f:
-        f.write(final_html)
+        f.write(html_head)
+        for chunk_start in range(0, len(compressed_payload), raw_chunk_size):
+            if chunk_start:
+                f.write("\n")
+            f.write('    <script type="application/octet-stream" class="payload-chunk">')
+            f.write(base64.b64encode(compressed_payload[chunk_start : chunk_start + raw_chunk_size]).decode("ascii"))
+            f.write("</script>")
+        f.write(html_tail)
 
 
 def save_interactive_replay_zlib(scenario, replay, filename):

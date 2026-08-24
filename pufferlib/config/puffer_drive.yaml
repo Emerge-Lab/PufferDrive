@@ -277,16 +277,6 @@ train:
   # Rendering options
   render: false
   render_interval: 1000
-  # If True, show exactly what the agent sees in agent observation
-  obs_only: true
-  # Show grid lines
-  show_grid: false
-  # Draws lines from ego agent observed ORUs and road elements to show detection range
-  show_lasers: false
-  # Display human xy logs in the background
-  show_human_logs: true
-  # Options: List[str to path], str to path (e.g., "resources/drive/training/binaries/map_001.bin"), None
-  render_map: none
 sweep:
   method: Protein
   metric: score

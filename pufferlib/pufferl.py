@@ -203,12 +203,6 @@ class PuffeRL:
         self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
         self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
         self.free_idx = total_agents
-        self.render = config["render"]
-        self.render_interval = config["render_interval"]
-
-        if self.render:
-            ensure_drive_binary()
-
         # LSTM
         if config["use_rnn"]:
             n = vecenv.agents_per_batch
@@ -537,34 +531,6 @@ class PuffeRL:
         if self.epoch % config["checkpoint_interval"] == 0 or done_training:
             self.save_checkpoint()
             self.msg = f"Checkpoint saved at update {self.epoch}"
-
-            if self.render and self.epoch % self.render_interval == 0:
-                model_dir = self.config["data_dir"]
-                model_files = glob.glob(os.path.join(model_dir, "models", "model_*.pt"))
-
-                if model_files:
-                    # Take the latest checkpoint
-                    latest_cpt = max(model_files, key=os.path.getctime)
-                    bin_path = f"{model_dir}.bin"
-
-                    # Export to .bin for rendering with raylib
-                    try:
-                        export_args = {"env_name": self.config["env"], "load_model_path": latest_cpt, **self.config}
-
-                        export(
-                            args=export_args,
-                            env_name=self.config["env"],
-                            vecenv=self.vecenv,
-                            policy=self.uncompiled_policy,
-                            path=bin_path,
-                            silent=True,
-                        )
-                        pufferlib.utils.render_videos(
-                            self.config, self.vecenv, self.logger, self.epoch, self.global_step, bin_path
-                        )
-
-                    except Exception as e:
-                        print(f"Failed to export model weights: {e}")
 
         return logs
 
@@ -1682,6 +1648,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                     run_dir=path,
                 )
 
+        if is_rank0 and args["train"]["render"] and pufferl.epoch % args["train"]["render_interval"] == 0:
+            render_training_replays(
+                env_name=env_name,
+                args=args,
+                policy=pufferl.uncompiled_policy,
+                epoch=pufferl.epoch,
+                global_step=_global_agent_steps(pufferl),
+                run_dir=path,
+            )
+
         if logs is not None:
             should_stop_early = False
             if early_stop_fn is not None:
@@ -1903,7 +1879,10 @@ def eval(
         }
 
         if render_scenarios:
-            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir)
+            max_renderer_count = (
+                eval_config["observation_replay_writer_count"] if eval_config["capture_observations"] else None
+            )
+            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir, max_renderer_count)
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -2061,31 +2040,6 @@ def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent
 
     if not silent:
         print(f"Saved {len(weights)} weights to {path}")
-
-
-def ensure_drive_binary():
-    """Delete existing visualize binary and rebuild it. This ensures the
-    binary is always up-to-date with the latest code changes.
-    """
-    if os.path.exists("./visualize"):
-        print("Removing existing visualize binary...")
-        os.remove("./visualize")
-
-    print("Building visualize binary...")
-    try:
-        result = subprocess.run(
-            ["bash", "scripts/build_ocean.sh", "visualize", "local"], capture_output=True, text=True, timeout=300
-        )
-
-        if result.returncode == 0:
-            print("Successfully built visualize binary")
-        else:
-            print(f"Build failed: {result.stderr}")
-            raise RuntimeError("Failed to build visualize binary for rendering")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Build timed out")
-    except Exception as e:
-        raise RuntimeError(f"Build error: {e}")
 
 
 def autotune(args=None, env_name=None, vecenv=None, policy=None):
@@ -2308,6 +2262,49 @@ def _run_eval_rollout(
     return episode_summaries
 
 
+def render_training_replays(env_name, args, policy, epoch, global_step, run_dir):
+    """Render one HTML replay per training map with the live policy, observations included."""
+    run_args = copy.deepcopy(args)
+    env_config = run_args["env"]
+    num_scenarios = env_config["num_maps"]
+    # Fixed-length episodes: eval-mode summaries flush on the resample boundary.
+    env_config["termination_mode"] = 0
+    env_config["compute_eval_metrics"] = True
+    env_config["num_agents"] = env_config["max_agents_per_env"]
+    run_args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+    capture_observations = run_args["eval"]["capture_observations"]
+    # Observation replays render at multi-GB RSS each; the obs writer count bounds that too.
+    max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    num_workers = min(run_args["vec"]["num_envs"], num_scenarios)
+    worker_env_kwargs, total_steps = drive_benchmark._plan_benchmark_eval_workers(
+        run_args, num_scenarios, num_workers, env_config["scenario_length"], capture_replay=True
+    )
+    output_dir = os.path.join(run_dir, "renders", f"epoch_{epoch:06d}_step_{global_step}")
+
+    rng_state = capture_rng_state()
+    policy_was_training = bool(getattr(policy, "training", False))
+    try:
+        summaries = _run_eval_rollout(
+            run_args,
+            env_name,
+            worker_env_kwargs,
+            total_steps,
+            "Rendering training replays",
+            num_scenarios,
+            policy=policy,
+            replay_output_dir=os.path.join(output_dir, "replays"),
+            capture_observations=capture_observations,
+        )
+        drive_eval_replay._render_eval_replays(summaries, output_dir, max_renderer_count)
+    except Exception:
+        print(f"\n[training render] Replay rendering failed at epoch {epoch}; continuing training:")
+        traceback.print_exc()
+    finally:
+        if hasattr(policy, "train"):
+            policy.train(policy_was_training)
+        restore_rng_state({"rng_state": rng_state})
+
+
 def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, run_dir):
     """Run the configured evaluator and log its means on the training run."""
     eval_args = copy.deepcopy(args)
@@ -2433,7 +2430,8 @@ def _render_eval_failures(
         )
         summaries.extend(wave_summaries)
     summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
-    drive_eval_replay._render_eval_replays(summaries, failures_dir)
+    max_renderer_count = run_args["eval"]["observation_replay_writer_count"] if capture_observations else None
+    drive_eval_replay._render_eval_replays(summaries, failures_dir, max_renderer_count)
     return {
         "episodes": summaries,
         "summary": summary,

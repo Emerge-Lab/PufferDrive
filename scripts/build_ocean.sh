@@ -52,6 +52,11 @@ if [ "$PLATFORM" = "Darwin" ]; then
     )
 fi
 
+# Match setup.py: link EGL/GL for the headless GPU render path when headers exist
+if [ "$PLATFORM" = "Linux" ] && [ -f /usr/include/EGL/egl.h ]; then
+    FLAGS+=(-lEGL -lGL -ldl)
+fi
+
 echo ${FLAGS[@]}
 
 if [ "$MODE" = "local" ]; then
