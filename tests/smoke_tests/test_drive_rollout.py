@@ -93,11 +93,7 @@ def _is_number(x):
 
 
 def _random_actions(vecenv, rng):
-    # single_action_space is a tuple of Discrete components (see test_simulator_perf).
-    return np.stack(
-        [rng.integers(0, space.n, size=vecenv.num_agents) for space in vecenv.single_action_space],
-        axis=-1,
-    ).astype(np.int32)
+    return rng.integers(0, vecenv.single_action_space.n, size=vecenv.num_agents).astype(np.int32)
 
 
 def _capture_env_means(vecenv, rng):

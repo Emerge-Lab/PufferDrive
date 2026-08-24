@@ -23,9 +23,7 @@ from notebooks.notebook_utils import COEF_NAMES, make_drive_env, random_actions,
 
 env, obs, info = make_drive_env()
 
-print(
-    f"env ready: {env.num_agents} agents, obs={obs.shape}, act_shape={(env.num_agents, len(env.single_action_space.nvec))}"
-)
+print(f"env ready: {env.num_agents} agents, obs={obs.shape}, act_shape={(env.num_agents,)}")
 print(
     f"ego_features={env.ego_features}, num_reward_coefs={env.num_reward_coefs}, obs_slots_partners_n={env.obs_slots_partners_n}, partner_features={env.partner_features}"
 )
@@ -220,10 +218,10 @@ if episodic_returns.std() < 1e-6:
 STEPS_PER_ACTION = 20
 action_rewards = {}
 
-for a in range(env.single_action_space.nvec[0]):
+for a in range(env.single_action_space.n):
     rews = []
     for _ in range(STEPS_PER_ACTION):
-        actions = np.full((env.num_agents, len(env.single_action_space.nvec)), a, dtype=np.int64)
+        actions = np.full(env.num_agents, a, dtype=np.int64)
         obs, rew, term, trunc, info = env.step(actions)
         rews.append(rew.mean())
     action_rewards[a] = np.mean(rews)

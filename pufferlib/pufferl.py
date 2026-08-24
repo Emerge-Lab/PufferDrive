@@ -115,9 +115,7 @@ def clean_policy_state_dict(state_dict):
 def logits_to_float(logits):
     if isinstance(logits, torch.distributions.Normal):
         return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
-    if isinstance(logits, torch.Tensor):
-        return logits.float()
-    return tuple(l.float() for l in logits)
+    return logits.float()
 
 
 class PuffeRL:
@@ -142,7 +140,7 @@ class PuffeRL:
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
         unwrapped_policy = base_policy(policy)
         if self.env_continuous and not unwrapped_policy.is_continuous:
-            action_shape = (len(unwrapped_policy.atn_dim),)
+            action_shape = ()
             action_dtype = torch.int32
         else:
             action_shape = vecenv.single_action_space.shape
