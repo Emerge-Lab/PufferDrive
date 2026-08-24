@@ -169,6 +169,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // Agent-agent collision
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
+#define SPAWN_CLEARANCE_M 1.5f // Min box-to-box gap between agents at spawn
 
 // Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)

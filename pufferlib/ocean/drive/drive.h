@@ -2221,7 +2221,11 @@ static void generate_traffic_light_states(Drive *env) {
 }
 
 static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tmp_agent) {
-    float min_safe_dist_sq = (tmp_agent->sim_length + 5.0f) * (tmp_agent->sim_length + 5.0f);
+    // Inflate the candidate box so agents keep SPAWN_CLEARANCE_M of gap to every neighbor
+    Agent inflated = *tmp_agent;
+    inflated.sim_length += 2.0f * SPAWN_CLEARANCE_M;
+    inflated.sim_width += 2.0f * SPAWN_CLEARANCE_M;
+    float min_safe_dist_sq = (inflated.sim_length + 5.0f) * (inflated.sim_length + 5.0f);
 
     for (int i = 0; i < num_existing_agents; i++) {
         Agent *other = &env->agents[i];
@@ -2237,7 +2241,7 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
         if (dist_sq > min_safe_dist_sq) {
             continue;
         }
-        if (check_obb_collision(tmp_agent, other)) {
+        if (check_obb_collision(&inflated, other)) {
             return true;
         }
     }
