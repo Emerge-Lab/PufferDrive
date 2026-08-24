@@ -68,7 +68,7 @@ srun torchrun \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     train.evaluation_benchmarks=carla_fast \
-    train.adv_filter_leak_fraction=0.05 \
+    train.adv_filter_leak_fraction=0.0 \
     env.partner_blindness_prob=0.05 \
     env.phantom_braking_prob=0.1 \
     env.phantom_braking_freeze_steering=false \
