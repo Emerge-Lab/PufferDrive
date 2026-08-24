@@ -473,7 +473,7 @@ class PuffeRL:
 
             if self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
-                self.vecenv.send(cont_action.squeeze(0))
+                self.vecenv.send(cont_action)
             else:
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
