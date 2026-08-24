@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0023_1000
+export RUN_NAME=k_scaled_0024_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -48,7 +48,7 @@ fi
     eval.dt=0.0667 \
     eval.goal_radius=10.0 \
     eval.goal_speed=3.0 \
-    eval.output_name=${RUN_NAME}_3_goal_speed \
+    eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
