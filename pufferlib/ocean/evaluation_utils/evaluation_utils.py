@@ -301,6 +301,9 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     goal_radius_override = args["eval"].get("goal_radius")
     if goal_radius_override is not None:
         args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+    base_max_speed_override = args["eval"].get("base_max_speed_mps")
+    if base_max_speed_override is not None:
+        args["env"]["base_max_speed_mps"] = _positive_float(base_max_speed_override, "eval.base_max_speed_mps")
     goal_speed_override = args["eval"].get("goal_speed")
     if goal_speed_override is not None:
         args["env"]["goal_speed"] = _non_negative_float(goal_speed_override, "eval.goal_speed")

@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0026_${SEED}
+export RUN_NAME=k_scaled_0027_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -73,11 +73,11 @@ srun torchrun \
     env.phantom_braking_prob=0.1 \
     env.phantom_braking_freeze_steering=false \
     env.reset_accel_on_stop=false \
+    env.base_max_speed_mps=20.0 \
+    env.goal_heading_max_deg = 60.0 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
-
-# env.goal_heading_max_deg = 60.0 \
 
 if [ ! -f ${MODEL_PATH} ]; then
     echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
@@ -95,6 +95,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
+    eval.base_max_speed_mps=20.0 \
     eval.goal_radius=10.0 \
     eval.goal_source=map \
     eval.min_goal_spacing=20 \
@@ -110,6 +111,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
+    eval.base_max_speed_mps=20.0 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     eval.render_filter=all_infractions \

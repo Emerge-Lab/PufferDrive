@@ -310,6 +310,9 @@ eval:
   dt: null
   # Overrides env.goal_radius of every selected benchmark; null keeps the benchmark's value.
   goal_radius: null
+  # Overrides env.base_max_speed_mps of every selected benchmark (20.0 = Gigaflow's eval speed cap,
+  # C_vel is fixed to 1 since benchmarks disable reward_randomization); null keeps the benchmark's value.
+  base_max_speed_mps: null
   # Overrides env.goal_regen_mode ("finite" or "rolling") of every selected benchmark; null keeps the benchmark's value.
   goal_regen_mode: null
   # Overrides env.goal_source ("route", "map" or "gt") of every selected benchmark; null keeps the benchmark's value.
