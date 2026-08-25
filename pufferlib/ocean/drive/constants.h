@@ -130,7 +130,6 @@
 // 3. DYNAMICS
 // =====================================================================================
 
-#define ABSOLUTE_FORWARD_SPEED_LIMIT_MPS 60.0f
 #define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;

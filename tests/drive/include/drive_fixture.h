@@ -109,6 +109,7 @@ static inline Drive drive_test_env_config(
     env.reward_randomization = 0;
     env.compute_eval_metrics = 1;
     env.eval_mode = 0;
+    env.obs_norm_speed_mps = 60.0f;
     env.obs_norm_goal_offset_m = 100.0f;
     env.obs_norm_xy_offset_m = 100.0f;
     env.obs_norm_veh_length_m = 15.0f;
