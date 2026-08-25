@@ -46,8 +46,11 @@ fi
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
+    eval.base_max_speed_mps=20.0 \
+    eval.obs_slots_partners_n=40 \
     eval.goal_radius=10.0 \
     eval.goal_source=map \
+    env.goal_heading_max_deg=60.0 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     eval.goal_speed=3.0 \
@@ -63,6 +66,8 @@ fi
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.render_filter=all_infractions \
+    eval.base_max_speed_mps=20.0 \
+    eval.obs_slots_partners_n=40 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
     eval.capture_observations=true \
