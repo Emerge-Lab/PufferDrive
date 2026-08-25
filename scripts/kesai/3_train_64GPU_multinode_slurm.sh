@@ -74,7 +74,7 @@ srun torchrun \
     env.phantom_braking_freeze_steering=false \
     env.reset_accel_on_stop=false \
     env.base_max_speed_mps=20.0 \
-    env.goal_heading_max_deg = 60.0 \
+    env.goal_heading_max_deg=60.0 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -98,6 +98,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.base_max_speed_mps=20.0 \
     eval.goal_radius=10.0 \
     eval.goal_source=map \
+    env.goal_heading_max_deg=60.0 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     eval.goal_speed=3.0 \
