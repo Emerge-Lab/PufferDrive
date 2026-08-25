@@ -130,7 +130,8 @@
 // 3. DYNAMICS
 // =====================================================================================
 
-#define MAX_SPEED 40.0f
+#define ABSOLUTE_FORWARD_SPEED_LIMIT_MPS 60.0f
+#define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
@@ -264,7 +265,8 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_THROTTLE 14
 #define REWARD_COEF_STEER 15
 #define REWARD_COEF_ACC 16
-#define NUM_REWARD_COEFS 17
+#define REWARD_COEF_SPEED 17
+#define NUM_REWARD_COEFS 18
 
 // =====================================================================================
 // 10. METRICS & SCORING

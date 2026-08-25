@@ -115,9 +115,7 @@ def clean_policy_state_dict(state_dict):
 def logits_to_float(logits):
     if isinstance(logits, torch.distributions.Normal):
         return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
-    if isinstance(logits, torch.Tensor):
-        return logits.float()
-    return tuple(l.float() for l in logits)
+    return logits.float()
 
 
 class PuffeRL:
@@ -142,7 +140,7 @@ class PuffeRL:
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
         unwrapped_policy = base_policy(policy)
         if self.env_continuous and not unwrapped_policy.is_continuous:
-            action_shape = (len(unwrapped_policy.atn_dim),)
+            action_shape = ()
             action_dtype = torch.int32
         else:
             action_shape = vecenv.single_action_space.shape
@@ -446,7 +444,7 @@ class PuffeRL:
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
                 # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0:
+                if l > 0 and config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
@@ -478,7 +476,7 @@ class PuffeRL:
 
             if self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
-                self.vecenv.send(cont_action.squeeze(0))
+                self.vecenv.send(cont_action)
             else:
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
@@ -580,7 +578,7 @@ class PuffeRL:
                 advantage_std = torch.sqrt(advantage_std)
             else:
                 advantage_mean = mb_adv.mean()
-                advantage_std = mb_adv.std()
+                advantage_std = mb_adv.std(unbiased=False)
 
             mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
             if adv_weights is not None:

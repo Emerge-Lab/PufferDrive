@@ -76,8 +76,8 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
+        base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
-        vehicle_max_speed_mps=40.0,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -148,12 +148,8 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_freeze_steering=True,
     ):
         self.dt = dt
+        self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
-        self.vehicle_max_speed_mps = float(vehicle_max_speed_mps)
-        if not 0.0 < self.vehicle_max_speed_mps <= binding.MAX_SPEED:
-            raise ValueError(
-                f"vehicle_max_speed_mps must be in (0, {binding.MAX_SPEED}] (MAX_SPEED is the observation normalizer). Got: {vehicle_max_speed_mps}"
-            )
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
@@ -434,13 +430,11 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             self._action_type_flag = binding.ACTION_TYPE_DISCRETE
             if dynamics_model == "classic":
-                # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
-                # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 9])
+                self.single_action_space = gymnasium.spaces.Discrete(
+                    len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
+                )
             elif dynamics_model == "jerk":
-                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
+                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
@@ -569,8 +563,8 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
+            "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
-            "vehicle_max_speed_mps": self.vehicle_max_speed_mps,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
@@ -1226,9 +1220,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env.reset()
     tick = 0
     num_agents = 1024
-    actions = np.stack(
-        [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
-    )
+    actions = np.random.randint(0, env.single_action_space.n, (atn_cache, num_agents))
 
     start = time.time()
     while time.time() - start < timeout:

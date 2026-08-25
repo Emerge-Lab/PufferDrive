@@ -224,8 +224,8 @@ struct Drive {
     int timestep;
     int init_step;
     float dt;
+    float base_max_speed_mps;
     float spawn_initial_speed;
-    float vehicle_max_speed_mps;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -348,6 +348,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -369,6 +370,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
 };
 
 // ========================================
@@ -2179,6 +2181,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_STEER] = sample_mixed_uniform(&env->rng_state, 1.25f);
         agent->reward_coefs[REWARD_COEF_ACC] = sample_mixed_uniform(&env->rng_state, 1.5f);
+        agent->reward_coefs[REWARD_COEF_SPEED] = sample_mixed_uniform(&env->rng_state, 1.5f);
     } else {
         agent->reward_coefs[REWARD_COEF_GOAL_RADIUS] = env->goal_radius;
         agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
@@ -2197,6 +2200,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
     }
 }
 
@@ -2484,7 +2488,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_valid = 1;
     agent->wheelbase = spawn_wheelbase;
     agent->current_lane_idx = start_lane_idx;
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, env->vehicle_max_speed_mps);
+    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, env->base_max_speed_mps);
     agent->sim_vx = spawn_speed * agent->cos_heading;
     agent->sim_vy = spawn_speed * agent->sin_heading;
     agent->yaw_rate = 0.0f;
@@ -3700,7 +3704,7 @@ static void compute_rewards(Drive *env, int i) {
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     float perceived_margin = env->eval_mode ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
-    obs[obs_idx++] = ego->sim_speed_signed / MAX_SPEED;
+    obs[obs_idx++] = ego->sim_speed_signed / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
@@ -3710,7 +3714,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
         = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
-    obs[obs_idx++] = current_lane_speed_limit / MAX_SPEED;
+    obs[obs_idx++] = current_lane_speed_limit / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
     obs[obs_idx++] = fminf(1.0f, ego->seconds_stopped / MAX_STOPPED_SECONDS);
     return obs_idx;
 }
@@ -3846,7 +3850,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
-        obs[obs_idx++] = other->sim_speed_signed / MAX_SPEED;
+        obs[obs_idx++] = other->sim_speed_signed / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;
@@ -4204,7 +4208,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 acceleration = 0.0f;
             }
         }
-        speed = clip(speed, -env->vehicle_max_speed_mps, env->vehicle_max_speed_mps);
+        speed = clip(speed, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
         // Compute yaw rate
         float beta = atanf(REAR_AXLE_RATIO * tanf(steering));
         // New heading
@@ -4311,7 +4315,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 a_lat_new = 0.0f;
             }
         } else {
-            v_new = clip(v_new, -2.0f, env->vehicle_max_speed_mps);
+            v_new = clip(v_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
         }
 
         // If phantom braking is active, prevent speed from going negative

@@ -26,7 +26,7 @@ typedef struct {
     float reward_reverse;
     float goal_radius;
     float spawn_initial_speed;
-    float vehicle_max_speed_mps;
+    float base_max_speed_mps;
     float goal_speed;
     int collision_behavior;
     int offroad_behavior;
@@ -187,8 +187,8 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->goal_radius = atof(value);
     } else if (MATCH("env", "spawn_initial_speed")) {
         env_config->spawn_initial_speed = atof(value);
-    } else if (MATCH("env", "vehicle_max_speed_mps")) {
-        env_config->vehicle_max_speed_mps = atof(value);
+    } else if (MATCH("env", "base_max_speed_mps")) {
+        env_config->base_max_speed_mps = atof(value);
     } else if (MATCH("env", "goal_speed")) {
         env_config->goal_speed = atof(value);
     } else if (MATCH("env", "dt")) {

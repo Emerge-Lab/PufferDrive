@@ -58,7 +58,7 @@ if CHECKPOINT_PATH:
 
 is_continuous = policy.is_continuous  # policy output space
 env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)  # env action space
-ACT_SHAPE = (N, env.single_action_space.shape[0]) if env_continuous else (N, len(env.single_action_space.nvec))
+ACT_SHAPE = (N, env.single_action_space.shape[0]) if env_continuous else (N,)
 
 print(f"Policy on {device}, params: {sum(p.numel() for p in policy.parameters()):,}")
 print(f"Obs shape: {obs.shape}, Action space: {env.single_action_space}")
@@ -76,12 +76,12 @@ obs_tensor = torch.FloatTensor(obs).to(device)
 policy.eval()
 
 with torch.no_grad():
-    logits_list, value = policy(obs_tensor)
+    logits, value = policy(obs_tensor)
 
 # Sample actions
-action, logprob, ent, cont_action = sample_logits(logits_list, env_continuous=env_continuous, policy=policy)
+action, logprob, ent, cont_action = sample_logits(logits, env_continuous=env_continuous, policy=policy)
 action_det, _, _, _ = sample_logits(
-    logits_list, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy
+    logits, action_selection=ACTION_SELECT_MODE, env_continuous=env_continuous, policy=policy
 )
 
 print(f"Value: mean={value.mean():.4f}, std={value.std():.4f}, range=[{value.min():.4f}, {value.max():.4f}]")
@@ -93,11 +93,8 @@ print(f"Deterministic action: {action_det[0].cpu().numpy()}")
 # Plot
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 
-# Action probs (first head for multi-discrete, or full logits)
-if isinstance(logits_list, list) or isinstance(logits_list, tuple):
-    probs = F.softmax(logits_list[0], dim=-1)
-else:
-    probs = F.softmax(logits_list, dim=-1)
+# Action probabilities
+probs = F.softmax(logits, dim=-1)
 mean_probs = probs.mean(dim=0).cpu().numpy()
 axes[0].bar(range(len(mean_probs)), mean_probs, edgecolor="black", alpha=0.7)
 axes[0].axhline(1.0 / len(mean_probs), color="red", ls="--", label="uniform")
@@ -147,9 +144,9 @@ def run_rollout(env, policy, action_selection=ACTION_SELECT_SAMPLE, horizon=HORI
     for t in range(horizon):
         obs_t = torch.FloatTensor(obs).to(device)
         with torch.no_grad():
-            logits_list, val = policy(obs_t)
+            logits, val = policy(obs_t)
             act, logp, entr, cont_act = sample_logits(
-                logits_list, action_selection=action_selection, env_continuous=env_continuous, policy=policy
+                logits, action_selection=action_selection, env_continuous=env_continuous, policy=policy
             )
 
         buffers["obs"][t] = obs
@@ -1054,13 +1051,12 @@ plt.show()
 
 # %%
 # Compute action probs over time for tracked agent (stochastic rollout)
-n_actions = policy.atn_dim[0] if not is_continuous else 1
+n_actions = policy.action_dim if not is_continuous else 1
 action_probs_time = np.zeros((HORIZON, n_actions))
 for t in range(HORIZON):
     obs_t = torch.FloatTensor(buf_stoch["obs"][t : t + 1, TRACKED_AGENT : TRACKED_AGENT + 1][0]).to(device)
     with torch.no_grad():
-        logits_list, _ = policy(obs_t)
-    logits = logits_list[0] if isinstance(logits_list, (list, tuple)) else logits_list
+        logits, _ = policy(obs_t)
     action_probs_time[t] = F.softmax(logits, dim=-1).cpu().numpy().flatten()
 
 fig, axes = plt.subplots(2, 2, figsize=(16, 10))
