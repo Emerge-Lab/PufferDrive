@@ -39,6 +39,7 @@ COEF_NAMES = [
     "throttle",
     "steer",
     "acc",
+    "speed",
 ]
 
 EGO_LABELS = [
