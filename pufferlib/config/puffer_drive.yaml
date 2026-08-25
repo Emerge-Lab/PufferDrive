@@ -52,6 +52,8 @@ env:
   reset_accel_on_stop: false
   # Time delta between steps in seconds
   dt: 0.3
+  # Base forward speed cap
+  base_max_speed_mps: 20.0
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"

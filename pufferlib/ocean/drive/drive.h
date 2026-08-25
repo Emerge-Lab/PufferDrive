@@ -224,6 +224,7 @@ struct Drive {
     int timestep;
     int init_step;
     float dt;
+    float base_max_speed_mps;
     float spawn_initial_speed;
     int dynamics_model;
     int reset_accel_on_stop;
@@ -2503,8 +2504,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_valid = 1;
     agent->wheelbase = spawn_wheelbase;
     agent->current_lane_idx = start_lane_idx;
-    // NOTE: Might replace with NOMINAL_FORWARD_SPEED_LIMIT_MPS * agent->reward_coefs[REWARD_COEF_SPEED]
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, NOMINAL_FORWARD_SPEED_LIMIT_MPS);
+    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, env->base_max_speed_mps);
     agent->sim_vx = spawn_speed * agent->cos_heading;
     agent->sim_vy = spawn_speed * agent->sin_heading;
     agent->yaw_rate = 0.0f;
@@ -4212,8 +4212,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 acceleration = 0.0f;
             }
         }
-        speed
-            = clip(speed, MAX_BACKWARD_SPEED, NOMINAL_FORWARD_SPEED_LIMIT_MPS * agent->reward_coefs[REWARD_COEF_SPEED]);
+        speed = clip(speed, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
         // Compute yaw rate
         float beta = atanf(REAR_AXLE_RATIO * tanf(steering));
         // New heading
@@ -4318,10 +4317,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
                 a_lat_new = 0.0f;
             }
         } else {
-            v_new = clip(
-                v_new,
-                MAX_BACKWARD_SPEED,
-                NOMINAL_FORWARD_SPEED_LIMIT_MPS * agent->reward_coefs[REWARD_COEF_SPEED]);
+            v_new = clip(v_new, MAX_BACKWARD_SPEED, env->base_max_speed_mps * agent->reward_coefs[REWARD_COEF_SPEED]);
         }
 
         // If phantom braking is active, prevent speed from going negative

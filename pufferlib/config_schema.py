@@ -93,6 +93,7 @@ class DriveEnvConfig:
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
+    base_max_speed_mps: float = MISSING
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING

@@ -130,7 +130,7 @@
 // 3. DYNAMICS
 // =====================================================================================
 
-#define NOMINAL_FORWARD_SPEED_LIMIT_MPS 40.0f
+#define DEFAULT_BASE_MAX_SPEED_MPS 40.0f
 #define ABSOLUTE_FORWARD_SPEED_LIMIT_MPS 60.0f
 #define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
