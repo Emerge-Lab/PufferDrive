@@ -233,6 +233,7 @@ struct Drive {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int disable_red_light_infractions;
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
@@ -3497,7 +3498,8 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
+    if (env->obs_slots_traffic_controls_n && !env->disable_red_light_infractions
+        && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->traffic_light_behavior);
         return;

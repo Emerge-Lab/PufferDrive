@@ -62,6 +62,8 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
+  # Skip red light violation detection (metrics, reward, behavior) - 0 off, 1 on
+  disable_red_light_infractions: 0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
@@ -326,6 +328,8 @@ eval:
   # closest observed agents); slots are max-pooled, so any checkpoint transfers. null keeps the
   # checkpoint's value.
   obs_slots_partners_n: null
+  # Overrides env.disable_red_light_infractions of every selected benchmark; null keeps the benchmark's value.
+  disable_red_light_infractions: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval

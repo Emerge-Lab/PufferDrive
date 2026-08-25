@@ -326,6 +326,11 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     partner_slots_override = args["eval"].get("obs_slots_partners_n")
     if partner_slots_override is not None:
         args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
+    red_light_override = args["eval"].get("disable_red_light_infractions")
+    if red_light_override is not None:
+        if red_light_override not in (0, 1):
+            raise pufferlib.APIUsageError("eval.disable_red_light_infractions must be 0 or 1")
+        args["env"]["disable_red_light_infractions"] = red_light_override
     scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
     dt_override = args["eval"].get("dt")
     if dt_override is not None:

@@ -98,6 +98,7 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    disable_red_light_infractions: int = MISSING
     use_map_cache: int = MISSING
     use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING

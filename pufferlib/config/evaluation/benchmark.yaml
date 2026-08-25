@@ -93,6 +93,7 @@ benchmarks:
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
+      disable_red_light_infractions: 1
 
   - name: nuplan_single
     seed: 42
@@ -105,3 +106,4 @@ benchmarks:
       control_mode: control_sdc_only
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
+      disable_red_light_infractions: 1
