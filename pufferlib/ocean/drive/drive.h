@@ -280,6 +280,7 @@ struct Drive {
     int obs_slots_lane_kept;
     int obs_slots_boundary_kept;
     int road_dropout_enabled;
+    float obs_norm_speed_mps;
     float obs_norm_goal_offset_m;
     float obs_norm_xy_offset_m;
     float obs_norm_veh_length_m;
@@ -3710,7 +3711,7 @@ static void compute_rewards(Drive *env, int i) {
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     float perceived_margin = env->eval_mode ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
-    obs[obs_idx++] = ego->sim_speed_signed / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
+    obs[obs_idx++] = ego->sim_speed_signed / env->obs_norm_speed_mps;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
     obs[obs_idx++] = ego->steering_angle / STEERING_LIMIT;
@@ -3720,7 +3721,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
     float current_lane_speed_limit
         = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
-    obs[obs_idx++] = current_lane_speed_limit / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
+    obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
     obs[obs_idx++] = fminf(1.0f, ego->seconds_stopped / MAX_STOPPED_SECONDS);
     return obs_idx;
 }
@@ -3853,7 +3854,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_width / env->obs_norm_veh_width_m;
         obs[obs_idx++] = rel_heading_x;
         obs[obs_idx++] = rel_heading_y;
-        obs[obs_idx++] = other->sim_speed_signed / ABSOLUTE_FORWARD_SPEED_LIMIT_MPS;
+        obs[obs_idx++] = other->sim_speed_signed / env->obs_norm_speed_mps;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
         partners_written++;

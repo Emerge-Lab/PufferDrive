@@ -149,6 +149,7 @@ class DriveEnvConfig:
     obs_dropout_boundary: float = MISSING
     obs_lane_stride: int = MISSING
     obs_boundary_stride: int = MISSING
+    obs_norm_speed_mps: float = MISSING
     obs_norm_goal_offset_m: float = MISSING
     obs_norm_xy_offset_m: float = MISSING
     obs_norm_veh_length_m: float = MISSING

@@ -150,6 +150,7 @@ env:
   obs_lane_stride: 2
   obs_boundary_stride: 1
   # --- Observation normalization ---
+  obs_norm_speed_mps: 60.0
   obs_norm_goal_offset_m: 200.0
   obs_norm_xy_offset_m: 200.0
   obs_norm_veh_length_m: 10.0
