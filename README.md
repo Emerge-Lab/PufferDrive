@@ -142,14 +142,6 @@ python data_utils/lanelet2_to_bin.py tests/fixtures/lanelet2_tiny.osm \
   --crop 0 0 9 20
 ```
 
-The converter validates the emitted binary, including the 3.0 `id == index`
-requirement, and records the detected CRS and local origin in the validation
-report. Use `--link-tolerance-m` only when the source omits explicit shared
-Lanelet2 endpoints. The focused converter includes `road` and `highway` lanelets
-only; regulatory traffic controls are outside this contribution.
-Unitless `speed_limit` values follow Lanelet2 conventions and are converted
-from kilometres per hour to metres per second. Missing values use 50 km/h.
-
 ## Train
 
 ```bash
