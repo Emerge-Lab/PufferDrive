@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <node id="1" lat="9.046566245" lon="140.999985406"/>
+  <node id="2" lat="9.046558682" lon="141.000014594"/>
+  <node id="3" lat="9.046713127" lon="141.000024450"/>
+  <node id="4" lat="9.046705134" lon="141.000054622"/>
+  <node id="5" lat="9.046785721" lon="141.000043739"/>
+  <node id="6" lat="9.046777550" lon="141.000074417"/>
+  <way id="101">
+    <nd ref="1"/><nd ref="3"/>
+    <tag k="type" v="line_thin"/>
+    <tag k="subtype" v="solid"/>
+  </way>
+  <way id="102">
+    <nd ref="2"/><nd ref="4"/>
+    <tag k="type" v="line_thin"/>
+    <tag k="subtype" v="solid"/>
+  </way>
+  <way id="103">
+    <nd ref="3"/><nd ref="5"/>
+    <tag k="type" v="line_thin"/>
+    <tag k="subtype" v="solid"/>
+  </way>
+  <way id="104">
+    <nd ref="4"/><nd ref="6"/>
+    <tag k="type" v="line_thin"/>
+    <tag k="subtype" v="solid"/>
+  </way>
+  <relation id="201">
+    <member type="way" ref="101" role="left"/>
+    <member type="way" ref="102" role="right"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="speed_limit" v="40 km/h"/>
+  </relation>
+  <relation id="202">
+    <member type="way" ref="103" role="left"/>
+    <member type="way" ref="104" role="right"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+    <tag k="speed_limit" v="40 km/h"/>
+  </relation>
+</osm>

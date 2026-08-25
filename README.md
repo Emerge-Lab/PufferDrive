@@ -112,6 +112,44 @@ Place binaries under `pufferlib/resources/drive/binaries/`.
 - **nuPlan (replay training/eval):** fetched by the default above, or convert
   yourself — see [`docs/nuplan_data.md`](docs/nuplan_data.md).
 
+### Lanelet2 maps
+
+Convert Lanelet2 OSM coordinates to a PufferDrive 3.0 binary. Install the
+optional conversion and PNG-rendering dependencies first. The converter detects
+the local UTM CRS and shifts the projected map to a local metre origin.
+
+```bash
+python -m pip install -e ".[lanelet2]"
+
+python data_utils/lanelet2_to_bin.py INPUT.osm OUTPUT.bin \
+  --validation-report validation.json
+
+python data_utils/visualize_map_bin.py OUTPUT.bin \
+  --png preview.png
+```
+
+The PNG reserves a small panel at the upper right for the road-lane, road-line,
+and road-edge colors. It reports binary segments and connected groups separately
+so split Lanelet2 records are not mistaken for separate visual roads.
+
+Crop coordinates are ordered as `XMIN YMIN XMAX YMAX`. They are measured in
+metres from the automatically selected local origin. For example, this keeps a
+local 9 m by 20 m window from the included fixture:
+
+```bash
+python data_utils/lanelet2_to_bin.py tests/fixtures/lanelet2_tiny.osm \
+  /tmp/lanelet2-crop.bin \
+  --crop 0 0 9 20
+```
+
+The converter validates the emitted binary, including the 3.0 `id == index`
+requirement, and records the detected CRS and local origin in the validation
+report. Use `--link-tolerance-m` only when the source omits explicit shared
+Lanelet2 endpoints. The focused converter includes `road` and `highway` lanelets
+only; regulatory traffic controls are outside this contribution.
+Unitless `speed_limit` values follow Lanelet2 conventions and are converted
+from kilometres per hour to metres per second. Missing values use 50 km/h.
+
 ## Train
 
 ```bash
