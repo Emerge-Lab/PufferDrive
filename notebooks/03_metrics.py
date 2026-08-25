@@ -25,9 +25,7 @@ from notebooks.notebook_utils import make_drive_env, random_actions
 
 env, obs, info = make_drive_env()
 
-print(
-    f"env ready: {env.num_agents} agents, obs={obs.shape}, act_shape={(env.num_agents, len(env.single_action_space.nvec))}"
-)
+print(f"env ready: {env.num_agents} agents, obs={obs.shape}, act_shape={(env.num_agents,)}")
 print(
     f"ego_features={env.ego_features}, num_reward_coefs={env.num_reward_coefs}, obs_slots_partners_n={env.obs_slots_partners_n}, partner_features={env.partner_features}"
 )

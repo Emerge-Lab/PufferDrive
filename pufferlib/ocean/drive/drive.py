@@ -412,13 +412,11 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             self._action_type_flag = binding.ACTION_TYPE_DISCRETE
             if dynamics_model == "classic":
-                # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
-                # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 9])
+                self.single_action_space = gymnasium.spaces.Discrete(
+                    len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
+                )
             elif dynamics_model == "jerk":
-                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
+                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
@@ -1201,9 +1199,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env.reset()
     tick = 0
     num_agents = 1024
-    actions = np.stack(
-        [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
-    )
+    actions = np.random.randint(0, env.single_action_space.n, (atn_cache, num_agents))
 
     start = time.time()
     while time.time() - start < timeout:

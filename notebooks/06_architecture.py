@@ -70,7 +70,7 @@ policy = DrivePolicy(
 
 print(f"Device: {device}")
 print(f"Obs dim: {obs.shape[1]}")
-print(f"Action dim: {policy.atn_dim}")
+print(f"Action dim: {policy.action_dim}")
 print(f"Shared network: {SHARED_NETWORK}")
 print(f"Backbone: {BACKBONE_HIDDEN_SIZE} x {BACKBONE_NUM_LAYERS}L")
 print(f"Actor: {ACTOR_HIDDEN_SIZE} x {ACTOR_NUM_LAYERS}L")
@@ -162,11 +162,9 @@ ax.annotate("", xy=(7.5, 5.0), xytext=(7.2, 5.0), arrowprops=dict(arrowstyle="->
 
 # Actor / Critic heads
 ax.add_patch(plt.Rectangle((9.0, 5.7), 0.9, 0.6, facecolor="lightgreen", edgecolor="black", lw=1.2))
-actor_label = f"Actor ({ACTOR_NUM_LAYERS}L)\n{BACKBONE_HIDDEN_SIZE}->{sum(policy.atn_dim)}"
+actor_label = f"Actor ({ACTOR_NUM_LAYERS}L)\n{BACKBONE_HIDDEN_SIZE}->{policy.action_dim}"
 if ACTOR_NUM_LAYERS > 1:
-    actor_label = (
-        f"Actor ({ACTOR_NUM_LAYERS}L)\n{BACKBONE_HIDDEN_SIZE}->{ACTOR_HIDDEN_SIZE}->...->{sum(policy.atn_dim)}"
-    )
+    actor_label = f"Actor ({ACTOR_NUM_LAYERS}L)\n{BACKBONE_HIDDEN_SIZE}->{ACTOR_HIDDEN_SIZE}->...->{policy.action_dim}"
 ax.text(9.45, 6.0, actor_label, ha="center", va="center", fontsize=6, fontweight="bold")
 
 ax.add_patch(plt.Rectangle((9.0, 3.7), 0.9, 0.6, facecolor="plum", edgecolor="black", lw=1.2))
@@ -338,7 +336,7 @@ with torch.no_grad():
     # Heads
     actor_out = policy.actor_head(hidden)
     critic_out = policy.critic_head(hidden)
-    print(f"  actor_head:  {hidden.shape} -> {actor_out.shape} (split into {policy.atn_dim})")
+    print(f"  actor_head:  {hidden.shape} -> {actor_out.shape}")
     print(f"  critic_head: {hidden.shape} -> {critic_out.shape}")
 
 # %% [markdown]
