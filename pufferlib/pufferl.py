@@ -173,14 +173,23 @@ class PuffeRL:
         if precision == "bfloat16" and not config.get("amp", True):
             raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
 
-        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        rollout_dtype = config.get("rollout_dtype", "float32")
+        if rollout_dtype == "float32":
+            obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        elif rollout_dtype == "float16" and np.issubdtype(obs_space.dtype, np.floating):
+            obs_dtype = getattr(torch, rollout_dtype)
+        else:
+            raise pufferlib.APIUsageError(
+                f"Invalid rollout_dtype {rollout_dtype} for observation dtype {obs_space.dtype}"
+            )
+        self.compress_observations = rollout_dtype != "float32"
 
         self.observations = torch.zeros(
             segments,
             horizon,
             *obs_space.shape,
             dtype=obs_dtype,
-            pin_memory=device == "cuda" and config["cpu_offload"],
+            pin_memory=use_cuda and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
         )
         self.actions = torch.zeros(
@@ -193,13 +202,12 @@ class PuffeRL:
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
-        self.terminals = torch.zeros(segments, horizon, device=device)
-        self.truncations = torch.zeros(segments, horizon, device=device)
-        self.ratio = torch.ones(segments, horizon, device=device)
-        self.importance = torch.ones(segments, horizon, device=device)
+        self.terminals = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
+        if config["use_rnn"]:
+            self.ratio = torch.ones(segments, horizon, device=device)
         self.masks = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
-        self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
-        self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
+        self.ep_lengths = torch.zeros(total_agents, dtype=torch.int32)
+        self.ep_indices = torch.arange(total_agents, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
@@ -385,12 +393,15 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
-            o_device = o.to(device)  # , non_blocking=True)
+            if self.compress_observations:
+                o_device = o.to(device=device, dtype=self.observations.dtype, non_blocking=True).float()
+            else:
+                o_device = o.to(device, non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
-            done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+            done_mask = (d + t).clamp(max=1.0)
 
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
@@ -445,8 +456,7 @@ class PuffeRL:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = done_mask.float()
-                self.truncations[batch_rows, l] = t.float()
+                self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
@@ -454,7 +464,7 @@ class PuffeRL:
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
-                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, device=config["device"]).int()
+                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, dtype=torch.int32)
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
@@ -482,7 +492,7 @@ class PuffeRL:
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
-        self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
+        self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
         return pufferlib.utils.reduce_environment_metrics(self.stats)
@@ -509,7 +519,7 @@ class PuffeRL:
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
-            self.losses = losses
+            self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
             logs = self.mean_and_log()
             self.print_dashboard()
             self.stats = defaultdict(list)
@@ -554,6 +564,8 @@ class PuffeRL:
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+        if self.compress_observations:
+            mb_obs = mb_obs.float()
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
@@ -611,12 +623,12 @@ class PuffeRL:
             newvalue,
             ratio,
             {
-                "policy_loss": pg_loss.item(),
-                "value_loss": v_loss.item(),
-                "entropy": entropy_loss.item(),
-                "old_approx_kl": old_approx_kl.item(),
-                "approx_kl": approx_kl.item(),
-                "clipfrac": clipfrac.item(),
+                "policy_loss": pg_loss.detach(),
+                "value_loss": v_loss.detach(),
+                "entropy": entropy_loss.detach(),
+                "old_approx_kl": old_approx_kl,
+                "approx_kl": approx_kl,
+                "clipfrac": clipfrac,
             },
         )
 
@@ -625,7 +637,7 @@ class PuffeRL:
         device = config["device"]
 
         masks = self.masks.bool()
-        terminals = torch.maximum(self.terminals, (~masks).float())
+        terminals = (self.terminals | ~masks).float()
         advantages = compute_puff_advantage(
             self.values,
             self.rewards,
@@ -690,7 +702,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             for key, value in stats.items():
                 losses[key] += value / self.total_minibatches
-            losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["importance"] += ratio.detach().mean() / self.total_minibatches
 
             profile("learn", epoch)
             loss.backward()

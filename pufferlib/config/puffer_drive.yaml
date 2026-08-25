@@ -226,6 +226,7 @@ train:
   anneal_lr: true
   amp: true
   precision: bfloat16
+  rollout_dtype: float32
   total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
