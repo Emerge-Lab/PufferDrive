@@ -8,6 +8,7 @@ import yaml
 
 import pufferlib
 import pufferlib.utils
+from pufferlib.config_schema import GoalSource
 
 
 MAX_C_SEED = 2**31 - 1
@@ -303,11 +304,22 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     goal_speed_override = args["eval"].get("goal_speed")
     if goal_speed_override is not None:
         args["env"]["goal_speed"] = _non_negative_float(goal_speed_override, "eval.goal_speed")
+    for spacing_key in ("min_goal_spacing", "max_goal_spacing"):
+        spacing_override = args["eval"].get(spacing_key)
+        if spacing_override is not None:
+            args["env"][spacing_key] = _positive_float(spacing_override, f"eval.{spacing_key}")
+    if args["env"]["min_goal_spacing"] > args["env"]["max_goal_spacing"]:
+        raise pufferlib.APIUsageError("env.min_goal_spacing must be <= env.max_goal_spacing")
     goal_regen_mode_override = args["eval"].get("goal_regen_mode")
     if goal_regen_mode_override is not None:
         if goal_regen_mode_override not in ("finite", "rolling"):
             raise pufferlib.APIUsageError('eval.goal_regen_mode must be "finite" or "rolling"')
         args["env"]["goal_regen_mode"] = goal_regen_mode_override
+    goal_source_override = args["eval"].get("goal_source")
+    if goal_source_override is not None:
+        if goal_source_override not in GoalSource.__members__:
+            raise pufferlib.APIUsageError(f"eval.goal_source must be one of {list(GoalSource.__members__)}")
+        args["env"]["goal_source"] = goal_source_override
     partner_slots_override = args["eval"].get("obs_slots_partners_n")
     if partner_slots_override is not None:
         args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")

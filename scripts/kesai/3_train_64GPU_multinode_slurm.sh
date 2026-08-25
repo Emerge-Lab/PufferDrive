@@ -96,6 +96,9 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
     eval.goal_radius=10.0 \
+    eval.goal_source=map \
+    eval.min_goal_spacing=20 \
+    eval.max_goal_spacing=200 \
     eval.goal_speed=3.0 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
