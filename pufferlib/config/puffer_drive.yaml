@@ -224,7 +224,6 @@ train:
   device: cuda
   optimizer: adamw
   anneal_lr: true
-  amp: true
   precision: bfloat16
   rollout_dtype: float32
   total_timesteps: 500000000000

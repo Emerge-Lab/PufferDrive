@@ -170,8 +170,6 @@ class PuffeRL:
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
-        if precision == "bfloat16" and not config.get("amp", True):
-            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
 
         rollout_dtype = config.get("rollout_dtype", "float32")
         if rollout_dtype == "float32":
@@ -308,7 +306,7 @@ class PuffeRL:
 
         # Automatic mixed precision
         self.amp_context = contextlib.nullcontext()
-        if config.get("amp", True) and use_cuda and precision == "bfloat16":
+        if use_cuda and precision == "bfloat16":
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
 
         # Initializations
@@ -2103,7 +2101,7 @@ def _run_eval_rollout(
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
         device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
