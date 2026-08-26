@@ -70,8 +70,8 @@ env:
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
   use_neighbor_cache: 1
-  # Number of steps before reset
-  scenario_length: 2560
+  # Number of steps before reset; keep it off multiples of train.bptt_horizon so episode ends don't all land on the unused last buffer slot
+  scenario_length: 2500
   # Frequency of resampling scenario (in steps), 0 to disable
   resample_frequency: 256000
   # End of episode - options: 0 - scenario_length, 1 - early reset when too many agents are removed

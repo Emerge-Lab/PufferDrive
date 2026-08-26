@@ -109,6 +109,7 @@ struct Agent {
     int displacement_sample_count;
     float distance_since_spawn;
     float seconds_stopped;
+    float lane_curvature; // 1/m at the closest segment of current lane, positive = left turn
     int comfort_violation_last_window_idx;
 
     // Goal positions

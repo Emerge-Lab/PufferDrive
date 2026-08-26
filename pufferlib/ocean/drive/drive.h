@@ -424,6 +424,22 @@ static float compute_heading_diff(float heading1, float heading2) {
     return normalize_heading(heading1 - heading2);
 }
 
+static float compute_lane_curvature(RoadMapElement *element, int seg_idx) {
+    int num_segments = element->segment_size - 1;
+    if (num_segments < 2) {
+        return 0.0f;
+    }
+    int next_seg_idx = (seg_idx < num_segments - 1) ? seg_idx + 1 : seg_idx;
+    int prev_seg_idx = next_seg_idx - 1;
+    float dx = element->x[next_seg_idx] - element->x[prev_seg_idx];
+    float dy = element->y[next_seg_idx] - element->y[prev_seg_idx];
+    float seg_length = sqrtf(dx * dx + dy * dy);
+    if (seg_length < 1e-3f) {
+        return 0.0f;
+    }
+    return compute_heading_diff(element->headings[next_seg_idx], element->headings[prev_seg_idx]) / seg_length;
+}
+
 static float sample_uniform(Rng *rng_state, float min_val, float max_val) {
     return min_val + rng_uniform_f32(rng_state) * (max_val - min_val);
 }
@@ -492,6 +508,7 @@ static void reset_agent_state(Agent *agent) {
     agent->steering_angle = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
+    agent->lane_curvature = 0.0f;
     agent->comfort_violation_last_window_idx = -1;
     agent->phantom_braking_counter = 0;
     agent->partner_blindness_counter = 0;
@@ -3375,6 +3392,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Track best candidate by combined distance/heading score
     float best_score = 1e9f;
     int lane_idx = -1;
+    int lane_seg_idx = 0;
     float signed_lane_distance = 0.0f, lane_heading = 0.0f;
 
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
@@ -3527,6 +3545,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         if (score < best_score) {
             best_score = score;
             lane_idx = entity_idx;
+            lane_seg_idx = closest_seg_idx;
             signed_lane_distance = signed_dist;
             lane_heading = avg_lane_heading;
         }
@@ -3548,12 +3567,14 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         // theta_f = angle relative to lane heading
         float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->lane_curvature = compute_lane_curvature(&env->road_elements[lane_idx], lane_seg_idx);
     } else {
         // Agent not on any lane
         agent->previous_lane_idx = -1;
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
         agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
+        agent->lane_curvature = 0.0f;
     }
 
     // Update cumulative metrics
@@ -3838,6 +3859,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
         = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
     obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
     obs[obs_idx++] = fminf(1.0f, ego->seconds_stopped / MAX_STOPPED_SECONDS);
+    obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->lane_curvature / LANE_CURVATURE_NORM));
     return obs_idx;
 }
 
@@ -4694,6 +4716,7 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             env->terminals[i] = 1;
+            env->masks[i] = 0;
         }
     }
 
