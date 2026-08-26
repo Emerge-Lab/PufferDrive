@@ -44,7 +44,6 @@ fi
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
     eval.base_max_speed_mps=20.0 \
     eval.obs_slots_partners_n=40 \
@@ -62,6 +61,7 @@ fi
     wandb=True
 #     eval.obs_slots_partners_n=40 \
 #     eval.goal_regen_mode=rolling \
+#     eval.reward_lane_center=0.0075 \
 
 # No srun: single-node eval, run here on the batch host.
 .venv/bin/puffer eval puffer_drive nuplan_multi \
@@ -70,7 +70,6 @@ fi
     eval.max_sdc_replay_workers=64 \
     eval.num_agents=300 \
     eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
     eval.dt=0.0667 \
     eval.base_max_speed_mps=20.0 \
     eval.obs_slots_partners_n=40 \
