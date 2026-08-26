@@ -1729,10 +1729,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         free(agent_counts);
 
-        PyObject *tuple = PyTuple_New(3);
+        PyObject *tuple = PyTuple_New(4);
         PyTuple_SetItem(tuple, 0, agent_offsets);
         PyTuple_SetItem(tuple, 1, map_ids_list);
         PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+        PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
         return tuple;
     }
 
@@ -1750,12 +1751,16 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     PyObject *agent_offsets = PyList_New(max_envs + 1);
     PyObject *map_ids = PyList_New(max_envs);
+    // Maps taken or skipped (no controllable agents); a deferred scene is not consumed
+    int maps_consumed = 0;
+    int eval_map_index_count = use_eval_map_indices ? (int) PyList_Size(eval_map_indices) : 0;
 
     while (total_agent_count < num_agents && env_count < max_envs
-           && (!eval_mode || use_eval_map_indices || s_map_counter < end_map_index)) {
+           && (!eval_mode
+               || (use_eval_map_indices ? maps_consumed < eval_map_index_count : s_map_counter < end_map_index))) {
         if (eval_mode) {
             if (use_eval_map_indices) {
-                map_id = (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count));
+                map_id = (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, maps_consumed));
             } else {
                 map_id = s_map_counter % num_maps;
                 s_map_counter += 1;
@@ -1788,6 +1793,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->active_agent_count == 0) {
+            maps_consumed++;
             for (int j = 0; j < env->num_total_agents; j++) {
                 free_agent(&env->agents[j]);
             }
@@ -1817,6 +1823,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
             total_agent_count += env->active_agent_count;
             env_count++;
+            maps_consumed++;
         }
         for (int j = 0; j < env->num_total_agents; j++) {
             free_agent(&env->agents[j]);
@@ -1848,10 +1855,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // resize lists
     PyObject *resized_agent_offsets = PyList_GetSlice(agent_offsets, 0, env_count + 1);
     PyObject *resized_map_ids = PyList_GetSlice(map_ids, 0, env_count);
-    PyObject *tuple = PyTuple_New(3);
+    PyObject *tuple = PyTuple_New(4);
     PyTuple_SetItem(tuple, 0, resized_agent_offsets);
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
+    PyTuple_SetItem(tuple, 3, PyLong_FromLong(maps_consumed));
     return tuple;
 }
 
@@ -1892,7 +1900,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->max_goal_spacing = (float) unpack(kwargs, "max_goal_spacing");
     env->goal_heading_max_deg = (float) unpack(kwargs, "goal_heading_max_deg");
     if (env->goal_heading_max_deg < 0.0f || env->goal_heading_max_deg > 180.0f) {
-        PyErr_Format(PyExc_ValueError, "goal_heading_max_deg must be in [0, 180]. Got: %d", (int) env->goal_heading_max_deg);
+        PyErr_Format(
+            PyExc_ValueError,
+            "goal_heading_max_deg must be in [0, 180]. Got: %d",
+            (int) env->goal_heading_max_deg);
         return -1;
     }
     env->num_goals = (int) unpack(kwargs, "num_goals");
@@ -1966,7 +1977,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_kept = (int) unpack(kwargs, "obs_slots_boundary_kept");
     env->partner_blindness_prob = (float) unpack(kwargs, "partner_blindness_prob");
     env->partner_blindness_trigger_prob = (float) unpack(kwargs, "partner_blindness_trigger_prob");
-    env->partner_blindness_duration = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
+    env->partner_blindness_duration
+        = (int) ceilf((float) unpack(kwargs, "partner_blindness_duration_seconds") / env->dt);
     env->phantom_braking_prob = (float) unpack(kwargs, "phantom_braking_prob");
     env->phantom_braking_trigger_prob = (float) unpack(kwargs, "phantom_braking_trigger_prob");
     env->phantom_braking_duration = (int) ceilf((float) unpack(kwargs, "phantom_braking_duration_seconds") / env->dt);

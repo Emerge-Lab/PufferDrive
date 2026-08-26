@@ -476,7 +476,7 @@ class Drive(pufferlib.PufferEnv):
         self.current_num_eval_scenarios = self._next_eval_batch_size()
 
         # Iterate through all maps to count total agents that can be initialized for each map
-        agent_offsets, map_ids, num_envs = binding.shared(
+        agent_offsets, map_ids, num_envs, maps_consumed = binding.shared(
             map_files=self.map_files,
             num_agents=num_agents,
             num_maps=num_maps,
@@ -498,7 +498,7 @@ class Drive(pufferlib.PufferEnv):
             goal_radius=self.goal_radius,
         )
         # In eval mode, don't wrap counter - allows termination condition to work correctly
-        self.starting_map_counter = self.starting_map_counter + num_envs
+        self.starting_map_counter = self.starting_map_counter + maps_consumed
         # Set once a worker has evaluated its whole map window; a frozen worker
         # stops stepping and emitting so it can't re-process or double-count.
         self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
@@ -710,7 +710,7 @@ class Drive(pufferlib.PufferEnv):
                 remaining_map_indices = (
                     self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
                 )
-                agent_offsets, map_ids, num_envs = binding.shared(
+                agent_offsets, map_ids, num_envs, maps_consumed = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
@@ -735,7 +735,7 @@ class Drive(pufferlib.PufferEnv):
                 self.map_ids = map_ids
                 self.num_envs = num_envs
                 # In eval mode, don't wrap counter - allows termination condition to work correctly
-                self.starting_map_counter = self.starting_map_counter + num_envs
+                self.starting_map_counter = self.starting_map_counter + maps_consumed
                 env_ids = []
                 for i in range(num_envs):
                     cur = agent_offsets[i]

@@ -36,30 +36,30 @@ fi
 
 # parallel_eval places one shard per allocated node via srun, so each shard's 64
 # env workers get a full node's cores instead of sharing the batch host.
-.venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 5000 \
-    --num-nodes 8 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
-    vec.num_envs=64 \
-    eval.render_filter=all_infractions \
-    eval.capture_observations=true \
-    eval.reward_comfort=0.0 \
-    eval.reward_lane_center=0.0075 \
-    eval.dt=0.0667 \
-    eval.base_max_speed_mps=20.0 \
-    eval.obs_slots_partners_n=40 \
-    eval.goal_radius=10.0 \
-    eval.goal_source=route \
-    env.goal_heading_max_deg=60.0 \
-    env.eval_perceived_size_margin_m=0.15 \
-    eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=30 \
-    eval.goal_speed=3.0 \
-    env.max_speed_mps=13.33 \
-    env.disable_red_light_infractions=1 \
-    eval.output_name=${RUN_NAME}_short9 \
-    load_model_path=${MODEL_PATH} \
-    wandb=True
+#.venv/bin/python scripts/parallel_eval.py carla \
+#    --total-scenarios 5000 \
+#    --num-nodes 8 \
+#    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
+#    vec.num_envs=64 \
+#    eval.render_filter=all_infractions \
+#    eval.capture_observations=true \
+#    eval.reward_comfort=0.0 \
+#    eval.reward_lane_center=0.0075 \
+#    eval.dt=0.0667 \
+#    eval.base_max_speed_mps=20.0 \
+#    eval.obs_slots_partners_n=40 \
+#    eval.goal_radius=10.0 \
+#    eval.goal_source=route \
+#    env.goal_heading_max_deg=60.0 \
+#    env.eval_perceived_size_margin_m=0.15 \
+#    eval.min_goal_spacing=20 \
+#    eval.max_goal_spacing=30 \
+#    eval.goal_speed=3.0 \
+#    env.max_speed_mps=13.33 \
+#    env.disable_red_light_infractions=1 \
+#    eval.output_name=${RUN_NAME}_short9 \
+#    load_model_path=${MODEL_PATH} \
+#    wandb=True
 #     eval.obs_slots_partners_n=40 \
 #     eval.goal_regen_mode=rolling \
 
