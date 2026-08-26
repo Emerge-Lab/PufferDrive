@@ -1,5 +1,6 @@
 {
   "env": {
+<<<<<<< HEAD
     "avg_distance_per_infraction": 12.717681472221118,
     "avg_speed_per_agent": 1.3703170720111117,
     "collision_rate": 0.03160112359550562,
@@ -28,6 +29,36 @@
     "total_distance_travelled_sum": 93.50257294901301,
     "total_infraction_count": 7.404494382022472,
     "velocity_progress_sum": 0.019522623441527397
+=======
+    "avg_distance_per_infraction": 12.755064824531818,
+    "avg_speed_per_agent": 1.3832166605982288,
+    "collision_rate": 0.034397615376731444,
+    "comfort_violation_count": 0.6469212194968914,
+    "dnf_rate": 0.5314552115982977,
+    "episode_length": 14.076611058465366,
+    "episode_return": -1.2163473449904343,
+    "lane_center_rate": 0.6744077133721319,
+    "n": 22.82758620689655,
+    "num_goals_reached": 0.013406818539931857,
+    "offroad_rate": 0.42518071213672903,
+    "red_light_violation_rate": 0.0017068773379613612,
+    "reward_components/ade": 0.0,
+    "reward_components/collision": -0.04826073695359559,
+    "reward_components/comfort": -0.4415202770253708,
+    "reward_components/goal": 0.0010775862068965517,
+    "reward_components/lane_align": -0.027171122616735,
+    "reward_components/lane_center": -0.004932266623905763,
+    "reward_components/offroad": -0.6841689964820599,
+    "reward_components/overspeed": 0.0,
+    "reward_components/red_light": -0.000833597323247071,
+    "reward_components/reverse": -0.010675457442693156,
+    "reward_components/timestep": -8.912118184902095e-05,
+    "reward_components/velocity": 0.00022662691145373612,
+    "score": 0.0,
+    "total_distance_travelled_sum": 132.01258514667379,
+    "total_infraction_count": 10.53448275862069,
+    "velocity_progress_sum": 0.020844110901917106
+>>>>>>> emerge/3.0
   },
   "meta": {
     "bptt_horizon": 64,
