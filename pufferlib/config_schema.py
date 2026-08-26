@@ -71,6 +71,7 @@ class NonVehicleController(Enum):
 class InitMode(Enum):
     create_all_valid = 0
     create_only_controlled = 1
+    create_controllable_types = 2
 
 
 class GoalRegen(Enum):
@@ -115,6 +116,7 @@ class DriveEnvConfig:
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
     non_vehicle_controller: NonVehicleController = MISSING
+    replay_expert_agents: int = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
     goal_regen_mode: GoalRegen = MISSING
