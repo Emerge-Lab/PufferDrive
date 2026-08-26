@@ -109,6 +109,7 @@ class Drive(pufferlib.PufferEnv):
         sdc_controller="policy",
         non_sdc_controller="policy",
         non_vehicle_controller="auto",
+        replay_expert_agents=1,
         map_dir=None,
         goal_regen_mode="finite",
         goal_source="route",
@@ -219,6 +220,9 @@ class Drive(pufferlib.PufferEnv):
         if disable_red_light_infractions not in (0, 1):
             raise ValueError(f"disable_red_light_infractions must be 0 or 1. Got: {disable_red_light_infractions}")
         self.disable_red_light_infractions = disable_red_light_infractions
+        if replay_expert_agents not in (0, 1):
+            raise ValueError(f"replay_expert_agents must be 0 or 1. Got: {replay_expert_agents}")
+        self.replay_expert_agents = replay_expert_agents
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
@@ -432,9 +436,12 @@ class Drive(pufferlib.PufferEnv):
             self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
         elif self.init_mode_str == "create_only_controlled":
             self.init_mode = binding.INIT_MODE_CREATE_ONLY_CONTROLLED
+        elif self.init_mode_str == "create_controllable_types":
+            self.init_mode = binding.INIT_MODE_CREATE_CONTROLLABLE_TYPES
         else:
             raise ValueError(
-                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
+                "init_mode must be one of 'create_all_valid', 'create_only_controlled', or "
+                f"'create_controllable_types'. Got: {self.init_mode_str}"
             )
 
         if action_type == "discrete":
@@ -480,6 +487,7 @@ class Drive(pufferlib.PufferEnv):
             sdc_controller=self.sdc_controller,
             non_sdc_controller=self.non_sdc_controller,
             non_vehicle_controller=self.non_vehicle_controller,
+            replay_expert_agents=self.replay_expert_agents,
             simulation_mode=self.simulation_mode,
             init_step=self.init_step,
             seed=self.random_seed,
@@ -591,6 +599,7 @@ class Drive(pufferlib.PufferEnv):
             "sdc_controller": self.sdc_controller,
             "non_sdc_controller": self.non_sdc_controller,
             "non_vehicle_controller": self.non_vehicle_controller,
+            "replay_expert_agents": self.replay_expert_agents,
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
@@ -711,6 +720,7 @@ class Drive(pufferlib.PufferEnv):
                     sdc_controller=self.sdc_controller,
                     non_sdc_controller=self.non_sdc_controller,
                     non_vehicle_controller=self.non_vehicle_controller,
+                    replay_expert_agents=self.replay_expert_agents,
                     simulation_mode=self.simulation_mode,
                     init_step=self.init_step,
                     map_files=self.map_files,

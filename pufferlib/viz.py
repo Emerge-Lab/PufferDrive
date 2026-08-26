@@ -128,6 +128,7 @@ def _obs_scales(
     inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
     return {
         "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
+        "meters_to_position": 1.0 if inverse_xy_scale is None else inverse_xy_scale,
         "veh_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_width_m * inverse_xy_scale,
         "veh_len_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_length_m * inverse_xy_scale,
         "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
@@ -1538,7 +1539,7 @@ self.onmessage = async event => {
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
-            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l, w:agent.w}); } else obsBox.style.display='none';
+            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l*H.scales.meters_to_position, w:agent.w*H.scales.meters_to_position}); } else obsBox.style.display='none';
         }
         function draw(force=false) {
             if(!H) return;

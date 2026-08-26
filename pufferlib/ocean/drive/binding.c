@@ -1607,6 +1607,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int sdc_controller = unpack(kwargs, "sdc_controller");
     int non_sdc_controller = unpack(kwargs, "non_sdc_controller");
     int non_vehicle_controller = unpack(kwargs, "non_vehicle_controller");
+    int replay_expert_agents = unpack(kwargs, "replay_expert_agents");
     int simulation_mode = unpack(kwargs, "simulation_mode");
     int init_step = unpack(kwargs, "init_step");
     uint64_t seed;
@@ -1771,12 +1772,17 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         env->sdc_controller = sdc_controller;
         env->non_sdc_controller = non_sdc_controller;
         env->non_vehicle_controller = non_vehicle_controller;
+        env->replay_expert_agents = replay_expert_agents;
         env->simulation_mode = simulation_mode;
         env->init_step = init_step;
         env->num_max_agents = max_agents_per_env;
         env->eval_mode = eval_mode;
         env->goal_radius = goal_radius;
         load_map_binary(map_file, env);
+        if (init_grid_map(env) != 0) {
+            PyErr_Format(PyExc_RuntimeError, "Failed to build grid map for map: %s", map_file);
+            return NULL;
+        }
 
         set_active_agents(env);
 
@@ -1794,6 +1800,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->agents);
             free(env->road_elements);
             free(env->traffic_elements);
+            free_grid_map(env->grid_map);
             free(env->active_agent_indices);
             free(env->static_agent_indices);
             free(env->expert_static_agent_indices);
@@ -1823,6 +1830,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->agents);
         free(env->road_elements);
         free(env->traffic_elements);
+        free_grid_map(env->grid_map);
         free(env->active_agent_indices);
         free(env->static_agent_indices);
         free(env->expert_static_agent_indices);
@@ -1933,6 +1941,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->sdc_controller = (int) unpack(kwargs, "sdc_controller");
     env->non_sdc_controller = (int) unpack(kwargs, "non_sdc_controller");
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
+    env->replay_expert_agents = (int) unpack(kwargs, "replay_expert_agents");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");

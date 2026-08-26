@@ -238,6 +238,7 @@ struct Drive {
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
+    int replay_expert_agents;
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
@@ -2518,6 +2519,45 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     return true;
 }
 
+static void load_pose_from_log(Agent *agent, int step) {
+    agent->sim_x = agent->log_trajectory_x[step];
+    agent->sim_y = agent->log_trajectory_y[step];
+    agent->sim_z = agent->log_trajectory_z[step];
+    agent->sim_heading = agent->log_heading[step];
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+    agent->sim_valid = agent->log_valid[step];
+    agent->sim_length = agent->log_length[step];
+    agent->sim_width = agent->log_width[step];
+    agent->sim_height = agent->log_height[step];
+    update_agent_radius(agent);
+    agent->wheelbase = 0.6f * agent->sim_length;
+    copy_pose_to_prev(agent);
+}
+
+static bool log_pose_overlaps_created_agent(
+    Drive *env,
+    Agent *agent,
+    const int *created_agent_indices,
+    int created_agent_count) {
+    for (int i = 0; i < created_agent_count; i++) {
+        Agent *other = &env->agents[created_agent_indices[i]];
+        float dx = other->sim_x - agent->sim_x;
+        float dy = other->sim_y - agent->sim_y;
+        float max_overlap_dist = agent->radius + other->radius;
+        if (dx * dx + dy * dy > max_overlap_dist * max_overlap_dist) {
+            continue;
+        }
+        if (fabsf(other->sim_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        if (check_obb_collision(agent, other)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void set_start_position(Drive *env) {
     for (int i = 0; i < env->num_total_agents; i++) {
         int is_active = 0;
@@ -2550,19 +2590,7 @@ static void set_start_position(Drive *env) {
                 continue;
             }
 
-            agent->sim_x = agent->log_trajectory_x[step];
-            agent->sim_y = agent->log_trajectory_y[step];
-            agent->sim_z = agent->log_trajectory_z[step];
-            agent->sim_heading = agent->log_heading[step];
-            agent->cos_heading = cosf(agent->sim_heading);
-            agent->sin_heading = sinf(agent->sim_heading);
-            agent->sim_valid = agent->log_valid[step];
-            agent->sim_length = agent->log_length[step];
-            agent->sim_width = agent->log_width[step];
-            agent->sim_height = agent->log_height[step];
-            update_agent_radius(agent);
-            agent->wheelbase = 0.6f * agent->sim_length;
-            copy_pose_to_prev(agent);
+            load_pose_from_log(agent, step);
 
             if (agent->type == UNKNOWN) {
                 continue;
@@ -2618,7 +2646,7 @@ static bool should_control_agent(Drive *env, int agent_idx) {
         type_is_controllable = is_controllable_agent(agent->type);
     }
 
-    if (!type_is_controllable || agent->mark_as_expert) {
+    if (!type_is_controllable || (agent->mark_as_expert && env->replay_expert_agents)) {
         return false;
     }
 
@@ -2709,6 +2737,9 @@ void set_active_agents(Drive *env) {
     int *active_agent_indices = (int *) malloc(max_agents * sizeof(int));
     int *static_agent_indices = (int *) malloc(max_agents * sizeof(int));
     int *expert_static_agent_indices = (int *) malloc(max_agents * sizeof(int));
+    int *created_agent_indices = (int *) malloc(max_agents * sizeof(int));
+    // Log-replay and WOSAC keep every logged track; self-play drops duplicate and road-edge spawns.
+    bool filter_spawns = !is_log_replay && env->control_mode != CONTROL_MODE_WOSAC;
 
     // Iterate through entities to find agents to create and/or control
     for (int i = 0; i < env->num_total_agents && env->num_agents < max_agents; i++) {
@@ -2735,10 +2766,20 @@ void set_active_agents(Drive *env) {
             continue;
         }
 
+        if (filter_spawns) {
+            load_pose_from_log(agent, env->init_step);
+        }
+        if (filter_spawns && log_pose_overlaps_created_agent(env, agent, created_agent_indices, env->num_agents)) {
+            continue;
+        }
+        created_agent_indices[env->num_agents] = i;
         env->num_agents++;
 
         // Determine if this agent should be policy-controlled
         bool is_controlled = should_control_agent(env, i);
+        if (is_controlled && filter_spawns && agent->type == VEHICLE && check_spawn_offroad(env, agent)) {
+            is_controlled = false;
+        }
 
         if (is_controlled) {
             active_agent_indices[env->active_agent_count] = i;
@@ -2749,8 +2790,8 @@ void set_active_agents(Drive *env) {
             static_agent_indices[env->static_agent_count] = i;
             env->static_agent_count++;
             env->agents[i].active_agent = 0;
-            int replay_by_default
-                = is_log_replay || env->agents[i].mark_as_expert == 1 || env->active_agent_count == env->num_max_agents;
+            int replay_by_default = is_log_replay || (env->agents[i].mark_as_expert == 1 && env->replay_expert_agents)
+                || env->active_agent_count == env->num_max_agents;
             env->agents[i].controller = resolve_agent_controller(env, i, 0, replay_by_default);
             if (env->agents[i].controller == CONTROLLER_REPLAY) {
                 expert_static_agent_indices[env->expert_static_agent_count] = i;
@@ -2777,6 +2818,7 @@ void set_active_agents(Drive *env) {
     free(active_agent_indices);
     free(static_agent_indices);
     free(expert_static_agent_indices);
+    free(created_agent_indices);
 
     if (env->num_controllable_agents > 0 && env->active_agent_count != env->num_controllable_agents) {
         printf(

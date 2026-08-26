@@ -91,6 +91,8 @@ benchmarks:
       max_scenarios_per_batch: null
       scenario_length: 200
       control_mode: control_vehicles
+      init_mode: create_controllable_types
+      replay_expert_agents: 0
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
       disable_red_light_infractions: 1

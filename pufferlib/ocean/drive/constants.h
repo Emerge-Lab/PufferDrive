@@ -78,6 +78,7 @@
 // Which agents get initialized at reset
 #define INIT_MODE_CREATE_ALL_VALID 0
 #define INIT_MODE_CREATE_ONLY_CONTROLLED 1
+#define INIT_MODE_CREATE_CONTROLLABLE_TYPES 2
 
 // Which initialized agents the policy controls
 #define CONTROL_MODE_VEHICLES 0
