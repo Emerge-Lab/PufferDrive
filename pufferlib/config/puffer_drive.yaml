@@ -205,6 +205,8 @@ train:
   evaluation_interval_epochs: null
   # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
   evaluation_benchmarks: carla_fast
+  # Fire the carla_cosim/nuplan_cosim debug hook in the beginning for debugging.
+  cosim_debug_at_start: True
   torch_deterministic: false
   cpu_offload: false
   device: cuda

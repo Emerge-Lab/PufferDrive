@@ -37,6 +37,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
+from pufferlib.ocean.evaluation_utils import cosim_evaluator as drive_cosim_eval
 import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
@@ -1371,6 +1372,11 @@ def _global_agent_steps(pufferl):
     return int(pufferl.global_step * world_size)
 
 
+def _latest_checkpoint_path(run_dir):
+    model_files = glob.glob(os.path.join(run_dir, "models", "model_*.pt"))
+    return max(model_files, key=os.path.getctime) if model_files else None
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
@@ -1492,6 +1498,17 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     _save_experiment_config(args, path)
     pufferl.logger.upload_config(os.path.join(path, "config.yaml"))
 
+    # Debug hook: force an initial checkpoint (epoch 0, before any training
+    # step) and submit the co-sim benchmarks against it (fire-and-forget --
+    # see run_cosim_debug_benchmarks), so the SLURM wiring can be verified
+    # without stalling training on a real CARLA/nuPlan run. Each benchmark's
+    # own orchestrator job logs its result to wandb once it's ready, whenever
+    # that is -- independent of this process's lifetime.
+    if training_evaluation_scheduled and args["train"]["cosim_debug_at_start"] and is_rank0:
+        initial_checkpoint = pufferl.save_checkpoint()
+        if initial_checkpoint is not None:
+            run_cosim_debug_benchmarks(env_name, args, initial_checkpoint, "start")
+
     # Sweep needs data for early stopped runs, so send data when steps > 100M
     logging_threshold = min(0.20 * train_config["total_timesteps"], 100_000_000)
     all_logs = []
@@ -1570,6 +1587,16 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             run_dir=path,
         )
 
+    # Debug hook: co-sim benchmarks against the final checkpoint (train()'s
+    # PPO loop always save_checkpoint()s once done_training, so this exists).
+    # Fire-and-forget, same as the start-of-training hook -- each benchmark's
+    # orchestrator job logs to wandb once it finishes, whenever that is, so
+    # this process doesn't need to wait around for it.
+    if training_evaluation_scheduled and is_rank0:
+        final_checkpoint = _latest_checkpoint_path(path)
+        if final_checkpoint is not None:
+            run_cosim_debug_benchmarks(env_name, args, final_checkpoint, "end")
+
     logs = pufferl.mean_and_log()
     if logs is not None:
         all_logs.append(logs)
@@ -1647,6 +1674,21 @@ def eval(
     evaluation_policy_cache = {"policy": policy}
     cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
+        if benchmark["simulation_mode"] in drive_cosim_eval.COSIM_SIMULATION_MODES:
+            if failure_replay_csv is not None:
+                raise pufferlib.APIUsageError(
+                    f"eval.failure_replay_csv is not supported for cosim benchmark {benchmark['name']}"
+                )
+            output_directory_name = benchmark["name"]
+            if output_name is not None:
+                output_directory_name = f"{output_directory_name}_{output_name}"
+            cosim_output_dir = os.path.join(eval_output_dir, output_directory_name, eval_output_subdir)
+            os.makedirs(cosim_output_dir)
+            benchmark_results[benchmark["name"]] = drive_cosim_eval.run_cosim_benchmark(
+                benchmark, base_args, cosim_output_dir
+            )
+            continue
+
         run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
         run_args = OmegaConf.to_container(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
@@ -2129,6 +2171,42 @@ def run_training_evaluation(env_name, args, policy, logger, epoch, global_step, 
         if hasattr(policy, "train"):
             policy.train(policy_was_training)
         restore_rng_state({"rng_state": rng_state})
+
+
+# Hardcoded for now -- wired to only the start and end of training (see
+# train()), not the periodic eval cadence. Debug hook: promote to an
+# eval.cosim_benchmarks config once the wiring itself has been exercised
+# end to end.
+COSIM_DEBUG_BENCHMARKS = ("carla_cosim", "nuplan_cosim")
+
+
+def run_cosim_debug_benchmarks(env_name, args, checkpoint_path, label):
+    """Fire-and-forget smoke-test hook: submit the co-sim benchmarks in
+    COSIM_DEBUG_BENCHMARKS against `checkpoint_path` and return immediately.
+    Each benchmark gets its own orchestrator SLURM job (see
+    cosim_evaluator.submit_cosim_benchmark_async) that submits the real
+    CARLA/nuPlan work, waits for it, and logs the result to wandb itself --
+    so results reach wandb whenever they're ready, independent of whether
+    this training process is still running. Failures are non-fatal (each
+    co-sim run depends on external infra -- a CARLA server, the nuPlan
+    devkit -- that training itself doesn't own)."""
+    eval_config = args["eval"]
+    try:
+        _, benchmarks = drive_benchmark.load_benchmark_config(eval_config["benchmark_config"], list(COSIM_DEBUG_BENCHMARKS))
+    except pufferlib.APIUsageError as exc:
+        print(f"[cosim_eval] skipping {label}-of-training cosim debug eval: {exc}")
+        return
+
+    cosim_args = copy.deepcopy(args)
+    cosim_args["load_model_path"] = checkpoint_path
+    run_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+    for benchmark in benchmarks:
+        output_dir = os.path.join(run_dir, "eval", "cosim", label, benchmark["name"])
+        try:
+            drive_cosim_eval.submit_cosim_benchmark_async(benchmark, cosim_args, output_dir)
+        except Exception:
+            print(f"\n[cosim_eval] {label}-of-training {benchmark['name']} submission failed; continuing training:")
+            traceback.print_exc()
 
 
 def _render_eval_failures(

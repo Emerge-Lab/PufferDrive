@@ -127,8 +127,15 @@ def load_benchmark_config(config_path, selected_names):
     for name in selected_names:
         benchmark = configured_benchmarks[name]
         simulation_mode = benchmark.get("simulation_mode")
+        if simulation_mode in ("carla_cosim", "nuplan_cosim"):
+            from pufferlib.ocean.evaluation_utils.cosim_evaluator import parse_cosim_benchmark
+
+            resolved_benchmarks.append(parse_cosim_benchmark(name, benchmark))
+            continue
         if simulation_mode not in ("gigaflow", "replay"):
-            raise pufferlib.APIUsageError(f"Benchmark {name} simulation_mode must be 'gigaflow' or 'replay'")
+            raise pufferlib.APIUsageError(
+                f"Benchmark {name} simulation_mode must be 'gigaflow', 'replay', 'carla_cosim', or 'nuplan_cosim'"
+            )
         seed = benchmark.get("seed")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_C_SEED:
             raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
