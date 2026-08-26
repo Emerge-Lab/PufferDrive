@@ -37,7 +37,7 @@ fi
 # parallel_eval places one shard per allocated node via srun, so each shard's 64
 # env workers get a full node's cores instead of sharing the batch host.
 .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 1000 \
+    --total-scenarios 5000 \
     --num-nodes 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
     vec.num_envs=64 \
@@ -53,7 +53,7 @@ fi
     env.goal_heading_max_deg=60.0 \
     env.eval_perceived_size_margin_m=0.25 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
+    eval.max_goal_spacing=100 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     env.disable_red_light_infractions=1 \
@@ -79,7 +79,7 @@ fi
     env.goal_heading_max_deg=60.0 \
     env.eval_perceived_size_margin_m=0.25 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
+    eval.max_goal_spacing=100 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     eval.disable_red_light_infractions=1 \
