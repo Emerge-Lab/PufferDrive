@@ -265,8 +265,6 @@ class Drive(pufferlib.PufferEnv):
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
-        if not np.isfinite(self.obs_norm_speed_mps) or self.obs_norm_speed_mps <= 0.0:
-            raise ValueError(f"obs_norm_speed_mps must be finite and > 0. Got: {obs_norm_speed_mps}")
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
