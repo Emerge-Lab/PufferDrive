@@ -2325,11 +2325,11 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
     return false;
 }
 
-static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
+static bool check_spawn_offroad(Drive *env, Agent *tmp_agent, float edge_clearance_m) {
     // Increase length and width slightly for spawn offroad check
     Agent scaled = *tmp_agent;
-    scaled.sim_length *= 1.1f;
-    scaled.sim_width *= 1.1f;
+    scaled.sim_length = scaled.sim_length * 1.1f + 2.0f * edge_clearance_m;
+    scaled.sim_width = scaled.sim_width * 1.1f + 2.0f * edge_clearance_m;
 
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
@@ -2460,7 +2460,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
             continue;
         }
 
-        if (check_spawn_offroad(env, &tmp_agent)) {
+        if (check_spawn_offroad(env, &tmp_agent, 0.0f)) {
             continue;
         }
 
@@ -2558,15 +2558,83 @@ static bool log_pose_overlaps_created_agent(
     return false;
 }
 
-static void set_start_position(Drive *env) {
-    for (int i = 0; i < env->num_total_agents; i++) {
-        int is_active = 0;
-        for (int j = 0; j < env->active_agent_count; j++) {
-            if (env->active_agent_indices[j] == i) {
-                is_active = 1;
-                break;
-            }
+static bool spawn_near_drivable_lane(Drive *env, Agent *agent) {
+    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
+    int list_size = get_neighbors_entities(
+        env,
+        agent->sim_x,
+        agent->sim_y,
+        entity_list,
+        ROAD_QUERY_ENTITY_COUNT,
+        ROAD_OFFSETS,
+        25);
+    for (int i = 0; i < list_size; i++) {
+        int entity_idx = entity_list[i].entity_idx;
+        int geometry_idx = entity_list[i].geometry_idx;
+        RoadMapElement *element = &env->road_elements[entity_idx];
+        if (!is_drivable_road_lane(element->type)) {
+            continue;
         }
+        if (fabsf(element->z[geometry_idx] - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        float lane_distance = compute_point_to_segment_distance(
+            agent->sim_x,
+            agent->sim_y,
+            element->x[geometry_idx],
+            element->y[geometry_idx],
+            element->x[geometry_idx + 1],
+            element->y[geometry_idx + 1]);
+        if (lane_distance <= REPLAY_SPAWN_MAX_LANE_DISTANCE_M) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool replay_spawn_fit_for_control(
+    Drive *env,
+    Agent *agent,
+    const int *created_agent_indices,
+    int created_agent_count) {
+    if (agent->sim_length > REPLAY_MAX_CONTROLLED_LENGTH_M) {
+        return false;
+    }
+    if (!spawn_near_drivable_lane(env, agent)) {
+        return false;
+    }
+    if (check_spawn_offroad(env, agent, REPLAY_SPAWN_EDGE_CLEARANCE_M)) {
+        return false;
+    }
+    Agent inflated = *agent;
+    inflated.sim_length += 2.0f * REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M;
+    update_agent_radius(&inflated);
+    for (int i = 0; i < created_agent_count; i++) {
+        Agent *other = &env->agents[created_agent_indices[i]];
+        if (other == agent) {
+            continue;
+        }
+        float dx = other->sim_x - inflated.sim_x;
+        float dy = other->sim_y - inflated.sim_y;
+        float max_overlap_dist = inflated.radius + other->radius;
+        if (dx * dx + dy * dy > max_overlap_dist * max_overlap_dist) {
+            continue;
+        }
+        if (fabsf(other->sim_z - inflated.sim_z) > Z_BUFFER) {
+            continue;
+        }
+        if (check_obb_collision(&inflated, other)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void set_start_position(Drive *env) {
+    for (int list_idx = 0; list_idx < env->num_agents; list_idx++) {
+        int is_active = list_idx < env->active_agent_count;
+        int i = is_active ? env->active_agent_indices[list_idx]
+                          : env->static_agent_indices[list_idx - env->active_agent_count];
         Agent *agent = &env->agents[i];
 
         // Initialize simulation trajectory from logged trajectory at init_step
@@ -2774,10 +2842,15 @@ void set_active_agents(Drive *env) {
         }
         created_agent_indices[env->num_agents] = i;
         env->num_agents++;
+    }
 
-        // Determine if this agent should be policy-controlled
+    // Control decisions need every created agent's pose, so they run after creation
+    for (int created_idx = 0; created_idx < env->num_agents; created_idx++) {
+        int i = created_agent_indices[created_idx];
+        Agent *agent = &env->agents[i];
         bool is_controlled = should_control_agent(env, i);
-        if (is_controlled && filter_spawns && agent->type == VEHICLE && check_spawn_offroad(env, agent)) {
+        if (is_controlled && filter_spawns && agent->type == VEHICLE
+            && !replay_spawn_fit_for_control(env, agent, created_agent_indices, env->num_agents)) {
             is_controlled = false;
         }
 
@@ -2815,6 +2888,10 @@ void set_active_agents(Drive *env) {
         env->expert_static_agent_indices[i] = expert_static_agent_indices[i];
     }
     // Free temporary buffers
+    // Uncreated tracks must not linger as ghosts: set_start_position re-poses only created agents
+    for (int i = 0; i < env->num_total_agents; i++) {
+        invalidate_agent(&env->agents[i]);
+    }
     free(active_agent_indices);
     free(static_agent_indices);
     free(expert_static_agent_indices);

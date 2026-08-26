@@ -170,7 +170,12 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // Agent-agent collision
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
-#define SPAWN_CLEARANCE_M 1.5f // Min box-to-box gap between agents at spawn
+#define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
+// Replay self-play: logged vehicles failing these are created static instead of policy-controlled
+#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f
+#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M
+#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f
+#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f
 
 // Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
