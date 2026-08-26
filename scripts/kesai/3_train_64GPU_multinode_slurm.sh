@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0027_${SEED}
+export RUN_NAME=k_scaled_0028_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -72,7 +72,7 @@ srun torchrun \
     env.partner_blindness_prob=0.05 \
     env.phantom_braking_prob=0.1 \
     env.phantom_braking_freeze_steering=false \
-    env.reset_accel_on_stop=false \
+    env.reset_accel_on_stop=true \
     env.base_max_speed_mps=20.0 \
     env.goal_heading_max_deg=60.0 \
     train.final_model_name=${FINAL_MODEL_NAME} \
@@ -98,11 +98,14 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.base_max_speed_mps=20.0 \
     eval.obs_slots_partners_n=40 \
     eval.goal_radius=10.0 \
-    eval.goal_source=map \
+    eval.goal_source=route \
     env.goal_heading_max_deg=60.0 \
+    env.eval_perceived_size_margin_m=0.15 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
+    eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
+    env.max_speed_mps=13.33 \
+    env.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
@@ -119,11 +122,13 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.base_max_speed_mps=20.0 \
     eval.obs_slots_partners_n=40 \
     eval.goal_radius=10.0 \
-    eval.goal_source=map \
+    eval.goal_source=route \
     env.goal_heading_max_deg=60.0 \
+    env.eval_perceived_size_margin_m=0.15 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=200 \
+    eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
+    env.max_speed_mps=13.33 \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
