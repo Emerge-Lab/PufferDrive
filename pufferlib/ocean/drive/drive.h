@@ -2404,7 +2404,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     } else {
         // Training: random size
         spawn_length = sample_uniform(&env->rng_state, 0.8f, 7.0f);
-        spawn_width = sample_uniform(&env->rng_state, 0.8f, 2.7f);
+        spawn_width = sample_uniform(&env->rng_state, 0.8f, 3.0f);
     }
     if (spawn_width > spawn_length) {
         spawn_width = spawn_length;

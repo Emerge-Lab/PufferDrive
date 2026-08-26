@@ -43,7 +43,7 @@ env:
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
-  max_agents_per_env: 120
+  max_agents_per_env: 150
   # Actions type - options: "discrete", "continuous"
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
@@ -150,7 +150,7 @@ env:
   # --- Observation slot counts ---
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
-  obs_slots_partners_n: 16
+  obs_slots_partners_n: 20
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.3
