@@ -17,6 +17,7 @@ and PascalCase for C class names and values: every C #define is
 """
 
 from dataclasses import dataclass
+from typing import Optional
 from enum import Enum
 
 from omegaconf import MISSING
@@ -94,6 +95,7 @@ class DriveEnvConfig:
     reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
     base_max_speed_mps: float = MISSING
+    max_speed_mps: Optional[float] = None
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING

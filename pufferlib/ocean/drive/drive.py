@@ -78,6 +78,7 @@ class Drive(pufferlib.PufferEnv):
         replay_worker_idx=0,
         dt=0.1,
         base_max_speed_mps=20.0,
+        max_speed_mps=None,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
         scenario_length=None,
@@ -151,6 +152,7 @@ class Drive(pufferlib.PufferEnv):
     ):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
+        self.max_speed_mps = self.base_max_speed_mps if max_speed_mps is None else float(max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
@@ -573,6 +575,7 @@ class Drive(pufferlib.PufferEnv):
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
+            "max_speed_mps": self.max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,

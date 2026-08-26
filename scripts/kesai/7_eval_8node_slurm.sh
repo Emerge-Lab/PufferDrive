@@ -55,6 +55,7 @@ fi
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     eval.goal_speed=3.0 \
+    env.max_speed_mps=13.33 \
     eval.output_name=${RUN_NAME}_short2 \
     load_model_path=${MODEL_PATH} \
     wandb=True
@@ -79,6 +80,7 @@ fi
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     eval.goal_speed=3.0 \
+    env.max_speed_mps=13.33 \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

@@ -225,6 +225,7 @@ struct Drive {
     int init_step;
     float dt;
     float base_max_speed_mps;
+    float max_speed_mps;
     float spawn_initial_speed;
     int dynamics_model;
     int reset_accel_on_stop;
@@ -2202,7 +2203,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_SPEED] = env->max_speed_mps / env->base_max_speed_mps;
     }
 }
 

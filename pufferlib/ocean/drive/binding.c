@@ -1904,6 +1904,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
+    env->max_speed_mps = (float) unpack(kwargs, "max_speed_mps");
+    if (!(env->max_speed_mps > 0.0f) || !isfinite(env->max_speed_mps)) {
+        PyErr_SetString(PyExc_ValueError, "max_speed_mps must be a positive finite float");
+        return -1;
+    }
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");

@@ -54,6 +54,8 @@ env:
   dt: 0.3
   # Base forward speed cap
   base_max_speed_mps: 20.0
+  # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [0.667, 1.5] -> [13.3, 30] m/s)
+  max_speed_mps: null
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
