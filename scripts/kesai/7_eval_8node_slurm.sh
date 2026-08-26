@@ -57,14 +57,14 @@ fi
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     env.disable_red_light_infractions=1 \
-    eval.output_name=${RUN_NAME}_short4 \
+    eval.output_name=${RUN_NAME}_short5 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
 #     eval.goal_regen_mode=rolling \
 
 # No srun: single-node eval, run here on the batch host.
-.venv/bin/puffer eval puffer_drive nuplan_single \
+.venv/bin/puffer eval puffer_drive nuplan_multi \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
@@ -85,7 +85,7 @@ fi
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_short4 \
+    eval.output_name=${RUN_NAME}_short5 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
