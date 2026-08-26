@@ -2058,6 +2058,9 @@ static void add_log(Drive *env) {
     Log episode_log = {0};
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
+        if (agent->is_blind_partner || agent->is_phantom_braker) {
+            continue;
+        }
         float episode_duration_s = env->logs[i].episode_length * env->dt;
         float reference_progress_distance = PUFFER_PROGRESS_REFERENCE_SPEED * episode_duration_s;
         reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
