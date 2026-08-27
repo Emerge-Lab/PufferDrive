@@ -396,7 +396,7 @@ static float idm_desired_speed(Drive *env, Agent *agent) {
         desired_speed = IDM_DEFAULT_DESIRED_SPEED;
     }
 
-    return clip(desired_speed, 1.0f, MAX_SPEED);
+    return clip(desired_speed, 1.0f, env->base_max_speed_mps);
 }
 
 static float idm_compute_acceleration(Drive *env, Agent *agent, IDMLeader leader) {

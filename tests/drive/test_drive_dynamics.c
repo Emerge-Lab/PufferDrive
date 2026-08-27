@@ -7,12 +7,12 @@ static int test_classic_action_clipping(void) {
     env.action_type = 1;
     env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
     Agent *agent = &env.agents[env.active_agent_indices[0]];
-    agent->sim_speed_signed = MAX_SPEED * 0.9f;
+    agent->sim_speed_signed = env.base_max_speed_mps * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
     ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[6] * 10.0f; // large acceleration
     ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[8] * 10.0f;     // large steering
     move_dynamics(&env, 0, env.active_agent_indices[0]);
-    EXPECT_TRUE(agent->sim_speed_signed <= MAX_SPEED);
+    EXPECT_TRUE(agent->sim_speed_signed <= env.base_max_speed_mps);
     EXPECT_TRUE(agent->steering_angle <= STEERING_LIMIT);
     free_allocated(&env);
     return 0;
@@ -24,7 +24,7 @@ static int test_jerk_action_clipping(void) {
     env.action_type = 1;
     env.dynamics_model = DYNAMICS_MODEL_JERK;
     Agent *agent = &env.agents[env.active_agent_indices[0]];
-    agent->sim_speed_signed = MAX_SPEED * 0.9f;
+    agent->sim_speed_signed = env.base_max_speed_mps * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
     ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[0] * 10.0f; // large braking
     ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[0] * 10.0f;     // large steering

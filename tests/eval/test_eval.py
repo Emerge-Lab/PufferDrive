@@ -521,6 +521,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "update_epochs": 1,
             "batch_size": batch_size,
             "bptt_horizon": TRAIN_HORIZON,
+            "adv_filter_enabled": False,
             "minibatch_size": 64,
             "max_minibatch_size": 64,
             "total_timesteps": TRAIN_EPOCH_COUNT * batch_size,

@@ -93,6 +93,7 @@ class DriveEnvConfig:
     dynamics_model: DynamicsModel = MISSING
     reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
+    base_max_speed_mps: float = MISSING
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
@@ -148,6 +149,7 @@ class DriveEnvConfig:
     obs_dropout_boundary: float = MISSING
     obs_lane_stride: int = MISSING
     obs_boundary_stride: int = MISSING
+    obs_norm_speed_mps: float = MISSING
     obs_norm_goal_offset_m: float = MISSING
     obs_norm_xy_offset_m: float = MISSING
     obs_norm_veh_length_m: float = MISSING

@@ -75,6 +75,7 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
+        base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
         scenario_length=None,
@@ -122,6 +123,7 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
+        obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
         obs_norm_xy_offset_m=100.0,
         obs_norm_veh_length_m=15.0,
@@ -145,6 +147,7 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_duration_seconds=1.0,
     ):
         self.dt = dt
+        self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
@@ -261,6 +264,7 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
+        self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
@@ -544,6 +548,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
+            "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
@@ -566,6 +571,7 @@ class Drive(pufferlib.PufferEnv):
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
+            "obs_norm_speed_mps": self.obs_norm_speed_mps,
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
