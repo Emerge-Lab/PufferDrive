@@ -376,7 +376,7 @@ Client *make_client(Drive *env) {
     // Get initial target position from first valid agent (active or expert_static).
     // Agents may have large raw world coordinates (e.g. WOMD), so center on them.
     float scene_cx = 0.0f, scene_cy = 0.0f, scene_cz = 0.0f;
-    for (int i = 0; i < env->num_total_agents; i++) {
+    for (int i = 0; i < env->num_sim_agents; i++) {
         Agent *a = &env->agents[i];
         if (a->sim_valid && a->sim_x != INVALID_POSITION && a->sim_y != INVALID_POSITION) {
             scene_cx = a->sim_x;
@@ -741,13 +741,12 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
     float *agent_obs = &observations[agent_index][0];
     // self
-    int active_idx = env->active_agent_indices[agent_index];
-    float heading_self = env->agents[active_idx].sim_heading;
+    float heading_self = env->agents[agent_index].sim_heading;
     float heading_self_x = cosf(heading_self);
     float heading_self_y = sinf(heading_self);
-    float px = env->agents[active_idx].sim_x;
-    float py = env->agents[active_idx].sim_y;
-    float pz = env->agents[active_idx].sim_z;
+    float px = env->agents[agent_index].sim_x;
+    float py = env->agents[agent_index].sim_y;
+    float pz = env->agents[agent_index].sim_z;
     // draw goal (first goal in the window, in ego frame)
     if (target_count > 0) {
         int goal_obs_idx = ego_dim + num_reward_coefs;
@@ -1134,29 +1133,10 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         DrawCube(sl_mid, 2.0f, 2.0f, 1.0f, tl_color);
     }
 
-    for (int i = 0; i < env->num_total_agents; i++) {
+    for (int i = 0; i < env->num_sim_agents; i++) {
         Agent *agent = &env->agents[i];
-        // Draw objects
-        // Check if this vehicle is an active agent
-        bool is_active_agent = false;
-        bool is_static_agent = false;
-        int agent_index = -1;
-        for (int j = 0; j < env->active_agent_count; j++) {
-            if (env->active_agent_indices[j] == i) {
-                is_active_agent = true;
-                agent_index = j;
-                break;
-            }
-        }
-        for (int j = 0; j < env->static_agent_count; j++) {
-            if (env->static_agent_indices[j] == i) {
-                is_static_agent = true;
-                break;
-            }
-        }
-        if (!is_active_agent && !is_static_agent) {
-            continue;
-        }
+        bool is_active_agent = i < env->num_agents;
+        int agent_index = is_active_agent ? i : -1;
         Vector3 position;
         float heading;
         // Use sim_z so cars on elevated map sections (hills, overpasses)
@@ -1320,7 +1300,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         // FPV Camera Control
         if (IsKeyDown(KEY_SPACE) && env->human_agent_idx == agent_index) {
             if (agent->metrics_array[REACHED_GOAL_IDX]) {
-                env->human_agent_idx = rand() % env->active_agent_count;
+                env->human_agent_idx = rand() % env->num_agents;
             }
             Vector3 camera_position = (Vector3) {position.x - (25.0f * cosf(heading)),
                                                  position.y - (25.0f * sinf(heading)),
@@ -1426,9 +1406,9 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         float map_height = env->grid_map->top_left_y - env->grid_map->bottom_right_y;
         float pixels_per_world_unit = client->height / map_height;
 
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            int womd_track_idx = env->tracks_to_predict[i];
+        for (int i = 0; i < env->num_agents; i++) {
+            int agent_idx = i;
+            int womd_track_idx = env->agents[agent_idx].id;
 
             float raw_x = -env->agents[agent_idx].sim_x * pixels_per_world_unit;
             float raw_y = env->agents[agent_idx].sim_y * pixels_per_world_unit;
@@ -1475,7 +1455,7 @@ void saveTopDownImage(
 
     // Draw log trajectories FIRST (in background at lower Z-level)
     if (log_trajectories) {
-        for (int i = 0; i < env->num_total_agents; i++) {
+        for (int i = 0; i < env->num_sim_agents; i++) {
             Agent *agent = &env->agents[i];
             for (int j = 0; j < agent->trajectory_size; j++) {
                 float x = agent->log_trajectory_x[j];
@@ -1519,7 +1499,7 @@ void saveAgentViewImage(
     int lasers,
     int show_grid) {
     // Agent perspective camera following the human agent
-    int agent_idx = env->active_agent_indices[env->human_agent_idx];
+    int agent_idx = env->human_agent_idx;
     Agent *agent = &env->agents[agent_idx];
 
     Camera3D camera = {0};
@@ -1580,9 +1560,8 @@ void c_render(Drive *env, int view_mode) {
         float map_w = fabsf(env->grid_map->bottom_right_x - env->grid_map->top_left_x);
         float map_h = fabsf(env->grid_map->bottom_right_y - env->grid_map->top_left_y);
         render_camera.fovy = fmaxf(map_w, map_h) * 1.05f;
-    } else if (
-        env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->active_agent_count > 0) {
-        int agent_idx = env->active_agent_indices[env->human_agent_idx];
+    } else if (env->render_mode == RENDER_HEADLESS && view_mode == VIEW_MODE_BEV_AGENT_OBS && env->num_agents > 0) {
+        int agent_idx = env->human_agent_idx;
         Agent *agent = &env->agents[agent_idx];
         render_camera = (Camera3D) {0};
         render_camera.position = (Vector3) {agent->sim_x, agent->sim_y, agent->sim_z + 400.0f};
@@ -1639,7 +1618,7 @@ void c_render(Drive *env, int view_mode) {
             20,
             PUFF_WHITE);
         DrawText(TextFormat("Timestep: %d", env->timestep), 10, 50, 20, PUFF_WHITE);
-        int human_idx = env->active_agent_indices[env->human_agent_idx];
+        int human_idx = env->human_agent_idx;
         DrawText(TextFormat("Controlling Agent: %d", env->human_agent_idx), 10, 70, 20, PUFF_WHITE);
         DrawText(TextFormat("Agent Index: %d", human_idx), 10, 90, 20, PUFF_WHITE);
         DrawText(

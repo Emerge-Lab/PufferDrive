@@ -156,8 +156,6 @@ static int test_leader_selection_and_move_idm(void) {
     float z[2] = {0.0f, 0.0f};
     float h[1] = {0.0f};
     Agent agents[2] = {0};
-    int active[1] = {0};
-    int statics[1] = {1};
     int ego_route[1] = {0};
     int other_route[1] = {0};
 
@@ -178,11 +176,8 @@ static int test_leader_selection_and_move_idm(void) {
     env.road_elements = &lane;
     env.num_road_elements = 1;
     env.agents = agents;
-    env.active_agent_indices = active;
-    env.static_agent_indices = statics;
-    env.active_agent_count = 1;
-    env.static_agent_count = 1;
-    env.num_agents = 2;
+    env.num_agents = 1;
+    env.num_sim_agents = 2;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
 

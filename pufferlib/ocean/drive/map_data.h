@@ -318,8 +318,8 @@ int load_map_binary(const char *filename, Drive *drive) {
         return -1;
     }
 
-    int num_total_agents, num_roads, num_traffic, num_objects;
-    if (fread(&num_total_agents, sizeof(int), 1, file) != 1) {
+    int loaded_agent_count, num_roads, num_traffic, num_objects;
+    if (fread(&loaded_agent_count, sizeof(int), 1, file) != 1) {
         fclose(file);
         return -1;
     }
@@ -336,13 +336,13 @@ int load_map_binary(const char *filename, Drive *drive) {
         return -1;
     }
 
-    drive->num_total_agents = num_total_agents;
+    drive->num_sim_agents = loaded_agent_count;
     drive->num_road_elements = num_roads;
     drive->num_traffic_elements = num_traffic;
     drive->num_objects = num_objects;
 
-    if (num_total_agents > 0) {
-        drive->agents = (Agent *) calloc(num_total_agents, sizeof(Agent));
+    if (loaded_agent_count > 0) {
+        drive->agents = (Agent *) calloc(loaded_agent_count, sizeof(Agent));
     }
     if (num_roads > 0) {
         drive->road_elements = (RoadMapElement *) calloc(num_roads, sizeof(RoadMapElement));
@@ -351,7 +351,7 @@ int load_map_binary(const char *filename, Drive *drive) {
         drive->traffic_elements = (TrafficControlElement *) calloc(num_traffic, sizeof(TrafficControlElement));
     }
 
-    for (int i = 0; i < num_total_agents; i++) {
+    for (int i = 0; i < loaded_agent_count; i++) {
         Agent *agent = &drive->agents[i];
 
         if (fread(&agent->id, sizeof(int), 1, file) != 1) {

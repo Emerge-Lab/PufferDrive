@@ -6,22 +6,22 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
     Drive env = drive_test_make_env(map_file, simulation_mode, num_agents, 0);
     int obs_size = compute_observation_size(&env);
 
-    EXPECT_TRUE(env.active_agent_count > 0);
+    EXPECT_TRUE(env.num_agents > 0);
     EXPECT_TRUE(env.observations != NULL);
     EXPECT_TRUE(env.rewards != NULL);
-    EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
+    EXPECT_TRUE(drive_all_finite(env.observations, env.num_agents * obs_size));
 
     int saw_log = 0;
     for (int t = 0; t < env.scenario_length + 5; t++) {
         drive_set_neutral_actions(&env);
         c_step(&env);
-        EXPECT_TRUE(drive_all_finite(env.observations, env.active_agent_count * obs_size));
-        EXPECT_TRUE(drive_all_finite(env.rewards, env.active_agent_count));
+        EXPECT_TRUE(drive_all_finite(env.observations, env.num_agents * obs_size));
+        EXPECT_TRUE(drive_all_finite(env.rewards, env.num_agents));
         if (env.log.n > 0.0f) {
             saw_log = 1;
         }
-        for (int i = 0; i < env.active_agent_count; i++) {
-            Agent *agent = &env.agents[env.active_agent_indices[i]];
+        for (int i = 0; i < env.num_agents; i++) {
+            Agent *agent = &env.agents[i];
             int terminal_flags = (agent->metrics_array[COLLISION_IDX] > 0.0f)
                 + (agent->metrics_array[OFFROAD_IDX] > 0.0f) + (agent->metrics_array[RED_LIGHT_IDX] > 0.0f);
             EXPECT_TRUE(terminal_flags <= 1);
@@ -29,7 +29,7 @@ static int run_case(const char *name, const char *map_file, int simulation_mode,
     }
 
     EXPECT_TRUE(saw_log);
-    printf("case %s active=%d log_n=%.0f\n", name, env.active_agent_count, env.log.n);
+    printf("case %s active=%d log_n=%.0f\n", name, env.num_agents, env.log.n);
     free_allocated(&env);
     return 0;
 }
@@ -59,7 +59,7 @@ static int test_truncation_and_episode_log(void) {
     }
 
     EXPECT_TRUE(env.log.n > 0.0f);
-    for (int i = 0; i < env.active_agent_count; i++) {
+    for (int i = 0; i < env.num_agents; i++) {
         EXPECT_EQ_INT(env.truncations[i], 1);
     }
 

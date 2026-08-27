@@ -32,7 +32,7 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     allocate(&env);
     c_reset(&env);
 
-    EXPECT_EQ_INT(env.active_agent_count, 1);
+    EXPECT_EQ_INT(env.num_agents, 1);
     int obs_size = compute_observation_size(&env);
     float *obs = env.observations;
     int partner_base = EGO_FEATURES + env.num_goals * GOAL_FEATURES;
@@ -57,17 +57,16 @@ static int test_observation_zero_fill_and_valid_counts(void) {
     return 0;
 }
 
-static void init_reward_env(Drive *env, Agent *agent, Log *log, int *active, float *reward) {
+static void init_reward_env(Drive *env, Agent *agent, Log *log, float *reward) {
     memset(env, 0, sizeof(*env));
     memset(agent, 0, sizeof(*agent));
     memset(log, 0, sizeof(*log));
     *agent = drive_test_agent(0.0f, 0.0f, 0.0f);
-    active[0] = 0;
     env->agents = agent;
-    env->active_agent_indices = active;
     env->logs = log;
     env->rewards = reward;
-    env->active_agent_count = 1;
+    env->num_agents = 1;
+    env->num_sim_agents = 1;
     env->dt = 0.1f;
     env->reward_goal = 2.0f;
     env->simulation_mode = SIMULATION_MODE_GIGAFLOW;
@@ -84,31 +83,30 @@ static int test_reward_terminal_components(void) {
     Drive env;
     Agent agent;
     Log log;
-    int active[1];
     float reward[1] = {0};
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     agent.sim_speed = 10.0f;
     agent.metrics_array[COLLISION_IDX] = 1.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(env.rewards[0], -4.0f, 1e-5f);
     EXPECT_NEAR(log.reward_collision, -4.0f, 1e-5f);
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[OFFROAD_IDX] = 1.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(env.rewards[0], -4.0f, 1e-5f);
     EXPECT_NEAR(log.reward_offroad, -4.0f, 1e-5f);
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[RED_LIGHT_IDX] = 1.0f;
     compute_rewards(&env, 0);
     EXPECT_NEAR(env.rewards[0], -5.0f, 1e-5f);
     EXPECT_NEAR(log.reward_red_light, -5.0f, 1e-5f);
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
     compute_rewards(&env, 0);
@@ -121,11 +119,10 @@ static int test_reward_goal_speed_gating(void) {
     Drive env;
     Agent agent;
     Log log;
-    int active[1];
     float reward[1] = {0};
 
     // GIGAFLOW: final waypoint reached above goal-speed → goal reward gated to 0
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
     agent.current_goal_idx = agent.goal_count;
@@ -135,7 +132,7 @@ static int test_reward_goal_speed_gating(void) {
     EXPECT_NEAR(log.reward_goal, 0.0f, 1e-5f);
 
     // Same final waypoint but below goal-speed → full goal reward
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[REACHED_GOAL_IDX] = 1.0f;
     agent.current_goal_idx = agent.goal_count;
@@ -150,10 +147,9 @@ static int test_reward_lane_align_wrong_way(void) {
     Drive env;
     Agent agent;
     Log log;
-    int active[1];
     float reward[1] = {0};
 
-    init_reward_env(&env, &agent, &log, active, reward);
+    init_reward_env(&env, &agent, &log, reward);
     reward[0] = 0.0f;
     agent.metrics_array[LANE_ANGLE_IDX] = -1.0f; // cos(θ_f) = -1 → driving against lane
     agent.sim_speed_signed = 5.0f;

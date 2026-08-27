@@ -112,9 +112,6 @@ static int test_moving_obb_collision_dimensions(void) {
 static int test_collision_check_filters(void) {
     Drive env = {0};
     Agent agents[5] = {0};
-    int active_agent_indices[2] = {0, 1};
-    int static_agent_indices[3] = {2, 3, 4};
-
     agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
     agents[1] = drive_test_agent(0.0f, 0.0f, 0.0f);
     agents[1].removed = 1;
@@ -124,12 +121,10 @@ static int test_collision_check_filters(void) {
     agents[4] = drive_test_agent(3.9f, 0.0f, 0.0f);
 
     env.agents = agents;
-    env.num_agents = 5;
-    env.active_agent_count = 2;
-    env.active_agent_indices = active_agent_indices;
-    env.static_agent_indices = static_agent_indices;
+    env.num_sim_agents = 5;
+    env.num_agents = 2;
 
-    EXPECT_EQ_INT(collision_check(&env, 0), 4);
+    EXPECT_EQ_INT(collision_check(&env, &agents[0]), 4);
     return 0;
 }
 

@@ -123,14 +123,14 @@ class EvalReplayCapture:
         episode_length = metadata["episode_length"]
         worker_idx = metadata["worker_idx"]
         active_agent_offset = metadata["active_agent_offset"]
-        active_agent_count = metadata["active_agent_count"]
+        num_agents = metadata["num_agents"]
         global_agent_start = worker_idx * self.agents_per_worker + active_agent_offset
-        global_agent_end = global_agent_start + active_agent_count
+        global_agent_end = global_agent_start + num_agents
         if (
             worker_idx < 0
             or worker_idx >= self.num_workers
             or active_agent_offset < 0
-            or active_agent_count <= 0
+            or num_agents <= 0
             or global_agent_end > self.agents_per_batch
             or episode_length > self.policy_history_frame_count
         ):

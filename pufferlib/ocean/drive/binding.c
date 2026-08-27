@@ -128,7 +128,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
 
     /* Validate main array pointers before accessing */
-    if (env->num_total_agents > 0 && !env->agents) {
+    if (env->num_sim_agents > 0 && !env->agents) {
         PyErr_SetString(PyExc_ValueError, "agents is NULL but count > 0");
         return NULL;
     }
@@ -141,17 +141,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         return NULL;
     }
 
-    v = PyLong_FromLong(env->active_agent_count);
+    v = PyLong_FromLong(env->num_agents);
     if (!v) {
         return NULL;
     }
-    if (PyDict_SetItemString(dict, "active_agent_count", v) < 0) {
+    if (PyDict_SetItemString(dict, "num_agents", v) < 0) {
         Py_DECREF(v);
         return NULL;
     }
     Py_DECREF(v);
 
-    v = PyLong_FromLong(env->num_total_agents);
+    v = PyLong_FromLong(env->num_sim_agents);
     if (!v) {
         return NULL;
     }
@@ -301,72 +301,15 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         }
     }
 
-    /* Lists (active agent indices) */
-    if (env->active_agent_indices && env->active_agent_count > 0) {
-        PyObject *lst = PyList_New(env->active_agent_count);
-        if (!lst) {
-            return NULL;
-        }
-        for (int i = 0; i < env->active_agent_count; i++) {
-            PyObject *it = PyLong_FromLong(env->active_agent_indices[i]);
-            if (!it) {
-                Py_DECREF(lst);
-                return NULL;
-            }
-            /* PyList_SetItem steals reference */
-            PyList_SetItem(lst, i, it);
-        }
-        if (PyDict_SetItemString(dict, "active_agent_indices", lst) < 0) {
-            Py_DECREF(lst);
-            return NULL;
-        }
-        Py_DECREF(lst);
-    } else {
-        if (PyDict_SetItemString(dict, "active_agent_indices", Py_None) < 0) {
-            return NULL;
-        }
-    }
-
-    /* Optionally expose static car indices if present */
-    if (env->static_agent_indices && env->static_agent_count > 0) {
-        PyObject *lst = PyList_New(env->static_agent_count);
-        if (!lst) {
-            return NULL;
-        }
-        for (int i = 0; i < env->static_agent_count; i++) {
-            PyObject *it = PyLong_FromLong(env->static_agent_indices[i]);
-            if (!it) {
-                Py_DECREF(lst);
-                return NULL;
-            }
-            PyList_SetItem(lst, i, it);
-        }
-        if (PyDict_SetItemString(dict, "static_agent_indices", lst) < 0) {
-            Py_DECREF(lst);
-            return NULL;
-        }
-        Py_DECREF(lst);
-    } else {
-        if (PyDict_SetItemString(dict, "static_agent_indices", Py_None) < 0) {
-            return NULL;
-        }
-    }
-
     /* Expose agents array as a list of dicts */
-    if (env->agents && env->num_total_agents > 0) {
-        PyObject *agents_list = PyList_New(env->num_total_agents);
+    if (env->agents && env->num_sim_agents > 0) {
+        PyObject *agents_list = PyList_New(env->num_sim_agents);
         if (!agents_list) {
             return NULL;
         }
-        int next_active_log_idx = 0;
-        for (int i = 0; i < env->num_total_agents; i++) {
+        for (int i = 0; i < env->num_sim_agents; i++) {
             Agent *a = &env->agents[i];
-            int active_log_idx = -1;
-            if (env->active_agent_indices && next_active_log_idx < env->active_agent_count
-                && env->active_agent_indices[next_active_log_idx] == i) {
-                active_log_idx = next_active_log_idx;
-                next_active_log_idx++;
-            }
+            int active_log_idx = i < env->num_agents ? i : -1;
 
             PyObject *agent = PyDict_New();
             if (!agent) {
@@ -375,7 +318,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
 
             /* ID and type */
-            PyObject *tmp = PyLong_FromLong(i);
+            PyObject *tmp = PyLong_FromLong(a->id);
             if (!tmp) {
                 Py_DECREF(agent);
                 Py_DECREF(agents_list);
@@ -1547,17 +1490,17 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             return NULL;
         }
     }
-    if (env->observations && env->active_agent_count > 0) {
+    if (env->observations && env->num_agents > 0) {
         /* Agent observations */
         int max_obs = compute_observation_size(env);
-        PyObject *obs_data = PyList_New(env->active_agent_count);
+        PyObject *obs_data = PyList_New(env->num_agents);
         if (!obs_data) {
             return NULL;
         }
 
         float (*observations)[max_obs] = (float (*)[max_obs]) env->observations;
 
-        for (int i = 0; i < env->active_agent_count; i++) {
+        for (int i = 0; i < env->num_agents; i++) {
             PyObject *agent_obs = PyList_New(max_obs);
             if (!agent_obs) {
                 Py_DECREF(obs_data);
@@ -1781,8 +1724,8 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         set_active_agents(env);
 
         // Skip map if it doesn't contain any controllable agents
-        if (env->active_agent_count == 0) {
-            for (int j = 0; j < env->num_total_agents; j++) {
+        if (env->num_agents == 0) {
+            for (int j = 0; j < env->num_sim_agents; j++) {
                 free_agent(&env->agents[j]);
             }
             for (int j = 0; j < env->num_road_elements; j++) {
@@ -1794,9 +1737,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(env->agents);
             free(env->road_elements);
             free(env->traffic_elements);
-            free(env->active_agent_indices);
-            free(env->static_agent_indices);
-            free(env->expert_static_agent_indices);
             free(env);
             continue;
         }
@@ -1804,14 +1744,14 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         // In eval, keep whole scenes: a scene that would overflow the buffer is
         // left for the next batch (the map cursor stays on it). Training keeps
         // its greedy packing (fits is always true when eval_mode is 0).
-        int fits = !(eval_mode && env_count > 0 && total_agent_count + env->active_agent_count > num_agents);
+        int fits = !(eval_mode && env_count > 0 && total_agent_count + env->num_agents > num_agents);
         if (fits) {
             PyList_SetItem(map_ids, env_count, PyLong_FromLong(map_id));
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(total_agent_count));
-            total_agent_count += env->active_agent_count;
+            total_agent_count += env->num_agents;
             env_count++;
         }
-        for (int j = 0; j < env->num_total_agents; j++) {
+        for (int j = 0; j < env->num_sim_agents; j++) {
             free_agent(&env->agents[j]);
         }
         for (int j = 0; j < env->num_road_elements; j++) {
@@ -1823,9 +1763,6 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(env->agents);
         free(env->road_elements);
         free(env->traffic_elements);
-        free(env->active_agent_indices);
-        free(env->static_agent_indices);
-        free(env->expert_static_agent_indices);
         free(env);
         if (!fits) {
             break;
@@ -1912,7 +1849,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
     snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
     free(resource_root);
-    env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
+    env->num_agents_capacity = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
@@ -1971,7 +1908,7 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
         return -1;
     }
     assign_to_dict(dict, "n", n);
-    assign_to_dict(dict, "active_agent_count", (float) env->active_agent_count);
+    assign_to_dict(dict, "num_agents", (float) env->num_agents);
     assign_to_dict(dict, "episode_timestep", (float) env->timestep);
 
     PyObject *seed_obj = PyLong_FromUnsignedLongLong(env->log_episode_seed);

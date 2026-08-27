@@ -79,8 +79,8 @@ static int test_map_goal_source_no_attrition(void) {
     allocate(&env);
     c_reset(&env);
 
-    for (int i = 0; i < env.active_agent_count; i++) {
-        Agent *agent = &env.agents[env.active_agent_indices[i]];
+    for (int i = 0; i < env.num_agents; i++) {
+        Agent *agent = &env.agents[i];
         EXPECT_FALSE(agent->removed);
         EXPECT_TRUE(agent->goal_count >= 1 && agent->goal_count <= env.num_goals);
     }
@@ -98,7 +98,7 @@ static int test_map_goals_carry_lane_and_track_slot_zero(void) {
     allocate(&env);
     c_reset(&env);
 
-    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    Agent *agent = &env.agents[0];
     EXPECT_TRUE(generate_new_goals_from_map(&env, agent));
     EXPECT_TRUE(agent->goal_count >= 1 && agent->goal_count <= env.num_goals);
     EXPECT_EQ_INT(agent->current_goal_idx, 0);
@@ -122,8 +122,8 @@ static int test_route_goals_full_set_or_removed(void) {
     // agent; it must never leave a live agent with a partial set.
     srand(5);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
-    for (int i = 0; i < env.active_agent_count; i++) {
-        Agent *agent = &env.agents[env.active_agent_indices[i]];
+    for (int i = 0; i < env.num_agents; i++) {
+        Agent *agent = &env.agents[i];
         EXPECT_TRUE(agent->removed || agent->goal_count == env.num_goals);
     }
     free_allocated(&env);
@@ -135,8 +135,8 @@ static int test_route_goals_front_aligned_with_lanes(void) {
     srand(11);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int checked = 0;
-    for (int i = 0; i < env.active_agent_count; i++) {
-        Agent *agent = &env.agents[env.active_agent_indices[i]];
+    for (int i = 0; i < env.num_agents; i++) {
+        Agent *agent = &env.agents[i];
         if (agent->removed) {
             continue;
         }
@@ -166,8 +166,8 @@ static int test_roll_goals_slides_window_and_appends(void) {
     srand(13);
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
     int rolled = 0;
-    for (int i = 0; i < env.active_agent_count && rolled == 0; i++) {
-        Agent *agent = &env.agents[env.active_agent_indices[i]];
+    for (int i = 0; i < env.num_agents && rolled == 0; i++) {
+        Agent *agent = &env.agents[i];
         if (agent->removed || agent->goal_count != env.num_goals) {
             continue;
         }
@@ -228,9 +228,9 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     allocate(&env);
     c_reset(&env);
 
-    EXPECT_TRUE(env.active_agent_count > 0);
-    for (int i = 0; i < env.active_agent_count; i++) {
-        Agent *agent = &env.agents[env.active_agent_indices[i]];
+    EXPECT_TRUE(env.num_agents > 0);
+    for (int i = 0; i < env.num_agents; i++) {
+        Agent *agent = &env.agents[i];
         EXPECT_EQ_INT(agent->goal_count, env.num_goals);
         EXPECT_TRUE(agent->current_goal_idx >= 0 && agent->current_goal_idx <= agent->goal_count);
         for (int slot = 0; slot < agent->goal_count; slot++) {
