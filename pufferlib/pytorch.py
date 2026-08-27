@@ -142,11 +142,6 @@ def entropy(logits):
     return -p_log_p.sum(-1)
 
 
-def entropy_probs(logits, probs):
-    p_log_p = logits * probs
-    return -p_log_p.sum(-1)
-
-
 def sample_logits(
     logits, action=None, action_selection=ACTION_SELECT_SAMPLE, env_continuous=None, policy=None
 ):  # TODO discrete continuous
