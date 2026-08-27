@@ -7,6 +7,7 @@ import pandas as pd
 import yaml
 
 import pufferlib
+import pufferlib.pytorch
 import pufferlib.utils
 
 
@@ -258,21 +259,46 @@ def summarize_benchmark_metrics(benchmark_results, key_prefix):
 def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
+    eval_training_render = args["env"]["eval_training_render"]
+    if not isinstance(eval_training_render, bool):
+        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
     benchmark_environment_config = benchmark["env"]
-    max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
+    if eval_training_render:
+        if args["env"]["simulation_mode"] != "gigaflow":
+            raise pufferlib.APIUsageError("env.eval_training_render only supports gigaflow simulation_mode")
+        _positive_int(args["env"]["scenario_length"], "training env.scenario_length")
+        training_min_agents_per_env = _positive_int(
+            args["env"]["min_agents_per_env"], "training env.min_agents_per_env"
+        )
+        training_max_agents_per_env = _positive_int(
+            args["env"]["max_agents_per_env"], "training env.max_agents_per_env"
+        )
+        if training_min_agents_per_env > training_max_agents_per_env:
+            raise pufferlib.APIUsageError(
+                "training env.min_agents_per_env must be less than or equal to env.max_agents_per_env"
+            )
+        max_agents_per_env = training_max_agents_per_env
+        max_agents_source = "training config"
+    else:
+        max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
+        max_agents_source = f"benchmark {benchmark['name']}"
     if max_agents_per_env is not None and eval_agent_count < max_agents_per_env:
         raise pufferlib.APIUsageError(
-            f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
+            f"eval.num_agents ({eval_agent_count}) must be at least {max_agents_source} "
             f"max_agents_per_env ({max_agents_per_env})"
         )
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
-    args["env"].update(copy.deepcopy(environment_config))
-    args["env"].update(copy.deepcopy(benchmark_environment_config))
+    if eval_training_render:
+        args["env"]["compute_eval_metrics"] = True
+        args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+    else:
+        args["env"].update(copy.deepcopy(environment_config))
+        args["env"].update(copy.deepcopy(benchmark_environment_config))
     args["env"]["num_agents"] = eval_agent_count
-    args["env"]["resample_frequency"] = benchmark_environment_config["scenario_length"]
+    args["env"]["resample_frequency"] = args["env"]["scenario_length"]
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 

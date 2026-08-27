@@ -110,6 +110,25 @@ scenario and builds a navigable `index.html`.
 
 `eval.capture_observations=true` also stores policy observations.
 
+To evaluate and render the environment distribution used during training, run:
+
+```bash
+puffer eval puffer_drive carla_fast \
+  load_model_path=experiments/seed-42/final_model.pt \
+  env.eval_training_render=true \
+  eval.num_agents=150 \
+  env.map_dir=pufferlib/resources/drive/binaries/carla
+```
+
+`env.eval_training_render=true` supports Gigaflow checkpoints. The environment
+values come from the training `config.yaml` stored alongside the checkpoint,
+including dynamics, goals, observation perturbations, termination, agent-count
+bounds, maps, reward settings, and episode length. The selected benchmark
+supplies only its name, deterministic seed, and scenario count. Replay capture,
+HTML rendering, and evaluation metrics are enabled automatically. The local map
+override above is needed when the path saved in the training config is not
+mounted. The default is `false`, so ordinary benchmark evaluation is unchanged.
+
 ## Filtered replay and rendering
 
 Set `eval.render_filter` to render scenarios where a selected metric is greater

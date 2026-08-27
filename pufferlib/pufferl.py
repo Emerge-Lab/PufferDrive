@@ -1705,10 +1705,13 @@ def eval(
         raise pufferlib.APIUsageError(
             f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
         )
+    eval_training_render = args["env"]["eval_training_render"]
+    if not isinstance(eval_training_render, bool):
+        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
+    render_scenarios = render_scenarios or eval_training_render
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
-            "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
-            "with eval.failure_replay_csv"
+            "Scenario rendering requires a standard benchmark pass and cannot be combined with eval.failure_replay_csv"
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
@@ -1724,6 +1727,7 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+    base_args["env"]["eval_training_render"] = eval_training_render
 
     wandb_run_identity = (
         drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
@@ -1750,7 +1754,11 @@ def eval(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
             resolve=True,
         )
+        run_args["env"]["eval_training_render"] = eval_training_render
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        if eval_training_render:
+            run_args["env"]["compute_eval_metrics"] = True
+            run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
         output_directory_name = benchmark["name"]

@@ -14,6 +14,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -174,6 +175,194 @@ def _standalone_eval_args(benchmark_config_path):
     return args
 
 
+def _training_render_benchmark_args(eval_training_render):
+    args = _load_config()
+    args["eval"]["num_agents"] = 16
+    args["env"].update(
+        {
+            "eval_training_render": eval_training_render,
+            "reward_randomization": False,
+            "partner_blindness_prob": 0.2,
+            "scenario_length": 123,
+            "min_agents_per_env": 3,
+            "max_agents_per_env": 7,
+        }
+    )
+    environment_config = {
+        "dt": 0.1,
+        "goal_source": "route",
+        "obs_dropout_lane": 0.0,
+        "obs_dropout_boundary": 0.0,
+        "termination_mode": 0,
+        "reward_randomization": True,
+        "partner_blindness_prob": 0.0,
+    }
+    benchmark = {
+        "name": "randomization_test",
+        "seed": SEED,
+        "num_scenarios": 4,
+        "env": {
+            "simulation_mode": "gigaflow",
+            "num_maps": CARLA_MAP_COUNT,
+            "max_agents_per_env": 8,
+            "scenario_length": CARLA_SCENARIO_LENGTH,
+            "control_mode": "control_vehicles",
+            "map_dir": str(CARLA_MAP_DIR),
+        },
+    }
+    return args, benchmark, environment_config
+
+
+def test_training_render_uses_saved_training_environment():
+    args, benchmark, environment_config = _training_render_benchmark_args(True)
+
+    resolved = drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+    assert resolved["env"]["eval_training_render"] is True
+    assert resolved["env"]["reward_randomization"] is False
+    assert resolved["env"]["scenario_length"] == args["env"]["scenario_length"]
+    assert resolved["env"]["resample_frequency"] == args["env"]["scenario_length"]
+    assert resolved["env"]["min_agents_per_env"] == args["env"]["min_agents_per_env"]
+    assert resolved["env"]["max_agents_per_env"] == args["env"]["max_agents_per_env"]
+    assert resolved["env"]["dt"] == args["env"]["dt"]
+    assert resolved["env"]["goal_source"] == args["env"]["goal_source"]
+    assert resolved["env"]["obs_dropout_lane"] == args["env"]["obs_dropout_lane"]
+    assert resolved["env"]["obs_dropout_boundary"] == args["env"]["obs_dropout_boundary"]
+    assert resolved["env"]["termination_mode"] == args["env"]["termination_mode"]
+    assert resolved["env"]["partner_blindness_prob"] == args["env"]["partner_blindness_prob"]
+    assert resolved["env"]["compute_eval_metrics"] is True
+    assert resolved["eval"]["action_selection"] == "sample"
+
+
+def test_default_eval_keeps_benchmark_randomizer_config():
+    args, benchmark, environment_config = _training_render_benchmark_args(False)
+
+    resolved = drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+    assert resolved["env"]["eval_training_render"] is False
+    assert resolved["env"]["reward_randomization"] == environment_config["reward_randomization"]
+    assert resolved["env"]["scenario_length"] == benchmark["env"]["scenario_length"]
+    assert resolved["env"]["resample_frequency"] == benchmark["env"]["scenario_length"]
+    assert resolved["env"]["max_agents_per_env"] == benchmark["env"]["max_agents_per_env"]
+
+
+def test_training_render_requires_boolean():
+    args, benchmark, environment_config = _training_render_benchmark_args(False)
+    args["env"]["eval_training_render"] = "true"
+
+    with pytest.raises(pufferlib.APIUsageError, match="must be a boolean"):
+        drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+
+def test_training_render_rejects_replay_training_config():
+    args, benchmark, environment_config = _training_render_benchmark_args(True)
+    args["env"]["simulation_mode"] = "replay"
+
+    with pytest.raises(pufferlib.APIUsageError, match="only supports gigaflow"):
+        drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+
+def test_training_render_requires_sufficient_agent_capacity():
+    args, benchmark, environment_config = _training_render_benchmark_args(True)
+    args["eval"]["num_agents"] = args["env"]["max_agents_per_env"] - 1
+
+    with pytest.raises(pufferlib.APIUsageError, match="training config max_agents_per_env"):
+        drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+
+def test_training_render_samples_eval_agent_counts_and_maps():
+    environment_kwargs = {
+        "num_agents": 64,
+        "min_agents_per_env": 3,
+        "max_agents_per_env": 12,
+        "num_maps": CARLA_MAP_COUNT,
+        "map_dir": str(CARLA_MAP_DIR),
+        "simulation_mode": "gigaflow",
+        "eval_mode": 1,
+        "num_eval_scenarios": 10,
+        "scenario_length": CARLA_SCENARIO_LENGTH,
+        "resample_frequency": CARLA_SCENARIO_LENGTH,
+        "seed": SEED,
+    }
+
+    fixed_environment = Drive(eval_training_render=False, **environment_kwargs)
+    training_render_environment = Drive(eval_training_render=True, **environment_kwargs)
+    try:
+        fixed_agent_counts = np.diff(fixed_environment.agent_offsets)
+        training_agent_counts = np.diff(training_render_environment.agent_offsets)
+
+        assert np.all(fixed_agent_counts == environment_kwargs["max_agents_per_env"])
+        assert np.all(training_agent_counts >= environment_kwargs["min_agents_per_env"])
+        assert np.all(training_agent_counts <= environment_kwargs["max_agents_per_env"])
+        assert len(set(training_agent_counts)) > 1
+        assert training_render_environment.map_ids != fixed_environment.map_ids
+    finally:
+        fixed_environment.close()
+        training_render_environment.close()
+
+    minimum_capacity_first_counts = []
+    for seed in range(8):
+        minimum_capacity_kwargs = dict(
+            environment_kwargs,
+            num_agents=environment_kwargs["max_agents_per_env"],
+            seed=seed,
+        )
+        minimum_capacity_environment = Drive(eval_training_render=True, **minimum_capacity_kwargs)
+        try:
+            first_agent_count = np.diff(minimum_capacity_environment.agent_offsets)[0]
+            minimum_capacity_first_counts.append(first_agent_count)
+        finally:
+            minimum_capacity_environment.close()
+    assert min(minimum_capacity_first_counts) >= environment_kwargs["min_agents_per_env"]
+    assert max(minimum_capacity_first_counts) <= environment_kwargs["max_agents_per_env"]
+    assert len(set(minimum_capacity_first_counts)) > 1
+
+
+def test_replay_telemetry_exports_active_perturbations():
+    environment = Drive(
+        num_agents=4,
+        min_agents_per_env=4,
+        max_agents_per_env=4,
+        num_maps=1,
+        map_dir=str(CARLA_MAP_DIR),
+        simulation_mode="gigaflow",
+        scenario_length=8,
+        resample_frequency=8,
+        action_type="discrete",
+        dynamics_model="classic",
+        partner_blindness_prob=1.0,
+        partner_blindness_trigger_prob=1.0,
+        partner_blindness_duration_seconds=0.1,
+        phantom_braking_prob=1.0,
+        phantom_braking_trigger_prob=1.0,
+        phantom_braking_duration_seconds=0.1,
+        seed=SEED,
+    )
+    try:
+        environment.reset(seed=SEED)
+        agent_capacity = max(np.diff(environment.agent_offsets))
+        agent_f32 = np.empty((environment.num_envs, agent_capacity, binding.AGENT_F32_FIELDS), dtype=np.float32)
+        agent_i32 = np.empty((environment.num_envs, agent_capacity, binding.AGENT_I32_FIELDS), dtype=np.int32)
+        metrics_f32 = np.empty((environment.num_envs, agent_capacity, binding.METRICS_F32_FIELDS), dtype=np.float32)
+        puffer_f32 = np.empty((environment.num_envs, agent_capacity, binding.SCORE_F32_FIELDS), dtype=np.float32)
+        traffic_i16 = np.empty((environment.num_envs, 1, binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
+
+        environment.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16)
+        assert binding.AGENT_I32_FIELDS == 10
+        assert np.all(agent_i32[:, :, 8] == 1)
+        assert np.all(agent_i32[:, :, 9] == 0)
+
+        neutral_action = (len(binding.ACCELERATION_VALUES) // 2) * len(binding.STEERING_VALUES) + (
+            len(binding.STEERING_VALUES) // 2
+        )
+        environment.step(np.full(environment.num_agents, neutral_action, dtype=np.int32))
+        environment.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16)
+        assert np.all(agent_i32[:, :, 8] == 1)
+        assert np.all(agent_i32[:, :, 9] == 1)
+    finally:
+        environment.close()
+
+
 @pytest.fixture(scope="module")
 def carla_evaluation(tmp_path_factory):
     output_root = tmp_path_factory.mktemp("carla_evaluation")
@@ -262,6 +451,56 @@ def test_multiprocess_eval_dispatches_all_scenarios_and_maps(carla_evaluation):
     assert metric_summary["total_distance_travelled"] == pytest.approx(metrics["total_distance_travelled_sum"].sum())
     assert metric_summary["total_infractions"] == pytest.approx(metrics["total_infraction_count"].sum())
     assert metric_summary["avg_distance_per_infraction"] == pytest.approx(expected_global_average)
+
+
+def test_training_render_flag_captures_and_renders_saved_environment(tmp_path):
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / "training_render_benchmark.yaml",
+        name="training_render",
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=2,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=1,
+    )
+    args = _standalone_eval_args(benchmark_config_path)
+    args["env"].update(
+        {
+            "eval_training_render": True,
+            "scenario_length": 8,
+            "resample_frequency": 8,
+            "partner_blindness_prob": 1.0,
+            "partner_blindness_trigger_prob": 1.0,
+            "partner_blindness_duration_seconds": 0.8,
+            "phantom_braking_prob": 1.0,
+            "phantom_braking_trigger_prob": 1.0,
+            "phantom_braking_duration_seconds": 0.8,
+        }
+    )
+    args["eval"]["benchmarks"] = "training_render"
+
+    pufferl.eval(
+        env_name="puffer_drive",
+        args=args,
+        policy=ZeroPolicy(action_count=63),
+        eval_output_dir=str(tmp_path),
+        eval_output_subdir="rendered",
+        use_training_config=True,
+        benchmark_names="training_render",
+    )
+
+    output_dir = tmp_path / "training_render" / "rendered"
+    rendered_pages = sorted(
+        path for path in (output_dir / "rendered_replays").glob("*.html") if path.name != "index.html"
+    )
+    resolved = yaml.safe_load((output_dir / "resolved_benchmark.yaml").read_text())
+    assert len(rendered_pages) == 2
+    assert (output_dir / "rendered_replays/index.html").is_file()
+    assert resolved["args"]["env"]["eval_training_render"] is True
+    assert resolved["args"]["env"]["scenario_length"] == 8
 
 
 def test_eval_report_reduces_distance_per_infraction_from_raw_totals():
@@ -445,12 +684,18 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         assert header["active_count"] == 1
         assert header["obs_dim"] > 0
         assert required_chunks <= set(header["chunks"])
+        assert header["chunks"]["agent_i32"]["shape"][2] == 10
 
     render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path)))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
     assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+    rendered_html = rendered_pages[0].read_text()
+    assert "PARTNER_BLINDNESS_OUTLINE_COLOR" in rendered_html
+    assert "PHANTOM_BRAKING_OUTLINE_COLOR" in rendered_html
+    assert "Partner blindness" in rendered_html
+    assert "Phantom braking" in rendered_html
 
 
 def _write_training_benchmark(tmp_path):

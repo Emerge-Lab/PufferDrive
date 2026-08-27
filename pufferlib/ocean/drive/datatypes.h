@@ -142,6 +142,8 @@ struct Agent {
     int partner_blindness_counter;   // >0 means currently blind to partners
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
+    unsigned char partner_blindness_active;
+    unsigned char phantom_braking_active;
 };
 
 struct RoadMapElement {
