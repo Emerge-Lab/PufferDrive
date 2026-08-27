@@ -312,6 +312,46 @@ static int get_neighbors_entities(
 // Map Loading Functions
 // ========================================
 
+#define TRAFFIC_PHASE_SECTION_TAG "TLPHASE1"
+#define TRAFFIC_PHASE_SECTION_TAG_LEN 8
+
+// Optional tail section; files written before it existed end right after the metadata.
+static int load_traffic_phase_section(FILE *file, Drive *drive) {
+    char tag[TRAFFIC_PHASE_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), TRAFFIC_PHASE_SECTION_TAG_LEN, file);
+    if (tag_bytes_read == 0) {
+        for (int i = 0; i < drive->num_traffic_elements; i++) {
+            drive->traffic_elements[i].junction_id = -1;
+            drive->traffic_elements[i].phase_idx = -1;
+        }
+        return 0;
+    }
+    if (tag_bytes_read != TRAFFIC_PHASE_SECTION_TAG_LEN
+        || memcmp(tag, TRAFFIC_PHASE_SECTION_TAG, TRAFFIC_PHASE_SECTION_TAG_LEN) != 0) {
+        printf("[ERROR] -> Unexpected bytes after map metadata (expected EOF or %s section).\n", TRAFFIC_PHASE_SECTION_TAG);
+        return -1;
+    }
+    for (int i = 0; i < drive->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &drive->traffic_elements[i];
+        if (fread(&tc->junction_id, sizeof(int), 1, file) != 1 || fread(&tc->phase_idx, sizeof(int), 1, file) != 1) {
+            printf("[ERROR] -> Truncated %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
+            return -1;
+        }
+        int has_junction = tc->junction_id >= 0;
+        int has_phase = tc->phase_idx >= 0 && tc->phase_idx < drive->num_traffic_elements;
+        if (tc->junction_id < -1 || tc->phase_idx < -1 || has_junction != has_phase) {
+            printf("[ERROR] -> Traffic element %d has invalid junction_id %d / phase_idx %d.\n", i, tc->junction_id, tc->phase_idx);
+            return -1;
+        }
+    }
+    char trailing_byte;
+    if (fread(&trailing_byte, sizeof(char), 1, file) == 1) {
+        printf("[ERROR] -> Trailing bytes after %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
+        return -1;
+    }
+    return 0;
+}
+
 int load_map_binary(const char *filename, Drive *drive) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
@@ -720,6 +760,11 @@ int load_map_binary(const char *filename, Drive *drive) {
         }
     } else {
         drive->tracks_to_predict = NULL;
+    }
+
+    if (load_traffic_phase_section(file, drive) != 0) {
+        fclose(file);
+        return -1;
     }
 
     fclose(file);

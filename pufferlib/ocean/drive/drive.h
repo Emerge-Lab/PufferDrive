@@ -2207,13 +2207,99 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
+typedef struct {
+    int steps_green;
+    int steps_yellow;
+    int steps_red; // all-red clearance closing each phase slot
+    int phase_count;
+    int offset;
+} TrafficLightCycle;
+
+// Lights of one junction share the cycle sampled for the first light of that junction.
+static int traffic_light_cycle_leader(Drive *env, int light_idx) {
+    TrafficControlElement *tc = &env->traffic_elements[light_idx];
+    if (tc->junction_id < 0) {
+        return light_idx;
+    }
+    for (int i = 0; i < light_idx; i++) {
+        TrafficControlElement *other = &env->traffic_elements[i];
+        if (other->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && other->junction_id == tc->junction_id) {
+            return i;
+        }
+    }
+    return light_idx;
+}
+
+static int traffic_light_phase_count(Drive *env, int junction_id) {
+    int max_phase_idx = 0;
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *tc = &env->traffic_elements[i];
+        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || tc->junction_id != junction_id) {
+            continue;
+        }
+        if (tc->phase_idx > max_phase_idx) {
+            max_phase_idx = tc->phase_idx;
+        }
+    }
+    return max_phase_idx + 1;
+}
+
+static int duration_to_steps(float duration_seconds, float dt) {
+    int steps = (int) (duration_seconds / dt);
+    return steps < 1 ? 1 : steps;
+}
+
+static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int junction_id) {
+    float dur_green, dur_yellow, dur_red;
+    if (env->eval_mode) {
+        dur_green = TL_DEFAULT_GREEN_DURATION;
+        dur_yellow = TL_DEFAULT_YELLOW_DURATION;
+        dur_red = TL_DEFAULT_RED_DURATION;
+    } else {
+        dur_green = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+        dur_yellow = sample_uniform(
+            &env->rng_state,
+            0.5f * TL_DEFAULT_YELLOW_DURATION,
+            0.75f * TL_DEFAULT_YELLOW_DURATION);
+        dur_red = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+    }
+    TrafficLightCycle cycle;
+    cycle.steps_green = duration_to_steps(dur_green, env->dt);
+    cycle.steps_yellow = duration_to_steps(dur_yellow, env->dt);
+    cycle.steps_red = duration_to_steps(dur_red, env->dt);
+    cycle.phase_count = junction_id < 0 ? 1 : traffic_light_phase_count(env, junction_id);
+    int cycle_length = cycle.phase_count * (cycle.steps_green + cycle.steps_yellow + cycle.steps_red);
+    cycle.offset = rng_below(&env->rng_state, cycle_length);
+    return cycle;
+}
+
+// Phase slots run GREEN -> YELLOW -> RED in order; a light is RED throughout every other slot.
+static void fill_traffic_light_states(TrafficControlElement *tc, const TrafficLightCycle *cycle, int fill_steps) {
+    int slot_length = cycle->steps_green + cycle->steps_yellow + cycle->steps_red;
+    int cycle_length = cycle->phase_count * slot_length;
+    int own_phase_idx = tc->junction_id < 0 ? 0 : tc->phase_idx;
+    for (int t = 0; t < fill_steps; t++) {
+        int cycle_step = (t + cycle->offset) % cycle_length;
+        int slot_step = cycle_step % slot_length;
+        if (cycle_step / slot_length != own_phase_idx) {
+            tc->states[t] = TRAFFIC_CONTROL_STATE_RED;
+        } else if (slot_step < cycle->steps_green) {
+            tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
+        } else if (slot_step < cycle->steps_green + cycle->steps_yellow) {
+            tc->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
+        } else {
+            tc->states[t] = TRAFFIC_CONTROL_STATE_RED;
+        }
+    }
+}
+
 static void generate_traffic_light_states(Drive *env) {
     int steps = env->scenario_length;
-    float dt = env->dt;
 
     // 20% chance: disable ALL lights for this episode
     int disable_all = (!env->eval_mode) && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
+    TrafficLightCycle cycles[env->num_traffic_elements > 0 ? env->num_traffic_elements : 1];
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
         if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || tc->states == NULL || tc->state_size <= 0) {
@@ -2230,6 +2316,11 @@ static void generate_traffic_light_states(Drive *env) {
                 tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
             }
             continue;
+        }
+
+        int leader_idx = traffic_light_cycle_leader(env, i);
+        if (leader_idx == i) {
+            cycles[i] = sample_traffic_light_cycle(env, tc->junction_id);
         }
 
         if (!env->eval_mode) {
@@ -2249,49 +2340,7 @@ static void generate_traffic_light_states(Drive *env) {
             }
         }
 
-        // Compute phase durations
-        float dur_green, dur_yellow, dur_red;
-        if (env->eval_mode) {
-            dur_green = TL_DEFAULT_GREEN_DURATION;
-            dur_yellow = TL_DEFAULT_YELLOW_DURATION;
-            dur_red = TL_DEFAULT_RED_DURATION;
-        } else {
-            dur_green = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = sample_uniform(
-                &env->rng_state,
-                0.5f * TL_DEFAULT_YELLOW_DURATION,
-                0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
-        }
-
-        int steps_green = (int) (dur_green / dt);
-        if (steps_green < 1) {
-            steps_green = 1;
-        }
-        int steps_yellow = (int) (dur_yellow / dt);
-        if (steps_yellow < 1) {
-            steps_yellow = 1;
-        }
-        int steps_red = (int) (dur_red / dt);
-        if (steps_red < 1) {
-            steps_red = 1;
-        }
-        int cycle_length = steps_green + steps_yellow + steps_red;
-
-        // Random phase offset
-        int offset = rng_below(&env->rng_state, cycle_length);
-
-        // Fill states: GREEN -> YELLOW -> RED -> repeat
-        for (int t = 0; t < fill_steps; t++) {
-            int phase = (t + offset) % cycle_length;
-            if (phase < steps_green) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
-            } else if (phase < steps_green + steps_yellow) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
-            } else {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_RED;
-            }
-        }
+        fill_traffic_light_states(tc, &cycles[leader_idx], fill_steps);
     }
 }
 

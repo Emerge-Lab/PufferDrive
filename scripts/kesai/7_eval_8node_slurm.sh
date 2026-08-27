@@ -39,7 +39,7 @@ fi
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 1000 \
     --num-nodes 8 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes_tl \
     vec.num_envs=64 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
@@ -56,8 +56,8 @@ fi
     eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
-    env.disable_red_light_infractions=0 \
-    eval.output_name=${RUN_NAME}_short4 \
+    env.disable_red_light_infractions=1 \
+    eval.output_name=${RUN_NAME}_medium \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
@@ -85,7 +85,7 @@ fi
     eval.disable_red_light_infractions=0 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_short4 \
+    eval.output_name=${RUN_NAME}_medium \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
