@@ -1673,10 +1673,11 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
-            PyObject *tuple = PyTuple_New(3);
+            PyObject *tuple = PyTuple_New(4);
             PyTuple_SetItem(tuple, 0, agent_offsets);
             PyTuple_SetItem(tuple, 1, map_ids_list);
             PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+            PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
             return tuple;
         }
 
