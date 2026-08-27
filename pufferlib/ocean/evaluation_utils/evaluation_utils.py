@@ -260,8 +260,6 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
     eval_training_render = args["env"]["eval_training_render"]
-    if not isinstance(eval_training_render, bool):
-        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
     benchmark_environment_config = benchmark["env"]
     if eval_training_render:
