@@ -180,7 +180,6 @@ struct Drive {
     // Agents
     Agent *agents;
     int num_sim_agents;        // All valid agents: [active | moving_log | static_log]
-    int num_agents_capacity;   // Number of agent slots allocated in shared buffers
     int num_max_agents;        // Max agents to keep active in the simulation (0 for no limit)
     int num_agents;            // Number of active agents in the simulation
     int num_moving_log_agents; // Number of log agents that moves during the scenario
@@ -2656,7 +2655,7 @@ void set_active_agents(Drive *env) {
     int num_valid_agents = 0;
 
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
-        int num_agents_to_create = env->num_agents_capacity;
+        int num_agents_to_create = env->num_max_agents;
         for (int i = 0; i < env->num_sim_agents; i++) {
             free_agent(&env->agents[i]);
         }

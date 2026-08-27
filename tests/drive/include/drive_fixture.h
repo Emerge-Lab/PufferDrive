@@ -94,8 +94,7 @@ static inline Drive drive_test_env_config(
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;
     env.map_name = drive_test_strdup(map_file);
-    env.num_agents_capacity = num_agents;
-    env.num_max_agents = 64;
+    env.num_max_agents = num_agents;
     env.init_step = 0;
     env.timestep = 0;
     env.init_mode = INIT_MODE_CREATE_ALL_VALID;

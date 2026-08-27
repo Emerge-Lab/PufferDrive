@@ -1849,8 +1849,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     }
     snprintf(env->resource_root, sizeof(env->resource_root), "%s", resource_root);
     free(resource_root);
-    env->num_agents_capacity = (int) unpack(kwargs, "max_agents");
-    env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
+    env->num_max_agents = (int) unpack(kwargs, "num_max_agents");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
     env->timestep = init_step;

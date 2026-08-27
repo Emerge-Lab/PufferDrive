@@ -85,7 +85,6 @@ void demo() {
         .map_name = map_path,
         // Standalone binaries run from the repo root.
         .resource_root = "pufferlib/resources/drive",
-        .num_agents_capacity = conf.max_agents_per_env,
         .num_max_agents = conf.max_agents_per_env,
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
@@ -214,7 +213,6 @@ void performance_test() {
         .human_agent_idx = 0,
         .map_name = strdup(conf.map_dir),
         .ini_file = strdup(ini_file),
-        .num_agents_capacity = conf.max_agents_per_env,
         .num_max_agents = conf.max_agents_per_env,
         // From conf
         .action_type = conf.action_type,
