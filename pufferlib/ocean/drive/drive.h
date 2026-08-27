@@ -487,8 +487,6 @@ static void reset_agent_state(Agent *agent) {
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
-    agent->partner_blindness_active = 0;
-    agent->phantom_braking_active = 0;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -3777,18 +3775,14 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
     // Partner blindness: zero partner obs for the configured duration once triggered
-    int partner_blindness_active = 0;
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
-        partner_blindness_active = 1;
     } else if (
         ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
-        ego->partner_blindness_counter = env->partner_blindness_duration - 1;
-        partner_blindness_active = 1;
+        ego->partner_blindness_counter = env->partner_blindness_duration;
     }
-    ego->partner_blindness_active = partner_blindness_active;
-    if (partner_blindness_active) {
+    if (ego->partner_blindness_counter > 0) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
@@ -4163,17 +4157,13 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     }
 
     // Phantom braking: override action with max braking
-    int phantom_braking_active = 0;
     if (agent->phantom_braking_counter > 0) {
         agent->phantom_braking_counter--;
-        phantom_braking_active = 1;
     } else if (
         agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
-        agent->phantom_braking_counter = env->phantom_braking_duration - 1;
-        phantom_braking_active = 1;
+        agent->phantom_braking_counter = env->phantom_braking_duration;
     }
-    agent->phantom_braking_active = phantom_braking_active;
 
     if (env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
         // Classic dynamics model
@@ -4198,7 +4188,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             steering *= STEERING_VALUES[8];
         }
 
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             acceleration = ACCELERATION_VALUES[0]; // max braking
             steering = 0.0f;
         }
@@ -4217,7 +4207,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Update speed with acceleration
         speed += acceleration * env->dt;
         // If phantom braking is active, prevent speed from going negative
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             if (speed < 0.0f) {
                 speed = 0.0f;
                 acceleration = 0.0f;
@@ -4282,7 +4272,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             j_lat = action_array_f[action_idx][1] * JERK_LAT[2];
         }
 
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             j_long = JERK_LONG[0]; // max braking jerk
             j_lat = 0.0f;
         }
@@ -4332,7 +4322,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         // If phantom braking is active, prevent speed from going negative
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             if (v_new < 0.0f) {
                 v_new = 0.0f;
                 a_long_new = 0.0f;
