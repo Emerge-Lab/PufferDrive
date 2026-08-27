@@ -51,13 +51,13 @@ fi
     eval.goal_radius=10.0 \
     eval.goal_source=route \
     env.goal_heading_max_deg=60.0 \
-    env.eval_perceived_size_margin_m=0.1 \
+    env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
-    env.disable_red_light_infractions=1 \
-    eval.output_name=${RUN_NAME}_short3 \
+    env.disable_red_light_infractions=0 \
+    eval.output_name=${RUN_NAME}_short4 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
@@ -77,15 +77,15 @@ fi
     eval.goal_radius=10.0 \
     eval.goal_source=route \
     env.goal_heading_max_deg=60.0 \
-    env.eval_perceived_size_margin_m=0.15 \
+    env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
-    eval.disable_red_light_infractions=1 \
+    eval.disable_red_light_infractions=0 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_short3 \
+    eval.output_name=${RUN_NAME}_short4 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
