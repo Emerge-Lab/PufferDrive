@@ -51,7 +51,7 @@ fi
     eval.goal_radius=10.0 \
     eval.goal_source=route \
     env.goal_heading_max_deg=60.0 \
-    env.eval_perceived_size_margin_m=0.15 \
+    env.eval_perceived_size_margin_m=0.05 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
