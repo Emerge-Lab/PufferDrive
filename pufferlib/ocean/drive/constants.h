@@ -319,6 +319,4 @@ static const int ROAD_OFFSETS[25][2]
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
 
-#define COMPLETED_EPISODE_QUEUE_CAPACITY 16
-
 #endif
