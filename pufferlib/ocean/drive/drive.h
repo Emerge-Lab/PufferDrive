@@ -2559,14 +2559,11 @@ static void set_agent_at_init_log_step(Drive *env) {
             agent->current_goal_x = agent->list_goal_x[0];
             agent->current_goal_y = agent->list_goal_y[0];
             agent->current_goal_z = agent->list_goal_z[0];
-            continue;
-        }
-
-        bool generated_goals = env->goal_source == GOAL_SOURCE_MAP ? generate_new_goals_from_map(env, agent)
-                                                                   : generate_new_goals_from_route(env, agent);
-        if (!generated_goals) {
-            invalidate_agent(agent);
-            agent->removed = 1;
+        } else if (env->goal_source == GOAL_SOURCE_ROUTE) {
+            if (!generate_new_goals_from_route(env, agent)) {
+                invalidate_agent(agent);
+                agent->removed = 1;
+            }
         }
     }
 }
@@ -4242,9 +4239,6 @@ static void move_dynamics(Drive *env, int agent_idx) {
 #include "idm.h"
 
 void c_reset(Drive *env) {
-    if (env->timestep != env->init_step) {
-        begin_episode_rng(env);
-    }
     env->timestep = env->init_step;
 
     if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
