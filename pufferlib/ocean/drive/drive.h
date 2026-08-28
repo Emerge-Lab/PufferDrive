@@ -3777,8 +3777,8 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     // Partner blindness: zero partner obs for the configured duration once triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
-    } else if (
-        ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
+    }
+    if (ego->partner_blindness_counter == 0 && ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
@@ -4159,8 +4159,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     // Phantom braking: override action with max braking
     if (agent->phantom_braking_counter > 0) {
         agent->phantom_braking_counter--;
-    } else if (
-        agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
+    }
+    if (agent->phantom_braking_counter == 0 && agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
         agent->phantom_braking_counter = env->phantom_braking_duration;
     }
