@@ -97,6 +97,7 @@ class Drive(pufferlib.PufferEnv):
         max_scenarios_per_batch=None,
         eval_map_indices=None,
         eval_scenario_seeds=None,
+        eval_training_render=False,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -236,6 +237,15 @@ class Drive(pufferlib.PufferEnv):
         if self.eval_map_indices is not None:
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
+        if not isinstance(eval_training_render, bool):
+            raise TypeError("eval_training_render must be a boolean")
+        if eval_training_render and not eval_mode:
+            raise ValueError("eval_training_render requires eval_mode")
+        if eval_training_render and simulation_mode != "gigaflow":
+            raise ValueError("eval_training_render only supports gigaflow simulation_mode")
+        if eval_training_render and num_agents < max_agents_per_env:
+            raise ValueError("eval_training_render requires num_agents >= max_agents_per_env")
+        self.eval_training_render = eval_training_render
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
@@ -447,6 +457,7 @@ class Drive(pufferlib.PufferEnv):
             num_maps=num_maps,
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
+            eval_training_render=self.eval_training_render,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
@@ -566,6 +577,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
+            "eval_training_render": self.eval_training_render,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "obs_norm_speed_mps": self.obs_norm_speed_mps,
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
@@ -674,6 +686,7 @@ class Drive(pufferlib.PufferEnv):
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
                     eval_mode=self.eval_mode,
+                    eval_training_render=self.eval_training_render,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     sdc_controller=self.sdc_controller,

@@ -99,6 +99,8 @@ env:
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
+  # Evaluate and render scenarios using the training distribution.
+  eval_training_render: false
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
@@ -289,7 +291,7 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and replay rendering settings.
 eval:
-  num_agents: 128
+  num_agents: 256
   # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml
