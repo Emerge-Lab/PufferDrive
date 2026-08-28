@@ -233,6 +233,7 @@ struct Drive {
     float inactive_agent_threshold;
     int terminate_on_goal;
     int eval_mode;
+    int eval_training_render;
     int compute_eval_metrics;
     // Rewards
     float reward_goal;
@@ -2191,9 +2192,10 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
 static void generate_traffic_light_states(Drive *env) {
     int steps = env->scenario_length;
     float dt = env->dt;
+    int training_mode = !env->eval_mode || env->eval_training_render;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = (!env->eval_mode) && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = training_mode && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -2213,7 +2215,7 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        if (!env->eval_mode) {
+        if (training_mode) {
             // Individual removal
             if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
@@ -2232,7 +2234,7 @@ static void generate_traffic_light_states(Drive *env) {
 
         // Compute phase durations
         float dur_green, dur_yellow, dur_red;
-        if (env->eval_mode) {
+        if (!training_mode) {
             dur_green = TL_DEFAULT_GREEN_DURATION;
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;
@@ -2355,7 +2357,7 @@ static bool create_agent(Drive *env, Agent *agent, int num_agents) {
     agent->mark_as_expert = 0;
 
     float spawn_length, spawn_width;
-    if (env->eval_mode) {
+    if (env->eval_mode && !env->eval_training_render) {
         // Eval: uniform random car-sized boxes
         spawn_length = sample_uniform(&env->rng_state, 2.0f, 5.5f);
         spawn_width = sample_uniform(&env->rng_state, 1.5f, 2.5f);
@@ -3569,7 +3571,8 @@ static void compute_rewards(Drive *env, int agent_idx) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
-    float perceived_margin = env->eval_mode ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
+    float perceived_margin
+        = (env->eval_mode && !env->eval_training_render) ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / env->obs_norm_speed_mps;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
@@ -3628,17 +3631,14 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
     // Partner blindness: zero partner obs for the configured duration once triggered
-    int partner_blindness_active = 0;
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
-        partner_blindness_active = 1;
     } else if (
         ego->is_blind_partner && env->partner_blindness_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->partner_blindness_trigger_prob) {
-        ego->partner_blindness_counter = env->partner_blindness_duration - 1;
-        partner_blindness_active = 1;
+        ego->partner_blindness_counter = env->partner_blindness_duration;
     }
-    if (partner_blindness_active) {
+    if (ego->partner_blindness_counter > 0) {
         int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
@@ -4008,15 +4008,12 @@ static void move_dynamics(Drive *env, int agent_idx) {
     }
 
     // Phantom braking: override action with max braking
-    int phantom_braking_active = 0;
     if (agent->phantom_braking_counter > 0) {
         agent->phantom_braking_counter--;
-        phantom_braking_active = 1;
     } else if (
         agent->is_phantom_braker && env->phantom_braking_trigger_prob > 0.0f
         && sample_uniform(&env->rng_state, 0.0f, 1.0f) < env->phantom_braking_trigger_prob) {
-        agent->phantom_braking_counter = env->phantom_braking_duration - 1;
-        phantom_braking_active = 1;
+        agent->phantom_braking_counter = env->phantom_braking_duration;
     }
 
     if (env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
@@ -4042,7 +4039,7 @@ static void move_dynamics(Drive *env, int agent_idx) {
             steering *= STEERING_VALUES[8];
         }
 
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             acceleration = ACCELERATION_VALUES[0]; // max braking
             steering = 0.0f;
         }
@@ -4061,7 +4058,7 @@ static void move_dynamics(Drive *env, int agent_idx) {
         // Update speed with acceleration
         speed += acceleration * env->dt;
         // If phantom braking is active, prevent speed from going negative
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             if (speed < 0.0f) {
                 speed = 0.0f;
                 acceleration = 0.0f;
@@ -4126,7 +4123,7 @@ static void move_dynamics(Drive *env, int agent_idx) {
             j_lat = action_array_f[agent_idx][1] * JERK_LAT[2];
         }
 
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             j_long = JERK_LONG[0]; // max braking jerk
             j_lat = 0.0f;
         }
@@ -4176,7 +4173,7 @@ static void move_dynamics(Drive *env, int agent_idx) {
         }
 
         // If phantom braking is active, prevent speed from going negative
-        if (phantom_braking_active) {
+        if (agent->phantom_braking_counter > 0) {
             if (v_new < 0.0f) {
                 v_new = 0.0f;
                 a_long_new = 0.0f;

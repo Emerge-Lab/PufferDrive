@@ -877,6 +877,8 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 5] = a->removed;
             agent_i32[i32_base + 6] = a->current_lane_idx;
             agent_i32[i32_base + 7] = -1;
+            agent_i32[i32_base + 8] = a->partner_blindness_counter > 0;
+            agent_i32[i32_base + 9] = a->phantom_braking_counter > 0;
 
             memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
         }
