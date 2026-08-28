@@ -98,6 +98,8 @@ class DriveEnvConfig:
     base_max_speed_mps: float = MISSING
     max_speed_mps: Optional[float] = None
     spawn_initial_speed: float = MISSING
+    spawn_lateral_offset_max_frac: float = MISSING
+    spawn_heading_max_deg: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING

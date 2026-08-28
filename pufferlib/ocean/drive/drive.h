@@ -227,6 +227,8 @@ struct Drive {
     float base_max_speed_mps;
     float max_speed_mps;
     float spawn_initial_speed;
+    float spawn_lateral_offset_max_frac;
+    float spawn_heading_max_deg;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -2507,10 +2509,16 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         start_lane_idx = chosen_lane_idx;
         start_lane = &env->road_elements[start_lane_idx];
 
-        spawn_x = start_lane->x[chosen_entity.geometry_idx];
-        spawn_y = start_lane->y[chosen_entity.geometry_idx];
+        float lane_heading = start_lane->headings[chosen_entity.geometry_idx];
+        float half_lane_width_m = 0.5f * start_lane->widths[chosen_entity.geometry_idx];
+        float lateral_offset_m
+            = env->spawn_lateral_offset_max_frac * half_lane_width_m * sample_uniform(&env->rng_state, -1.0f, 1.0f);
+        float heading_offset_rad
+            = env->spawn_heading_max_deg * (float) M_PI / 180.0f * sample_uniform(&env->rng_state, -1.0f, 1.0f);
+        spawn_x = start_lane->x[chosen_entity.geometry_idx] - sinf(lane_heading) * lateral_offset_m;
+        spawn_y = start_lane->y[chosen_entity.geometry_idx] + cosf(lane_heading) * lateral_offset_m;
         spawn_z = start_lane->z[chosen_entity.geometry_idx];
-        spawn_heading = start_lane->headings[chosen_entity.geometry_idx];
+        spawn_heading = normalize_heading(lane_heading + heading_offset_rad);
 
         Agent tmp_agent = {0};
         tmp_agent.sim_x = spawn_x;

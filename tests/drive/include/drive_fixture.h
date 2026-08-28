@@ -91,6 +91,8 @@ static inline Drive drive_test_env_config(
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
     env.spawn_initial_speed = 0.0f;
+    env.spawn_lateral_offset_max_frac = 0.0f;
+    env.spawn_heading_max_deg = 0.0f;
     env.scenario_length = 91;
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;

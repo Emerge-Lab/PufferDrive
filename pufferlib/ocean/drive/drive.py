@@ -77,6 +77,8 @@ class Drive(pufferlib.PufferEnv):
         base_max_speed_mps=20.0,
         max_speed_mps=None,
         spawn_initial_speed=0.0,
+        spawn_lateral_offset_max_frac=0.0,
+        spawn_heading_max_deg=0.0,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -154,6 +156,12 @@ class Drive(pufferlib.PufferEnv):
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.max_speed_mps = self.base_max_speed_mps if max_speed_mps is None else float(max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.spawn_lateral_offset_max_frac = float(spawn_lateral_offset_max_frac)
+        self.spawn_heading_max_deg = float(spawn_heading_max_deg)
+        if not 0.0 <= self.spawn_lateral_offset_max_frac <= 1.0:
+            raise ValueError(f"spawn_lateral_offset_max_frac must be in [0, 1], got {spawn_lateral_offset_max_frac}")
+        if not 0.0 <= self.spawn_heading_max_deg <= 180.0:
+            raise ValueError(f"spawn_heading_max_deg must be in [0, 180], got {spawn_heading_max_deg}")
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
@@ -603,6 +611,8 @@ class Drive(pufferlib.PufferEnv):
             "base_max_speed_mps": self.base_max_speed_mps,
             "max_speed_mps": self.max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "spawn_lateral_offset_max_frac": self.spawn_lateral_offset_max_frac,
+            "spawn_heading_max_deg": self.spawn_heading_max_deg,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

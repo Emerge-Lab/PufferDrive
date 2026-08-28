@@ -1943,6 +1943,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         return -1;
     }
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->spawn_lateral_offset_max_frac = (float) unpack(kwargs, "spawn_lateral_offset_max_frac");
+    env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
