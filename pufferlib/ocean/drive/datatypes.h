@@ -163,6 +163,7 @@ struct RoadMapElement {
     float speed_limit;
     float length;
     float *cum_lengths;
+    float *widths; // per-point lane width, meters
 };
 
 struct TrafficControlElement {
@@ -207,6 +208,7 @@ void free_road_element(struct RoadMapElement *element) {
     free(element->entry_lanes);
     free(element->exit_lanes);
     free(element->cum_lengths);
+    free(element->widths);
 }
 
 void free_traffic_element(struct TrafficControlElement *element) {

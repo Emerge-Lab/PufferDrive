@@ -165,7 +165,8 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define LANE_CURVATURE_NORM 0.2f // 1/m; a 5 m turn radius saturates the obs
 #define MAX_CHECKED_LANES 32
-#define LANE_WIDTH 3.7f
+#define LANE_WIDTH 3.7f // fallback when the map carries no per-point widths
+#define MAX_LANE_WIDTH_M 50.0f
 #define LANE_MARGIN 0.2f
 
 // Agent-agent collision

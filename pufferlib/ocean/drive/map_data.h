@@ -314,6 +314,8 @@ static int get_neighbors_entities(
 
 #define TRAFFIC_PHASE_SECTION_TAG "TLPHASE1"
 #define TRAFFIC_PHASE_SECTION_TAG_LEN 8
+#define LANE_WIDTH_SECTION_TAG "LANEWID1"
+#define LANE_WIDTH_SECTION_TAG_LEN 8
 
 // Optional tail section; files written before it existed end right after the metadata.
 static int load_traffic_phase_section(FILE *file, Drive *drive) {
@@ -350,9 +352,50 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
             return -1;
         }
     }
+    return 0;
+}
+
+// Optional tail section; files without it get LANE_WIDTH for every lane point.
+static int load_lane_width_section(FILE *file, Drive *drive) {
+    char tag[LANE_WIDTH_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), LANE_WIDTH_SECTION_TAG_LEN, file);
+    int has_section = tag_bytes_read == LANE_WIDTH_SECTION_TAG_LEN
+        && memcmp(tag, LANE_WIDTH_SECTION_TAG, LANE_WIDTH_SECTION_TAG_LEN) == 0;
+    if (tag_bytes_read != 0 && !has_section) {
+        printf(
+            "[ERROR] -> Unexpected bytes after %s section (expected EOF or %s).\n",
+            TRAFFIC_PHASE_SECTION_TAG,
+            LANE_WIDTH_SECTION_TAG);
+        return -1;
+    }
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        RoadMapElement *road = &drive->road_elements[i];
+        if (!is_road_lane(road->type)) {
+            continue;
+        }
+        int slen = road->segment_size;
+        road->widths = (float *) malloc(slen * sizeof(float));
+        if (!has_section) {
+            for (int p = 0; p < slen; p++) {
+                road->widths[p] = LANE_WIDTH;
+            }
+            continue;
+        }
+        if ((size_t) slen > 0 && fread(road->widths, sizeof(float), slen, file) != (size_t) slen) {
+            printf("[ERROR] -> Truncated %s section at lane %d.\n", LANE_WIDTH_SECTION_TAG, i);
+            return -1;
+        }
+        for (int p = 0; p < slen; p++) {
+            float width = road->widths[p];
+            if (!isfinite(width) || width <= 0.0f || width > MAX_LANE_WIDTH_M) {
+                printf("[ERROR] -> Lane %d point %d has invalid width %f.\n", i, p, width);
+                return -1;
+            }
+        }
+    }
     char trailing_byte;
     if (fread(&trailing_byte, sizeof(char), 1, file) == 1) {
-        printf("[ERROR] -> Trailing bytes after %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
+        printf("[ERROR] -> Trailing bytes after %s section.\n", LANE_WIDTH_SECTION_TAG);
         return -1;
     }
     return 0;
@@ -769,6 +812,10 @@ int load_map_binary(const char *filename, Drive *drive) {
     }
 
     if (load_traffic_phase_section(file, drive) != 0) {
+        fclose(file);
+        return -1;
+    }
+    if (load_lane_width_section(file, drive) != 0) {
         fclose(file);
         return -1;
     }
