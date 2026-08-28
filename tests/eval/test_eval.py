@@ -131,7 +131,6 @@ def _standalone_eval_args(benchmark_config_path):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "torch_deterministic": True,
         }
     )
@@ -357,7 +356,6 @@ def _replay_render_args():
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
         }
     )
     args["vec"].update({"seed": SEED, "num_envs": 2, "num_workers": 2})
@@ -517,13 +515,13 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "precision": "float32",
             "torch_deterministic": True,
             "anneal_lr": False,
             "update_epochs": 1,
             "batch_size": batch_size,
             "bptt_horizon": TRAIN_HORIZON,
+            "adv_filter_enabled": False,
             "minibatch_size": 64,
             "max_minibatch_size": 64,
             "total_timesteps": TRAIN_EPOCH_COUNT * batch_size,
@@ -681,7 +679,6 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "torch_deterministic": True,
         }
     )

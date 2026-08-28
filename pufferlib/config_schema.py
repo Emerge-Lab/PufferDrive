@@ -120,6 +120,7 @@ class DriveEnvConfig:
     replay_expert_agents: int = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
+    eval_training_render: bool = MISSING
     goal_regen_mode: GoalRegen = MISSING
     goal_source: GoalSource = MISSING
     obs_goal_lane_distance: bool = MISSING

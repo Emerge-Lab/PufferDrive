@@ -107,6 +107,8 @@ env:
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
+  # Evaluate and render scenarios using the training distribution.
+  eval_training_render: false
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
@@ -244,10 +246,10 @@ train:
   device: cuda
   optimizer: adamw
   anneal_lr: true
-  amp: true
   precision: bfloat16
   # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
   tf32: true
+  rollout_dtype: float32
   total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
@@ -305,7 +307,7 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and replay rendering settings.
 eval:
-  num_agents: 128
+  num_agents: 256
   # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml

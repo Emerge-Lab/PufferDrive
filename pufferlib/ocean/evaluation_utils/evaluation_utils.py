@@ -7,6 +7,7 @@ import pandas as pd
 import yaml
 
 import pufferlib
+import pufferlib.pytorch
 import pufferlib.utils
 from pufferlib.config_schema import GoalSource
 
@@ -281,66 +282,89 @@ def summarize_benchmark_metrics(benchmark_results, key_prefix):
 def build_benchmark_args(base_args, benchmark, environment_config):
     """Apply the benchmark evaluation overrides."""
     args = copy.deepcopy(base_args)
+    eval_training_render = args["env"]["eval_training_render"]
     eval_agent_count = _positive_int(args["eval"]["num_agents"], "eval.num_agents")
     benchmark_environment_config = benchmark["env"]
-    max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
+    if eval_training_render:
+        if args["env"]["simulation_mode"] != "gigaflow":
+            raise pufferlib.APIUsageError("env.eval_training_render only supports gigaflow simulation_mode")
+        _positive_int(args["env"]["scenario_length"], "training env.scenario_length")
+        training_min_agents_per_env = _positive_int(
+            args["env"]["min_agents_per_env"], "training env.min_agents_per_env"
+        )
+        training_max_agents_per_env = _positive_int(
+            args["env"]["max_agents_per_env"], "training env.max_agents_per_env"
+        )
+        if training_min_agents_per_env > training_max_agents_per_env:
+            raise pufferlib.APIUsageError(
+                "training env.min_agents_per_env must be less than or equal to env.max_agents_per_env"
+            )
+        max_agents_per_env = training_max_agents_per_env
+        max_agents_source = "training config"
+    else:
+        max_agents_per_env = benchmark_environment_config.get("max_agents_per_env")
+        max_agents_source = f"benchmark {benchmark['name']}"
     if max_agents_per_env is not None and eval_agent_count < max_agents_per_env:
         raise pufferlib.APIUsageError(
-            f"eval.num_agents ({eval_agent_count}) must be at least benchmark {benchmark['name']} "
+            f"eval.num_agents ({eval_agent_count}) must be at least {max_agents_source} "
             f"max_agents_per_env ({max_agents_per_env})"
         )
     seed = benchmark["seed"]
     args["train"]["seed"] = seed
     args["vec"]["seed"] = seed
-    args["env"].update(copy.deepcopy(environment_config))
-    args["env"].update(copy.deepcopy(benchmark_environment_config))
-    for reward_key in ("reward_comfort", "reward_lane_center"):
-        reward_override = args["eval"].get(reward_key)
-        if reward_override is not None:
-            args["env"][reward_key] = _non_negative_float(reward_override, f"eval.{reward_key}")
-    goal_radius_override = args["eval"].get("goal_radius")
-    if goal_radius_override is not None:
-        args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
-    base_max_speed_override = args["eval"].get("base_max_speed_mps")
-    if base_max_speed_override is not None:
-        args["env"]["base_max_speed_mps"] = _positive_float(base_max_speed_override, "eval.base_max_speed_mps")
-    goal_speed_override = args["eval"].get("goal_speed")
-    if goal_speed_override is not None:
-        args["env"]["goal_speed"] = _non_negative_float(goal_speed_override, "eval.goal_speed")
-    for spacing_key in ("min_goal_spacing", "max_goal_spacing"):
-        spacing_override = args["eval"].get(spacing_key)
-        if spacing_override is not None:
-            args["env"][spacing_key] = _positive_float(spacing_override, f"eval.{spacing_key}")
-    if args["env"]["min_goal_spacing"] > args["env"]["max_goal_spacing"]:
-        raise pufferlib.APIUsageError("env.min_goal_spacing must be <= env.max_goal_spacing")
-    goal_regen_mode_override = args["eval"].get("goal_regen_mode")
-    if goal_regen_mode_override is not None:
-        if goal_regen_mode_override not in ("finite", "rolling"):
-            raise pufferlib.APIUsageError('eval.goal_regen_mode must be "finite" or "rolling"')
-        args["env"]["goal_regen_mode"] = goal_regen_mode_override
-    goal_source_override = args["eval"].get("goal_source")
-    if goal_source_override is not None:
-        if goal_source_override not in GoalSource.__members__:
-            raise pufferlib.APIUsageError(f"eval.goal_source must be one of {list(GoalSource.__members__)}")
-        args["env"]["goal_source"] = goal_source_override
-    partner_slots_override = args["eval"].get("obs_slots_partners_n")
-    if partner_slots_override is not None:
-        args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
-    red_light_override = args["eval"].get("disable_red_light_infractions")
-    if red_light_override is not None:
-        if red_light_override not in (0, 1):
-            raise pufferlib.APIUsageError("eval.disable_red_light_infractions must be 0 or 1")
-        args["env"]["disable_red_light_infractions"] = red_light_override
-    scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
-    dt_override = args["eval"].get("dt")
-    if dt_override is not None:
-        dt_override = _positive_float(dt_override, "eval.dt")
-        benchmark_dt = _positive_float(args["env"]["dt"], "env.dt")
-        scenario_length = max(1, int(round(scenario_length * benchmark_dt / dt_override)))
-        args["env"]["dt"] = dt_override
-        args["env"]["scenario_length"] = scenario_length
+    if eval_training_render:
+        args["env"]["compute_eval_metrics"] = True
+        args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+    else:
+        args["env"].update(copy.deepcopy(environment_config))
+        args["env"].update(copy.deepcopy(benchmark_environment_config))
+        for reward_key in ("reward_comfort", "reward_lane_center"):
+            reward_override = args["eval"].get(reward_key)
+            if reward_override is not None:
+                args["env"][reward_key] = _non_negative_float(reward_override, f"eval.{reward_key}")
+        goal_radius_override = args["eval"].get("goal_radius")
+        if goal_radius_override is not None:
+            args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+        base_max_speed_override = args["eval"].get("base_max_speed_mps")
+        if base_max_speed_override is not None:
+            args["env"]["base_max_speed_mps"] = _positive_float(base_max_speed_override, "eval.base_max_speed_mps")
+        goal_speed_override = args["eval"].get("goal_speed")
+        if goal_speed_override is not None:
+            args["env"]["goal_speed"] = _non_negative_float(goal_speed_override, "eval.goal_speed")
+        for spacing_key in ("min_goal_spacing", "max_goal_spacing"):
+            spacing_override = args["eval"].get(spacing_key)
+            if spacing_override is not None:
+                args["env"][spacing_key] = _positive_float(spacing_override, f"eval.{spacing_key}")
+        if args["env"]["min_goal_spacing"] > args["env"]["max_goal_spacing"]:
+            raise pufferlib.APIUsageError("env.min_goal_spacing must be <= env.max_goal_spacing")
+        goal_regen_mode_override = args["eval"].get("goal_regen_mode")
+        if goal_regen_mode_override is not None:
+            if goal_regen_mode_override not in ("finite", "rolling"):
+                raise pufferlib.APIUsageError('eval.goal_regen_mode must be "finite" or "rolling"')
+            args["env"]["goal_regen_mode"] = goal_regen_mode_override
+        goal_source_override = args["eval"].get("goal_source")
+        if goal_source_override is not None:
+            if goal_source_override not in GoalSource.__members__:
+                raise pufferlib.APIUsageError(f"eval.goal_source must be one of {list(GoalSource.__members__)}")
+            args["env"]["goal_source"] = goal_source_override
+        partner_slots_override = args["eval"].get("obs_slots_partners_n")
+        if partner_slots_override is not None:
+            args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
+        red_light_override = args["eval"].get("disable_red_light_infractions")
+        if red_light_override is not None:
+            if red_light_override not in (0, 1):
+                raise pufferlib.APIUsageError("eval.disable_red_light_infractions must be 0 or 1")
+            args["env"]["disable_red_light_infractions"] = red_light_override
+        scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
+        dt_override = args["eval"].get("dt")
+        if dt_override is not None:
+            dt_override = _positive_float(dt_override, "eval.dt")
+            benchmark_dt = _positive_float(args["env"]["dt"], "env.dt")
+            scenario_length = max(1, int(round(scenario_length * benchmark_dt / dt_override)))
+            args["env"]["dt"] = dt_override
+            args["env"]["scenario_length"] = scenario_length
     args["env"]["num_agents"] = eval_agent_count
-    args["env"]["resample_frequency"] = scenario_length
+    args["env"]["resample_frequency"] = args["env"]["scenario_length"]
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 

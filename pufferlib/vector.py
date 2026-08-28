@@ -796,20 +796,6 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
 
 
-def make_seeds(seed, num_envs):
-    if isinstance(seed, int):
-        return [seed + i for i in range(num_envs)]
-
-    err = f"seed {seed} must be an integer or a list of integers"
-    if isinstance(seed, (list, tuple)):
-        if len(seed) != num_envs:
-            raise pufferlib.APIUsageError(err)
-
-        return seed
-
-    raise pufferlib.APIUsageError(err)
-
-
 def check_envs(envs, driver):
     if not isinstance(driver, PufferEnv):
         raise pufferlib.APIUsageError("env_creator must be PufferEnv")

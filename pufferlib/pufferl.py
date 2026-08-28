@@ -178,14 +178,23 @@ class PuffeRL:
         if precision == "bfloat16" and not config.get("tf32", True):
             raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
 
-        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        rollout_dtype = config.get("rollout_dtype", "float32")
+        if rollout_dtype == "float32":
+            obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        elif rollout_dtype == "float16" and np.issubdtype(obs_space.dtype, np.floating):
+            obs_dtype = getattr(torch, rollout_dtype)
+        else:
+            raise pufferlib.APIUsageError(
+                f"Invalid rollout_dtype {rollout_dtype} for observation dtype {obs_space.dtype}"
+            )
+        self.compress_observations = rollout_dtype != "float32"
 
         self.observations = torch.zeros(
             segments,
             horizon,
             *obs_space.shape,
             dtype=obs_dtype,
-            pin_memory=device == "cuda" and config["cpu_offload"],
+            pin_memory=use_cuda and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
         )
         self.actions = torch.zeros(
@@ -198,13 +207,12 @@ class PuffeRL:
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
-        self.terminals = torch.zeros(segments, horizon, device=device)
-        self.truncations = torch.zeros(segments, horizon, device=device)
-        self.ratio = torch.ones(segments, horizon, device=device)
-        self.importance = torch.ones(segments, horizon, device=device)
+        self.terminals = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
+        if config["use_rnn"]:
+            self.ratio = torch.ones(segments, horizon, device=device)
         self.masks = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
-        self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
-        self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
+        self.ep_lengths = torch.zeros(total_agents, dtype=torch.int32)
+        self.ep_indices = torch.arange(total_agents, dtype=torch.int32)
         self.free_idx = total_agents
         # LSTM
         if config["use_rnn"]:
@@ -306,7 +314,7 @@ class PuffeRL:
 
         # Automatic mixed precision
         self.amp_context = contextlib.nullcontext()
-        if config.get("amp", True) and use_cuda and precision == "bfloat16":
+        if use_cuda and precision == "bfloat16":
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
 
         # Initializations
@@ -395,12 +403,15 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
-            o_device = o.to(device)  # , non_blocking=True)
+            if self.compress_observations:
+                o_device = o.to(device=device, dtype=self.observations.dtype, non_blocking=True).float()
+            else:
+                o_device = o.to(device, non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
-            done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+            done_mask = (d + t).clamp(max=1.0)
 
             obs_stat_source = o_device if self.normalized_obs_idx is None else o_device[..., self.normalized_obs_idx]
             self.stats["obs/max"].append(obs_stat_source.max().item())
@@ -453,8 +464,7 @@ class PuffeRL:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = done_mask.float()
-                self.truncations[batch_rows, l] = t.float()
+                self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
@@ -462,7 +472,7 @@ class PuffeRL:
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
-                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, device=config["device"]).int()
+                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, dtype=torch.int32)
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
@@ -490,7 +500,7 @@ class PuffeRL:
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
-        self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
+        self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
         return pufferlib.utils.reduce_environment_metrics(self.stats)
@@ -523,7 +533,7 @@ class PuffeRL:
             torch.distributed.broadcast(should_log_flag, src=0)
             should_log = bool(should_log_flag.item())
         if should_log:
-            self.losses = losses
+            self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
             logs = self.mean_and_log()
             self.print_dashboard()
             self.stats = defaultdict(list)
@@ -552,6 +562,8 @@ class PuffeRL:
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+        if self.compress_observations:
+            mb_obs = mb_obs.float()
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
@@ -610,13 +622,13 @@ class PuffeRL:
             newvalue,
             ratio,
             {
-                "policy_loss": pg_loss.item(),
-                "value_loss": v_loss.item(),
-                "entropy": entropy_loss.item(),
+                "policy_loss": pg_loss.detach(),
+                "value_loss": v_loss.detach(),
+                "entropy": entropy_loss.detach(),
                 "ent_coef": ent_coef,
-                "old_approx_kl": old_approx_kl.item(),
-                "approx_kl": approx_kl.item(),
-                "clipfrac": clipfrac.item(),
+                "old_approx_kl": old_approx_kl,
+                "approx_kl": approx_kl,
+                "clipfrac": clipfrac,
             },
         )
 
@@ -633,7 +645,7 @@ class PuffeRL:
         device = config["device"]
 
         masks = self.masks.bool()
-        terminals = torch.maximum(self.terminals, (~masks).float())
+        terminals = (self.terminals | ~masks).float()
         advantages = compute_puff_advantage(
             self.values,
             self.rewards,
@@ -698,7 +710,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             for key, value in stats.items():
                 losses[key] += value / self.total_minibatches
-            losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["importance"] += ratio.detach().mean() / self.total_minibatches
 
             profile("learn", epoch)
             loss.backward()
@@ -1751,10 +1763,13 @@ def eval(
         not isinstance(configured_output_subdir, str) or not configured_output_subdir.strip()
     ):
         raise pufferlib.APIUsageError("eval.output_subdir must be a non-empty string or null")
+    eval_training_render = args["env"]["eval_training_render"]
+    if not isinstance(eval_training_render, bool):
+        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
+    render_scenarios = render_scenarios or eval_training_render
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
-            "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
-            "with eval.failure_replay_csv"
+            "Scenario rendering requires a standard benchmark pass and cannot be combined with eval.failure_replay_csv"
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
@@ -1772,6 +1787,7 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+    base_args["env"]["eval_training_render"] = eval_training_render
 
     wandb_run_identity = (
         drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
@@ -1798,7 +1814,11 @@ def eval(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
             resolve=True,
         )
+        run_args["env"]["eval_training_render"] = eval_training_render
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        if eval_training_render:
+            run_args["env"]["compute_eval_metrics"] = True
+            run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
         if scenario_offset:
@@ -2143,7 +2163,7 @@ def _run_eval_rollout(
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
         device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         allow_tf32 = args["train"].get("tf32", True)
