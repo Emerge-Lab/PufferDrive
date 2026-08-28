@@ -58,7 +58,7 @@ srun torchrun \
     wandb_project=nightly-multi-long \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
@@ -78,6 +78,7 @@ srun torchrun \
     env.reset_accel_on_stop=true \
     env.base_max_speed_mps=20.0 \
     env.goal_heading_max_deg=60.0 \
+    env.traffic_light_junction_phases=0 \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
     tb=True
@@ -93,7 +94,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/python scripts/parallel_eval.py carla \
     --total-scenarios 40000 \
     --num-nodes 8 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
@@ -108,6 +109,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.max_goal_spacing=30 \
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
+    env.traffic_light_junction_phases=0 \
     env.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

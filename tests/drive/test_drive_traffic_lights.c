@@ -11,6 +11,7 @@ static int light_states[LIGHT_COUNT][STATE_COUNT];
 static Drive drive_test_lights_env(TrafficControlElement *lights, int eval_mode) {
     Drive env = {0};
     env.eval_mode = eval_mode;
+    env.traffic_light_junction_phases = 1;
     env.dt = 0.1f;
     env.scenario_length = STATE_COUNT;
     env.num_traffic_elements = LIGHT_COUNT;
@@ -83,6 +84,19 @@ static int test_standalone_light_keeps_single_phase_cycle(void) {
     return 0;
 }
 
+static int test_junction_phases_disabled_makes_every_light_standalone(void) {
+    TrafficControlElement lights[LIGHT_COUNT];
+    Drive env = drive_test_lights_env(lights, 1);
+    env.traffic_light_junction_phases = 0;
+    generate_traffic_light_states(&env);
+    for (int i = 0; i < LIGHT_COUNT; i++) {
+        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_GREEN), 600);
+        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_YELLOW), 180);
+        EXPECT_EQ_INT(count_state(lights[i].states, TRAFFIC_CONTROL_STATE_RED), 120);
+    }
+    return 0;
+}
+
 static int test_training_lights_stay_exclusive_unless_removed(void) {
     TrafficControlElement lights[LIGHT_COUNT];
     int exclusive_violations = 0;
@@ -109,6 +123,7 @@ int main(void) {
     RUN_TEST(test_junction_lights_never_green_together);
     RUN_TEST(test_junction_lights_share_cycle_and_take_turns);
     RUN_TEST(test_standalone_light_keeps_single_phase_cycle);
+    RUN_TEST(test_junction_phases_disabled_makes_every_light_standalone);
     RUN_TEST(test_training_lights_stay_exclusive_unless_removed);
     return test_summary(failures);
 }

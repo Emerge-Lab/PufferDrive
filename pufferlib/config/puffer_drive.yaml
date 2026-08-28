@@ -66,6 +66,8 @@ env:
   traffic_light_behavior: stop
   # Skip red light violation detection (metrics, reward, behavior) - 0 off, 1 on
   disable_red_light_infractions: 0
+  # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins) - 0 independent lights (legacy), 1 on
+  traffic_light_junction_phases: 0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on

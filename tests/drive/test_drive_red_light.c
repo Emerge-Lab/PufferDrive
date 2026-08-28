@@ -34,7 +34,7 @@ static Drive drive_test_light_env(TrafficControlElement *tc) {
     return env;
 }
 
-// Agent length 4: rear bumper sits 2 m behind center; violation = rear crossing.
+// Violation = vehicle center crossing the line; stationary/backward motion never flags.
 static Agent drive_test_driving_agent(float prev_x, float cur_x, float y) {
     Agent agent = drive_test_agent(prev_x, y, 0.0f);
     agent.sim_x = cur_x;
@@ -47,7 +47,7 @@ static int test_red_crossing_flags(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -58,7 +58,7 @@ static int test_straddle_then_proceed_on_red_flags(void) {
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
     // nose already over the line when the light turned red; proceeding completes entry
-    Agent agent = drive_test_driving_agent(-0.5f, 2.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-1.5f, 0.5f, 0.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -105,7 +105,7 @@ static int test_opposing_lane_bypass_flags(void) {
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
     // crossing 5 m beside the painted line (opposing lane) is still a violation
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 5.0f);
+    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 5.0f);
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -115,7 +115,7 @@ static int test_crossing_beyond_virtual_extension_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 18.0f);
+    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 18.0f);
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
     return 0;
@@ -138,8 +138,8 @@ static int test_diagonal_entry_flags(void) {
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
     // 1.2 rad off the light heading is still entering (< pi/2 gate)
-    Agent agent = drive_test_agent(0.5f, 0.0f, 1.2f);
-    agent.sim_x = 1.0f;
+    Agent agent = drive_test_agent(-0.5f, 0.0f, 1.2f);
+    agent.sim_x = 0.5f;
     env.agents = &agent;
     EXPECT_TRUE(check_red_light_violation(&env, 0));
     return 0;
@@ -161,7 +161,7 @@ static int test_different_z_level_no_flag(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     agent.sim_z = 6.0f;
     env.agents = &agent;
     EXPECT_TRUE(!check_red_light_violation(&env, 0));
@@ -172,7 +172,7 @@ static int test_no_lane_assignment_still_flags(void) {
     TrafficControlElement tc = drive_test_light();
     Drive env = drive_test_light_env(&tc);
     set_light(TRAFFIC_CONTROL_STATE_RED);
-    Agent agent = drive_test_driving_agent(1.5f, 2.5f, 0.0f);
+    Agent agent = drive_test_driving_agent(-0.5f, 0.5f, 0.0f);
     agent.current_lane_idx = -1;
     agent.previous_lane_idx = -1;
     env.agents = &agent;

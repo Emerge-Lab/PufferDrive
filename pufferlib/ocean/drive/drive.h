@@ -235,6 +235,7 @@ struct Drive {
     int offroad_behavior;
     int traffic_light_behavior;
     int disable_red_light_infractions;
+    int traffic_light_junction_phases;
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
@@ -2219,7 +2220,7 @@ typedef struct {
 // Lights of one junction share the cycle sampled for the first light of that junction.
 static int traffic_light_cycle_leader(Drive *env, int light_idx) {
     TrafficControlElement *tc = &env->traffic_elements[light_idx];
-    if (tc->junction_id < 0) {
+    if (tc->junction_id < 0 || !env->traffic_light_junction_phases) {
         return light_idx;
     }
     for (int i = 0; i < light_idx; i++) {
@@ -2275,10 +2276,10 @@ static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int junction_id)
 }
 
 // Phase slots run GREEN -> YELLOW -> RED in order; a light is RED throughout every other slot.
-static void fill_traffic_light_states(TrafficControlElement *tc, const TrafficLightCycle *cycle, int fill_steps) {
+static void fill_traffic_light_states(
+    TrafficControlElement *tc, const TrafficLightCycle *cycle, int own_phase_idx, int fill_steps) {
     int slot_length = cycle->steps_green + cycle->steps_yellow + cycle->steps_red;
     int cycle_length = cycle->phase_count * slot_length;
-    int own_phase_idx = tc->junction_id < 0 ? 0 : tc->phase_idx;
     for (int t = 0; t < fill_steps; t++) {
         int cycle_step = (t + cycle->offset) % cycle_length;
         int slot_step = cycle_step % slot_length;
@@ -2319,9 +2320,11 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
+        int junction_id = env->traffic_light_junction_phases ? tc->junction_id : -1;
+        int own_phase_idx = junction_id < 0 ? 0 : tc->phase_idx;
         int leader_idx = traffic_light_cycle_leader(env, i);
         if (leader_idx == i) {
-            cycles[i] = sample_traffic_light_cycle(env, tc->junction_id);
+            cycles[i] = sample_traffic_light_cycle(env, junction_id);
         }
 
         if (!env->eval_mode) {
@@ -2341,7 +2344,7 @@ static void generate_traffic_light_states(Drive *env) {
             }
         }
 
-        fill_traffic_light_states(tc, &cycles[leader_idx], fill_steps);
+        fill_traffic_light_states(tc, &cycles[leader_idx], own_phase_idx, fill_steps);
     }
 }
 

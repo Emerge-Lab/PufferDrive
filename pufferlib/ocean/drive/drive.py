@@ -72,6 +72,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         disable_red_light_infractions=0,
+        traffic_light_junction_phases=0,
         use_map_cache=0,
         use_neighbor_cache=1,
         capture_replay=False,
@@ -221,6 +222,9 @@ class Drive(pufferlib.PufferEnv):
         if disable_red_light_infractions not in (0, 1):
             raise ValueError(f"disable_red_light_infractions must be 0 or 1. Got: {disable_red_light_infractions}")
         self.disable_red_light_infractions = disable_red_light_infractions
+        if traffic_light_junction_phases not in (0, 1):
+            raise ValueError(f"traffic_light_junction_phases must be 0 or 1. Got: {traffic_light_junction_phases}")
+        self.traffic_light_junction_phases = traffic_light_junction_phases
         if replay_expert_agents not in (0, 1):
             raise ValueError(f"replay_expert_agents must be 0 or 1. Got: {replay_expert_agents}")
         self.replay_expert_agents = replay_expert_agents
@@ -570,6 +574,7 @@ class Drive(pufferlib.PufferEnv):
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
             "disable_red_light_infractions": self.disable_red_light_infractions,
+            "traffic_light_junction_phases": self.traffic_light_junction_phases,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
