@@ -293,6 +293,7 @@ struct Drive {
     float obs_norm_road_seg_width_m;
     float obs_norm_z_m;
     float eval_perceived_size_margin_m;
+    float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
     float obs_range_traffic_control_m;
     float obs_range_partner_m;
     float obs_range_road_front_m;
@@ -4443,6 +4444,11 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             if (env->phantom_braking_freeze_steering) {
                 j_lat = 0.0f;
             }
+        }
+
+        if (env->eval_mode && agent->sim_speed < STANDSTILL_SPEED_EPSILON_MPS
+            && fabsf(j_long) < env->eval_standstill_jerk_deadband_mps3) {
+            j_long = 0.0f;
         }
 
         // Get dynamic conditioning coefficients

@@ -164,6 +164,7 @@ class DriveEnvConfig:
     obs_norm_road_seg_width_m: float = MISSING
     obs_norm_z_m: float = MISSING
     eval_perceived_size_margin_m: float = MISSING
+    eval_standstill_jerk_deadband_mps3: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING

@@ -136,6 +136,7 @@ class Drive(pufferlib.PufferEnv):
         obs_norm_road_seg_width_m=5.0,
         obs_norm_z_m=10.0,
         eval_perceived_size_margin_m=0.1,
+        eval_standstill_jerk_deadband_mps3=0.0,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
         obs_range_road_front_m=120.0,
@@ -288,6 +289,11 @@ class Drive(pufferlib.PufferEnv):
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
         self.obs_norm_z_m = float(obs_norm_z_m)
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
+        self.eval_standstill_jerk_deadband_mps3 = float(eval_standstill_jerk_deadband_mps3)
+        if self.eval_standstill_jerk_deadband_mps3 < 0:
+            raise ValueError(
+                f"eval_standstill_jerk_deadband_mps3 must be >= 0. Got: {eval_standstill_jerk_deadband_mps3}"
+            )
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
         self.obs_range_partner_m = float(obs_range_partner_m)
         self.obs_range_road_front_m = float(obs_range_road_front_m)
@@ -616,6 +622,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
             "obs_norm_z_m": self.obs_norm_z_m,
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
+            "eval_standstill_jerk_deadband_mps3": self.eval_standstill_jerk_deadband_mps3,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
