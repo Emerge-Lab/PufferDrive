@@ -595,7 +595,7 @@ class PuffeRL:
                 advantage_std = torch.sqrt(advantage_std)
             else:
                 advantage_mean = mb_adv.mean()
-                advantage_std = mb_adv.std(unbiased=False)
+                advantage_std = mb_adv.std()
 
             mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
             if adv_weights is not None:
