@@ -2477,7 +2477,27 @@ static bool create_agent(Drive *env, Agent *agent, int num_agents) {
     return is_agent_spawned;
 }
 
-static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default);
+static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default) {
+    if (replay_by_default) {
+        return CONTROLLER_REPLAY;
+    }
+
+    Agent *agent = &env->agents[agent_idx];
+    int requested_controller = CONTROLLER_STATIC;
+    if (agent->id == EGO_IDX) {
+        requested_controller = env->sdc_controller;
+    } else if (agent->type == VEHICLE) {
+        requested_controller = env->non_sdc_controller;
+    } else {
+        requested_controller = env->non_vehicle_controller;
+    }
+
+    if (requested_controller == CONTROLLER_POLICY && !is_active) {
+        return CONTROLLER_STATIC;
+    }
+
+    return requested_controller;
+}
 
 static void set_agent_at_init_log_step(Drive *env) {
     assert(env->init_step >= 0);
@@ -2627,28 +2647,6 @@ static bool should_control_agent(Drive *env, int agent_idx) {
 
     // Control if the agent has a route to follow
     return agent->route_length != 0;
-}
-
-static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, int replay_by_default) {
-    if (replay_by_default) {
-        return CONTROLLER_REPLAY;
-    }
-
-    Agent *agent = &env->agents[agent_idx];
-    int requested_controller = CONTROLLER_STATIC;
-    if (agent->id == EGO_IDX) {
-        requested_controller = env->sdc_controller;
-    } else if (agent->type == VEHICLE) {
-        requested_controller = env->non_sdc_controller;
-    } else {
-        requested_controller = env->non_vehicle_controller;
-    }
-
-    if (requested_controller == CONTROLLER_POLICY && !is_active) {
-        return CONTROLLER_STATIC;
-    }
-
-    return requested_controller;
 }
 
 void set_active_agents(Drive *env) {
