@@ -1111,6 +1111,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
             <button type="button" id="ego-obs-header" class="toggle-header" data-target="ego-obs-grid"><span>Ego observation</span><span>&#9662;</span></button>
             <div id="ego-obs-grid" class="grid toggle-body"></div>
+            <button type="button" id="cond-obs-header" class="toggle-header" data-target="cond-obs-grid"><span>Conditioning</span><span>&#9662;</span></button>
+            <div id="cond-obs-grid" class="grid toggle-body"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1134,6 +1136,7 @@ __PAYLOAD_CHUNKS__
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped"];
+        const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
@@ -1476,6 +1479,12 @@ self.onmessage = async event => {
             while (egoLabels.length < H.ego_dim) egoLabels.push(`ego[${egoLabels.length}]`);
             eg.innerHTML = C.obs ? egoLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
             document.getElementById('ego-obs-header').style.display = C.obs ? '' : 'none';
+            const cg = document.getElementById('cond-obs-grid');
+            const showCond = C.obs && H.reward_conditioning;
+            const condLabels = EGO_COND_LABELS.slice(0, H.reward_coef_count);
+            while (condLabels.length < H.reward_coef_count) condLabels.push(`coef[${condLabels.length}]`);
+            cg.innerHTML = showCond ? condLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('cond-obs-header').style.display = showCond ? '' : 'none';
             const pol = document.getElementById('policy-grid');
             let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
@@ -1499,6 +1508,7 @@ self.onmessage = async event => {
                 heat: [...pol.querySelectorAll('.heat-cell')],
                 acts: [...pol.querySelectorAll('.pol-act')], means: [...pol.querySelectorAll('.pol-mean')], stds: [...pol.querySelectorAll('.pol-std')],
                 egoObs: [...eg.querySelectorAll('.num')],
+                condObs: [...cg.querySelectorAll('.num')],
                 polLp: pol.querySelector('[data-pol=lp]'),
                 discrete, actionDims,
             };
@@ -1544,7 +1554,11 @@ self.onmessage = async event => {
             for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
             for (let i=0;i<refs.metric.length;i++) refs.metric[i].textContent = C.metrics_f32[mb+i].toFixed(2);
             for (let i=0;i<refs.puffer.length;i++) refs.puffer[i].textContent = C.puffer_f32[pb+i].toFixed(3);
-            if (refs.egoObs.length && agent.slot >= 0) { const egoRow = obsRow(f, agent.slot); for (let i=0;i<refs.egoObs.length;i++) refs.egoObs[i].textContent = egoRow[i].toFixed(3); }
+            if (refs.egoObs.length && agent.slot >= 0) {
+                const egoRow = obsRow(f, agent.slot);
+                for (let i=0;i<refs.egoObs.length;i++) refs.egoObs[i].textContent = egoRow[i].toFixed(3);
+                for (let i=0;i<refs.condObs.length;i++) refs.condObs[i].textContent = egoRow[H.ego_dim+i].toFixed(3);
+            }
             updatePolicy(f, agent);
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
