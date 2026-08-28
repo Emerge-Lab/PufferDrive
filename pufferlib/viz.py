@@ -917,6 +917,8 @@ def encode_interactive_replay(scenario, replay):
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("rewards_f32") is not None:
+        chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
         chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
@@ -1109,6 +1111,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Position x / y / heading</div>
             <div class="mono dim" style="font-size:11.5px"><span id="tel-x">0</span>, <span id="tel-y">0</span>, <span id="tel-h">0</span></div>
             <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
+            <button type="button" id="reward-header" class="toggle-header" data-target="reward-grid"><span>Reward</span><span>&#9662;</span></button>
+            <div id="reward-grid" class="grid toggle-body"></div>
             <button type="button" id="ego-obs-header" class="toggle-header" data-target="ego-obs-grid"><span>Ego observation</span><span>&#9662;</span></button>
             <div id="ego-obs-grid" class="grid toggle-body"></div>
             <button type="button" id="cond-obs-header" class="toggle-header" data-target="cond-obs-grid"><span>Conditioning</span><span>&#9662;</span></button>
@@ -1136,6 +1140,7 @@ __PAYLOAD_CHUNKS__
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped"];
+        const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
         const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
@@ -1255,7 +1260,7 @@ self.onmessage = async event => {
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             if (C.obs && !C.obs_scale) C.obs_scale = new Float32Array(H.obs_dim).fill(H.obs_scale === undefined ? 1 : H.obs_scale); // pre-per-dim replays
             if (C.obs && H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, o = C.obs; for (let row = 0; row < o.length; row += T) for (let t = row + 1; t < row + T; t++) o[t] += o[t-1]; }
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -1474,6 +1479,10 @@ self.onmessage = async event => {
             mg.innerHTML = METRIC_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
             const pg = document.getElementById('puffer-grid');
             pg.innerHTML = PUFFER_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
+            const rg = document.getElementById('reward-grid');
+            const rewardLabels = ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)));
+            rg.innerHTML = C.rewards_f32 ? rewardLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('reward-header').style.display = C.rewards_f32 ? '' : 'none';
             const eg = document.getElementById('ego-obs-grid');
             const egoLabels = EGO_OBS_LABELS.slice(0, H.ego_dim);
             while (egoLabels.length < H.ego_dim) egoLabels.push(`ego[${egoLabels.length}]`);
@@ -1508,6 +1517,7 @@ self.onmessage = async event => {
                 heat: [...pol.querySelectorAll('.heat-cell')],
                 acts: [...pol.querySelectorAll('.pol-act')], means: [...pol.querySelectorAll('.pol-mean')], stds: [...pol.querySelectorAll('.pol-std')],
                 egoObs: [...eg.querySelectorAll('.num')],
+                rewardCells: [...rg.querySelectorAll('.num')],
                 condObs: [...cg.querySelectorAll('.num')],
                 polLp: pol.querySelector('[data-pol=lp]'),
                 discrete, actionDims,
@@ -1554,6 +1564,15 @@ self.onmessage = async event => {
             for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
             for (let i=0;i<refs.metric.length;i++) refs.metric[i].textContent = C.metrics_f32[mb+i].toFixed(2);
             for (let i=0;i<refs.puffer.length;i++) refs.puffer[i].textContent = C.puffer_f32[pb+i].toFixed(3);
+            if (refs.rewardCells.length) {
+                // rewards_f32 rows are cumulative Log sums; step value = difference to the previous frame.
+                const rb = (f * H.agent_cap + agent.idx) * F.rf, rbPrev = ((f-1) * H.agent_cap + agent.idx) * F.rf;
+                const cum = i => C.rewards_f32[rb + i], stepDelta = i => f > 0 ? cum(i) - C.rewards_f32[rbPrev + i] : cum(i);
+                const fmtReward = v => v === 0 ? "0" : (Math.abs(v) >= 1e-4 ? v.toFixed(5) : v.toExponential(1));
+                refs.rewardCells[0].textContent = cum(0).toFixed(3);
+                refs.rewardCells[1].textContent = fmtReward(stepDelta(0));
+                for (let i=2;i<refs.rewardCells.length;i++) refs.rewardCells[i].textContent = fmtReward(stepDelta(i-1));
+            }
             if (refs.egoObs.length && agent.slot >= 0) {
                 const egoRow = obsRow(f, agent.slot);
                 for (let i=0;i<refs.egoObs.length;i++) refs.egoObs[i].textContent = egoRow[i].toFixed(3);

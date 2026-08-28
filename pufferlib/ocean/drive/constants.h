@@ -331,6 +331,7 @@ static const int ROAD_OFFSETS[25][2]
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+#define REWARD_F32_FIELDS 13           // Log fields: episode_return + reward_collision .. reward_ade (cumulative)
 
 #define COMPLETED_EPISODE_QUEUE_CAPACITY 16
 
