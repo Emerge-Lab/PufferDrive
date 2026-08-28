@@ -316,6 +316,7 @@ static const int ROAD_OFFSETS[25][2]
 
 // Stopped-agent detection
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
+#define STANDSTILL_SPEED_EPSILON_MPS 1e-4f
 #define MAX_STOPPED_SECONDS 60.0f
 
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f
@@ -328,11 +329,11 @@ static const int ROAD_OFFSETS[25][2]
 // obs_html_frame array field counts
 #define AGENT_F32_FIELDS                                                                                               \
     12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
-#define AGENT_I32_FIELDS 8             // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define AGENT_I32_FIELDS                                                                                               \
+    10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-
-#define COMPLETED_EPISODE_QUEUE_CAPACITY 16
+#define REWARD_F32_FIELDS 13           // Log fields: episode_return + reward_collision .. reward_ade (cumulative)
 
 #endif

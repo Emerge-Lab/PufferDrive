@@ -1601,6 +1601,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int num_maps = unpack(kwargs, "num_maps");
     int starting_map_counter = unpack(kwargs, "starting_map_counter");
     int eval_mode = unpack(kwargs, "eval_mode");
+    int eval_training_render = unpack(kwargs, "eval_training_render");
     int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
@@ -1648,13 +1649,17 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "num_agents must be >= min_agents_per_env");
         return NULL;
     }
+    if (eval_training_render && num_agents < max_agents_per_env) {
+        PyErr_SetString(PyExc_ValueError, "eval_training_render requires num_agents >= max_agents_per_env");
+        return NULL;
+    }
 
     Rng shared_rng;
     rng_seed(&shared_rng, seed);
 
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
-        if (eval_mode) {
+        if (eval_mode && !eval_training_render) {
             // Eval mode: fixed agent count, sequential map cycling
             int agents_per_env = max_agents_per_env;
             int env_count = num_agents / agents_per_env;
@@ -1673,21 +1678,29 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
-            PyObject *tuple = PyTuple_New(3);
+            PyObject *tuple = PyTuple_New(4);
             PyTuple_SetItem(tuple, 0, agent_offsets);
             PyTuple_SetItem(tuple, 1, map_ids_list);
             PyTuple_SetItem(tuple, 2, PyLong_FromLong(env_count));
+            PyTuple_SetItem(tuple, 3, PyLong_FromLong(env_count));
             return tuple;
         }
 
-        // Training mode: random agent counts per env
+        // Training and training-render eval use random agent counts per env.
+        int environment_limit = eval_training_render ? eval_target_count : num_agents;
         int *agent_counts = malloc((num_agents / min_agents_per_env + 1) * sizeof(int));
         int remaining = num_agents;
         int env_count = 0;
 
-        while (remaining > 0) {
+        while (remaining > 0 && env_count < environment_limit) {
             int count;
-            if (remaining <= max_agents_per_env) {
+            if (eval_training_render) {
+                int range = max_agents_per_env - min_agents_per_env + 1;
+                count = min_agents_per_env + rng_below(&shared_rng, range);
+                if (count > remaining) {
+                    break;
+                }
+            } else if (remaining <= max_agents_per_env) {
                 count = remaining;
             } else {
                 // 1. We must leave at least min_agents_per_env for the future.
@@ -1725,7 +1738,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
             offset += agent_counts[i];
         }
-        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));
+        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
         free(agent_counts);
 
@@ -1885,6 +1898,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->disable_red_light_infractions = (int) unpack(kwargs, "disable_red_light_infractions");
+    env->traffic_light_junction_phases = (int) unpack(kwargs, "traffic_light_junction_phases");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
@@ -1960,6 +1974,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
+    env->eval_training_render = (int) unpack(kwargs, "eval_training_render");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
@@ -1968,6 +1983,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
     env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
+    env->eval_standstill_jerk_deadband_mps3 = (float) unpack(kwargs, "eval_standstill_jerk_deadband_mps3");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");

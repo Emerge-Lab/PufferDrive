@@ -49,7 +49,7 @@ env:
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
-  reset_accel_on_stop: false
+  reset_accel_on_stop: true
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -66,6 +66,8 @@ env:
   traffic_light_behavior: stop
   # Skip red light violation detection (metrics, reward, behavior) - 0 off, 1 on
   disable_red_light_infractions: 0
+  # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins) - 0 independent lights (legacy), 1 on
+  traffic_light_junction_phases: 0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
@@ -105,6 +107,8 @@ env:
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
+  # Evaluate and render scenarios using the training distribution.
+  eval_training_render: false
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
@@ -123,7 +127,7 @@ env:
   max_goal_spacing: 200.0
   # Map goal source only: max lane-heading change (deg) between successive waypoints, re-sampling spacing
   # up to GOAL_HEADING_MAX_ATTEMPTS times (GIGAFLOW uses 60). 0 disables.
-  goal_heading_max_deg: 0.0
+  goal_heading_max_deg: 60.0
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
@@ -170,6 +174,9 @@ env:
   obs_norm_z_m: 10.0
   # --- Eval-only ---
   eval_perceived_size_margin_m: 0.1
+  # Eval-only: while standing exactly still, |longitudinal jerk| below this (m/s^3) is zeroed
+  # so leftover mean-action jerk cannot creep the car. 0 disables.
+  eval_standstill_jerk_deadband_mps3: 0.0
   # --- Observation ranges (meters, ego frame) ---
   obs_range_road_front_m: 200.0
   obs_range_road_behind_m: 60.0
@@ -179,19 +186,19 @@ env:
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
   # Upper bound of the per-episode blind-agent rate; each episode draws its rate uniformly from [0, this]
-  partner_blindness_prob: 0.02
+  partner_blindness_prob: 0.05
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
   # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
-  phantom_braking_prob: 0.02
+  phantom_braking_prob: 0.1
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
   # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
-  phantom_braking_freeze_steering: true
+  phantom_braking_freeze_steering: false
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
@@ -239,8 +246,10 @@ train:
   device: cuda
   optimizer: adamw
   anneal_lr: true
-  amp: true
   precision: bfloat16
+  # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
+  tf32: true
+  rollout_dtype: float32
   total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
@@ -298,7 +307,7 @@ sweep:
   downsample: 10
 # Catalog-defined evaluation and replay rendering settings.
 eval:
-  num_agents: 128
+  num_agents: 256
   # Worker cap for replay benchmarks that control only the SDC. Needed for now to limit RAM usage.
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml

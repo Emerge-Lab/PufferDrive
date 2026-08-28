@@ -102,6 +102,7 @@ class DriveEnvConfig:
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
     disable_red_light_infractions: int = MISSING
+    traffic_light_junction_phases: int = MISSING
     use_map_cache: int = MISSING
     use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING
@@ -119,6 +120,7 @@ class DriveEnvConfig:
     replay_expert_agents: int = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
+    eval_training_render: bool = MISSING
     goal_regen_mode: GoalRegen = MISSING
     goal_source: GoalSource = MISSING
     obs_goal_lane_distance: bool = MISSING
@@ -164,6 +166,7 @@ class DriveEnvConfig:
     obs_norm_road_seg_width_m: float = MISSING
     obs_norm_z_m: float = MISSING
     eval_perceived_size_margin_m: float = MISSING
+    eval_standstill_jerk_deadband_mps3: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING

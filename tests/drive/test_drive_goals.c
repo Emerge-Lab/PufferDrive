@@ -141,9 +141,15 @@ static int count_goal_heading_violations(Drive *env, float max_heading_deg, int 
         }
         for (int slot = 1; slot < agent->goal_count; slot++) {
             float prev_heading = lane_heading_at_point(
-                env, agent->list_goal_lane[slot - 1], agent->list_goal_x[slot - 1], agent->list_goal_y[slot - 1]);
+                env,
+                agent->list_goal_lane[slot - 1],
+                agent->list_goal_x[slot - 1],
+                agent->list_goal_y[slot - 1]);
             float heading = lane_heading_at_point(
-                env, agent->list_goal_lane[slot], agent->list_goal_x[slot], agent->list_goal_y[slot]);
+                env,
+                agent->list_goal_lane[slot],
+                agent->list_goal_x[slot],
+                agent->list_goal_y[slot]);
             (*out_pair_count)++;
             if (fabsf(normalize_heading(heading - prev_heading)) > max_heading_rad) {
                 violation_count++;
@@ -168,8 +174,12 @@ static int test_map_goal_heading_constraint_reduces_turns(void) {
     int free_pair_count = 0, constrained_pair_count = 0;
     int free_violations = count_goal_heading_violations(&env, 0.0f, 2000, &free_pair_count);
     int constrained_violations = count_goal_heading_violations(&env, 60.0f, 2000, &constrained_pair_count);
-    printf("  heading>60deg pairs: unconstrained %d/%d, constrained %d/%d\n",
-        free_violations, free_pair_count, constrained_violations, constrained_pair_count);
+    printf(
+        "  heading>60deg pairs: unconstrained %d/%d, constrained %d/%d\n",
+        free_violations,
+        free_pair_count,
+        constrained_violations,
+        constrained_pair_count);
     EXPECT_TRUE(free_pair_count > 500 && constrained_pair_count > 500);
     // Constrained violation rate must be under 60% of the unconstrained rate (Town01 T-junctions leave a residue).
     EXPECT_TRUE(constrained_violations * free_pair_count * 10 < free_violations * constrained_pair_count * 6);

@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0027_1000
+export RUN_NAME=k_scaled_0028_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -36,28 +36,23 @@ fi
 
 # parallel_eval places one shard per allocated node via srun, so each shard's 64
 # env workers get a full node's cores instead of sharing the batch host.
-#.venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 5000 \
+.venv/bin/python scripts/parallel_eval.py carla \
+    --total-scenarios 40000 \
     --num-nodes 8 \
-    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_hole_fixes \
+    env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
-    eval.dt=0.0667 \
-    eval.base_max_speed_mps=20.0 \
-    eval.obs_slots_partners_n=40 \
-    eval.goal_radius=10.0 \
-    eval.goal_source=route \
-    env.goal_heading_max_deg=60.0 \
-    env.eval_perceived_size_margin_m=0.15 \
+    env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=30 \
-    eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     env.disable_red_light_infractions=1 \
-    eval.output_name=${RUN_NAME}_short9 \
+    env.traffic_light_junction_phases=0 \
+    env.eval_standstill_jerk_deadband_mps3=1.5 \
+    eval.output_name=${RUN_NAME}_long \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
@@ -69,23 +64,14 @@ fi
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.num_agents=300 \
-    eval.reward_comfort=0.0 \
+        eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
-    eval.dt=0.0667 \
-    eval.base_max_speed_mps=20.0 \
-    eval.obs_slots_partners_n=40 \
-    eval.goal_radius=10.0 \
-    eval.goal_source=route \
-    env.goal_heading_max_deg=60.0 \
     env.eval_perceived_size_margin_m=0.15 \
-    eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=30 \
-    eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_short9 \
+    eval.output_name=${RUN_NAME}_medium \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
