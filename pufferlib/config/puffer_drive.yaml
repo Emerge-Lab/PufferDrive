@@ -99,7 +99,7 @@ env:
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
-  # Evaluate and render scenarios using the saved Gigaflow training distribution.
+  # Evaluate and render scenarios using the training distribution.
   eval_training_render: false
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)

@@ -2232,10 +2232,10 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
 static void generate_traffic_light_states(Drive *env) {
     int steps = env->scenario_length;
     float dt = env->dt;
-    int use_training_behavior = !env->eval_mode || env->eval_training_render;
+    int training_mode = !env->eval_mode || env->eval_training_render;
 
     // 20% chance: disable ALL lights for this episode
-    int disable_all = use_training_behavior && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+    int disable_all = training_mode && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
 
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *tc = &env->traffic_elements[i];
@@ -2255,7 +2255,7 @@ static void generate_traffic_light_states(Drive *env) {
             continue;
         }
 
-        if (use_training_behavior) {
+        if (training_mode) {
             // Individual removal
             if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
                 for (int t = 0; t < fill_steps; t++) {
@@ -2274,7 +2274,7 @@ static void generate_traffic_light_states(Drive *env) {
 
         // Compute phase durations
         float dur_green, dur_yellow, dur_red;
-        if (!use_training_behavior) {
+        if (!training_mode) {
             dur_green = TL_DEFAULT_GREEN_DURATION;
             dur_yellow = TL_DEFAULT_YELLOW_DURATION;
             dur_red = TL_DEFAULT_RED_DURATION;
