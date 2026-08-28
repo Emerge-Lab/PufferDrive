@@ -120,8 +120,11 @@ def logits_to_float(logits):
 
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
-        # Backend perf optimization
-        torch.set_float32_matmul_precision("high")
+        # Backend perf optimization; tf32=False forces true float32 matmuls/convs
+        allow_tf32 = config.get("tf32", True)
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
         torch.backends.cudnn.benchmark = not config["torch_deterministic"]
         torch.use_deterministic_algorithms(config["torch_deterministic"], warn_only=True)
@@ -172,6 +175,8 @@ class PuffeRL:
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
         if precision == "bfloat16" and not config.get("amp", True):
             raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
+        if precision == "bfloat16" and not config.get("tf32", True):
+            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
 
         obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
 
@@ -2141,6 +2146,12 @@ def _run_eval_rollout(
         use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+        allow_tf32 = args["train"].get("tf32", True)
+        if not allow_tf32 and use_bfloat16:
+            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)

@@ -244,6 +244,8 @@ train:
   anneal_lr: true
   amp: true
   precision: bfloat16
+  # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
+  tf32: true
   total_timesteps: 500000000000
   learning_rate: 0.0005
   gamma: 0.999
