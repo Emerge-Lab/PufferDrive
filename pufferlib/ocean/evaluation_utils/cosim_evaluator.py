@@ -92,6 +92,14 @@ def _load_compute_config(compute_config):
 
 
 @contextlib.contextmanager
+def _clean_env_prefixes(*prefixes):
+    saved = {key: os.environ.pop(key) for key in list(os.environ) if key.startswith(prefixes)}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
 def _clean_slurm_env():
     """Submitting a new sbatch job from inside an already-running SLURM job
     (as the training-loop debug hook does) leaks the parent job's SLURM_* env
@@ -99,11 +107,18 @@ def _clean_slurm_env():
     environment, and the child job then fails at its own srun step with "CPU
     binding outside of job step allocation" once it lands on a different
     node/allocation. Strip them for just the submission call."""
-    saved = {key: os.environ.pop(key) for key in list(os.environ) if key.startswith("SLURM_")}
-    try:
-        yield
-    finally:
-        os.environ.update(saved)
+    return _clean_env_prefixes("SLURM_")
+
+
+def _clean_slurm_and_wandb_env():
+    """Same leak as _clean_slurm_env, but also strips WANDB_* -- the parent
+    training process's live WandbLogger sets WANDB_SERVICE (and friends)
+    pointing at a local wandb-core socket under its own SLURM job's
+    node-local scratch dir. Submitting the orchestrator job (which later
+    calls wandb.init itself, possibly on a different node, long after the
+    parent's socket is gone) with that inherited would make it try to reuse
+    a dead service and silently fall back to logging a disconnected run."""
+    return _clean_env_prefixes("SLURM_", "WANDB_")
 
 
 def _build_executor(compute_config, folder, job_name):
@@ -514,7 +529,7 @@ def submit_cosim_benchmark_async(benchmark, base_args, output_dir, orchestrator_
     executor = _build_executor(
         orchestrator_config, os.path.join(output_dir, "submitit_orchestrator"), job_name=f"{benchmark['name']}_log"
     )
-    with _clean_slurm_env():
+    with _clean_slurm_and_wandb_env():
         job = executor.submit(_run_cosim_benchmark_job, benchmark, base_args, output_dir)
     print(
         f"[cosim_eval] submitted orchestrator for benchmark {benchmark['name']}: will submit the real CARLA/nuPlan "
