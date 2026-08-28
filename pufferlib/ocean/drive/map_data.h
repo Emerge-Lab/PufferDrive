@@ -328,7 +328,9 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
     }
     if (tag_bytes_read != TRAFFIC_PHASE_SECTION_TAG_LEN
         || memcmp(tag, TRAFFIC_PHASE_SECTION_TAG, TRAFFIC_PHASE_SECTION_TAG_LEN) != 0) {
-        printf("[ERROR] -> Unexpected bytes after map metadata (expected EOF or %s section).\n", TRAFFIC_PHASE_SECTION_TAG);
+        printf(
+            "[ERROR] -> Unexpected bytes after map metadata (expected EOF or %s section).\n",
+            TRAFFIC_PHASE_SECTION_TAG);
         return -1;
     }
     for (int i = 0; i < drive->num_traffic_elements; i++) {
@@ -340,7 +342,11 @@ static int load_traffic_phase_section(FILE *file, Drive *drive) {
         int has_junction = tc->junction_id >= 0;
         int has_phase = tc->phase_idx >= 0 && tc->phase_idx < drive->num_traffic_elements;
         if (tc->junction_id < -1 || tc->phase_idx < -1 || has_junction != has_phase) {
-            printf("[ERROR] -> Traffic element %d has invalid junction_id %d / phase_idx %d.\n", i, tc->junction_id, tc->phase_idx);
+            printf(
+                "[ERROR] -> Traffic element %d has invalid junction_id %d / phase_idx %d.\n",
+                i,
+                tc->junction_id,
+                tc->phase_idx);
             return -1;
         }
     }

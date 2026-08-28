@@ -819,8 +819,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array)
-        || !PyArray_Check(rewards_f32_array)) {
+        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(rewards_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }

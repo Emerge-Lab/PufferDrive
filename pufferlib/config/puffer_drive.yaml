@@ -49,7 +49,7 @@ env:
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
-  reset_accel_on_stop: false
+  reset_accel_on_stop: true
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
@@ -125,7 +125,7 @@ env:
   max_goal_spacing: 200.0
   # Map goal source only: max lane-heading change (deg) between successive waypoints, re-sampling spacing
   # up to GOAL_HEADING_MAX_ATTEMPTS times (GIGAFLOW uses 60). 0 disables.
-  goal_heading_max_deg: 0.0
+  goal_heading_max_deg: 60.0
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
@@ -184,19 +184,19 @@ env:
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
   # Upper bound of the per-episode blind-agent rate; each episode draws its rate uniformly from [0, this]
-  partner_blindness_prob: 0.02
+  partner_blindness_prob: 0.05
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
   # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
-  phantom_braking_prob: 0.02
+  phantom_braking_prob: 0.1
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
   # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
-  phantom_braking_freeze_steering: true
+  phantom_braking_freeze_steering: false
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128

@@ -2259,10 +2259,8 @@ static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int junction_id)
         dur_red = TL_DEFAULT_RED_DURATION;
     } else {
         dur_green = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-        dur_yellow = sample_uniform(
-            &env->rng_state,
-            0.5f * TL_DEFAULT_YELLOW_DURATION,
-            0.75f * TL_DEFAULT_YELLOW_DURATION);
+        dur_yellow
+            = sample_uniform(&env->rng_state, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
         dur_red = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
     }
     TrafficLightCycle cycle;
@@ -2277,7 +2275,10 @@ static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int junction_id)
 
 // Phase slots run GREEN -> YELLOW -> RED in order; a light is RED throughout every other slot.
 static void fill_traffic_light_states(
-    TrafficControlElement *tc, const TrafficLightCycle *cycle, int own_phase_idx, int fill_steps) {
+    TrafficControlElement *tc,
+    const TrafficLightCycle *cycle,
+    int own_phase_idx,
+    int fill_steps) {
     int slot_length = cycle->steps_green + cycle->steps_yellow + cycle->steps_red;
     int cycle_length = cycle->phase_count * slot_length;
     for (int t = 0; t < fill_steps; t++) {

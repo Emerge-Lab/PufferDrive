@@ -174,27 +174,36 @@ def export_town(path, extension_m):
                 outside_painted = abs(lateral) > line_len / 2 + PAINTED_SPAN_TOLERANCE_M
                 if entering_aligned and outside_painted:
                     seen_lanes.add(i)
-                    hits.append({
-                        "lane": i, "x": round(cross_x, 1), "y": round(cross_y, 1),
-                        "lat": round(lateral, 1), "hdiff_deg": round(math.degrees(hdiff)),
-                        "z_filtered": bool(abs(cross_z - mid_z) > Z_BUFFER_M),
-                        "own": bool(i in tc["controlled_lanes"]),
-                    })
+                    hits.append(
+                        {
+                            "lane": i,
+                            "x": round(cross_x, 1),
+                            "y": round(cross_y, 1),
+                            "lat": round(lateral, 1),
+                            "hdiff_deg": round(math.degrees(hdiff)),
+                            "z_filtered": bool(abs(cross_z - mid_z) > Z_BUFFER_M),
+                            "own": bool(i in tc["controlled_lanes"]),
+                        }
+                    )
                     break
-        tls_js.append({
-            "id": ci,
-            "line": [round(float(v), 1) for v in (sl[0], sl[1], sl[3], sl[4])],
-            "ext": [round(float(v), 1) for v in (*ext_p1, *ext_p2)],
-            "heading": round(float(tc["heading"]), 3),
-            "mid": [round(mid_x, 1), round(mid_y, 1)],
-            "hits": hits,
-        })
+        tls_js.append(
+            {
+                "id": ci,
+                "line": [round(float(v), 1) for v in (sl[0], sl[1], sl[3], sl[4])],
+                "ext": [round(float(v), 1) for v in (*ext_p1, *ext_p2)],
+                "heading": round(float(tc["heading"]), 3),
+                "mid": [round(mid_x, 1), round(mid_y, 1)],
+                "hits": hits,
+            }
+        )
     return {"lanes": lanes_js, "edges": edges_js, "tls": tls_js}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--map-dir", default=os.path.join(REPO_ROOT, "pufferlib/resources/drive/binaries/carla_hole_fixes"))
+    parser.add_argument(
+        "--map-dir", default=os.path.join(REPO_ROOT, "pufferlib/resources/drive/binaries/carla_hole_fixes")
+    )
     parser.add_argument("--output", default="stop_line_audit.html")
     args = parser.parse_args()
 

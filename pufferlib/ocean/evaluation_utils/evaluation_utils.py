@@ -345,7 +345,9 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     return args
 
 
-def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False, scenario_offset=0):
+def _plan_benchmark_eval_workers(
+    args, num_scenarios, num_workers, scenario_length, capture_replay=False, scenario_offset=0
+):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
