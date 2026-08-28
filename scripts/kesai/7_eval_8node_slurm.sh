@@ -57,8 +57,7 @@ fi
     eval.goal_speed=3.0 \
     env.max_speed_mps=13.33 \
     env.disable_red_light_infractions=0 \
-    eval.action_selection=sample \
-    eval.output_name=${RUN_NAME}_short \
+    eval.output_name=${RUN_NAME}_short2 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
