@@ -60,7 +60,7 @@ env:
   spawn_initial_speed: 0.0
   # Gigaflow spawn pose noise: lateral offset as a fraction of half the lane width, heading offset in degrees
   spawn_lateral_offset_max_frac: 1.0
-  spawn_heading_max_deg: 180.0
+  spawn_heading_max_deg: 30.0
   # Collision behavior - options: "ignore", "stop", "remove"
   collision_behavior: stop
   # Offroad behavior - options: "ignore", "stop", "remove"
