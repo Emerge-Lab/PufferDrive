@@ -166,8 +166,8 @@ struct SharedMapData {
     pid_t owner_pid;
 };
 
-// Per-process map cache. Built lazily in init(); freeing is gated by per-entry
-// owner_pid in c_close.
+// Cached geometry is read-only after construction. Forked workers inherit the
+// parent's entries copy-on-write and never free parent-owned entries.
 static struct SharedMapData **g_map_cache = NULL;
 static int g_map_cache_count = 0;
 
@@ -2904,6 +2904,13 @@ void remove_bad_trajectories(Drive *env) {
     env->timestep = 0;
 }
 
+static int compute_vision_range(Drive *env) {
+    int vision_half_range = (int) ceilf(
+        fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
+        / GRID_CELL_SIZE);
+    return 2 * vision_half_range + 1;
+}
+
 void init(Drive *env) {
     env->human_agent_idx = 0;
     env->timestep = 0;
@@ -2937,27 +2944,12 @@ void init(Drive *env) {
             fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env->map_name);
             return;
         }
-        int vision_half_range = (int) ceilf(
-            fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
-            / GRID_CELL_SIZE);
-        env->grid_map->vision_range = 2 * vision_half_range + 1;
+        env->grid_map->vision_range = compute_vision_range(env);
         init_neighbor_offsets(env);
         if (env->use_map_cache) {
             // Transfer the just-built geometry into a shared, ref-counted entry that
             // this env borrows (ref_count starts at 1).
-            struct SharedMapData *entry = (struct SharedMapData *) calloc(1, sizeof(struct SharedMapData));
-            entry->map_name = strdup(env->map_name);
-            entry->road_elements = env->road_elements;
-            entry->num_road_elements = env->num_road_elements;
-            entry->grid_map = env->grid_map;
-            entry->neighbor_offsets = env->neighbor_offsets;
-            entry->lane_graph = env->lane_graph;
-            entry->obs_lane_stride = env->obs_lane_stride;
-            entry->obs_boundary_stride = env->obs_boundary_stride;
-            entry->ref_count = 1;
-            entry->owner_pid = getpid();
-            map_cache_insert(entry);
-            env->shared_map = entry;
+            env->shared_map = map_cache_store(env);
         }
     }
     if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
@@ -3083,6 +3075,78 @@ void c_close(Drive *env) {
     free(env->tracks_to_predict);
     free(env->map_name);
     free(env->ini_file);
+}
+
+static int release_preloaded_map_cache(Drive *config, const char **map_files, int num_map_files) {
+    if (num_map_files == 0) {
+        return 0;
+    }
+    struct SharedMapData **released = (struct SharedMapData **) malloc(num_map_files * sizeof(struct SharedMapData *));
+    if (released == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < num_map_files; i++) {
+        Drive env = *config;
+        env.map_name = (char *) map_files[i];
+        struct SharedMapData *shared = map_cache_lookup(&env);
+        if (shared == NULL || shared->ref_count <= 0) {
+            for (int released_idx = 0; released_idx < i; released_idx++) {
+                released[released_idx]->ref_count++;
+            }
+            fprintf(stderr, "[ERROR] -> map_cache release miss (config drift): %s\n", env.map_name);
+            free(released);
+            return -1;
+        }
+        shared->ref_count--;
+        released[i] = shared;
+    }
+    free(released);
+    for (int cache_idx = 0; cache_idx < g_map_cache_count; cache_idx++) {
+        struct SharedMapData *shared = g_map_cache[cache_idx];
+        if (shared != NULL && shared->ref_count == 0 && shared->owner_pid == getpid()) {
+            free_shared_map_data(shared);
+        }
+    }
+    return 0;
+}
+
+static int preload_map_cache(Drive *config, const char **map_files, int num_map_files) {
+    for (int i = 0; i < num_map_files; i++) {
+        Drive env = *config;
+        env.map_name = strdup(map_files[i]);
+        struct SharedMapData *shared = map_cache_lookup(&env);
+        if (shared != NULL) {
+            env.grid_map = shared->grid_map;
+            env.neighbor_offsets = shared->neighbor_offsets;
+            if (env.use_neighbor_cache && env.grid_map->neighbor_cache_entities == NULL) {
+                cache_neighbor_offsets(&env);
+            }
+            shared->ref_count++;
+            free(env.map_name);
+            continue;
+        }
+        if (load_map_binary(env.map_name, &env) != 0) {
+            fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env.map_name);
+            c_close(&env);
+            release_preloaded_map_cache(config, map_files, i);
+            return -1;
+        }
+        if (init_grid_map(&env) != 0) {
+            fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env.map_name);
+            c_close(&env);
+            release_preloaded_map_cache(config, map_files, i);
+            return -1;
+        }
+        env.grid_map->vision_range = compute_vision_range(&env);
+        init_neighbor_offsets(&env);
+        if (env.use_neighbor_cache) {
+            cache_neighbor_offsets(&env);
+        }
+        env.shared_map = map_cache_store(&env);
+        env.shared_map->ref_count++;
+        c_close(&env);
+    }
+    return g_map_cache_count;
 }
 
 static int compute_observation_size(Drive *env) {

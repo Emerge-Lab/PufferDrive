@@ -91,6 +91,8 @@ static int init_grid_map(Drive *env) {
     float grid_height = top_left_y - bottom_right_y;
     if (!first_valid_point || !isfinite(grid_width) || !isfinite(grid_height)) {
         fprintf(stderr, "[ERROR] -> Map has no valid road geometry extent for grid\n");
+        free(env->grid_map);
+        env->grid_map = NULL;
         return 1;
     }
     env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
@@ -104,6 +106,8 @@ static int init_grid_map(Drive *env) {
             env->grid_map->grid_rows,
             grid_width,
             grid_height);
+        free(env->grid_map);
+        env->grid_map = NULL;
         return 1;
     }
     int grid_cell_count = (int) grid_cell_count_wide;
@@ -748,6 +752,22 @@ static void map_cache_insert(struct SharedMapData *entry) {
     g_map_cache
         = (struct SharedMapData **) realloc(g_map_cache, (g_map_cache_count + 1) * sizeof(struct SharedMapData *));
     g_map_cache[g_map_cache_count++] = entry;
+}
+
+static struct SharedMapData *map_cache_store(Drive *env) {
+    struct SharedMapData *entry = (struct SharedMapData *) calloc(1, sizeof(struct SharedMapData));
+    entry->map_name = strdup(env->map_name);
+    entry->road_elements = env->road_elements;
+    entry->num_road_elements = env->num_road_elements;
+    entry->grid_map = env->grid_map;
+    entry->neighbor_offsets = env->neighbor_offsets;
+    entry->lane_graph = env->lane_graph;
+    entry->obs_lane_stride = env->obs_lane_stride;
+    entry->obs_boundary_stride = env->obs_boundary_stride;
+    entry->ref_count = 1;
+    entry->owner_pid = getpid();
+    map_cache_insert(entry);
+    return entry;
 }
 
 static void free_grid_map(GridMap *grid_map) {

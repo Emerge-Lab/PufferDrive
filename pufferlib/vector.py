@@ -1,6 +1,7 @@
 # TODO: Check actions passed to envs are right shape? On first call at least
 
 
+import inspect
 import numpy as np
 import time
 import psutil
@@ -71,6 +72,12 @@ def step(vecenv, actions):
     return obs, rewards, terminals, truncations, infos  # include env_ids or no?
 
 
+def make_config_env(creator, args, kwargs):
+    if "config_only" in inspect.signature(creator).parameters:
+        return creator(*args, **kwargs, config_only=True)
+    return creator(*args, **kwargs)
+
+
 class Serial:
     reset = reset
     step = step
@@ -80,14 +87,17 @@ class Serial:
         return self.agents_per_batch
 
     def __init__(self, env_creators, env_args, env_kwargs, num_envs, buf=None, seed=0, **kwargs):
-        self.driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
-        self.agents_per_batch = self.driver_env.num_agents * num_envs
+        driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
+        num_agents_per_env = driver_env.num_agents
+        self.agents_per_batch = num_agents_per_env * num_envs
         self.num_agents = self.agents_per_batch
 
-        self.single_observation_space = self.driver_env.single_observation_space
-        self.single_action_space = self.driver_env.single_action_space
+        self.single_observation_space = driver_env.single_observation_space
+        self.single_action_space = driver_env.single_action_space
         self.action_space = pufferlib.spaces.joint_space(self.single_action_space, self.agents_per_batch)
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
+
+        driver_env.close()
 
         set_buffers(self, buf)
 
@@ -95,7 +105,7 @@ class Serial:
         ptr = 0
         child_seeds = np.random.SeedSequence(seed).spawn(len(env_creators)) if seed is not None else None
         for i in range(num_envs):
-            end = ptr + self.driver_env.num_agents
+            end = ptr + num_agents_per_env
             buf_i = dict(
                 observations=self.observations[ptr:end],
                 rewards=self.rewards[ptr:end],
@@ -112,8 +122,6 @@ class Serial:
             env = env_creators[i](*env_args[i], buf=buf_i, seed=seed_i, **env_kwargs[i])
             self.envs.append(env)
 
-        # Close the initial driver_env used only for configuration (it's not in self.envs)
-        self.driver_env.close()
         self.driver_env = driver = self.envs[0]
         self.emulated = self.driver_env.emulated
         check_envs(self.envs, self.driver_env)
@@ -339,7 +347,7 @@ class Multiprocessing:
         # with the resource tracker that spams warnings and does not work with
         # forked processes. So for now, RawArray is much more reliable.
         # You can't send a RawArray through a pipe.
-        self.driver_env = driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
+        self.driver_env = driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
         is_native = isinstance(driver_env, PufferEnv)
         self.emulated = False if is_native else driver_env.emulated
         self.num_agents = num_agents = driver_env.num_agents * num_envs
@@ -363,11 +371,9 @@ class Multiprocessing:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
 
-        # Close driver env 0 after setup is done and args are read to free memory (which can be significant in the case of nuPlan evals).
         agents_per_env = driver_env.num_agents
-        driver_env.close()
 
-        from multiprocessing import RawArray
+        from multiprocessing import RawArray, get_start_method
 
         # Mac breaks without setting fork... but setting it breaks sweeps on 2nd run
         # set_start_method('fork')
@@ -401,6 +407,13 @@ class Multiprocessing:
         self.send_pipes, w_recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
         w_send_pipes, self.recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
         self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
+
+        preload_shared_resources = getattr(driver_env, "preload_shared_resources", None)
+        self._driver_env_open = False
+        if get_start_method() == "fork" and callable(preload_shared_resources):
+            self._driver_env_open = bool(preload_shared_resources())
+        if not self._driver_env_open:
+            driver_env.close()
 
         worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
         worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
@@ -571,8 +584,14 @@ class Multiprocessing:
         self.buf["notify"][:] = True
 
     def close(self):
+        if self.processes is None:
+            return
         for p in self.processes:
             p.terminate()
+        if self._driver_env_open:
+            self.driver_env.close()
+            self._driver_env_open = False
+        self.processes = None
 
 
 class Ray:
@@ -595,7 +614,7 @@ class Ray:
         self.workers_per_batch = batch_size // envs_per_worker
         self.num_workers = num_workers
 
-        driver_env = env_creators[0](*env_args[0], **env_kwargs[0])
+        driver_env = make_config_env(env_creators[0], env_args[0], env_kwargs[0])
         self.driver_env = driver_env
         self.emulated = driver_env.emulated
         self.num_agents = num_agents = driver_env.num_agents * num_envs
@@ -616,6 +635,8 @@ class Ray:
         self.observation_space = pufferlib.spaces.joint_space(self.single_observation_space, self.agents_per_batch)
 
         self.agent_ids = np.arange(num_agents).reshape(num_workers, agents_per_worker)
+
+        driver_env.close()
 
         import ray
 

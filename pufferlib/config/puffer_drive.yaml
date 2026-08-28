@@ -64,6 +64,8 @@ env:
   traffic_light_behavior: stop
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
+  # Load all configured maps before fork so workers inherit shared geometry - 0 off, 1 on
+  preload_map_cache: 0
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
   use_neighbor_cache: 1
   # Number of steps before reset
