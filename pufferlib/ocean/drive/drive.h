@@ -179,7 +179,7 @@ struct Drive {
     unsigned char *masks;
     // Agents
     Agent *agents;
-    int num_sim_agents;        // All valid agents: [active | moving_log | static_log]
+    int num_total_agents;      // All valid agents: [active | moving_log | static_log]
     int num_max_agents;        // Max agents to keep active in the simulation (0 for no limit)
     int num_agents;            // Number of active agents in the simulation
     int num_moving_log_agents; // Number of log agents that moves during the scenario
@@ -1758,7 +1758,7 @@ static int collision_check(Drive *env, Agent *agent) {
     float ego_disp = compute_euclidean_distance(agent->sim_x, agent->sim_y, agent->prev_x, agent->prev_y);
 
     // Linear over all actors; pair radius quick-check prunes before OBB SAT.
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *other_agent = &env->agents[i];
         if (agent == other_agent || other_agent->sim_x == INVALID_POSITION || other_agent->removed
             || other_agent->sim_valid != 1) {
@@ -1946,7 +1946,7 @@ static void compute_agent_ttc(Drive *env, Agent *agent) {
         return;
     }
 
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         if (&env->agents[i] == agent) {
             continue;
         }
@@ -2502,7 +2502,7 @@ static int resolve_agent_controller(Drive *env, int agent_idx, int is_active, in
 static void set_agent_at_init_log_step(Drive *env) {
     assert(env->init_step >= 0);
     assert(env->init_step < env->log_length);
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &env->agents[i];
         int step = env->init_step;
         reset_agent_state(agent);
@@ -2653,24 +2653,24 @@ void set_active_agents(Drive *env) {
 
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int num_agents_to_create = env->num_max_agents;
-        for (int i = 0; i < env->num_sim_agents; i++) {
+        for (int i = 0; i < env->num_total_agents; i++) {
             free_agent(&env->agents[i]);
         }
         free(env->agents);
         env->agents = (Agent *) calloc(num_agents_to_create, sizeof(Agent));
-        env->num_sim_agents = num_agents_to_create;
+        env->num_total_agents = num_agents_to_create;
         env->num_agents = num_agents_to_create;
         return;
     }
 
     Agent *raw_agents = env->agents;
-    Agent *compacted_agents = (Agent *) calloc(env->num_sim_agents, sizeof(Agent));
-    int *kept = (int *) calloc(env->num_sim_agents, sizeof(int));
-    int max_active = env->num_max_agents == 0 ? env->num_sim_agents : env->num_max_agents;
+    Agent *compacted_agents = (Agent *) calloc(env->num_total_agents, sizeof(Agent));
+    int *kept = (int *) calloc(env->num_total_agents, sizeof(int));
+    int max_active = env->num_max_agents == 0 ? env->num_total_agents : env->num_max_agents;
     bool is_log_replay = (env->control_mode == CONTROL_MODE_SDC_ONLY);
 
     // First pass: collect controlled agents up to the max_active limit
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &raw_agents[i];
         if (agent->log_valid[env->init_step] == 0 || env->num_agents >= max_active) {
             continue;
@@ -2687,7 +2687,7 @@ void set_active_agents(Drive *env) {
     }
 
     // Second pass: collect moving-log/replay agents
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &raw_agents[i];
         if (kept[i]) {
             continue;
@@ -2718,7 +2718,7 @@ void set_active_agents(Drive *env) {
     }
 
     // Third pass: collect remaining valid log agents
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &raw_agents[i];
         if (kept[i]) {
             continue;
@@ -2739,7 +2739,7 @@ void set_active_agents(Drive *env) {
         kept[i] = 1;
     }
 
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         if (kept[i]) {
             continue;
         }
@@ -2750,7 +2750,7 @@ void set_active_agents(Drive *env) {
     free(raw_agents);
 
     env->agents = (Agent *) realloc(compacted_agents, num_valid_agents * sizeof(Agent));
-    env->num_sim_agents = num_valid_agents;
+    env->num_total_agents = num_valid_agents;
 }
 
 static void move_expert(Drive *env, int agent_idx) {
@@ -2901,7 +2901,7 @@ void init(Drive *env) {
 }
 
 void c_close(Drive *env) {
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         free_agent(&env->agents[i]);
     }
     for (int i = 0; i < env->num_traffic_elements; i++) {
@@ -3645,9 +3645,9 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         float dist_sq;
         float dz;
     } AgentDistance;
-    AgentDistance nearby_agents[env->num_sim_agents];
+    AgentDistance nearby_agents[env->num_total_agents];
     int nearby_count = 0;
-    for (int j = 0; j < env->num_sim_agents; j++) {
+    for (int j = 0; j < env->num_total_agents; j++) {
         if (j == agent_idx) {
             continue;
         }
@@ -4321,7 +4321,7 @@ void c_step(Drive *env) {
     // Update stopped-duration for every agent (active + replayed/static), not
     // just policy-controlled ones, so the partner seconds_stopped observation is
     // populated even in control_sdc_only mode where only the ego is active.
-    for (int j = 0; j < env->num_sim_agents; j++) {
+    for (int j = 0; j < env->num_total_agents; j++) {
         Agent *agent = &env->agents[j];
         if (agent->removed || agent->sim_valid == 0) {
             continue;

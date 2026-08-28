@@ -128,7 +128,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
 
     /* Validate main array pointers before accessing */
-    if (env->num_sim_agents > 0 && !env->agents) {
+    if (env->num_total_agents > 0 && !env->agents) {
         PyErr_SetString(PyExc_ValueError, "agents is NULL but count > 0");
         return NULL;
     }
@@ -151,7 +151,7 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
-    v = PyLong_FromLong(env->num_sim_agents);
+    v = PyLong_FromLong(env->num_total_agents);
     if (!v) {
         return NULL;
     }
@@ -302,12 +302,12 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
 
     /* Expose agents array as a list of dicts */
-    if (env->agents && env->num_sim_agents > 0) {
-        PyObject *agents_list = PyList_New(env->num_sim_agents);
+    if (env->agents && env->num_total_agents > 0) {
+        PyObject *agents_list = PyList_New(env->num_total_agents);
         if (!agents_list) {
             return NULL;
         }
-        for (int i = 0; i < env->num_sim_agents; i++) {
+        for (int i = 0; i < env->num_total_agents; i++) {
             Agent *a = &env->agents[i];
             int active_log_idx = i < env->num_agents ? i : -1;
 
@@ -1737,7 +1737,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         // Skip map if it doesn't contain any controllable agents
         if (env->num_agents == 0) {
-            for (int j = 0; j < env->num_sim_agents; j++) {
+            for (int j = 0; j < env->num_total_agents; j++) {
                 free_agent(&env->agents[j]);
             }
             for (int j = 0; j < env->num_road_elements; j++) {
@@ -1763,7 +1763,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             total_agent_count += env->num_agents;
             env_count++;
         }
-        for (int j = 0; j < env->num_sim_agents; j++) {
+        for (int j = 0; j < env->num_total_agents; j++) {
             free_agent(&env->agents[j]);
         }
         for (int j = 0; j < env->num_road_elements; j++) {

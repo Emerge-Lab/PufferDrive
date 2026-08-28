@@ -177,7 +177,7 @@ static int test_leader_selection_and_move_idm(void) {
     env.num_road_elements = 1;
     env.agents = agents;
     env.num_agents = 1;
-    env.num_sim_agents = 2;
+    env.num_total_agents = 2;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
 

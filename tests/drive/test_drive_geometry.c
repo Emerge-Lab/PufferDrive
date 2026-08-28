@@ -121,7 +121,7 @@ static int test_collision_check_filters(void) {
     agents[4] = drive_test_agent(3.9f, 0.0f, 0.0f);
 
     env.agents = agents;
-    env.num_sim_agents = 5;
+    env.num_total_agents = 5;
     env.num_agents = 2;
 
     EXPECT_EQ_INT(collision_check(&env, &agents[0]), 4);

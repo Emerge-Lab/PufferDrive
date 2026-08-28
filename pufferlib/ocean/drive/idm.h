@@ -94,7 +94,7 @@ static int idm_collect_route_candidates(Drive *env, int ego_idx, float lookahead
     Agent *ego = &env->agents[ego_idx];
     int count = 0;
 
-    for (int i = 0; i < env->num_sim_agents && count < max_candidates; i++) {
+    for (int i = 0; i < env->num_total_agents && count < max_candidates; i++) {
         int other_idx = i;
         if (other_idx == ego_idx) {
             continue;

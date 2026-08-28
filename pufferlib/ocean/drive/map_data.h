@@ -336,7 +336,7 @@ int load_map_binary(const char *filename, Drive *drive) {
         return -1;
     }
 
-    drive->num_sim_agents = loaded_agent_count;
+    drive->num_total_agents = loaded_agent_count;
     drive->num_road_elements = num_roads;
     drive->num_traffic_elements = num_traffic;
     drive->num_objects = num_objects;

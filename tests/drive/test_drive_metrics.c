@@ -25,7 +25,7 @@ static int test_metric_invalid_position_resets(void) {
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
     Log log = {0};
     env.agents = &agent;
-    env.num_sim_agents = 1;
+    env.num_total_agents = 1;
     env.logs = &log;
     agent.sim_x = INVALID_POSITION;
     agent.metrics_array[COLLISION_IDX] = 1.0f;

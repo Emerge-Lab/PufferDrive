@@ -376,7 +376,7 @@ Client *make_client(Drive *env) {
     // Get initial target position from first valid agent (active or expert_static).
     // Agents may have large raw world coordinates (e.g. WOMD), so center on them.
     float scene_cx = 0.0f, scene_cy = 0.0f, scene_cz = 0.0f;
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *a = &env->agents[i];
         if (a->sim_valid && a->sim_x != INVALID_POSITION && a->sim_y != INVALID_POSITION) {
             scene_cx = a->sim_x;
@@ -1133,7 +1133,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         DrawCube(sl_mid, 2.0f, 2.0f, 1.0f, tl_color);
     }
 
-    for (int i = 0; i < env->num_sim_agents; i++) {
+    for (int i = 0; i < env->num_total_agents; i++) {
         Agent *agent = &env->agents[i];
         bool is_active_agent = i < env->num_agents;
         int agent_index = is_active_agent ? i : -1;
@@ -1455,7 +1455,7 @@ void saveTopDownImage(
 
     // Draw log trajectories FIRST (in background at lower Z-level)
     if (log_trajectories) {
-        for (int i = 0; i < env->num_sim_agents; i++) {
+        for (int i = 0; i < env->num_total_agents; i++) {
             Agent *agent = &env->agents[i];
             for (int j = 0; j < agent->trajectory_size; j++) {
                 float x = agent->log_trajectory_x[j];

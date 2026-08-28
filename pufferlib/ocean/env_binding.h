@@ -847,7 +847,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
-        int agent_count = drive->num_sim_agents < agent_cap ? drive->num_sim_agents : agent_cap;
+        int agent_count = drive->num_total_agents < agent_cap ? drive->num_total_agents : agent_cap;
         int traffic_count = drive->num_traffic_elements < traffic_cap ? drive->num_traffic_elements : traffic_cap;
 
         for (int i = 0; i < agent_count; i++) {

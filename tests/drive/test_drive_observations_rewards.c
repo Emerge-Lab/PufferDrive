@@ -66,7 +66,7 @@ static void init_reward_env(Drive *env, Agent *agent, Log *log, float *reward) {
     env->logs = log;
     env->rewards = reward;
     env->num_agents = 1;
-    env->num_sim_agents = 1;
+    env->num_total_agents = 1;
     env->dt = 0.1f;
     env->reward_goal = 2.0f;
     env->simulation_mode = SIMULATION_MODE_GIGAFLOW;
