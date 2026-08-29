@@ -83,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         scenario_length=None,
         resample_frequency=91,
         num_maps=100,
+        allow_map_subset=False,
         num_agents=512,
         min_agents_per_env=32,
         max_agents_per_env=64,
@@ -172,6 +173,7 @@ class Drive(pufferlib.PufferEnv):
         self.shared_network = shared_network
         self.render_mode = render_mode
         self.num_maps = num_maps
+        self.allow_map_subset = bool(allow_map_subset)
         self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
@@ -494,6 +496,11 @@ class Drive(pufferlib.PufferEnv):
         available_maps = len(self.map_files)
         if num_maps > available_maps:
             raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({available_maps}).")
+        if not eval_mode and num_maps < available_maps and not self.allow_map_subset:
+            raise ValueError(
+                f"num_maps ({num_maps}) < available maps in {map_dir} ({available_maps}); training would only use the "
+                f"first {num_maps} files in sorted order. Set env.num_maps={available_maps} or env.allow_map_subset=true."
+            )
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 

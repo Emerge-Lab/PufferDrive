@@ -151,6 +151,7 @@ class DriveEnvConfig:
     reward_ade: float = MISSING
     map_dir: str = MISSING
     num_maps: int = MISSING
+    allow_map_subset: bool = MISSING
     obs_slots_lane_n: int = MISSING
     obs_slots_boundary_n: int = MISSING
     obs_slots_partners_n: int = MISSING

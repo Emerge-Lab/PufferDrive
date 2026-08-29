@@ -154,6 +154,8 @@ env:
   map_dir: pufferlib/resources/drive/binaries/carla
   # Number of maps to load from map_dir
   num_maps: 8
+  # Training fails if num_maps < files in map_dir unless this is set (sorted order would silently pick a subset)
+  allow_map_subset: false
   # --- Observation slot counts ---
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
