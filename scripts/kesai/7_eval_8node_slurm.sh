@@ -59,7 +59,7 @@ fi
 #     eval.goal_regen_mode=rolling \
 
 # No srun: single-node eval, run here on the batch host.
-.venv/bin/puffer eval puffer_drive nuplan_multi \
+python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \

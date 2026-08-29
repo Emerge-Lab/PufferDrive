@@ -28,7 +28,7 @@ bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
 #    load_model_path=${MODEL_PATH} \
 #    wandb=True
 
-.venv/bin/puffer eval puffer_drive nuplan_single \
+python -m pufferlib.pufferl eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \

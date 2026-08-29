@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0031_${SEED}
+export RUN_NAME=k_scaled_0032_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -59,6 +59,7 @@ srun torchrun \
     wandb_group=emerge_ \
     train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla_128_affine \
+    env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
     train.total_timesteps=1000000000000 \
@@ -100,7 +101,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-.venv/bin/puffer eval puffer_drive nuplan_multi \
+python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     vec.num_envs=64 \
     eval.num_agents=300 \

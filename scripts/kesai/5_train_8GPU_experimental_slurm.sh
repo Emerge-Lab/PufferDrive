@@ -102,7 +102,7 @@ fi
 # 131072 = 524288 / 4
 
 echo "Training done, evaluating ${MODEL_PATH}"
-.venv/bin/puffer eval puffer_drive carla \
+python -m pufferlib.pufferl eval puffer_drive carla \
     vec.num_envs=16 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
@@ -110,7 +110,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     load_model_path=${MODEL_PATH} \
     wandb=True
 
-.venv/bin/puffer eval puffer_drive nuplan_single \
+python -m pufferlib.pufferl eval puffer_drive nuplan_single \
     eval.render_filter=all_infractions \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
     eval.capture_observations=true \
