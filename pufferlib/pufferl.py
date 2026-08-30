@@ -175,8 +175,9 @@ class PuffeRL:
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
         if precision == "bfloat16" and not config.get("amp", True):
             raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
-        if precision == "bfloat16" and not config.get("tf32", True):
-            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
+        fp32_heads = getattr(base_policy(policy), "fp32_heads", False)
+        if precision == "bfloat16" and not config.get("tf32", True) and not fp32_heads:
+            raise pufferlib.APIUsageError("train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true")
 
         rollout_dtype = config.get("rollout_dtype", "float32")
         if rollout_dtype == "float32":
@@ -2167,8 +2168,8 @@ def _run_eval_rollout(
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         allow_tf32 = args["train"].get("tf32", True)
-        if not allow_tf32 and use_bfloat16:
-            raise pufferlib.APIUsageError("train.tf32=False requires train.precision=float32")
+        if not allow_tf32 and use_bfloat16 and not getattr(uncompiled_policy, "fp32_heads", False):
+            raise pufferlib.APIUsageError("train.tf32=False with train.precision=bfloat16 requires policy.fp32_heads=true")
         torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
         torch.backends.cudnn.allow_tf32 = allow_tf32

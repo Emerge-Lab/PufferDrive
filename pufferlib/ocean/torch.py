@@ -1,3 +1,5 @@
+import contextlib
+
 from torch import nn
 import torch
 import torch.nn.functional as F
@@ -333,6 +335,7 @@ class Drive(nn.Module):
         action_type: str,
         actor_head_layer_norm: bool = False,
         critic_head_layer_norm: bool = False,
+        fp32_heads: bool = False,
     ):
         super().__init__()
 
@@ -434,6 +437,7 @@ class Drive(nn.Module):
             critic_in = critic_hidden_size
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
         self.critic_head = nn.Sequential(*critic_head_layers)
+        self.fp32_heads = fp32_heads
 
     def forward(self, observations, state=None):
         """
@@ -448,18 +452,23 @@ class Drive(nn.Module):
         else:
             critic_hidden = self.critic_backbone(observations, self.ego_dim)
 
-        # Compute actions
-        if self.is_continuous:
-            params = self.actor_head(actor_hidden)
-            loc, scale = torch.split(params, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            actions = torch.distributions.Normal(loc, std)
-        else:
-            actions = self.actor_head(actor_hidden)
+        return self._run_heads(actor_hidden, critic_hidden)
 
-        # Compute value
-        value = self.critic_head(critic_hidden)
-
+    def _run_heads(self, actor_hidden, critic_hidden):
+        head_context = contextlib.nullcontext()
+        if self.fp32_heads:
+            head_context = torch.autocast(device_type=actor_hidden.device.type, enabled=False)
+            actor_hidden = actor_hidden.float()
+            critic_hidden = critic_hidden.float()
+        with head_context:
+            if self.is_continuous:
+                params = self.actor_head(actor_hidden)
+                loc, scale = torch.split(params, self.action_dim, dim=1)
+                std = torch.nn.functional.softplus(scale) + 1e-4
+                actions = torch.distributions.Normal(loc, std)
+            else:
+                actions = self.actor_head(actor_hidden)
+            value = self.critic_head(critic_hidden)
         return actions, value
 
     def forward_train(self, x, state=None):
@@ -483,17 +492,7 @@ class Drive(nn.Module):
         Args:
             hidden: The hidden state for the actor (policy).
         """
-        if self.is_continuous:
-            parameters = self.actor_head(hidden)
-            loc, scale = torch.split(parameters, self.action_dim, dim=1)
-            std = torch.nn.functional.softplus(scale) + 1e-4
-            action = torch.distributions.Normal(loc, std)
-        else:
-            action = self.actor_head(hidden)
-
-        value = self.critic_head(hidden)
-
-        return action, value
+        return self._run_heads(hidden, hidden)
 
     def discrete_actions_to_continuous(self, actions):
         return self.action_table[actions.long()]
