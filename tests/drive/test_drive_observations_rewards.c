@@ -17,6 +17,10 @@ static int test_observation_size_formula(void) {
     expected = EGO_FEATURES + NUM_REWARD_COEFS + 3 * GOAL_FEATURES + 2 * PARTNER_FEATURES + 5 * LANE_FEATURES
         + 7 * BOUNDARY_FEATURES + 4 * TRAFFIC_CONTROL_FEATURES + OBS_VALID_COUNT_FEATURES;
     EXPECT_EQ_INT(compute_observation_size(&env), expected);
+
+    env.obs_partner_relative_velocity = 1;
+    expected += 2 * PARTNER_RELATIVE_VELOCITY_FEATURES;
+    EXPECT_EQ_INT(compute_observation_size(&env), expected);
     return 0;
 }
 
@@ -146,6 +150,73 @@ static int test_reward_goal_speed_gating(void) {
     return 0;
 }
 
+static int test_reward_coef_goal_speed_pinned(void) {
+    Drive env = {0};
+    Agent agent = {0};
+    env.reward_randomization = 1;
+    env.goal_speed = 3.0f;
+    rng_seed(&env.rng_state, 7);
+
+    env.goal_speed_randomization = 0;
+    for (int sample_idx = 0; sample_idx < 16; sample_idx++) {
+        generate_reward_coefs(&env, &agent);
+        EXPECT_NEAR(agent.reward_coefs[REWARD_COEF_GOAL_SPEED], 3.0f, 1e-6f);
+    }
+
+    env.goal_speed_randomization = 1;
+    int differs_from_pinned = 0;
+    for (int sample_idx = 0; sample_idx < 16; sample_idx++) {
+        generate_reward_coefs(&env, &agent);
+        float goal_speed = agent.reward_coefs[REWARD_COEF_GOAL_SPEED];
+        EXPECT_TRUE(goal_speed >= 0.0f && goal_speed <= 20.0f);
+        differs_from_pinned += fabsf(goal_speed - 3.0f) > 1e-3f;
+    }
+    EXPECT_TRUE(differs_from_pinned > 0);
+    return 0;
+}
+
+static int test_partner_obs_relative_velocity(void) {
+    // Ego heading +x at 10 m/s; partner 20 m ahead heading +y at 5 m/s -> ego-frame relative velocity (-10, 5).
+    Drive env = {0};
+    env.obs_norm_speed_mps = 10.0f;
+    env.obs_norm_xy_offset_m = 100.0f;
+    env.obs_norm_z_m = 10.0f;
+    env.obs_norm_veh_length_m = 10.0f;
+    env.obs_norm_veh_width_m = 5.0f;
+    env.obs_range_partner_m = 100.0f;
+    env.obs_slots_partners_n = 2;
+    env.num_agents = 2;
+    env.active_agent_count = 2;
+    int active[2] = {0, 1};
+    env.active_agent_indices = active;
+    Agent agents[2];
+    agents[0] = drive_test_agent(0.0f, 0.0f, 0.0f);
+    agents[0].sim_vx = 10.0f;
+    agents[1] = drive_test_agent(20.0f, 0.0f, (float) M_PI / 2.0f);
+    agents[1].sim_vy = 5.0f;
+    update_agent_speed(&agents[0]);
+    update_agent_speed(&agents[1]);
+    env.agents = agents;
+    float obs[2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES)];
+    int partner_count = 0;
+
+    env.obs_partner_relative_velocity = 0;
+    memset(obs, 0, sizeof(obs));
+    int end_idx = write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
+    EXPECT_EQ_INT(partner_count, 1);
+    EXPECT_EQ_INT(end_idx, 2 * PARTNER_FEATURES);
+    EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
+
+    env.obs_partner_relative_velocity = 1;
+    memset(obs, 0, sizeof(obs));
+    end_idx = write_partner_obs(&env, &agents[0], 0, obs, 0, &partner_count);
+    EXPECT_EQ_INT(end_idx, 2 * (PARTNER_FEATURES + PARTNER_RELATIVE_VELOCITY_FEATURES));
+    EXPECT_NEAR(obs[7], 0.5f, 1e-5f);
+    EXPECT_NEAR(obs[PARTNER_FEATURES], -1.0f, 1e-5f);
+    EXPECT_NEAR(obs[PARTNER_FEATURES + 1], 0.5f, 1e-5f);
+    return 0;
+}
+
 static int test_reward_lane_align_wrong_way(void) {
     Drive env;
     Agent agent;
@@ -170,6 +241,8 @@ int main(void) {
     RUN_TEST(test_observation_zero_fill_and_valid_counts);
     RUN_TEST(test_reward_terminal_components);
     RUN_TEST(test_reward_goal_speed_gating);
+    RUN_TEST(test_reward_coef_goal_speed_pinned);
+    RUN_TEST(test_partner_obs_relative_velocity);
     RUN_TEST(test_reward_lane_align_wrong_way);
     return test_summary(failures);
 }

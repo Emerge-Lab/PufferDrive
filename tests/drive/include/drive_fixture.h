@@ -74,6 +74,8 @@ static inline Drive drive_test_env_config(
     env.use_map_cache = use_map_cache;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
+    env.goal_speed_randomization = 1;
+    env.goal_reach_requires_speed = 0;
     env.min_goal_spacing = 20.0f;
     env.max_goal_spacing = 60.0f;
     env.goal_heading_max_deg = 0.0f;
@@ -86,6 +88,7 @@ static inline Drive drive_test_env_config(
     env.obs_slots_lane_kept = 32;
     env.obs_slots_boundary_kept = 32;
     env.obs_slots_partners_n = 16;
+    env.obs_partner_relative_velocity = 0;
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
     env.dt = 0.1f;

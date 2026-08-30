@@ -243,6 +243,7 @@ static const int ROAD_OFFSETS[25][2]
 #define LANE_FEATURES 9
 #define BOUNDARY_FEATURES 6
 #define PARTNER_FEATURES 9
+#define PARTNER_RELATIVE_VELOCITY_FEATURES 2 // appended per partner row when obs_partner_relative_velocity is set
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
 #define OBS_VALID_COUNT_FEATURES 4

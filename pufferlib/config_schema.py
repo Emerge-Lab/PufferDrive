@@ -128,6 +128,8 @@ class DriveEnvConfig:
     obs_goal_lane_distance: bool = MISSING
     goal_radius: float = MISSING
     goal_speed: float = MISSING
+    goal_speed_randomization: bool = MISSING
+    goal_reach_requires_speed: bool = MISSING
     num_goals: int = MISSING
     min_goal_spacing: float = MISSING
     max_goal_spacing: float = MISSING
@@ -155,6 +157,7 @@ class DriveEnvConfig:
     obs_slots_lane_n: int = MISSING
     obs_slots_boundary_n: int = MISSING
     obs_slots_partners_n: int = MISSING
+    obs_partner_relative_velocity: bool = MISSING
     obs_slots_traffic_controls_n: int = MISSING
     obs_dropout_lane: float = MISSING
     obs_dropout_boundary: float = MISSING

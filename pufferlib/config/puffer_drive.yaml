@@ -123,6 +123,10 @@ env:
   goal_radius: 2.0
   # Maximum speed at final waypoint to count goal reward
   goal_speed: 3.0
+  # true: goal-speed coef ~ U(0, 20) per agent under reward_randomization; false: pinned to goal_speed (GIGAFLOW v_goal = 3)
+  goal_speed_randomization: true
+  # true: the final goal is only consumed below goal speed (GIGAFLOW R_goal); false: consumed on entry, reward gated
+  goal_reach_requires_speed: false
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
   # Waypoint spacing range in meters when building path
@@ -160,6 +164,8 @@ env:
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
   obs_slots_partners_n: 20
+  # Append the partner's velocity relative to ego (ego frame, 2 floats) to every partner row (GIGAFLOW observes velocity)
+  obs_partner_relative_velocity: false
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.5

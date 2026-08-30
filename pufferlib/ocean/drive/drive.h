@@ -273,6 +273,8 @@ struct Drive {
     float min_goal_spacing;
     float max_goal_spacing;
     float goal_heading_max_deg; // 0 disables the successive-waypoint heading constraint
+    int goal_speed_randomization; // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
+    int goal_reach_requires_speed; // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
     int goal_regen_mode;
     int goal_source;
@@ -281,6 +283,7 @@ struct Drive {
     int obs_slots_boundary_n;
     int obs_slots_lane_n;
     int obs_slots_partners_n;
+    int obs_partner_relative_velocity;
     int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     int obs_lane_stride;
@@ -2204,6 +2207,9 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
                 ? sample_log_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val)
                 : sample_uniform(&env->rng_state, bounds[c].min_val, bounds[c].max_val);
         }
+        if (!env->goal_speed_randomization) {
+            agent->reward_coefs[REWARD_COEF_GOAL_SPEED] = env->goal_speed;
+        }
         agent->reward_coefs[REWARD_COEF_VELOCITY] = 2.5e-3f;
         agent->reward_coefs[REWARD_COEF_TIMESTEP] = 2.5e-5f;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = sample_mixed_uniform(&env->rng_state, 1.25f);
@@ -3268,8 +3274,12 @@ void c_close(Drive *env) {
     free(env->ini_file);
 }
 
+static inline int partner_feature_count(const Drive *env) {
+    return PARTNER_FEATURES + (env->obs_partner_relative_velocity ? PARTNER_RELATIVE_VELOCITY_FEATURES : 0);
+}
+
 static int compute_observation_size(Drive *env) {
-    return EGO_FEATURES + PARTNER_FEATURES * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
+    return EGO_FEATURES + partner_feature_count(env) * env->obs_slots_partners_n + LANE_FEATURES * env->obs_slots_lane_kept
         + BOUNDARY_FEATURES * env->obs_slots_boundary_kept
         + TRAFFIC_CONTROL_FEATURES * env->obs_slots_traffic_controls_n + OBS_VALID_COUNT_FEATURES
         + env->reward_conditioning * NUM_REWARD_COEFS + env->num_goals * GOAL_FEATURES;
@@ -3722,8 +3732,10 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         agent->sim_x,
         agent->sim_y);
     float goal_z_dist = fabsf(agent->sim_z - agent->current_goal_z);
+    bool final_goal_too_fast = env->goal_reach_requires_speed && agent->current_goal_idx == agent->goal_count - 1
+        && agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED];
     if (agent->current_goal_idx < agent->goal_count && distance_to_goal < agent->reward_coefs[REWARD_COEF_GOAL_RADIUS]
-        && goal_z_dist < Z_BUFFER) {
+        && goal_z_dist < Z_BUFFER && !final_goal_too_fast) {
         agent->metrics_array[REACHED_GOAL_IDX] = 1.0f;
         agent_log->num_goals_reached += 1;
         agent->current_goal_idx++;
@@ -3985,7 +3997,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         ego->partner_blindness_counter = env->partner_blindness_duration;
     }
     if (ego->partner_blindness_counter > 0) {
-        int partner_obs_stride = env->obs_slots_partners_n * PARTNER_FEATURES;
+        int partner_obs_stride = env->obs_slots_partners_n * partner_feature_count(env);
         memset(&obs[obs_idx], 0, partner_obs_stride * sizeof(float));
         *partner_count = 0;
         return obs_idx + partner_obs_stride;
@@ -4062,11 +4074,15 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_speed_signed / env->obs_norm_speed_mps;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
+        if (env->obs_partner_relative_velocity) {
+            obs[obs_idx++] = rel_vx / env->obs_norm_speed_mps;
+            obs[obs_idx++] = rel_vy / env->obs_norm_speed_mps;
+        }
         partners_written++;
     }
 
     *partner_count = partners_written;
-    return obs_idx + (env->obs_slots_partners_n - partners_written) * PARTNER_FEATURES;
+    return obs_idx + (env->obs_slots_partners_n - partners_written) * partner_feature_count(env);
 }
 
 static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *lane_count, int *boundary_count) {

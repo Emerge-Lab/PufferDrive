@@ -1931,6 +1931,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->obs_partner_relative_velocity = (int) unpack(kwargs, "obs_partner_relative_velocity");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
@@ -1946,6 +1947,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_lateral_offset_max_frac = (float) unpack(kwargs, "spawn_lateral_offset_max_frac");
     env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
+    env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
+    env->goal_reach_requires_speed = (int) unpack(kwargs, "goal_reach_requires_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");

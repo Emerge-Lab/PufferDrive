@@ -772,14 +772,14 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
     int obs_idx = ego_dim + num_reward_coefs + goal_dim; // Start after ego, conditioning, and target obs
     for (int j = 0; j < env->obs_slots_partners_n; j++) {
         bool is_empty = true;
-        for (int k = 0; k < PARTNER_FEATURES; k++) {
+        for (int k = 0; k < partner_feature_count(env); k++) {
             if (agent_obs[obs_idx + k] != 0.0f) {
                 is_empty = false;
                 break;
             }
         }
         if (is_empty) {
-            obs_idx += PARTNER_FEATURES;
+            obs_idx += partner_feature_count(env);
             continue;
         }
         // Draw position of other agents
@@ -904,7 +904,7 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
             }
         }
 
-        obs_idx += PARTNER_FEATURES;
+        obs_idx += partner_feature_count(env);
     }
     // Then draw lane segment observations (obs_idx is now at lane obs start after partner loop)
     int lane_obs_start = obs_idx;

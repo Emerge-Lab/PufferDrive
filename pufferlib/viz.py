@@ -482,6 +482,7 @@ def unpack_obs(
     obs_dropout_lane: float = 0.0,
     obs_dropout_boundary: float = 0.0,
     agent_idx: int = 0,
+    obs_partner_relative_velocity: bool = False,
 ):
     """
     Unpack the flattened observation into ego, map, partner, and traffic-control views.
@@ -497,7 +498,9 @@ def unpack_obs(
     ego_dim = binding.EGO_FEATURES
 
     # Partner obs
-    partner_feature_size = binding.PARTNER_FEATURES
+    partner_feature_size = binding.PARTNER_FEATURES + (
+        binding.PARTNER_RELATIVE_VELOCITY_FEATURES if obs_partner_relative_velocity else 0
+    )
     # Road obs
     lane_feature_size = binding.LANE_FEATURES
     boundary_feature_size = binding.BOUNDARY_FEATURES
@@ -582,6 +585,7 @@ def plot_observation(
     obs_norm_road_seg_width_m=5.0,
     true_length_m=None,
     true_width_m=None,
+    obs_partner_relative_velocity=False,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
@@ -602,6 +606,7 @@ def plot_observation(
         obs_dropout_lane=obs_dropout_lane,
         obs_dropout_boundary=obs_dropout_boundary,
         agent_idx=agent_idx,
+        obs_partner_relative_velocity=obs_partner_relative_velocity,
     )
     scales = _obs_scales(
         obs_norm_goal_offset_m=obs_norm_goal_offset_m,
@@ -995,7 +1000,8 @@ def encode_interactive_replay(scenario, replay):
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
         "ego_dim": int(binding.EGO_FEATURES),
         "reward_coef_count": int(binding.NUM_REWARD_COEFS),
-        "partner_features": int(binding.PARTNER_FEATURES),
+        "partner_features": int(binding.PARTNER_FEATURES)
+        + (int(binding.PARTNER_RELATIVE_VELOCITY_FEATURES) if env_cfg.get("obs_partner_relative_velocity") else 0),
         "lane_features": int(binding.LANE_FEATURES),
         "boundary_features": int(binding.BOUNDARY_FEATURES),
         "traffic_features": int(binding.TRAFFIC_CONTROL_FEATURES),
