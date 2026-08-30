@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0028_1000
+export RUN_NAME=k_scaled_0032_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -47,16 +47,16 @@ fi
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=30 \
-    env.max_speed_mps=13.33 \
+    eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
-    eval.output_name=${RUN_NAME}_long \
+    eval.output_name=${RUN_NAME}_fast \
     load_model_path=${MODEL_PATH} \
     wandb=True
 #     eval.obs_slots_partners_n=40 \
 #     eval.goal_regen_mode=rolling \
+#     env.max_speed_mps=13.33 \
 
 # No srun: single-node eval, run here on the batch host.
 python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
@@ -64,16 +64,17 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.num_agents=300 \
-        eval.reward_comfort=0.0 \
+    eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
-    env.eval_perceived_size_margin_m=0.15 \
-    env.max_speed_mps=13.33 \
+    env.eval_perceived_size_margin_m=0.0 \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_medium \
+    eval.output_name=${RUN_NAME}_fast \
     load_model_path=${MODEL_PATH} \
     wandb=True
+
+#     env.max_speed_mps=13.33 \
 
 end=$(date +%s)
 runtime=$((end-start))
