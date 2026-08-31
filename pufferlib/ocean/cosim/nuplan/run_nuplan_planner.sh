@@ -41,7 +41,7 @@
 #   (nuPlan's own ground-truth video is always requested via
 #    carl_visualization_callback in the callback list below -- one .avi per
 #    scenario under $GROUP/simulation/<challenge>/<run_ts>/visualization/)
-if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
+if [ -z "$INSIDE_PUFFER_CONTAINER" ] && [ -f /share/apps/images/slurm-ib-bind-apptainer.sh ]; then
     source /share/apps/images/slurm-ib-bind-apptainer.sh
     export APPTAINERENV_PREPEND_PATH=/share/apps/apptainer/bin:$APPTAINERENV_PREPEND_PATH
     exec singularity exec \
@@ -52,7 +52,7 @@ fi
 set -u
 
 : "${CKPT:?set CKPT=/path/to/model_xxx.pt (or CKPT=dummy for the wiring test)}"
-PY=/scratch/yw4142/venvs/pufferdrive/bin/python
+PY=${PY:-/scratch/yw4142/venvs/pufferdrive/bin/python}
 PD=${PD:-/scratch/yw4142/PufferDrive_cosim}
 export NUPLAN_DATA_ROOT=${NUPLAN_DATA_ROOT:-/scratch/yw4142/datasets/ad/nuplan}
 export NUPLAN_MAPS_ROOT=${NUPLAN_MAPS_ROOT:-/scratch/yw4142/datasets/ad/nuplan/maps-gpkg}
@@ -68,6 +68,8 @@ DEBUG_BEV=${COSIM_DEBUG_BEV:-1}
 
 EXTRA_ARGS=()
 [ "$DEBUG_BEV" = "1" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.debug_bev_dir=$GROUP/bev")
+CITY_BIN_DIR=${CITY_BIN_DIR:-/scratch/yw4142/datasets/ad/nuplan/maps}
+EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")

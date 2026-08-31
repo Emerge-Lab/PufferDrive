@@ -5,7 +5,7 @@ pufferdrive_planner:
   checkpoint_path: ???
   bin_cache_dir: ${oc.env:NUPLAN_EXP_ROOT}/pufferdrive_bin_cache
   # Whole-city map-only bins -- the only map source, no fallback.
-  city_bin_dir: /scratch/yw4142/datasets/ad/nuplan/maps
+  city_bin_dir: ???
   device: "cpu"
   map_radius: 400.0 # TODO: load from config
   goal_spacing: 20.0 # TODO: load from config
