@@ -3096,9 +3096,8 @@ static void compute_metrics(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     Log *agent_log = &env->logs[agent_idx];
 
-    for (int i = 0; i < NUM_METRICS; i++) {
-        agent->metrics_array[i] = 0.0f;
-    }
+    memset(agent->metrics_array, 0, sizeof(agent->metrics_array));
+
     if (agent->sim_x == INVALID_POSITION) {
         return; // invalid agent position
     }
@@ -3967,9 +3966,6 @@ static void compute_observations(Drive *env) {
     for (int i = 0; i < env->num_agents; i++) {
         float *obs = &obs_matrix[i][0];
         Agent *ego = &env->agents[i];
-        if (ego->removed || ego->stopped || ego->sim_valid == 0) {
-            continue;
-        }
         int partner_count = 0;
         int lane_count = 0;
         int boundary_count = 0;
