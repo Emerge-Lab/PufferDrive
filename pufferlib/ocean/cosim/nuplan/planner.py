@@ -36,6 +36,11 @@ def clean_policy_state_dict(state_dict):
     return {clean(k): v for k, v in state_dict.items()}
 
 
+# per-process caches: one planner per scenario, same checkpoint/bins each time
+_state_dict_cache: Dict[str, dict] = {}
+_bin_geometry_cache: Dict[str, dict] = {}
+
+
 def _angle_diff(a: float, b: float) -> float:
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
 
@@ -193,7 +198,10 @@ class PufferDrivePlanner(AbstractPlanner):
     def _resolve_map_bin(self):
         """-> (bin_path, NuPlanTransform, stop_line_centers, num_traffic)."""
         city_bin = self._find_city_bin()
-        geo = nb.read_bin_geometry(city_bin)
+        geo = _bin_geometry_cache.get(str(city_bin))
+        if geo is None:
+            geo = nb.read_bin_geometry(city_bin)
+            _bin_geometry_cache[str(city_bin)] = geo
         tf = (
             nb.NuPlanTransform(*geo["origin"])
             if geo["origin"] is not None
@@ -282,8 +290,13 @@ class PufferDrivePlanner(AbstractPlanner):
             # pre-3.0 checkpoints keep action_type only in the env section
             cfg["policy"].setdefault("action_type", cfg["env"]["action_type"])
             policy = getattr(drive_torch, cfg.get("policy_name", "Drive"))(self._env, **cfg["policy"])
-            sd = torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
-            policy.load_state_dict(clean_policy_state_dict(sd))
+            sd = _state_dict_cache.get(str(self._checkpoint_path))
+            if sd is None:
+                sd = clean_policy_state_dict(
+                    torch.load(self._checkpoint_path, map_location=self._device, weights_only=False)
+                )
+                _state_dict_cache[str(self._checkpoint_path)] = sd
+            policy.load_state_dict(sd)
             self._policy = policy.to(self._device).eval()
 
         # fixed route goals (bin frame): prefer the scenario's logged expert

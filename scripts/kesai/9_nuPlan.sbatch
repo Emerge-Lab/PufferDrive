@@ -21,21 +21,26 @@ export COSIM_DEBUG_BEV=0
 export CALLBACKS="[simulation_log_callback]"
 
 RUNNER=$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
-NPAR=56
+NPAR=80
+NUM_UNITS=112
 EVAL_ROOT=/home/bjaeger/cosim_Puffer/experiments/nuplan_val14_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$EVAL_ROOT"
 
 for i in $(seq -w 00 55); do
-    while [ "$(jobs -rp | wc -l)" -ge "$NPAR" ]; do wait -n; done
-    (
-        export SPLIT=nuplan_shard_$i GROUP=$EVAL_ROOT/shard_$i
-        bash "$RUNNER" > "$EVAL_ROOT/shard_$i.log" 2>&1
-        echo $? > "$EVAL_ROOT/shard_$i.exit"
-        done_count=$(ls "$EVAL_ROOT"/*.exit | wc -l)
-        bar=$(printf '%*s' $((done_count * 40 / 56)) '' | tr ' ' '#')
-        printf '%s [%-40s] %2d/56 shards  (shard_%s exit %s)\n' \
-            "$(date +%H:%M)" "$bar" "$done_count" "$i" "$(cat "$EVAL_ROOT/shard_$i.exit")"
-    ) &
+    for REACTIVITY in nonreactive reactive; do
+        while [ "$(jobs -rp | wc -l)" -ge "$NPAR" ]; do wait -n; done
+        (
+            UNIT=shard_${i}_${REACTIVITY}
+            export SPLIT=nuplan_shard_$i GROUP=$EVAL_ROOT/shard_$i
+            export CHALLENGES=closed_loop_${REACTIVITY}_agents_pufferdrive
+            bash "$RUNNER" > "$EVAL_ROOT/$UNIT.log" 2>&1
+            echo $? > "$EVAL_ROOT/$UNIT.exit"
+            done_count=$(ls "$EVAL_ROOT"/*.exit | wc -l)
+            bar=$(printf '%*s' $((done_count * 40 / NUM_UNITS)) '' | tr ' ' '#')
+            printf '%s [%-40s] %3d/%d units  (%s exit %s)\n' \
+                "$(date +%H:%M)" "$bar" "$done_count" "$NUM_UNITS" "$UNIT" "$(cat "$EVAL_ROOT/$UNIT.exit")"
+        ) &
+    done
 done
 wait
 
