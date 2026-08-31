@@ -14,7 +14,6 @@ export PD=/home/bjaeger/cosim_Puffer
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 export CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
 export CITY_BIN_DIR=/home/shared/data/nuPlan/PufferDrive
-export NUPLAN_VAL_DB_DIR=/home/shared/data/nuPlan/nuplan-v1.1/splits/trainval
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export WORKER=sequential
 
