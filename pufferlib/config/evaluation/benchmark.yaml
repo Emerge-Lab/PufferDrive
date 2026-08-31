@@ -4,7 +4,7 @@ env:
   collision_behavior: stop
   offroad_behavior: stop
   traffic_light_behavior: stop
-  dt: 0.1
+  dt: 0.0667
   reward_randomization: false
   reward_collision: 3.0
   reward_offroad: 3.0
@@ -18,9 +18,9 @@ env:
   reward_lane_center: 0.0038
   reward_timestep: 0.000025
   reward_reverse: 0.005
-  goal_speed: 20.0
+  goal_speed: 3.0
   goal_source: "route"
-  goal_radius: 2.0
+  goal_radius: 10.0
   goal_regen_mode: "finite"
   min_goal_spacing: 30.0
   max_goal_spacing: 30.0
@@ -30,7 +30,10 @@ env:
   partner_blindness_trigger_prob: 0.0
   phantom_braking_prob: 0.0
   phantom_braking_trigger_prob: 0.0
+  use_neighbor_cache: 1
   termination_mode: 0
+  spawn_lateral_offset_max_frac: 0.0
+  spawn_heading_max_deg: 0.0
 
 benchmarks:
   - name: carla

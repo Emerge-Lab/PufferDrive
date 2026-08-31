@@ -11,12 +11,13 @@ import inspect
 
 from pufferlib.ocean.drive.drive import Drive
 
-# Mirror of the noise/light keys in pufferlib/config/evaluation/benchmark.yaml,
-# duplicated so the co-sim venvs (CARLA cp310 / nuPlan) never import the training
-# stack; tests/unit_tests/test_cosim_config_contract.py pins the two equal.
-# Train-time observation noise is disabled, and traffic_light_behavior="stop"
-# keeps the benchmark's red-light semantics: a shadow-detected violation
-# latches the ego stopped (drive.h apply_infraction_behavior).
+# Mirror of the noise/light/conditioning keys in
+# pufferlib/config/evaluation/benchmark.yaml, duplicated so the co-sim venvs
+# (CARLA cp310 / nuPlan) never import the training stack;
+# tests/unit_tests/test_cosim_config_contract.py pins the two equal.
+# The reward_*/goal_* keys pin the conditioning obs to the GigaFlow paper's
+# eval values (Table A2) instead of adopting the training config's
+# reward_randomization=true, which would sample a random command profile.
 CLEAN_EVAL_OVERRIDES = {
     "obs_dropout_lane": 0.0,
     "obs_dropout_boundary": 0.0,
@@ -25,6 +26,22 @@ CLEAN_EVAL_OVERRIDES = {
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
     "traffic_light_behavior": "stop",
+    "eval_mode": True,
+    "reward_randomization": False,
+    "goal_speed": 3.0,
+    "goal_radius": 10.0,
+    "reward_collision": 3.0,
+    "reward_offroad": 3.0,
+    "reward_stop_line": 1.0,
+    "reward_ade": 0.0,
+    "reward_goal": 1.0,
+    "reward_overspeed": 0.05,
+    "reward_comfort": 0.05,
+    "reward_velocity": 0.0025,
+    "reward_lane_align": 0.025,
+    "reward_lane_center": 0.0038,
+    "reward_timestep": 0.000025,
+    "reward_reverse": 0.005,
 }
 
 

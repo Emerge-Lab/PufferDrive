@@ -241,6 +241,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 "map_dir": str(bin_path),
                 "num_maps": 1,
                 "num_agents": self._num_agents,
+                # lockstep with nuPlan's 10 Hz iterations, not the training dt (mimolette: 0.3)
+                "dt": 0.1,
                 "scenario_length": 1_000_000,
                 "resample_frequency": 0,
                 # External sim owns the episode: a training-config
@@ -369,7 +371,13 @@ class PufferDrivePlanner(AbstractPlanner):
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
         # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
-        objs = list(detections.tracked_objects)[: self._num_agents - 1]
+        objs = list(detections.tracked_objects)
+        if len(objs) > self._num_agents - 1:
+            # keep the nearest: devkit ordering is by type/token, so blind
+            # truncation could drop a close vehicle while keeping far ones
+            ox, oy = ego_state.center.x, ego_state.center.y
+            objs.sort(key=lambda o: (o.center.x - ox) ** 2 + (o.center.y - oy) ** 2)
+            objs = objs[: self._num_agents - 1]
         if objs:
             idx, x, y, z, hh, vx, vy, _tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
             env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
