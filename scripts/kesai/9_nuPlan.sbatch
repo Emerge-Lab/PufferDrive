@@ -16,9 +16,12 @@ export CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
 export CITY_BIN_DIR=/home/shared/data/nuPlan/PufferDrive
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export WORKER=sequential
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
+export COSIM_DEBUG_BEV=0
+export CALLBACKS="[simulation_log_callback]"
 
 RUNNER=$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
-NPAR=40
+NPAR=56
 EVAL_ROOT=/home/bjaeger/cosim_Puffer/experiments/nuplan_val14_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$EVAL_ROOT"
 
