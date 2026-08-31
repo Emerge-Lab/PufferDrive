@@ -3244,7 +3244,8 @@ void c_set_agent_states(
     const float *vx,
     const float *vy,
     const float *yaw_rate,
-    const float *accel_long) {
+    const float *accel_long,
+    const float *seconds_stopped) {
     for (int k = 0; k < count; k++) {
         int agent_idx = idx[k];
         if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
@@ -3283,8 +3284,10 @@ void c_set_agent_states(
         agent->accel_lat = agent->sim_speed_signed * agent->yaw_rate;
         refresh_lane_association(env, agent); // current_lane_idx / lane-dist / lane-angle for the new pose
 
-        // seconds_stopped is intentionally left untouched: c_step already updates it once per tick, before this
-        // overwrite runs, so redoing it here would double-count.
+        // NULL keeps c_step's own accumulation (co-sim default); an array injects stopped-time as state.
+        if (seconds_stopped) {
+            agent->seconds_stopped = seconds_stopped[k];
+        }
     }
 }
 
