@@ -2871,7 +2871,6 @@ void init(Drive *env) {
     env->road_dropout_enabled = (env->obs_slots_lane_kept < env->obs_slots_lane_n)
         || (env->obs_slots_boundary_kept < env->obs_slots_boundary_n);
     env->logs_capacity = 0;
-    begin_episode_rng(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int steps = env->scenario_length;
         if (steps > 0) {
@@ -4236,6 +4235,7 @@ static void move_dynamics(Drive *env, int agent_idx) {
 
 void c_reset(Drive *env) {
     env->timestep = env->init_step;
+    begin_episode_rng(env);
 
     if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
         set_agent_at_init_log_step(env);
