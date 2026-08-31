@@ -10,8 +10,7 @@
 #SBATCH --partition dev
 set -u
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-export PD=$(cd "$SCRIPT_DIR/../.." && pwd)
+export PD=/home/bjaeger/cosim_Puffer
 export PY=$PD/.venv/bin/python
 export CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
 export CITY_BIN_DIR=/home/shared/data/nuPlan/PufferDrive
