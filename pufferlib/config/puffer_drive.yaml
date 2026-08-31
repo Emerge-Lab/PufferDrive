@@ -101,7 +101,8 @@ env:
   # Controller used by non-vehicle agents. "auto" follows non_sdc_controller unless it is "idm", then it uses "replay".
   # options: "auto", "static", "policy", "replay", "idm"
   non_vehicle_controller: auto
-  # Replay-mode agents flagged mark_as_expert are log-replayed (1) or treated like any other agent (0)
+  # Per-agent override, independent of the controllers above: agents flagged mark_as_expert
+  # in the scenario data are forced to log-replay (1) or follow their controller setting (0)
   replay_expert_agents: 1
   # Options: "create_all_valid", "create_only_controlled", "create_controllable_types" (uncontrolled ones static)
   init_mode: create_all_valid

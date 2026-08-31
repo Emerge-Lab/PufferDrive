@@ -2359,7 +2359,7 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
     Agent inflated = *tmp_agent;
     inflated.sim_length += 2.0f * SPAWN_CLEARANCE_M;
     inflated.sim_width += 2.0f * SPAWN_CLEARANCE_M;
-    float min_safe_dist_sq = (inflated.sim_length + 5.0f) * (inflated.sim_length + 5.0f);
+    update_agent_radius(&inflated);
 
     for (int i = 0; i < num_existing_agents; i++) {
         Agent *other = &env->agents[i];
@@ -2370,9 +2370,9 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
 
         float dx = other->sim_x - tmp_agent->sim_x;
         float dy = other->sim_y - tmp_agent->sim_y;
-        float dist_sq = dx * dx + dy * dy;
+        float max_overlap_dist = inflated.radius + other->radius;
 
-        if (dist_sq > min_safe_dist_sq) {
+        if (dx * dx + dy * dy > max_overlap_dist * max_overlap_dist) {
             continue;
         }
         if (check_obb_collision(&inflated, other)) {
@@ -2386,8 +2386,8 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
 static bool check_spawn_offroad(Drive *env, Agent *tmp_agent, float edge_clearance_m) {
     // Increase length and width slightly for spawn offroad check
     Agent scaled = *tmp_agent;
-    scaled.sim_length = scaled.sim_length * 1.1f + 2.0f * edge_clearance_m;
-    scaled.sim_width = scaled.sim_width * 1.1f + 2.0f * edge_clearance_m;
+    scaled.sim_length = scaled.sim_length * SPAWN_OFFROAD_SCALE_FACTOR + 2.0f * edge_clearance_m;
+    scaled.sim_width = scaled.sim_width * SPAWN_OFFROAD_SCALE_FACTOR + 2.0f * edge_clearance_m;
 
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
