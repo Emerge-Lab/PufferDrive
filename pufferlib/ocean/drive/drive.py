@@ -145,8 +145,6 @@ class Drive(pufferlib.PufferEnv):
         adv_target_collision_reward=0.5,
         adv_target_collision_reward_use_responsibility=False,
         adv_target_failure_reward=2.0,
-        adv_compliant_bonus=1.5,
-        adv_genuine_compliant_bonus=6.5,
         adv_target_avoidability_reward=0.0,
         adv_target_detection_reward=0.0,
         adv_target_time_reward_tau=2.0,
@@ -273,8 +271,6 @@ class Drive(pufferlib.PufferEnv):
         self.adv_target_collision_reward = float(adv_target_collision_reward)
         self.adv_target_collision_reward_use_responsibility = bool(adv_target_collision_reward_use_responsibility)
         self.adv_target_failure_reward = float(adv_target_failure_reward)
-        self.adv_compliant_bonus = float(adv_compliant_bonus)
-        self.adv_genuine_compliant_bonus = float(adv_genuine_compliant_bonus)
         self.adv_target_avoidability_reward = float(adv_target_avoidability_reward)
         self.adv_target_detection_reward = float(adv_target_detection_reward)
         self.adv_target_time_reward_tau = float(adv_target_time_reward_tau)
@@ -790,7 +786,7 @@ class Drive(pufferlib.PufferEnv):
             stacked[key] = np.stack(frames, axis=0)
         return stacked
 
-    def _build_compact_replay_bundle(self, env_slot, summary, avoidability_debug=None, compliance_diagnostics=None):
+    def _build_compact_replay_bundle(self, env_slot, summary, avoidability_debug=None):
         if env_slot is None or env_slot < 0 or env_slot >= len(self._compact_replay_buffers):
             return None
 
@@ -812,7 +808,7 @@ class Drive(pufferlib.PufferEnv):
             }
         )
         bundle = {
-            "schema_version": 8,
+            "schema_version": 7,
             "metadata": metadata,
             "agent_arrays": self._stack_compact_replay_frames(buffer["agent_frames"]),
             "traffic_arrays": self._stack_compact_replay_frames(buffer["traffic_frames"]),
@@ -820,15 +816,7 @@ class Drive(pufferlib.PufferEnv):
         }
         if avoidability_debug:
             bundle["avoidability_debug"] = avoidability_debug
-        if compliance_diagnostics:
-            bundle["compliance_diagnostics"] = compliance_diagnostics
         return zlib.compress(pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL), level=3)
-
-    def _flatten_compliance_diagnostics(self, summary, diagnostics):
-        if not diagnostics:
-            return
-        for key, value in diagnostics.items():
-            summary[f"hitter_compliance_{key}"] = value
 
     def _normalize_log_summaries(self, log_payload):
         if not log_payload:
@@ -921,8 +909,6 @@ class Drive(pufferlib.PufferEnv):
             "adv_target_collision_reward": self.adv_target_collision_reward,
             "adv_target_collision_reward_use_responsibility": self.adv_target_collision_reward_use_responsibility,
             "adv_target_failure_reward": self.adv_target_failure_reward,
-            "adv_compliant_bonus": self.adv_compliant_bonus,
-            "adv_genuine_compliant_bonus": self.adv_genuine_compliant_bonus,
             "adv_target_avoidability_reward": self.adv_target_avoidability_reward,
             "adv_target_detection_reward": self.adv_target_detection_reward,
             "adv_target_time_reward_tau": self.adv_target_time_reward_tau,
@@ -1050,17 +1036,12 @@ class Drive(pufferlib.PufferEnv):
                         if isinstance(summary, dict):
                             tagged_summary = dict(summary)
                             avoidability_debug = tagged_summary.pop("avoidability_debug", None)
-                            compliance_diagnostics = tagged_summary.pop("compliance_diagnostics", None)
-                            self._flatten_compliance_diagnostics(tagged_summary, compliance_diagnostics)
                             env_slot = tagged_summary.get("env_slot")
                             if env_slot is not None:
                                 tagged_summary["env_slot"] = int(env_slot)
                             if self.capture_compact_replay:
                                 compact_replay_bundle = self._build_compact_replay_bundle(
-                                    tagged_summary.get("env_slot"),
-                                    tagged_summary,
-                                    avoidability_debug,
-                                    compliance_diagnostics,
+                                    tagged_summary.get("env_slot"), tagged_summary, avoidability_debug
                                 )
                                 if compact_replay_bundle is not None:
                                     tagged_summary["compact_replay_bundle"] = compact_replay_bundle
@@ -1075,14 +1056,12 @@ class Drive(pufferlib.PufferEnv):
                 elif isinstance(completed_episodes, dict):
                     tagged_summary = dict(completed_episodes)
                     avoidability_debug = tagged_summary.pop("avoidability_debug", None)
-                    compliance_diagnostics = tagged_summary.pop("compliance_diagnostics", None)
-                    self._flatten_compliance_diagnostics(tagged_summary, compliance_diagnostics)
                     env_slot = tagged_summary.get("env_slot")
                     if env_slot is not None:
                         tagged_summary["env_slot"] = int(env_slot)
                     if self.capture_compact_replay:
                         compact_replay_bundle = self._build_compact_replay_bundle(
-                            tagged_summary.get("env_slot"), tagged_summary, avoidability_debug, compliance_diagnostics
+                            tagged_summary.get("env_slot"), tagged_summary, avoidability_debug
                         )
                         if compact_replay_bundle is not None:
                             tagged_summary["compact_replay_bundle"] = compact_replay_bundle

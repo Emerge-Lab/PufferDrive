@@ -176,11 +176,7 @@ def metric_log_key(metric_name):
     }
     collision_metrics = {
         "did_target_collide": "did_target_collide",
-        "did_target_have_genuine_non_compliant_collision": "genuine_non_compliant",
-        "did_target_have_genuine_compliant_collision": "genuine_compliant",
         "did_target_have_unavoidable_collision": "unavoidable",
-        "did_target_have_compliant_forced_collision": "compliant_forced",
-        "did_target_have_forced_non_compliant_collision": "forced_not_compliant",
         "did_target_have_at_fault_collision": "at_fault",
     }
     overview_metrics = {

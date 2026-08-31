@@ -17,8 +17,8 @@ def load_compact_replay(path):
         replay_bundle = pickle.loads(zlib.decompress(f.read()))
 
     schema_version = int(replay_bundle.get("schema_version", 0) or 0)
-    if schema_version not in (7, 8):
-        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected 7 or 8.")
+    if schema_version != 7:
+        raise ValueError(f"Unsupported compact replay schema_version={schema_version}. Expected schema_version=7.")
 
     required_top_level = ("metadata", "agent_arrays", "traffic_arrays", "episode_timesteps")
     missing_top_level = [key for key in required_top_level if key not in replay_bundle]
@@ -177,395 +177,7 @@ def load_map_static(map_path):
         "map_name": scenario.get("map_name"),
         "map_corners": scenario.get("map_corners", []),
         "road_elements": scenario.get("road_elements", []),
-        "traffic_elements": [
-            {
-                "type": element.get("type"),
-                "stop_line": element.get("stop_line"),
-                "heading": element.get("heading"),
-                "controlled_lanes": element.get("controlled_lanes"),
-            }
-            for element in scenario.get("traffic_elements", [])
-        ],
     }
-
-
-COMPLIANCE_WINDOW_SECONDS = 5.0
-COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD = 2.0
-COMPLIANCE_SPEED_LIMIT_RATIO_THRESHOLD = 1.05
-COMPLIANCE_SOLID_LINE_TYPES = {12, 13, 16, 17}
-COMPLIANCE_LANE_TYPES = {1, 2}
-
-
-@lru_cache(maxsize=16)
-def _compliance_map_geometry(map_path):
-    map_static = load_map_static(map_path)
-    road_elements = map_static.get("road_elements", [])
-    lanes = []
-    solid_segments = []
-    for line_index, element in enumerate(road_elements):
-        element_type = int(element.get("type", 0) or 0)
-        xs = element.get("x") or []
-        ys = element.get("y") or []
-        zs = element.get("z") or []
-        if element_type in COMPLIANCE_LANE_TYPES:
-            lanes.append(
-                {
-                    "line_index": line_index,
-                    "speed_limit": float(element.get("speed_limit", 0.0) or 0.0),
-                    "x": [float(value) for value in xs],
-                    "y": [float(value) for value in ys],
-                    "z": [float(value) for value in zs],
-                }
-            )
-        for segment_index in range(min(len(xs), len(ys)) - 1):
-            z1 = float(zs[segment_index]) if segment_index < len(zs) else 0.0
-            z2 = float(zs[segment_index + 1]) if segment_index + 1 < len(zs) else z1
-            segment = (
-                float(xs[segment_index]),
-                float(ys[segment_index]),
-                z1,
-                float(xs[segment_index + 1]),
-                float(ys[segment_index + 1]),
-                z2,
-            )
-            if element_type in COMPLIANCE_SOLID_LINE_TYPES:
-                solid_segments.append((line_index, segment_index, element_type, segment))
-    return lanes, solid_segments, map_static.get("traffic_elements", [])
-
-
-def _segment_intersection(a1, a2, b1, b2, epsilon=1e-9):
-    ax = a2[0] - a1[0]
-    ay = a2[1] - a1[1]
-    bx = b2[0] - b1[0]
-    by = b2[1] - b1[1]
-    cross = ax * by - ay * bx
-    if abs(cross) <= epsilon:
-        return False
-    dx = b1[0] - a1[0]
-    dy = b1[1] - a1[1]
-    ta = (dx * by - dy * bx) / cross
-    tb = (dx * ay - dy * ax) / cross
-    return -epsilon <= ta <= 1.0 + epsilon and -epsilon <= tb <= 1.0 + epsilon
-
-
-def _angle_difference(a, b):
-    return (a - b + math.pi) % (2.0 * math.pi) - math.pi
-
-
-def _closest_compliance_lane(sample, lanes, current_lane_index=-1):
-    best = None
-    best_score = float("inf")
-    x = sample["x"]
-    y = sample["y"]
-    z = sample["z"]
-    max_distance_sq = (3.0 * max(sample.get("width", 0.0), 0.1)) ** 2
-    for lane in lanes:
-        xs = lane["x"]
-        ys = lane["y"]
-        zs = lane["z"]
-        closest_segment = -1
-        closest_distance_sq = float("inf")
-        for segment_index in range(min(len(xs), len(ys)) - 1):
-            z1 = zs[segment_index] if segment_index < len(zs) else 0.0
-            z2 = zs[segment_index + 1] if segment_index + 1 < len(zs) else z1
-            if min(abs(z1 - z), abs(z2 - z)) > 4.0:
-                continue
-            x1, y1 = xs[segment_index], ys[segment_index]
-            x2, y2 = xs[segment_index + 1], ys[segment_index + 1]
-            dx = x2 - x1
-            dy = y2 - y1
-            length_sq = dx * dx + dy * dy
-            if length_sq <= 1e-12:
-                continue
-            projection = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / length_sq))
-            px = x1 + projection * dx
-            py = y1 + projection * dy
-            distance_sq = (x - px) ** 2 + (y - py) ** 2
-            if distance_sq < closest_distance_sq:
-                closest_distance_sq = distance_sq
-                closest_segment = segment_index
-        if closest_segment < 0 or closest_distance_sq > max_distance_sq:
-            continue
-
-        start = max(0, closest_segment - 1)
-        end = min(len(xs) - 2, closest_segment + 1)
-        headings = [math.atan2(ys[index + 1] - ys[index], xs[index + 1] - xs[index]) for index in range(start, end + 1)]
-        weights = [2.0 if index == closest_segment else 1.0 for index in range(start, end + 1)]
-        sin_sum = sum(weight * math.sin(heading) for weight, heading in zip(weights, headings))
-        cos_sum = sum(weight * math.cos(heading) for weight, heading in zip(weights, headings))
-        lane_heading = math.atan2(sin_sum, cos_sum)
-        distance = math.sqrt(closest_distance_sq)
-        heading_penalty = abs(_angle_difference(sample["heading"], lane_heading)) / math.pi
-        score = 0.7 * distance / 4.0 + 0.3 * heading_penalty
-        if current_lane_index >= 0 and lane["line_index"] != current_lane_index:
-            score += 0.05
-        if score < best_score:
-            best_score = score
-            best = {
-                "line_index": lane["line_index"],
-                "segment_index": closest_segment,
-                "heading": lane_heading,
-                "speed_limit": lane["speed_limit"],
-            }
-    return best
-
-
-def _crossed_solid_line(previous, sample, solid_segments):
-    movement_start = (previous["x"], previous["y"])
-    movement_end = (sample["x"], sample["y"])
-    for line_index, segment_index, line_type, segment in solid_segments:
-        x1, y1, z1, x2, y2, z2 = segment
-        if min(abs(z1 - sample["z"]), abs(z2 - sample["z"])) > 4.0:
-            continue
-        if _segment_intersection(movement_start, movement_end, (x1, y1), (x2, y2)):
-            return line_index, segment_index, line_type
-    return None
-
-
-def _agent_corners(sample):
-    half_length = 0.5 * sample["length"]
-    half_width = 0.5 * sample["width"]
-    cos_heading = math.cos(sample["heading"])
-    sin_heading = math.sin(sample["heading"])
-    return (
-        (
-            sample["x"] + half_length * cos_heading - half_width * sin_heading,
-            sample["y"] + half_length * sin_heading + half_width * cos_heading,
-        ),
-        (
-            sample["x"] + half_length * cos_heading + half_width * sin_heading,
-            sample["y"] + half_length * sin_heading - half_width * cos_heading,
-        ),
-        (
-            sample["x"] - half_length * cos_heading + half_width * sin_heading,
-            sample["y"] - half_length * sin_heading - half_width * cos_heading,
-        ),
-        (
-            sample["x"] - half_length * cos_heading - half_width * sin_heading,
-            sample["y"] - half_length * sin_heading + half_width * cos_heading,
-        ),
-    )
-
-
-def _crossed_red_light(sample, replay_bundle, lane_index, previous_lane_index, traffic_elements):
-    frame_index = sample.get("frame_index")
-    if frame_index is None:
-        return None
-    if lane_index < 0:
-        return -1
-    traffic = replay_bundle["traffic_arrays"]
-    if frame_index >= traffic["valid"].shape[0]:
-        return None
-    corners = _agent_corners(sample)
-    for control_index in np.flatnonzero(traffic["valid"][frame_index]):
-        if int(traffic["type"][frame_index, control_index]) != 1:
-            continue
-        if int(traffic["state"][frame_index, control_index]) != 1:
-            continue
-        static_control = traffic_elements[int(control_index)]
-        controlled_lanes = static_control.get("controlled_lanes") or []
-        if lane_index not in controlled_lanes:
-            continue
-        stop_line = traffic["stop_line"][frame_index, control_index]
-        if min(abs(float(stop_line[2]) - sample["z"]), abs(float(stop_line[5]) - sample["z"])) > 4.0:
-            continue
-        midpoint_x = 0.5 * (float(stop_line[0]) + float(stop_line[3]))
-        midpoint_y = 0.5 * (float(stop_line[1]) + float(stop_line[4]))
-        if (sample["x"] - midpoint_x) ** 2 + (sample["y"] - midpoint_y) ** 2 > 100.0:
-            continue
-        if previous_lane_index >= 0 and previous_lane_index != lane_index:
-            return int(control_index)
-        control_heading = static_control.get("heading")
-        if control_heading is None or abs(_angle_difference(sample["heading"], float(control_heading))) > math.pi / 4:
-            continue
-        line_dx = float(stop_line[3]) - float(stop_line[0])
-        line_dy = float(stop_line[4]) - float(stop_line[1])
-        extended_start = (float(stop_line[0]) - 0.25 * line_dx, float(stop_line[1]) - 0.25 * line_dy)
-        extended_end = (float(stop_line[3]) + 0.25 * line_dx, float(stop_line[4]) + 0.25 * line_dy)
-        for edge_index in (0, 1, 3):
-            if _segment_intersection(corners[edge_index], corners[(edge_index + 1) % 4], extended_start, extended_end):
-                return int(control_index)
-    return -1
-
-
-def _historical_hitter_samples(replay_bundle, hitter_index, collision_timestep, collision_snapshot):
-    arrays = replay_bundle["agent_arrays"]
-    timesteps = replay_bundle["episode_timesteps"]
-    samples = []
-    for frame_index, timestep in enumerate(timesteps):
-        if hitter_index >= arrays["valid"].shape[1] or not arrays["valid"][frame_index, hitter_index]:
-            continue
-        samples.append(
-            {
-                "frame_index": frame_index,
-                "timestep": int(timestep),
-                "x": float(arrays["x"][frame_index, hitter_index]),
-                "y": float(arrays["y"][frame_index, hitter_index]),
-                "z": float(arrays["z"][frame_index, hitter_index]),
-                "heading": float(arrays["heading"][frame_index, hitter_index]),
-                "length": float(arrays["length"][frame_index, hitter_index]),
-                "vx": float(arrays["vx"][frame_index, hitter_index]),
-                "vy": float(arrays["vy"][frame_index, hitter_index]),
-                "width": float(arrays["width"][frame_index, hitter_index]),
-            }
-        )
-    if collision_snapshot and collision_snapshot.get("valid"):
-        samples.append(
-            {
-                "frame_index": None,
-                "timestep": int(collision_timestep),
-                "x": float(collision_snapshot["x"]),
-                "y": float(collision_snapshot["y"]),
-                "z": float(collision_snapshot.get("z", 0.0)),
-                "heading": float(collision_snapshot.get("heading", 0.0)),
-                "length": float(collision_snapshot.get("length", 0.0)),
-                "vx": float(collision_snapshot.get("vx", 0.0)),
-                "vy": float(collision_snapshot.get("vy", 0.0)),
-                "width": float(collision_snapshot.get("width", 0.0)),
-            }
-        )
-    samples.sort(key=lambda sample: sample["timestep"])
-    return samples
-
-
-def reconstruct_compliance_diagnostics(replay_bundle):
-    avoidability = replay_bundle.get("avoidability_debug") or {}
-    collision = avoidability.get("collision") or {}
-    if not collision:
-        return None
-
-    hitter_index = int(collision.get("collision_adversary_index", -1))
-    collision_timestep = int(collision.get("collision_timestep", -1))
-    if hitter_index < 0 or collision_timestep < 0:
-        return None
-    dt = float((avoidability.get("constants") or {}).get("dt", 0.1) or 0.1)
-    nominal_window_start = collision_timestep - int(math.ceil(COMPLIANCE_WINDOW_SECONDS / dt))
-    samples = _historical_hitter_samples(replay_bundle, hitter_index, collision_timestep, collision.get("adversary"))
-    samples = [sample for sample in samples if sample["timestep"] >= nominal_window_start]
-    if not samples:
-        return None
-
-    map_path = replay_bundle.get("metadata", {}).get("map_path")
-    lanes, solid_segments, traffic_elements = _compliance_map_geometry(str(_resolve_map_path(map_path)))
-    diagnostics = {
-        "valid": 1,
-        "source": "reconstructed",
-        "compliant": 1,
-        "hitter_agent_index": hitter_index,
-        "hitter_agent_id": int((collision.get("adversary") or {}).get("id", hitter_index)),
-        "collision_timestep": collision_timestep,
-        "dt": dt,
-        "window_seconds": COMPLIANCE_WINDOW_SECONDS,
-        "window_start_timestep": samples[0]["timestep"],
-        "window_sample_count": len(samples),
-        "lane_sample_count": 0,
-        "lane_unavailable_sample_count": 0,
-        "speed_limit_sample_count": 0,
-        "speed_limit_unavailable_sample_count": 0,
-        "red_light_sample_count": 0,
-        "red_light_unavailable_sample_count": 0,
-        "red_light_violation": 0,
-        "wrong_way_violation": 0,
-        "solid_line_violation": 0,
-        "speed_limit_violation": 0,
-        "first_red_light_timestep": -1,
-        "first_wrong_way_timestep": -1,
-        "first_solid_line_timestep": -1,
-        "first_speed_limit_timestep": -1,
-        "wrong_way_distance": 0.0,
-        "max_speed_ratio": 0.0,
-        "crossed_line_index": -1,
-        "crossed_line_segment_index": -1,
-        "crossed_line_type": -1,
-        "crossing_segment_start_x": 0.0,
-        "crossing_segment_start_y": 0.0,
-        "crossing_segment_end_x": 0.0,
-        "crossing_segment_end_y": 0.0,
-        "wrong_way_distance_threshold": COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD,
-        "speed_limit_ratio_threshold": COMPLIANCE_SPEED_LIMIT_RATIO_THRESHOLD,
-        "hitter_trajectory": [
-            {"timestep": sample["timestep"], "x": sample["x"], "y": sample["y"]} for sample in samples
-        ],
-    }
-
-    previous = None
-    current_lane_index = -1
-    for sample in samples:
-        previous_lane_index = current_lane_index
-        lane = _closest_compliance_lane(sample, lanes, current_lane_index)
-        if lane is None:
-            current_lane_index = -1
-            diagnostics["lane_unavailable_sample_count"] += 1
-            diagnostics["speed_limit_unavailable_sample_count"] += 1
-        else:
-            current_lane_index = lane["line_index"]
-            diagnostics["lane_sample_count"] += 1
-            speed_limit = lane["speed_limit"]
-            if speed_limit > 0.0:
-                diagnostics["speed_limit_sample_count"] += 1
-                speed_ratio = math.hypot(sample["vx"], sample["vy"]) / speed_limit
-                diagnostics["max_speed_ratio"] = max(diagnostics["max_speed_ratio"], speed_ratio)
-                if speed_ratio > COMPLIANCE_SPEED_LIMIT_RATIO_THRESHOLD:
-                    diagnostics["speed_limit_violation"] = 1
-                    if diagnostics["first_speed_limit_timestep"] < 0:
-                        diagnostics["first_speed_limit_timestep"] = sample["timestep"]
-            else:
-                diagnostics["speed_limit_unavailable_sample_count"] += 1
-
-            if sample["timestep"] > nominal_window_start:
-                lane_vx = math.cos(lane["heading"])
-                lane_vy = math.sin(lane["heading"])
-                wrong_speed = max(0.0, -(sample["vx"] * lane_vx + sample["vy"] * lane_vy))
-                diagnostics["wrong_way_distance"] += wrong_speed * dt
-                if (
-                    diagnostics["wrong_way_distance"] > COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD
-                    and diagnostics["first_wrong_way_timestep"] < 0
-                ):
-                    diagnostics["wrong_way_violation"] = 1
-                    diagnostics["first_wrong_way_timestep"] = sample["timestep"]
-
-        red_control = _crossed_red_light(
-            sample, replay_bundle, current_lane_index, previous_lane_index, traffic_elements
-        )
-        if red_control is None:
-            diagnostics["red_light_unavailable_sample_count"] += 1
-        else:
-            diagnostics["red_light_sample_count"] += 1
-            if red_control >= 0:
-                diagnostics["red_light_violation"] = 1
-                if diagnostics["first_red_light_timestep"] < 0:
-                    diagnostics["first_red_light_timestep"] = sample["timestep"]
-
-        if previous is not None and sample["timestep"] > nominal_window_start:
-            crossing = _crossed_solid_line(previous, sample, solid_segments)
-            if crossing is not None:
-                diagnostics["solid_line_violation"] = 1
-                if diagnostics["first_solid_line_timestep"] < 0:
-                    diagnostics["first_solid_line_timestep"] = sample["timestep"]
-                    diagnostics["crossed_line_index"] = crossing[0]
-                    diagnostics["crossed_line_segment_index"] = crossing[1]
-                    diagnostics["crossed_line_type"] = crossing[2]
-                    diagnostics["crossing_segment_start_x"] = previous["x"]
-                    diagnostics["crossing_segment_start_y"] = previous["y"]
-                    diagnostics["crossing_segment_end_x"] = sample["x"]
-                    diagnostics["crossing_segment_end_y"] = sample["y"]
-        previous = sample
-
-    diagnostics["wrong_way_violation"] = int(
-        diagnostics["wrong_way_distance"] > COMPLIANCE_WRONG_WAY_DISTANCE_THRESHOLD
-    )
-    diagnostics["compliant"] = int(
-        not any(
-            diagnostics[key]
-            for key in (
-                "red_light_violation",
-                "wrong_way_violation",
-                "solid_line_violation",
-                "speed_limit_violation",
-            )
-        )
-    )
-    return diagnostics
 
 
 def _compute_bounds(map_static, replay_bundle):
@@ -596,25 +208,6 @@ def _build_render_payload(replay_bundle):
     materialized_bundle = _materialize_replay_bundle(replay_bundle)
     metadata = {key: _ensure_python_scalar(value) for key, value in materialized_bundle.get("metadata", {}).items()}
     map_static = load_map_static(metadata["map_path"])
-    compliance = replay_bundle.get("compliance_diagnostics")
-    if compliance:
-        compliance = {key: _ensure_python_scalar(value) for key, value in compliance.items()}
-        compliance.setdefault("source", "simulator")
-        collision = (replay_bundle.get("avoidability_debug") or {}).get("collision") or {}
-        samples = _historical_hitter_samples(
-            replay_bundle,
-            int(compliance.get("hitter_agent_index", -1)),
-            int(compliance.get("collision_timestep", -1)),
-            collision.get("adversary"),
-        )
-        window_start = int(compliance.get("window_start_timestep", -1))
-        compliance["hitter_trajectory"] = [
-            {"timestep": sample["timestep"], "x": sample["x"], "y": sample["y"]}
-            for sample in samples
-            if sample["timestep"] >= window_start
-        ]
-    else:
-        compliance = reconstruct_compliance_diagnostics(replay_bundle)
     return {
         "metadata": metadata,
         "map": map_static,
@@ -623,7 +216,6 @@ def _build_render_payload(replay_bundle):
         "traffic_frames": materialized_bundle.get("traffic_frames", []),
         "episode_timesteps": [int(value) for value in replay_bundle.get("episode_timesteps", [])],
         "avoidability_debug": replay_bundle.get("avoidability_debug"),
-        "compliance_diagnostics": compliance,
     }
 
 
@@ -747,9 +339,6 @@ HTML_TEMPLATE = """<!doctype html>
       color: #93c5fd;
     }
     .avoidability-result strong { display: block; margin-bottom: 3px; }
-    .compliance-card { margin: 14px 0; }
-    .compliance-jumps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-    .compliance-jumps button { padding: 5px 8px; font-size: 12px; }
     .rollout-markers {
       padding: 9px 10px;
       border-radius: 10px;
@@ -1018,11 +607,6 @@ HTML_TEMPLATE = """<!doctype html>
         <a id="prev-link" href="#">Previous</a>
         <a id="next-link" href="#">Next</a>
       </div>
-      <div id="compliance-card" class="avoidability-result compliance-card reference">
-        <strong>Compliance unavailable</strong>
-        <div id="compliance-detail"></div>
-        <div id="compliance-jumps" class="compliance-jumps"></div>
-      </div>
       <div class="meta">
         <div class="meta-item"><span class="meta-label">Focused Speed</span><span class="meta-value" id="focus-speed">n/a</span></div>
         <div class="meta-item"><span class="meta-label">Did Target Collide</span><span class="meta-value" id="meta-collide"></span></div>
@@ -1059,8 +643,6 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="legend-row"><span class="swatch" style="background: #fb7185"></span>Target stopped / impact pose</div>
         <div class="legend-row"><span class="swatch" style="background: #22d3ee"></span>Adversary rollout / impact pose</div>
         <div class="legend-row"><span class="swatch" style="background: #c084fc"></span>Impact poses (secondary blocker)</div>
-        <div class="legend-row"><span class="swatch" style="background: #fb7185"></span>Hitter compliance trajectory</div>
-        <div class="legend-row"><span class="swatch" style="background: #ff2d55"></span>Crossed solid line / movement</div>
       </div>
     </aside>
     <main class="panel viewer">
@@ -1128,9 +710,6 @@ HTML_TEMPLATE = """<!doctype html>
     const detectorHud = document.getElementById('detector-hud');
     const bufferBadge = document.getElementById('buffer-badge');
     const ttcBadge = document.getElementById('ttc-badge');
-    const complianceCard = document.getElementById('compliance-card');
-    const complianceDetail = document.getElementById('compliance-detail');
-    const complianceJumps = document.getElementById('compliance-jumps');
 
     const metadata = DATA.metadata || {};
     const summary = DATA.summary || {};
@@ -1139,7 +718,6 @@ HTML_TEMPLATE = """<!doctype html>
     const trafficFrames = DATA.traffic_frames || [];
     const episodeTimesteps = DATA.episode_timesteps || [];
     const avoidability = DATA.avoidability_debug || null;
-    const compliance = DATA.compliance_diagnostics || null;
     const candidates = (avoidability && avoidability.candidate_arrays) || {};
     const candidateSteps = candidates.steps_back || [];
     const hasAvoidability = !!(avoidability && avoidability.collision && candidateSteps.length);
@@ -1340,60 +918,6 @@ HTML_TEMPLATE = """<!doctype html>
         const driveWeightText = driveWeight == null ? '' : ` | drive=${formatAdvDriveWeight(driveWeight)}`;
         return `<a class="${active}" href="${hrefWithState(item.href, nav.state)}">${badge}<strong>Episode ${item.episode_id}${driveWeightText}</strong><small>${item.map_name || ''} | ${item.scenario_id || ''}</small></a>`;
       }).join('');
-      setComplianceCard();
-    }
-
-    function complianceReasonLabel(key) {
-      return {
-        red_light: 'red light',
-        wrong_way: 'wrong way',
-        solid_line: 'solid line',
-        speed_limit: 'speed limit',
-      }[key];
-    }
-
-    function setComplianceCard() {
-      if (!compliance || !Number(compliance.valid || 0)) return;
-      const reasons = ['red_light', 'wrong_way', 'solid_line', 'speed_limit'].filter(
-        reason => Number(compliance[`${reason}_violation`] || 0) > 0
-      );
-      const compliant = Number(compliance.compliant || 0) > 0;
-      complianceCard.className = compliant
-        ? 'avoidability-result compliance-card'
-        : 'avoidability-result compliance-card failed';
-      complianceCard.querySelector('strong').innerText = compliant ? 'Hitter compliant' : 'Hitter non-compliant';
-      const laneMissing = Number(compliance.lane_unavailable_sample_count || 0);
-      const speedMissing = Number(compliance.speed_limit_unavailable_sample_count || 0);
-      const redMissing = Number(compliance.red_light_unavailable_sample_count || 0);
-      const coverage = [
-        laneMissing ? `lane unavailable ${laneMissing}` : null,
-        speedMissing ? `limit unavailable ${speedMissing}` : null,
-        redMissing ? `red unavailable ${redMissing}` : null,
-      ].filter(Boolean).join(' · ') || 'coverage complete';
-      const crossedLine = Number(compliance.solid_line_violation || 0) > 0
-        ? ` · line ${Number(compliance.crossed_line_index)}:${Number(compliance.crossed_line_segment_index)}`
-        : '';
-      complianceDetail.innerText =
-        `${reasons.length ? reasons.map(complianceReasonLabel).join(', ') : 'no violations'} · ` +
-        `wrong-way ${Number(compliance.wrong_way_distance || 0).toFixed(2)}m · ` +
-        `max speed ${(100 * Number(compliance.max_speed_ratio || 0)).toFixed(1)}% · ` +
-        `${coverage}${crossedLine} · ${compliance.source || 'simulator'}`;
-      complianceJumps.innerHTML = reasons.map(reason => {
-        const timestep = Number(compliance[`first_${reason}_timestep`]);
-        return timestep >= 0
-          ? `<button type="button" data-compliance-timestep="${timestep}">${complianceReasonLabel(reason)} @ ${timestep}</button>`
-          : '';
-      }).join('');
-      complianceJumps.querySelectorAll('button').forEach(button => {
-        button.addEventListener('click', () => {
-          if (replayMode !== 'observed') setReplayMode('observed');
-          frameIndex = nearestFrameAtOrBefore(Number(button.dataset.complianceTimestep));
-          observedFrameIndex = frameIndex;
-          playing = false;
-          playToggle.innerText = 'Play';
-          draw();
-        });
-      });
     }
 
     function resizeCanvas() {
@@ -2336,8 +1860,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     function drawRoads() {
-      for (let roadIndex = 0; roadIndex < roadElements.length; roadIndex++) {
-        const elem = roadElements[roadIndex];
+      for (const elem of roadElements) {
         const xs = elem.x || [];
         const ys = elem.y || [];
         if (xs.length < 2 || ys.length < 2) continue;
@@ -2364,39 +1887,6 @@ HTML_TEMPLATE = """<!doctype html>
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.globalAlpha = 1.0;
-      }
-    }
-
-    function drawComplianceOverlay() {
-      if (!compliance || !Number(compliance.valid || 0)) return;
-      const trajectory = compliance.hitter_trajectory || [];
-      const currentTimestep = Number(episodeTimesteps[frameIndex] ?? compliance.collision_timestep);
-      const visibleTrajectory = trajectory.filter(point => Number(point.timestep) <= currentTimestep);
-      drawTrajectoryLine(trajectory, '#fbbf24', 2.0, [6, 5]);
-      drawTrajectoryLine(visibleTrajectory, '#fb7185', 3.6);
-
-      const lineIndex = Number(compliance.crossed_line_index ?? -1);
-      const segmentIndex = Number(compliance.crossed_line_segment_index ?? -1);
-      const line = roadElements[lineIndex];
-      if (line && segmentIndex >= 0 && segmentIndex + 1 < (line.x || []).length) {
-        const p1 = worldToCanvas(line.x[segmentIndex], line.y[segmentIndex]);
-        const p2 = worldToCanvas(line.x[segmentIndex + 1], line.y[segmentIndex + 1]);
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.strokeStyle = '#ff2d55';
-        ctx.lineWidth = 6;
-        ctx.globalAlpha = 0.95;
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      if (Number(compliance.solid_line_violation || 0) > 0) {
-        drawTrajectoryLine([
-          {x: Number(compliance.crossing_segment_start_x), y: Number(compliance.crossing_segment_start_y)},
-          {x: Number(compliance.crossing_segment_end_x), y: Number(compliance.crossing_segment_end_y)},
-        ], '#ff2d55', 5.0);
       }
     }
 
@@ -2806,7 +2296,6 @@ HTML_TEMPLATE = """<!doctype html>
         }
       }
       drawRoads();
-      drawComplianceOverlay();
       drawTraffic(trafficFrames[frameIndex] || []);
       drawDetectorOverlays();
       drawAvoidabilityTrajectories();
@@ -3080,13 +2569,6 @@ def generate_failure_index(episodes_df, render_lookup, output_path):
         "target_collision_target_failure_rate",
         "target_collision_unavoidable_rate",
         "target_collision_adversary_forced_rate",
-        "compliance_avoidability_outcome",
-        "hitter_compliance_compliant",
-        "hitter_compliance_reason_signature",
-        "hitter_compliance_wrong_way_distance",
-        "hitter_compliance_max_speed_ratio",
-        "hitter_compliance_lane_unavailable_sample_count",
-        "hitter_compliance_speed_limit_unavailable_sample_count",
         "t_brake",
         "target_episode_return",
         "target_episode_length",

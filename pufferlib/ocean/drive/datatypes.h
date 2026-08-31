@@ -98,7 +98,6 @@
 
 // Rolling per-agent trajectory history length for target collision diagnostics
 #define TARGET_TRAJECTORY_HISTORY_LEN 80 // 8.0s at dt=0.1
-#define COMPLIANCE_HISTORY_LEN TARGET_TRAJECTORY_HISTORY_LEN
 
 struct Waypoint {
     float s;           // Arc length (cumulative distance from the start) - init position
@@ -275,35 +274,6 @@ struct Agent {
     float trajectory_hist_z[TARGET_TRAJECTORY_HISTORY_LEN];
     float trajectory_hist_heading[TARGET_TRAJECTORY_HISTORY_LEN];
     float trajectory_hist_speed_signed[TARGET_TRAJECTORY_HISTORY_LEN];
-
-    int compliance_hist_count;
-    int compliance_hist_timestep[COMPLIANCE_HISTORY_LEN];
-    unsigned char compliance_hist_red_light[COMPLIANCE_HISTORY_LEN];
-    unsigned char compliance_hist_solid_line[COMPLIANCE_HISTORY_LEN];
-    unsigned char compliance_hist_lane_available[COMPLIANCE_HISTORY_LEN];
-    unsigned char compliance_hist_speed_limit_available[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_wrong_way_distance[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_speed_ratio[COMPLIANCE_HISTORY_LEN];
-    int compliance_hist_solid_line_index[COMPLIANCE_HISTORY_LEN];
-    int compliance_hist_solid_line_segment_index[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_segment_start_x[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_segment_start_y[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_segment_end_x[COMPLIANCE_HISTORY_LEN];
-    float compliance_hist_segment_end_y[COMPLIANCE_HISTORY_LEN];
-    int compliance_current_valid;
-    int compliance_current_timestep;
-    unsigned char compliance_current_red_light;
-    unsigned char compliance_current_solid_line;
-    unsigned char compliance_current_lane_available;
-    unsigned char compliance_current_speed_limit_available;
-    float compliance_current_wrong_way_distance;
-    float compliance_current_speed_ratio;
-    int compliance_current_solid_line_index;
-    int compliance_current_solid_line_segment_index;
-    float compliance_current_segment_start_x;
-    float compliance_current_segment_start_y;
-    float compliance_current_segment_end_x;
-    float compliance_current_segment_end_y;
 };
 
 struct RoadMapElement {
