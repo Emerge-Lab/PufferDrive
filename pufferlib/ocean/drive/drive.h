@@ -2562,7 +2562,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     }
 
     if (!is_agent_spawned) {
-        printf("[GIGAFLOW WARNING] -> Failed to find a collision-free spawn position for agent %d\n", agent->id);
         return is_agent_spawned;
     }
 
@@ -4648,13 +4647,6 @@ void c_reset(Drive *env) {
                 invalidate_agent(&env->agents[agent_idx]);
                 env->agents[agent_idx].removed = 1;
             }
-        }
-
-        if (num_reset != env->active_agent_count) {
-            printf(
-                "[GIGAFLOW ERROR] -> Only respawned %d out of %d agents during reset\n",
-                num_reset,
-                env->active_agent_count);
         }
 
         // GIGAFLOW: spawn_agent already set positions, routes, paths, goals.

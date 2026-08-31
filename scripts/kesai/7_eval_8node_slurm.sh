@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0032_1000
+export RUN_NAME=k_scaled_0034_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
