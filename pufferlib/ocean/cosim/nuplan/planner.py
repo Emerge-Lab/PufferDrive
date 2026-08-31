@@ -301,14 +301,14 @@ class PufferDrivePlanner(AbstractPlanner):
             policy.load_state_dict(sd)
             self._policy = policy.to(self._device).eval()
 
-        # fixed route goals (bin frame): prefer the scenario's logged expert
-        # trajectory (the actual driven path, unambiguous about lane/fork
-        # choice) over the roadblock lane-graph walk, which only fixes route at
-        # the roadblock level and can hop onto a parallel or turning lane at
-        # multi-lane blocks / forks. See nb.expert_route_xy docstring.
-        centerline = nb.expert_route_xy(self._scenario)
-        if len(centerline) < 2:  # no usable logged trajectory: fall back to the lane graph
-            centerline = nb.route_centerline(init.map_api, init.route_roadblock_ids, ex, ey)
+        # fixed route goals (bin frame) from the CaRL-corrected route roadblocks;
+        # never the logged expert trajectory, which leaks ground-truth positions
+        from carl_nuplan.planning.simulation.planner.pdm_planner.utils.route_utils import (
+            route_roadblock_correction_v2,
+        )
+
+        route_ids = route_roadblock_correction_v2(ego_state, init.map_api, list(init.route_roadblock_ids))
+        centerline = nb.route_centerline(init.map_api, route_ids, ex, ey)
         goals = nb.goals_along(centerline, self._goal_spacing)
         if len(goals) == 0:  # degenerate route: fall back to the mission goal
             goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
