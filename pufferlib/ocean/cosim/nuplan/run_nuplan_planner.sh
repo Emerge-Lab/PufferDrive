@@ -87,7 +87,7 @@ for CHALLENGE in $CHALLENGES; do
     "$PY" "$NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py" \
         +simulation=$CHALLENGE \
         scenario_builder=nuplan \
-        scenario_builder.data_root="$NUPLAN_DATA_ROOT/nuplan-v1.1/splits/val" \
+        scenario_builder.data_root="${NUPLAN_VAL_DB_DIR:-$NUPLAN_DATA_ROOT/nuplan-v1.1/splits/val}" \
         scenario_filter=$SPLIT \
         planner=pufferdrive_planner \
         planner.pufferdrive_planner.checkpoint_path="$CKPT" \
