@@ -3,9 +3,9 @@
 A post-training `puffer eval` runs in its own process, so to land on the run that
 produced the checkpoint it must resolve that run's identity from the checkpoint's
 config.yaml rather than from its own config defaults. It also must not disturb what
-training already published: no config overwrite, no step-series write, no model
-re-upload. All of that is asserted here against a stub wandb module, with no env,
-C-sim, GPU, or network.
+training already published: no config overwrite, no model re-upload, and metrics are
+logged step-free so wandb appends them after training's step history. All of that is
+asserted here against a stub wandb module, with no env, C-sim, GPU, or network.
 """
 
 import sys
@@ -57,13 +57,14 @@ def stub_wandb(monkeypatch):
     stub = types.ModuleType("wandb")
     stub.run = _StubRun()
     stub.init_kwargs = None
+    stub.logged = []
     stub.finished = False
 
     def init(**kwargs):
         stub.init_kwargs = kwargs
 
-    def log(*args, **kwargs):
-        raise AssertionError("eval reporting must not write to the step history")
+    def log(metrics, step=None):
+        stub.logged.append((metrics, step))
 
     stub.init = init
     stub.log = log
@@ -90,7 +91,7 @@ def eval_args():
 
 
 def test_identity_comes_from_checkpoint_not_eval_config(stub_wandb, eval_args):
-    pufferl.report_eval_to_wandb(eval_args, {"carla": _benchmark_result(collision_rate=0.11)}, RUN_IDENTITY)
+    pufferl.report_eval_to_wandb(eval_args, {"carla": _benchmark_result(collision_rate=0.11)}, RUN_IDENTITY, "eval")
 
     assert stub_wandb.init_kwargs["id"] == RUN_IDENTITY["run_name"]
     assert stub_wandb.init_kwargs["name"] == RUN_IDENTITY["run_name"]
@@ -101,7 +102,7 @@ def test_identity_comes_from_checkpoint_not_eval_config(stub_wandb, eval_args):
 
 
 def test_training_config_and_artifacts_are_left_alone(stub_wandb, eval_args):
-    pufferl.report_eval_to_wandb(eval_args, {"carla": _benchmark_result(collision_rate=0.11)}, RUN_IDENTITY)
+    pufferl.report_eval_to_wandb(eval_args, {"carla": _benchmark_result(collision_rate=0.11)}, RUN_IDENTITY, "eval")
 
     assert stub_wandb.init_kwargs["config"] is None
     assert stub_wandb.finished is True
@@ -110,14 +111,14 @@ def test_training_config_and_artifacts_are_left_alone(stub_wandb, eval_args):
     assert eval_args["wandb_project"] == "pufferlib"
 
 
-def test_metrics_land_in_summary_under_the_final_eval_prefix(stub_wandb, eval_args):
+def test_metrics_are_logged_step_free_under_the_final_eval_prefix(stub_wandb, eval_args):
     results = {
         "carla": _benchmark_result(collision_rate=0.11),
         "nuplan_single": _benchmark_result(collision_rate=0.04, offroad_rate=0.01),
     }
-    pufferl.report_eval_to_wandb(eval_args, results, RUN_IDENTITY)
+    pufferl.report_eval_to_wandb(eval_args, results, RUN_IDENTITY, "eval")
 
-    assert stub_wandb.run.summary == {
+    expected_metrics = {
         "final_eval_carla/num_scenarios": 1000,
         "final_eval_carla/num_episodes": 998,
         "final_eval_carla/collision_rate": 0.11,
@@ -126,13 +127,14 @@ def test_metrics_land_in_summary_under_the_final_eval_prefix(stub_wandb, eval_ar
         "final_eval_nuplan_single/collision_rate": 0.04,
         "final_eval_nuplan_single/offroad_rate": 0.01,
     }
+    assert stub_wandb.logged == [(expected_metrics, None)]
 
 
 def test_no_metrics_opens_no_wandb_session(stub_wandb, eval_args):
-    pufferl.report_eval_to_wandb(eval_args, {"carla": {"episodes": [], "summary": None}}, RUN_IDENTITY)
+    pufferl.report_eval_to_wandb(eval_args, {"carla": {"episodes": [], "summary": None}}, RUN_IDENTITY, "eval")
 
     assert stub_wandb.init_kwargs is None
-    assert stub_wandb.run.summary == {}
+    assert stub_wandb.logged == []
 
 
 @pytest.mark.parametrize("missing_key", sorted(drive_benchmark.CHECKPOINT_RUN_IDENTITY_KEYS))

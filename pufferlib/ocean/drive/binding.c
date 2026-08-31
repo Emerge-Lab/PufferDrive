@@ -6,6 +6,7 @@
 #define MY_SHARED
 #define MY_PUT
 #define MY_GET
+#define MY_RESEED
 
 // Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
 static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
@@ -32,6 +33,29 @@ static PyObject *map_cache_live_count_py(
 // clang-format on
 
 #include "../env_binding.h"
+
+// Seeds are 63-bit non-negative so they survive int64 round-trips (numpy, pandas, CSV).
+static int unpack_seed(PyObject *kwargs, uint64_t *seed_out) {
+    PyObject *seed_obj = PyDict_GetItemString(kwargs, "seed");
+    if (seed_obj == NULL || !PyLong_Check(seed_obj)) {
+        PyErr_SetString(PyExc_TypeError, "Missing or non-integer keyword argument 'seed'");
+        return -1;
+    }
+    long long seed = PyLong_AsLongLong(seed_obj);
+    if (PyErr_Occurred() || seed < 0) {
+        PyErr_SetString(PyExc_ValueError, "seed must be a non-negative 63-bit integer");
+        return -1;
+    }
+    *seed_out = (uint64_t) seed;
+    return 0;
+}
+
+static void my_reseed(Env *env, uint64_t seed) {
+    env->init_seed = seed;
+    rng_seed(&env->seed_stream_rng, seed);
+    // Defeat c_reset's timestep==0 fast path so the new stream regenerates the episode
+    env->timestep = -1;
+}
 
 static int my_put(Env *env, PyObject *args, PyObject *kwargs) {
     PyObject *obs = PyDict_GetItemString(kwargs, "observations");
@@ -1577,6 +1601,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int num_maps = unpack(kwargs, "num_maps");
     int starting_map_counter = unpack(kwargs, "starting_map_counter");
     int eval_mode = unpack(kwargs, "eval_mode");
+    int eval_training_render = unpack(kwargs, "eval_training_render");
     int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
@@ -1585,7 +1610,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int non_vehicle_controller = unpack(kwargs, "non_vehicle_controller");
     int simulation_mode = unpack(kwargs, "simulation_mode");
     int init_step = unpack(kwargs, "init_step");
-    int seed = unpack(kwargs, "seed");
+    uint64_t seed;
+    if (unpack_seed(kwargs, &seed) != 0) {
+        return NULL;
+    }
     int min_agents_per_env = unpack(kwargs, "min_agents_per_env");
     int max_agents_per_env = unpack(kwargs, "max_agents_per_env");
     float goal_radius = (float) unpack(kwargs, "goal_radius");
@@ -1620,12 +1648,17 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "num_agents must be >= min_agents_per_env");
         return NULL;
     }
+    if (eval_training_render && num_agents < max_agents_per_env) {
+        PyErr_SetString(PyExc_ValueError, "eval_training_render requires num_agents >= max_agents_per_env");
+        return NULL;
+    }
 
-    srand(seed);
+    Rng shared_rng;
+    rng_seed(&shared_rng, seed);
 
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
-        if (eval_mode) {
+        if (eval_mode && !eval_training_render) {
             // Eval mode: fixed agent count, sequential map cycling
             int agents_per_env = max_agents_per_env;
             int env_count = num_agents / agents_per_env;
@@ -1651,14 +1684,21 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
             return tuple;
         }
 
-        // Training mode: random agent counts per env
+        // Training and training-render eval use random agent counts per env.
+        int environment_limit = eval_training_render ? eval_target_count : num_agents;
         int *agent_counts = malloc((num_agents / min_agents_per_env + 1) * sizeof(int));
         int remaining = num_agents;
         int env_count = 0;
 
-        while (remaining > 0) {
+        while (remaining > 0 && env_count < environment_limit) {
             int count;
-            if (remaining <= max_agents_per_env) {
+            if (eval_training_render) {
+                int range = max_agents_per_env - min_agents_per_env + 1;
+                count = min_agents_per_env + rng_below(&shared_rng, range);
+                if (count > remaining) {
+                    break;
+                }
+            } else if (remaining <= max_agents_per_env) {
                 count = remaining;
             } else {
                 // 1. We must leave at least min_agents_per_env for the future.
@@ -1679,7 +1719,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 } else {
                     // Now the range is guaranteed to be positive.
                     int range = current_upper_bound - current_lower_bound + 1;
-                    count = current_lower_bound + (rand() % range);
+                    count = current_lower_bound + rng_below(&shared_rng, range);
                 }
             }
             agent_counts[env_count++] = count;
@@ -1693,10 +1733,10 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rand() % num_maps));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
             offset += agent_counts[i];
         }
-        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(num_agents));
+        PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
 
         free(agent_counts);
 
@@ -1732,7 +1772,7 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
                 s_map_counter += 1;
             }
         } else {
-            map_id = rand() % num_maps;
+            map_id = rng_below(&shared_rng, num_maps);
         }
 
         const char *map_file = PyUnicode_AsUTF8(PyList_GetItem(map_files, map_id));
@@ -1823,6 +1863,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->render_mode = (int) unpack(kwargs, "render_mode");
     env->action_type = (int) unpack(kwargs, "action_type");
     env->dynamics_model = (int) unpack(kwargs, "dynamics_model");
+    env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
@@ -1843,7 +1884,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
-    env->seed_stream_state = (unsigned int) unpack(kwargs, "seed");
+    uint64_t env_seed;
+    if (unpack_seed(kwargs, &env_seed) != 0) {
+        return -1;
+    }
+    my_reseed(env, env_seed);
     env->use_exact_episode_seed = (int) unpack(kwargs, "use_exact_episode_seed");
     env->goal_radius = (float) unpack(kwargs, "goal_radius");
     env->min_goal_spacing = (float) unpack(kwargs, "min_goal_spacing");
@@ -1864,6 +1909,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
+    env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
@@ -1891,14 +1937,19 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
+    env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
+    env->eval_training_render = (int) unpack(kwargs, "eval_training_render");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
     env->obs_norm_xy_offset_m = (float) unpack(kwargs, "obs_norm_xy_offset_m");
     env->obs_norm_veh_length_m = (float) unpack(kwargs, "obs_norm_veh_length_m");
     env->obs_norm_veh_width_m = (float) unpack(kwargs, "obs_norm_veh_width_m");
     env->obs_norm_road_seg_length_m = (float) unpack(kwargs, "obs_norm_road_seg_length_m");
     env->obs_norm_road_seg_width_m = (float) unpack(kwargs, "obs_norm_road_seg_width_m");
+    env->obs_norm_z_m = (float) unpack(kwargs, "obs_norm_z_m");
+    env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
@@ -1914,6 +1965,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->phantom_braking_duration = (int) unpack(kwargs, "phantom_braking_duration_seconds");
 
     init(env);
+    // Episodes must always be generated by c_reset's full path so a logged
+    // episode_seed replays identically regardless of which reset created it.
+    env->timestep = -1;
     return 0;
 }
 
@@ -1933,7 +1987,7 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
     assign_to_dict(dict, "active_agent_count", (float) env->active_agent_count);
     assign_to_dict(dict, "episode_timestep", (float) env->timestep);
 
-    PyObject *seed_obj = PyLong_FromUnsignedLong(env->log_episode_seed);
+    PyObject *seed_obj = PyLong_FromUnsignedLongLong(env->log_episode_seed);
     if (seed_obj == NULL) {
         return -1;
     }

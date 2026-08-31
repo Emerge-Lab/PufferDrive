@@ -88,6 +88,7 @@ static inline Drive drive_test_env_config(
     env.obs_slots_traffic_controls_n = 4;
     env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
     env.dt = 0.1f;
+    env.base_max_speed_mps = 20.0f;
     env.spawn_initial_speed = 0.0f;
     env.scenario_length = 91;
     env.termination_mode = 0;
@@ -107,12 +108,14 @@ static inline Drive drive_test_env_config(
     env.reward_randomization = 0;
     env.compute_eval_metrics = 1;
     env.eval_mode = 0;
+    env.obs_norm_speed_mps = 60.0f;
     env.obs_norm_goal_offset_m = 100.0f;
     env.obs_norm_xy_offset_m = 100.0f;
     env.obs_norm_veh_length_m = 15.0f;
     env.obs_norm_veh_width_m = 10.0f;
     env.obs_norm_road_seg_length_m = 5.0f;
     env.obs_norm_road_seg_width_m = 5.0f;
+    env.obs_norm_z_m = 10.0f;
     env.obs_range_traffic_control_m = 100.0f;
     env.obs_range_partner_m = 100.0f;
     env.obs_range_road_front_m = 120.0f;

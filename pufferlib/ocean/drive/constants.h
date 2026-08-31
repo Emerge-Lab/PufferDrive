@@ -130,7 +130,7 @@
 // 3. DYNAMICS
 // =====================================================================================
 
-#define MAX_SPEED 40.0f
+#define MAX_BACKWARD_SPEED -2.0f
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
@@ -167,7 +167,6 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_MARGIN 0.2f
 
 // Agent-agent collision
-#define EVAL_PERCEIVED_SIZE_MARGIN_M 0.1f // inflate ego's perceived size by this per side for safety clearance
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 
@@ -183,6 +182,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // =====================================================================================
 
 #define GRID_CELL_SIZE 5.0f
+#define MAX_GRID_CELL_COUNT 100000000
 // Depends on resolution of data Formula: 3 * (2 + GRID_CELL_SIZE*sqrt(2)/resolution)
 // => For each entity type in gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define MAX_ENTITIES_PER_CELL 30
@@ -257,7 +257,8 @@ static const int ROAD_OFFSETS[25][2]
 #define REWARD_COEF_THROTTLE 14
 #define REWARD_COEF_STEER 15
 #define REWARD_COEF_ACC 16
-#define NUM_REWARD_COEFS 17
+#define REWARD_COEF_SPEED 17
+#define NUM_REWARD_COEFS 18
 
 // =====================================================================================
 // 10. METRICS & SCORING
@@ -313,11 +314,10 @@ static const int ROAD_OFFSETS[25][2]
 // obs_html_frame array field counts
 #define AGENT_F32_FIELDS                                                                                               \
     12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
-#define AGENT_I32_FIELDS 8             // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx
+#define AGENT_I32_FIELDS                                                                                               \
+    10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
-
-#define COMPLETED_EPISODE_QUEUE_CAPACITY 16
 
 #endif

@@ -331,6 +331,8 @@ class Drive(nn.Module):
         shared_network: bool,
         mask_padded_features: bool,
         action_type: str,
+        actor_head_layer_norm: bool = False,
+        critic_head_layer_norm: bool = False,
     ):
         super().__init__()
 
@@ -360,6 +362,12 @@ class Drive(nn.Module):
         k = torch.arange(num_classes)
         action_table = torch.stack([long_norm[k // num_lat], lat_norm[k % num_lat]], dim=-1)  # [num_classes, 2]
         self.register_buffer("action_table", action_table, persistent=False)
+        # The env decode is piecewise, so expectations must be taken in physical space, not normalized space.
+        action_table_physical = torch.stack([action_long[k // num_lat], action_lat[k % num_lat]], dim=-1)
+        self.register_buffer("action_table_physical", action_table_physical, persistent=False)
+        self.action_long_neg_scale = float(-action_long[0])
+        self.action_long_pos_scale = float(action_long[-1])
+        self.action_lat_scale = float(action_lat[-1])
 
         # Configuration flags from policy kwargs
         self.shared_network = shared_network
@@ -397,9 +405,9 @@ class Drive(nn.Module):
         # Setup action and value heads
         self.is_continuous = action_type == "continuous"
         if self.is_continuous:
-            self.atn_dim = (env.single_action_space.shape[0],) * 2
+            self.action_dim = env.single_action_space.shape[0]
         else:
-            self.atn_dim = [self.action_long_norm.numel() * self.action_lat_norm.numel()]
+            self.action_dim = self.action_long_norm.numel() * self.action_lat_norm.numel()
 
         # n-layer MLP for actor head (num_layers = number of hidden layers)
         backbone_out_dim = self.actor_backbone.out_dim
@@ -407,9 +415,12 @@ class Drive(nn.Module):
         actor_in = backbone_out_dim
         for _ in range(actor_num_layers):
             actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_hidden_size)))
+            if actor_head_layer_norm:
+                actor_head_layers.append(nn.LayerNorm(actor_hidden_size))
             actor_head_layers.append(nn.ReLU())
             actor_in = actor_hidden_size
-        actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, sum(self.atn_dim)), std=0.01))
+        actor_output_dim = self.action_dim * 2 if self.is_continuous else self.action_dim
+        actor_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(actor_in, actor_output_dim), std=0.01))
         self.actor_head = nn.Sequential(*actor_head_layers)
 
         # n-layer MLP for critic head (num_layers = number of hidden layers)
@@ -417,6 +428,8 @@ class Drive(nn.Module):
         critic_in = backbone_out_dim
         for _ in range(critic_num_layers):
             critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, critic_hidden_size)))
+            if critic_head_layer_norm:
+                critic_head_layers.append(nn.LayerNorm(critic_hidden_size))
             critic_head_layers.append(nn.ReLU())
             critic_in = critic_hidden_size
         critic_head_layers.append(pufferlib.pytorch.layer_init(nn.Linear(critic_in, 1), std=1))
@@ -438,11 +451,11 @@ class Drive(nn.Module):
         # Compute actions
         if self.is_continuous:
             params = self.actor_head(actor_hidden)
-            loc, scale = torch.split(params, self.atn_dim, dim=1)
+            loc, scale = torch.split(params, self.action_dim, dim=1)
             std = torch.nn.functional.softplus(scale) + 1e-4
             actions = torch.distributions.Normal(loc, std)
         else:
-            actions = torch.split(self.actor_head(actor_hidden), self.atn_dim, dim=1)
+            actions = self.actor_head(actor_hidden)
 
         # Compute value
         value = self.critic_head(critic_hidden)
@@ -472,12 +485,11 @@ class Drive(nn.Module):
         """
         if self.is_continuous:
             parameters = self.actor_head(hidden)
-            loc, scale = torch.split(parameters, self.atn_dim, dim=1)
+            loc, scale = torch.split(parameters, self.action_dim, dim=1)
             std = torch.nn.functional.softplus(scale) + 1e-4
             action = torch.distributions.Normal(loc, std)
         else:
             action = self.actor_head(hidden)
-            action = torch.split(action, self.atn_dim, dim=1)
 
         value = self.critic_head(hidden)
 
@@ -487,5 +499,13 @@ class Drive(nn.Module):
         return self.action_table[actions.long()]
 
     def discrete_probs_to_continuous_mean(self, probs):
-        # probs: [..., num_classes] -> [..., 2]  (E[cont | probs])
-        return probs @ self.action_table.to(probs.dtype)
+        # probs: [..., num_classes] -> [..., 2]
+        mean_physical = probs @ self.action_table_physical.to(probs.dtype)
+        mean_long = mean_physical[..., 0]
+        mean_long_norm = torch.where(
+            mean_long < 0.0,
+            mean_long / self.action_long_neg_scale,
+            mean_long / self.action_long_pos_scale,
+        )
+        # low-precision matmul can overshoot the [-1, 1] bounds by an epsilon
+        return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1).clamp_(-1.0, 1.0)

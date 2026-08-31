@@ -156,6 +156,9 @@ puffer eval puffer_drive carla \
   eval.capture_observations=false
 ```
 
+Set `env.eval_training_render=true` to evaluate and render the Gigaflow
+environment distribution saved in the checkpoint's adjacent `config.yaml`.
+
 Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
 Evaluation outputs are written under
 `eval/<benchmark>[_<output_name>]/<timestamp>/`. The benchmark seed and effective

@@ -305,6 +305,7 @@ int eval_gif(
     env.scenario_length = (scenario_length_override > 0) ? scenario_length_override
         : (conf.scenario_length > 0)                     ? conf.scenario_length
                                                          : TRAJECTORY_LENGTH_DEFAULT;
+    rng_seed(&env.seed_stream_rng, env.init_seed);
     allocate(&env);
 
     // Set which vehicle to focus on for obs mode

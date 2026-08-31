@@ -19,7 +19,7 @@ start=$(date +%s)
 SEED=$((1000 + 1000 * SLURM_ARRAY_TASK_ID))
 echo "SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} -> train.seed=${SEED}"
 
-export RUN_NAME=k_exp_0004_${SEED}
+export RUN_NAME=k_exp_0022_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -38,12 +38,36 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
 source .venv/bin/activate
-python setup.py build_ext --inplace --force
+
+# Only task 0 builds; concurrent in-place builds race on shared NFS build files.
+BUILD_STATUS_FILE=/home/bjaeger/PufferDrive/experiments/logs/build_status_${SLURM_ARRAY_JOB_ID}
+if [ "${SLURM_ARRAY_TASK_ID}" -eq 0 ]; then
+    bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive
+    BUILD_STATUS=$?
+    echo ${BUILD_STATUS} > ${BUILD_STATUS_FILE}
+else
+    BUILD_WAIT_SECONDS=0
+    BUILD_TIMEOUT_SECONDS=1800
+    while [ ! -f ${BUILD_STATUS_FILE} ]; do
+        if [ ${BUILD_WAIT_SECONDS} -ge ${BUILD_TIMEOUT_SECONDS} ]; then
+            echo "Timed out after ${BUILD_TIMEOUT_SECONDS}s waiting for task 0 build; aborting."
+            exit 1
+        fi
+        sleep 10
+        BUILD_WAIT_SECONDS=$((BUILD_WAIT_SECONDS + 10))
+    done
+    BUILD_STATUS=$(cat ${BUILD_STATUS_FILE})
+fi
+if [ "${BUILD_STATUS}" -ne 0 ]; then
+    echo "C extension build failed with status ${BUILD_STATUS}; aborting."
+    exit 1
+fi
+
 torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-method spawn \
     -m pufferlib.pufferl train puffer_drive \
     wandb=True \
     wandb_project=nightly-multi-long \
-    wandb_group=emerge_ \
+    wandb_group=kesai \
     train.data_dir=${DATA_DIR} \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     train.name=${RUN_NAME} \
@@ -51,21 +75,15 @@ torchrun --standalone --nnodes=1 --nproc-per-node=8 --max_restarts=0 --start-met
     train.total_timesteps=100000000000 \
     vec.num_envs=16 \
     train.compile=True \
-    train.max_minibatch_size=196608 \
-    train.minibatch_size=196608 \
+    train.max_minibatch_size=131072 \
+    train.minibatch_size=131072 \
     train.precision=bfloat16 \
-    env.num_agents=192 \
-    train.min_batch_size=786432 \
-    train.bptt_horizon=256 \
-    policy.action_type=discrete \
-    env.action_type=continuous \
-    train.adv_filter_enabled=False \
-    train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
-    train.adam_eps=0.00001 \
-    train.adam_weight_decay=0.0 \
-    train.learning_rate=0.00025 \
+    train.learning_rate=0.004 \
+    policy.actor_head_layer_norm=True \
+    policy.backbone_layer_norm=True \
+    policy.critic_head_layer_norm=True \
     tb=True
 
 # Only evaluate a run that actually finished, otherwise the eval jobs below would
@@ -86,14 +104,16 @@ fi
 echo "Training done, evaluating ${MODEL_PATH}"
 .venv/bin/puffer eval puffer_drive carla \
     vec.num_envs=16 \
-    eval.action_selection=mean \
+    eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
+    eval.render_filter=all_infractions \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.action_selection=mean \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \
     wandb=True

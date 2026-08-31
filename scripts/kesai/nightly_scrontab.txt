@@ -1,0 +1,7 @@
+# Nightly training submitter. Install by pasting into: scrontab -e
+# The scron job only runs sbatch; the training job itself carries its own #SBATCH resources.
+#SCRON --partition=dev
+#SCRON --time=00:05:00
+#SCRON --job-name=nightly_submit
+#SCRON --output=/home/bjaeger/nightly_PufferDrive/experiments/logs/scron_submit_%j.out
+0 21 * * * cd /home/bjaeger/nightly_PufferDrive && sbatch scripts/kesai/2_train_8GPU_nightly_SLURM.sh

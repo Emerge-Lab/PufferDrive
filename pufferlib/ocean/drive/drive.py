@@ -1,11 +1,7 @@
-import argparse
 import pickle
 import zlib
-from pathlib import Path
 import numpy as np
 import gymnasium
-import json
-import struct
 import os
 from importlib.resources import files as package_files
 import pufferlib
@@ -75,6 +71,7 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
+        base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
         scenario_length=None,
@@ -85,6 +82,7 @@ class Drive(pufferlib.PufferEnv):
         max_agents_per_env=64,
         action_type="discrete",
         dynamics_model="classic",
+        reset_accel_on_stop=False,
         simulation_mode="gigaflow",
         termination_mode=0,
         inactive_agent_threshold=0.4,
@@ -99,6 +97,7 @@ class Drive(pufferlib.PufferEnv):
         max_scenarios_per_batch=None,
         eval_map_indices=None,
         eval_scenario_seeds=None,
+        eval_training_render=False,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -110,6 +109,7 @@ class Drive(pufferlib.PufferEnv):
         obs_goal_lane_distance=False,
         reward_conditioning=False,
         reward_randomization=False,
+        reward_log_sampling=False,
         compute_eval_metrics=True,
         shared_network=True,
         obs_slots_lane_n=32,
@@ -120,12 +120,15 @@ class Drive(pufferlib.PufferEnv):
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
+        obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
         obs_norm_xy_offset_m=100.0,
         obs_norm_veh_length_m=15.0,
         obs_norm_veh_width_m=10.0,
         obs_norm_road_seg_length_m=5.0,
         obs_norm_road_seg_width_m=5.0,
+        obs_norm_z_m=10.0,
+        eval_perceived_size_margin_m=0.1,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
         obs_range_road_front_m=120.0,
@@ -141,12 +144,14 @@ class Drive(pufferlib.PufferEnv):
         phantom_braking_duration_seconds=1.0,
     ):
         self.dt = dt
+        self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
+        self.reward_log_sampling = reward_log_sampling
         self.compute_eval_metrics = compute_eval_metrics
         self.shared_network = shared_network
         self.render_mode = render_mode
@@ -221,6 +226,7 @@ class Drive(pufferlib.PufferEnv):
             self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
         else:
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.reset_accel_on_stop = reset_accel_on_stop
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
         if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
@@ -231,6 +237,15 @@ class Drive(pufferlib.PufferEnv):
         if self.eval_map_indices is not None:
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
+        if not isinstance(eval_training_render, bool):
+            raise TypeError("eval_training_render must be a boolean")
+        if eval_training_render and not eval_mode:
+            raise ValueError("eval_training_render requires eval_mode")
+        if eval_training_render and simulation_mode != "gigaflow":
+            raise ValueError("eval_training_render only supports gigaflow simulation_mode")
+        if eval_training_render and num_agents < max_agents_per_env:
+            raise ValueError("eval_training_render requires num_agents >= max_agents_per_env")
+        self.eval_training_render = eval_training_render
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
@@ -255,12 +270,15 @@ class Drive(pufferlib.PufferEnv):
         self.obs_slots_partners_n = obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
+        self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
         self.obs_norm_xy_offset_m = float(obs_norm_xy_offset_m)
         self.obs_norm_veh_length_m = float(obs_norm_veh_length_m)
         self.obs_norm_veh_width_m = float(obs_norm_veh_width_m)
         self.obs_norm_road_seg_length_m = float(obs_norm_road_seg_length_m)
         self.obs_norm_road_seg_width_m = float(obs_norm_road_seg_width_m)
+        self.obs_norm_z_m = float(obs_norm_z_m)
+        self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
         self.obs_range_partner_m = float(obs_range_partner_m)
         self.obs_range_road_front_m = float(obs_range_road_front_m)
@@ -404,13 +422,11 @@ class Drive(pufferlib.PufferEnv):
         if action_type == "discrete":
             self._action_type_flag = binding.ACTION_TYPE_DISCRETE
             if dynamics_model == "classic":
-                # Joint action space (assume dependence)
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([7 * 9])
-                # Multi discrete (assume independence)
-                # self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 9])
+                self.single_action_space = gymnasium.spaces.Discrete(
+                    len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
+                )
             elif dynamics_model == "jerk":
-                # Joint action space (assume dependence) - 4 longitudinal × 3 lateral = 12
-                self.single_action_space = gymnasium.spaces.MultiDiscrete([4 * 3])
+                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
             else:
                 raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         elif action_type == "continuous":
@@ -441,6 +457,7 @@ class Drive(pufferlib.PufferEnv):
             num_maps=num_maps,
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
+            eval_training_render=self.eval_training_render,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
@@ -502,6 +519,7 @@ class Drive(pufferlib.PufferEnv):
             "resource_root": str(package_files("pufferlib") / "resources" / "drive"),
             "action_type": self._action_type_flag,
             "dynamics_model": self.dynamics_model_flag,
+            "reset_accel_on_stop": self.reset_accel_on_stop,
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
@@ -537,6 +555,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
+            "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
@@ -555,15 +574,20 @@ class Drive(pufferlib.PufferEnv):
             "simulation_mode": self.simulation_mode,
             "reward_conditioning": self.reward_conditioning,
             "reward_randomization": self.reward_randomization,
+            "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
+            "eval_training_render": self.eval_training_render,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
+            "obs_norm_speed_mps": self.obs_norm_speed_mps,
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
             "obs_norm_veh_width_m": self.obs_norm_veh_width_m,
             "obs_norm_road_seg_length_m": self.obs_norm_road_seg_length_m,
             "obs_norm_road_seg_width_m": self.obs_norm_road_seg_width_m,
+            "obs_norm_z_m": self.obs_norm_z_m,
+            "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
@@ -601,10 +625,15 @@ class Drive(pufferlib.PufferEnv):
 
     @property
     def random_seed(self):
-        return int(self.rng.integers(0, 2**24))
+        # 63-bit: stays exact through int64 (CSV, numpy) and the C binding's PyLong_AsLongLong
+        return int(self.rng.integers(0, 2**63, dtype=np.int64))
 
     def reset(self, seed=None):
-        binding.vec_reset(self.c_envs)
+        if seed is not None and not self.use_exact_episode_seed:
+            self.rng = np.random.default_rng(seed)
+            binding.vec_reset(self.c_envs, [self.random_seed for _ in range(self.num_envs)])
+        else:
+            binding.vec_reset(self.c_envs)
         self.tick = 0
         self.truncations[:] = 0
         if self.capture_replay:
@@ -657,6 +686,7 @@ class Drive(pufferlib.PufferEnv):
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
                     eval_mode=self.eval_mode,
+                    eval_training_render=self.eval_training_render,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     sdc_controller=self.sdc_controller,
@@ -945,238 +975,6 @@ class Drive(pufferlib.PufferEnv):
         )
 
 
-def calculate_area(p1, p2, p3):
-    # Calculate the area of the triangle using the determinant method
-    return 0.5 * abs((p1["x"] - p3["x"]) * (p2["y"] - p1["y"]) - (p1["x"] - p2["x"]) * (p3["y"] - p1["y"]))
-
-
-def simplify_polyline(geometry, polyline_reduction_threshold):
-    """Simplify the given polyline using a method inspired by Visvalingham-Whyatt, optimized for Python."""
-    num_points = len(geometry)
-    if num_points < 3:
-        return geometry  # Not enough points to simplify
-
-    skip = [False] * num_points
-    skip_changed = True
-
-    while skip_changed:
-        skip_changed = False
-        k = 0
-        while k < num_points - 1:
-            k_1 = k + 1
-            while k_1 < num_points - 1 and skip[k_1]:
-                k_1 += 1
-            if k_1 >= num_points - 1:
-                break
-
-            k_2 = k_1 + 1
-            while k_2 < num_points and skip[k_2]:
-                k_2 += 1
-            if k_2 >= num_points:
-                break
-
-            point1 = geometry[k]
-            point2 = geometry[k_1]
-            point3 = geometry[k_2]
-            area = calculate_area(point1, point2, point3)
-
-            if area < polyline_reduction_threshold:
-                skip[k_1] = True
-                skip_changed = True
-                k = k_2
-            else:
-                k = k_1
-
-    return [geometry[i] for i in range(num_points) if not skip[i]]
-
-
-def save_map_binary(map_data, output_file):
-    trajectory_length = 91
-    """Saves map data in a binary format readable by C"""
-    with open(output_file, "wb") as f:
-        # Count total entities
-        print(len(map_data.get("objects", [])))
-        print(len(map_data.get("roads", [])))
-        num_objects = len(map_data.get("objects", []))
-        num_roads = len(map_data.get("roads", []))
-        # num_entities = num_objects + num_roads
-        f.write(struct.pack("i", num_objects))
-        f.write(struct.pack("i", num_roads))
-        # f.write(struct.pack('i', num_entities))
-        # Write objects
-        for obj in map_data.get("objects", []):
-            # Write base entity data
-            obj_type = obj.get("type", 1)
-            if obj_type == "vehicle":
-                obj_type = 1
-            elif obj_type == "pedestrian":
-                obj_type = 2
-            elif obj_type == "cyclist":
-                obj_type = 3
-            f.write(struct.pack("i", obj_type))  # type
-            # f.write(struct.pack("i", obj.get("id", 0)))  # id
-            f.write(struct.pack("i", trajectory_length))  # array_size
-            # Write position arrays
-            positions = obj.get("position", [])
-            for i in range(trajectory_length):
-                pos = positions[i] if i < len(positions) else {"x": 0.0, "y": 0.0, "z": 0.0}
-                f.write(struct.pack("f", float(pos.get("x", 0.0))))
-            for i in range(trajectory_length):
-                pos = positions[i] if i < len(positions) else {"x": 0.0, "y": 0.0, "z": 0.0}
-                f.write(struct.pack("f", float(pos.get("y", 0.0))))
-            for i in range(trajectory_length):
-                pos = positions[i] if i < len(positions) else {"x": 0.0, "y": 0.0, "z": 0.0}
-                f.write(struct.pack("f", float(pos.get("z", 0.0))))
-
-            # Write velocity arrays
-            velocities = obj.get("velocity", [])
-            for arr, key in [(velocities, "x"), (velocities, "y"), (velocities, "z")]:
-                for i in range(trajectory_length):
-                    vel = arr[i] if i < len(arr) else {"x": 0.0, "y": 0.0, "z": 0.0}
-                    f.write(struct.pack("f", float(vel.get(key, 0.0))))
-
-            # Write heading and valid arrays
-            headings = obj.get("heading", [])
-            f.write(
-                struct.pack(
-                    f"{trajectory_length}f",
-                    *[float(headings[i]) if i < len(headings) else 0.0 for i in range(trajectory_length)],
-                )
-            )
-
-            valids = obj.get("valid", [])
-            f.write(
-                struct.pack(
-                    f"{trajectory_length}i",
-                    *[int(valids[i]) if i < len(valids) else 0 for i in range(trajectory_length)],
-                )
-            )
-
-            # Write scalar fields
-            f.write(struct.pack("f", float(obj.get("width", 0.0))))
-            f.write(struct.pack("f", float(obj.get("length", 0.0))))
-            f.write(struct.pack("f", float(obj.get("height", 0.0))))
-            goal_pos = obj.get("goalPosition", {"x": 0, "y": 0, "z": 0})  # Get goalPosition object with default
-            f.write(struct.pack("f", float(goal_pos.get("x", 0.0))))  # Get x value
-            f.write(struct.pack("f", float(goal_pos.get("y", 0.0))))  # Get y value
-            f.write(struct.pack("f", float(goal_pos.get("z", 0.0))))  # Get z value
-            f.write(struct.pack("i", obj.get("mark_as_expert", 0)))
-
-        # Write roads
-        for idx, road in enumerate(map_data.get("roads", [])):
-            geometry = road.get("geometry", [])
-            road_type = road.get("map_element_id", 0)
-            road_type_word = road.get("type", 0)
-            if road_type_word == "lane":
-                road_type = 2
-            elif road_type_word == "road_edge":
-                road_type = 15
-            # breakpoint()
-            if len(geometry) > 10 and road_type <= 16:
-                geometry = simplify_polyline(geometry, 0.1)
-            size = len(geometry)
-            # breakpoint()
-            if road_type >= 0 and road_type <= 3:
-                road_type = 4
-            elif road_type >= 5 and road_type <= 13:
-                road_type = 5
-            elif road_type >= 14 and road_type <= 16:
-                road_type = 6
-            elif road_type == 17:
-                road_type = 7
-            elif road_type == 18:
-                road_type = 8
-            elif road_type == 19:
-                road_type = 9
-            elif road_type == 20:
-                road_type = 10
-            # Write base entity data
-            f.write(struct.pack("i", road_type))  # type
-            # f.write(struct.pack("i", road.get("id", 0)))  # id
-            f.write(struct.pack("i", size))  # array_size
-
-            # Write position arrays
-            for coord in ["x", "y", "z"]:
-                for point in geometry:
-                    f.write(struct.pack("f", float(point.get(coord, 0.0))))
-            # Write scalar fields
-            f.write(struct.pack("f", float(road.get("width", 0.0))))
-            f.write(struct.pack("f", float(road.get("length", 0.0))))
-            f.write(struct.pack("f", float(road.get("height", 0.0))))
-            goal_pos = road.get("goalPosition", {"x": 0, "y": 0, "z": 0})  # Get goalPosition object with default
-            f.write(struct.pack("f", float(goal_pos.get("x", 0.0))))  # Get x value
-            f.write(struct.pack("f", float(goal_pos.get("y", 0.0))))  # Get y value
-            f.write(struct.pack("f", float(goal_pos.get("z", 0.0))))  # Get z value
-            f.write(struct.pack("i", road.get("mark_as_expert", 0)))
-
-
-def load_map(map_name, binary_output=None):
-    """Loads a JSON map and optionally saves it as binary"""
-    with open(map_name, "r") as f:
-        map_data = json.load(f)
-
-    if binary_output:
-        save_map_binary(map_data, binary_output)
-
-
-def process_all_maps(dataset_path: str, max_file_to_process: int = 1000):
-    """Process all maps from a local path (or GCS) and save them as binaries."""
-    # Create the binaries directory if it doesn't exist
-    binary_dir = Path("pufferlib/resources/drive/binaries")
-    binary_dir.mkdir(parents=True, exist_ok=True)
-
-    # --- GCS FUSE ---
-    if dataset_path.startswith("gs://") and os.path.exists("/gcs/"):
-        print("Vertex AI GCS FUSE mount detected. Translating GCS URI to local path.")
-        dataset_path = dataset_path.replace("gs://", "/gcs/")
-        print(f"Using mounted dataset path: {dataset_path}")
-
-    file_iterator = None
-    fs = None  # Will hold the gcsfs filesystem object if needed
-
-    path = Path(dataset_path)
-    print(f"Searching for JSON map files in local path: {path.resolve()}")
-    # Use rglob for recursive globbing to match the GCS '**' behavior
-    file_iterator = sorted(path.rglob("*.json"))
-    print(f"Found {len(file_iterator)} JSON files locally.")
-
-    file_count = 0
-    # Process each JSON file from the appropriate source
-    for i, item in enumerate(file_iterator):
-        if i >= max_file_to_process:
-            print(f"Reached file limit of {max_file_to_process}.")
-            break
-
-        map_path_str = ""
-        try:
-            # if is_gcs_stream:
-            #     # item is a path string from gcsfs.glob, e.g., "my-bucket/path/file.json"
-            #     map_path_str = f"gs://{item}"
-            #     # Use 'with' to ensure the stream is automatically closed
-            #     with fs.open(item, "rt", encoding="utf-8") as stream:
-            #         map_data = json.load(stream)
-            # else:
-            # item is a Path object from Path.rglob
-            map_path_str = str(item)
-            # Use 'with' for local files too (good practice)
-            with open(map_path_str, "r") as f:
-                map_data = json.load(f)
-
-            map_name = Path(map_path_str).name
-            binary_file = f"map_{i:03d}.bin"
-            binary_path = binary_dir / binary_file
-
-            print(f"Processing {map_name} -> {binary_file}")
-            save_map_binary(map_data, str(binary_path))
-            file_count += 1
-
-        except Exception as e:
-            print(f"Error processing {map_path_str}: {e}")
-            continue
-
-    print(f"Found and processed {file_count} JSON files.")
-
-
 def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     import time
 
@@ -1184,9 +982,7 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
     env.reset()
     tick = 0
     num_agents = 1024
-    actions = np.stack(
-        [np.random.randint(0, space.n + 1, (atn_cache, num_agents)) for space in env.single_action_space], axis=-1
-    )
+    actions = np.random.randint(0, env.single_action_space.n, (atn_cache, num_agents))
 
     start = time.time()
     while time.time() - start < timeout:
@@ -1196,13 +992,3 @@ def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
 
     print(f"SPS: {num_agents * tick / (time.time() - start)}")
     env.close()
-
-
-if __name__ == "__main__":
-    # test_performance()
-    parser = argparse.ArgumentParser(description="Process maps for PufferDrive.")
-    parser.add_argument(
-        "--data_dir", type=str, default="data/train", help="Path to the directory containing JSON map files."
-    )
-    args = parser.parse_args()
-    process_all_maps(args.data_dir)

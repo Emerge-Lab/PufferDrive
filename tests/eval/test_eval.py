@@ -131,7 +131,6 @@ def _standalone_eval_args(benchmark_config_path):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "torch_deterministic": True,
         }
     )
@@ -166,6 +165,7 @@ def _standalone_eval_args(benchmark_config_path):
             "render_filter": None,
             "failure_replay_csv": None,
             "capture_observations": False,
+            "action_selection": "mode",
         }
     )
     args["wandb"] = False
@@ -356,7 +356,6 @@ def _replay_render_args():
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
         }
     )
     args["vec"].update({"seed": SEED, "num_envs": 2, "num_workers": 2})
@@ -384,6 +383,7 @@ def _replay_render_args():
     )
     _set_small_observation_config(args)
     args["eval"]["observation_replay_writer_count"] = 1
+    args["eval"]["action_selection"] = "mode"
     return args
 
 
@@ -515,13 +515,13 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "precision": "float32",
             "torch_deterministic": True,
             "anneal_lr": False,
             "update_epochs": 1,
             "batch_size": batch_size,
             "bptt_horizon": TRAIN_HORIZON,
+            "adv_filter_enabled": False,
             "minibatch_size": 64,
             "max_minibatch_size": 64,
             "total_timesteps": TRAIN_EPOCH_COUNT * batch_size,
@@ -679,7 +679,6 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "seed": SEED,
             "device": "cpu",
             "compile": False,
-            "amp": False,
             "torch_deterministic": True,
         }
     )
@@ -717,6 +716,7 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "render_filter": None,
             "failure_replay_csv": None,
             "capture_observations": False,
+            "action_selection": "mode",
         }
     )
     args["wandb"] = False

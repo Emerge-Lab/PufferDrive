@@ -39,6 +39,7 @@ COEF_NAMES = [
     "throttle",
     "steer",
     "acc",
+    "speed",
 ]
 
 EGO_LABELS = [
@@ -128,19 +129,19 @@ def make_drive_env(**overrides):
 
 
 def action_shape(env):
-    if hasattr(env.single_action_space, "nvec"):
-        return (env.num_agents, len(env.single_action_space.nvec))
+    if hasattr(env.single_action_space, "n"):
+        return (env.num_agents,)
     return (env.num_agents, env.single_action_space.shape[0])
 
 
 def zero_actions(env):
-    dtype = np.int64 if hasattr(env.single_action_space, "nvec") else np.float32
+    dtype = np.int64 if hasattr(env.single_action_space, "n") else np.float32
     return np.zeros(action_shape(env), dtype=dtype)
 
 
 def random_actions(env):
-    if hasattr(env.single_action_space, "nvec"):
-        return np.stack([np.random.randint(0, n, size=env.num_agents) for n in env.single_action_space.nvec], axis=1)
+    if hasattr(env.single_action_space, "n"):
+        return np.random.randint(0, env.single_action_space.n, size=env.num_agents)
     return np.random.uniform(-1.0, 1.0, size=action_shape(env)).astype(np.float32)
 
 

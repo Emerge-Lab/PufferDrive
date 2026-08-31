@@ -24,6 +24,26 @@ def recv_precheck(vecenv):
     vecenv.flag = SEND
 
 
+def _action_space_mismatch_message(space, actions):
+    parts = [
+        f"Actions do not match action space: actions shape={actions.shape} dtype={actions.dtype},"
+        f" space shape={getattr(space, 'shape', None)} dtype={getattr(space, 'dtype', None)}"
+    ]
+    if np.issubdtype(actions.dtype, np.floating):
+        nonfinite_count = int((~np.isfinite(actions)).sum())
+        if nonfinite_count:
+            parts.append(f"{nonfinite_count} non-finite values")
+        low, high = getattr(space, "low", None), getattr(space, "high", None)
+        if low is not None and actions.shape == space.shape:
+            below, above = int((actions < low).sum()), int((actions > high).sum())
+            if below or above:
+                parts.append(
+                    f"{below} below low / {above} above high,"
+                    f" finite actions min={np.nanmin(actions)} max={np.nanmax(actions)}"
+                )
+    return "; ".join(parts)
+
+
 def send_precheck(vecenv, actions):
     if vecenv.flag != SEND:
         raise pufferlib.APIUsageError("Call (async) reset + recv before sending")
@@ -32,7 +52,7 @@ def send_precheck(vecenv, actions):
     if not vecenv.initialized:
         vecenv.initialized = True
         if not vecenv.action_space.contains(actions):
-            raise pufferlib.APIUsageError("Actions do not match action space")
+            raise pufferlib.APIUsageError(_action_space_mismatch_message(vecenv.action_space, actions))
 
     vecenv.flag = RECV
     return actions
@@ -774,20 +794,6 @@ def make(env_creator_or_creators, env_args=None, env_kwargs=None, backend=Puffer
     # TODO: First step action space check
 
     return backend(env_creators, env_args, env_kwargs, num_envs, **kwargs)
-
-
-def make_seeds(seed, num_envs):
-    if isinstance(seed, int):
-        return [seed + i for i in range(num_envs)]
-
-    err = f"seed {seed} must be an integer or a list of integers"
-    if isinstance(seed, (list, tuple)):
-        if len(seed) != num_envs:
-            raise pufferlib.APIUsageError(err)
-
-        return seed
-
-    raise pufferlib.APIUsageError(err)
 
 
 def check_envs(envs, driver):

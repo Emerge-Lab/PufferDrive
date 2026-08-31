@@ -194,32 +194,32 @@ static int test_stop_line_red_light_gating(void) {
     env.traffic_elements = &tc;
     env.timestep = 0;
 
-    EXPECT_TRUE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
 
     state[0] = TRAFFIC_CONTROL_STATE_GREEN;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
     state[0] = TRAFFIC_CONTROL_STATE_YELLOW;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
-    EXPECT_TRUE(check_stop_line_crossing(&env, &agent, true)); // yellow counts when spawn-mode flag is set
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
+    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, true)); // yellow counts when spawn-mode flag is set
     state[0] = TRAFFIC_CONTROL_STATE_OFF;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
     state[0] = TRAFFIC_CONTROL_STATE_RED;
 
     env.timestep = 1;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
     env.timestep = 0;
 
     controlled_lane[0] = 2;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
     controlled_lane[0] = 1;
 
     agent = drive_test_agent(1.0f, 0.0f, (float) M_PI);
     agent.prev_x = -3.0f;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
 
     agent = drive_test_agent(11.0f, 0.0f, 0.0f);
     agent.prev_x = -1.0f;
-    EXPECT_FALSE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_FALSE(check_agent_on_stop_line(&env, &agent, false));
 
     agent = drive_test_agent(1.0f, 1.4f, 0.0f);
     agent.prev_x = -3.0f;
@@ -227,7 +227,7 @@ static int test_stop_line_red_light_gating(void) {
     agent.sim_width = 0.4f;
     update_agent_radius(&agent);
     tc.states = red_state;
-    EXPECT_TRUE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
 
     return 0;
 }
@@ -253,7 +253,7 @@ static int test_stop_line_stationary_on_red(void) {
     env.traffic_elements = &tc;
     env.timestep = 0;
 
-    EXPECT_TRUE(check_stop_line_crossing(&env, &agent, false));
+    EXPECT_TRUE(check_agent_on_stop_line(&env, &agent, false));
     return 0;
 }
 

@@ -82,7 +82,6 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
-EVAL_WANDB_KEY_PREFIX = "final_eval_"
 
 
 def torch_device(device):
@@ -116,9 +115,7 @@ def clean_policy_state_dict(state_dict):
 def logits_to_float(logits):
     if isinstance(logits, torch.distributions.Normal):
         return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
-    if isinstance(logits, torch.Tensor):
-        return logits.float()
-    return tuple(l.float() for l in logits)
+    return logits.float()
 
 
 class PuffeRL:
@@ -131,7 +128,7 @@ class PuffeRL:
 
         # Reproducibility
         seed = config["seed"]
-        # Decorrelate reset streams across DDP ranks for envs that honor reset(seed).
+        # Decorrelate reset streams across DDP ranks
         if seed is not None and torch.distributed.is_initialized():
             seed = seed * torch.distributed.get_world_size() + torch.distributed.get_rank()
 
@@ -143,7 +140,7 @@ class PuffeRL:
         # Custom policy attributes live on the base module, not the DDP/compile wrapper.
         unwrapped_policy = base_policy(policy)
         if self.env_continuous and not unwrapped_policy.is_continuous:
-            action_shape = (len(unwrapped_policy.atn_dim),)
+            action_shape = ()
             action_dtype = torch.int32
         else:
             action_shape = vecenv.single_action_space.shape
@@ -173,17 +170,24 @@ class PuffeRL:
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
-        if precision == "bfloat16" and not config.get("amp", True):
-            raise pufferlib.APIUsageError("bfloat16 precision requires train.amp=True")
 
-        obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        rollout_dtype = config.get("rollout_dtype", "float32")
+        if rollout_dtype == "float32":
+            obs_dtype = pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype]
+        elif rollout_dtype == "float16" and np.issubdtype(obs_space.dtype, np.floating):
+            obs_dtype = getattr(torch, rollout_dtype)
+        else:
+            raise pufferlib.APIUsageError(
+                f"Invalid rollout_dtype {rollout_dtype} for observation dtype {obs_space.dtype}"
+            )
+        self.compress_observations = rollout_dtype != "float32"
 
         self.observations = torch.zeros(
             segments,
             horizon,
             *obs_space.shape,
             dtype=obs_dtype,
-            pin_memory=device == "cuda" and config["cpu_offload"],
+            pin_memory=use_cuda and config["cpu_offload"],
             device="cpu" if config["cpu_offload"] else device,
         )
         self.actions = torch.zeros(
@@ -196,13 +200,12 @@ class PuffeRL:
         self.values = torch.zeros(segments, horizon, device=device)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
-        self.terminals = torch.zeros(segments, horizon, device=device)
-        self.truncations = torch.zeros(segments, horizon, device=device)
-        self.ratio = torch.ones(segments, horizon, device=device)
-        self.importance = torch.ones(segments, horizon, device=device)
+        self.terminals = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
+        if config["use_rnn"]:
+            self.ratio = torch.ones(segments, horizon, device=device)
         self.masks = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
-        self.ep_lengths = torch.zeros(total_agents, device=device, dtype=torch.int32)
-        self.ep_indices = torch.arange(total_agents, device=device, dtype=torch.int32)
+        self.ep_lengths = torch.zeros(total_agents, dtype=torch.int32)
+        self.ep_indices = torch.arange(total_agents, dtype=torch.int32)
         self.free_idx = total_agents
         self.render = config["render"]
         self.render_interval = config["render_interval"]
@@ -303,7 +306,7 @@ class PuffeRL:
 
         # Automatic mixed precision
         self.amp_context = contextlib.nullcontext()
-        if config.get("amp", True) and use_cuda and precision == "bfloat16":
+        if use_cuda and precision == "bfloat16":
             self.amp_context = torch.amp.autocast(device_type="cuda", dtype=getattr(torch, precision))
 
         # Initializations
@@ -388,12 +391,15 @@ class PuffeRL:
 
             profile("eval_copy", epoch)
             o = torch.as_tensor(o)
-            o_device = o.to(device)  # , non_blocking=True)
+            if self.compress_observations:
+                o_device = o.to(device=device, dtype=self.observations.dtype, non_blocking=True).float()
+            else:
+                o_device = o.to(device, non_blocking=True)
             r = torch.as_tensor(r).to(device)  # , non_blocking=True)
             d = torch.as_tensor(d).to(device)  # , non_blocking=True)
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
-            done_mask = (d + t).clamp(max=1.0)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
+            done_mask = (d + t).clamp(max=1.0)
 
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
@@ -444,12 +450,11 @@ class PuffeRL:
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
                 # proxy for the pre-reset terminal value (bootstrap term is not clipped).
-                if l > 0:
+                if l > 0 and config["use_value_bootstrapping"]:
                     trunc_mask = (t > 0) & (d == 0)
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
-                self.terminals[batch_rows, l] = done_mask.float()
-                self.truncations[batch_rows, l] = t.float()
+                self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = value.flatten().float()
                 self.masks[batch_rows, l] = m
 
@@ -457,7 +462,7 @@ class PuffeRL:
                 self.ep_lengths[env_id] += 1
                 if l + 1 >= config["bptt_horizon"]:
                     num_full = env_id.stop - env_id.start
-                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, device=config["device"]).int()
+                    self.ep_indices[env_id] = self.free_idx + torch.arange(num_full, dtype=torch.int32)
                     self.ep_lengths[env_id] = 0
                     self.free_idx += num_full
                     self.full_rows += num_full
@@ -476,7 +481,7 @@ class PuffeRL:
 
             if self.env_continuous and not self.uncompiled_policy.is_continuous:
                 cont_action = cont_action.cpu().numpy()
-                self.vecenv.send(cont_action.squeeze(0))
+                self.vecenv.send(cont_action)
             else:
                 action = action.cpu().numpy()
                 if isinstance(logits, torch.distributions.Normal):
@@ -485,7 +490,7 @@ class PuffeRL:
 
         profile("eval_misc", epoch)
         self.free_idx = self.total_agents
-        self.ep_indices = torch.arange(self.total_agents, device=device, dtype=torch.int32)
+        self.ep_indices = torch.arange(self.total_agents, dtype=torch.int32)
         self.ep_lengths.zero_()
         profile.end()
         return pufferlib.utils.reduce_environment_metrics(self.stats)
@@ -512,7 +517,7 @@ class PuffeRL:
         self.epoch += 1
         done_training = self.global_step >= config["total_timesteps"]
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
-            self.losses = losses
+            self.losses = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
             logs = self.mean_and_log()
             self.print_dashboard()
             self.stats = defaultdict(list)
@@ -557,6 +562,8 @@ class PuffeRL:
     def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
         config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
+        if self.compress_observations:
+            mb_obs = mb_obs.float()
         with self.amp_context:
             logits, newvalue = self.policy(mb_obs, state)
         logits = logits_to_float(logits)
@@ -614,12 +621,12 @@ class PuffeRL:
             newvalue,
             ratio,
             {
-                "policy_loss": pg_loss.item(),
-                "value_loss": v_loss.item(),
-                "entropy": entropy_loss.item(),
-                "old_approx_kl": old_approx_kl.item(),
-                "approx_kl": approx_kl.item(),
-                "clipfrac": clipfrac.item(),
+                "policy_loss": pg_loss.detach(),
+                "value_loss": v_loss.detach(),
+                "entropy": entropy_loss.detach(),
+                "old_approx_kl": old_approx_kl,
+                "approx_kl": approx_kl,
+                "clipfrac": clipfrac,
             },
         )
 
@@ -628,7 +635,7 @@ class PuffeRL:
         device = config["device"]
 
         masks = self.masks.bool()
-        terminals = torch.maximum(self.terminals, (~masks).float())
+        terminals = (self.terminals | ~masks).float()
         advantages = compute_puff_advantage(
             self.values,
             self.rewards,
@@ -693,7 +700,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             for key, value in stats.items():
                 losses[key] += value / self.total_minibatches
-            losses["importance"] += ratio.mean().item() / self.total_minibatches
+            losses["importance"] += ratio.detach().mean() / self.total_minibatches
 
             profile("learn", epoch)
             loss.backward()
@@ -775,8 +782,11 @@ class PuffeRL:
         total_minibatches = 0
         pending_minibatches = 0
 
-        # final minibatch can be partial due to advantage filtering or invalid agents. Drop the last mini-batch if is is partial.
-        full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+        # Disabled for now: dropping the partial final minibatch means zero optimizer
+        # steps (silently) whenever fewer than minibatch_size transitions survive the
+        # advantage filter, which permanently freezes a plateaued policy.
+        # full_minibatch_transitions = (keep_idx.numel() // self.minibatch_size) * self.minibatch_size
+        full_minibatch_transitions = keep_idx.numel()
 
         for _ in range(config["update_epochs"]):
             permutation = keep_idx[torch.randperm(keep_idx.numel(), device=keep_idx.device)]
@@ -888,6 +898,9 @@ class PuffeRL:
         model_path = os.path.join(models_dir, model_name)
         if not os.path.exists(model_path):
             torch.save(self.uncompiled_policy.state_dict(), model_path)
+        for old_model_path in glob.glob(os.path.join(models_dir, "model_*.pt")):
+            if old_model_path != model_path:
+                os.remove(old_model_path)
 
         current_score = self.last_stats.get("puffer_score", self.last_stats.get("score", -float("inf")))
         new_best = current_score > self.best_score
@@ -918,6 +931,9 @@ class PuffeRL:
             best_state_file = os.path.join(path, f"best_models/best_trainer_state_{self.epoch:06d}.pt")
             os.makedirs(os.path.dirname(best_state_file), exist_ok=True)
             shutil.copy(model_path, best_state_file)
+            for old_best_path in glob.glob(os.path.join(path, "best_models", "best_trainer_state_*.pt")):
+                if old_best_path != best_state_file:
+                    os.remove(old_best_path)
             print(f"New best model saved at epoch {self.epoch} with puffer_score {self.best_score:.4f}")
 
         return model_path
@@ -1289,7 +1305,7 @@ class NeptuneLogger:
 
 
 class WandbLogger:
-    def __init__(self, args, load_id=None, resume="allow", upload_config=True):
+    def __init__(self, args, load_id=None, resume="allow", upload_config=True, disable_meta=False):
         import wandb
 
         # run_name is the run id: with resume="allow" wandb attaches to the
@@ -1304,7 +1320,7 @@ class WandbLogger:
             resume=resume,
             config=args if upload_config else None,
             tags=[args["tag"]] if args["tag"] is not None else [],
-            settings=wandb.Settings(console="off"),  # stop sending dashboard to wandb
+            settings=wandb.Settings(console="off", x_disable_meta=disable_meta),
         )
         self.wandb = wandb
         self.run_id = wandb.run.id
@@ -1312,12 +1328,6 @@ class WandbLogger:
 
     def log(self, logs, step):
         self.wandb.log(logs, step=step)
-
-    def log_summary(self, logs):
-        """Record run-level scalars. Unlike log(), carries no step, so a job that runs
-        after training cannot collide with the step history training already wrote."""
-        for key, value in logs.items():
-            self.wandb.run.summary[key] = value
 
     def finish(self):
         """End the wandb session without the model upload and early_stop that close() adds."""
@@ -1695,10 +1705,13 @@ def eval(
         raise pufferlib.APIUsageError(
             f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
         )
+    eval_training_render = args["env"]["eval_training_render"]
+    if not isinstance(eval_training_render, bool):
+        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
+    render_scenarios = render_scenarios or eval_training_render
     if render_scenarios and failure_replay_csv is not None:
         raise pufferlib.APIUsageError(
-            "eval.render_scenarios requires a standard benchmark pass and cannot be combined "
-            "with eval.failure_replay_csv"
+            "Scenario rendering requires a standard benchmark pass and cannot be combined with eval.failure_replay_csv"
         )
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
@@ -1714,13 +1727,14 @@ def eval(
         checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+    base_args["env"]["eval_training_render"] = eval_training_render
 
     wandb_run_identity = (
         drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
     )
     if eval_output_dir is None:
         run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
-        eval_output_dir = os.path.join(run_dir, "eval")
+        eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
@@ -1740,7 +1754,11 @@ def eval(
             OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
             resolve=True,
         )
+        run_args["env"]["eval_training_render"] = eval_training_render
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        if eval_training_render:
+            run_args["env"]["compute_eval_metrics"] = True
+            run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
         if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
             run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
         output_directory_name = benchmark["name"]
@@ -1823,13 +1841,13 @@ def eval(
             )
 
     if wandb_run_identity is not None:
-        report_eval_to_wandb(args, benchmark_results, wandb_run_identity)
+        report_eval_to_wandb(args, benchmark_results, wandb_run_identity, eval_config["output_dir_name"])
     return benchmark_results
 
 
-def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
+def report_eval_to_wandb(args, benchmark_results, wandb_run_identity, output_dir_name):
     """Attach standalone eval results to the wandb run that trained the checkpoint."""
-    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, EVAL_WANDB_KEY_PREFIX)
+    metrics = drive_benchmark.summarize_benchmark_metrics(benchmark_results, f"final_{output_dir_name}_")
     if not metrics:
         print("No evaluation metrics to report to wandb.")
         return
@@ -1837,9 +1855,9 @@ def report_eval_to_wandb(args, benchmark_results, wandb_run_identity):
     run_args = copy.copy(args)
     run_args.update(wandb_run_identity)
 
-    logger = WandbLogger(run_args, resume="must", upload_config=False)
+    logger = WandbLogger(run_args, resume="must", upload_config=False, disable_meta=True)
     try:
-        logger.log_summary(metrics)
+        logger.log(metrics, step=None)
     finally:
         logger.finish()
     print(f"Reported {len(metrics)} eval metrics to wandb run {wandb_run_identity['run_name']}")
@@ -2002,6 +2020,20 @@ def autotune(args=None, env_name=None, vecenv=None, policy=None):
     pufferlib.vector.autotune(make_env, batch_size=args["train"]["env_batch_size"])
 
 
+def _require_finite_eval_batch(batch_array, what, num_workers, worker_env_kwargs):
+    if np.isfinite(batch_array).all():
+        return
+    rows_per_worker = batch_array.shape[0] // num_workers
+    bad_rows = np.unique(np.where(~np.isfinite(batch_array))[0])
+    bad_workers = sorted({int(row) // rows_per_worker for row in bad_rows})
+    details = ", ".join(
+        f"worker {w} (starting_map={worker_env_kwargs[w].get('starting_map')},"
+        f" num_eval_scenarios={worker_env_kwargs[w].get('num_eval_scenarios')})"
+        for w in bad_workers
+    )
+    raise pufferlib.APIUsageError(f"Non-finite {what} from {details}")
+
+
 def _run_eval_rollout(
     args,
     env_name,
@@ -2077,11 +2109,12 @@ def _run_eval_rollout(
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
         discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
         device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["amp"] and args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
         if use_bfloat16 and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
         eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
+        _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
         if padding_agent_count:
@@ -2139,8 +2172,9 @@ def _run_eval_rollout(
                 else:
                     raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
                     action = raw_action
-            if isinstance(logits, torch.distributions.Normal):
+            if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
+            _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
                 replay_capture.capture_frame(

@@ -3,9 +3,9 @@
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --time=1-00:00
-#SBATCH --gres=gpu:1
-#SBATCH --mem=125G
-#SBATCH --cpus-per-task=18
+#SBATCH --gres=gpu:8
+#SBATCH --mem=1007G
+#SBATCH --cpus-per-task=144
 #SBATCH --output=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.out
 #SBATCH --error=/home/bjaeger/PufferDrive/experiments/logs/eval_%a_%A.err
 #SBATCH --partition=dev
@@ -14,24 +14,31 @@
 echo "START TIME: $(date)"
 start=`date +%s`
 
-export RUN_NAME=k_exp_0001_3000
-MODEL_PATH=/home/bjaeger/PufferDrive/experiments/k_exp_0001/puffer_drive_m10p3mck/puffer_drive_m10p3mck.pt
-#final_model.pt
+export RUN_NAME=k_scaled_0008_1000
+MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
+
 source .venv/bin/activate
-python setup.py build_ext --inplace --force
-.venv/bin/puffer eval puffer_drive carla \
-    vec.num_envs=16 \
-    eval.action_selection=mean \
-    eval.output_name=${RUN_NAME} \
-    load_model_path=${MODEL_PATH}
+bash scripts/kesai/build_ext_if_changed.sh /home/bjaeger/PufferDrive || exit 1
+
+#.venv/bin/puffer eval puffer_drive carla \
+#    vec.num_envs=64 \
+#    num_scenarios=4000 \
+#    eval.output_name=${RUN_NAME} \
+#    load_model_path=${MODEL_PATH} \
+#    wandb=True
 
 .venv/bin/puffer eval puffer_drive nuplan_single \
     env.map_dir=/home/shared/data/nuPlan/PufferDrive \
-    eval.action_selection=mean \
+    vec.num_envs=64 \
+    eval.max_sdc_replay_workers=64 \
+    env.goal_source=gt \
+    eval.render_filter=all_infractions \
+    eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
-    load_model_path=${MODEL_PATH}
+    load_model_path=${MODEL_PATH} \
+    wandb=True
 
-
+#
 end=`date +%s`
 runtime=$((end-start))
 echo "END TIME: $(date)"

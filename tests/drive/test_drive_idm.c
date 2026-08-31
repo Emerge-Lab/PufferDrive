@@ -61,6 +61,7 @@ static int test_desired_speed_fallback_and_lane_limit(void) {
     make_lane(&lanes[1], x1, y1, z1, h1, 12.0f);
     env.road_elements = lanes;
     env.num_road_elements = 2;
+    env.base_max_speed_mps = 20.0f;
     agent.current_lane_idx = 0;
     agent.route = route;
     agent.route_length = 1;
@@ -183,6 +184,7 @@ static int test_leader_selection_and_move_idm(void) {
     env.static_agent_count = 1;
     env.num_agents = 2;
     env.dt = 0.1f;
+    env.base_max_speed_mps = 20.0f;
 
     IDMLeader leader = idm_find_leader_by_route_boxes(&env, 0);
     EXPECT_EQ_INT(leader.has_leader, 1);

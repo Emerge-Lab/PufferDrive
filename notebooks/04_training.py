@@ -28,7 +28,7 @@ env, obs, info = make_drive_env()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 policy = make_drive_policy(env, device)
 print(f"Policy on {device}, params: {sum(p.numel() for p in policy.parameters()):,}")
-print(f"Action dim: {policy.atn_dim}, act_shape: {(env.num_agents, len(env.single_action_space.nvec))}")
+print(f"Action dim: {policy.action_dim}, act_shape: {(env.num_agents,)}")
 
 # %% [markdown]
 # ### Optional: load checkpoint
@@ -70,18 +70,17 @@ plt.show()
 with torch.no_grad():
     action_logits, value = policy.decode_actions(hidden)
 
-for i, logit in enumerate(action_logits):
-    print(f"Action head {i}: shape={logit.shape}")
-    probs = F.softmax(logit, dim=-1)
-    entropy = -(probs * probs.log()).sum(dim=-1).mean()
-    max_entropy = np.log(logit.shape[-1])
-    print(f"  Entropy: {entropy:.4f} / {max_entropy:.4f} (max) = {entropy / max_entropy:.2%}")
-    print(f"  Logit range: [{logit.min():.3f}, {logit.max():.3f}]")
+print(f"Action logits: shape={action_logits.shape}")
+probs = F.softmax(action_logits, dim=-1)
+entropy = -(probs * probs.log()).sum(dim=-1).mean()
+max_entropy = np.log(action_logits.shape[-1])
+print(f"  Entropy: {entropy:.4f} / {max_entropy:.4f} (max) = {entropy / max_entropy:.2%}")
+print(f"  Logit range: [{action_logits.min():.3f}, {action_logits.max():.3f}]")
 
 print(f"\nValue: mean={value.mean():.4f}, std={value.std():.4f}")
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
-probs = F.softmax(action_logits[0], dim=-1)
+probs = F.softmax(action_logits, dim=-1)
 mean_probs = probs.mean(dim=0).cpu().numpy()
 axes[0].bar(range(len(mean_probs)), mean_probs, edgecolor="black", alpha=0.7)
 axes[0].axhline(1.0 / len(mean_probs), color="red", ls="--", label="uniform")
@@ -155,15 +154,14 @@ if context_dim > 0:
 policy.train()
 optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
 
-action_logits_list, value = policy(obs_tensor)
+action_logits, value = policy(obs_tensor)
 
-fake_actions = torch.randint(0, env.single_action_space.nvec[0], (env.num_agents,), device=device)
+fake_actions = torch.randint(0, env.single_action_space.n, (env.num_agents,), device=device)
 fake_advantages = torch.randn(env.num_agents, device=device)
 fake_returns = torch.randn(env.num_agents, device=device)
 fake_old_logprobs = torch.randn(env.num_agents, device=device)
 
-logits = action_logits_list[0]
-dist = torch.distributions.Categorical(logits=logits)
+dist = torch.distributions.Categorical(logits=action_logits)
 new_logprobs = dist.log_prob(fake_actions)
 entropy = dist.entropy()
 
@@ -229,8 +227,8 @@ policy.eval()
 for t in range(HORIZON):
     obs_t = torch.FloatTensor(obs).to(device)
     with torch.no_grad():
-        logits_list, val = policy(obs_t)
-        dist = torch.distributions.Categorical(logits=logits_list[0])
+        logits, val = policy(obs_t)
+        dist = torch.distributions.Categorical(logits=logits)
         act = dist.sample()
         logp = dist.log_prob(act)
 
@@ -239,9 +237,7 @@ for t in range(HORIZON):
     val_buf[t] = val.squeeze().cpu().numpy()
     logp_buf[t] = logp.cpu().numpy()
 
-    # Reshape (N,) -> (N, 1) for env.step with MultiDiscrete
-    env_actions = act.cpu().numpy().reshape(env.num_agents, len(env.single_action_space.nvec))
-    obs, rew, term, trunc, info = env.step(env_actions)
+    obs, rew, term, trunc, info = env.step(act.cpu().numpy())
     rew_buf[t] = rew
     done_buf[t] = term | trunc
 
@@ -306,9 +302,9 @@ mb_old_val = torch.FloatTensor(val_buf[:MB].flatten()).to(device)
 mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
 policy.train()
-logits_list, newvalue = policy(mb_obs)
+logits, newvalue = policy(mb_obs)
 newvalue = newvalue.squeeze()
-dist = torch.distributions.Categorical(logits=logits_list[0])
+dist = torch.distributions.Categorical(logits=logits)
 new_logp = dist.log_prob(mb_act)
 entropy = dist.entropy()
 
@@ -332,7 +328,7 @@ entropy_loss = entropy.mean()
 
 print(f"\npg_loss:  {pg_loss.item():.6f}")
 print(f"v_loss:   {v_loss.item():.6f}")
-print(f"entropy:  {entropy_loss.item():.6f} (max={np.log(env.single_action_space.nvec[0]):.4f})")
+print(f"entropy:  {entropy_loss.item():.6f} (max={np.log(env.single_action_space.n):.4f})")
 print(f"total:    {(pg_loss + 0.5 * v_loss - 0.01 * entropy_loss).item():.6f}")
 
 # %% [markdown]
@@ -353,9 +349,9 @@ history = {"pg_loss": [], "v_loss": [], "entropy": [], "kl": []}
 
 policy.train()
 for epoch in range(N_EPOCHS):
-    logits_list, newval = policy(all_obs)
+    logits, newval = policy(all_obs)
     newval = newval.squeeze()
-    dist = torch.distributions.Categorical(logits=logits_list[0])
+    dist = torch.distributions.Categorical(logits=logits)
     new_logp = dist.log_prob(all_act)
     ent = dist.entropy().mean()
 

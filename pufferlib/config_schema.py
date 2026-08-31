@@ -91,7 +91,9 @@ class DriveEnvConfig:
     max_agents_per_env: int = MISSING
     action_type: ActionType = MISSING
     dynamics_model: DynamicsModel = MISSING
+    reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
+    base_max_speed_mps: float = MISSING
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
@@ -112,6 +114,7 @@ class DriveEnvConfig:
     non_vehicle_controller: NonVehicleController = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
+    eval_training_render: bool = MISSING
     goal_regen_mode: GoalRegen = MISSING
     goal_source: GoalSource = MISSING
     obs_goal_lane_distance: bool = MISSING
@@ -122,6 +125,7 @@ class DriveEnvConfig:
     max_goal_spacing: float = MISSING
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
+    reward_log_sampling: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
     reward_offroad: float = MISSING
@@ -146,12 +150,15 @@ class DriveEnvConfig:
     obs_dropout_boundary: float = MISSING
     obs_lane_stride: int = MISSING
     obs_boundary_stride: int = MISSING
+    obs_norm_speed_mps: float = MISSING
     obs_norm_goal_offset_m: float = MISSING
     obs_norm_xy_offset_m: float = MISSING
     obs_norm_veh_length_m: float = MISSING
     obs_norm_veh_width_m: float = MISSING
     obs_norm_road_seg_length_m: float = MISSING
     obs_norm_road_seg_width_m: float = MISSING
+    obs_norm_z_m: float = MISSING
+    eval_perceived_size_margin_m: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING
