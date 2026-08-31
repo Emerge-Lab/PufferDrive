@@ -11,7 +11,7 @@
 set -u
 
 export PD=/home/bjaeger/cosim_Puffer
-export PY=$PD/.venv/bin/python
+export PY=$(conda info --base)/envs/carl_nuplan/bin/python
 export CKPT=$PD/weights/mimolette/models/model_puffer_drive_003815.pt
 export CITY_BIN_DIR=/home/shared/data/nuPlan/PufferDrive
 export PYTHONPATH=$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
