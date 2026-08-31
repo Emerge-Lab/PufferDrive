@@ -21,7 +21,7 @@ export COSIM_DEBUG_BEV=0
 export CALLBACKS="[simulation_log_callback]"
 
 RUNNER=$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
-NPAR=40
+NPAR=56
 EVAL_ROOT=/home/bjaeger/cosim_Puffer/experiments/nuplan_val14_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$EVAL_ROOT"
 
