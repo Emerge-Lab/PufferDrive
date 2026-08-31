@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0033_${SEED}
+export RUN_NAME=k_scaled_0035_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -70,6 +70,9 @@ srun torchrun \
     train.precision=bfloat16 \
     policy.fp32_heads=true \
     train.tf32=false \
+    env.goal_speed_randomization=false \
+    env.goal_reach_requires_speed=true \
+    env.obs_partner_relative_velocity=true \
     train.evaluation_benchmarks=carla_fast \
     train.final_model_name=${FINAL_MODEL_NAME} \
     train.seed=${SEED} \
@@ -92,8 +95,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.2 \
     eval.min_goal_spacing=20 \
-    eval.max_goal_spacing=30 \
-    env.max_speed_mps=13.33 \
+    eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
@@ -109,8 +111,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     eval.num_agents=300 \
     eval.reward_comfort=0.0 \
     eval.reward_lane_center=0.0075 \
-    env.eval_perceived_size_margin_m=0.15 \
-    env.max_speed_mps=13.33 \
+    env.eval_perceived_size_margin_m=0.0 \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
