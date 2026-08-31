@@ -249,6 +249,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 # termination_mode=1 would c_reset() the pool (ego included)
                 # once parked FAR_AWAY slots latch under "stop" behaviors.
                 "termination_mode": 0,
+                # native-eval scenario batching builds zero envs on a map-only bin
+                "eval_mode": False,
                 # Enforcement off (flags still fire): in one endless episode a
                 # "stop" latch is permanent and would freeze the ego for good.
                 "collision_behavior": "ignore",

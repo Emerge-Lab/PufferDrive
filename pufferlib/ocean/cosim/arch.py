@@ -26,7 +26,6 @@ CLEAN_EVAL_OVERRIDES = {
     "phantom_braking_prob": 0.0,
     "phantom_braking_trigger_prob": 0.0,
     "traffic_light_behavior": "stop",
-    "eval_mode": True,
     "reward_randomization": False,
     "goal_speed": 3.0,
     "goal_radius": 10.0,
