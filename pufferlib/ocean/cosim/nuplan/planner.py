@@ -126,6 +126,16 @@ class PufferDrivePlanner(AbstractPlanner):
     def observation_type(self) -> Type[Observation]:
         return DetectionsTracks  # type: ignore
 
+    def generate_planner_report(self, clear_stats: bool = True):
+        # runners stay referenced until the whole process exits; free per-scenario state
+        report = super().generate_planner_report(clear_stats)
+        if self._env is not None:
+            self._env.close()
+        self._env = None
+        self._policy = None
+        self._bev = None
+        return report
+
     # --- whole-city map-only bins -------------------------------------------
     def _find_city_bin(self) -> Path:
         """City bin for this scenario's map (the map id the devkit read from
