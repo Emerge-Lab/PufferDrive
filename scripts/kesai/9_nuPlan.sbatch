@@ -18,7 +18,7 @@ export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHO
 export WORKER=sequential
 
 RUNNER=$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh
-NPAR=16
+NPAR=40
 EVAL_ROOT=/home/bjaeger/cosim_Puffer/experiments/nuplan_val14_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 mkdir -p "$EVAL_ROOT"
 
