@@ -31,6 +31,10 @@ for i in $(seq -w 00 55); do
         export SPLIT=nuplan_shard_$i GROUP=$EVAL_ROOT/shard_$i
         bash "$RUNNER" > "$EVAL_ROOT/shard_$i.log" 2>&1
         echo $? > "$EVAL_ROOT/shard_$i.exit"
+        done_count=$(ls "$EVAL_ROOT"/*.exit | wc -l)
+        bar=$(printf '%*s' $((done_count * 40 / 56)) '' | tr ' ' '#')
+        printf '%s [%-40s] %2d/56 shards  (shard_%s exit %s)\n' \
+            "$(date +%H:%M)" "$bar" "$done_count" "$i" "$(cat "$EVAL_ROOT/shard_$i.exit")"
     ) &
 done
 wait
