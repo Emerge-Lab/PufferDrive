@@ -257,6 +257,8 @@ train:
   evaluation_interval_epochs: null
   # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
   evaluation_benchmarks: carla_fast
+  # Submit the carla_cosim/nuplan_cosim SLURM debug hooks at start/end of training.
+  cosim_debug_evals: False
   torch_deterministic: false
   cpu_offload: false
   device: cuda

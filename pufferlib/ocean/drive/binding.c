@@ -871,6 +871,24 @@ static PyObject *my_get(PyObject *dict, Env *env) {
             }
             Py_DECREF(tmp);
 
+            /* list_goal_lane[current_goal_idx]: the lane find_goal_lane snapped the
+             * CURRENT goal to (co-sim diagnostics -- verify goal placement against
+             * map geometry from Python without touching the hot obs path). -1 once
+             * every goal is reached (current_goal_idx == goal_count). */
+            tmp = PyLong_FromLong((a->current_goal_idx < a->goal_count) ? a->list_goal_lane[a->current_goal_idx] : -1);
+            if (!tmp) {
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            if (PyDict_SetItemString(agent, "goal_lane_idx", tmp) < 0) {
+                Py_DECREF(tmp);
+                Py_DECREF(agent);
+                Py_DECREF(agents_list);
+                return NULL;
+            }
+            Py_DECREF(tmp);
+
             tmp = PyLong_FromLong(a->active_agent);
             if (!tmp) {
                 Py_DECREF(agent);

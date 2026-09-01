@@ -1,0 +1,17 @@
+pufferdrive_planner:
+  _target_: pufferlib.ocean.cosim.nuplan.planner.PufferDrivePlanner
+  _convert_: 'all'
+
+  checkpoint_path: ???
+  bin_cache_dir: ${oc.env:NUPLAN_EXP_ROOT}/pufferdrive_bin_cache
+  # Whole-city map-only bins -- the only map source, no fallback.
+  city_bin_dir: ???
+  device: "cpu"
+  map_radius: 400.0 # TODO: load from config
+  goal_spacing: 20.0 # TODO: load from config
+  num_agents: 64 # TODO: load from config
+  horizon_seconds: 8.0 # nuplan default
+  deterministic: true
+  env_overrides: null
+  # Write a top-down BEV mp4 of the shadow PufferDrive
+  debug_bev_dir: null

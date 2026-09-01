@@ -158,6 +158,11 @@ def load_benchmark_config(config_path, selected_names, map_dir_override=None, nu
     resolved_benchmarks = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
+        if benchmark.get("simulation_mode") in ("carla_cosim", "nuplan_cosim"):
+            from pufferlib.ocean.evaluation_utils.cosim_evaluator import parse_cosim_benchmark
+
+            resolved_benchmarks.append(parse_cosim_benchmark(name, benchmark))
+            continue
         if num_scenarios_override is not None:
             benchmark = {**benchmark, "num_scenarios": num_scenarios_override}
         benchmark_environment_config = _require_mapping(benchmark.get("env"), f"Benchmark {name} env")
