@@ -68,9 +68,10 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     eval.reward_lane_center=0.0075 \
     env.eval_perceived_size_margin_m=0.0 \
     eval.disable_red_light_infractions=1 \
+    env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_fast4 \
+    eval.output_name=${RUN_NAME}_fast5 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
