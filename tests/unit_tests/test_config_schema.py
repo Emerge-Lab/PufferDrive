@@ -100,6 +100,29 @@ class TestConfigSchema(unittest.TestCase):
         with self.assertRaisesRegex(pufferlib.APIUsageError, "optimizer"):
             load_config("puffer_drive")
 
+    @patch("sys.argv", ["pufferl.py", "train.optimizer=muon"])
+    def test_supported_muon_optimizer_loads(self):
+        args = load_config("puffer_drive")
+        self.assertEqual(args["train"]["optimizer"], "muon")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_non_recurrent_policy_allows_zero_layer_backbone(self):
+        args = load_config("puffer_drive")
+        args["policy"]["backbone_num_layers"] = 0
+        validate_puffer_drive_config(args, "test")
+
+        args["policy"]["backbone_num_layers"] = -1
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "backbone_num_layers"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_recurrent_policy_requires_backbone_layer(self):
+        args = load_config("puffer_drive")
+        args["rnn_name"] = "Recurrent"
+        args["policy"]["backbone_num_layers"] = 0
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "backbone_num_layers"):
+            validate_puffer_drive_config(args, "test")
+
     @patch("sys.argv", ["pufferl.py"])
     def test_validation_is_idempotent_and_does_not_mutate_input(self):
         args = load_config("puffer_drive")
