@@ -153,24 +153,20 @@ class PuffeRL:
         self.total_agents = total_agents
 
         # Experience
-        if config["batch_size"] == "auto" and config["bptt_horizon"] == "auto":
-            raise pufferlib.APIUsageError("Must specify batch_size or bptt_horizon")
-        elif config["batch_size"] == "auto":
+        batch_size_is_auto = config["batch_size"] == "auto"
+        bptt_horizon_is_auto = config["bptt_horizon"] == "auto"
+        if batch_size_is_auto:
             config["batch_size"] = total_agents * config["bptt_horizon"]
-        elif config["bptt_horizon"] == "auto":
+        elif bptt_horizon_is_auto:
             config["bptt_horizon"] = config["batch_size"] // total_agents
 
         batch_size = config["batch_size"]
         horizon = config["bptt_horizon"]
         segments = batch_size // horizon
         self.segments = segments
-        if total_agents > segments:
-            raise pufferlib.APIUsageError(f"Total agents {total_agents} <= segments {segments}")
 
         device = config["device"]
         precision = config["precision"]
-        if precision not in ("float32", "bfloat16"):
-            raise pufferlib.APIUsageError(f"Invalid precision: {precision}: use float32 or bfloat16")
         use_cuda = is_cuda_device(device)
         if precision == "bfloat16" and use_cuda and not torch.cuda.is_bf16_supported():
             raise pufferlib.APIUsageError("bfloat16 precision requires a CUDA device with bf16 support")
@@ -228,21 +224,9 @@ class PuffeRL:
         minibatch_size = config["minibatch_size"]
         max_minibatch_size = config["max_minibatch_size"]
         self.minibatch_size = min(minibatch_size, max_minibatch_size)
-        if minibatch_size > max_minibatch_size and minibatch_size % max_minibatch_size != 0:
-            raise pufferlib.APIUsageError(
-                f"minibatch_size {minibatch_size} > max_minibatch_size {max_minibatch_size} must divide evenly"
-            )
-
-        if batch_size < minibatch_size:
-            raise pufferlib.APIUsageError(f"batch_size {batch_size} must be >= minibatch_size {minibatch_size}")
-
         self.accumulate_minibatches = max(1, minibatch_size // max_minibatch_size)
         self.total_minibatches = int(config["update_epochs"] * batch_size / self.minibatch_size)
         self.minibatch_segments = self.minibatch_size // horizon
-        if self.minibatch_segments * horizon != self.minibatch_size:
-            raise pufferlib.APIUsageError(
-                f"minibatch_size {self.minibatch_size} must be divisible by bptt_horizon {horizon}"
-            )
 
         # Torch compile
         self.uncompiled_policy = base_policy(policy)
@@ -293,9 +277,6 @@ class PuffeRL:
                 eps=config["adam_eps"],
                 heavyball_momentum=True,
             )
-        else:
-            raise ValueError(f"Unknown optimizer: {config['optimizer']}")
-
         self.optimizer = optimizer
 
         # Logging
@@ -1706,25 +1687,8 @@ def eval(
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
-    valid_action_selections = (
-        pufferlib.pytorch.ACTION_SELECT_SAMPLE,
-        pufferlib.pytorch.ACTION_SELECT_MODE,
-        pufferlib.pytorch.ACTION_SELECT_MEAN,
-    )
-    if eval_config["action_selection"] not in valid_action_selections:
-        raise pufferlib.APIUsageError(
-            f"eval.action_selection='{eval_config['action_selection']}' must be one of {valid_action_selections}"
-        )
     eval_training_render = args["env"]["eval_training_render"]
-    if not isinstance(eval_training_render, bool):
-        raise pufferlib.APIUsageError("env.eval_training_render must be a boolean")
     render_scenarios = render_scenarios or eval_training_render
-    if render_scenarios and failure_replay_csv is not None:
-        raise pufferlib.APIUsageError(
-            "Scenario rendering requires a standard benchmark pass and cannot be combined with eval.failure_replay_csv"
-        )
-    if failure_replay_csv is not None and render_filter is None:
-        raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
@@ -1750,10 +1714,6 @@ def eval(
     failure_replay_output_dir = None
     if failure_replay_csv is not None:
         failure_replay_csv = os.path.abspath(failure_replay_csv)
-        if not os.path.isfile(failure_replay_csv):
-            raise pufferlib.APIUsageError(
-                f"eval.failure_replay_csv must reference an existing CSV file: {failure_replay_csv}"
-            )
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
@@ -2304,27 +2264,15 @@ def _render_eval_failures(
     pairs = list(zip(map_indices, seeds))
     failure_args = copy.deepcopy(run_args)
     configured_worker_count = failure_args["vec"]["num_envs"]
-    if configured_worker_count <= 0:
-        raise pufferlib.APIUsageError("Failure rendering requires at least one worker")
     replay_wave_size = len(pairs)
     if capture_observations:
         observation_replay_wave_size = run_args["eval"]["observation_replay_wave_size"]
-        if (
-            isinstance(observation_replay_wave_size, bool)
-            or not isinstance(observation_replay_wave_size, int)
-            or observation_replay_wave_size <= 0
-        ):
-            raise pufferlib.APIUsageError(
-                "eval.observation_replay_wave_size must be a positive integer when rendering observations"
-            )
         replay_wave_size = min(
             len(pairs),
             configured_worker_count,
             observation_replay_wave_size,
         )
         replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
-        if replay_agent_capacity <= 0:
-            raise pufferlib.APIUsageError("Failure rendering requires max_agents_per_env > 0")
         failure_args["env"]["num_agents"] = replay_agent_capacity
     replay_output_dir = os.path.join(failures_dir, "replays")
     os.makedirs(replay_output_dir, exist_ok=True)
@@ -2403,8 +2351,6 @@ def load_policy(args, vecenv, env_name=""):
             path = NeptuneLogger(args, load_id, mode="read-only").download()
         elif args["wandb"]:
             path = WandbLogger(args, load_id).download()
-        else:
-            raise pufferlib.APIUsageError("No run id provided for eval")
 
         state_dict = torch.load(path, map_location=device)
         policy.load_state_dict(clean_policy_state_dict(state_dict))

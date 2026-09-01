@@ -352,9 +352,7 @@ class TrainingConfig:
     seed: int | None = MISSING
     final_model_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     evaluation_interval_epochs: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    # OmegaConf does not support unions between scalar and container types.
-    # These selection fields are checked explicitly after structured merging.
-    evaluation_benchmarks: Any = MISSING
+    evaluation_benchmarks: str | None = MISSING
     torch_deterministic: bool = MISSING
     cpu_offload: bool = MISSING
     device: str | int = MISSING
@@ -531,6 +529,9 @@ def _validate_string_selection(value, context, path, *, allow_none=True):
 
 def _validate_cross_field_constraints(config, context):
     """Validate relationships and context-dependent rules spanning config fields."""
+    if config["load_id"] is not None and not (config["wandb"] or config["neptune"]):
+        _raise_config_error(context, "load_id", "requires wandb or neptune")
+
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:
         _raise_config_error(context, "env.min_agents_per_env", "must not exceed env.max_agents_per_env")
@@ -583,17 +584,77 @@ def _validate_cross_field_constraints(config, context):
             _raise_config_error(context, "rnn", "input_size and hidden_size must match policy.backbone_hidden_size")
 
     train = config["train"]
-    _validate_string_selection(
-        train["evaluation_benchmarks"],
-        context,
-        "train.evaluation_benchmarks",
-        allow_none=train["evaluation_interval_epochs"] is None,
-    )
+    evaluation_benchmarks = train["evaluation_benchmarks"]
+    evaluation_disabled = train["evaluation_interval_epochs"] is None
+    if not (evaluation_disabled and evaluation_benchmarks is None) and (
+        not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
+    ):
+        _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
     for field_name in ("batch_size", "bptt_horizon"):
         if train[field_name] != "auto":
             _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")
     if train["batch_size"] == "auto" and train["bptt_horizon"] == "auto":
         _raise_config_error(context, "train", "batch_size and bptt_horizon cannot both be 'auto'")
+    if (
+        train["minibatch_size"] > train["max_minibatch_size"]
+        and train["minibatch_size"] % train["max_minibatch_size"] != 0
+    ):
+        _raise_config_error(
+            context,
+            "train.minibatch_size",
+            "must be divisible by train.max_minibatch_size when it exceeds that value",
+        )
+    if train["batch_size"] != "auto" and train["batch_size"] < train["minibatch_size"]:
+        _raise_config_error(context, "train.batch_size", "must be at least train.minibatch_size")
+    effective_minibatch_size = min(train["minibatch_size"], train["max_minibatch_size"])
+    if train["bptt_horizon"] != "auto":
+        if effective_minibatch_size % train["bptt_horizon"] != 0:
+            _raise_config_error(
+                context,
+                "train.minibatch_size",
+                "the effective minibatch size must be divisible by train.bptt_horizon",
+            )
+        if train["batch_size"] == "auto":
+            total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
+            derived_batch_size = total_agents * train["bptt_horizon"]
+            if derived_batch_size < train["minibatch_size"]:
+                _raise_config_error(
+                    context,
+                    "train.batch_size",
+                    f"the derived batch_size ({derived_batch_size}) must be at least train.minibatch_size ({train['minibatch_size']})",
+                )
+        else:
+            total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
+            segments = train["batch_size"] // train["bptt_horizon"]
+            if total_agents > segments:
+                _raise_config_error(
+                    context,
+                    "train.batch_size",
+                    f"total agents ({total_agents}) must be <= segments ({segments}) (batch_size {train['batch_size']} // bptt_horizon {train['bptt_horizon']})",
+                )
+    else:
+        # bptt_horizon is "auto", so we compute it using batch_size and total_agents
+        total_agents = config["vec"]["num_envs"] * config["env"]["num_agents"]
+        if train["batch_size"] != "auto":
+            if train["batch_size"] < total_agents:
+                _raise_config_error(
+                    context,
+                    "train.batch_size",
+                    f"batch_size {train['batch_size']} must be at least total agents {total_agents} to automatically derive bptt_horizon",
+                )
+            horizon = train["batch_size"] // total_agents
+            if horizon == 0:
+                _raise_config_error(
+                    context,
+                    "train.batch_size",
+                    "batch_size / total agents resulted in a bptt_horizon of 0",
+                )
+            if effective_minibatch_size % horizon != 0:
+                _raise_config_error(
+                    context,
+                    "train.minibatch_size",
+                    f"the effective minibatch size ({effective_minibatch_size}) must be divisible by the auto-computed bptt_horizon ({horizon})",
+                )
     _validate_string_selection(train["render_map"], context, "train.render_map")
 
     eval_config = config["eval"]
@@ -606,6 +667,14 @@ def _validate_cross_field_constraints(config, context):
         _validate_string_selection(eval_config["render_filter"], context, "eval.render_filter")
         if eval_config["failure_replay_csv"] is not None and eval_config["render_filter"] is None:
             _raise_config_error(context, "eval.failure_replay_csv", "requires eval.render_filter")
+        if eval_config["failure_replay_csv"] is not None and (
+            eval_config["render_scenarios"] or env["eval_training_render"]
+        ):
+            _raise_config_error(
+                context,
+                "eval.failure_replay_csv",
+                "cannot be combined with scenario rendering",
+            )
 
     vector_config = config["vec"]
     if vector_config["num_workers"] != "auto":

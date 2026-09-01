@@ -24,9 +24,11 @@ from pufferlib.config_schema import (
     InitMode,
     NonVehicleController,
     SimulationMode,
+    normalize_puffer_drive_config,
     validate_puffer_drive_config,
 )
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.pufferl import load_config
 
 
@@ -62,6 +64,27 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_evaluation_benchmarks_accepts_comma_separated_string(self):
+        args = load_config("puffer_drive")
+        args["train"]["evaluation_interval_epochs"] = 1
+        args["train"]["evaluation_benchmarks"] = "carla_fast,womd_single"
+
+        normalized = normalize_puffer_drive_config(args, "test")
+        self.assertIsNone(validate_puffer_drive_config(normalized, "test"))
+        self.assertTrue(drive_benchmark.validate_training_evaluation_config(normalized))
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_evaluation_benchmarks_rejects_list(self):
+        args = load_config("puffer_drive")
+        args["train"]["evaluation_interval_epochs"] = 1
+        args["train"]["evaluation_benchmarks"] = ["carla_fast", "womd_single"]
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
+            normalize_puffer_drive_config(args, "test")
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
+            validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
@@ -117,6 +140,85 @@ class TestConfigSchema(unittest.TestCase):
                 continue
             const_name = f"CONTROLLER_{member.name.upper()}"
             self.assertEqual(getattr(binding, const_name), member.value)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_batch_relationships_are_checked(self):
+        args = load_config("puffer_drive")
+
+        invalid = {**args, "train": {**args["train"], "batch_size": "auto", "bptt_horizon": "auto"}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "batch_size and bptt_horizon"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {**args, "train": {**args["train"], "minibatch_size": 10, "max_minibatch_size": 6}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "max_minibatch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {**args, "train": {**args["train"], "batch_size": 8, "minibatch_size": 16}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "train.batch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {
+            **args,
+            "train": {
+                **args["train"],
+                "batch_size": 32,
+                "minibatch_size": 10,
+                "max_minibatch_size": 10,
+                "bptt_horizon": 4,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "bptt_horizon"):
+            validate_puffer_drive_config(invalid, "test")
+
+        # Test derived batch_size < minibatch_size when batch_size is auto
+        invalid = {
+            **args,
+            "vec": {**args["vec"], "num_envs": 1},
+            "env": {**args["env"], "num_agents": 4},
+            "train": {
+                **args["train"],
+                "batch_size": "auto",
+                "bptt_horizon": 2,
+                "minibatch_size": 1024,
+                "max_minibatch_size": 1024,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "derived batch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        # Test total_agents > segments when neither is auto
+        invalid = {
+            **args,
+            "vec": {**args["vec"], "num_envs": 16},
+            "env": {**args["env"], "num_agents": 4},
+            "train": {
+                **args["train"],
+                "batch_size": 32,
+                "bptt_horizon": 2,
+                "minibatch_size": 16,
+                "max_minibatch_size": 16,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "total agents .* must be <= segments"):
+            validate_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_failure_replay_rejects_scenario_rendering(self):
+        args = load_config("puffer_drive")
+        args["eval"]["failure_replay_csv"] = "failures.csv"
+        args["eval"]["render_filter"] = "collision"
+        args["eval"]["render_scenarios"] = True
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "scenario rendering"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_remote_load_id_requires_tracker(self):
+        args = load_config("puffer_drive")
+        args["load_id"] = "remote-run"
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "load_id"):
+            validate_puffer_drive_config(args, "test")
 
 
 if __name__ == "__main__":
