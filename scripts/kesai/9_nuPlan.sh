@@ -18,6 +18,9 @@ export CKPT=$(ls -t "$RUN_DIR"/models/model_*.pt 2>/dev/null | head -1)
 : "${CKPT:?no model_*.pt found in $RUN_DIR/models}"
 echo "Evaluating checkpoint: $CKPT"
 export CITY_BIN_DIR=/home/shared/data/nuplan/PufferDrive
+# shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
+export NUPLAN_DATA_ROOT=/home/shared/data/nuplan
+export NUPLAN_MAPS_ROOT=/home/shared/data/nuplan/maps
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export COSIM_DEBUG_BEV=0
