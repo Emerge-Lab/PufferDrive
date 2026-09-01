@@ -499,12 +499,28 @@ def main():
             import torch
             import pufferlib.pytorch
 
+            import pufferlib.spaces
+
+            # A discrete policy head on a continuous env needs the bin->continuous
+            # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
+            env_continuous = isinstance(env.single_action_space, pufferlib.spaces.Box)
+            action_selection = (
+                pufferlib.pytorch.ACTION_SELECT_MEAN
+                if env_continuous and not policy.is_continuous
+                else pufferlib.pytorch.ACTION_SELECT_MODE
+            )
             with torch.no_grad():
                 logits, _ = policy.forward_eval(torch.as_tensor(obs).to(args.device))
-                action, _, _, _ = pufferlib.pytorch.sample_logits(
-                    logits, action_selection=pufferlib.pytorch.ACTION_SELECT_MODE
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                    logits,
+                    action_selection=action_selection,
+                    env_continuous=env_continuous,
+                    policy=policy,
                 )
-                act = action.cpu().numpy().reshape(n_active, -1).astype(np.int32)
+                env_action = cont_action if env_continuous and cont_action is not None else action
+                act = env_action.cpu().numpy().reshape(n_active, -1)
+                if not env_continuous:
+                    act = act.astype(np.int32)
         else:
             act = dummy_action
 

@@ -460,15 +460,31 @@ class PufferDrivePlanner(AbstractPlanner):
         if self._policy is None:  # dummy wiring test: constant forward jerk
             act = np.full((self._env.num_agents, 1), 3 * 3 + 1, dtype=np.int32)
         else:
+            import pufferlib.spaces
+
+            # A discrete policy head on a continuous env needs the bin->continuous
+            # mapping (pufferl.py feeds cont_action to the env, never the bin indices).
+            env_continuous = isinstance(self._env.single_action_space, pufferlib.spaces.Box)
+            if self._deterministic:
+                action_selection = (
+                    pufferlib.pytorch.ACTION_SELECT_MEAN
+                    if env_continuous and not self._policy.is_continuous
+                    else pufferlib.pytorch.ACTION_SELECT_MODE
+                )
+            else:
+                action_selection = pufferlib.pytorch.ACTION_SELECT_SAMPLE
             with torch.no_grad():
                 logits, _ = self._policy.forward_eval(torch.as_tensor(obs).to(self._device))
-                action, _, _, _ = pufferlib.pytorch.sample_logits(
+                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
                     logits,
-                    action_selection=pufferlib.pytorch.ACTION_SELECT_MODE
-                    if self._deterministic
-                    else pufferlib.pytorch.ACTION_SELECT_SAMPLE,
+                    action_selection=action_selection,
+                    env_continuous=env_continuous,
+                    policy=self._policy,
                 )
-            act = action.cpu().numpy().reshape(self._env.num_agents, -1).astype(np.int32)
+            env_action = cont_action if env_continuous and cont_action is not None else action
+            act = env_action.cpu().numpy().reshape(self._env.num_agents, -1)
+            if not env_continuous:
+                act = act.astype(np.int32)
 
         self._env.step(act)  # integrates the ego one dt; background is re-synced next call
 
