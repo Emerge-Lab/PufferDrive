@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pufferlib.config_schema import check_puffer_drive_config
+from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.pufferl import load_config, pufferlib
 
 VERBOSITY = 0
@@ -48,11 +48,11 @@ class TestDriveConfig(unittest.TestCase):
             args = load_config("puffer_drive")
         args["env"]["obs_lane_stride"] = 0
         with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_lane_stride"):
-            check_puffer_drive_config(args, "test")
+            validate_puffer_drive_config(args, "test")
         args["env"]["obs_lane_stride"] = 1
         args["env"]["obs_boundary_stride"] = 0
         with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_boundary_stride"):
-            check_puffer_drive_config(args, "test")
+            validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):

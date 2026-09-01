@@ -25,9 +25,9 @@ from pufferlib.config_schema import (
     InitMode,
     NonVehicleController,
     SimulationMode,
-    check_puffer_drive_config,
-    validate_config_schema,
-    validate_puffer_drive_benchmark_sources,
+    normalize_puffer_drive_benchmarks,
+    normalize_puffer_drive_config,
+    validate_puffer_drive_config,
     validate_puffer_drive_resources,
 )
 from pufferlib.ocean.drive import binding
@@ -63,7 +63,7 @@ class TestConfigSchema(unittest.TestCase):
         """Final validation must not change the plain-dict contract: enum
         fields come back as their string names, not Enum members."""
         args = load_config("puffer_drive")
-        self.assertIsNone(check_puffer_drive_config(args, "test"))
+        self.assertIsNone(validate_puffer_drive_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
@@ -104,8 +104,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_validation_is_idempotent_and_does_not_mutate_input(self):
         args = load_config("puffer_drive")
         original = copy.deepcopy(args)
-        first = check_puffer_drive_config(args, "test")
-        second = check_puffer_drive_config(args, "test")
+        first = validate_puffer_drive_config(args, "test")
+        second = validate_puffer_drive_config(args, "test")
         self.assertEqual(args, original)
         self.assertIsNone(first)
         self.assertIsNone(second)
@@ -115,7 +115,7 @@ class TestConfigSchema(unittest.TestCase):
         args = load_config("puffer_drive")
         args["env"]["num_agents"] = True
         with self.assertRaisesRegex(pufferlib.APIUsageError, "num_agents"):
-            check_puffer_drive_config(args, "test")
+            validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_final_schema_rejects_unknown_keys_in_fixed_sections(self):
@@ -126,14 +126,14 @@ class TestConfigSchema(unittest.TestCase):
                 target = invalid if section is None else invalid[section]
                 target["unexpected_key"] = 1
                 with self.assertRaisesRegex(pufferlib.APIUsageError, "unexpected_key"):
-                    validate_config_schema(invalid, "test")
+                    normalize_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_final_schema_rejects_missing_required_fields(self):
         args = load_config("puffer_drive")
         del args["train"]["learning_rate"]
         with self.assertRaisesRegex(pufferlib.APIUsageError, "train.learning_rate"):
-            validate_config_schema(args, "test")
+            normalize_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_field_constraints_apply_across_nested_sections(self):
@@ -155,7 +155,7 @@ class TestConfigSchema(unittest.TestCase):
                     target = target[key]
                 target[path[-1]] = invalid_value
                 with self.assertRaisesRegex(pufferlib.APIUsageError, path[-1]):
-                    check_puffer_drive_config(invalid, "test")
+                    validate_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_observation_categories_allow_zero_and_reject_negative(self):
@@ -164,7 +164,7 @@ class TestConfigSchema(unittest.TestCase):
         args["env"]["obs_slots_boundary_n"] = 0
         args["env"]["obs_slots_partners_n"] = 0
         args["env"]["obs_slots_traffic_controls_n"] = 0
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
         slot_fields = (
             "obs_slots_lane_n",
@@ -177,35 +177,35 @@ class TestConfigSchema(unittest.TestCase):
                 invalid = copy.deepcopy(args)
                 invalid["env"][field_name] = -1
                 with self.assertRaisesRegex(pufferlib.APIUsageError, field_name):
-                    check_puffer_drive_config(invalid, "test")
+                    validate_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py", "train.seed=null"])
     def test_training_seed_allows_none(self):
         args = load_config("puffer_drive")
         self.assertIsNone(args["train"]["seed"])
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_goal_speed_can_exceed_physical_speed_cap(self):
         args = load_config("puffer_drive")
         args["env"]["base_max_speed_mps"] = 20.0
         args["env"]["goal_speed"] = 300.0
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
         for invalid_goal_speed in (-1.0, float("inf"), float("nan")):
             with self.subTest(goal_speed=invalid_goal_speed):
                 invalid = copy.deepcopy(args)
                 invalid["env"]["goal_speed"] = invalid_goal_speed
                 with self.assertRaisesRegex(pufferlib.APIUsageError, "goal_speed"):
-                    check_puffer_drive_config(invalid, "test")
+                    validate_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_optional_eval_is_allowed_only_when_training_evaluation_is_disabled(self):
         args = load_config("puffer_drive")
         args["eval"] = None
-        check_puffer_drive_config(args, "training")
+        validate_puffer_drive_config(args, "training")
         with self.assertRaisesRegex(pufferlib.APIUsageError, "complete eval section"):
-            check_puffer_drive_config(args, "evaluation")
+            validate_puffer_drive_config(args, "evaluation")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_load_config_does_not_apply_ddp_derivation(self):
@@ -278,7 +278,7 @@ class TestConfigSchema(unittest.TestCase):
         args["env"]["num_maps"] = 1
         args["num_scenarios"] = 3
 
-        benchmarks = validate_puffer_drive_benchmark_sources(
+        benchmarks = normalize_puffer_drive_benchmarks(
             {},
             [
                 {

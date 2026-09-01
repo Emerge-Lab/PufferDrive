@@ -44,15 +44,18 @@ FINITE_NUMBER_CONSTRAINT = 8
 
 
 def _error(context, path, message):
+    """Raise a config error whose path is qualified by the caller's context."""
     location = f"{context}.{path}" if context else path
     raise pufferlib.APIUsageError(f"Invalid PufferDrive configuration at {location}: {message}")
 
 
 def _checked(constraint_mode, default=MISSING):
+    """Declare a dataclass field carrying a runtime value constraint."""
     return field(default=default, metadata={"constraint_mode": constraint_mode})
 
 
 def _validate_constraint(value, constraint_mode, context, path):
+    """Validate one scalar value against its configured constraint."""
     if value is None and constraint_mode in (
         POSITIVE_INT_CONSTRAINT,
         NONNEGATIVE_INT_CONSTRAINT,
@@ -469,12 +472,12 @@ class PufferDriveConfig:
 MAX_C_SEED = 2**31 - 1
 
 
-def validate_config_schema(args, context="load"):
-    """Return PufferDrive input normalized by its structured schema."""
-    if not isinstance(args, Mapping):
+def normalize_puffer_drive_config(config, context="load"):
+    """Validate config structure and types, then return a normalized plain dictionary."""
+    if not isinstance(config, Mapping):
         _error(context, "root", "must be a mapping")
     try:
-        validated = OmegaConf.merge(OmegaConf.structured(PufferDriveConfig), dict(args))
+        validated = OmegaConf.merge(OmegaConf.structured(PufferDriveConfig), dict(config))
         missing_keys = sorted(OmegaConf.missing_keys(validated))
         if missing_keys:
             _error(context, missing_keys[0], "is required")
@@ -490,6 +493,7 @@ def validate_config_schema(args, context="load"):
 
 
 def _validate_field_constraints(config, schema, context):
+    """Apply dataclass field constraints recursively across a normalized config."""
     pending_schemas = [(config, schema, "")]
     for current_config, current_schema, schema_path in pending_schemas:
         if not current_config:
@@ -511,7 +515,8 @@ def _validate_field_constraints(config, schema, context):
                 pending_schemas.append((field_value, nested_schema, field_path))
 
 
-def _string_selection(value, context, path, *, allow_none=True):
+def _validate_string_selection(value, context, path, *, allow_none=True):
+    """Validate a string or non-empty list of strings used to select inputs."""
     if value is None and allow_none:
         return
     if isinstance(value, str):
@@ -523,7 +528,8 @@ def _string_selection(value, context, path, *, allow_none=True):
         _error(context, path, "must be a non-empty string or list of non-empty strings")
 
 
-def _validate_relationships(config, context):
+def _validate_cross_field_constraints(config, context):
+    """Validate relationships and context-dependent rules spanning config fields."""
     env = config["env"]
     if env["min_agents_per_env"] > env["max_agents_per_env"]:
         _error(context, "env.min_agents_per_env", "must not exceed env.max_agents_per_env")
@@ -570,7 +576,7 @@ def _validate_relationships(config, context):
             _error(context, "rnn", "input_size and hidden_size must match policy.backbone_hidden_size")
 
     train = config["train"]
-    _string_selection(
+    _validate_string_selection(
         train["evaluation_benchmarks"],
         context,
         "train.evaluation_benchmarks",
@@ -581,7 +587,7 @@ def _validate_relationships(config, context):
             _validate_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")
     if train["batch_size"] == "auto" and train["bptt_horizon"] == "auto":
         _error(context, "train", "batch_size and bptt_horizon cannot both be 'auto'")
-    _string_selection(train["render_map"], context, "train.render_map")
+    _validate_string_selection(train["render_map"], context, "train.render_map")
 
     eval_config = config["eval"]
     evaluation_required = context.startswith("evaluation") or config["train"]["evaluation_interval_epochs"] is not None
@@ -589,8 +595,8 @@ def _validate_relationships(config, context):
         if evaluation_required:
             _error(context, "eval", "a complete eval section is required")
     else:
-        _string_selection(eval_config["benchmarks"], context, "eval.benchmarks")
-        _string_selection(eval_config["render_filter"], context, "eval.render_filter")
+        _validate_string_selection(eval_config["benchmarks"], context, "eval.benchmarks")
+        _validate_string_selection(eval_config["render_filter"], context, "eval.render_filter")
         if eval_config["failure_replay_csv"] is not None and eval_config["render_filter"] is None:
             _error(context, "eval.failure_replay_csv", "requires eval.render_filter")
 
@@ -603,13 +609,14 @@ def _validate_relationships(config, context):
         _error(context, "vec.seed", f"must not exceed the C RNG maximum {MAX_C_SEED}")
 
 
-def check_puffer_drive_config(args, context) -> None:
-    """Raise ``APIUsageError`` when normalized config semantics are invalid."""
-    _validate_field_constraints(args, PufferDriveConfig, context)
-    _validate_relationships(args, context)
+def validate_puffer_drive_config(config, context) -> None:
+    """Validate field and cross-field semantics on a normalized PufferDrive config."""
+    _validate_field_constraints(config, PufferDriveConfig, context)
+    _validate_cross_field_constraints(config, context)
 
 
-def _validate_environment_resources(env, context):
+def _validate_map_resources(env, context):
+    """Validate an environment's map path and count, returning the available map count."""
     map_dir = env["map_dir"]
     if not isinstance(map_dir, str) or not map_dir:
         _error(context, "env.map_dir", "must be a non-empty path")
@@ -635,18 +642,18 @@ def _validate_environment_resources(env, context):
     return available_maps
 
 
-def puffer_drive_env_keys():
+def puffer_drive_constructor_keys():
     """Return keyword arguments accepted by the PufferDrive constructor."""
     from pufferlib.ocean.drive.drive import Drive
 
     return set(inspect.signature(Drive.__init__).parameters) - {"self"}
 
 
-def validate_puffer_drive_benchmark_sources(environment_config, benchmarks, context):
-    """Validate and normalize selected benchmark definitions before merging."""
+def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context):
+    """Validate benchmark definitions and return normalized copies for merging."""
     if not isinstance(environment_config, Mapping):
         _error(context, "env", "must be a mapping")
-    accepted_environment_fields = puffer_drive_env_keys()
+    accepted_environment_fields = puffer_drive_constructor_keys()
     unknown_environment_fields = set(environment_config) - accepted_environment_fields
     if unknown_environment_fields:
         _error(
@@ -737,7 +744,7 @@ def validate_puffer_drive_benchmark_sources(environment_config, benchmarks, cont
         if not isinstance(map_dir, str) or not map_dir:
             _error(context, f"{benchmark_path}.env.map_dir", "must be a non-empty path")
         normalized_environment["map_dir"] = os.path.abspath(map_dir)
-        _validate_environment_resources(normalized_environment, f"{context}.{benchmark_path}")
+        _validate_map_resources(normalized_environment, f"{context}.{benchmark_path}")
         if max_agents_per_env is None:
             normalized_environment.pop("max_agents_per_env", None)
 
@@ -752,15 +759,15 @@ def validate_puffer_drive_benchmark_sources(environment_config, benchmarks, cont
     return normalized_benchmarks
 
 
-def validate_puffer_drive_resources(args, context):
+def validate_puffer_drive_resources(config, context):
     """Check final filesystem inputs separately from config semantics."""
-    _validate_environment_resources(args["env"], context)
+    _validate_map_resources(config["env"], context)
 
-    load_model_path = args.get("load_model_path")
+    load_model_path = config.get("load_model_path")
     if load_model_path not in (None, "latest") and not os.path.isfile(load_model_path):
         _error(context, "load_model_path", f"checkpoint does not exist: {load_model_path}")
 
-    eval_config = args.get("eval")
+    eval_config = config.get("eval")
     if eval_config and eval_config.get("failure_replay_csv"):
         failure_csv = eval_config["failure_replay_csv"]
         if not os.path.isfile(failure_csv):

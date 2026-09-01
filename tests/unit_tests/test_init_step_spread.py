@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 import pufferlib
-from pufferlib.config_schema import check_puffer_drive_config
+from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.pufferl import load_config
 
@@ -141,7 +141,7 @@ def test_spread_rejected_in_non_replay_mode():
         args = load_config("puffer_drive")
     args["env"]["init_step_spread"] = True
     with pytest.raises(pufferlib.APIUsageError, match="replay"):
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
 
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_spread_rejected_when_min_horizon_at_or_past_episode_length(min_horizon)
         init_step_min_horizon=min_horizon,
     )
     with pytest.raises(pufferlib.APIUsageError, match="init_step_min_horizon"):
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
 
 if __name__ == "__main__":

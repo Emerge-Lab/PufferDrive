@@ -15,7 +15,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
-from pufferlib.config_schema import check_puffer_drive_config
+from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -955,7 +955,7 @@ def test_batch_cap_rejects_non_positive_values():
     args = _load_config()
     args["env"]["max_scenarios_per_batch"] = 0
     with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
-        check_puffer_drive_config(args, "test")
+        validate_puffer_drive_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):

@@ -42,8 +42,8 @@ import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
 from pufferlib.config_schema import (
-    check_puffer_drive_config,
-    validate_config_schema,
+    normalize_puffer_drive_config,
+    validate_puffer_drive_config,
     validate_puffer_drive_resources,
 )
 
@@ -1493,8 +1493,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 "policy/observation architecture instead of the checkpoint's."
             )
 
-    args = validate_config_schema(args, "training")
-    check_puffer_drive_config(args, "training")
+    args = normalize_puffer_drive_config(args, "training")
+    validate_puffer_drive_config(args, "training")
     if vecenv is None:
         validate_puffer_drive_resources(args, "training")
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
@@ -1970,8 +1970,8 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
     args = args or load_config(env_name)
-    args = validate_config_schema(args, "export")
-    check_puffer_drive_config(args, "export")
+    args = normalize_puffer_drive_config(args, "export")
+    validate_puffer_drive_config(args, "export")
     if vecenv is None:
         validate_puffer_drive_resources(args, "export")
     vecenv = vecenv or load_env(env_name, args)
@@ -2442,7 +2442,7 @@ def load_config(env_name, config_dir=None):
 
     args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
     args["train"]["use_rnn"] = args["rnn_name"] is not None
-    return defaultdict(dict, validate_config_schema(args, "load"))
+    return defaultdict(dict, normalize_puffer_drive_config(args, "load"))
 
 
 def main():

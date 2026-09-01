@@ -17,7 +17,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from pufferlib.config_schema import check_puffer_drive_config  # noqa: E402
+from pufferlib.config_schema import validate_puffer_drive_config  # noqa: E402
 from pufferlib.pufferl import load_config  # noqa: E402
 
 YAML_PATH = REPO_ROOT / "scripts/cluster_configs/single_agent_speed_run.yaml"
@@ -45,7 +45,7 @@ class TestSingleAgentYaml(unittest.TestCase):
         with patch.object(sys, "argv", argv), redirect_stderr(stderr_buf):
             try:
                 args = load_config("puffer_drive")
-                check_puffer_drive_config(args, "training")
+                validate_puffer_drive_config(args, "training")
             except Exception as exc:
                 self.fail(f"training validation rejected the launcher yaml: {exc}")
 

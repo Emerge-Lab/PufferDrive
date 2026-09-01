@@ -10,10 +10,10 @@ import pufferlib
 import pufferlib.pytorch
 import pufferlib.utils
 from pufferlib.config_schema import (
-    check_puffer_drive_config,
-    puffer_drive_env_keys,
-    validate_config_schema,
-    validate_puffer_drive_benchmark_sources,
+    normalize_puffer_drive_benchmarks,
+    normalize_puffer_drive_config,
+    puffer_drive_constructor_keys,
+    validate_puffer_drive_config,
     validate_puffer_drive_resources,
 )
 
@@ -126,7 +126,7 @@ def load_benchmark_config(config_path, selected_names):
         raise pufferlib.APIUsageError(f"Unknown benchmarks: {', '.join(missing_names)}")
 
     selected_benchmark_configs = [configured_benchmarks[name] for name in selected_names]
-    resolved_benchmarks = validate_puffer_drive_benchmark_sources(
+    resolved_benchmarks = normalize_puffer_drive_benchmarks(
         environment_config,
         selected_benchmark_configs,
         "benchmark_config",
@@ -147,7 +147,7 @@ def load_checkpoint_architecture(args):
         values = _require_mapping(checkpoint_config.get(section), f"checkpoint config {section}")
         merged[section].update(values)
     checkpoint_env = _require_mapping(checkpoint_config.get("env"), "checkpoint config env")
-    accepted_env_keys = puffer_drive_env_keys()
+    accepted_env_keys = puffer_drive_constructor_keys()
     merged["env"].update({key: value for key, value in checkpoint_env.items() if key in accepted_env_keys})
     for key in ("policy_name", "rnn_name"):
         if key not in checkpoint_config:
@@ -222,7 +222,7 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
         args["env"]["compute_eval_metrics"] = True
         args["env"]["resample_frequency"] = args["env"]["scenario_length"]
 
-    args = validate_config_schema(args, validation_context)
+    args = normalize_puffer_drive_config(args, validation_context)
     single_agent_replay = (
         args["env"]["simulation_mode"] == "replay" and args["env"]["control_mode"] == "control_sdc_only"
     )
@@ -231,7 +231,7 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
             args["vec"]["num_envs"],
             args["eval"]["max_sdc_replay_workers"],
         )
-    check_puffer_drive_config(args, validation_context)
+    validate_puffer_drive_config(args, validation_context)
     validate_puffer_drive_resources(args, validation_context)
     return args
 
