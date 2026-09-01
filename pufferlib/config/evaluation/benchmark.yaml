@@ -98,6 +98,7 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
       disable_red_light_infractions: 1
+      goal_reach_requires_speed: false
 
   - name: nuplan_single
     seed: 42
@@ -111,3 +112,4 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
       disable_red_light_infractions: 1
+      goal_reach_requires_speed: false
