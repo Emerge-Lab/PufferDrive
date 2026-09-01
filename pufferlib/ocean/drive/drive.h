@@ -3646,6 +3646,10 @@ void c_set_agent_states(
         agent->sim_vy = vy[k];
         update_agent_speed(agent);
         agent->sim_valid = 1;
+        // External sim owns this agent: a removed/stopped latch (e.g. failed gigaflow
+        // respawn) must not survive the overwrite, else move_dynamics re-invalidates it.
+        agent->removed = 0;
+        agent->stopped = 0;
 
         // yaw_rate/accel_long come from the external sim's own physics (e.g. CARLA's
         // get_angular_velocity()/get_acceleration(), nuPlan's EgoState.dynamic_car_state) rather than
