@@ -36,7 +36,7 @@ def yaml_to_argv(yaml_path: Path) -> list:
 
 
 class TestSingleAgentYaml(unittest.TestCase):
-    def test_yaml_passes_training_validation(self):
+    def test_yaml_parses_via_hydra_compose(self):
         """The launcher yaml must compose and satisfy final training semantics."""
         self.assertTrue(YAML_PATH.exists(), f"Missing launcher yaml: {YAML_PATH}")
         argv = yaml_to_argv(YAML_PATH)
