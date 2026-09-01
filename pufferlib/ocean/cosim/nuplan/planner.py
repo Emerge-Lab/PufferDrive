@@ -288,6 +288,30 @@ class PufferDrivePlanner(AbstractPlanner):
         self._env = Drive(**self._arch)
         self._env.reset()
 
+        # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
+        # gigaflow spawning failed (e.g. a city bin without lane connectivity).
+        probe_x, probe_y = self._transform.loc_to_bin(ex, ey)
+        zero = np.zeros(1, np.float32)
+        self._env.set_agent_states(
+            np.array([0], np.int32),
+            np.array([probe_x], np.float32),
+            np.array([probe_y], np.float32),
+            zero,
+            np.array([float(ego_state.center.heading)], np.float32),
+            zero,
+            zero,
+            zero,
+            zero,
+        )
+        readback = self._env.get_global_agent_state()
+        if abs(float(readback["x"][0]) - probe_x) > 0.5 or abs(float(readback["y"][0]) - probe_y) > 0.5:
+            raise RuntimeError(
+                f"{bin_path.name}: shadow env agent slot 0 is not the ego "
+                f"(set ({probe_x:.1f}, {probe_y:.1f}), read ({readback['x'][0]:.1f}, {readback['y'][0]:.1f})). "
+                "Gigaflow spawning likely failed on this bin -- check for '[GIGAFLOW WARNING]'/'[ERROR]' in the "
+                "worker stdout; a map-only city bin without lane connectivity (exit_lanes) is the known cause."
+            )
+
         if self._dummy:
             self._policy = None
         else:

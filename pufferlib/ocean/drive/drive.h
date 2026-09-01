@@ -2915,6 +2915,14 @@ void set_active_agents(Drive *env) {
         }
         free(active_agent_indices);
 
+        if (successfully_created == 0) {
+            fprintf(
+                stderr,
+                "[ERROR] -> gigaflow spawn created 0 of %d agents on map %s (no drivable lanes or missing lane "
+                "connectivity?)\n",
+                num_agents_to_create,
+                env->map_name);
+        }
         env->active_agent_count = successfully_created;
         env->num_agents = successfully_created;
 
