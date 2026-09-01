@@ -100,6 +100,8 @@ class DriveEnvConfig:
     spawn_initial_speed: float = MISSING
     spawn_lateral_offset_max_frac: float = MISSING
     spawn_heading_max_deg: float = MISSING
+    pose_noise_xy_m: float = MISSING
+    pose_noise_yaw_deg: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING

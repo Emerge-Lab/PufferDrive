@@ -229,6 +229,8 @@ struct Drive {
     float spawn_initial_speed;
     float spawn_lateral_offset_max_frac;
     float spawn_heading_max_deg;
+    float pose_noise_xy_m;
+    float pose_noise_yaw_rad;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -456,6 +458,12 @@ static float sample_log_uniform(Rng *rng_state, float min_val, float max_val) {
     return expf(sample_uniform(rng_state, logf(min_val), logf(max_val)));
 }
 
+static float sample_normal(Rng *rng_state, float std_dev) {
+    float u1 = fmaxf(rng_uniform_f32(rng_state), 1e-7f);
+    float u2 = rng_uniform_f32(rng_state);
+    return std_dev * sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float) M_PI * u2);
+}
+
 static float sample_mixed_uniform(Rng *rng_state, float a) {
     // Mixed uniform distribution X(a) = 0.5*U(1/a, 1) + 0.5*U(1, a)
     if (rng_uniform_f32(rng_state) < 0.5f) {
@@ -586,6 +594,7 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
 
 static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
     // Seed accel/steering from the log so mid-motion spawns don't start the dynamics at zero state.
+    // Log frames are log_dt apart (nuPlan 0.1s), not env->dt; using env->dt inflated the seeded state.
     int step = env->init_step;
     if (step >= agent->trajectory_size) {
         step = agent->trajectory_size - 1;
@@ -599,11 +608,12 @@ static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
         float sin_heading = sinf(agent->log_heading[step]);
         float speed_now = agent->log_velocity_x[step] * cos_heading + agent->log_velocity_y[step] * sin_heading;
         float speed_next = agent->log_velocity_x[next_step] * cos_heading + agent->log_velocity_y[next_step] * sin_heading;
-        agent->accel_long = clip((speed_next - speed_now) / env->dt, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+        agent->accel_long = clip((speed_next - speed_now) / env->log_dt, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
     }
-    agent->accel_lat = clip(agent->sim_speed_signed * agent->yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    float log_yaw_rate = compute_log_yaw_rate(agent, step, env->log_dt);
+    agent->accel_lat = clip(agent->sim_speed_signed * log_yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
     float v_eff = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
-    float signed_curvature = agent->yaw_rate / v_eff;
+    float signed_curvature = log_yaw_rate / v_eff;
     agent->steering_angle = clip(atanf(signed_curvature * agent->wheelbase), -0.55f, 0.55f);
 }
 
@@ -3174,6 +3184,10 @@ void init(Drive *env) {
             env->shared_map = entry;
         }
     }
+    if (env->simulation_mode == SIMULATION_MODE_REPLAY && (!isfinite(env->log_dt) || env->log_dt <= 0.0f)) {
+        fprintf(stderr, "[ERROR] -> Replay map %s has invalid log_dt %f\n", env->map_name, (double) env->log_dt);
+        return;
+    }
     if (env->use_neighbor_cache && env->grid_map->neighbor_cache_entities == NULL) {
         cache_neighbor_offsets(env);
     }
@@ -4639,6 +4653,15 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     return;
 }
 
+static void apply_pose_noise(Drive *env, Agent *agent) {
+    // GIGAFLOW dynamics randomization: brownian buffeting applied to the pose, not integrated through speed.
+    agent->sim_x += sample_normal(&env->rng_state, env->pose_noise_xy_m);
+    agent->sim_y += sample_normal(&env->rng_state, env->pose_noise_xy_m);
+    agent->sim_heading = normalize_heading(agent->sim_heading + sample_normal(&env->rng_state, env->pose_noise_yaw_rad));
+    agent->cos_heading = cosf(agent->sim_heading);
+    agent->sin_heading = sinf(agent->sim_heading);
+}
+
 #include "idm.h"
 
 void c_reset(Drive *env) {
@@ -4784,6 +4807,10 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
+            if ((env->pose_noise_xy_m > 0.0f || env->pose_noise_yaw_rad > 0.0f)
+                && (!env->eval_mode || env->eval_training_render)) {
+                apply_pose_noise(env, agent);
+            }
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {

@@ -34,6 +34,8 @@ env:
   termination_mode: 0
   spawn_lateral_offset_max_frac: 0.0
   spawn_heading_max_deg: 0.0
+  pose_noise_xy_m: 0.0
+  pose_noise_yaw_deg: 0.0
 
 benchmarks:
   - name: carla
@@ -65,6 +67,7 @@ benchmarks:
     num_scenarios: 1000
     env:
       simulation_mode: replay
+      dt: 0.1 # replay steps one log frame per sim step; must match the 10 Hz log rate
       num_maps: 1000
       max_agents_per_env: 128
       max_scenarios_per_batch: null
@@ -77,6 +80,7 @@ benchmarks:
     num_scenarios: 1000
     env:
       simulation_mode: replay
+      dt: 0.1
       num_maps: 1000
       max_scenarios_per_batch: 16
       scenario_length: 91
@@ -88,6 +92,7 @@ benchmarks:
     num_scenarios: 1000
     env:
       simulation_mode: replay
+      dt: 0.1
       num_maps: 1000
       max_agents_per_env: 300
       max_scenarios_per_batch: null
@@ -105,6 +110,7 @@ benchmarks:
     num_scenarios: 1000
     env:
       simulation_mode: replay
+      dt: 0.1
       num_maps: 1000
       scenario_length: 200
       max_scenarios_per_batch: 16

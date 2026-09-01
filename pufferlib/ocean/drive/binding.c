@@ -1946,6 +1946,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->spawn_lateral_offset_max_frac = (float) unpack(kwargs, "spawn_lateral_offset_max_frac");
     env->spawn_heading_max_deg = (float) unpack(kwargs, "spawn_heading_max_deg");
+    env->pose_noise_xy_m = (float) unpack(kwargs, "pose_noise_xy_m");
+    env->pose_noise_yaw_rad = (float) unpack(kwargs, "pose_noise_yaw_deg") * (float) M_PI / 180.0f;
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
     env->goal_reach_requires_speed = (int) unpack(kwargs, "goal_reach_requires_speed");

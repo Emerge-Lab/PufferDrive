@@ -79,6 +79,8 @@ class Drive(pufferlib.PufferEnv):
         spawn_initial_speed=0.0,
         spawn_lateral_offset_max_frac=0.0,
         spawn_heading_max_deg=0.0,
+        pose_noise_xy_m=0.0,
+        pose_noise_yaw_deg=0.0,
         goal_speed=3.0,
         goal_speed_randomization=True,
         goal_reach_requires_speed=False,
@@ -166,6 +168,10 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"spawn_lateral_offset_max_frac must be in [0, 1], got {spawn_lateral_offset_max_frac}")
         if not 0.0 <= self.spawn_heading_max_deg <= 180.0:
             raise ValueError(f"spawn_heading_max_deg must be in [0, 180], got {spawn_heading_max_deg}")
+        self.pose_noise_xy_m = float(pose_noise_xy_m)
+        self.pose_noise_yaw_deg = float(pose_noise_yaw_deg)
+        if self.pose_noise_xy_m < 0.0 or self.pose_noise_yaw_deg < 0.0:
+            raise ValueError(f"pose noise must be >= 0, got xy {pose_noise_xy_m}, yaw {pose_noise_yaw_deg}")
         self.goal_speed = float(goal_speed)
         self.goal_speed_randomization = int(bool(goal_speed_randomization))
         self.goal_reach_requires_speed = int(bool(goal_reach_requires_speed))
@@ -629,6 +635,8 @@ class Drive(pufferlib.PufferEnv):
             "spawn_initial_speed": self.spawn_initial_speed,
             "spawn_lateral_offset_max_frac": self.spawn_lateral_offset_max_frac,
             "spawn_heading_max_deg": self.spawn_heading_max_deg,
+            "pose_noise_xy_m": self.pose_noise_xy_m,
+            "pose_noise_yaw_deg": self.pose_noise_yaw_deg,
             "goal_speed": self.goal_speed,
             "goal_speed_randomization": self.goal_speed_randomization,
             "goal_reach_requires_speed": self.goal_reach_requires_speed,

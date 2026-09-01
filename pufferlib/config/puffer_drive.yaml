@@ -61,6 +61,9 @@ env:
   # Gigaflow spawn pose noise: lateral offset as a fraction of half the lane width, heading offset in degrees
   spawn_lateral_offset_max_frac: 1.0
   spawn_heading_max_deg: 30.0
+  # Gigaflow dynamics randomization: per-step brownian pose buffeting (std in meters / degrees); 0 disables
+  pose_noise_xy_m: 0.0
+  pose_noise_yaw_deg: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
   collision_behavior: stop
   # Offroad behavior - options: "ignore", "stop", "remove"
