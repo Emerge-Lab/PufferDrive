@@ -69,6 +69,7 @@ srun torchrun \
     train.minibatch_size=131072 \
     train.precision=bfloat16 \
     policy.fp32_heads=true \
+    policy.mask_padded_features=true \
     train.tf32=false \
     env.goal_speed_randomization=false \
     env.goal_reach_requires_speed=true \

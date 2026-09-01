@@ -2065,7 +2065,7 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
 
 static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
-    float total_infractions = log->total_infractions * n;
+    float total_infractions = roundf(log->total_infractions * n);
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
 
     assign_to_dict(dict, "n", log->n);
