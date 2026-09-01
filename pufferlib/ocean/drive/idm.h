@@ -867,7 +867,6 @@ static float nuplan_idm_desired_speed(Drive *env, Agent *agent) {
         desired_speed = NUPLAN_IDM_DEFAULT_DESIRED_SPEED;
     }
 
-    desired_speed = fminf(desired_speed, NUPLAN_IDM_DEFAULT_DESIRED_SPEED);
     return clip(desired_speed, 1.0f, MAX_SPEED);
 }
 
