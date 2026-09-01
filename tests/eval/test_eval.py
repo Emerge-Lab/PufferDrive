@@ -1,3 +1,4 @@
+import copy
 import json
 import random
 import struct
@@ -14,6 +15,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.config_schema import check_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -174,6 +176,171 @@ def _standalone_eval_args(benchmark_config_path):
     return args
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    ("simulation_mode", "num_maps", "control_mode", "map_dir", "max_agents_per_env"),
+)
+def test_benchmark_requires_environment_fields(tmp_path, missing_field):
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / f"missing_{missing_field}.yaml",
+        name="missing_field",
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=1,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=1,
+    )
+    benchmark_config = yaml.safe_load(benchmark_config_path.read_text())
+    del benchmark_config["benchmarks"][0]["env"][missing_field]
+    benchmark_config_path.write_text(yaml.safe_dump(benchmark_config, sort_keys=False))
+
+    with pytest.raises(pufferlib.APIUsageError, match=missing_field):
+        drive_benchmark.load_benchmark_config(benchmark_config_path, "missing_field")
+
+
+def test_single_agent_replay_allows_missing_max_agents_per_env(tmp_path):
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / "single_agent_replay.yaml",
+        name="single_agent_replay",
+        map_dir=REPLAY_MAP_DIR,
+        simulation_mode="replay",
+        num_maps=1,
+        num_scenarios=1,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=1,
+        control_mode="control_sdc_only",
+        use_neighbor_cache=1,
+    )
+    benchmark_config = yaml.safe_load(benchmark_config_path.read_text())
+    del benchmark_config["benchmarks"][0]["env"]["max_agents_per_env"]
+    benchmark_config_path.write_text(yaml.safe_dump(benchmark_config, sort_keys=False))
+
+    _, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, "single_agent_replay")
+    assert "max_agents_per_env" not in benchmarks[0]["env"]
+
+
+def test_invalid_final_benchmark_config_creates_no_output_directory(tmp_path):
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / "invalid_benchmark.yaml",
+        name="invalid_final",
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=1,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=1,
+    )
+    benchmark_config = yaml.safe_load(benchmark_config_path.read_text())
+    benchmark_config["benchmarks"][0]["env"]["dt"] = -1.0
+    benchmark_config_path.write_text(yaml.safe_dump(benchmark_config, sort_keys=False))
+
+    args = _standalone_eval_args(benchmark_config_path)
+    output_directory = tmp_path / "must_not_exist"
+    with pytest.raises(pufferlib.APIUsageError, match=r"env\.dt"):
+        pufferl.eval(
+            env_name="puffer_drive",
+            args=args,
+            policy=ZeroPolicy(action_count=63),
+            eval_output_dir=str(output_directory),
+            eval_output_subdir="invalid",
+            use_training_config=True,
+            benchmark_names="invalid_final",
+        )
+    assert not output_directory.exists()
+
+
+@pytest.mark.parametrize(
+    ("environment_source", "field_name", "invalid_value", "error_match"),
+    (
+        ("shared", "dt", -1.0, r"env\.dt"),
+        ("benchmark", "dt", -1.0, r"env\.dt"),
+        ("shared", "starting_map", 0, "starting_map"),
+        ("benchmark", "starting_map", 0, "starting_map"),
+    ),
+)
+def test_training_render_validates_ignored_benchmark_environment(
+    tmp_path,
+    environment_source,
+    field_name,
+    invalid_value,
+    error_match,
+):
+    benchmark_config_path = _write_benchmark_config(
+        tmp_path / f"invalid_training_render_{environment_source}_{field_name}.yaml",
+        name="training_render_validation",
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=1,
+        scenario_length=CARLA_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=1,
+    )
+    benchmark_config = yaml.safe_load(benchmark_config_path.read_text())
+    environment_config = benchmark_config["env"]
+    if environment_source == "benchmark":
+        environment_config = benchmark_config["benchmarks"][0]["env"]
+    environment_config[field_name] = invalid_value
+    benchmark_config_path.write_text(yaml.safe_dump(benchmark_config, sort_keys=False))
+
+    args = _standalone_eval_args(benchmark_config_path)
+    args["env"]["eval_training_render"] = True
+    output_directory = tmp_path / "must_not_exist"
+    with pytest.raises(pufferlib.APIUsageError, match=error_match):
+        pufferl.eval(
+            env_name="puffer_drive",
+            args=args,
+            policy=ZeroPolicy(action_count=63),
+            eval_output_dir=str(output_directory),
+            eval_output_subdir="invalid",
+            use_training_config=True,
+            benchmark_names="training_render_validation",
+        )
+    assert not output_directory.exists()
+
+
+def test_training_render_build_derives_eval_mode_and_ignores_environment_overlays():
+    args = _standalone_eval_args("unused.yaml")
+    args["env"]["eval_training_render"] = True
+    assert args["env"]["eval_mode"] == 0
+    training_dt_seconds = args["env"]["dt"]
+    training_scenario_length = args["env"]["scenario_length"]
+    training_map_dir = args["env"]["map_dir"]
+    shared_environment_config = {
+        "dt": training_dt_seconds * 2,
+        "map_dir": str(CARLA_MAP_DIR),
+    }
+    benchmark = {
+        "name": "training_render_environment",
+        "seed": SEED,
+        "num_scenarios": 1,
+        "env": {
+            "dt": training_dt_seconds * 3,
+            "scenario_length": training_scenario_length + 1,
+            "map_dir": str(CARLA_MAP_DIR),
+        },
+    }
+    original_args = copy.deepcopy(args)
+    original_benchmark = copy.deepcopy(benchmark)
+    original_environment_config = copy.deepcopy(shared_environment_config)
+
+    run_args = drive_benchmark.build_benchmark_args(args, benchmark, shared_environment_config)
+
+    assert run_args["env"]["dt"] == training_dt_seconds
+    assert run_args["env"]["scenario_length"] == training_scenario_length
+    assert run_args["env"]["map_dir"] == training_map_dir
+    assert run_args["env"]["eval_mode"] == 1
+    assert args == original_args
+    assert benchmark == original_benchmark
+    assert shared_environment_config == original_environment_config
+
+
 @pytest.fixture(scope="module")
 def carla_evaluation(tmp_path_factory):
     output_root = tmp_path_factory.mktemp("carla_evaluation")
@@ -304,7 +471,6 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     environment_config["obs_dropout_lane"] = args["env"]["obs_dropout_lane"]
     environment_config["obs_dropout_boundary"] = args["env"]["obs_dropout_boundary"]
     replay_args = drive_benchmark.build_benchmark_args(args, benchmarks[0], environment_config)
-    replay_args["env"]["num_agents"] = replay_args["eval"]["num_agents"]
 
     map_indices = drive_benchmark._resolve_map_indices(
         replay_args["env"]["map_dir"],
@@ -785,20 +951,11 @@ def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
         capped.close()
 
 
-def test_batch_cap_rejects_non_positive_values(sdc_replay_map_dir):
-    with pytest.raises(ValueError, match="max_scenarios_per_batch"):
-        Drive(
-            num_agents=SDC_SCENARIO_COUNT,
-            num_maps=SDC_SCENARIO_COUNT,
-            map_dir=str(sdc_replay_map_dir),
-            simulation_mode="replay",
-            control_mode="control_sdc_only",
-            eval_mode=1,
-            num_eval_scenarios=SDC_SCENARIO_COUNT,
-            min_agents_per_env=1,
-            max_agents_per_env=SDC_MAX_AGENTS_PER_ENV,
-            max_scenarios_per_batch=0,
-        )
+def test_batch_cap_rejects_non_positive_values():
+    args = _load_config()
+    args["env"]["max_scenarios_per_batch"] = 0
+    with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
+        check_puffer_drive_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):

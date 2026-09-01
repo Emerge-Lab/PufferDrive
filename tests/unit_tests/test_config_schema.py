@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Structured-config schema tests: load_config validates the env section of
-puffer_drive against pufferlib.config_schema.DriveEnvConfig at load time.
+"""PufferDrive schema and final resolved-config checker tests.
 
 Run: python -m unittest tests.unit_tests.test_config_schema
 """
 
+import copy
 import os
 import re
 import sys
 import unittest
 from unittest.mock import patch
 
-from omegaconf.errors import ConfigKeyError, ValidationError
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import pufferlib
 from pufferlib.config_schema import (
     ActionType,
-    ControlMode,
     Controller,
+    ControlMode,
     DynamicsModel,
     GoalRegen,
     GoalSource,
@@ -26,8 +25,13 @@ from pufferlib.config_schema import (
     InitMode,
     NonVehicleController,
     SimulationMode,
+    check_puffer_drive_config,
+    validate_config_schema,
+    validate_puffer_drive_benchmark_sources,
+    validate_puffer_drive_resources,
 )
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.pufferl import load_config
 
 
@@ -56,37 +60,205 @@ _DRIFT_CHECKED_ENUMS = [
 class TestConfigSchema(unittest.TestCase):
     @patch("sys.argv", ["pufferl.py"])
     def test_valid_config_loads_with_plain_strings(self):
-        """Schema validation must not change the plain-dict contract: enum
+        """Final validation must not change the plain-dict contract: enum
         fields come back as their string names, not Enum members."""
         args = load_config("puffer_drive")
+        self.assertIsNone(check_puffer_drive_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
-        with self.assertRaisesRegex(ValidationError, "expected one of"):
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "collision_behavior"):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.num_agents=lots"])
     def test_wrong_type_fails_at_load(self):
-        with self.assertRaisesRegex(ValidationError, "could not be converted"):
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "num_agents"):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
         """Keys force-added with + that the schema doesn't declare are
-        rejected (plain overrides of unknown keys already fail in compose)."""
-        with self.assertRaisesRegex(ConfigKeyError, "collission_behavior"):
+        rejected as soon as Hydra composition finishes."""
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "collission_behavior"):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=1"])
-    def test_enum_accepts_c_int_value(self):
-        """OmegaConf coerces enum *values* as well as names. This is safe
-        exactly because the schema ints mirror drive.h (see the sync test
-        below) — the coerced member round-trips to the right name."""
+    def test_schema_normalizes_enum_integer_value(self):
         args = load_config("puffer_drive")
         self.assertEqual(args["env"]["collision_behavior"], "stop")
+
+    @patch("sys.argv", ["pufferl.py", "+policy.encoder_actvation=relu"])
+    def test_unknown_non_environment_key_fails_at_load(self):
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "encoder_actvation"):
+            load_config("puffer_drive")
+
+    @patch("sys.argv", ["pufferl.py", "train.optimizer=sgd"])
+    def test_config_only_enum_fails_at_load(self):
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "optimizer"):
+            load_config("puffer_drive")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_validation_is_idempotent_and_does_not_mutate_input(self):
+        args = load_config("puffer_drive")
+        original = copy.deepcopy(args)
+        first = check_puffer_drive_config(args, "test")
+        second = check_puffer_drive_config(args, "test")
+        self.assertEqual(args, original)
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_boolean_is_rejected_for_integer_field(self):
+        args = load_config("puffer_drive")
+        args["env"]["num_agents"] = True
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "num_agents"):
+            check_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_final_schema_rejects_unknown_keys_in_fixed_sections(self):
+        args = load_config("puffer_drive")
+        for section in (None, "vec", "env", "policy", "rnn", "train", "eval"):
+            with self.subTest(section=section):
+                invalid = copy.deepcopy(args)
+                target = invalid if section is None else invalid[section]
+                target["unexpected_key"] = 1
+                with self.assertRaisesRegex(pufferlib.APIUsageError, "unexpected_key"):
+                    validate_config_schema(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_final_schema_rejects_missing_required_fields(self):
+        args = load_config("puffer_drive")
+        del args["train"]["learning_rate"]
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "train.learning_rate"):
+            validate_config_schema(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_field_constraints_apply_across_nested_sections(self):
+        args = load_config("puffer_drive")
+        invalid_values = (
+            (("num_scenarios",), 0),
+            (("vec", "num_envs"), 0),
+            (("env", "dt"), 0.0),
+            (("policy", "actor_num_layers"), -1),
+            (("rnn", "input_size"), 0),
+            (("train", "gamma"), 1.1),
+            (("eval", "num_agents"), 0),
+        )
+        for path, invalid_value in invalid_values:
+            with self.subTest(path=path):
+                invalid = copy.deepcopy(args)
+                target = invalid
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = invalid_value
+                with self.assertRaisesRegex(pufferlib.APIUsageError, path[-1]):
+                    check_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_optional_eval_is_allowed_only_when_training_evaluation_is_disabled(self):
+        args = load_config("puffer_drive")
+        args["eval"] = None
+        check_puffer_drive_config(args, "training")
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "complete eval section"):
+            check_puffer_drive_config(args, "evaluation")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_load_config_does_not_apply_ddp_derivation(self):
+        with patch.dict(os.environ, {"LOCAL_RANK": "0", "WORLD_SIZE": "4"}):
+            first = load_config("puffer_drive")
+            second = load_config("puffer_drive")
+        self.assertEqual(first["train"]["total_timesteps"], second["train"]["total_timesteps"])
+        self.assertEqual(first["train"]["total_timesteps"], 500_000_000_000)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_cli_values_are_validated_after_benchmark_merge(self):
+        args = load_config("puffer_drive")
+        benchmark = {
+            "name": "merge_order",
+            "seed": 42,
+            "num_scenarios": 1,
+            "env": {"simulation_mode": "gigaflow", "control_mode": "control_vehicles"},
+        }
+        environment_config = {"eval_mode": 1, "dt": -1.0}
+        original_args = copy.deepcopy(args)
+        original_benchmark = copy.deepcopy(benchmark)
+        original_environment_config = copy.deepcopy(environment_config)
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "env.dt"):
+            drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+
+        checked = drive_benchmark.build_benchmark_args(
+            args,
+            benchmark,
+            environment_config,
+            ["env.dt=0.2", "env.eval_mode=0"],
+        )
+        self.assertEqual(checked["env"]["dt"], 0.2)
+        self.assertEqual(checked["env"]["eval_mode"], 1)
+        self.assertEqual(args, original_args)
+        self.assertEqual(benchmark, original_benchmark)
+        self.assertEqual(environment_config, original_environment_config)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_benchmark_builder_validates_final_resources(self):
+        args = load_config("puffer_drive")
+        benchmark = {
+            "name": "missing_maps",
+            "seed": 42,
+            "num_scenarios": 1,
+            "env": {"simulation_mode": "gigaflow", "control_mode": "control_vehicles"},
+        }
+        missing_map_dir = os.path.join(os.path.dirname(__file__), "missing_benchmark_maps")
+        self.assertFalse(os.path.exists(missing_map_dir))
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "env.map_dir"):
+            drive_benchmark.build_benchmark_args(
+                args,
+                benchmark,
+                {"eval_mode": 1, "map_dir": missing_map_dir},
+            )
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_resource_validation_only_bounds_num_maps_by_available_files(self):
+        args = load_config("puffer_drive")
+        args["env"]["simulation_mode"] = "replay"
+        args["env"]["map_dir"] = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "pufferlib",
+            "resources",
+            "drive",
+            "binaries",
+            "sdc_replay_test",
+        )
+        args["env"]["num_maps"] = 1
+        args["num_scenarios"] = 3
+
+        benchmarks = validate_puffer_drive_benchmark_sources(
+            {},
+            [
+                {
+                    "name": "repeated_map",
+                    "seed": 42,
+                    "num_scenarios": 3,
+                    "env": {
+                        "simulation_mode": "replay",
+                        "control_mode": "control_sdc_only",
+                        "map_dir": args["env"]["map_dir"],
+                        "num_maps": 1,
+                    },
+                }
+            ],
+            "evaluation",
+        )
+        self.assertEqual(benchmarks[0]["num_scenarios"], 3)
+        validate_puffer_drive_resources(args, "evaluation.test")
+
+        args["env"]["num_maps"] = 2
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "env.num_maps"):
+            validate_puffer_drive_resources(args, "evaluation.test")
 
     def test_schema_enums_match_binding_constants(self):
         """drive.h #defines are the source of truth for the ints. Naming

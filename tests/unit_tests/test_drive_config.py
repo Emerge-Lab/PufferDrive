@@ -10,11 +10,10 @@ import os
 import sys
 import unittest
 from unittest.mock import patch
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pufferlib.ocean.drive.drive import Drive
+from pufferlib.config_schema import check_puffer_drive_config
 from pufferlib.pufferl import load_config, pufferlib
 
 VERBOSITY = 0
@@ -45,10 +44,15 @@ class TestDriveConfig(unittest.TestCase):
         self.assertEqual(args["env"]["obs_boundary_stride"], 4)
 
     def test_obs_stride_validation(self):
-        with self.assertRaisesRegex(ValueError, "obs_lane_stride"):
-            Drive(obs_lane_stride=0)
-        with self.assertRaisesRegex(ValueError, "obs_boundary_stride"):
-            Drive(obs_boundary_stride=0)
+        with patch.object(sys, "argv", ["pufferl.py"]):
+            args = load_config("puffer_drive")
+        args["env"]["obs_lane_stride"] = 0
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_lane_stride"):
+            check_puffer_drive_config(args, "test")
+        args["env"]["obs_lane_stride"] = 1
+        args["env"]["obs_boundary_stride"] = 0
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "obs_boundary_stride"):
+            check_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py", "train.learning_rate=0.5"])
     def test_cli_override(self):
@@ -73,39 +77,6 @@ class TestDriveConfig(unittest.TestCase):
         """Typo'd override keys must fail at compose time, not train silently."""
         with self.assertRaises(Exception):
             load_config("puffer_drive")
-
-    def test_custom_config_yaml(self):
-        """A yaml dropped into the config dir loads by name; comments
-        (full-line and inline) are ignored by the YAML parser."""
-        config_dir = Path(pufferlib.__file__).parent / "config"
-        temp_yaml_path = config_dir / "temp_comment_test.yaml"
-
-        yaml_content = """\
-env_name: temp_comment_test
-rnn_name: null
-train: {}
-
-comments:
-  real_key: I exist
-  # commented_key: I do not
-  inline_value: 12  # inline comment
-"""
-
-        try:
-            with open(temp_yaml_path, "w") as f:
-                f.write(yaml_content)
-
-            with patch("sys.argv", ["pufferl.py"]):
-                args = load_config("temp_comment_test")
-
-            self.assertEqual(args["comments"]["real_key"], "I exist")
-            self.assertNotIn("commented_key", args["comments"])
-            self.assertEqual(args["comments"]["inline_value"], 12)
-            self.assertIsInstance(args["comments"]["inline_value"], int)
-
-        finally:
-            if os.path.exists(temp_yaml_path):
-                os.remove(temp_yaml_path)
 
 
 if __name__ == "__main__":

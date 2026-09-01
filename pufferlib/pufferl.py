@@ -41,7 +41,11 @@ import pufferlib.sweep
 import pufferlib.utils
 import pufferlib.vector
 import pufferlib.pytorch
-from pufferlib.config_schema import ENV_SCHEMAS
+from pufferlib.config_schema import (
+    check_puffer_drive_config,
+    validate_config_schema,
+    validate_puffer_drive_resources,
+)
 
 
 try:
@@ -1439,7 +1443,6 @@ def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
-    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Fine-tuning: reload network, observation configuration from config.yaml and override the args --> only change new reward / new maps / new simulation mode
     if args["load_model_path"]:
@@ -1489,6 +1492,12 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
                 f"No config.yaml at {config_yaml_path}; fine-tuning with the configured "
                 "policy/observation architecture instead of the checkpoint's."
             )
+
+    args = validate_config_schema(args, "training")
+    check_puffer_drive_config(args, "training")
+    if vecenv is None:
+        validate_puffer_drive_resources(args, "training")
+    training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
 
     # Assume TorchRun DDP is used if LOCAL_RANK is set
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -1540,6 +1549,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             )
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
+    if torch.distributed.is_initialized():
+        train_config["total_timesteps"] //= torch.distributed.get_world_size()
     pufferl = PuffeRL(train_config, vecenv, policy, logger)
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
@@ -1695,7 +1706,6 @@ def eval(
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
-    max_sdc_replay_workers = eval_config["max_sdc_replay_workers"]
     valid_action_selections = (
         pufferlib.pytorch.ACTION_SELECT_SAMPLE,
         pufferlib.pytorch.ACTION_SELECT_MODE,
@@ -1747,20 +1757,13 @@ def eval(
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
-    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
-        run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
-        run_args = OmegaConf.to_container(
-            OmegaConf.merge(OmegaConf.create(dict(run_args)), cli_override_config),
-            resolve=True,
+        run_args = drive_benchmark.build_benchmark_args(
+            base_args,
+            benchmark,
+            environment_config,
+            cli_overrides,
         )
-        run_args["env"]["eval_training_render"] = eval_training_render
-        run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
-        if eval_training_render:
-            run_args["env"]["compute_eval_metrics"] = True
-            run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
-        if run_args["env"]["simulation_mode"] == "replay" and run_args["env"]["control_mode"] == "control_sdc_only":
-            run_args["vec"]["num_envs"] = min(run_args["vec"]["num_envs"], max_sdc_replay_workers)
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
@@ -1967,6 +1970,10 @@ def profile(args=None, env_name=None, vecenv=None, policy=None):
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):
     args = args or load_config(env_name)
+    args = validate_config_schema(args, "export")
+    check_puffer_drive_config(args, "export")
+    if vecenv is None:
+        validate_puffer_drive_resources(args, "export")
     vecenv = vecenv or load_env(env_name, args)
     policy = policy or load_policy(args, vecenv)
 
@@ -2433,27 +2440,9 @@ def load_config(env_name, config_dir=None):
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name=env_name, overrides=overrides)
 
-    # Structured-schema validation (types, enum names, unknown keys) for envs
-    # that declare one. Overrides are already composed in, so CLI typos fail
-    # here too — at load time, not deep in env construction.
-    env_schema = ENV_SCHEMAS.get(env_name)
-    if env_schema is not None:
-        cfg["env"] = OmegaConf.merge(OmegaConf.structured(env_schema), cfg["env"])
-
-    # Plain nested dict — the contract every downstream consumer relies on.
-    # Protein's sweep.suggest() writes arbitrary keys into it, so no
-    # struct-mode OmegaConf objects may leak past this point. enum_to_str
-    # converts validated enum members back to their names; throw_on_missing
-    # rejects schema keys the YAML no longer provides.
-    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, enum_to_str=True, throw_on_missing=True))
-
+    args = defaultdict(dict, OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
     args["train"]["use_rnn"] = args["rnn_name"] is not None
-
-    if "LOCAL_RANK" in os.environ:
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
-        args["train"]["total_timesteps"] //= world_size
-
-    return args
+    return defaultdict(dict, validate_config_schema(args, "load"))
 
 
 def main():

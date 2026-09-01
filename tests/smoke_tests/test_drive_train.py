@@ -166,7 +166,7 @@ def _build_config():
 
     args["wandb"] = False
     args["neptune"] = False
-    args["eval"] = {}  # disable all evaluators during the smoke run
+    args["eval"] = None  # disable all evaluators during the smoke run
 
     return args
 
