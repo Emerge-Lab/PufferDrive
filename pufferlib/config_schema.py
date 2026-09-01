@@ -276,10 +276,10 @@ class DriveEnvConfig:
     reward_ade: float = _checked(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _checked(POSITIVE_INT_CONSTRAINT)
-    obs_slots_lane_n: int = _checked(POSITIVE_INT_CONSTRAINT)
-    obs_slots_boundary_n: int = _checked(POSITIVE_INT_CONSTRAINT)
-    obs_slots_partners_n: int = _checked(POSITIVE_INT_CONSTRAINT)
-    obs_slots_traffic_controls_n: int = _checked(POSITIVE_INT_CONSTRAINT)
+    obs_slots_lane_n: int = _checked(NONNEGATIVE_INT_CONSTRAINT)
+    obs_slots_boundary_n: int = _checked(NONNEGATIVE_INT_CONSTRAINT)
+    obs_slots_partners_n: int = _checked(NONNEGATIVE_INT_CONSTRAINT)
+    obs_slots_traffic_controls_n: int = _checked(NONNEGATIVE_INT_CONSTRAINT)
     obs_dropout_lane: float = _checked(PROBABILITY_CONSTRAINT)
     obs_dropout_boundary: float = _checked(PROBABILITY_CONSTRAINT)
     obs_lane_stride: int = _checked(POSITIVE_INT_CONSTRAINT)
@@ -345,7 +345,7 @@ class RecurrentConfig:
 class TrainingConfig:
     name: str = _checked(NONEMPTY_STRING_CONSTRAINT)
     project: str = _checked(NONEMPTY_STRING_CONSTRAINT)
-    seed: int = MISSING
+    seed: int | None = MISSING
     final_model_name: str = _checked(NONEMPTY_STRING_CONSTRAINT)
     evaluation_interval_epochs: int | None = _checked(POSITIVE_INT_CONSTRAINT)
     # OmegaConf does not support unions between scalar and container types.
@@ -533,8 +533,6 @@ def _validate_relationships(config, context):
         _error(context, "env.init_step", "must be smaller than env.scenario_length")
     if env["spawn_initial_speed"] > env["base_max_speed_mps"]:
         _error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
-    if env["goal_speed"] > env["base_max_speed_mps"]:
-        _error(context, "env.goal_speed", "must not exceed env.base_max_speed_mps")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
 

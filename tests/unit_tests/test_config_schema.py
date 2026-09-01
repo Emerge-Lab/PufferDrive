@@ -158,6 +158,48 @@ class TestConfigSchema(unittest.TestCase):
                     check_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
+    def test_observation_categories_allow_zero_and_reject_negative(self):
+        args = load_config("puffer_drive")
+        args["env"]["obs_slots_lane_n"] = 0
+        args["env"]["obs_slots_boundary_n"] = 0
+        args["env"]["obs_slots_partners_n"] = 0
+        args["env"]["obs_slots_traffic_controls_n"] = 0
+        check_puffer_drive_config(args, "test")
+
+        slot_fields = (
+            "obs_slots_lane_n",
+            "obs_slots_boundary_n",
+            "obs_slots_partners_n",
+            "obs_slots_traffic_controls_n",
+        )
+        for field_name in slot_fields:
+            with self.subTest(field_name=field_name):
+                invalid = copy.deepcopy(args)
+                invalid["env"][field_name] = -1
+                with self.assertRaisesRegex(pufferlib.APIUsageError, field_name):
+                    check_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py", "train.seed=null"])
+    def test_training_seed_allows_none(self):
+        args = load_config("puffer_drive")
+        self.assertIsNone(args["train"]["seed"])
+        check_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_goal_speed_can_exceed_physical_speed_cap(self):
+        args = load_config("puffer_drive")
+        args["env"]["base_max_speed_mps"] = 20.0
+        args["env"]["goal_speed"] = 300.0
+        check_puffer_drive_config(args, "test")
+
+        for invalid_goal_speed in (-1.0, float("inf"), float("nan")):
+            with self.subTest(goal_speed=invalid_goal_speed):
+                invalid = copy.deepcopy(args)
+                invalid["env"]["goal_speed"] = invalid_goal_speed
+                with self.assertRaisesRegex(pufferlib.APIUsageError, "goal_speed"):
+                    check_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
     def test_optional_eval_is_allowed_only_when_training_evaluation_is_disabled(self):
         args = load_config("puffer_drive")
         args["eval"] = None

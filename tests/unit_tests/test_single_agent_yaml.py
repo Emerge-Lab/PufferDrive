@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Smoke test: scripts/cluster_configs/single_agent_speed_run.yaml can be turned
-into Hydra overrides that compose accepts without unknown-key errors, and the
-parsed config carries the yaml's values into the right places.
+into Hydra overrides that compose and final training validation both accept.
 
 Run: python -m unittest tests/test_single_agent_yaml.py
 """
@@ -18,6 +17,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+from pufferlib.config_schema import check_puffer_drive_config  # noqa: E402
 from pufferlib.pufferl import load_config  # noqa: E402
 
 YAML_PATH = REPO_ROOT / "scripts/cluster_configs/single_agent_speed_run.yaml"
@@ -36,18 +36,18 @@ def yaml_to_argv(yaml_path: Path) -> list:
 
 
 class TestSingleAgentYaml(unittest.TestCase):
-    def test_yaml_parses_via_hydra_compose(self):
-        """Every key in the launcher yaml must exist in the env config —
-        Hydra's compose rejects unknown override keys."""
+    def test_yaml_passes_training_validation(self):
+        """The launcher yaml must compose and satisfy final training semantics."""
         self.assertTrue(YAML_PATH.exists(), f"Missing launcher yaml: {YAML_PATH}")
         argv = yaml_to_argv(YAML_PATH)
 
         stderr_buf = io.StringIO()
         with patch.object(sys, "argv", argv), redirect_stderr(stderr_buf):
             try:
-                load_config("puffer_drive")
+                args = load_config("puffer_drive")
+                check_puffer_drive_config(args, "training")
             except Exception as exc:
-                self.fail(f"load_config rejected the launcher yaml: {exc}")
+                self.fail(f"training validation rejected the launcher yaml: {exc}")
 
     def test_map_dir_points_at_existing_file_or_dir(self):
         """env.map_dir in the yaml must resolve to a real path under the repo
