@@ -153,11 +153,9 @@ class PuffeRL:
         self.total_agents = total_agents
 
         # Experience
-        batch_size_is_auto = config["batch_size"] == "auto"
-        bptt_horizon_is_auto = config["bptt_horizon"] == "auto"
-        if batch_size_is_auto:
+        if config["batch_size"] == "auto":
             config["batch_size"] = total_agents * config["bptt_horizon"]
-        elif bptt_horizon_is_auto:
+        elif config["bptt_horizon"] == "auto":
             config["bptt_horizon"] = config["batch_size"] // total_agents
 
         batch_size = config["batch_size"]
