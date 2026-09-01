@@ -112,7 +112,7 @@ python -m pufferlib.pufferl eval puffer_drive carla \
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_single \
     eval.render_filter=all_infractions \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
     eval.capture_observations=true \
     eval.output_name=${RUN_NAME} \
     load_model_path=${MODEL_PATH} \

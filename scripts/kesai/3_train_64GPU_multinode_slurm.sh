@@ -109,7 +109,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     wandb=True
 
 python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    env.map_dir=/home/shared/data/nuPlan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
     vec.num_envs=64 \
     eval.num_agents=300 \
     eval.reward_comfort=0.0 \

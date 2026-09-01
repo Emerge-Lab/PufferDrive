@@ -17,7 +17,7 @@ RUN_DIR=/home/bjaeger/PufferDrive/experiments/k_scaled_0035_1000
 export CKPT=$(ls -t "$RUN_DIR"/models/model_*.pt 2>/dev/null | head -1)
 : "${CKPT:?no model_*.pt found in $RUN_DIR/models}"
 echo "Evaluating checkpoint: $CKPT"
-export CITY_BIN_DIR=/home/shared/data/nuPlan/PufferDrive
+export CITY_BIN_DIR=/home/shared/data/nuplan/PufferDrive
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export COSIM_DEBUG_BEV=0
