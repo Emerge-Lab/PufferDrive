@@ -728,7 +728,7 @@ def puffer_drive_constructor_keys():
     return set(inspect.signature(Drive.__init__).parameters) - {"self"}
 
 
-def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context):
+def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, validate_resources=True):
     """Validate benchmark definitions and return normalized copies for merging."""
     if not isinstance(environment_config, Mapping):
         _raise_config_error(context, "env", "must be a mapping")
@@ -823,7 +823,8 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context):
         if not isinstance(map_dir, str) or not map_dir:
             _raise_config_error(context, f"{benchmark_path}.env.map_dir", "must be a non-empty path")
         normalized_environment["map_dir"] = os.path.abspath(map_dir)
-        _validate_map_resources(normalized_environment, f"{context}.{benchmark_path}")
+        if validate_resources:
+            _validate_map_resources(normalized_environment, f"{context}.{benchmark_path}")
         if max_agents_per_env is None:
             normalized_environment.pop("max_agents_per_env", None)
 

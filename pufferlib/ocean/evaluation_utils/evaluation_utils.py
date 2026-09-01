@@ -130,6 +130,7 @@ def load_benchmark_config(config_path, selected_names):
         environment_config,
         selected_benchmark_configs,
         "benchmark_config",
+        validate_resources=False,
     )
     return environment_config, resolved_benchmarks
 
