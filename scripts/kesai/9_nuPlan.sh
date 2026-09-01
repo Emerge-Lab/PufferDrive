@@ -26,6 +26,7 @@ export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHO
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export COSIM_DEBUG_BEV=0
 export CALLBACKS="[simulation_log_callback]"
+export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 export THREADS_PER_NODE=96
 export GROUP=$PD/experiments/nuplan_val14_k_scaled_0035_1000_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
