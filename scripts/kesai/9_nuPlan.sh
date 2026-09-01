@@ -29,4 +29,6 @@ export WORKER=ray_distributed
 export THREADS_PER_NODE=96
 export GROUP=$PD/experiments/nuplan_val14_k_scaled_0035_1000_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
+PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
+
 bash "$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh"
