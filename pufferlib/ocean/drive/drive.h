@@ -584,6 +584,29 @@ static inline float compute_log_yaw_rate(Agent *agent, int timestep, float dt) {
     return 0.0f;
 }
 
+static void init_dynamics_state_from_log(Drive *env, Agent *agent) {
+    // Seed accel/steering from the log so mid-motion spawns don't start the dynamics at zero state.
+    int step = env->init_step;
+    if (step >= agent->trajectory_size) {
+        step = agent->trajectory_size - 1;
+    }
+    if (step < 0) {
+        step = 0;
+    }
+    int next_step = step + 1;
+    if (next_step < agent->trajectory_size && agent->log_valid[next_step] == 1) {
+        float cos_heading = cosf(agent->log_heading[step]);
+        float sin_heading = sinf(agent->log_heading[step]);
+        float speed_now = agent->log_velocity_x[step] * cos_heading + agent->log_velocity_y[step] * sin_heading;
+        float speed_next = agent->log_velocity_x[next_step] * cos_heading + agent->log_velocity_y[next_step] * sin_heading;
+        agent->accel_long = clip((speed_next - speed_now) / env->dt, ACCEL_LONG_LIMIT[0], ACCEL_LONG_LIMIT[1]);
+    }
+    agent->accel_lat = clip(agent->sim_speed_signed * agent->yaw_rate, ACCEL_LAT_LIMIT[0], ACCEL_LAT_LIMIT[1]);
+    float v_eff = fmaxf(fabsf(agent->sim_speed_signed), 1.0f);
+    float signed_curvature = agent->yaw_rate / v_eff;
+    agent->steering_angle = clip(atanf(signed_curvature * agent->wheelbase), -0.55f, 0.55f);
+}
+
 static inline void project_vector_to_local(
     float world_vec_x,
     float world_vec_y,
@@ -2770,6 +2793,9 @@ static void set_start_position(Drive *env) {
         reset_agent_metrics(env, i);
         reset_agent_state(agent);
         generate_reward_coefs(env, agent);
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY && is_active && agent->sim_valid == 1) {
+            init_dynamics_state_from_log(env, agent);
+        }
     }
 }
 
@@ -4679,6 +4705,9 @@ void c_reset(Drive *env) {
         reset_agent_state(agent);
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
+        if (env->simulation_mode == SIMULATION_MODE_REPLAY && agent->sim_valid == 1) {
+            init_dynamics_state_from_log(env, agent);
+        }
 
         if (env->goal_source == GOAL_SOURCE_GT) {
             int start = env->init_step > 0 ? env->init_step : 0;
