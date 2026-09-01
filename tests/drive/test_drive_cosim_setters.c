@@ -130,12 +130,34 @@ static int test_set_agent_states_teleport_resets_prev_pose(void) {
     int idx[1] = {0};
     float x[1] = {10.0f}, y[1] = {20.0f}, z[1] = {0.0f}, h[1] = {0.5f};
     float vx[1] = {1.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
-    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al);
+    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL);
 
     EXPECT_NEAR(agent.prev_x, agent.sim_x, 1e-6f);
     EXPECT_NEAR(agent.prev_y, agent.sim_y, 1e-6f);
     EXPECT_NEAR(agent.prev_cos_heading, agent.cos_heading, 1e-6f);
     EXPECT_NEAR(agent.prev_sin_heading, agent.sin_heading, 1e-6f);
+    return 0;
+}
+
+static int test_set_agent_states_seconds_stopped_injects_or_preserves(void) {
+    // seconds_stopped is optional: a NULL array leaves c_step's own accumulation untouched
+    // (the co-sim default CARLA/nuplan rely on), a non-NULL array injects it as state.
+    Drive env = {0};
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    agent.seconds_stopped = 12.5f;
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    int idx[1] = {0};
+    float x[1] = {1.0f}, y[1] = {2.0f}, z[1] = {0.0f}, h[1] = {0.0f};
+    float vx[1] = {0.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
+
+    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, NULL);
+    EXPECT_NEAR(agent.seconds_stopped, 12.5f, 1e-6f); // NULL: untouched
+
+    float seconds_stopped[1] = {3.0f};
+    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al, seconds_stopped);
+    EXPECT_NEAR(agent.seconds_stopped, 3.0f, 1e-6f); // array: overwritten
     return 0;
 }
 
@@ -226,6 +248,7 @@ int main(void) {
     RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_skips_out_of_range_or_missing_states);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
+    RUN_TEST(test_set_agent_states_seconds_stopped_injects_or_preserves);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
     RUN_TEST(test_set_agent_goals_caps_at_max_goals);
     RUN_TEST(test_set_agent_goals_out_of_range_agent_idx_is_noop);
