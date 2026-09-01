@@ -70,7 +70,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     eval.disable_red_light_infractions=1 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_fast2 \
+    eval.output_name=${RUN_NAME}_fast3 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
