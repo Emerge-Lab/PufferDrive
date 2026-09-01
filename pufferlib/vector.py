@@ -188,6 +188,12 @@ class Serial:
         for env in self.envs:
             env.notify()
 
+    def set_epoch(self, epoch):
+        for env in self.envs:
+            set_epoch = getattr(env, "set_epoch", None)
+            if set_epoch is not None:
+                set_epoch(epoch)
+
     def recv(self):
         recv_precheck(self)
         return (
@@ -246,11 +252,20 @@ def _worker_process(
 
     semaphores = np.ndarray(num_workers, dtype=np.uint8, buffer=shm["semaphores"])
     notify = np.ndarray(num_workers, dtype=bool, buffer=shm["notify"])
+    envs_set_epoch = getattr(envs, "set_epoch", None)
+    epoch_arr = np.ndarray(1, dtype=np.int32, buffer=shm["epoch"])
+    last_epoch_seen = None
     start = time.time()
     while True:
         if notify[worker_idx]:
             envs.notify()
             notify[worker_idx] = False
+
+        if envs_set_epoch is not None:
+            current_epoch = int(epoch_arr[0])
+            if current_epoch != last_epoch_seen:
+                envs_set_epoch(current_epoch)
+                last_epoch_seen = current_epoch
 
         sem = semaphores[worker_idx]
         if sem >= MAIN:
@@ -380,10 +395,16 @@ class Multiprocessing:
             masks=RawArray("b", num_agents),
             semaphores=RawArray("c", num_workers),
             notify=RawArray("b", num_workers),
+            # Lock-free, eventually-consistent broadcast of the current training epoch to
+            # every worker (see set_epoch / _worker_process); single writer (main process),
+            # many readers, no synchronization needed since being off by a step or two
+            # within an epoch has no correctness impact on env-side curricula.
+            epoch=RawArray("i", 1),
         )
         shape = (num_workers, agents_per_worker)
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
         self.atn_batch_shape = (self.workers_per_batch, agents_per_worker, *atn_shape)
+        self.epoch_arr = np.ndarray(1, dtype=np.int32, buffer=self.shm["epoch"])
         self.actions = np.ndarray((*shape, *atn_shape), dtype=atn_dtype, buffer=self.shm["actions"])
         self.buf = dict(
             observations=np.ndarray((*shape, *obs_shape), dtype=obs_dtype, buffer=self.shm["observations"]),
@@ -570,6 +591,12 @@ class Multiprocessing:
     def notify(self):
         self.buf["notify"][:] = True
 
+    def set_epoch(self, epoch):
+        # Direct shared-memory write, no pipe/semaphore handshake: workers pick this up
+        # on their own poll loop (see _worker_process), independent of the STEP/RESET
+        # pipeline so this can be called at any point without racing it.
+        self.epoch_arr[0] = int(epoch)
+
     def close(self):
         for p in self.processes:
             p.terminate()
@@ -695,6 +722,11 @@ class Ray:
             handles.append(e.recv.remote())
 
         self.async_handles = handles
+
+    def set_epoch(self, epoch):
+        # Fire-and-forget: same eventual-consistency contract as Multiprocessing.set_epoch.
+        for e in self.envs:
+            e.set_epoch.remote(epoch)
 
     def close(self):
         self.ray.get([e.close.remote() for e in self.envs])

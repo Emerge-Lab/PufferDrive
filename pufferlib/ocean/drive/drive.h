@@ -256,6 +256,9 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float default_speed_limit;         // Fallback target speed (m/s) when a lane has no mapped speed_limit
+    float reward_collision_speed_coef; // Extra collision penalty per m/s of ego speed at impact; 0 disables it
+    int disable_comfort_penalty;       // Force REWARD_COEF_COMFORT to 0 regardless of reward_randomization
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -328,7 +331,7 @@ typedef struct {
 static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
-    {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
+    {2.0f, 6.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(2, 6)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
     {0.0f, 0.1f, 0},       // REWARD_COEF_COMFORT         α_comfort ~ U(0, 0.1)
     {2.5e-4f, 2.5e-2f, 0}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ U(2.5e-4, 2.5e-2)
@@ -349,7 +352,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
 static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {2.0f, 12.0f, 0},      // REWARD_COEF_GOAL_RADIUS     δ_goal ~ U(2, 12)
     {0.0f, 20.0f, 0},      // REWARD_COEF_GOAL_SPEED      δ_goal-speed ~ U(0, 20)
-    {0.0f, 3.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(0, 3)
+    {2.0f, 6.0f, 0},       // REWARD_COEF_COLLISION       α_collision ~ U(2, 6)
     {0.0f, 3.0f, 0},       // REWARD_COEF_OFFROAD         α_boundary ~ U(0, 3)
     {1e-5f, 0.1f, 1},      // REWARD_COEF_COMFORT         α_comfort ~ logU(1e-5, 0.1)
     {2.5e-4f, 2.5e-2f, 1}, // REWARD_COEF_LANE_ALIGN      α_l-align ~ logU(2.5e-4, 2.5e-2)
@@ -2217,6 +2220,9 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
         agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
     }
+    if (env->disable_comfort_penalty) {
+        agent->reward_coefs[REWARD_COEF_COMFORT] = 0.0f;
+    }
 }
 
 static void generate_traffic_light_states(Drive *env) {
@@ -3448,7 +3454,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     agent_log->avg_speed_per_agent += agent->sim_speed;
 
     // Speed limit metric (CUSTOM)
-    float target_speed = 15.0f; // Default target speed
+    float target_speed = env->default_speed_limit;
     int current_lane_idx = agent->current_lane_idx;
     if (current_lane_idx != -1 && env->road_elements[current_lane_idx].speed_limit > 0) {
         target_speed = env->road_elements[current_lane_idx].speed_limit;
@@ -3552,9 +3558,14 @@ static void compute_rewards(Drive *env, int i) {
 
     // Collision reward
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
-        // Velocity-dependent penalty: incentivizes braking before unavoidable collision.
-        // At max speed (~20 m/s): extra -2.0 on top of base coefficient.
-        float reward_collision = -(agent->reward_coefs[REWARD_COEF_COLLISION] + 0.1f * agent->sim_speed);
+        // reward_collision_speed_coef defaults to 0 (flat penalty regardless of the
+        // agent's own speed). A nonzero value restores the old speed-scaled penalty,
+        // which rewards braking to near-zero before any collision, including ones the
+        // agent couldn't avoid (e.g. rear-ended by non-reactive replayed traffic) -
+        // that shape taught the policy to freeze in place instead of avoiding the
+        // situation, so it's opt-in rather than the default.
+        float reward_collision
+            = -(agent->reward_coefs[REWARD_COEF_COLLISION] + env->reward_collision_speed_coef * agent->sim_speed);
         env->rewards[i] += reward_collision;
         agent_log->collision_rate = 1.0f;
         agent_log->reward_collision += reward_collision;

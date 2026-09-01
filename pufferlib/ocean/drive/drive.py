@@ -51,8 +51,10 @@ class Drive(pufferlib.PufferEnv):
         human_agent_idx=0,
         reward_goal=1.0,
         reward_collision=3.0,
+        reward_collision_speed_coef=0.0,
         reward_offroad=3.0,
         reward_comfort=0.05,
+        disable_comfort_penalty=False,
         reward_lane_align=0.025,
         reward_vel_align=1.0,
         reward_lane_center=0.0038,
@@ -77,6 +79,7 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
+        default_speed_limit=15.0,
         scenario_length=None,
         resample_frequency=91,
         num_maps=100,
@@ -95,6 +98,7 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         init_step_spread=False,
         init_step_min_horizon=20,
+        init_step_spread_anneal_epochs=0,
         eval_mode=0,
         num_eval_scenarios=16,
         max_scenarios_per_batch=None,
@@ -147,6 +151,7 @@ class Drive(pufferlib.PufferEnv):
         self.dt = dt
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
+        self.default_speed_limit = float(default_speed_limit)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
@@ -159,8 +164,10 @@ class Drive(pufferlib.PufferEnv):
         self.report_interval = report_interval
         self.reward_goal = reward_goal
         self.reward_collision = reward_collision
+        self.reward_collision_speed_coef = reward_collision_speed_coef
         self.reward_offroad = reward_offroad
         self.reward_comfort = reward_comfort
+        self.disable_comfort_penalty = bool(disable_comfort_penalty)
         self.reward_lane_align = reward_lane_align
         self.reward_vel_align = reward_vel_align
         self.reward_lane_center = reward_lane_center
@@ -321,6 +328,12 @@ class Drive(pufferlib.PufferEnv):
         self.init_step_spread = bool(init_step_spread)
         # limit at which we set the starting point from the end of the total episode length
         self.init_step_min_horizon = int(init_step_min_horizon)
+        # Curriculum: shrink the sampled spread toward 0 (full-length episodes) as training
+        # progresses, reaching init_step=0 once this many PPO epochs have elapsed. 0 disables
+        # annealing (spread stays constant). Driven by set_epoch(), called once per epoch by
+        # the trainer (see vector.py Multiprocessing/Serial.set_epoch and pufferl.py).
+        self.init_step_spread_anneal_epochs = int(init_step_spread_anneal_epochs)
+        self._current_epoch = 0
         self.init_mode_str = init_mode
         self.control_mode_str = control_mode
         self.sdc_controller_str = sdc_controller
@@ -357,6 +370,10 @@ class Drive(pufferlib.PufferEnv):
             if self.scenario_length - self.init_step_min_horizon <= 0:
                 raise ValueError(
                     f"init_step_min_horizon ({self.init_step_min_horizon}) leaves no room to sample a start in a scenario of length {self.scenario_length}; it must be < scenario_length."
+                )
+            if self.init_step_spread_anneal_epochs < 0:
+                raise ValueError(
+                    f"init_step_spread_anneal_epochs must be >= 0 (0 disables annealing). Got: {self.init_step_spread_anneal_epochs}"
                 )
 
         if self.control_mode_str == "control_vehicles":
@@ -514,8 +531,10 @@ class Drive(pufferlib.PufferEnv):
             "human_agent_idx": self.human_agent_idx,
             "reward_goal": self.reward_goal,
             "reward_collision": self.reward_collision,
+            "reward_collision_speed_coef": self.reward_collision_speed_coef,
             "reward_offroad": self.reward_offroad,
             "reward_comfort": self.reward_comfort,
+            "disable_comfort_penalty": self.disable_comfort_penalty,
             "reward_lane_align": self.reward_lane_align,
             "reward_vel_align": self.reward_vel_align,
             "reward_lane_center": self.reward_lane_center,
@@ -548,6 +567,7 @@ class Drive(pufferlib.PufferEnv):
             "dt": self.dt,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,
+            "default_speed_limit": self.default_speed_limit,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
@@ -591,11 +611,20 @@ class Drive(pufferlib.PufferEnv):
             "phantom_braking_duration_seconds": self.phantom_braking_duration_seconds,
         }
 
+    def set_epoch(self, epoch):
+        """Called by the trainer (once per PPO epoch) to drive the init_step_spread anneal."""
+        self._current_epoch = int(epoch)
+
     def _sample_init_step(self):
         # randomizer for the initialization of the C environment
         if not self.init_step_spread:
             return self.init_step
         upper = self.scenario_length - self.init_step_min_horizon
+        if self.init_step_spread_anneal_epochs > 0:
+            progress = min(1.0, self._current_epoch / self.init_step_spread_anneal_epochs)
+            upper = int(round(upper * (1.0 - progress)))
+        if upper <= 0:
+            return 0
         return int(self.rng.integers(0, upper))
 
     def _next_eval_batch_size(self):

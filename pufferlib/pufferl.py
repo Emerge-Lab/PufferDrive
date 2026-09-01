@@ -509,6 +509,9 @@ class PuffeRL:
         profile.end()
         logs = None
         self.epoch += 1
+        set_epoch = getattr(self.vecenv, "set_epoch", None)
+        if set_epoch is not None:
+            set_epoch(self.epoch)
         done_training = self.global_step >= config["total_timesteps"]
         if done_training or self.global_step == 0 or time.time() > self.last_log_time + 0.25:
             self.losses = losses

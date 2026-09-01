@@ -19,6 +19,7 @@ env:
   reward_timestep: 0.000025
   reward_reverse: 0.005
   goal_speed: 20.0
+  default_speed_limit: 15.0
   goal_source: "route"
   goal_radius: 2.0
   goal_regen_mode: "finite"
@@ -103,5 +104,5 @@ benchmarks:
       scenario_length: 200
       max_scenarios_per_batch: 16
       control_mode: control_sdc_only
-      map_dir: pufferlib/resources/drive/binaries/nuplan
+      map_dir: /home/ricky/pufferdata/nuplan_val/nuplan_val_moving
       use_neighbor_cache: 0

@@ -1854,8 +1854,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reset_accel_on_stop = (bool) unpack(kwargs, "reset_accel_on_stop");
     env->reward_goal = (float) unpack(kwargs, "reward_goal");
     env->reward_collision = (float) unpack(kwargs, "reward_collision");
+    env->reward_collision_speed_coef = (float) unpack(kwargs, "reward_collision_speed_coef");
     env->reward_offroad = (float) unpack(kwargs, "reward_offroad");
     env->reward_comfort = (float) unpack(kwargs, "reward_comfort");
+    env->disable_comfort_penalty = (bool) unpack(kwargs, "disable_comfort_penalty");
     env->reward_lane_align = (float) unpack(kwargs, "reward_lane_align");
     env->reward_vel_align = (float) unpack(kwargs, "reward_vel_align");
     env->reward_lane_center = (float) unpack(kwargs, "reward_lane_center");
@@ -1899,6 +1901,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dt = (float) unpack(kwargs, "dt");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
+    env->default_speed_limit = (float) unpack(kwargs, "default_speed_limit");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");

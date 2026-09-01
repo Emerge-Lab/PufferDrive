@@ -82,6 +82,10 @@ env:
   # sets an upper bound on the random init step
   # the sampled init step can be at most this close to the end of the episode;
   init_step_min_horizon: 20
+  # Shrinks the init_step_spread sampling range toward 0 (full-length episodes) over this many
+  # PPO training epochs; 0 disables annealing so the spread stays constant. Requires
+  # init_step_spread=true; ignored (and irrelevant) if it's false.
+  init_step_spread_anneal_epochs: 0
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
@@ -108,6 +112,8 @@ env:
   goal_radius: 2.0
   # Maximum speed at final waypoint to count goal reward
   goal_speed: 3.0
+  # Fallback target speed (m/s) for reward_overspeed when a lane has no mapped speed_limit
+  default_speed_limit: 15.0
   # Number of target waypoints in the observation (including goal)
   num_goals: 3
   # Waypoint spacing range in meters when building path
@@ -118,10 +124,18 @@ env:
   reward_randomization: true
   reward_log_sampling: false
   reward_goal: 1.0
-  reward_collision: 1.5
+  reward_collision: 4.0
+  # Extra collision penalty per m/s of ego speed at impact, on top of reward_collision.
+  # 0 (default) is a flat penalty regardless of speed; a nonzero value restores the old
+  # behavior of rewarding braking to near-zero before any collision, which is only a good
+  # incentive for avoidable/at-fault collisions.
+  reward_collision_speed_coef: 0.0
   reward_offroad: 1.5
   reward_stop_line: 1.0
   reward_comfort: 0.05
+  # Forces the comfort penalty coefficient to 0 regardless of reward_randomization (which
+  # otherwise samples it from a range, ignoring reward_comfort above).
+  disable_comfort_penalty: false
   reward_lane_align: 0.025
   reward_vel_align: 1.0
   reward_lane_center: 0.001

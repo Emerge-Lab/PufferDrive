@@ -107,6 +107,7 @@ class DriveEnvConfig:
     init_step: int = MISSING
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = MISSING
+    init_step_spread_anneal_epochs: int = MISSING
     control_mode: ControlMode = MISSING
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
@@ -118,6 +119,7 @@ class DriveEnvConfig:
     obs_goal_lane_distance: bool = MISSING
     goal_radius: float = MISSING
     goal_speed: float = MISSING
+    default_speed_limit: float = MISSING
     num_goals: int = MISSING
     min_goal_spacing: float = MISSING
     max_goal_spacing: float = MISSING
@@ -126,9 +128,11 @@ class DriveEnvConfig:
     reward_log_sampling: bool = MISSING
     reward_goal: float = MISSING
     reward_collision: float = MISSING
+    reward_collision_speed_coef: float = MISSING
     reward_offroad: float = MISSING
     reward_stop_line: float = MISSING
     reward_comfort: float = MISSING
+    disable_comfort_penalty: bool = MISSING
     reward_lane_align: float = MISSING
     reward_vel_align: float = MISSING
     reward_lane_center: float = MISSING
