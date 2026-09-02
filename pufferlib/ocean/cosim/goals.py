@@ -34,6 +34,14 @@ class RouteGoalWindow:
         return self.goals[self.window_start : self.window_start + self.num_goals]
 
     @property
+    def consumed_count(self):
+        """Goals of the current window the shadow env has already consumed (zeroed in the obs)."""
+        if not self.pushed:
+            return 0
+        current_goal_idx, goal_count = self.env.get_agent_goal_progress(self.agent_idx)
+        return min(current_goal_idx, goal_count)
+
+    @property
     def exhausted(self):
         return self.pushed and self.window_start + self.num_goals >= len(self.goals) and self._consumed_all()
 

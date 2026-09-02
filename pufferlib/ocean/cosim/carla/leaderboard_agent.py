@@ -31,7 +31,6 @@ Environment variables:
                                env's target (speed, yaw) into throttle/brake/
                                steer and CARLA's own vehicle physics moves the
                                ego (subject to dynamics-mismatch tracking lag).
-  COSIM_DEBUG_BEV=/dir         write a top-down BEV mp4 of the shadow env per route
   COSIM_DEBUG_CARLA_VIEW=/dir  write a CARLA chase-camera mp4 per route (native
                                tick rate, streamed to disk frame-by-frame)
   COSIM_RECORD_INFRACTIONS=/dir  write a short chase-cam clip (last ~5 s) per
@@ -62,7 +61,7 @@ from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim.goals import RouteGoalWindow
 from pufferlib.ocean.cosim import carla_bridge as cb
-from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
 from pufferlib.ocean.cosim.carla.controller import TrackingController, read_vehicle_geometry
 
 # Rolling chase-cam window kept for COSIM_RECORD_INFRACTIONS clips, and the
@@ -107,7 +106,7 @@ def resolve_checkpoint(path_to_conf_file):
 
     p = Path(path_to_conf_file).resolve()
     if p.is_file():
-        ckpt, cfg_path = p, p.parents[1] / "config.yaml"
+        ckpt, cfg_path = p, checkpoint_config_path(p)
     else:
         models = sorted((p / "models").glob("*.pt")) or sorted(p.glob("*.pt"))
         if not models:
@@ -173,7 +172,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.max_goal_spacing = float(env_cfg["max_goal_spacing"])
         self.goal_radius = float(env_cfg["goal_radius"])
 
-        self.debug_bev_dir = os.environ.get("COSIM_DEBUG_BEV", None)
         self.debug_carla_view_dir = os.environ.get("COSIM_DEBUG_CARLA_VIEW", None)
         self.record_infractions_dir = os.environ.get("COSIM_RECORD_INFRACTIONS", None)
         self.telemetry_dir = os.environ.get("COSIM_TELEMETRY", None)
@@ -193,7 +191,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         self.step = -1
         self.initialized = False
         self.policy = None
-        self.bev = None
         self.carla_view_writer = None
         self.goal_window = None
         self.target = (0.0, 0.0)  # (target_speed, target_yaw_deg), held between policy steps
@@ -335,39 +332,13 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         wheelbase, max_steer = read_vehicle_geometry(self.vehicle)
         self.controller = TrackingController(wheelbase_m=wheelbase, max_steer_rad=max_steer, horizon_s=self.dt)
 
-        if self.debug_bev_dir:
-            from pufferlib.ocean.cosim.carla_cosim import BEVRenderer
-
-            Path(self.debug_bev_dir).mkdir(parents=True, exist_ok=True)
-            out = str(Path(self.debug_bev_dir) / f"{self.video_tag}.mp4")
-            self.bev = BEVRenderer(self.town_bin, out)
-
         if self.obs_html_dir:
-            from pufferlib.ocean.drive import binding
+            from pufferlib.ocean.cosim.obs_replay import ObsReplayCapture
 
             Path(self.obs_html_dir).mkdir(parents=True, exist_ok=True)
-            state = self.env.get_state()
-            scenario = state[0] if isinstance(state, list) else state
-            self._obs_html = {
-                "scenario": scenario,
-                "agent_cap": int(scenario["num_total_agents"]),
-                "traffic_cap": max(int(scenario["num_traffic_elements"]), 1),
-                "frames": {
-                    key: []
-                    for key in (
-                        "agent_f32",
-                        "agent_i32",
-                        "metrics_f32",
-                        "puffer_f32",
-                        "traffic_i16",
-                        "obs",
-                        "raw_action",
-                        "value",
-                        "entropy",
-                        "policy_probs",
-                    )
-                },
-            }
+            self._obs_html = ObsReplayCapture(
+                self.env, self.policy, Path(self.obs_html_dir) / self.video_tag, max_steps=self.obs_html_max_steps
+            )
 
         if self.debug_carla_view_dir:
             from pufferlib.ocean.cosim.carla_cosim import Mp4Writer
@@ -748,130 +719,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             actions = actions.astype(np.int32)
         aux = {}
         if self._obs_html is not None:
-            probs = torch.softmax(logits if isinstance(logits, torch.Tensor) else logits[0], dim=-1)
-            aux = {
-                "value": value.cpu().numpy().reshape(-1).astype(np.float32),
-                "entropy": entropy.cpu().numpy().reshape(-1).astype(np.float32),
-                "policy_probs": probs.cpu().numpy().astype(np.float32),
-            }
-            # Max-pool win counts per obs slot: the viewer shades the
-            # ego-centric observation by them, showing which observed
-            # elements the encoders actually attended to.
-            pool_method = getattr(self.policy, "pool_slot_counts", None)
-            if pool_method is not None:
-                with torch.no_grad():
-                    pool = pool_method(torch.as_tensor(obs).to(self.device))
-                aux["pool"] = {k: v.cpu().numpy().astype(np.int16) for k, v in pool.items()}
+            aux = self._obs_html.policy_outputs(torch.as_tensor(obs).to(self.device), logits, value, entropy)
+            aux["action_index"] = action.cpu().numpy().reshape(-1) if not self.policy.is_continuous else None
         return actions, aux
-
-    def _capture_obs_html_frame(self, obs, actions, aux):
-        """Mirrors benchmark/evaluators/base.py's
-        _render_pass_obs capture loop for a single env."""
-        from pufferlib.ocean.drive import binding
-
-        oh = self._obs_html
-        cap, tcap = oh["agent_cap"], oh["traffic_cap"]
-        agent_f32 = np.zeros((1, cap, binding.AGENT_F32_FIELDS), dtype=np.float32)
-        agent_i32 = np.zeros((1, cap, binding.AGENT_I32_FIELDS), dtype=np.int32)
-        metrics_f32 = np.zeros((1, cap, binding.METRICS_F32_FIELDS), dtype=np.float32)
-        puffer_f32 = np.zeros((1, cap, binding.SCORE_F32_FIELDS), dtype=np.float32)
-        traffic_i16 = np.zeros((1, tcap, binding.TRAFFIC_I16_FIELDS), dtype=np.int16)
-        self.env.get_obs_html_frame(agent_f32, agent_i32, metrics_f32, puffer_f32, traffic_i16)
-        frames = oh["frames"]
-        frames["agent_f32"].append(agent_f32[0])
-        frames["agent_i32"].append(agent_i32[0])
-        frames["metrics_f32"].append(metrics_f32[0])
-        frames["puffer_f32"].append(puffer_f32[0])
-        frames["traffic_i16"].append(traffic_i16[0])
-        # Clip to the legitimate obs range before storage: the viewer quantizes
-        # obs to int16 using the GLOBAL max |value|, and the parked FAR_AWAY
-        # agents' rows carry ~5e3-magnitude goal offsets that blow up the scale
-        # and quantize the ego's real observations (<= ~70) to zero.
-        frames["obs"].append(np.clip(np.asarray(obs, dtype=np.float32), -100.0, 100.0))
-        frames["raw_action"].append(actions.astype(np.float32))
-        frames["value"].append(aux.get("value", np.zeros(1, np.float32)))
-        frames["entropy"].append(aux.get("entropy", np.zeros(1, np.float32)))
-        if "policy_probs" in aux:
-            frames["policy_probs"].append(aux["policy_probs"])
-        for pool_name, counts in aux.get("pool", {}).items():
-            frames.setdefault(pool_name, []).append(counts)
-
-    def _write_obs_html(self):
-        """Write the interactive obs viewer HTML for this route (pufferlib.viz)."""
-        from pufferlib import viz
-
-        oh = self._obs_html
-        frames = oh["frames"]
-        if not frames["obs"]:
-            return
-        env = self.env
-        env_cfg = {
-            "init_step": 0,
-            "goal_regen_mode": "finite",
-            "action_type": "discrete",
-            "dynamics_model": env.dynamics_model,
-            "num_goals": int(env.num_goals),
-            "reward_conditioning": bool(env.num_reward_coefs),
-            "obs_slots_partners_n": int(env.obs_slots_partners_n),
-            "obs_slots_lane_n": int(env.obs_slots_lane_n),
-            "obs_slots_boundary_n": int(env.obs_slots_boundary_n),
-            "obs_lane_stride": int(env.obs_lane_stride),
-            "obs_boundary_stride": int(env.obs_boundary_stride),
-            "obs_slots_traffic_controls_n": int(env.obs_slots_traffic_controls_n),
-            "obs_dropout_lane": float(env.obs_dropout_lane),
-            "obs_dropout_boundary": float(env.obs_dropout_boundary),
-            "obs_norm_goal_offset_m": float(env.obs_norm_goal_offset_m),
-            "obs_norm_xy_offset_m": float(env.obs_norm_xy_offset_m),
-            "obs_norm_veh_width_m": float(env.obs_norm_veh_width_m),
-            "obs_norm_veh_length_m": float(env.obs_norm_veh_length_m),
-            "obs_norm_road_seg_length_m": float(env.obs_norm_road_seg_length_m),
-            "obs_norm_road_seg_width_m": float(env.obs_norm_road_seg_width_m),
-            # Column-offset bookkeeping for decoding the raw obs array
-            # directly (see the .npz side-dump below): ego block, optional
-            # reward-coef block, then num_goals*3 goal-offset columns
-            # (write_reward_target_obs, ego-frame rel_x/rel_y/rel_z), then
-            # partner slots, then lane slots (each ending in the two GPS
-            # lane-distance columns from write_road_obs).
-            "ego_features": int(env.ego_features),
-            "num_reward_coefs": int(env.num_reward_coefs),
-            "goal_dim": int(env.goal_dim),
-            "partner_features": int(env.partner_features),
-            "lane_features": int(env.lane_features),
-        }
-        replay = {
-            "schema": "obs_html_compact_v1",
-            "env": env_cfg,
-            "agent_f32": np.stack(frames["agent_f32"]),
-            "agent_i32": np.stack(frames["agent_i32"]),
-            "metrics_f32": np.stack(frames["metrics_f32"]),
-            "puffer_f32": np.stack(frames["puffer_f32"]),
-            "traffic_i16": np.stack(frames["traffic_i16"]),
-            "obs": np.stack(frames["obs"]),
-            "raw_action": np.stack(frames["raw_action"]),
-            "clipped_action": np.stack(frames["raw_action"]),
-            "value": np.stack(frames["value"]),
-            "entropy": np.stack(frames["entropy"]),
-            "policy_probs": np.stack(frames["policy_probs"]) if frames["policy_probs"] else None,
-            "policy_mean": None,
-            "policy_std": None,
-            "policy_log_prob": None,
-        }
-        for pool_name in ("pool_partner", "pool_lane", "pool_boundary", "pool_traffic"):
-            if frames.get(pool_name):
-                replay[pool_name] = np.stack(frames[pool_name])
-        zlib_path = str(Path(self.obs_html_dir) / f"{self.video_tag}.replay.zlib")
-        out = str(Path(self.obs_html_dir) / f"{self.video_tag}.html")
-        viz.save_interactive_replay_zlib(oh["scenario"], replay, zlib_path)
-        viz.render_interactive_replay_zlib(zlib_path, out)
-        print(f"[puffer_agent] wrote obs_html viewer ({len(frames['obs'])} frames) -> {out}")
-
-        # Raw-array side dump: the exact same obs/agent_f32 the HTML viewer
-        # renders, saved for offline decoding (verify the goal offset and GPS
-        # lane-distance columns the policy actually sees, straight from the
-        # obs array -- not this script's own external Python-side bookkeeping).
-        npz_out = str(Path(self.obs_html_dir) / f"{self.video_tag}.npz")
-        np.savez(npz_out, obs=replay["obs"], agent_f32=replay["agent_f32"], env_cfg_json=np.array(json.dumps(env_cfg)))
-        print(f"[puffer_agent] wrote obs_html raw arrays -> {npz_out}")
 
     def _write_telemetry_row(self, ego_action, pd_flags, carla_flags):
         """One CSV row per policy step: what the loop commanded vs achieved,
@@ -940,19 +790,9 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
 
         if self.step % self.action_repeat == 0:
             obs = self._sync_carla()  # shadow env <- CARLA ground truth
-            if self.bev is not None:
-                # capture the SYNCED state (CARLA truth), before integrate()
-                # extrapolates every agent one dt past it
-                goals = self.goal_window.window
-                self.bev.capture(
-                    self.env.get_global_agent_state(include_static=True),
-                    ego_idx=0,
-                    goals=(goals[:, 0], goals[:, 1]),
-                    light_states=self.last_light_states,
-                )
             actions, aux = self._policy_actions(obs)
-            if self._obs_html is not None and len(self._obs_html["frames"]["obs"]) < self.obs_html_max_steps:
-                self._capture_obs_html_frame(obs, actions, aux)
+            if self._obs_html is not None:
+                self._obs_html.capture(obs, actions, aux, aux.get("action_index"))
             self.target = self._carla_integrate(actions)  # policy intent, one dt ahead
             if self.telemetry_file is not None or self.record_infractions_dir:
                 # _init_carla_infraction_detectors ran for either dir being set
@@ -1001,8 +841,6 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
             f"[puffer_agent] route done: goals {self.goal_window.current_index + 1}/{len(self.route_goals)}, "
             f"tracking {self.controller.stats()}"
         )
-        if self.bev is not None and self.bev.frames:
-            self.bev.save()
         if self.carla_view_writer is not None:
             self.carla_view_writer.close()
             print(f"[puffer_agent] wrote CARLA chase-cam video for route {self.video_tag}")
@@ -1013,6 +851,7 @@ class PufferAgent(autonomous_agent.AutonomousAgent):
         if self._goal_lane_debug_file is not None:
             self._goal_lane_debug_file.close()
         if self._obs_html is not None:
-            self._write_obs_html()
+            html = self._obs_html.write()
+            print(f"[puffer_agent] wrote obs_html viewer ({len(self._obs_html)} frames) -> {html}")
         self.env.close()
         self.initialized = False

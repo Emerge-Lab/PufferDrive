@@ -942,6 +942,8 @@ def encode_interactive_replay(scenario, replay):
         chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
+    if replay.get("action_index") is not None:  # discrete class behind a continuous executed action (-1: none)
+        chunks["action_index"] = replay["action_index"].astype(np.int32, copy=False)
     if replay.get("policy_mean") is not None:
         chunks["policy_mean"] = replay["policy_mean"].astype(np.float32, copy=False)
         chunks["policy_std"] = replay["policy_std"].astype(np.float32, copy=False)
@@ -1559,6 +1561,11 @@ self.onmessage = async event => {
                 html += '<div class="heat-lab"></div>' + cols.map(v=>`<div class="heat-lab">${v.toFixed(1)}</div>`).join('');
                 for (let r=0;r<rows.length;r++) { html += `<div class="heat-lab">${rows[r].toFixed(1)}</div>`; for (let cI=0;cI<cols.length;cI++) html += '<div class="heat-cell"></div>'; }
                 html += `</div><div class="heat-cap">${jerk ? 'jerk_long &#8595; / jerk_lat &#8594;' : 'accel &#8595; / steer &#8594;'}</div>`;
+                if (C.action_index && actionDims === 2) {
+                    // continuous env driven by the distribution mean: the grid highlights the argmax, these are the executed values
+                    labels = jerk ? ["jerk_long","jerk_lat"] : ["accel","steer"];
+                    labels.forEach(l => html += `<div class="item"><span class="name">executed ${l} (mean)</span><span class="num pol-act">-</span></div>`);
+                }
             } else {
                 labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : Array.from({length:actionDims}, (_,i)=>`p${i}`);
                 labels.forEach(l => html += `<div class="item"><span class="name">${l}</span><span class="num pol-act">-</span></div>`);
@@ -1585,7 +1592,7 @@ self.onmessage = async event => {
             refs.polE.textContent = C.entropy[s].toFixed(3);
             const ab = s * refs.actionDims;
             if (refs.discrete) {
-                const n = refs.heat.length, pb = s * n, selected = Math.round(C.raw_action[ab]);
+                const n = refs.heat.length, pb = s * n, selected = C.action_index ? C.action_index[s] : Math.round(C.raw_action[ab]);
                 let maxP = 1e-9;
                 for (let i=0;i<n;i++) maxP = Math.max(maxP, C.policy_probs[pb+i]);
                 for (let i=0;i<n;i++){
@@ -1596,6 +1603,11 @@ self.onmessage = async event => {
                     cell.style.color = t > 0.6 ? '#0d1420' : '#c4cddc';
                     cell.classList.toggle('selected', i===selected);
                     cell.title = (prob*100).toFixed(1)+'%';
+                }
+                for (let i=0;i<refs.acts.length;i++) {
+                    const clip = C.clipped_action[ab+i];
+                    const scaled = H.dynamics_model === "jerk" ? (i===0 ? (clip < 0 ? clip*15 : clip*4) : clip*4) : (i===0 ? clip*4 : clip*.667);
+                    refs.acts[i].textContent = scaled.toFixed(2) + ' / ' + clip.toFixed(2);
                 }
                 return;
             }

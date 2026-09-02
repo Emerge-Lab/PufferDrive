@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 # `carla` is imported lazily inside the functions that need it (build_carla,
-# _route_goal_xy, attach_chase_camera, main), NOT at module scope: BEVRenderer
+# _route_goal_xy, attach_chase_camera, main), NOT at module scope: Mp4Writer
 # and the other pure-python helpers here are reused by
 # pufferlib/ocean/cosim/nuplan/planner.py, which runs in the pufferdrive venv
 # (cp312) where the carla package (CARLA 0.9.15, cp310/cp37 wheels only) isn't
@@ -38,7 +38,7 @@ import numpy as np
 
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim import carla_bridge as cb
-from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+from pufferlib.ocean.cosim.arch import checkpoint_config_path, shadow_env_kwargs
 from pufferlib.ocean.cosim.goals import RouteGoalWindow
 # carla_scenarios imports carla at module scope (it's pure CARLA-actor
 # manipulation, unlike this module's carla_bridge deps) and is only used
@@ -72,7 +72,7 @@ def load_checkpoint_config(checkpoint):
         return None
     import yaml
 
-    return yaml.safe_load(open(Path(checkpoint).resolve().parents[1] / "config.yaml"))
+    return yaml.safe_load(open(checkpoint_config_path(checkpoint)))
 
 
 DEFAULT_DT = 0.1  # co-sim runs lockstep with CARLA at 0.1s (sub_ticks=1)
@@ -273,87 +273,6 @@ def carla_image_to_rgb(img):
     return arr[:, :, [2, 1, 0]].copy()  # BGRA -> RGB
 
 
-class BEVRenderer:
-    """Top-down render of the PufferDrive scene (ego red, external-sim partners
-    blue, ego goals gold, stop lines colored by light state), centered on the
-    ego. Draws with OpenCV on a numpy canvas (a matplotlib version redrew every
-    road polyline of a city bin per frame: ~1 s/frame). Frames -> mp4."""
-
-    ROAD_COLOR_LANE = (150, 150, 150)
-    ROAD_COLOR_EDGE = (60, 60, 60)
-    ROAD_COLOR_OTHER = (205, 205, 205)
-    EGO_COLOR = (220, 30, 30)
-    PARTNER_COLOR = (40, 100, 200)
-    GOAL_COLOR = (255, 200, 0)
-    # UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4 (datatypes.h)
-    LIGHT_COLOR = {1: (230, 0, 0), 2: (255, 160, 0), 3: (50, 205, 50), 4: (128, 128, 128), 0: (180, 180, 180)}
-
-    def __init__(self, town_bin, out_path, span=70.0, size_px=480):
-        import data_utils.mirror_map_bin as mbin
-
-        data = mbin.read_bin(Path(town_bin))
-        self.roads = [(np.stack([np.asarray(r["x"]), np.asarray(r["y"])], axis=1), int(r["type"])) for r in data["roads"]]
-        bounds = np.array([[xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()] for xy, _ in self.roads]).reshape(-1, 4)
-        self.road_bounds = bounds
-        self.traffic = [np.asarray(t["stop_line"], dtype=float).reshape(2, 3)[:, :2] for t in data["traffic"]]
-        self.traffic_centers = np.array([sl.mean(axis=0) for sl in self.traffic]).reshape(-1, 2)
-        self.out_path = out_path
-        self.span = float(span)
-        self.size_px = int(size_px)
-        self.scale = self.size_px / (2.0 * self.span)
-        self.frames = []
-
-    def _to_px(self, xy, ex, ey):
-        px = (np.asarray(xy, dtype=np.float64).reshape(-1, 2) - (ex - self.span, ey + self.span)) * (self.scale, -self.scale)
-        return np.round(px).astype(np.int32).reshape(-1, 1, 2)
-
-    def _box_px(self, x, y, heading, length, width, ex, ey):
-        c, s = math.cos(heading), math.sin(heading)
-        corners = [(length / 2, width / 2), (length / 2, -width / 2), (-length / 2, -width / 2), (-length / 2, width / 2)]
-        return self._to_px([(x + c * dx - s * dy, y + s * dx + c * dy) for dx, dy in corners], ex, ey)
-
-    def capture(self, agents, ego_idx=0, goals=None, light_states=None):
-        import cv2
-
-        ex, ey = float(agents["x"][ego_idx]), float(agents["y"][ego_idx])
-        canvas = np.full((self.size_px, self.size_px, 3), 255, np.uint8)
-        b = self.road_bounds
-        visible = (b[:, 2] >= ex - self.span) & (b[:, 0] <= ex + self.span) & (b[:, 3] >= ey - self.span) & (b[:, 1] <= ey + self.span)
-        for road_idx in np.nonzero(visible)[0]:
-            xy, road_type = self.roads[road_idx]
-            color = self.ROAD_COLOR_LANE if 0 <= road_type <= 9 else (self.ROAD_COLOR_EDGE if 20 <= road_type <= 29 else self.ROAD_COLOR_OTHER)
-            cv2.polylines(canvas, [self._to_px(xy, ex, ey)], False, color, 1, cv2.LINE_AA)
-        if light_states is not None and len(self.traffic):
-            near = np.nonzero(np.all(np.abs(self.traffic_centers - (ex, ey)) <= self.span, axis=1))[0]
-            for j in near:
-                if j >= len(light_states):
-                    break
-                color = self.LIGHT_COLOR.get(int(light_states[j]), self.LIGHT_COLOR[0])
-                cv2.polylines(canvas, [self._to_px(self.traffic[j], ex, ey)], False, color, 3, cv2.LINE_AA)
-                cx, cy = self._to_px(self.traffic_centers[j], ex, ey)[0, 0]
-                cv2.rectangle(canvas, (cx - 4, cy - 4), (cx + 4, cy + 4), color, -1)
-                cv2.rectangle(canvas, (cx - 4, cy - 4), (cx + 4, cy + 4), (0, 0, 0), 1)
-        for i in range(len(agents["x"])):
-            x, y = float(agents["x"][i]), float(agents["y"][i])
-            if abs(x - ex) > self.span or abs(y - ey) > self.span:
-                continue  # surplus agents parked far away
-            box = self._box_px(x, y, float(agents["heading"][i]), float(agents["length"][i]), float(agents["width"][i]), ex, ey)
-            cv2.fillPoly(canvas, [box], self.EGO_COLOR if i == ego_idx else self.PARTNER_COLOR, cv2.LINE_AA)
-            cv2.polylines(canvas, [box[:2]], False, (0, 0, 0), 1, cv2.LINE_AA)  # front edge
-        if goals is not None:
-            for gx, gy in zip(np.asarray(goals[0]).reshape(-1), np.asarray(goals[1]).reshape(-1)):
-                if abs(gx - ex) > self.span or abs(gy - ey) > self.span:
-                    continue
-                cx, cy = self._to_px((gx, gy), ex, ey)[0, 0]
-                cv2.circle(canvas, (int(cx), int(cy)), 6, self.GOAL_COLOR, -1, cv2.LINE_AA)
-                cv2.circle(canvas, (int(cx), int(cy)), 6, (0, 0, 0), 1, cv2.LINE_AA)
-        self.frames.append(canvas)
-
-    def save(self, fps=10):
-        write_mp4(self.out_path, self.frames, fps=fps)
-        print(f"[cosim] wrote {self.out_path} ({len(self.frames)} frames)")
-
-
 class Mp4Writer:
     """Streams RGB uint8 frames to an mp4 via OpenCV."""
 
@@ -414,8 +333,6 @@ def main():
     ap.add_argument(
         "--dt", type=float, default=None, help="ego dynamics dt (default: the checkpoint's training dt, else 0.1)"
     )
-    ap.add_argument("--render", default=None, help="output mp4 path for a top-down BEV render")
-    ap.add_argument("--bev-span", type=float, default=70.0, help="BEV half-window in meters")
     ap.add_argument(
         "--carla-view",
         default=None,
@@ -531,7 +448,6 @@ def main():
         env.set_agent_states(surplus, z6, z6, z6, zero, zero, zero, zero, zero)
     obs = np.asarray(env.recompute_observations())
 
-    bev = BEVRenderer(town_bin, args.render, span=args.bev_span) if args.render else None
     cam, cam_q = attach_chase_camera(world, ego) if args.carla_view else (None, None)
     carla_frames = []
 
@@ -602,8 +518,6 @@ def main():
         gx, gy = goal_window.window[:, 0], goal_window.window[:, 1]
         obs = np.asarray(env.recompute_observations())
 
-        if bev is not None:
-            bev.capture(env.get_global_agent_state(include_static=True), ego_idx=0, goals=(gx, gy), light_states=states)
 
         if step % 10 == 0:
             el = ego.get_location()
@@ -623,8 +537,6 @@ def main():
             )
 
     # cleanup
-    if bev is not None:
-        bev.save()
     if carla_frames:
         write_mp4(args.carla_view, carla_frames, fps=10)
         print(f"[cosim] wrote {args.carla_view} ({len(carla_frames)} frames)")

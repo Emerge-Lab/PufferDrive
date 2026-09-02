@@ -28,6 +28,9 @@ from nuplan.common.actor_state.state_representation import Point2D  # noqa: E402
 from nuplan.common.maps.maps_datatypes import SemanticMapLayer  # noqa: E402
 from nuplan.planning.simulation.simulation_log import SimulationLog  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nuplan_log_remap  # noqa: E402  logs written on another machine (cluster paths, planner classes)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from pufferlib.ocean.cosim.carla_cosim import write_mp4  # noqa: E402
@@ -198,7 +201,7 @@ def diagnose(row, stats, comfort):
 def process_scenario(job):
     sim_dir, token, row, report_dir, make_video = job
     report_dir = Path(report_dir)
-    log = SimulationLog.load_data(Path(row["log_path"]))
+    log = nuplan_log_remap.load_log(row["log_path"])
     hist, scenario = log.simulation_history, log.scenario
     ego, expert, stats = trajectory_stats(hist, scenario)
     categories, reasons = diagnose(row, stats, comfort_failures(sim_dir, token))

@@ -13,5 +13,7 @@ pufferdrive_planner:
   horizon_seconds: 8.0 # nuplan default
   deterministic: true
   env_overrides: null
-  # Write a top-down BEV mp4 of the shadow PufferDrive
-  debug_bev_dir: null
+  # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario
+  obs_html_dir: null
+  obs_html_max_steps: 800
+  obs_html_render: true  # false: save .replay.zlib only, render later (scripts/eval/render_obs_html.py)

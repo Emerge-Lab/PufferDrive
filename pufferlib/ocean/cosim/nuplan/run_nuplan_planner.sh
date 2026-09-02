@@ -33,11 +33,12 @@
 #             no cap, SPLIT's own scenario count applies). Handy for a quick
 #             sanity check before committing to the full SPLIT.
 #   GROUP     output group dir. Default: runs/nuplan_leaderboard_<timestamp>.
-#   COSIM_DEBUG_BEV=1   write one PufferDrive shadow-env BEV mp4 per scenario
-#             (default on; set to 0 to disable) -> $GROUP/bev. Frames buffer
-#             in memory per scenario (bounded -- a fresh planner instance,
-#             and BEV, per scenario) but do add disk + memory overhead across
-#             ~900 scenarios; disable for a resource-constrained full run.
+#   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
+#             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
+#             scenario. failures (default): only scenarios scoring below
+#             COSIM_OBS_HTML_MAX_SCORE (default 0.9). infractions: only scenarios with an
+#             at-fault collision, drivable-area or driving-direction violation, or no
+#             progress. Non-selected replays are deleted after the run. 0: off.
 #   (nuPlan's own ground-truth video is always requested via
 #    carl_visualization_callback in the callback list below -- one .avi per
 #    scenario under $GROUP/simulation/<challenge>/<run_ts>/visualization/)
@@ -64,10 +65,11 @@ SPLIT=${SPLIT:-val14_split}
 CHALLENGES=${CHALLENGES:-"closed_loop_nonreactive_agents_pufferdrive closed_loop_reactive_agents_pufferdrive"}
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 GROUP=${GROUP:-$NUPLAN_EXP_ROOT/nuplan_leaderboard_${TIMESTAMP}}
-DEBUG_BEV=${COSIM_DEBUG_BEV:-1}
+OBS_HTML=${COSIM_OBS_HTML:-failures}
+[ "$OBS_HTML" = "1" ] && OBS_HTML=all
 
 EXTRA_ARGS=()
-[ "$DEBUG_BEV" = "1" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.debug_bev_dir=$GROUP/bev")
+[ "$OBS_HTML" != "0" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.obs_html_dir=$GROUP/obs_html" "planner.pufferdrive_planner.obs_html_render=false")
 CITY_BIN_DIR=${CITY_BIN_DIR:-/scratch/yw4142/datasets/ad/nuplan/maps}
 EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
@@ -99,6 +101,16 @@ for CHALLENGE in $CHALLENGES; do
     STATUS[$CHALLENGE]=$?
     echo "[run_nuplan_planner] $CHALLENGE exit ${STATUS[$CHALLENGE]}"
 done
+
+if [ "$OBS_HTML" = "all" ]; then
+    "$PY" "$PD/scripts/eval/render_obs_html.py" "$GROUP" --max-score 1.01
+elif [ "$OBS_HTML" = "failures" ]; then
+    "$PY" "$PD/scripts/eval/render_obs_html.py" "$GROUP" --max-score "${COSIM_OBS_HTML_MAX_SCORE:-0.9}" --prune
+elif [ "$OBS_HTML" = "infractions" ]; then
+    "$PY" "$PD/scripts/eval/render_obs_html.py" "$GROUP" --max-score 0 --prune \
+        --metric no_ego_at_fault_collisions --metric drivable_area_compliance \
+        --metric driving_direction_compliance --metric ego_is_making_progress
+fi
 
 echo "=========== SUMMARY ==========="
 rc=0

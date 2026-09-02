@@ -15,16 +15,11 @@
 #                  (e.g. point ROUTES at the combined longest6.xml for all 36).
 #   OUT            result json path. Default: runs/cosim_leaderboard_<timestamp>/result.json
 #   CARLA_PORT     default 2000 (use a distinct port per concurrent instance).
-#   COSIM_DEBUG_BEV         dir for one PufferDrive shadow-env BEV mp4 per
-#                  route. Default: "$(dirname "$OUT")/bev". Frames are
-#                  buffered in memory per route (fine for a debug route,
-#                  risky for a long/full-benchmark one).
 #   COSIM_DEBUG_CARLA_VIEW  dir for one CARLA chase-cam mp4 per route (an
 #                  actual camera sensor on the ego, native 20 Hz tick rate,
 #                  streamed to disk frame-by-frame so it's safe for long
 #                  routes). Default: "$(dirname "$OUT")/carla_view".
-#                  Set either COSIM_DEBUG_BEV= / COSIM_DEBUG_CARLA_VIEW=
-#                  (empty) to disable.
+#                  Set COSIM_DEBUG_CARLA_VIEW= (empty) to disable.
 #   COSIM_DEVICE / COSIM_DT / COSIM_NUM_AGENTS
 #                  forwarded to leaderboard_agent.py as-is if already exported.
 if [ -z "$INSIDE_PUFFER_CONTAINER" ]; then
@@ -56,9 +51,7 @@ ROUTES_SUBSET=${ROUTES_SUBSET-0-35}   # ROUTES_SUBSET= (empty) runs every route 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 OUT=${OUT:-/scratch/yw4142/runs/cosim_leaderboard_${TIMESTAMP}/result.json}
 mkdir -p "$(dirname "$OUT")"
-# PufferDrive shadow-env BEV mp4s and CARLA chase-cam mp4s (one each per
-# route), next to OUT by default.
-export COSIM_DEBUG_BEV=${COSIM_DEBUG_BEV-"$(dirname "$OUT")/bev"}
+# CARLA chase-cam mp4 per route, next to OUT by default.
 export COSIM_DEBUG_CARLA_VIEW=${COSIM_DEBUG_CARLA_VIEW-"$(dirname "$OUT")/carla_view"}
 
 export CARLA_ROOT CARL_WORK_DIR

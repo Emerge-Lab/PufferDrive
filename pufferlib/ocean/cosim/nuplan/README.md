@@ -35,6 +35,19 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   Found via `hydra.searchpath=[pkg://pufferlib.ocean.cosim.nuplan.config, ...]`.
   Use city bins
 
+## Visualization
+
+- `COSIM_OBS_HTML=all|failures|0` (default `failures`): one interactive pufferlib.viz
+  replay per scenario -> `$GROUP/obs_html/<token>.html`, showing the exact observation
+  vector the policy received each step (partner/lane/boundary/light slots, goals), its
+  action/value/entropy/probabilities and the encoder max-pool winners. This is what the
+  agent saw; road geometry is cropped to 250 m around the driven path. `failures` renders
+  (and keeps) only scenarios scoring below `COSIM_OBS_HTML_MAX_SCORE` (default 0.9);
+  `all` renders every scenario. Pages can be rendered later from the saved
+  `.replay.zlib` files with `scripts/eval/render_obs_html.py`.
+- nuPlan ground truth: `carl_visualization_callback` in `CALLBACKS`, or nuBoard on the
+  simulation logs (`scripts/eval/nuboard_failures.py` builds a failures-only nuBoard folder).
+
 ## How to run
 
 ```

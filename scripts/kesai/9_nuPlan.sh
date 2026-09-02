@@ -13,10 +13,10 @@ set -u
 
 export PD=/home/bjaeger/cosim_Puffer
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
-RUN_DIR=/home/bjaeger/PufferDrive/experiments/k_scaled_0035_1000
-# planner.py reads config.yaml from the checkpoint's run dir (parents[1]), so CKPT must be a models/*.pt
-export CKPT=$(ls -t "$RUN_DIR"/models/model_*.pt 2>/dev/null | head -1)
-: "${CKPT:?no model_*.pt found in $RUN_DIR/models}"
+RUN_DIR=/home/bjaeger/PufferDrive/experiments/k_scaled_0036_1000
+# the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
+export CKPT=$RUN_DIR/final_model.pt
+[ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }
 echo "Evaluating checkpoint: $CKPT"
 export CITY_BIN_DIR=/home/shared/data/nuplan/PufferDrive
 # shell env still exports the pre-rename nuPlan casing; pin the renamed paths here
@@ -24,14 +24,14 @@ export NUPLAN_DATA_ROOT=/home/shared/data/nuplan
 export NUPLAN_MAPS_ROOT=/home/shared/data/nuplan/maps
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
-export COSIM_DEBUG_BEV=1  # shadow-env BEV mp4 per scenario -> $GROUP/bev
+export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
 # carl_visualization_callback: nuPlan ground-truth video per scenario -> $GROUP/simulation/<challenge>/<ts>/visualization
 export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
 export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 export THREADS_PER_NODE=128
-export GROUP=$PD/experiments/nuplan_val14_k_scaled_0035_1000_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+export GROUP=$PD/experiments/nuplan_val14_$(basename "$RUN_DIR")_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 

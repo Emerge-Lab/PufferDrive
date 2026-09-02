@@ -8,6 +8,7 @@ scenario_length, ...) win.
 """
 
 import inspect
+from pathlib import Path
 
 from pufferlib.ocean.drive.drive import Drive
 
@@ -51,6 +52,17 @@ CLEAN_EVAL_OVERRIDES = {
 # weights/mimolette: collision_behavior: 1); normalize either spelling.
 _INFRACTION_BEHAVIOR_NAMES = {0: "ignore", 1: "stop", 2: "remove"}
 _INFRACTION_BEHAVIOR_KEYS = ("collision_behavior", "offroad_behavior", "traffic_light_behavior")
+
+
+def checkpoint_config_path(checkpoint):
+    """config.yaml saved with a checkpoint: next to a run-dir `final_model.pt`, or one level up for
+    `models/model_*.pt`. Raises when neither exists (a shadow env built from Drive defaults would be
+    silently wrong)."""
+    checkpoint = Path(checkpoint).resolve()
+    for candidate in (checkpoint.parent / "config.yaml", checkpoint.parents[1] / "config.yaml"):
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"no config.yaml next to or one level above {checkpoint}")
 
 
 def shadow_env_kwargs(cfg, defaults=None, overrides=None):

@@ -18,6 +18,7 @@ from nuplan.planning.simulation.trajectory.abstract_trajectory import AbstractTr
 from nuplan.planning.simulation.trajectory.interpolated_trajectory import InterpolatedTrajectory
 
 from pufferlib.ocean.cosim import nuplan_bridge as nb
+from pufferlib.ocean.cosim.arch import checkpoint_config_path
 from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
 from pufferlib.ocean.drive.drive import Drive
 
@@ -79,7 +80,9 @@ class PufferDrivePlanner(AbstractPlanner):
         horizon_seconds: float = 8.0,
         deterministic: bool = True,
         env_overrides: Optional[Dict] = None,
-        debug_bev_dir: Optional[str] = None,
+        obs_html_dir: Optional[str] = None,
+        obs_html_max_steps: int = 800,
+        obs_html_render: bool = True,
     ):
         """
         :param checkpoint_path: PufferDrive policy checkpoint (.pt); config.yaml
@@ -96,13 +99,11 @@ class PufferDrivePlanner(AbstractPlanner):
         :param horizon_seconds: returned trajectory horizon (constant-velocity
             extrapolation past the integrated first step) [s].
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
-        :param debug_bev_dir: write a top-down BEV mp4 of the shadow PufferDrive
-            env per scenario (roads/traffic from the resolved bin, agents from
-            the shadow env) — the nuPlan analog of the CARLA co-sim's
-            COSIM_DEBUG_BEV. This is the shadow env's OWN view (what the policy
-            actually sees), not nuPlan's ground truth; for that, enable CaRL's
-            own carl_visualization_callback in the simulation `callback` list
-            instead (see module docstring "How to run").
+        :param obs_html_dir: write the interactive pufferlib.viz observation replay per
+            scenario (the exact obs the policy received, its outputs and encoder pool winners).
+        :param obs_html_render: render the html right away; False saves only the compact
+            .replay.zlib so pages can be rendered later for selected scenarios
+            (scripts/eval/render_obs_html.py, e.g. only those scoring below a threshold).
         """
         self._checkpoint_path = checkpoint_path
         self._bin_cache_dir = Path(bin_cache_dir)
@@ -115,7 +116,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._horizon_seconds = float(horizon_seconds)
         self._deterministic = deterministic
         self._env_overrides = env_overrides or {}
-        self._debug_bev_dir = Path(debug_bev_dir) if debug_bev_dir else None
+        self._obs_html_dir = Path(obs_html_dir) if obs_html_dir else None
+        self._obs_html_max_steps = int(obs_html_max_steps)
+        self._obs_html_render = bool(obs_html_render)
+        self._obs_replay = None  # ObsReplayCapture, built in _build if obs_html_dir is set
         self._arch: Optional[Dict] = None  # resolved in _build from the checkpoint config
 
         # lazy state (built on the first compute call, which knows the ego pose)
@@ -127,7 +131,6 @@ class PufferDrivePlanner(AbstractPlanner):
         self._route_connector_ids = ()  # lane ids along the Dijkstra route: they decide shared stop-line elements
         self._num_traffic = 0
         self._goal_window: Optional[RouteGoalWindow] = None
-        self._bev = None  # BEVRenderer, built in _build if debug_bev_dir is set
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
 
@@ -148,7 +151,7 @@ class PufferDrivePlanner(AbstractPlanner):
             self._env.close()
         self._env = None
         self._policy = None
-        self._bev = None
+        self._obs_replay = None
         return report
 
     # --- whole-city map-only bins -------------------------------------------
@@ -298,7 +301,7 @@ class PufferDrivePlanner(AbstractPlanner):
         cfg = (
             {}
             if self._dummy
-            else yaml.safe_load(open(Path(self._checkpoint_path).resolve().parents[1] / "config.yaml"))
+            else yaml.safe_load(open(checkpoint_config_path(self._checkpoint_path)))
         )
 
         bin_path, self._transform, stop_centers, self._num_traffic = self._resolve_map_bin()
@@ -370,19 +373,13 @@ class PufferDrivePlanner(AbstractPlanner):
             np.array([0], np.int32), np.array([fp.length], np.float32), np.array([fp.width], np.float32)
         )
 
-        if self._debug_bev_dir:
-            from datetime import datetime
+        if self._obs_html_dir and self._policy is not None:
+            from pufferlib.ocean.cosim.obs_replay import ObsReplayCapture
 
-            from pufferlib.ocean.cosim.carla_cosim import BEVRenderer
-
-            # scenario.token is a genuine per-scenario unique id (unlike the
-            # CARLA leaderboard's route_index, which turned out to just be the
-            # routes-file stem) — still add a timestamp as cheap defense
-            # against re-running the same scenario into the same output dir.
             token = self._scenario.token if self._scenario else "scenario"
-            tag = f"{token}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-            self._debug_bev_dir.mkdir(parents=True, exist_ok=True)
-            self._bev = BEVRenderer(str(bin_path), str(self._debug_bev_dir / f"{tag}.mp4"))
+            self._obs_replay = ObsReplayCapture(
+                self._env, self._policy, self._obs_html_dir / token, max_steps=self._obs_html_max_steps
+            )
 
         print(
             f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
@@ -494,9 +491,10 @@ class PufferDrivePlanner(AbstractPlanner):
                 )
             else:
                 action_selection = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+            obs_tensor = torch.as_tensor(obs).to(self._device)
             with torch.no_grad():
-                logits, _ = self._policy.forward_eval(torch.as_tensor(obs).to(self._device))
-                action, _, _, cont_action = pufferlib.pytorch.sample_logits(
+                logits, value = self._policy.forward_eval(obs_tensor)
+                action, _, entropy, cont_action = pufferlib.pytorch.sample_logits(
                     logits,
                     action_selection=action_selection,
                     env_continuous=env_continuous,
@@ -506,34 +504,19 @@ class PufferDrivePlanner(AbstractPlanner):
             act = env_action.cpu().numpy().reshape(self._env.num_agents, -1)
             if not env_continuous:
                 act = act.astype(np.int32)
+            if self._obs_replay is not None:
+                # sample_logits' discrete `action` is the class taken (mode/sample) or the argmax under mean selection
+                action_index = action.cpu().numpy().reshape(-1) if not self._policy.is_continuous else None
+                self._obs_replay.capture(
+                    obs, act, self._obs_replay.policy_outputs(obs_tensor, logits, value, entropy), action_index
+                )
 
         self._env.step(act)  # integrates the ego one dt; background is re-synced next call
 
-        if self._bev is not None:
-            try:
-                window = self._goal_window.window
-                self._bev.capture(
-                    self._env.get_global_agent_state(include_static=True),
-                    ego_idx=0,
-                    goals=(window[:, 0], window[:, 1]),
-                    light_states=self._last_light_states,
-                )
-                # AbstractPlanner has no close()/destroy() hook, so save at the
-                # scenario's last planning iteration instead (BEVRenderer
-                # buffers frames in memory until .save(), like the CARLA-side
-                # BEV). simulations_runner.py's loop is `while
-                # is_simulation_running()`, checked BEFORE each call, and
-                # reached_end() (-> not running) fires once the iteration
-                # index hits get_number_of_iterations()-1 -- so the LAST index
-                # the planner is ever actually invoked with is
-                # get_number_of_iterations()-2, not -1 (confirmed empirically:
-                # -1 never saved anything, debug_bev_dir stayed empty).
-                last_iter = self._scenario.get_number_of_iterations() - 2
-                if current_input.iteration.index >= last_iter:
-                    self._bev.save()
-            except Exception as e:
-                print(f"[pufferdrive_planner] debug_bev_dir capture/save failed (non-fatal): {e}")
-                self._bev = None
+        if self._obs_replay is not None and current_input.iteration.index >= self._scenario.get_number_of_iterations() - 2:
+            out = self._obs_replay.write(render_html=self._obs_html_render)
+            print(f"[pufferdrive_planner] wrote obs replay ({len(self._obs_replay)} steps) -> {out}")
+            self._obs_replay = None
 
         # integrated ego -> nuPlan EgoState at t + dt
         dt = float(self._arch["dt"])
