@@ -39,7 +39,7 @@ CLEAN_EVAL_OVERRIDES = {
     "reward_comfort": 0.05,
     "reward_velocity": 0.0025,
     "reward_lane_align": 0.025,
-    "reward_lane_center": 0.0038,
+    "reward_lane_center": 0.0075,  # training-range max (REWARD_BOUNDS), not the paper's 0.0038
     "reward_timestep": 0.000025,
     "reward_reverse": 0.005,
     "pose_noise_xy_m": 0.0,

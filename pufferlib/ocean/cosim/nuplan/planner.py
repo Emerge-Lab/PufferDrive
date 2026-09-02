@@ -32,6 +32,7 @@ SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation
 NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
 TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
+GOAL_CONTINUATION_MARGIN_M = 5.0  # first route goal after the endpoint sits this far beyond the goal radius
 
 
 def clean_policy_state_dict(state_dict):
@@ -96,8 +97,10 @@ class PufferDrivePlanner(AbstractPlanner):
         :param scenario: injected by the devkit (requires_scenario).
         :param map_radius: map extraction / light-matching radius [m].
         :param goal_spacing: goal spacing along the route / logged path fed to the policy [m].
-        :param goal_source: "route" (lane-graph route through the route roadblocks) or "gt_map"
-            (logged ego path, every sample snapped to the nearest co-directional lane center).
+        :param goal_source: "route" (goal windows along the lane-graph route through the route
+            roadblocks) or "gt_map" (one goal: the human's endpoint snapped to the nearest
+            co-directional lane center; once cleared, route goals continue past it like a
+            training goal-window regeneration).
         :param num_agents: PufferDrive agent-pool size (ego + streamed background).
         :param horizon_seconds: returned trajectory horizon (constant-velocity
             extrapolation past the integrated first step) [s].
@@ -137,6 +140,8 @@ class PufferDrivePlanner(AbstractPlanner):
         self._route_connector_ids = ()  # lane ids along the Dijkstra route: they decide shared stop-line elements
         self._num_traffic = 0
         self._goal_window: Optional[RouteGoalWindow] = None
+        self._route_centerline = np.zeros((0, 2))  # lane-graph route in nuPlan map coordinates
+        self._destination_reached = False  # gt_map: the endpoint goal was cleared, route goals took over
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
         self._static_on_drivable: Dict[str, bool] = {}  # static object track_token -> stands on the drivable area
@@ -267,9 +272,8 @@ class PufferDrivePlanner(AbstractPlanner):
                 "min_agents_per_env": 1,
                 "cosim_partner_slots": self._num_agents - 1,
                 "goal_source": "external",
-                # Mirrors the nuplan_* benchmarks in config/evaluation/benchmark.yaml: a nuPlan route
-                # never ends inside the scenario, so no window-final goal is speed gated.
-                "goal_reach_requires_speed": False,
+                # Training semantics: a window's final goal clears only below goal_speed (3 m/s)
+                "goal_reach_requires_speed": True,
                 # C_acc conditioning: cap the jerk model's positive accel at nuPlan's comfort bound instead of 2.5
                 "conditioning_accel_scale": COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 / binding.ACCEL_LONG_MAX,
                 # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
@@ -369,13 +373,15 @@ class PufferDrivePlanner(AbstractPlanner):
         centerline, self._route_connector_ids = nb.route_centerline(
             init.map_api, route_ids, ex, ey, float(ego_state.center.heading)
         )
+        self._route_centerline = centerline
         snapped_count = 0
         if self._goal_source == "gt_map":
-            goals, goal_headings, snapped_count = nb.logged_ego_goals(self._scenario, init.map_api, self._goal_spacing)
-            goals -= (self._transform.ox, self._transform.oy)
-            route_goals = np.column_stack(
-                [goals, np.zeros(len(goals)), np.cos(goal_headings), np.sin(goal_headings)]
-            ).astype(np.float32)
+            goal_xy, goal_heading, snapped = nb.logged_ego_endpoint_goal(self._scenario, init.map_api)
+            snapped_count = int(snapped)
+            goals = (goal_xy - (self._transform.ox, self._transform.oy)).reshape(1, 2)
+            route_goals = np.array(
+                [[goals[0, 0], goals[0, 1], 0.0, np.cos(goal_heading), np.sin(goal_heading)]], dtype=np.float32
+            )
         else:
             goals = nb.goals_along(centerline, self._goal_spacing)
             if len(goals) == 0:  # degenerate route: fall back to the mission goal
@@ -465,6 +471,20 @@ class PufferDrivePlanner(AbstractPlanner):
             env.set_traffic_light_states(self._last_light_states)
 
         self._goal_window.sync(ex, ey, h)
+        if self._goal_source == "gt_map" and not self._destination_reached and self._goal_window.exhausted:
+            self._destination_reached = True
+            self._continue_along_route(ego_state.center.x, ego_state.center.y, ex, ey, h)
+
+    def _continue_along_route(self, nuplan_x: float, nuplan_y: float, bin_x: float, bin_y: float, heading: float) -> None:
+        """Endpoint goal cleared: hand the ego route goal windows past its position, like a training regen."""
+        min_ahead_m = float(self._env.goal_radius) + GOAL_CONTINUATION_MARGIN_M
+        goals = nb.route_goals_ahead(self._route_centerline, self._goal_spacing, nuplan_x, nuplan_y, min_ahead_m)
+        if len(goals) == 0:
+            print("[pufferdrive_planner] endpoint goal cleared with no route left ahead: last goal stays")
+            return
+        goals -= (self._transform.ox, self._transform.oy)
+        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals))
+        self._goal_window.sync(bin_x, bin_y, heading)
 
     def _check_ego_tracking(self, bin_x: float, bin_y: float, heading: float) -> None:
         lx, ly, lh = self._last_integrated

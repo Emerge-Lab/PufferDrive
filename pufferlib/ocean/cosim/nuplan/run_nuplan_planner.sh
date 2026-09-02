@@ -77,6 +77,8 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
+[ -n "${SCENARIO_TOKENS:-}" ] && EXTRA_ARGS+=("scenario_filter.scenario_tokens=$SCENARIO_TOKENS")
+[ -n "${EXTRA_HYDRA:-}" ] && EXTRA_ARGS+=($EXTRA_HYDRA)
 
 cd "$PD"
 declare -A STATUS

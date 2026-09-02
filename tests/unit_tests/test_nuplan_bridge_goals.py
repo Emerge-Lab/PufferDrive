@@ -55,3 +55,23 @@ def test_logged_goals_keep_raw_pose_without_lane():
     xy, _, snapped = nb.logged_ego_goals(scenario, _MapApi(), spacing=20.0)
     assert snapped == 0
     np.testing.assert_allclose(xy[:, 1], 50.0)
+
+
+def test_endpoint_goal_snaps_to_codirectional_lane():
+    xy, heading, snapped = nb.logged_ego_endpoint_goal(_scenario([0.0, 10.0, 20.0], [1.2, 1.1, 0.9]), _MapApi())
+    assert snapped and heading == 0.0
+    assert np.allclose(xy, [20.0, 0.0])
+
+
+def test_endpoint_goal_keeps_raw_pose_without_lane():
+    xy, heading, snapped = nb.logged_ego_endpoint_goal(_scenario([0.0, 10.0], [50.0, 50.0]), _MapApi())
+    assert not snapped and heading == 0.0
+    assert np.allclose(xy, [10.0, 50.0])
+
+
+def test_route_goals_ahead_skips_goals_behind_and_too_close():
+    centerline = np.column_stack([np.arange(0.0, 101.0), np.zeros(101)])
+    ahead = nb.route_goals_ahead(centerline, 20.0, 45.0, 0.3, min_ahead_m=12.0)
+    assert np.allclose(ahead[:, 0], [60.0, 80.0, 100.0])
+    assert len(nb.route_goals_ahead(centerline, 20.0, 95.0, 0.0, min_ahead_m=12.0)) == 0
+    assert len(nb.route_goals_ahead(np.zeros((1, 2)), 20.0, 0.0, 0.0, min_ahead_m=12.0)) == 0

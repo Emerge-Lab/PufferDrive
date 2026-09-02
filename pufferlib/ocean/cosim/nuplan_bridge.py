@@ -280,6 +280,30 @@ def logged_ego_goals(scenario, map_api, spacing: float):
     return xy, goal_headings, snapped_count
 
 
+def logged_ego_endpoint_goal(scenario, map_api):
+    """Human endpoint (ego pose at the scenario's last iteration) snapped to the nearest co-directional
+    lane center -> ((2,) xy in nuPlan map coordinates, heading, snapped). The raw pose is kept only when
+    no lane is within the snap radius."""
+    state = scenario.get_ego_state_at_iteration(scenario.get_number_of_iterations() - 1)
+    x, y, heading = float(state.center.x), float(state.center.y), float(state.center.heading)
+    pose = snap_to_lane_center(map_api, x, y, heading)
+    if pose is None:
+        return np.array([x, y], dtype=np.float64), heading, False
+    return np.array([pose.x, pose.y], dtype=np.float64), float(pose.heading), True
+
+
+def route_goals_ahead(centerline, spacing: float, x: float, y: float, min_ahead_m: float) -> np.ndarray:
+    """Goals every `spacing` m along `centerline` (+ endpoint) whose arc length is at least `min_ahead_m`
+    past the centerline vertex nearest (x, y) -> (N, 2); empty once the route is used up."""
+    centerline = np.asarray(centerline, dtype=np.float64).reshape(-1, 2)
+    if len(centerline) < 2:
+        return np.zeros((0, 2))
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(centerline, axis=0).T))])
+    nearest = int(np.argmin(np.hypot(centerline[:, 0] - x, centerline[:, 1] - y)))
+    indices = indices_along(centerline, spacing)
+    return centerline[indices[cum[indices] >= cum[nearest] + min_ahead_m]]
+
+
 def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
     """Human-driven ego per scenario iteration -> (N, 5) float32 [x, y, heading, length, width], bin frame."""
     iteration_count = scenario.get_number_of_iterations()
