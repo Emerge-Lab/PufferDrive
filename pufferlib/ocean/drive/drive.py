@@ -638,7 +638,7 @@ class Drive(pufferlib.PufferEnv):
         self.truncations[:] = 0
         if self.capture_replay:
             self._initialize_replay_captures()
-        return self.observations, []
+        return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
         if self._eval_exhausted:
@@ -734,6 +734,7 @@ class Drive(pufferlib.PufferEnv):
                     self._initialize_replay_captures()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
+        info.append({"agent_offsets": self.agent_offsets})
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):

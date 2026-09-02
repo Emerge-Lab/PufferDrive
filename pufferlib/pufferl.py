@@ -122,10 +122,10 @@ def logits_to_float(logits):
 @dataclass
 class ActorOutput:
     action: torch.Tensor
-    logprob: torch.Tensor
-    value: torch.Tensor
-    continuous_action: torch.Tensor | None
-    clip_actions: bool
+    logprob: torch.Tensor | None = None
+    value: torch.Tensor | None = None
+    continuous_action: torch.Tensor | None = None
+    clip_actions: bool = False
 
 
 class TrainableTorchActor:
@@ -151,8 +151,83 @@ class TrainableTorchActor:
         )
 
 
+def _index_actor_batch(batch, indices):
+    if torch.is_tensor(batch):
+        return batch.index_select(0, indices)
+    if isinstance(batch, np.ndarray):
+        return batch[indices.cpu().numpy()]
+    return batch
+
+
+def _run_actor_subset(actor, observation, indices, state):
+    if indices.numel() == 0:
+        return None
+
+    subset_state = {
+        "reward": _index_actor_batch(state["reward"], indices),
+        "done": _index_actor_batch(state["done"], indices),
+        "env_id": state["env_id"],
+        "mask": _index_actor_batch(state["mask"], indices),
+    }
+    if "lstm_h" in state:
+        subset_state["lstm_h"] = state["lstm_h"].index_select(0, indices)
+        subset_state["lstm_c"] = state["lstm_c"].index_select(0, indices)
+
+    actor_output = actor.act(observation.index_select(0, indices), subset_state)
+
+    if "lstm_h" in state:
+        state["lstm_h"].index_copy_(0, indices, subset_state["lstm_h"])
+        state["lstm_c"].index_copy_(0, indices, subset_state["lstm_c"])
+
+    return actor_output
+
+
+def _route_actor_actions(observation, target_mask, policy_actor, policy_state, target_actor, target_state):
+    if target_actor is None or not target_mask.any():
+        return policy_actor.act(observation, policy_state)
+
+    adversary_indices = torch.nonzero(~target_mask, as_tuple=False).flatten()
+    target_indices = torch.nonzero(target_mask, as_tuple=False).flatten()
+    adversary_output = _run_actor_subset(policy_actor, observation, adversary_indices, policy_state)
+    target_output = _run_actor_subset(target_actor, observation, target_indices, target_state)
+
+    batch_size = observation.shape[0]
+    reference_output = adversary_output or target_output
+    action = reference_output.action.new_zeros(batch_size, *reference_output.action.shape[1:])
+    logprob = torch.zeros(batch_size, dtype=torch.float32, device=observation.device)
+    value = torch.zeros(batch_size, dtype=torch.float32, device=observation.device)
+    continuous_action = None
+    clip_actions = False
+
+    for indices, actor_output, trainable in (
+        (adversary_indices, adversary_output, True),
+        (target_indices, target_output, False),
+    ):
+        if actor_output is None:
+            continue
+        clip_actions = clip_actions or actor_output.clip_actions
+        action.index_copy_(0, indices, actor_output.action)
+        if trainable:
+            logprob.index_copy_(0, indices, actor_output.logprob.float())
+            value.index_copy_(0, indices, actor_output.value.flatten().float())
+        if actor_output.continuous_action is not None:
+            if continuous_action is None:
+                continuous_action = actor_output.continuous_action.new_zeros(
+                    batch_size, *actor_output.continuous_action.shape[1:]
+                )
+            continuous_action.index_copy_(0, indices, actor_output.continuous_action)
+
+    return ActorOutput(
+        action=action,
+        logprob=logprob,
+        value=value,
+        continuous_action=continuous_action,
+        clip_actions=clip_actions,
+    )
+
+
 class PuffeRL:
-    def __init__(self, config, vecenv, policy, logger=None):
+    def __init__(self, config, vecenv, policy, logger=None, target_policy=None):
         # Backend perf optimization
         torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.deterministic = config["torch_deterministic"]
@@ -231,6 +306,7 @@ class PuffeRL:
             dtype=action_dtype,
         )
         self.values = torch.zeros(segments, horizon, device=device)
+        self.target_masks = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
         self.logprobs = torch.zeros(segments, horizon, device=device)
         self.rewards = torch.zeros(segments, horizon, device=device)
         self.terminals = torch.zeros(segments, horizon, device=device, dtype=torch.bool)
@@ -252,6 +328,12 @@ class PuffeRL:
             h = policy.hidden_size
             self.lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
             self.lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+        self.target_uses_rnn = target_policy is not None and hasattr(base_policy(target_policy), "lstm")
+        if self.target_uses_rnn:
+            n = vecenv.agents_per_batch
+            h = target_policy.hidden_size
+            self.target_lstm_h = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
+            self.target_lstm_c = {i * n: torch.zeros(n, h, device=device) for i in range(total_agents // n)}
 
         # Minibatching & gradient accumulation
         minibatch_size = config["minibatch_size"]
@@ -276,6 +358,8 @@ class PuffeRL:
         # Torch compile
         self.uncompiled_policy = base_policy(policy)
         self.policy = policy
+        self.uncompiled_target_policy = base_policy(target_policy) if target_policy is not None else None
+        self.target_policy = target_policy
         if config["compile"]:
             compile_kwargs = {
                 "mode": config["compile_mode"],
@@ -283,8 +367,19 @@ class PuffeRL:
             }
             self.policy = torch.compile(policy, **compile_kwargs)
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
+            if target_policy is not None:
+                self.target_policy = torch.compile(target_policy, **compile_kwargs)
+                self.target_policy.forward_eval = torch.compile(
+                    self.uncompiled_target_policy.forward_eval,
+                    **compile_kwargs,
+                )
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
         self.policy_actor = TrainableTorchActor(self.policy, self.uncompiled_policy, self.env_continuous)
+        self.target_actor = (
+            TrainableTorchActor(self.target_policy, self.uncompiled_target_policy, self.env_continuous)
+            if self.target_policy is not None
+            else None
+        )
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -364,6 +459,23 @@ class PuffeRL:
         self.model_size = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         self.print_dashboard(clear=True)
 
+    def _build_target_mask(self, info, device):
+        target_mask = torch.zeros(self.vecenv.agents_per_batch, dtype=torch.bool, device=device)
+        if self.target_actor is None:
+            return target_mask
+
+        agents_per_worker = self.vecenv.driver_env.num_agents
+        worker_idx = 0
+        for information in info:
+            agent_offsets = information.get("agent_offsets")
+            if agent_offsets is None:
+                continue
+            agent_offsets = torch.as_tensor(agent_offsets, dtype=torch.int64, device=device)
+            target_mask[agent_offsets[:-1] + worker_idx * agents_per_worker] = True
+            worker_idx += 1
+
+        return target_mask
+
     def load_training_state(self, path):
         device = torch_device(self.config["device"])
         state = torch.load(path, map_location=device, weights_only=False)
@@ -412,6 +524,10 @@ class PuffeRL:
             for k in self.lstm_h:
                 self.lstm_h[k].zero_()
                 self.lstm_c[k].zero_()
+        if self.target_uses_rnn:
+            for k in self.target_lstm_h:
+                self.target_lstm_h[k].zero_()
+                self.target_lstm_c[k].zero_()
 
         self.full_rows = 0
         while self.full_rows < self.segments:
@@ -434,6 +550,7 @@ class PuffeRL:
             t = torch.as_tensor(t).to(device)  # , non_blocking=True)
             m = torch.as_tensor(mask).to(device)  # , non_blocking=True)
             done_mask = (d + t).clamp(max=1.0)
+            target_mask = self._build_target_mask(info, device)
 
             # Obs distribution stats (max/min/mean across the batch and obs
             # dims, appended per env step). Surfaces clipping / unbounded
@@ -444,7 +561,13 @@ class PuffeRL:
 
             profile("eval_forward", epoch)
             with torch.no_grad(), self.amp_context:
-                state = dict(
+                policy_state = dict(
+                    reward=r,
+                    done=done_mask,
+                    env_id=env_id,
+                    mask=mask,
+                )
+                target_state = dict(
                     reward=r,
                     done=done_mask,
                     env_id=env_id,
@@ -452,18 +575,31 @@ class PuffeRL:
                 )
 
                 if config["use_rnn"]:
-                    state["lstm_h"] = self.lstm_h[env_id.start]
-                    state["lstm_c"] = self.lstm_c[env_id.start]
+                    policy_state["lstm_h"] = self.lstm_h[env_id.start]
+                    policy_state["lstm_c"] = self.lstm_c[env_id.start]
+                if self.target_uses_rnn:
+                    target_state["lstm_h"] = self.target_lstm_h[env_id.start]
+                    target_state["lstm_c"] = self.target_lstm_c[env_id.start]
 
-                actor_output = self.policy_actor.act(o_device, state)
+                actor_output = _route_actor_actions(
+                    o_device,
+                    target_mask,
+                    self.policy_actor,
+                    policy_state,
+                    self.target_actor,
+                    target_state,
+                )
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
             profile("eval_copy", epoch)
             with torch.no_grad():
                 if config["use_rnn"]:
-                    self.lstm_h[env_id.start] = state["lstm_h"]
-                    self.lstm_c[env_id.start] = state["lstm_c"]
+                    self.lstm_h[env_id.start] = policy_state["lstm_h"]
+                    self.lstm_c[env_id.start] = policy_state["lstm_c"]
+                if self.target_uses_rnn:
+                    self.target_lstm_h[env_id.start] = target_state["lstm_h"]
+                    self.target_lstm_c[env_id.start] = target_state["lstm_c"]
 
                 # Fast path for fully vectorized envs
                 l = self.ep_lengths[env_id.start].item()
@@ -487,6 +623,7 @@ class PuffeRL:
                 self.terminals[batch_rows, l] = done_mask.bool()
                 self.values[batch_rows, l] = actor_output.value.flatten().float()
                 self.masks[batch_rows, l] = m
+                self.target_masks[batch_rows, l] = target_mask
 
                 # Note: We are not yet handling masks in this version
                 self.ep_lengths[env_id] += 1
@@ -499,6 +636,8 @@ class PuffeRL:
 
             profile("eval_misc", epoch)
             for i in info:
+                if i.keys() == {"agent_offsets"}:
+                    continue
                 for k, v in pufferlib.unroll_nested_dict(i):
                     if isinstance(v, np.ndarray):
                         v = v.tolist()
@@ -589,7 +728,17 @@ class PuffeRL:
 
         return logs
 
-    def _ppo_loss(self, mb_obs, mb_actions, mb_logprobs, mb_values, mb_returns, mb_adv, adv_weights=None):
+    def _ppo_loss(
+        self,
+        mb_obs,
+        mb_actions,
+        mb_logprobs,
+        mb_values,
+        mb_returns,
+        mb_adv,
+        adv_weights=None,
+        loss_mask=None,
+    ):
         config = self.config
         state = dict(action=mb_actions, lstm_h=None, lstm_c=None)
         if self.compress_observations:
@@ -604,28 +753,31 @@ class PuffeRL:
         newvalue = newvalue.view_as(mb_returns)
         logratio = newlogprob - mb_logprobs
         ratio = logratio.exp()
+        if loss_mask is None:
+            loss_mask = torch.ones_like(mb_logprobs, dtype=torch.bool)
+        loss_mask = loss_mask.view_as(mb_logprobs)
+        loss_weight = loss_mask.to(mb_adv.dtype)
+        loss_denominator = loss_weight.sum()
 
         with torch.no_grad():
-            old_approx_kl = (-logratio).mean()
-            approx_kl = ((ratio - 1) - logratio).mean()
-            clipfrac = ((ratio - 1.0).abs() > config["clip_coef"]).float().mean()
+            old_approx_kl = ((-logratio) * loss_weight).sum() / loss_denominator
+            approx_kl = (((ratio - 1) - logratio) * loss_weight).sum() / loss_denominator
+            clipfrac = (((ratio - 1.0).abs() > config["clip_coef"]).float() * loss_weight).sum()
+            clipfrac = clipfrac / loss_denominator
 
         with torch.no_grad():
             if torch.distributed.is_initialized():
-                # This mean computation assumes that all GPUs use the same batch size. This is currently guaranteed.
-                world_size = torch.distributed.get_world_size()
-                # Distributed mean
-                advantage_mean = mb_adv.mean()
-                torch.distributed.all_reduce(advantage_mean, op=torch.distributed.ReduceOp.SUM)
-                advantage_mean = advantage_mean / world_size
+                advantage_sum_and_count = torch.stack(((mb_adv * loss_weight).sum(), loss_denominator))
+                torch.distributed.all_reduce(advantage_sum_and_count, op=torch.distributed.ReduceOp.SUM)
+                advantage_mean = advantage_sum_and_count[0] / advantage_sum_and_count[1]
 
-                advantage_std = torch.sum(torch.square(mb_adv - advantage_mean))
-                torch.distributed.all_reduce(advantage_std, op=torch.distributed.ReduceOp.SUM)
-                advantage_std = advantage_std / (world_size * torch.numel(mb_adv) - 1)  # -1 is bessel's correction
-                advantage_std = torch.sqrt(advantage_std)
+                advantage_square_sum = (torch.square(mb_adv - advantage_mean) * loss_weight).sum()
+                torch.distributed.all_reduce(advantage_square_sum, op=torch.distributed.ReduceOp.SUM)
+                advantage_std = torch.sqrt(advantage_square_sum / (advantage_sum_and_count[1] - 1))
             else:
-                advantage_mean = mb_adv.mean()
-                advantage_std = mb_adv.std()
+                filtered_advantage = mb_adv[loss_mask]
+                advantage_mean = filtered_advantage.mean()
+                advantage_std = filtered_advantage.std()
 
             mb_adv = (mb_adv - advantage_mean) / (advantage_std + 1e-8)
             if adv_weights is not None:
@@ -633,18 +785,21 @@ class PuffeRL:
 
         pg_loss1 = -mb_adv * ratio
         pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - config["clip_coef"], 1 + config["clip_coef"])
-        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+        pg_loss = (torch.max(pg_loss1, pg_loss2) * loss_weight).sum() / loss_denominator
 
         if config["vf_clip_coef"] is not None:
             v_clipped = mb_values + torch.clamp(newvalue - mb_values, -config["vf_clip_coef"], config["vf_clip_coef"])
             v_loss_unclipped = (newvalue - mb_returns) ** 2
             v_loss_clipped = (v_clipped - mb_returns) ** 2
-            v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+            v_loss = 0.5 * (torch.max(v_loss_unclipped, v_loss_clipped) * loss_weight).sum() / loss_denominator
         else:
-            v_loss = 0.5 * (newvalue - mb_returns) ** 2
-            v_loss = v_loss.mean()
-        entropy_loss = entropy.mean()
+            v_loss = 0.5 * (((newvalue - mb_returns) ** 2) * loss_weight).sum() / loss_denominator
+        entropy = entropy.view_as(mb_logprobs)
+        entropy_loss = (entropy * loss_weight).sum() / loss_denominator
         loss = pg_loss + config["vf_coef"] * v_loss - config["ent_coef"] * entropy_loss
+
+        ratio = torch.where(loss_mask, ratio, torch.ones_like(ratio))
+        newvalue = torch.where(loss_mask, newvalue, mb_values)
 
         return (
             loss,
@@ -696,9 +851,11 @@ class PuffeRL:
                 config["vtrace_rho_clip"],
                 config["vtrace_c_clip"],
             )
-            adv = advantages.abs().sum(axis=1)
-            prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
-            prio_probs = (prio_weights + 1e-6) / (prio_weights.sum() + 1e-6)
+            training_masks = masks & ~self.target_masks
+            valid_segments = training_masks.any(dim=1)
+            adv = (advantages.abs() * training_masks).sum(axis=1)
+            prio_weights = torch.nan_to_num(adv**a, 0, 0, 0) * valid_segments
+            prio_probs = (prio_weights + 1e-6 * valid_segments) / (prio_weights.sum() + 1e-6 * valid_segments.sum())
             idx = torch.multinomial(prio_probs, self.minibatch_segments)
             mb_prio = (self.segments * prio_probs[idx, None]) ** -anneal_beta
 
@@ -712,6 +869,7 @@ class PuffeRL:
             mb_values = self.values[idx]
             mb_returns = returns[idx]
             mb_adv = advantages[idx]
+            mb_loss_mask = training_masks[idx]
 
             profile("train_forward", epoch)
             loss, newvalue, ratio, stats = self._ppo_loss(
@@ -722,6 +880,7 @@ class PuffeRL:
                 mb_returns,
                 mb_adv,
                 adv_weights=mb_prio,
+                loss_mask=mb_loss_mask,
             )
             self.ratio[idx] = ratio.detach()
 
@@ -730,7 +889,7 @@ class PuffeRL:
             profile("train_misc", epoch)
             for key, value in stats.items():
                 losses[key] += value / self.total_minibatches
-            losses["importance"] += ratio.detach().mean() / self.total_minibatches
+            losses["importance"] += ratio.detach()[mb_loss_mask].mean() / self.total_minibatches
 
             profile("learn", epoch)
             loss.backward()
@@ -739,8 +898,9 @@ class PuffeRL:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
-        y_pred = self.values.flatten()
-        y_true = returns.flatten()
+        valid_idx = torch.nonzero((masks & ~self.target_masks).reshape(-1), as_tuple=False).flatten()
+        y_pred = self.values.reshape(-1)[valid_idx]
+        y_true = returns.reshape(-1)[valid_idx]
         var_y = y_true.var()
         losses["explained_variance"] = (
             float("nan") if var_y == 0 else (1 - (y_true - y_pred).var(unbiased=False) / var_y).item()
@@ -764,8 +924,9 @@ class PuffeRL:
         flat_returns = returns.reshape(-1)
         flat_advantages = advantages.reshape(-1)
         flat_masks = masks.reshape(-1).bool()
+        flat_target_masks = self.target_masks.reshape(-1)
         total_transitions = flat_masks.numel()
-        valid_idx = torch.nonzero(flat_masks, as_tuple=False).flatten()
+        valid_idx = torch.nonzero(flat_masks & ~flat_target_masks, as_tuple=False).flatten()
         valid_abs_adv = flat_advantages[valid_idx].abs()
 
         losses["masked_fraction"] = 1.0 - (valid_idx.numel() / max(total_transitions, 1))
@@ -1467,6 +1628,29 @@ def derive_rank_seeds(vec_seed, train_seed, world_size, global_rank):
     return torch_seed, env_seed
 
 
+def _prepare_target_policy_args(args, target_policy_path):
+    target_args = copy.deepcopy(args)
+    target_args["load_id"] = None
+    target_args["load_model_path"] = target_policy_path
+
+    config_path = os.path.join(drive_benchmark.resolve_run_dir(target_policy_path), "config.yaml")
+    if not os.path.isfile(config_path):
+        print(f"No target config.yaml at {config_path}; using the current policy configuration.")
+        return target_args
+
+    print(f"Found target config.yaml at {config_path}. Loading target policy configuration...")
+    with open(config_path, "r") as config_file:
+        target_config = yaml.safe_load(config_file)
+
+    target_args["policy_name"] = target_config.get("policy_name", target_args["policy_name"])
+    target_args["rnn_name"] = target_config.get("rnn_name", target_args["rnn_name"])
+    for section in ("policy", "rnn"):
+        if section in target_config and isinstance(target_config[section], dict):
+            target_args[section].update(target_config[section])
+
+    return target_args
+
+
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
     args = args or load_config(env_name)
     training_evaluation_scheduled = drive_benchmark.validate_training_evaluation_config(args)
@@ -1539,10 +1723,23 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     vecenv = vecenv or load_env(env_name, args, seed=env_seed)
     policy = policy or load_policy(args, vecenv, env_name)
 
+    target_policy = None
+    target_policy_path = args["train"].get("target_policy")
+    if target_policy_path is not None:
+        target_args = _prepare_target_policy_args(args, target_policy_path)
+        target_policy = load_policy(target_args, vecenv, env_name)
+        if base_policy(target_policy).is_continuous != base_policy(policy).is_continuous:
+            raise pufferlib.APIUsageError("Target and adversarial policies must use the same action representation")
+        for parameter in target_policy.parameters():
+            parameter.requires_grad = False
+        target_policy.eval()
+
     if "LOCAL_RANK" in os.environ:
         args["train"]["device"] = "cuda"
         torch.distributed.init_process_group(backend="nccl", world_size=world_size)
         policy = policy.to(local_rank)
+        if target_policy is not None:
+            target_policy = target_policy.to(local_rank)
         model = torch.nn.parallel.DistributedDataParallel(policy, device_ids=[local_rank], output_device=local_rank)
         if hasattr(policy, "lstm"):
             # model.lstm = policy.lstm
@@ -1570,7 +1767,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             )
 
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
-    pufferl = PuffeRL(train_config, vecenv, policy, logger)
+    pufferl = PuffeRL(train_config, vecenv, policy, logger=logger, target_policy=target_policy)
 
     # A run is identified by its name, and its directory is train.data_dir. Relaunching
     # the same run therefore finds its own trainer_state.pt and continues from it rather

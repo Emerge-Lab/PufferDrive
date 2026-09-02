@@ -218,6 +218,8 @@ train:
   name: pufferai
   project: ablations
   seed: 42
+  # Frozen native-3.0 checkpoint controlling each scene's SDC. Null disables adversarial training.
+  target_policy: null
   # Filename of the final model copy written into train.data_dir when training ends.
   final_model_name: final_model.pt
   # Null disables evaluation during training.
