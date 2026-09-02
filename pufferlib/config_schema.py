@@ -572,6 +572,13 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.num_goals", f"must not exceed {binding.MAX_GOALS}")
 
     policy = config["policy"]
+    # Discrete policy outputs can be decoded into continuous controls; the inverse has no defined mapping.
+    if env["action_type"] == "discrete" and policy["action_type"] == "continuous":
+        _raise_config_error(
+            context,
+            "policy.action_type",
+            "cannot be continuous when env.action_type is discrete",
+        )
     if config["rnn_name"] is not None:
         if policy["backbone_num_layers"] == 0:
             _raise_config_error(

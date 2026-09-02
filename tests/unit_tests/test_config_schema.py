@@ -203,6 +203,26 @@ class TestConfigSchema(unittest.TestCase):
             validate_puffer_drive_config(invalid, "test")
 
     @patch("sys.argv", ["pufferl.py"])
+    def test_continuous_policy_rejects_discrete_environment(self):
+        args = load_config("puffer_drive")
+        args["env"]["action_type"] = "discrete"
+        args["policy"]["action_type"] = "continuous"
+
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            "policy.action_type.*cannot be continuous when env.action_type is discrete",
+        ):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_discrete_policy_accepts_continuous_environment(self):
+        args = load_config("puffer_drive")
+        args["env"]["action_type"] = "continuous"
+        args["policy"]["action_type"] = "discrete"
+
+        self.assertIsNone(validate_puffer_drive_config(args, "test"))
+
+    @patch("sys.argv", ["pufferl.py"])
     def test_failure_replay_rejects_scenario_rendering(self):
         args = load_config("puffer_drive")
         args["eval"]["failure_replay_csv"] = "failures.csv"
