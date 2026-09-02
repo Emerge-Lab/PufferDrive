@@ -75,7 +75,7 @@ def _make_spread_env(cls=Drive, *, init_step_spread=True, **overrides):
         non_sdc_controller="replay",
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,  # don't resample mid-episode
-        termination_mode=0,
+        termination_mode=False,
         init_step_spread=init_step_spread,
         init_step_min_horizon=MIN_HORIZON,
         num_goals=3,

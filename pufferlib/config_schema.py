@@ -35,18 +35,23 @@ import pufferlib
 
 POSITIVE_INT_CONSTRAINT = 1
 NONNEGATIVE_INT_CONSTRAINT = 2
-ZERO_OR_ONE_INT_CONSTRAINT = 3
-POSITIVE_NUMBER_CONSTRAINT = 4
-NONNEGATIVE_NUMBER_CONSTRAINT = 5
-PROBABILITY_CONSTRAINT = 6
-NONEMPTY_STRING_CONSTRAINT = 7
-FINITE_NUMBER_CONSTRAINT = 8
+POSITIVE_NUMBER_CONSTRAINT = 3
+NONNEGATIVE_NUMBER_CONSTRAINT = 4
+PROBABILITY_CONSTRAINT = 5
+NONEMPTY_STRING_CONSTRAINT = 6
+FINITE_NUMBER_CONSTRAINT = 7
 
 
 def _raise_config_error(context, path, message):
-    """Raise a config error whose path is qualified by the caller's context."""
-    location = f"{context}.{path}" if context else path
-    raise pufferlib.APIUsageError(f"Invalid PufferDrive configuration at {location}: {message}")
+    """Raise a config error with separate field-path and validation-context labels."""
+    location = "configuration root" if path == "root" else path
+    if context == "load":
+        context_suffix = " while loading"
+    elif context:
+        context_suffix = f" during {context}"
+    else:
+        context_suffix = ""
+    raise pufferlib.APIUsageError(f"Invalid PufferDrive configuration at {location}{context_suffix}: {message}")
 
 
 def _constrained_field(constraint_mode, default=MISSING):
@@ -70,9 +75,6 @@ def _validate_value_constraint(value, constraint_mode, context, path):
     elif constraint_mode == NONNEGATIVE_INT_CONSTRAINT:
         valid = not isinstance(value, bool) and isinstance(value, int) and value >= 0
         message = "must be a non-negative integer"
-    elif constraint_mode == ZERO_OR_ONE_INT_CONSTRAINT:
-        valid = not isinstance(value, bool) and value in (0, 1)
-        message = "must be 0 or 1"
     elif constraint_mode == POSITIVE_NUMBER_CONSTRAINT:
         valid = not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value > 0
         message = "must be positive"
@@ -236,13 +238,13 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
-    use_map_cache: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
-    use_neighbor_cache: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
+    use_map_cache: bool = MISSING
+    use_neighbor_cache: bool = MISSING
     scenario_length: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     resample_frequency: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    termination_mode: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
+    termination_mode: bool = MISSING
     inactive_agent_threshold: float = _constrained_field(PROBABILITY_CONSTRAINT)
-    terminate_on_goal: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
+    terminate_on_goal: bool = MISSING
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     init_step_spread: bool = MISSING
     init_step_min_horizon: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -431,9 +433,9 @@ class PufferDriveConfig:
     render_mode: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     video_path: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     num_scenarios: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
-    render: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
+    render: bool = MISSING
     agent_index: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    save_frames: int = _constrained_field(ZERO_OR_ONE_INT_CONSTRAINT)
+    save_frames: bool = MISSING
     gif_path: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     fps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     max_runs: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
@@ -487,7 +489,9 @@ def normalize_puffer_drive_config(config, context="load"):
             throw_on_missing=True,
         )
     except (OmegaConfBaseException, TypeError, ValueError) as exc:
-        _raise_config_error(context, "root", str(exc))
+        error_path = getattr(exc, "full_key", None) or "root"
+        error_message = str(exc).splitlines()[0]
+        _raise_config_error(context, error_path, error_message)
     return container
 
 

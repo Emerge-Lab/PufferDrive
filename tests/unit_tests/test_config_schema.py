@@ -64,6 +64,45 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
+        self.assertIsInstance(args["render"], bool)
+        self.assertIsInstance(args["save_frames"], bool)
+        for field_name in (
+            "use_map_cache",
+            "use_neighbor_cache",
+            "termination_mode",
+            "terminate_on_goal",
+        ):
+            self.assertIsInstance(args["env"][field_name], bool)
+
+    @patch("sys.argv", ["pufferl.py", "render=true", "env.use_map_cache=false"])
+    def test_boolean_cli_overrides_load(self):
+        args = load_config("puffer_drive")
+
+        self.assertIs(args["render"], True)
+        self.assertIs(args["env"]["use_map_cache"], False)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_legacy_zero_or_one_values_normalize_to_booleans(self):
+        args = load_config("puffer_drive")
+        args["render"] = 1
+        args["save_frames"] = 0
+        args["env"].update(
+            {
+                "use_map_cache": 1,
+                "use_neighbor_cache": 0,
+                "termination_mode": 1,
+                "terminate_on_goal": 0,
+            }
+        )
+
+        normalized = normalize_puffer_drive_config(args, "test")
+
+        self.assertIs(normalized["render"], True)
+        self.assertIs(normalized["save_frames"], False)
+        self.assertIs(normalized["env"]["use_map_cache"], True)
+        self.assertIs(normalized["env"]["use_neighbor_cache"], False)
+        self.assertIs(normalized["env"]["termination_mode"], True)
+        self.assertIs(normalized["env"]["terminate_on_goal"], False)
 
     @patch("sys.argv", ["pufferl.py"])
     def test_training_evaluation_benchmarks_accepts_comma_separated_string(self):
@@ -88,19 +127,28 @@ class TestConfigSchema(unittest.TestCase):
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "collision_behavior"):
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.collision_behavior while loading: Invalid value 'sotp'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.num_agents=lots"])
     def test_wrong_type_fails_at_load(self):
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "num_agents"):
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.num_agents while loading: Value 'lots'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
         """Keys force-added with + that the schema doesn't declare are
         rejected as soon as Hydra composition finishes."""
-        with self.assertRaisesRegex(pufferlib.APIUsageError, "collission_behavior"):
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.collission_behavior while loading: Key 'collission_behavior'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=1"])
@@ -201,6 +249,17 @@ class TestConfigSchema(unittest.TestCase):
         }
         with self.assertRaisesRegex(pufferlib.APIUsageError, "total agents .* must be <= segments"):
             validate_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_semantic_error_separates_field_path_from_context(self):
+        args = load_config("puffer_drive")
+        args["env"]["obs_lane_stride"] = 0
+
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.obs_lane_stride during training: must be a positive integer",
+        ):
+            validate_puffer_drive_config(args, "training")
 
     @patch("sys.argv", ["pufferl.py"])
     def test_continuous_policy_rejects_discrete_environment(self):
