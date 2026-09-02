@@ -60,7 +60,7 @@ fi
 
 # No srun: single-node eval, run here on the batch host.
 python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
-    eval.map_dir=/home/shared/data/nuplan/PufferDrive \
+    eval.map_dir=/home/shared/data/nuplan/PufferDrive_broken_noconn \
     vec.num_envs=64 \
     eval.max_sdc_replay_workers=64 \
     eval.num_agents=300 \
