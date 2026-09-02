@@ -144,6 +144,7 @@ env:
   obs_slots_lane_n: 70
   obs_slots_boundary_n: 50
   obs_slots_partners_n: 16
+  target_obs_slots_partners_n: 16
   obs_slots_traffic_controls_n: 4
   # Fraction of segment observation slots to drop (reduces obs size)
   obs_dropout_lane: 0.3
@@ -167,6 +168,7 @@ env:
   obs_range_road_behind_m: 60.0
   obs_range_road_side_m: 50.0
   obs_range_partner_m: 200.0
+  target_obs_range_partner_m: 200.0
   obs_range_traffic_control_m: 200.0
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.

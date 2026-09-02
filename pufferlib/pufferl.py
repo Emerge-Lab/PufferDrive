@@ -1727,6 +1727,7 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     target_policy_path = args["train"].get("target_policy")
     if target_policy_path is not None:
         target_args = _prepare_target_policy_args(args, target_policy_path)
+        target_args["policy_name"] = "TargetDrive"
         target_policy = load_policy(target_args, vecenv, env_name)
         if base_policy(target_policy).is_continuous != base_policy(policy).is_continuous:
             raise pufferlib.APIUsageError("Target and adversarial policies must use the same action representation")

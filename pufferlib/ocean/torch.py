@@ -1,3 +1,5 @@
+import copy
+
 from torch import nn
 import torch
 import torch.nn.functional as F
@@ -509,3 +511,40 @@ class Drive(nn.Module):
         )
         # low-precision matmul can overshoot the [-1, 1] bounds by an epsilon
         return torch.stack([mean_long_norm, mean_physical[..., 1] / self.action_lat_scale], dim=-1).clamp_(-1.0, 1.0)
+
+
+class TargetDrive(Drive):
+    def __init__(self, env, **kwargs):
+        target_env = copy.copy(env)
+        target_env.partner_features -= 1
+        super().__init__(target_env, **kwargs)
+
+        self.partner_start = env.ego_features + env.num_reward_coefs + env.goal_dim
+        self.obs_slots_partners_n = env.obs_slots_partners_n
+        self.partner_features = env.partner_features
+
+    def _strip_target_marker(self, observations):
+        partner_end = self.partner_start + self.obs_slots_partners_n * self.partner_features
+        partner_observations = observations[:, self.partner_start : partner_end].view(
+            -1,
+            self.obs_slots_partners_n,
+            self.partner_features,
+        )
+        partner_observations = partner_observations[..., :-1].flatten(start_dim=1)
+        return torch.cat(
+            (
+                observations[:, : self.partner_start],
+                partner_observations,
+                observations[:, partner_end:],
+            ),
+            dim=1,
+        )
+
+    def forward(self, observations, state=None):
+        return super().forward(self._strip_target_marker(observations), state)
+
+    def encode_observations(self, observations, state=None):
+        return super().encode_observations(self._strip_target_marker(observations), state)
+
+    def pool_slot_counts(self, observations, state=None):
+        return super().pool_slot_counts(self._strip_target_marker(observations), state)

@@ -1904,6 +1904,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->target_obs_slots_partners_n = (int) unpack(kwargs, "target_obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
@@ -1952,6 +1953,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
+    env->target_obs_range_partner_m = (float) unpack(kwargs, "target_obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
     env->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
     env->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");

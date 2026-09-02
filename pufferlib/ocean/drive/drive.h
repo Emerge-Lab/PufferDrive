@@ -274,6 +274,7 @@ struct Drive {
     int obs_slots_boundary_n;
     int obs_slots_lane_n;
     int obs_slots_partners_n;
+    int target_obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
     int traffic_control_scope;
     int obs_lane_stride;
@@ -292,6 +293,7 @@ struct Drive {
     float eval_perceived_size_margin_m;
     float obs_range_traffic_control_m;
     float obs_range_partner_m;
+    float target_obs_range_partner_m;
     float obs_range_road_front_m;
     float obs_range_road_behind_m;
     float obs_range_road_side_m;
@@ -3774,6 +3776,10 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
 }
 
 static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, int obs_idx, int *partner_count) {
+    int is_target = env->active_agent_indices[agent_idx] == env->active_agent_indices[0];
+    int partner_limit = is_target ? env->target_obs_slots_partners_n : env->obs_slots_partners_n;
+    float partner_range_m = is_target ? env->target_obs_range_partner_m : env->obs_range_partner_m;
+
     // Partner blindness: zero partner obs for the configured duration once triggered
     if (ego->partner_blindness_counter > 0) {
         ego->partner_blindness_counter--;
@@ -3811,7 +3817,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         float dy = other->sim_y - ego->sim_y;
         float dz = other->sim_z - ego->sim_z;
         float dist_sq = dx * dx + dy * dy + dz * dz;
-        if (dist_sq > env->obs_range_partner_m * env->obs_range_partner_m) {
+        if (dist_sq > partner_range_m * partner_range_m) {
             continue;
         }
         nearby_agents[nearby_count].index = index;
@@ -3821,7 +3827,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
     }
 
     int partners_written = 0;
-    int partners_to_write = (nearby_count < env->obs_slots_partners_n) ? nearby_count : env->obs_slots_partners_n;
+    int partners_to_write = (nearby_count < partner_limit) ? nearby_count : partner_limit;
     for (int k = 0; k < partners_to_write; k++) {
         int nearest_idx = k;
         for (int j = k + 1; j < nearby_count; j++) {
@@ -3860,6 +3866,7 @@ static int write_partner_obs(Drive *env, Agent *ego, int agent_idx, float *obs, 
         obs[obs_idx++] = other->sim_speed_signed / env->obs_norm_speed_mps;
         // TODO(hack): partner seconds_stopped is a temporary feature; remove later.
         obs[obs_idx++] = fminf(1.0f, other->seconds_stopped / MAX_STOPPED_SECONDS);
+        obs[obs_idx++] = nearby_agents[j].index == env->active_agent_indices[0] ? 1.0f : 0.0f;
         partners_written++;
     }
 

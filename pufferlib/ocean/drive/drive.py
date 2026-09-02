@@ -117,6 +117,7 @@ class Drive(pufferlib.PufferEnv):
         obs_lane_stride=1,
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
+        target_obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
@@ -131,6 +132,7 @@ class Drive(pufferlib.PufferEnv):
         eval_perceived_size_margin_m=0.1,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
+        target_obs_range_partner_m=100.0,
         obs_range_road_front_m=120.0,
         obs_range_road_behind_m=20.0,
         obs_range_road_side_m=30.0,
@@ -268,6 +270,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
+        self.target_obs_slots_partners_n = target_obs_slots_partners_n
+        if not 0 <= self.target_obs_slots_partners_n <= self.obs_slots_partners_n:
+            raise ValueError("target_obs_slots_partners_n must be between 0 and obs_slots_partners_n")
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
@@ -281,6 +286,9 @@ class Drive(pufferlib.PufferEnv):
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
         self.obs_range_partner_m = float(obs_range_partner_m)
+        self.target_obs_range_partner_m = float(target_obs_range_partner_m)
+        if not 0.0 <= self.target_obs_range_partner_m <= self.obs_range_partner_m:
+            raise ValueError("target_obs_range_partner_m must be between 0 and obs_range_partner_m")
         self.obs_range_road_front_m = float(obs_range_road_front_m)
         self.obs_range_road_behind_m = float(obs_range_road_behind_m)
         self.obs_range_road_side_m = float(obs_range_road_side_m)
@@ -552,6 +560,7 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
+            "target_obs_slots_partners_n": self.target_obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
@@ -590,6 +599,7 @@ class Drive(pufferlib.PufferEnv):
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
+            "target_obs_range_partner_m": self.target_obs_range_partner_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
             "obs_range_road_behind_m": self.obs_range_road_behind_m,
             "obs_range_road_side_m": self.obs_range_road_side_m,
