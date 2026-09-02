@@ -27,11 +27,6 @@ export NUPLAN_MAPS_ROOT=/home/shared/data/nuplan/maps
 INHERITED_PYTHONPATH=$(echo "${PYTHONPATH:-}" | tr ':' '\n' | grep -v "cosim_Puffer\|/PufferDrive" | paste -sd: -)
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${INHERITED_PYTHONPATH:+:$INHERITED_PYTHONPATH}
 cd "$PD" || exit 1
-IMPORTED_PLANNER=$("$PY" -c "import pufferlib.ocean.cosim.nuplan.planner as p; print(p.__file__)")
-case "$IMPORTED_PLANNER" in
-    "$PD"/*) echo "planner: $IMPORTED_PLANNER" ;;
-    *) echo "ERROR: planner imported from $IMPORTED_PLANNER, expected $PD"; exit 1 ;;
-esac
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export COSIM_OBS_HTML=infractions  # obs replays (what the policy saw) only for collision/offroad/wrong-way/no-progress scenarios; all|failures|infractions|0
 # carl_visualization_callback: nuPlan ground-truth video per scenario -> $GROUP/simulation/<challenge>/<ts>/visualization
@@ -43,5 +38,12 @@ export THREADS_PER_NODE=128
 export GROUP=$PD/experiments/nuplan_val14_$(basename "$RUN_DIR")_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
+
+# The planner must come from this checkout (needs the freshly built C extension above).
+IMPORTED_PLANNER=$("$PY" -c "import pufferlib.ocean.cosim.nuplan.planner as p; print(p.__file__)") || { echo "ERROR: planner import failed (see traceback above)"; exit 1; }
+case "$IMPORTED_PLANNER" in
+    "$PD"/*) echo "planner: $IMPORTED_PLANNER" ;;
+    *) echo "ERROR: planner imported from '$IMPORTED_PLANNER', expected $PD"; exit 1 ;;
+esac
 
 bash "$PD/pufferlib/ocean/cosim/nuplan/run_nuplan_planner.sh"
