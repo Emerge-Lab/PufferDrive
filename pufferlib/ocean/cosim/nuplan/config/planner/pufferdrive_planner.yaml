@@ -9,10 +9,12 @@ pufferdrive_planner:
   device: "cpu"
   map_radius: 400.0 # TODO: load from config
   goal_spacing: 20.0 # TODO: load from config
+  goal_source: route # route (lane-graph route goals) | gt_map (logged ego path snapped to lane centers)
   num_agents: 64 # TODO: load from config
   horizon_seconds: 8.0 # nuplan default
   deterministic: true
-  env_overrides: null
+  env_overrides:
+    obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
   # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario
   obs_html_dir: null
   obs_html_max_steps: 800

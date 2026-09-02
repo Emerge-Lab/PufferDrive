@@ -1636,6 +1636,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GOAL_SOURCE_MAP", GOAL_SOURCE_MAP);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_GT", GOAL_SOURCE_GT);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_EXTERNAL", GOAL_SOURCE_EXTERNAL);
+    PyModule_AddIntConstant(m, "GOAL_SOURCE_GT_MAP", GOAL_SOURCE_GT_MAP);
     PyModule_AddIntConstant(m, "CONTROLLER_STATIC", CONTROLLER_STATIC);
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);

@@ -21,7 +21,10 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   nuPlan's ego pose ever diverges from the integrated one (the configs pin
   `perfect_tracking_controller`).
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
-  goals every `goal_spacing` m. The shadow env consumes the goals of its
+  goals every `goal_spacing` m. Planner `goal_source: gt_map` (env
+  `GOAL_SOURCE=gt_map`) samples the logged ego path instead, every sample
+  snapped to the nearest co-directional lane center within 6 m (raw pose kept
+  when no lane qualifies). The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the
@@ -43,8 +46,10 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   action/value/entropy/probabilities and the encoder max-pool winners. This is what the
   agent saw; road geometry is cropped to 250 m around the driven path. `failures` renders
   (and keeps) only scenarios scoring below `COSIM_OBS_HTML_MAX_SCORE` (default 0.9);
-  `all` renders every scenario. Pages can be rendered later from the saved
-  `.replay.zlib` files with `scripts/eval/render_obs_html.py`.
+  `all` renders every scenario, `infractions` only collision / drivable-area / direction /
+  no-progress failures. `obs_html/index.html` is the same navigator as the self-play eval
+  replays (pages named `s<score>_<flags>_<type>_<token>.html`, worst first). Pages can be
+  rendered later from the saved `.replay.zlib` files with `scripts/eval/render_obs_html.py`.
 - nuPlan ground truth: `carl_visualization_callback` in `CALLBACKS`, or nuBoard on the
   simulation logs (`scripts/eval/nuboard_failures.py` builds a failures-only nuBoard folder).
 

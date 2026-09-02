@@ -22,7 +22,7 @@ start=$(date +%s)
 
 export SEED=1000
 
-export RUN_NAME=k_scaled_0036_${SEED}
+export RUN_NAME=k_scaled_0037_${SEED}
 echo ${RUN_NAME}
 
 export DATA_DIR=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}
@@ -62,7 +62,7 @@ srun torchrun \
     env.num_maps=128 \
     train.name=${RUN_NAME} \
     run_name=${RUN_NAME} \
-    train.total_timesteps=1000000000000 \
+    train.total_timesteps=5000000000000 \
     vec.num_envs=16 \
     train.compile=True \
     train.max_minibatch_size=131072 \
@@ -100,7 +100,7 @@ echo "Training done, evaluating ${MODEL_PATH}"
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
-    env.traffic_light_junction_phases=0 \
+    env.traffic_light_junction_phases=1 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \

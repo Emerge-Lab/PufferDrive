@@ -33,6 +33,7 @@
 #             no cap, SPLIT's own scenario count applies). Handy for a quick
 #             sanity check before committing to the full SPLIT.
 #   GROUP     output group dir. Default: runs/nuplan_leaderboard_<timestamp>.
+#   GOAL_SOURCE=route|gt_map  planner goal source (default route, see pufferdrive_planner.yaml).
 #   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
 #             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
 #             scenario. failures (default): only scenarios scoring below
@@ -72,6 +73,7 @@ EXTRA_ARGS=()
 [ "$OBS_HTML" != "0" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.obs_html_dir=$GROUP/obs_html" "planner.pufferdrive_planner.obs_html_render=false")
 CITY_BIN_DIR=${CITY_BIN_DIR:-/scratch/yw4142/datasets/ad/nuplan/maps}
 EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
+[ -n "${GOAL_SOURCE:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.goal_source=$GOAL_SOURCE")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
@@ -119,4 +121,5 @@ for c in "${!STATUS[@]}"; do
     echo "$s  $c"
 done
 echo "group -> $GROUP"
+[ -f "$GROUP/obs_html/index.html" ] && echo "obs replays -> $GROUP/obs_html/index.html"
 exit $rc

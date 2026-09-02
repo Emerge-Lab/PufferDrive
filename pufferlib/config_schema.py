@@ -84,6 +84,7 @@ class GoalSource(Enum):
     map = 1
     gt = 2
     external = 3
+    gt_map = 4
 
 
 @dataclass

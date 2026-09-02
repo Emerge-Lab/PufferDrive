@@ -35,7 +35,10 @@ export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 export THREADS_PER_NODE=128
-export GROUP=$PD/experiments/nuplan_val14_$(basename "$RUN_DIR")_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+# route: lane-graph route goals; gt_map: logged ego path snapped to the nearest lane center (GIGAFLOW-style)
+export GOAL_SOURCE=gt_map
+# results live in the model's own eval folder, next to the PufferDrive benchmark evals
+export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 

@@ -191,32 +191,93 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
         nearest = int(np.argmin(np.hypot(*(pts - (start_x, start_y)).T)))
         return abs((path[nearest].heading - start_heading + np.pi) % (2.0 * np.pi) - np.pi)
 
-    ego_point = Point2D(start_x, start_y)
-    containing = [lane for lane in route_lanes.values() if lane.contains_point(ego_point)]
-    if containing:
-        start_lane = min(containing, key=_heading_error)
-    else:
-        start_lane = min(route_lanes.values(), key=lambda l: float(np.min(np.hypot(*(_lane_pts(l) - (start_x, start_y)).T))))
+    def _distance(lane):
+        return float(np.min(np.hypot(*(_lane_pts(lane) - (start_x, start_y)).T)))
 
+    ego_point = Point2D(start_x, start_y)
+    containing = sorted((lane for lane in route_lanes.values() if lane.contains_point(ego_point)), key=_heading_error)
     block_ids = [block.id for block in blocks]
-    start_block_idx = block_ids.index(start_lane.get_roadblock_id()) if start_lane.get_roadblock_id() in block_ids else 0
+    start_block_idx = block_ids.index(containing[0].get_roadblock_id()) if containing else 0
+    # The ego's own lane may not connect to the next route block (wrong lane for the turn, PDM's
+    # route correction keeps the block): fall back to the sibling lanes of its block, nearest first.
+    siblings = sorted((lane for lane in blocks[start_block_idx].interior_edges if lane not in containing), key=_distance)
+    candidates = containing + siblings or sorted(route_lanes.values(), key=_distance)[:1]
     target_block = blocks[min(len(blocks) - 1, start_block_idx + ROUTE_SEARCH_DEPTH_BLOCKS - 1)]
-    path, _ = Dijkstra(start_lane, list(route_lanes.keys())).search(target_block)
+    path = []
+    for start_lane in candidates:
+        candidate_path, found = Dijkstra(start_lane, list(route_lanes.keys())).search(target_block)
+        if found:
+            path = candidate_path
+            break
+        if len(candidate_path) > len(path):
+            path = candidate_path
 
     lane_points = [_lane_pts(lane) for lane in path]
     start_idx = int(np.argmin(np.hypot(*(lane_points[0] - (start_x, start_y)).T)))
     lane_points[0] = lane_points[0][start_idx:]
     return np.concatenate(lane_points, axis=0), [str(lane.id) for lane in path]
 
+def indices_along(polyline: np.ndarray, spacing: float) -> np.ndarray:
+    """(N, 2) polyline -> vertex indices every `spacing` meters of arc length (+ the endpoint)."""
+    if len(polyline) < 2:
+        return np.arange(len(polyline))
+    seg = np.hypot(*np.diff(polyline, axis=0).T)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    indices = [int(np.searchsorted(cum, s)) for s in np.arange(spacing, cum[-1], spacing)]
+    indices.append(len(polyline) - 1)
+    return np.asarray(indices, dtype=np.int64)
+
+
 def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
     """(N, 2) polyline -> fixed goal sequence every `spacing` meters (+ endpoint)."""
-    if len(centerline) < 2:
-        return centerline.copy()
-    seg = np.hypot(*np.diff(centerline, axis=0).T)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
-    goals = [centerline[int(np.searchsorted(cum, s))] for s in np.arange(spacing, cum[-1], spacing)]
-    goals.append(centerline[-1])
-    return np.asarray(goals, dtype=np.float64)
+    return np.asarray(centerline, dtype=np.float64)[indices_along(centerline, spacing)]
+
+
+GOAL_LANE_SNAP_MAX_DIST_M = 6.0  # same radius as Drive's GOAL_LANE_SNAP_MAX_DIST_M
+GOAL_LANE_SNAP_MAX_HEADING_ERROR_RAD = np.pi / 4
+
+
+def snap_to_lane_center(map_api, x: float, y: float, heading: float):
+    """Nearest pose on a lane/lane-connector baseline within the snap radius whose direction agrees with
+    `heading` (co-directional, so neither oncoming nor crossing lanes), or None if no lane qualifies."""
+    from nuplan.common.actor_state.state_representation import Point2D
+    from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+
+    point = Point2D(x, y)
+    layers = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
+    best_pose, best_dist = None, GOAL_LANE_SNAP_MAX_DIST_M
+    for lanes in map_api.get_proximal_map_objects(point, GOAL_LANE_SNAP_MAX_DIST_M, layers).values():
+        for lane in lanes:
+            pose = lane.baseline_path.get_nearest_pose_from_position(point)
+            heading_error = abs((pose.heading - heading + np.pi) % (2.0 * np.pi) - np.pi)
+            if heading_error > GOAL_LANE_SNAP_MAX_HEADING_ERROR_RAD:
+                continue
+            dist = float(np.hypot(pose.x - x, pose.y - y))
+            if dist < best_dist:
+                best_pose, best_dist = pose, dist
+    return best_pose
+
+
+def logged_ego_goals(scenario, map_api, spacing: float):
+    """Logged ego path sampled every `spacing` m (+ endpoint), each sample snapped to the nearest
+    co-directional lane center so the expert's exact pose never reaches the policy. Returns
+    ((N, 2) xy in nuPlan map coordinates, (N,) headings, snapped count); samples without a lane
+    within the snap radius keep the raw logged pose."""
+    states = [scenario.get_ego_state_at_iteration(i) for i in range(scenario.get_number_of_iterations())]
+    path = np.array([[s.center.x, s.center.y] for s in states], dtype=np.float64)
+    headings = np.array([s.center.heading for s in states], dtype=np.float64)
+    indices = indices_along(path, spacing)
+    xy = path[indices].copy()
+    goal_headings = headings[indices].copy()
+    snapped_count = 0
+    for k in range(len(indices)):
+        pose = snap_to_lane_center(map_api, xy[k, 0], xy[k, 1], goal_headings[k])
+        if pose is None:
+            continue
+        xy[k] = (pose.x, pose.y)
+        goal_headings[k] = pose.heading
+        snapped_count += 1
+    return xy, goal_headings, snapped_count
 
 
 def read_bin_geometry(bin_path: Path) -> dict:

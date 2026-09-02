@@ -118,7 +118,8 @@ env:
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
-  # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
+  # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam),
+  # replay only: "gt" (raw logged trajectory points), "gt_map" (logged points snapped to the nearest lane center)
   goal_source: map
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
   obs_goal_lane_distance: True
@@ -348,7 +349,7 @@ eval:
   base_max_speed_mps: null
   # Overrides env.goal_regen_mode ("finite" or "rolling") of every selected benchmark; null keeps the benchmark's value.
   goal_regen_mode: null
-  # Overrides env.goal_source ("route", "map" or "gt") of every selected benchmark; null keeps the benchmark's value.
+  # Overrides env.goal_source ("route", "map", "gt" or "gt_map") of every selected benchmark; null keeps the benchmark's value.
   goal_source: null
   # Overrides env.goal_speed of every selected benchmark; null keeps the benchmark's value.
   goal_speed: null

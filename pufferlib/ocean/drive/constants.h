@@ -115,6 +115,7 @@
 #define GOAL_SOURCE_MAP 1   // seed from a uniformly sampled map lane
 #define GOAL_SOURCE_GT 2    // seed directly from the logged ground-truth trajectory
 #define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
+#define GOAL_SOURCE_GT_MAP 4   // logged-trajectory goals projected onto the nearest co-directional lane center
 
 // Dynamics model
 #define DYNAMICS_MODEL_CLASSIC 0

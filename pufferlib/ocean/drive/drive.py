@@ -230,8 +230,10 @@ class Drive(pufferlib.PufferEnv):
             self.goal_source = binding.GOAL_SOURCE_GT
         elif goal_source == "external":
             self.goal_source = binding.GOAL_SOURCE_EXTERNAL
+        elif goal_source == "gt_map":
+            self.goal_source = binding.GOAL_SOURCE_GT_MAP
         else:
-            raise ValueError(f"goal_source must be 'route', 'map', 'gt', or 'external'. Got: {goal_source}")
+            raise ValueError(f"goal_source must be 'route', 'map', 'gt', 'gt_map', or 'external'. Got: {goal_source}")
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
             "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
@@ -435,9 +437,9 @@ class Drive(pufferlib.PufferEnv):
         else:
             raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
 
-        if self.goal_source == binding.GOAL_SOURCE_GT and self.simulation_mode != 1:
+        if self.goal_source in (binding.GOAL_SOURCE_GT, binding.GOAL_SOURCE_GT_MAP) and self.simulation_mode != 1:
             raise ValueError(
-                "goal_source 'gt' is only supported in replay simulation_mode (it reads the logged ground-truth trajectory)."
+                f"goal_source '{goal_source}' is only supported in replay simulation_mode (it reads the logged ground-truth trajectory)."
             )
 
         if self.init_step_spread:

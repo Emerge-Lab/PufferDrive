@@ -76,6 +76,7 @@ class PufferDrivePlanner(AbstractPlanner):
         device: str = "cpu",
         map_radius: float = 400.0,
         goal_spacing: float = 20.0,
+        goal_source: str = "route",
         num_agents: int = 64,
         horizon_seconds: float = 8.0,
         deterministic: bool = True,
@@ -94,7 +95,9 @@ class PufferDrivePlanner(AbstractPlanner):
             docstring). A missing bin is a hard error, no fallback.
         :param scenario: injected by the devkit (requires_scenario).
         :param map_radius: map extraction / light-matching radius [m].
-        :param goal_spacing: route-goal spacing fed to the policy [m].
+        :param goal_spacing: goal spacing along the route / logged path fed to the policy [m].
+        :param goal_source: "route" (lane-graph route through the route roadblocks) or "gt_map"
+            (logged ego path, every sample snapped to the nearest co-directional lane center).
         :param num_agents: PufferDrive agent-pool size (ego + streamed background).
         :param horizon_seconds: returned trajectory horizon (constant-velocity
             extrapolation past the integrated first step) [s].
@@ -112,6 +115,9 @@ class PufferDrivePlanner(AbstractPlanner):
         self._device = device
         self._map_radius = float(map_radius)
         self._goal_spacing = float(goal_spacing)
+        if goal_source not in ("route", "gt_map"):
+            raise ValueError(f"goal_source must be 'route' or 'gt_map', got {goal_source!r}")
+        self._goal_source = goal_source
         self._num_agents = int(num_agents)
         self._horizon_seconds = float(horizon_seconds)
         self._deterministic = deterministic
@@ -351,8 +357,9 @@ class PufferDrivePlanner(AbstractPlanner):
             policy.load_state_dict(sd)
             self._policy = policy.to(self._device).eval()
 
-        # fixed route goals (bin frame) from the CaRL-corrected route roadblocks;
-        # never the logged expert trajectory, which leaks ground-truth positions
+        # The lane-graph route through the CaRL-corrected route roadblocks always decides the shared
+        # stop-line elements; it also seeds the goals unless goal_source is gt_map (logged ego path,
+        # lane-snapped so the expert's raw positions never leak).
         from carl_nuplan.planning.simulation.planner.pdm_planner.utils.route_utils import (
             route_roadblock_correction_v2,
         )
@@ -361,11 +368,20 @@ class PufferDrivePlanner(AbstractPlanner):
         centerline, self._route_connector_ids = nb.route_centerline(
             init.map_api, route_ids, ex, ey, float(ego_state.center.heading)
         )
-        goals = nb.goals_along(centerline, self._goal_spacing)
-        if len(goals) == 0:  # degenerate route: fall back to the mission goal
-            goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
-        goals -= (self._transform.ox, self._transform.oy)
-        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals))
+        snapped_count = 0
+        if self._goal_source == "gt_map":
+            goals, goal_headings, snapped_count = nb.logged_ego_goals(self._scenario, init.map_api, self._goal_spacing)
+            goals -= (self._transform.ox, self._transform.oy)
+            route_goals = np.column_stack(
+                [goals, np.zeros(len(goals)), np.cos(goal_headings), np.sin(goal_headings)]
+            ).astype(np.float32)
+        else:
+            goals = nb.goals_along(centerline, self._goal_spacing)
+            if len(goals) == 0:  # degenerate route: fall back to the mission goal
+                goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
+            goals -= (self._transform.ox, self._transform.oy)
+            route_goals = route_goals_from_xy(goals)
+        self._goal_window = RouteGoalWindow(self._env, route_goals)
 
         # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint
@@ -383,7 +399,7 @@ class PufferDrivePlanner(AbstractPlanner):
 
         print(
             f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
-            f"{self._num_traffic} goals={len(goals)}"
+            f"{self._num_traffic} goals={len(goals)} goal_source={self._goal_source} snapped={snapped_count}"
         )
 
     # --- world sync -----------------------------------------------------------

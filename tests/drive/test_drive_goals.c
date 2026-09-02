@@ -318,6 +318,52 @@ static int test_gt_goals_along_trajectory_are_laneless(void) {
     return 0;
 }
 
+static int test_gt_map_goals_snap_to_lane_centers(void) {
+    // GT_MAP places goals at the GT timesteps but projected onto the nearest co-directional lane: a snapped
+    // goal carries a lane idx and moved at most the snap radius; goals farther from any lane keep the raw
+    // logged point without a lane.
+    srand(17);
+    Drive raw_env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    raw_env.goal_source = GOAL_SOURCE_GT;
+    allocate(&raw_env);
+    c_reset(&raw_env);
+    srand(17);
+    Drive env = drive_test_env_config(drive_nuplan_map(), SIMULATION_MODE_REPLAY, 1, 0);
+    env.goal_source = GOAL_SOURCE_GT_MAP;
+    allocate(&env);
+    c_reset(&env);
+
+    EXPECT_TRUE(env.active_agent_count > 0);
+    EXPECT_EQ_INT(env.active_agent_count, raw_env.active_agent_count);
+    int snapped_count = 0;
+    for (int i = 0; i < env.active_agent_count; i++) {
+        EXPECT_EQ_INT(env.active_agent_indices[i], raw_env.active_agent_indices[i]);
+        Agent *agent = &env.agents[env.active_agent_indices[i]];
+        Agent *raw_agent = &raw_env.agents[raw_env.active_agent_indices[i]];
+        EXPECT_EQ_INT(agent->goal_count, env.num_goals);
+        for (int slot = 0; slot < agent->goal_count; slot++) {
+            float dx = agent->list_goal_x[slot] - raw_agent->list_goal_x[slot];
+            float dy = agent->list_goal_y[slot] - raw_agent->list_goal_y[slot];
+            float moved_m = sqrtf(dx * dx + dy * dy);
+            EXPECT_FINITE(agent->list_goal_x[slot]);
+            EXPECT_FINITE(agent->list_goal_y[slot]);
+            EXPECT_NEAR(agent->list_goal_z[slot], raw_agent->list_goal_z[slot], 0.0f);
+            EXPECT_TRUE(moved_m <= GOAL_LANE_SNAP_MAX_DIST_M + 1e-3f);
+            if (agent->list_goal_lane[slot] == -1) {
+                EXPECT_NEAR(moved_m, 0.0f, 0.0f);
+                continue;
+            }
+            EXPECT_TRUE(is_drivable_road_lane(env.road_elements[agent->list_goal_lane[slot]].type));
+            snapped_count++;
+        }
+    }
+    printf("  gt_map goals snapped to a lane: %d/%d\n", snapped_count, env.active_agent_count * env.num_goals);
+    EXPECT_TRUE(snapped_count > 0);
+    free_allocated(&env);
+    free_allocated(&raw_env);
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     RUN_TEST(test_commit_goals_front_align_fills_every_slot);
@@ -330,5 +376,6 @@ int main(void) {
     RUN_TEST(test_roll_goals_slides_window_and_appends);
     RUN_TEST(test_roll_goals_bails_on_replay_pins);
     RUN_TEST(test_gt_goals_along_trajectory_are_laneless);
+    RUN_TEST(test_gt_map_goals_snap_to_lane_centers);
     return test_summary(failures);
 }

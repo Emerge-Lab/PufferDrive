@@ -1116,6 +1116,117 @@ static bool compute_new_route(Drive *env, Agent *agent, int current_lane_idx) {
     return true;
 }
 
+// Nearest drivable lane for a goal waypoint (sim frame) plus the waypoint's projection onto it, so
+// the GPS lane-distance observation columns (write_road_obs: list_goal_lane -> lane-graph
+// distance) stay live for external and logged routes, matching goals produced by the map/route
+// generators. Alignment gate: at a junction, the nearest lane to a goal can be the
+// CROSSING road's (9% of Town01 route goals measured), which points the GPS features
+// down the wrong road exactly where a turn decision happens.
+#define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject > 45 deg divergence mod 180
+#define GOAL_LANE_ALIGN_COS_MIN 0.0f      // cos(90 deg): reject lanes not generally co-directional
+static int find_goal_lane(
+    Drive *env,
+    float goal_x,
+    float goal_y,
+    float route_dir_x,
+    float route_dir_y,
+    float *out_snap_x,
+    float *out_snap_y) {
+    *out_snap_x = goal_x;
+    *out_snap_y = goal_y;
+    if (env->grid_map == NULL || get_grid_index(env, goal_x, goal_y) == -1) {
+        return -1;
+    }
+    float route_norm = sqrtf(route_dir_x * route_dir_x + route_dir_y * route_dir_y);
+    int use_alignment_gate = route_norm > 1e-6f;
+    if (use_alignment_gate) {
+        route_dir_x /= route_norm;
+        route_dir_y /= route_norm;
+    }
+    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
+    int list_size = get_neighbors_entities(env, goal_x, goal_y, entity_list, ROAD_QUERY_ENTITY_COUNT, ROAD_OFFSETS, 25);
+    int best_lane_idx = -1;
+    float best_dist_sq = GOAL_LANE_SNAP_MAX_DIST_M * GOAL_LANE_SNAP_MAX_DIST_M;
+    for (int i = 0; i < list_size; i++) {
+        if (entity_list[i].entity_idx == -1) {
+            continue;
+        }
+        RoadMapElement *element = &env->road_elements[entity_list[i].entity_idx];
+        if (!is_drivable_road_lane(element->type)) {
+            continue;
+        }
+        int geometry_idx = entity_list[i].geometry_idx;
+        if (geometry_idx + 1 >= element->segment_size) {
+            continue;
+        }
+        float seg_start_x = element->x[geometry_idx];
+        float seg_start_y = element->y[geometry_idx];
+        float seg_dx = element->x[geometry_idx + 1] - seg_start_x;
+        float seg_dy = element->y[geometry_idx + 1] - seg_start_y;
+        float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        if (use_alignment_gate && seg_length_sq > 1e-6f) {
+            float seg_length = sqrtf(seg_length_sq);
+            float seg_dir_x = seg_dx / seg_length;
+            float seg_dir_y = seg_dy / seg_length;
+            float cross = route_dir_x * seg_dir_y - route_dir_y * seg_dir_x;
+            if (fabsf(cross) > GOAL_LANE_ALIGN_SIN_LIMIT) {
+                continue; // crossing road's lane, not the route's
+            }
+            float dot = route_dir_x * seg_dir_x + route_dir_y * seg_dir_y;
+            if (dot < GOAL_LANE_ALIGN_COS_MIN) {
+                continue; // oncoming lane (mirror-image direction of the route), not the route's
+            }
+        }
+        float to_goal_x = goal_x - seg_start_x;
+        float to_goal_y = goal_y - seg_start_y;
+        float t = (seg_length_sq > 1e-6f) ? (to_goal_x * seg_dx + to_goal_y * seg_dy) / seg_length_sq : 0.0f;
+        t = clip(t, 0.0f, 1.0f);
+        float dx = to_goal_x - t * seg_dx;
+        float dy = to_goal_y - t * seg_dy;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_lane_idx = entity_list[i].entity_idx;
+            *out_snap_x = seg_start_x + t * seg_dx;
+            *out_snap_y = seg_start_y + t * seg_dy;
+        }
+    }
+    return best_lane_idx;
+}
+
+static void generate_new_goals_from_log(Drive *env, Agent *agent) {
+    // GT keeps the raw logged points (no lane -> no GPS lane-distance). GT_MAP projects each point onto
+    // the nearest lane co-directional with the logged heading so the expert's exact pose never reaches the policy.
+    int start = env->init_step > 0 ? env->init_step : 0;
+    int remaining = agent->trajectory_size - 1 - start;
+    if (remaining < 1) {
+        remaining = 1;
+    }
+    int num_wp = env->num_goals;
+    for (int g = 0; g < num_wp; g++) {
+        int t = start + (g + 1) * remaining / num_wp;
+        if (t >= agent->trajectory_size) {
+            t = agent->trajectory_size - 1;
+        }
+        float goal_x = agent->log_trajectory_x[t];
+        float goal_y = agent->log_trajectory_y[t];
+        int goal_lane_idx = -1;
+        if (env->goal_source == GOAL_SOURCE_GT_MAP) {
+            float log_heading = agent->log_heading[t];
+            goal_lane_idx = find_goal_lane(env, goal_x, goal_y, cosf(log_heading), sinf(log_heading), &goal_x, &goal_y);
+        }
+        agent->list_goal_x[g] = goal_x;
+        agent->list_goal_y[g] = goal_y;
+        agent->list_goal_z[g] = agent->log_trajectory_z[t];
+        agent->list_goal_lane[g] = goal_lane_idx;
+    }
+    agent->goal_count = num_wp;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
+}
+
 static bool generate_new_goals_from_route(Drive *env, Agent *agent) {
     // Places num_goals goals along the agent's route by native lane arc-length.
     // Replay follows the loaded route to its end; gigaflow route source random-walks a fresh route
@@ -2851,7 +2962,8 @@ static bool should_control_agent(Drive *env, int agent_idx) {
     }
 
     // In REPLAY mode without route data, control agents spawning far enough from their goal
-    if (env->goal_source == GOAL_SOURCE_GT && agent->route_length == 0) {
+    bool log_goal_source = env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP;
+    if (log_goal_source && agent->route_length == 0) {
         float dx = agent->gt_goal_x - agent->log_trajectory_x[env->init_step];
         float dy = agent->gt_goal_y - agent->log_trajectory_y[env->init_step];
         float dz = agent->gt_goal_z - agent->log_trajectory_z[env->init_step];
@@ -3262,36 +3374,10 @@ void init(Drive *env) {
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
-    if (env->goal_source == GOAL_SOURCE_GT) {
+    if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            Agent *agent = &env->agents[agent_idx];
-            // For replay mode, always place goals along the logged
-            // trajectory. Route-based goal generation can produce goals that
-            // diverge from the actual path the SDC should follow.
-            {
-                int start = env->init_step > 0 ? env->init_step : 0;
-                int remaining = agent->trajectory_size - 1 - start;
-                if (remaining < 1) {
-                    remaining = 1;
-                }
-                int num_wp = env->num_goals;
-                for (int g = 0; g < num_wp; g++) {
-                    int t = start + (g + 1) * remaining / num_wp;
-                    if (t >= agent->trajectory_size) {
-                        t = agent->trajectory_size - 1;
-                    }
-                    agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                    agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                    agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                    agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-                }
-                agent->goal_count = num_wp;
-                agent->current_goal_idx = 0;
-                agent->current_goal_x = agent->list_goal_x[0];
-                agent->current_goal_y = agent->list_goal_y[0];
-                agent->current_goal_z = agent->list_goal_z[0];
-            }
+            Agent *agent = &env->agents[env->active_agent_indices[i]];
+            generate_new_goals_from_log(env, agent);
         }
     } else if (env->goal_source == GOAL_SOURCE_MAP) {
         for (int i = 0; i < env->active_agent_count; i++) {
@@ -3749,73 +3835,6 @@ void c_get_agent_goal_progress(Drive *env, int agent_idx, int *current_goal_idx_
     *goal_count_out = agent->goal_count;
 }
 
-// Cosim-only: nearest drivable lane for an externally-set goal waypoint (sim frame), so the
-// GPS lane-distance observation columns (write_road_obs: list_goal_lane -> lane-graph
-// distance) stay live for external routes, matching goals produced by the map/route
-// generators. Alignment gate: at a junction, the nearest lane to a goal can be the
-// CROSSING road's (9% of Town01 route goals measured), which points the GPS features
-// down the wrong road exactly where a turn decision happens.
-#define GOAL_LANE_ALIGN_SIN_LIMIT 0.7071f // sin(45 deg): reject > 45 deg divergence mod 180
-#define GOAL_LANE_ALIGN_COS_MIN 0.0f      // cos(90 deg): reject lanes not generally co-directional
-static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_dir_x, float route_dir_y) {
-    if (env->grid_map == NULL || get_grid_index(env, goal_x, goal_y) == -1) {
-        return -1;
-    }
-    float route_norm = sqrtf(route_dir_x * route_dir_x + route_dir_y * route_dir_y);
-    int use_alignment_gate = route_norm > 1e-6f;
-    if (use_alignment_gate) {
-        route_dir_x /= route_norm;
-        route_dir_y /= route_norm;
-    }
-    GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
-    int list_size = get_neighbors_entities(env, goal_x, goal_y, entity_list, ROAD_QUERY_ENTITY_COUNT, ROAD_OFFSETS, 25);
-    int best_lane_idx = -1;
-    float best_dist_sq = GOAL_LANE_SNAP_MAX_DIST_M * GOAL_LANE_SNAP_MAX_DIST_M;
-    for (int i = 0; i < list_size; i++) {
-        if (entity_list[i].entity_idx == -1) {
-            continue;
-        }
-        RoadMapElement *element = &env->road_elements[entity_list[i].entity_idx];
-        if (!is_drivable_road_lane(element->type)) {
-            continue;
-        }
-        int geometry_idx = entity_list[i].geometry_idx;
-        if (geometry_idx + 1 >= element->segment_size) {
-            continue;
-        }
-        float seg_start_x = element->x[geometry_idx];
-        float seg_start_y = element->y[geometry_idx];
-        float seg_dx = element->x[geometry_idx + 1] - seg_start_x;
-        float seg_dy = element->y[geometry_idx + 1] - seg_start_y;
-        float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-        if (use_alignment_gate && seg_length_sq > 1e-6f) {
-            float seg_length = sqrtf(seg_length_sq);
-            float seg_dir_x = seg_dx / seg_length;
-            float seg_dir_y = seg_dy / seg_length;
-            float cross = route_dir_x * seg_dir_y - route_dir_y * seg_dir_x;
-            if (fabsf(cross) > GOAL_LANE_ALIGN_SIN_LIMIT) {
-                continue; // crossing road's lane, not the route's
-            }
-            float dot = route_dir_x * seg_dir_x + route_dir_y * seg_dir_y;
-            if (dot < GOAL_LANE_ALIGN_COS_MIN) {
-                continue; // oncoming lane (mirror-image direction of the route), not the route's
-            }
-        }
-        float to_goal_x = goal_x - seg_start_x;
-        float to_goal_y = goal_y - seg_start_y;
-        float t = (seg_length_sq > 1e-6f) ? (to_goal_x * seg_dx + to_goal_y * seg_dy) / seg_length_sq : 0.0f;
-        t = clip(t, 0.0f, 1.0f);
-        float dx = to_goal_x - t * seg_dx;
-        float dy = to_goal_y - t * seg_dy;
-        float dist_sq = dx * dx + dy * dy;
-        if (dist_sq < best_dist_sq) {
-            best_dist_sq = dist_sq;
-            best_lane_idx = entity_list[i].entity_idx;
-        }
-    }
-    return best_lane_idx;
-}
-
 int c_set_agent_goals(
     Drive *env,
     int agent_idx,
@@ -3838,8 +3857,9 @@ int c_set_agent_goals(
         agent->list_goal_z[w] = gz[w];
         // Snap each waypoint to its nearest route-aligned drivable lane so the GPS
         // lane-distance features work for external routes.
+        float snap_x, snap_y; // external goals keep their pushed position, only the lane idx is used
         agent->list_goal_lane[w]
-            = find_goal_lane(env, agent->list_goal_x[w], agent->list_goal_y[w], gdir_x[w], gdir_y[w]);
+            = find_goal_lane(env, agent->list_goal_x[w], agent->list_goal_y[w], gdir_x[w], gdir_y[w], &snap_x, &snap_y);
     }
     agent->goal_count = num_wp;
     agent->current_goal_idx = 0;
@@ -5038,28 +5058,8 @@ void c_reset(Drive *env) {
             init_dynamics_state_from_log(env, agent);
         }
 
-        if (env->goal_source == GOAL_SOURCE_GT) {
-            int start = env->init_step > 0 ? env->init_step : 0;
-            int remaining = agent->trajectory_size - 1 - start;
-            if (remaining < 1) {
-                remaining = 1;
-            }
-            int num_wp = env->num_goals;
-            for (int g = 0; g < num_wp; g++) {
-                int t = start + (g + 1) * remaining / num_wp;
-                if (t >= agent->trajectory_size) {
-                    t = agent->trajectory_size - 1;
-                }
-                agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-            }
-            agent->goal_count = num_wp;
-            agent->current_goal_idx = 0;
-            agent->current_goal_x = agent->list_goal_x[0];
-            agent->current_goal_y = agent->list_goal_y[0];
-            agent->current_goal_z = agent->list_goal_z[0];
+        if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP) {
+            generate_new_goals_from_log(env, agent);
         } else {
             generate_new_goals_from_route(env, agent);
         }
@@ -5206,7 +5206,8 @@ void c_step(Drive *env) {
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
             continue;
         }
-        if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_EXTERNAL) {
+        if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_GT_MAP
+            || env->goal_source == GOAL_SOURCE_EXTERNAL) {
             // Replay/co-sim: leave current_goal_idx saturated so the reached-goal condition won't fire
             // again; the next window comes from the log layout (GT) or c_set_agent_goals (external).
             continue;
