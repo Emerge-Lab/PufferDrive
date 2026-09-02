@@ -5,6 +5,7 @@
 import contextlib
 import copy
 import warnings
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -116,6 +117,38 @@ def logits_to_float(logits):
     if isinstance(logits, torch.distributions.Normal):
         return torch.distributions.Normal(logits.loc.float(), logits.scale.float())
     return logits.float()
+
+
+@dataclass
+class ActorOutput:
+    action: torch.Tensor
+    logprob: torch.Tensor
+    value: torch.Tensor
+    continuous_action: torch.Tensor | None
+    clip_actions: bool
+
+
+class TrainableTorchActor:
+    def __init__(self, policy, uncompiled_policy, env_continuous):
+        self.policy = policy
+        self.uncompiled_policy = uncompiled_policy
+        self.env_continuous = env_continuous
+
+    def act(self, observation, state):
+        logits, value = self.policy.forward_eval(observation, state)
+        logits = logits_to_float(logits)
+        action, logprob, _, continuous_action = pufferlib.pytorch.sample_logits(
+            logits,
+            env_continuous=self.env_continuous,
+            policy=self.uncompiled_policy,
+        )
+        return ActorOutput(
+            action=action,
+            logprob=logprob,
+            value=value,
+            continuous_action=continuous_action,
+            clip_actions=isinstance(logits, torch.distributions.Normal),
+        )
 
 
 class PuffeRL:
@@ -251,6 +284,7 @@ class PuffeRL:
             self.policy = torch.compile(policy, **compile_kwargs)
             self.policy.forward_eval = torch.compile(self.uncompiled_policy.forward_eval, **compile_kwargs)
             pufferlib.pytorch.sample_logits = torch.compile(pufferlib.pytorch.sample_logits, **compile_kwargs)
+        self.policy_actor = TrainableTorchActor(self.policy, self.uncompiled_policy, self.env_continuous)
 
         # Optimizer
         if config["optimizer"] == "adam":
@@ -421,11 +455,7 @@ class PuffeRL:
                     state["lstm_h"] = self.lstm_h[env_id.start]
                     state["lstm_c"] = self.lstm_c[env_id.start]
 
-                logits, value = self.policy.forward_eval(o_device, state)
-                logits = logits_to_float(logits)
-                action, logprob, _, cont_action = pufferlib.pytorch.sample_logits(
-                    logits, env_continuous=self.env_continuous, policy=self.uncompiled_policy
-                )
+                actor_output = self.policy_actor.act(o_device, state)
                 if config["normalize_rewards"]:
                     r = torch.sign(r) * torch.log1p(torch.abs(r))
 
@@ -444,8 +474,8 @@ class PuffeRL:
                 else:
                     self.observations[batch_rows, l] = o_device
 
-                self.actions[batch_rows, l] = action
-                self.logprobs[batch_rows, l] = logprob.float()
+                self.actions[batch_rows, l] = actor_output.action
+                self.logprobs[batch_rows, l] = actor_output.logprob.float()
                 # Truncation bootstrap hack for auto-reset envs.
                 # Ideally we add `gamma * V(s_{t+1})` on truncation steps, but Drive resets in C so
                 # the value at index `l` is post-reset. We use `values[..., l-1]` as a heuristic
@@ -455,7 +485,7 @@ class PuffeRL:
                     r = r + trunc_mask.to(r.dtype) * config["gamma"] * self.values[batch_rows, l - 1]
                 self.rewards[batch_rows, l] = r
                 self.terminals[batch_rows, l] = done_mask.bool()
-                self.values[batch_rows, l] = value.flatten().float()
+                self.values[batch_rows, l] = actor_output.value.flatten().float()
                 self.masks[batch_rows, l] = m
 
                 # Note: We are not yet handling masks in this version
@@ -480,11 +510,11 @@ class PuffeRL:
             profile("env", epoch)
 
             if self.env_continuous and not self.uncompiled_policy.is_continuous:
-                cont_action = cont_action.cpu().numpy()
-                self.vecenv.send(cont_action)
+                continuous_action = actor_output.continuous_action.cpu().numpy()
+                self.vecenv.send(continuous_action)
             else:
-                action = action.cpu().numpy()
-                if isinstance(logits, torch.distributions.Normal):
+                action = actor_output.action.cpu().numpy()
+                if actor_output.clip_actions:
                     action = np.clip(action, self.vecenv.action_space.low, self.vecenv.action_space.high)
                 self.vecenv.send(action)
 
