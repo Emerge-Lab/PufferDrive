@@ -5,6 +5,7 @@ import inspect
 import numpy as np
 import time
 import psutil
+from multiprocessing import get_all_start_methods, get_context
 
 from pufferlib import PufferEnv, set_buffers
 import pufferlib.spaces
@@ -373,19 +374,25 @@ class Multiprocessing:
 
         agents_per_env = driver_env.num_agents
 
-        from multiprocessing import RawArray, get_start_method
+        preload_shared_resources = getattr(driver_env, "preload_shared_resources", None)
+        self._driver_env_open = False
+        if "fork" in get_all_start_methods() and callable(preload_shared_resources):
+            self._driver_env_open = bool(preload_shared_resources())
+        process_context = get_context("fork") if self._driver_env_open else get_context()
+        if not self._driver_env_open:
+            driver_env.close()
 
         # Mac breaks without setting fork... but setting it breaks sweeps on 2nd run
         # set_start_method('fork')
         self.shm = dict(
-            observations=RawArray(obs_ctype, num_agents * int(np.prod(obs_shape))),
-            actions=RawArray(atn_ctype, num_agents * int(np.prod(atn_shape))),
-            rewards=RawArray("f", num_agents),
-            terminals=RawArray("b", num_agents),
-            truncateds=RawArray("b", num_agents),
-            masks=RawArray("b", num_agents),
-            semaphores=RawArray("c", num_workers),
-            notify=RawArray("b", num_workers),
+            observations=process_context.RawArray(obs_ctype, num_agents * int(np.prod(obs_shape))),
+            actions=process_context.RawArray(atn_ctype, num_agents * int(np.prod(atn_shape))),
+            rewards=process_context.RawArray("f", num_agents),
+            terminals=process_context.RawArray("b", num_agents),
+            truncateds=process_context.RawArray("b", num_agents),
+            masks=process_context.RawArray("b", num_agents),
+            semaphores=process_context.RawArray("c", num_workers),
+            notify=process_context.RawArray("b", num_workers),
         )
         shape = (num_workers, agents_per_worker)
         self.obs_batch_shape = (self.agents_per_batch, *obs_shape)
@@ -402,18 +409,9 @@ class Multiprocessing:
         )
         self.buf["semaphores"][:] = MAIN
 
-        from multiprocessing import Pipe, Process
-
-        self.send_pipes, w_recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
-        w_send_pipes, self.recv_pipes = zip(*[Pipe() for _ in range(num_workers)])
+        self.send_pipes, w_recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
+        w_send_pipes, self.recv_pipes = zip(*[process_context.Pipe() for _ in range(num_workers)])
         self.recv_pipe_dict = {p: i for i, p in enumerate(self.recv_pipes)}
-
-        preload_shared_resources = getattr(driver_env, "preload_shared_resources", None)
-        self._driver_env_open = False
-        if get_start_method() == "fork" and callable(preload_shared_resources):
-            self._driver_env_open = bool(preload_shared_resources())
-        if not self._driver_env_open:
-            driver_env.close()
 
         worker_ss = np.random.SeedSequence(seed).spawn(num_workers) if seed is not None else [None] * num_workers
         worker_seeds = [int(ss.generate_state(1)[0]) & 0x7FFFFFFF if ss is not None else None for ss in worker_ss]
@@ -422,7 +420,7 @@ class Multiprocessing:
         for i in range(num_workers):
             start = i * envs_per_worker
             end = start + envs_per_worker
-            p = Process(
+            p = process_context.Process(
                 target=_worker_process,
                 args=(
                     env_creators[start:end],
