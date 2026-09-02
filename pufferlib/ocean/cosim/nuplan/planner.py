@@ -139,6 +139,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._goal_window: Optional[RouteGoalWindow] = None
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
+        self._static_on_drivable: Dict[str, bool] = {}  # static object track_token -> stands on the drivable area
 
     # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
@@ -394,7 +395,11 @@ class PufferDrivePlanner(AbstractPlanner):
 
             token = self._scenario.token if self._scenario else "scenario"
             self._obs_replay = ObsReplayCapture(
-                self._env, self._policy, self._obs_html_dir / token, max_steps=self._obs_html_max_steps
+                self._env,
+                self._policy,
+                self._obs_html_dir / token,
+                max_steps=self._obs_html_max_steps,
+                ghost_trajectory=nb.logged_ego_boxes(self._scenario, self._transform),
             )
 
         print(
@@ -435,7 +440,7 @@ class PufferDrivePlanner(AbstractPlanner):
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
         # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
-        objs = list(detections.tracked_objects)
+        objs = nb.partner_tracked_objects(detections.tracked_objects, self._initialization.map_api, self._static_on_drivable)
         if len(objs) > self._num_agents - 1:
             # keep the nearest: devkit ordering is by type/token, so blind
             # truncation could drop a close vehicle while keeping far ones

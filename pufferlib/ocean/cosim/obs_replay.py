@@ -16,11 +16,14 @@ OBS_TRAILING_COUNT_FEATURES = 4  # lane/boundary/partner/traffic-control counts 
 
 
 class ObsReplayCapture:
-    def __init__(self, env, policy, out_stem, max_steps=800):
+    def __init__(self, env, policy, out_stem, max_steps=800, ghost_trajectory=None):
+        """ghost_trajectory: (N, 5) logged/human ego boxes [x, y, heading, length, width] in the bin frame,
+        row f = frame f (the viewer's red ghost); None when the external sim has no logged ego."""
         self.env = env
         self.policy = policy
         self.out_stem = Path(out_stem)
         self.max_steps = int(max_steps)
+        self.ghost_trajectory = None if ghost_trajectory is None else np.asarray(ghost_trajectory, np.float32).reshape(-1, 5)
         state = env.get_state()
         self.scenario = state[0] if isinstance(state, list) else state
         self.agent_cap = int(self.scenario["num_total_agents"])
@@ -191,6 +194,12 @@ class ObsReplayCapture:
         for pool_name in POOL_NAMES:
             if frames.get(pool_name):
                 replay[pool_name] = np.stack(frames[pool_name])
+        if self.ghost_trajectory is not None:
+            frame_count = agent_f32.shape[0]
+            ghost = np.zeros((frame_count, replay["raw_action"].shape[1], 5), np.float32)
+            ghost_count = min(frame_count, len(self.ghost_trajectory))
+            ghost[:ghost_count, 0] = self.ghost_trajectory[:ghost_count]
+            replay["ghost_f32"] = ghost
         self.out_stem.parent.mkdir(parents=True, exist_ok=True)
         zlib_path = str(self.out_stem) + ".replay.zlib"
         html_path = str(self.out_stem) + ".html"

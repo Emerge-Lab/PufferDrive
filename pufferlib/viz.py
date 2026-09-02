@@ -962,6 +962,13 @@ def encode_interactive_replay(scenario, replay):
     active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
     ghost = np.zeros((frame_count, max(1, active_count), 5), dtype=np.float32)
+    explicit_ghost = replay.get("ghost_f32")
+    if explicit_ghost is not None:  # co-sim: the logged trajectory lives outside the bin scenario
+        explicit_ghost = np.asarray(explicit_ghost, dtype=np.float32)
+        if explicit_ghost.shape != ghost.shape:
+            raise ValueError(f"ghost_f32 shape {explicit_ghost.shape} != expected {ghost.shape}")
+        ghost = explicit_ghost
+        active_indices = []
     for slot in range(min(active_count, len(active_indices))):
         agent_idx = active_indices[slot]
         if agent_idx < 0 or agent_idx >= len(agents):
@@ -1073,6 +1080,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .perturbation-line { width:28px; height:0; border-top:3px solid; }
         .perturbation-line.blindness { border-color:#6d28d9; border-top-style:dashed; }
         .perturbation-line.phantom-braking { border-color:#b45309; }
+        .perturbation-line.human-log { border-color:#ff0000; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
         #hud-telemetry { --border:#4a5468; --muted:#aab3c5; --field:rgba(255,255,255,.07); --accent:#7cbcff; position:absolute; top:14px; right:14px; width:372px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; background:rgba(54,62,77,.95); color:#eef1f6; }
         [data-theme="dark"] #hud-telemetry { background:rgba(48,56,70,.95); }
@@ -1122,6 +1130,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
                 <div class="perturbation-key"><span class="perturbation-line phantom-braking"></span><span>Phantom braking</span></div>
+                <div class="perturbation-key" id="ghost-key" style="display:none"><span class="perturbation-line human-log"></span><span>Human driver (log) &middot; G toggles</span></div>
             </div>
             <button type="button" class="toggle-header is-collapsed" id="overrides-header" data-target="overrides-body"><span>Eval overrides</span><span>&#9662;</span></button>
             <div id="overrides-body" class="grid toggle-body is-collapsed"></div>
@@ -1190,7 +1199,7 @@ __PAYLOAD_CHUNKS__
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
-        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
+        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false, ghostPaths = [];
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
         let expertAgentIndices = new Set();
         const OBS_MODES = ["ALL","POOL","BOTH"];
@@ -1298,7 +1307,10 @@ self.onmessage = async event => {
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
-            showGhost = (H.active_count === 1) && !!(H.chunks && H.chunks.ghost_f32);
+            buildGhostPaths();
+            const hasGhost = ghostPaths.length > 0 && C.ghost_f32.some((v, i) => i % 5 === 4 && v > 0);
+            showGhost = (H.active_count === 1) && hasGhost;
+            document.getElementById('ghost-key').style.display = hasGhost ? '' : 'none';
             const ov = H.eval_overrides || {}, ovKeys = Object.keys(ov);
             if (ovKeys.length) document.getElementById('overrides-body').innerHTML = ovKeys.map(k=>`<div class="item"><span class="name">${k}</span><span class="num">${ov[k]}</span></div>`).join('');
             else document.getElementById('overrides-header').style.display = 'none';
@@ -1396,9 +1408,17 @@ self.onmessage = async event => {
             return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
+        function buildGhostPaths() {
+            ghostPaths = [];
+            if (!C.ghost_f32) return;
+            const N = H.chunks.ghost_f32.shape[1];
+            for (let j=0;j<N;j++) { const p = new Path2D(); let started = false; for (let f=0; f<H.frames; f++) { const b=(f*N+j)*5; if (C.ghost_f32[b+4] <= 0) { started = false; continue; } if (started) p.lineTo(C.ghost_f32[b], C.ghost_f32[b+1]); else p.moveTo(C.ghost_f32[b], C.ghost_f32[b+1]); started = true; } ghostPaths.push(p); }
+        }
         function drawGhosts(f) {
             if (!showGhost || !C.ghost_f32) return;
             const N = H.chunks.ghost_f32.shape[1];
+            ctx.strokeStyle = 'rgba(255,0,0,.55)'; ctx.lineWidth = .35; ctx.setLineDash([]);
+            for (const p of ghostPaths) ctx.stroke(p);
             ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255,0,0,.22)'; ctx.lineWidth = .28; ctx.setLineDash([.6,.4]);
             for (let j=0;j<N;j++) { const b=(f*N+j)*5, w=C.ghost_f32[b+4]; if (w <= 0) continue; ctx.save(); ctx.translate(C.ghost_f32[b], C.ghost_f32[b+1]); ctx.rotate(C.ghost_f32[b+2]); ctx.beginPath(); ctx.rect(-C.ghost_f32[b+3]/2, -w/2, C.ghost_f32[b+3], w); ctx.fill(); ctx.stroke(); ctx.restore(); }
             ctx.setLineDash([]);
@@ -1715,6 +1735,32 @@ def render_interactive_replay_zlib(replay_path, filename):
     with open(replay_path, "rb") as replay_file:
         compressed_payload = replay_file.read()
     _render_interactive_replay_payload(compressed_payload, filename)
+
+
+def read_replay_zlib(replay_path):
+    """-> (header dict, chunk name -> ndarray view) of a saved .replay.zlib."""
+    with open(replay_path, "rb") as replay_file:
+        raw = zlib.decompress(replay_file.read())
+    header_len = struct.unpack("<I", raw[:4])[0]
+    header = json.loads(raw[4 : 4 + header_len])
+    data_start = 4 + header_len + ((-(4 + header_len)) % 4)
+    chunks = {}
+    for name, meta in header["chunks"].items():
+        start = data_start + meta["offset"]
+        chunks[name] = np.frombuffer(raw, dtype=meta["dtype"], count=meta["nbytes"] // np.dtype(meta["dtype"]).itemsize, offset=start).reshape(meta["shape"])
+    return header, chunks
+
+
+def set_replay_ghost(replay_path, ghost_f32):
+    """Overwrite the ghost (logged trajectory) chunk of a saved .replay.zlib in place; shape must match."""
+    header, chunks = read_replay_zlib(replay_path)
+    ghost_f32 = np.asarray(ghost_f32, dtype=np.float32)
+    if "ghost_f32" not in chunks or chunks["ghost_f32"].shape != ghost_f32.shape:
+        raise ValueError(f"{replay_path}: ghost chunk shape {chunks.get('ghost_f32', np.empty(0)).shape} != {ghost_f32.shape}")
+    chunks["ghost_f32"] = ghost_f32
+    header = {key: value for key, value in header.items() if key != "chunks"}
+    with open(replay_path, "wb") as replay_file:
+        replay_file.write(_pack_replay_binary(header, chunks))
 
 
 def build_gallery_index(folder_path=".", file_metrics=None):

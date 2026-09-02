@@ -280,6 +280,18 @@ def logged_ego_goals(scenario, map_api, spacing: float):
     return xy, goal_headings, snapped_count
 
 
+def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
+    """Human-driven ego per scenario iteration -> (N, 5) float32 [x, y, heading, length, width], bin frame."""
+    iteration_count = scenario.get_number_of_iterations()
+    boxes = np.zeros((iteration_count, 5), np.float32)
+    for i in range(iteration_count):
+        state = scenario.get_ego_state_at_iteration(i)
+        bx, by = transform.loc_to_bin(float(state.center.x), float(state.center.y))
+        footprint = state.car_footprint
+        boxes[i] = (bx, by, float(state.center.heading), float(footprint.length), float(footprint.width))
+    return boxes
+
+
 def read_bin_geometry(bin_path: Path) -> dict:
     """Read the co-sim-relevant geometry out of an existing PufferDrive bin
     (city_bin_dir map-only bins or pre-converted training-format bins):
@@ -434,6 +446,35 @@ def match_connectors_to_stop_lines(
         if d2[j] <= max_dist_m**2:
             mapping[str(cid)] = j
     return mapping
+
+
+MOVING_PARTNER_TYPES = ("VEHICLE", "PEDESTRIAN", "BICYCLE")  # the only types the training bins turn into agents
+STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT")
+
+
+def partner_tracked_objects(tracked_objects, map_api, static_on_drivable: dict):
+    """Objects the shadow env should see: moving agents always; static clutter (cones, barriers, signs,
+    generic objects) only when it stands on the drivable area, where nuPlan scores a collision with it.
+    Off-road poles would otherwise fill the nearest-N partner slots as stopped 0.3 m vehicles the policy
+    never saw in training. static_on_drivable: track_token -> bool, filled here (statics never move)."""
+    from nuplan.common.actor_state.state_representation import Point2D
+    from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+
+    kept = []
+    for obj in tracked_objects:
+        type_name = obj.tracked_object_type.name
+        if type_name in MOVING_PARTNER_TYPES:
+            kept.append(obj)
+            continue
+        if type_name not in STATIC_PARTNER_TYPES:
+            continue
+        on_drivable = static_on_drivable.get(obj.track_token)
+        if on_drivable is None:
+            on_drivable = bool(map_api.is_in_layer(Point2D(obj.center.x, obj.center.y), SemanticMapLayer.DRIVABLE_AREA))
+            static_on_drivable[obj.track_token] = on_drivable
+        if on_drivable:
+            kept.append(obj)
+    return kept
 
 
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
