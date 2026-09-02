@@ -4567,6 +4567,8 @@ void c_step(Drive *env) {
         Agent *agent = &env->agents[background_idx];
         if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
+        } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
+            move_corridor_idm(env, background_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, background_idx);
         }
@@ -4581,6 +4583,8 @@ void c_step(Drive *env) {
             move_dynamics(env, i, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
+            move_corridor_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         }

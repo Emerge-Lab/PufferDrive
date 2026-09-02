@@ -73,16 +73,17 @@ class Controller(Enum):
     policy = 1
     replay = 2
     idm = 3
+    corridor_idm = 4
 
 
 class NonVehicleController(Enum):
-    # "auto" is config-side only: drive.py resolves it to a Controller
-    # (replay when non_sdc_controller is idm, else non_sdc_controller).
+    # "auto" is config-side only: drive.py resolves it to a Controller.
     auto = -1
     static = 0
     policy = 1
     replay = 2
     idm = 3
+    corridor_idm = 4
 
 
 class InitMode(Enum):

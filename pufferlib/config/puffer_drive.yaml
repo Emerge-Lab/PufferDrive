@@ -93,13 +93,13 @@ env:
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
-  # options: "static", "policy", "replay", "idm"
+  # options: "static", "policy", "replay", "idm", "corridor_idm"
   sdc_controller: policy
   # Controller used by non-SDC vehicles.
-  # options: "static", "policy", "replay", "idm"
+  # options: "static", "policy", "replay", "idm", "corridor_idm"
   non_sdc_controller: policy
-  # Controller used by non-vehicle agents. "auto" follows non_sdc_controller unless it is "idm", then it uses "replay".
-  # options: "auto", "static", "policy", "replay", "idm"
+  # Controller used by non-vehicle agents. "auto" uses replay for vehicle baselines, otherwise follows non_sdc_controller.
+  # options: "auto", "static", "policy", "replay", "idm", "corridor_idm"
   non_vehicle_controller: auto
   # Options: "created_all_valid", "create_only_controlled"
   init_mode: create_all_valid
