@@ -21,6 +21,11 @@ from pufferlib.ocean.cosim import nuplan_bridge as nb
 from pufferlib.ocean.drive.drive import Drive
 
 from pufferlib.ocean.cosim.nuplan_bridge import DEFAULT_ARCH, FAR_AWAY
+from pufferlib.ocean.drive import binding
+
+EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
+EGO_TRACKING_TOL_M = 0.05
+EGO_TRACKING_TOL_RAD = 0.005
 
 
 def clean_policy_state_dict(state_dict):
@@ -119,6 +124,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._goal_cursor = 0
         self._bev = None  # BEVRenderer, built in _build if debug_bev_dir is set
         self._last_goal_xy = None  # (gx, gy) selected in the most recent _sync, for BEV capture
+        self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
 
     # --- AbstractPlanner interface -------------------------------------------
@@ -334,7 +340,7 @@ class PufferDrivePlanner(AbstractPlanner):
         )
 
         route_ids = route_roadblock_correction_v2(ego_state, init.map_api, list(init.route_roadblock_ids))
-        centerline = nb.route_centerline(init.map_api, route_ids, ex, ey)
+        centerline = nb.route_centerline(init.map_api, route_ids, ex, ey, float(ego_state.center.heading))
         goals = nb.goals_along(centerline, self._goal_spacing)
         if len(goals) == 0:  # degenerate route: fall back to the mission goal
             goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
@@ -382,17 +388,21 @@ class PufferDrivePlanner(AbstractPlanner):
         vx_g = v_local.x * math.cos(h) - v_local.y * math.sin(h)
         vy_g = v_local.x * math.sin(h) + v_local.y * math.cos(h)
         ex, ey = tf.loc_to_bin(ego_state.center.x, ego_state.center.y)
-        env.set_agent_states(
-            np.array([0], np.int32),
-            np.array([ex], np.float32),
-            np.array([ey], np.float32),
-            np.array([0.0], np.float32),
-            np.array([h], np.float32),
-            np.array([vx_g], np.float32),
-            np.array([vy_g], np.float32),
-            np.array([float(dcs.angular_velocity)], np.float32),
-            np.array([float(dcs.center_acceleration_2d.x)], np.float32),
-        )
+        # Under perfect tracking nuPlan hands back exactly the pose we integrated: keep the shadow
+        # ego's own jerk-model state (accel_long, steering) instead of re-deriving it from telemetry,
+        # which re-injects finite-difference accel after every stop and drives the ego into reverse.
+        if not self._ego_matches_last_integrated(ex, ey, h):
+            env.set_agent_states(
+                np.array([0], np.int32),
+                np.array([ex], np.float32),
+                np.array([ey], np.float32),
+                np.array([0.0], np.float32),
+                np.array([h], np.float32),
+                np.array([vx_g], np.float32),
+                np.array([vy_g], np.float32),
+                np.array([float(dcs.angular_velocity)], np.float32),
+                np.array([float(dcs.center_acceleration_2d.x)], np.float32),
+            )
 
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
@@ -423,10 +433,14 @@ class PufferDrivePlanner(AbstractPlanner):
 
         # route goals: cursor advances only on arrival (like the CARLA side)
         goals = self._route_goals
-        while (
-            self._goal_cursor < len(goals) - 1
-            and np.hypot(goals[self._goal_cursor, 0] - ex, goals[self._goal_cursor, 1] - ey) < self._arch["goal_radius"]
-        ):
+        goal_radius = self._arch["goal_radius"]
+        cos_h, sin_h = math.cos(h), math.sin(h)
+        while self._goal_cursor < len(goals) - 1:
+            dx, dy = goals[self._goal_cursor, 0] - ex, goals[self._goal_cursor, 1] - ey
+            reached = math.hypot(dx, dy) < goal_radius
+            passed = dx * cos_h + dy * sin_h < -goal_radius  # clearly behind: never pull the ego backwards
+            if not (reached or passed):
+                break
             self._goal_cursor += 1
         k = self._arch["num_goals"]
         indices = [min(self._goal_cursor + i, len(goals) - 1) for i in range(k)]
@@ -443,6 +457,14 @@ class PufferDrivePlanner(AbstractPlanner):
             dir_sel[:, 0].copy(),
             dir_sel[:, 1].copy(),
         )
+
+    def _ego_matches_last_integrated(self, bin_x: float, bin_y: float, heading: float) -> bool:
+        if self._last_integrated is None:
+            return False
+        lx, ly, lh = self._last_integrated
+        return abs(bin_x - lx) < EGO_TRACKING_TOL_M and abs(bin_y - ly) < EGO_TRACKING_TOL_M and abs(
+            _angle_diff(heading, lh)
+        ) < EGO_TRACKING_TOL_RAD
 
     # --- planning -------------------------------------------------------------
     def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
@@ -518,12 +540,14 @@ class PufferDrivePlanner(AbstractPlanner):
         state = self._env.get_global_agent_state()
         nx_, ny_ = self._transform.bin_to_loc(float(state["x"][0]), float(state["y"][0]))
         nh = float(state["heading"][0])
+        self._last_integrated = (float(state["x"][0]), float(state["y"][0]), nh)
 
         # speed = the shadow ego's POST-STEP velocity state (ego obs column 0),
         # not displacement/dt, which halves the intent during acceleration and
         # makes the closed loop crawl (see WorldSync.integrate).
-        speed = float(np.asarray(self._env.observations)[0, 0]) * self._env.obs_norm_speed_mps
-        v0 = ego_state.dynamic_car_state.center_velocity_2d.x
+        ego_obs = np.asarray(self._env.observations)[0]
+        speed = float(ego_obs[0]) * self._env.obs_norm_speed_mps
+        accel_long = float(ego_obs[EGO_OBS_ACCEL_LONG_IDX]) * binding.ACCEL_LONG_NORM
         yaw_rate = _angle_diff(nh, float(ego_state.center.heading)) / dt
 
         params = ego_state.car_footprint.vehicle_parameters
@@ -541,7 +565,7 @@ class PufferDrivePlanner(AbstractPlanner):
             return EgoState.build_from_center(
                 center=StateSE2(x, y, heading),
                 center_velocity_2d=StateVector2D(speed, 0.0),
-                center_acceleration_2d=StateVector2D((speed - v0) / dt if i == 1 else 0.0, 0.0),
+                center_acceleration_2d=StateVector2D(accel_long if i == 1 else 0.0, 0.0),
                 tire_steering_angle=_steering_from(yaw_rate, speed, params.wheel_base),
                 time_point=TimePoint(t0.time_us + int(i * dt * 1e6)),
                 vehicle_parameters=params,

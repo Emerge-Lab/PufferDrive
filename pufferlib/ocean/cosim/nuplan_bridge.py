@@ -43,6 +43,7 @@ _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 _NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": 2, "GREEN": 3, "UNKNOWN": 0}
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
+ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
 
 # Env/obs layout the carla_combined gigaflow policy expects at eval time (a
 # fallback for shadow_env_kwargs' checkpoint-config adoption, see
@@ -158,15 +159,18 @@ def expert_route_xy(scenario) -> np.ndarray:
     ).reshape(-1, 2)
 
 
-def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: float) -> np.ndarray:
-    """Greedy lane walk through the route roadblocks -> (N, 2) centerline in
-    nuPlan map coordinates (PDM-style: nearest lane in the first block, then
-    prefer connected lanes block to block). Fallback goal source for when the
-    scenario has no usable logged trajectory (see `expert_route_xy`)."""
+def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float) -> np.ndarray:
+    """Lane-graph route through the route roadblocks -> (N, 2) centerline in
+    nuPlan map coordinates, PDM-style: the starting lane is the on-route lane
+    under the ego with the smallest heading error (never a crossing lane of the
+    same junction), then Dijkstra over the route's lane graph to the last
+    roadblock. The first lane is trimmed to the point nearest the ego."""
+    from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+    from carl_nuplan.planning.simulation.planner.pdm_planner.utils.graph_search.dijkstra import Dijkstra
 
     blocks = []
-    for rid in route_roadblock_ids:
+    for rid in dict.fromkeys(route_roadblock_ids):
         block = map_api.get_map_object(str(rid), SemanticMapLayer.ROADBLOCK) or map_api.get_map_object(
             str(rid), SemanticMapLayer.ROADBLOCK_CONNECTOR
         )
@@ -174,32 +178,33 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
             blocks.append(block)
     if not blocks:
         return np.zeros((0, 2))
+    route_lanes = {lane.id: lane for block in blocks for lane in block.interior_edges}
 
     def _lane_pts(lane):
         return np.array([[p.x, p.y] for p in lane.baseline_path.discrete_path])
 
-    def _nearest(lanes, x, y):
-        return min(lanes, key=lambda l: float(np.min(np.hypot(*(_lane_pts(l) - (x, y)).T))))
+    def _heading_error(lane):
+        path = lane.baseline_path.discrete_path
+        pts = _lane_pts(lane)
+        nearest = int(np.argmin(np.hypot(*(pts - (start_x, start_y)).T)))
+        return abs((path[nearest].heading - start_heading + np.pi) % (2.0 * np.pi) - np.pi)
 
-    current = _nearest(blocks[0].interior_edges, start_x, start_y)
-    path = [current]
-    for block in blocks[1:]:
-        ids = {l.id for l in block.interior_edges}
-        nxt = next((o for o in current.outgoing_edges if o.id in ids), None)
-        if nxt is None:  # route gap (e.g. lane-change requirement): jump to nearest
-            end = _lane_pts(current)[-1]
-            nxt = _nearest(block.interior_edges, end[0], end[1])
-        path.append(nxt)
-        current = nxt
+    ego_point = Point2D(start_x, start_y)
+    containing = [lane for lane in route_lanes.values() if lane.contains_point(ego_point)]
+    if containing:
+        start_lane = min(containing, key=_heading_error)
+    else:
+        start_lane = min(route_lanes.values(), key=lambda l: float(np.min(np.hypot(*(_lane_pts(l) - (start_x, start_y)).T))))
 
-    lane_points = [_lane_pts(l) for l in path]
-    # The first lane's baseline path starts at the lane's own beginning, which
-    # is usually behind the ego (ego is partway along it) -> trim to the point
-    # nearest the ego so goals_along doesn't place goals behind the vehicle.
+    block_ids = [block.id for block in blocks]
+    start_block_idx = block_ids.index(start_lane.get_roadblock_id()) if start_lane.get_roadblock_id() in block_ids else 0
+    target_block = blocks[min(len(blocks) - 1, start_block_idx + ROUTE_SEARCH_DEPTH_BLOCKS - 1)]
+    path, _ = Dijkstra(start_lane, list(route_lanes.keys())).search(target_block)
+
+    lane_points = [_lane_pts(lane) for lane in path]
     start_idx = int(np.argmin(np.hypot(*(lane_points[0] - (start_x, start_y)).T)))
     lane_points[0] = lane_points[0][start_idx:]
     return np.concatenate(lane_points, axis=0)
-
 
 def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
     """(N, 2) polyline -> fixed goal sequence every `spacing` meters (+ endpoint)."""
