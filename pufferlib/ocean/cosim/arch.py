@@ -65,15 +65,24 @@ def checkpoint_config_path(checkpoint):
     raise FileNotFoundError(f"no config.yaml next to or one level above {checkpoint}")
 
 
+# Applied to every co-sim shadow env after CLEAN_EVAL_OVERRIDES: the eval-only semantics the native
+# benchmark gets from eval_mode (scripts/kesai/7_eval_8node_slurm.sh passes the 0.2 m margin), which the
+# co-sim env cannot enter because eval_mode's scenario batching needs a full agent pool.
+COSIM_EVAL_OVERRIDES = {
+    "cosim_eval_semantics": True,
+    "eval_perceived_size_margin_m": 0.2,
+}
+
+
 def shadow_env_kwargs(cfg, defaults=None, overrides=None):
     """Drive kwargs for a co-sim shadow env.
 
     Precedence: `defaults` (no-checkpoint fallback arch) < checkpoint env
-    config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES < `overrides`
+    config (every Drive-accepted key) < CLEAN_EVAL_OVERRIDES < COSIM_EVAL_OVERRIDES < `overrides`
     (the co-sim's structural keys)."""
     accepted = set(inspect.signature(Drive.__init__).parameters)
     adopted = {k: v for k, v in ((cfg or {}).get("env") or {}).items() if k in accepted}
     for key in _INFRACTION_BEHAVIOR_KEYS:
         if key in adopted and isinstance(adopted[key], int):
             adopted[key] = _INFRACTION_BEHAVIOR_NAMES[adopted[key]]
-    return {**(defaults or {}), **adopted, **CLEAN_EVAL_OVERRIDES, **(overrides or {})}
+    return {**(defaults or {}), **adopted, **CLEAN_EVAL_OVERRIDES, **COSIM_EVAL_OVERRIDES, **(overrides or {})}

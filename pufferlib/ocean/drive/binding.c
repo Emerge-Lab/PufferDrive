@@ -1985,6 +1985,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
     env->cosim_partner_slots = (int) unpack(kwargs, "cosim_partner_slots");
+    env->cosim_eval_semantics = (int) unpack(kwargs, "cosim_eval_semantics");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
     env->timestep = init_step;

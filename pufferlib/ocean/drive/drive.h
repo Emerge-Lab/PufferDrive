@@ -305,6 +305,7 @@ struct Drive {
     float obs_norm_road_seg_width_m;
     float obs_norm_z_m;
     float eval_perceived_size_margin_m;
+    int cosim_eval_semantics; // co-sim: apply the eval-only obs/action tweaks without native eval batching
     float eval_standstill_jerk_deadband_mps3; // 0 disables; eval-only standstill deadband on j_long
     float obs_range_traffic_control_m;
     float obs_range_partner_m;
@@ -4290,8 +4291,8 @@ static void compute_rewards(Drive *env, int i) {
 }
 
 static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
-    float perceived_margin
-        = (env->eval_mode && !env->eval_training_render) ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
+    bool perceived_margin_active = (env->eval_mode && !env->eval_training_render) || env->cosim_eval_semantics;
+    float perceived_margin = perceived_margin_active ? 2.0f * env->eval_perceived_size_margin_m : 0.0f;
     obs[obs_idx++] = ego->sim_speed_signed / env->obs_norm_speed_mps;
     obs[obs_idx++] = (ego->sim_width + perceived_margin) / env->obs_norm_veh_width_m;
     obs[obs_idx++] = (ego->sim_length + perceived_margin) / env->obs_norm_veh_length_m;
@@ -4861,7 +4862,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
             }
         }
 
-        if (env->eval_mode && agent->sim_speed < STANDSTILL_SPEED_EPSILON_MPS
+        if ((env->eval_mode || env->cosim_eval_semantics) && agent->sim_speed < STANDSTILL_SPEED_EPSILON_MPS
             && fabsf(j_long) < env->eval_standstill_jerk_deadband_mps3) {
             j_long = 0.0f;
         }

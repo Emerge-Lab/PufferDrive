@@ -93,6 +93,7 @@ class Drive(pufferlib.PufferEnv):
         min_agents_per_env=32,
         max_agents_per_env=64,
         cosim_partner_slots=0,
+        cosim_eval_semantics=False,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
@@ -311,6 +312,9 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"cosim_partner_slots must be >= 0. Got: {cosim_partner_slots}")
         if self.cosim_partner_slots > 0 and simulation_mode != "gigaflow":
             raise ValueError("cosim_partner_slots is only supported in gigaflow simulation_mode")
+        # Co-sim envs stay out of eval_mode (its scenario batching needs a full agent pool) but still want the
+        # eval-only observation/action semantics: perceived-size margin and standstill jerk deadband.
+        self.cosim_eval_semantics = int(bool(cosim_eval_semantics))
         if goal_source == "external" and simulation_mode != "gigaflow":
             raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
 
@@ -670,6 +674,7 @@ class Drive(pufferlib.PufferEnv):
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
             "cosim_partner_slots": self.cosim_partner_slots,
+            "cosim_eval_semantics": self.cosim_eval_semantics,
             "init_step": self._sample_init_step(),
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
