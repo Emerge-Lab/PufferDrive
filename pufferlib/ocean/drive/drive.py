@@ -83,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         pose_noise_yaw_deg=0.0,
         goal_speed=3.0,
         goal_speed_randomization=True,
+        conditioning_accel_scale=1.0,
         goal_reach_requires_speed=False,
         scenario_length=None,
         resample_frequency=91,
@@ -91,6 +92,7 @@ class Drive(pufferlib.PufferEnv):
         num_agents=512,
         min_agents_per_env=32,
         max_agents_per_env=64,
+        cosim_partner_slots=0,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
@@ -174,6 +176,13 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"pose noise must be >= 0, got xy {pose_noise_xy_m}, yaw {pose_noise_yaw_deg}")
         self.goal_speed = float(goal_speed)
         self.goal_speed_randomization = int(bool(goal_speed_randomization))
+        # Eval-time C_acc conditioning coefficient (training samples it in REWARD_BOUNDS[REWARD_COEF_ACC]).
+        self.conditioning_accel_scale = float(conditioning_accel_scale)
+        if not (binding.CONDITIONING_ACC_MIN <= self.conditioning_accel_scale <= binding.CONDITIONING_ACC_MAX):
+            raise ValueError(
+                f"conditioning_accel_scale must be within the trained C_acc range "
+                f"[{binding.CONDITIONING_ACC_MIN}, {binding.CONDITIONING_ACC_MAX}]. Got: {conditioning_accel_scale}"
+            )
         self.goal_reach_requires_speed = int(bool(goal_reach_requires_speed))
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
@@ -219,8 +228,10 @@ class Drive(pufferlib.PufferEnv):
             self.goal_source = binding.GOAL_SOURCE_MAP
         elif goal_source == "gt":
             self.goal_source = binding.GOAL_SOURCE_GT
+        elif goal_source == "external":
+            self.goal_source = binding.GOAL_SOURCE_EXTERNAL
         else:
-            raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
+            raise ValueError(f"goal_source must be 'route', 'map', 'gt', or 'external'. Got: {goal_source}")
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
             "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
@@ -292,6 +303,14 @@ class Drive(pufferlib.PufferEnv):
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
         self.max_agents_per_env = max_agents_per_env
+        # Co-sim: static agent slots per env owned by the external simulator (never spawned or stepped).
+        self.cosim_partner_slots = int(cosim_partner_slots)
+        if self.cosim_partner_slots < 0:
+            raise ValueError(f"cosim_partner_slots must be >= 0. Got: {cosim_partner_slots}")
+        if self.cosim_partner_slots > 0 and simulation_mode != "gigaflow":
+            raise ValueError("cosim_partner_slots is only supported in gigaflow simulation_mode")
+        if goal_source == "external" and simulation_mode != "gigaflow":
+            raise ValueError("goal_source 'external' is only supported in gigaflow simulation_mode (co-sim)")
 
         self.ego_features = binding.EGO_FEATURES
 
@@ -639,6 +658,7 @@ class Drive(pufferlib.PufferEnv):
             "pose_noise_yaw_deg": self.pose_noise_yaw_deg,
             "goal_speed": self.goal_speed,
             "goal_speed_randomization": self.goal_speed_randomization,
+            "conditioning_accel_scale": self.conditioning_accel_scale,
             "goal_reach_requires_speed": self.goal_reach_requires_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
@@ -647,6 +667,7 @@ class Drive(pufferlib.PufferEnv):
             "map_file": map_file,
             "max_agents": max_agents,
             "max_agents_per_env": self.max_agents_per_env,
+            "cosim_partner_slots": self.cosim_partner_slots,
             "init_step": self._sample_init_step(),
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
@@ -822,14 +843,17 @@ class Drive(pufferlib.PufferEnv):
                 self.truncations[:] = 1
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
-    def get_global_agent_state(self):
+    def get_global_agent_state(self, include_static=False):
         """Get current global state of all active agents.
+
+        include_static: also return the co-sim partner slots after the active agents
+        (num_active_agents + cosim_partner_slots * num_envs rows).
 
         Returns:
             dict with keys 'x', 'y', 'z', 'heading', 'id', 'length', 'width' containing numpy arrays
             of shape (num_active_agents,)
         """
-        num_agents = self.num_agents
+        num_agents = self.num_agents + (self.cosim_partner_slots * self.num_envs if include_static else 0)
 
         states = {
             "x": np.zeros(num_agents, dtype=np.float32),
@@ -850,6 +874,7 @@ class Drive(pufferlib.PufferEnv):
             states["id"],
             states["length"],
             states["width"],
+            int(bool(include_static)),
         )
 
         return states
@@ -921,6 +946,11 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(gdir_x, dtype=np.float32),
             np.ascontiguousarray(gdir_y, dtype=np.float32),
         )
+
+    def get_agent_goal_progress(self, agent_idx):
+        """Co-sim: (current_goal_idx, goal_count) of one agent. current_goal_idx == goal_count
+        means every goal of the current window has been consumed."""
+        return binding.vec_get_agent_goal_progress(self.c_envs, int(agent_idx))
 
     # ───────────────────────────────────────
 

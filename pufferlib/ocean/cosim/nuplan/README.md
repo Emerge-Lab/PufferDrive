@@ -8,12 +8,25 @@ Evaluate a PufferDrive-trained policy with nuPlan's **unmodified** `run_simulati
 
 Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner via `planner=pufferdrive_planner` (a config pointing at this package's `PufferDrivePlanner`), so the whole integration is this package:
 
-- `planner.py` — `PufferDrivePlanner(AbstractPlanner)`. Per 10 Hz planning
-  iteration: read nuPlan's `PlannerInput` (ego, `DetectionsTracks`, traffic
-  lights), overwrite the shadow `Drive` env with it (`nuplan_bridge`
-  transforms), recompute observations, run the policy, `env.step` (PufferDrive
-  integrates the ego one dt), and return the integrated pose as the
-  trajectory
+- `planner.py` — `PufferDrivePlanner(AbstractPlanner)`. The shadow `Drive`
+  env holds ONE policy agent (the ego) plus `num_agents - 1` static partner
+  slots (`cosim_partner_slots`) that are never spawned or stepped by
+  PufferDrive. Per planning iteration (dt = the scenario's
+  `database_interval`): stream nuPlan's `PlannerInput` (`DetectionsTracks`,
+  traffic lights) into the partner slots (`nuplan_bridge` transforms),
+  recompute observations, run the policy on the ego row, `env.step`
+  (PufferDrive integrates the ego one dt), and return the integrated pose as
+  the trajectory. The ego is synced from nuPlan telemetry only at the first
+  iteration; afterwards the shadow env owns it and the planner raises if
+  nuPlan's ego pose ever diverges from the integrated one (the configs pin
+  `perfect_tracking_controller`).
+- Route goals (`goal_source: external`): PDM-style lane-graph route ->
+  goals every `goal_spacing` m. The shadow env consumes the goals of its
+  `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
+  consumed slots zeroed in the obs); the planner pushes the next window only
+  when the current one is exhausted or its current goal is clearly behind the
+  ego. Lights nuPlan does not report are GREEN (training never produces
+  UNKNOWN).
 - `pufferlib/ocean/cosim/nuplan_bridge.py`
 - `config/` — the Hydra configs that plug the planner in without touching
   nuplan-devkit or `carl_nuplan`: `planner/pufferdrive_planner.yaml` and two
@@ -68,7 +81,6 @@ lane graph (`n: 0`), which silently zeroes the GPS goal columns.
 
 - [ ] The full Val14 split (both challenges) has never been run to
   completion, so total wall time are unmeasured.
-- [ ] Route goals is hacky
 - [ ] Double check static variables
 - [ ] `nuplan_bridge.write_drive_bin` should build a lane graph (or refuse
   `--map_only`-style use) so a regenerated bin can't silently lose the GPS

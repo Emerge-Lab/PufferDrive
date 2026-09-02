@@ -999,15 +999,16 @@ static PyObject *get_global_agent_state(PyObject *self, PyObject *args) {
     float *length_data = (float *) PyArray_DATA((PyArrayObject *) length_arr);
     float *width_data = (float *) PyArray_DATA((PyArrayObject *) width_arr);
 
-    c_get_global_agent_state(drive, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
+    c_get_global_agent_state(drive, 0, x_data, y_data, z_data, heading_data, id_data, length_data, width_data);
 
     Py_RETURN_NONE;
 }
 static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 8 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_global_agent_state requires 9 arguments");
         return NULL;
     }
+    int include_static = (int) PyLong_AsLong(PyTuple_GetItem(args, 8));
 
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1054,6 +1055,7 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
         // Write to the arrays at the current offset
         c_get_global_agent_state(
             drive,
+            include_static,
             &x_base[offset],
             &y_base[offset],
             &z_base[offset],
@@ -1063,7 +1065,7 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
             &width_base[offset]);
 
         // Move offset forward by the number of agents in this environment
-        offset += drive->active_agent_count;
+        offset += include_static ? drive->num_agents : drive->active_agent_count;
     }
 
     Py_RETURN_NONE;
@@ -1105,7 +1107,17 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     float *yaw_rate = (float *) PyArray_DATA((PyArrayObject *) yaw_rate_arr);
     float *accel_long = (float *) PyArray_DATA((PyArrayObject *) accel_long_arr);
     int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    c_set_agent_states((Drive *) vec->envs[0], count, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long);
+    PyObject *value_arrs[8] = {x_arr, y_arr, z_arr, heading_arr, vx_arr, vy_arr, yaw_rate_arr, accel_long_arr};
+    for (int k = 0; k < 8; k++) {
+        if ((int) PyArray_SIZE((PyArrayObject *) value_arrs[k]) != count) {
+            PyErr_SetString(PyExc_ValueError, "vec_set_agent_states: every array must have the same length as idx");
+            return NULL;
+        }
+    }
+    if (c_set_agent_states((Drive *) vec->envs[0], count, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_states: agent index out of range or non-finite state");
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 
@@ -1129,7 +1141,15 @@ static PyObject *vec_set_agent_sizes(PyObject *self, PyObject *args) {
     float *length = (float *) PyArray_DATA((PyArrayObject *) length_arr);
     float *width = (float *) PyArray_DATA((PyArrayObject *) width_arr);
     int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    c_set_agent_sizes((Drive *) vec->envs[0], count, idx, length, width);
+    if ((int) PyArray_SIZE((PyArrayObject *) length_arr) != count
+        || (int) PyArray_SIZE((PyArrayObject *) width_arr) != count) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_sizes: length/width must have the same length as idx");
+        return NULL;
+    }
+    if (c_set_agent_sizes((Drive *) vec->envs[0], count, idx, length, width) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_sizes: agent index out of range or non-positive size");
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 
@@ -1159,8 +1179,41 @@ static PyObject *vec_set_traffic_light_states(PyObject *self, PyObject *args) {
         return NULL;
     }
     int *states = (int *) PyArray_DATA((PyArrayObject *) states_arr);
-    c_set_traffic_light_states((Drive *) vec->envs[0], states);
+    Drive *drive = (Drive *) vec->envs[0];
+    if ((int) PyArray_SIZE((PyArrayObject *) states_arr) != drive->num_traffic_elements) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "vec_set_traffic_light_states: expected %d states (one per traffic element), got %d",
+            drive->num_traffic_elements,
+            (int) PyArray_SIZE((PyArrayObject *) states_arr));
+        return NULL;
+    }
+    if (c_set_traffic_light_states(drive, states) != 0) {
+        PyErr_SetString(
+            PyExc_ValueError, "vec_set_traffic_light_states: timestep outside the light state buffer or invalid state");
+        return NULL;
+    }
     Py_RETURN_NONE;
+}
+
+static PyObject *vec_get_agent_goal_progress(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_agent_goal_progress requires 2 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    Drive *drive = (Drive *) vec->envs[0];
+    int agent_idx = (int) PyLong_AsLong(PyTuple_GetItem(args, 1));
+    if (agent_idx < 0 || agent_idx >= drive->num_total_agents) {
+        PyErr_SetString(PyExc_ValueError, "vec_get_agent_goal_progress: agent index out of range");
+        return NULL;
+    }
+    int current_goal_idx, goal_count;
+    c_get_agent_goal_progress(drive, agent_idx, &current_goal_idx, &goal_count);
+    return Py_BuildValue("(ii)", current_goal_idx, goal_count);
 }
 
 static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
@@ -1189,7 +1242,19 @@ static PyObject *vec_set_agent_goals(PyObject *self, PyObject *args) {
     float *gdx = (float *) PyArray_DATA((PyArrayObject *) gdx_arr);
     float *gdy = (float *) PyArray_DATA((PyArrayObject *) gdy_arr);
     int num_wp = (int) PyArray_SIZE((PyArrayObject *) gx_arr);
-    c_set_agent_goals((Drive *) vec->envs[0], agent_idx, num_wp, gx, gy, gz, gdx, gdy);
+    if ((int) PyArray_SIZE((PyArrayObject *) gy_arr) != num_wp || (int) PyArray_SIZE((PyArrayObject *) gz_arr) != num_wp
+        || (int) PyArray_SIZE((PyArrayObject *) gdx_arr) != num_wp
+        || (int) PyArray_SIZE((PyArrayObject *) gdy_arr) != num_wp) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_goals: goal arrays must all have the same length");
+        return NULL;
+    }
+    if (c_set_agent_goals((Drive *) vec->envs[0], agent_idx, num_wp, gx, gy, gz, gdx, gdy) != 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "vec_set_agent_goals: agent index out of range, waypoint count outside 1..%d, or non-finite goal",
+            MAX_GOALS);
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 
@@ -1482,6 +1547,10 @@ static PyMethodDef methods[]
         METH_VARARGS,
         "Override traffic light states (co-sim)"},
        {"vec_set_agent_goals", vec_set_agent_goals, METH_VARARGS, "Set an agent's goal waypoints (co-sim)"},
+       {"vec_get_agent_goal_progress",
+        vec_get_agent_goal_progress,
+        METH_VARARGS,
+        "(current_goal_idx, goal_count) of one agent (co-sim)"},
        {"get_ground_truth_trajectories", get_ground_truth_trajectories, METH_VARARGS, "Get ground truth trajectories"},
        {"vec_get_global_ground_truth_trajectories",
         vec_get_global_ground_truth_trajectories,
@@ -1566,6 +1635,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GOAL_SOURCE_ROUTE", GOAL_SOURCE_ROUTE);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_MAP", GOAL_SOURCE_MAP);
     PyModule_AddIntConstant(m, "GOAL_SOURCE_GT", GOAL_SOURCE_GT);
+    PyModule_AddIntConstant(m, "GOAL_SOURCE_EXTERNAL", GOAL_SOURCE_EXTERNAL);
     PyModule_AddIntConstant(m, "CONTROLLER_STATIC", CONTROLLER_STATIC);
     PyModule_AddIntConstant(m, "CONTROLLER_POLICY", CONTROLLER_POLICY);
     PyModule_AddIntConstant(m, "CONTROLLER_REPLAY", CONTROLLER_REPLAY);
@@ -1579,6 +1649,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // the shadow ego's post-step accel intent back out of the observation row. The speed
     // norm (obs[0]) is per-env config: env.obs_norm_speed_mps.
     PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
+    PyModule_AddObject(m, "ACCEL_LONG_MAX", PyFloat_FromDouble(ACCEL_LONG_LIMIT[1]));
+    PyModule_AddObject(m, "CONDITIONING_ACC_MIN", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].min_val));
+    PyModule_AddObject(m, "CONDITIONING_ACC_MAX", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].max_val));
     PyModule_AddIntConstant(m, "ACTION_TYPE_DISCRETE", ACTION_TYPE_DISCRETE);
     PyModule_AddIntConstant(m, "ACTION_TYPE_CONTINUOUS", ACTION_TYPE_CONTINUOUS);
     PyModule_AddIntConstant(m, "DYNAMICS_MODEL_CLASSIC", DYNAMICS_MODEL_CLASSIC);

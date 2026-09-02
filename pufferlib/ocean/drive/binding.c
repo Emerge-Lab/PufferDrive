@@ -1968,6 +1968,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->pose_noise_yaw_rad = (float) unpack(kwargs, "pose_noise_yaw_deg") * (float) M_PI / 180.0f;
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->goal_speed_randomization = (int) unpack(kwargs, "goal_speed_randomization");
+    env->conditioning_accel_scale = (float) unpack(kwargs, "conditioning_accel_scale");
     env->goal_reach_requires_speed = (int) unpack(kwargs, "goal_reach_requires_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
@@ -1983,6 +1984,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     free(resource_root);
     env->num_controllable_agents = (int) unpack(kwargs, "max_agents");
     env->num_max_agents = (int) unpack(kwargs, "max_agents_per_env");
+    env->cosim_partner_slots = (int) unpack(kwargs, "cosim_partner_slots");
     int init_step = (int) unpack(kwargs, "init_step");
     env->init_step = init_step;
     env->timestep = init_step;

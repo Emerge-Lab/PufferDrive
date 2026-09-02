@@ -38,9 +38,10 @@ TRAFFIC_TYPE_LIGHT = 1  # matches the CARLA bins' traffic-element type
 # nuPlan TrackedObjectType -> PufferDrive agent type (1=vehicle 2=ped 3=cyclist)
 _NUPLAN_AGENT_TYPE = {"VEHICLE": 1, "PEDESTRIAN": 2, "BICYCLE": 3}
 
-# nuPlan TrafficLightStatusType -> PufferDrive light enum
-# (datatypes.h: UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4)
-_NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": 2, "GREEN": 3, "UNKNOWN": 0}
+# nuPlan TrafficLightStatusType -> PufferDrive light enum (datatypes.h: RED=1 YELLOW=2 GREEN=3).
+# Training never produces UNKNOWN (0), so an unknown or unreported light is treated as GREEN.
+LIGHT_STATE_GREEN = 3
+_NUPLAN_LIGHT_STATE = {"RED": 1, "YELLOW": 2, "GREEN": LIGHT_STATE_GREEN, "UNKNOWN": LIGHT_STATE_GREEN}
 
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
 ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
@@ -51,7 +52,7 @@ ROUTE_SEARCH_DEPTH_BLOCKS = 30  # PDM's Dijkstra window over route roadblocks
 # chiefly the no-checkpoint dummy run). Override per-checkpoint via the
 # planner's `env_overrides` when the training config differs.
 DEFAULT_ARCH = dict(
-    goal_source="map",  # reset-time goals are throwaway; "map" keeps reset fast
+    goal_source="external",  # route goal windows are pushed by the planner
     num_goals=3,
     obs_slots_lane_n=80,
     obs_slots_boundary_n=40,
@@ -159,12 +160,13 @@ def expert_route_xy(scenario) -> np.ndarray:
     ).reshape(-1, 2)
 
 
-def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float) -> np.ndarray:
-    """Lane-graph route through the route roadblocks -> (N, 2) centerline in
-    nuPlan map coordinates, PDM-style: the starting lane is the on-route lane
-    under the ego with the smallest heading error (never a crossing lane of the
-    same junction), then Dijkstra over the route's lane graph to the last
-    roadblock. The first lane is trimmed to the point nearest the ego."""
+def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: float, start_heading: float):
+    """Lane-graph route through the route roadblocks -> ((N, 2) centerline in
+    nuPlan map coordinates, [lane ids along it]), PDM-style: the starting lane
+    is the on-route lane under the ego with the smallest heading error (never
+    a crossing lane of the same junction), then Dijkstra over the route's lane
+    graph to the last roadblock. The first lane is trimmed to the point
+    nearest the ego."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
     from carl_nuplan.planning.simulation.planner.pdm_planner.utils.graph_search.dijkstra import Dijkstra
@@ -177,7 +179,7 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
         if block is not None and block.interior_edges:
             blocks.append(block)
     if not blocks:
-        return np.zeros((0, 2))
+        return np.zeros((0, 2)), []
     route_lanes = {lane.id: lane for block in blocks for lane in block.interior_edges}
 
     def _lane_pts(lane):
@@ -204,7 +206,7 @@ def route_centerline(map_api, route_roadblock_ids, start_x: float, start_y: floa
     lane_points = [_lane_pts(lane) for lane in path]
     start_idx = int(np.argmin(np.hypot(*(lane_points[0] - (start_x, start_y)).T)))
     lane_points[0] = lane_points[0][start_idx:]
-    return np.concatenate(lane_points, axis=0)
+    return np.concatenate(lane_points, axis=0), [str(lane.id) for lane in path]
 
 def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
     """(N, 2) polyline -> fixed goal sequence every `spacing` meters (+ endpoint)."""
@@ -404,12 +406,26 @@ def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first
     )
 
 
-def traffic_light_states(traffic_light_data, connector_map: dict, num_traffic: int) -> np.ndarray:
+_LIGHT_RESTRICTIVENESS = {1: 0, 2: 1, LIGHT_STATE_GREEN: 2}  # RED < YELLOW < GREEN
+
+
+def traffic_light_states(traffic_light_data, connector_map: dict, num_traffic: int, route_connector_ids=()) -> np.ndarray:
     """PlannerInput.traffic_light_data -> per-element state array for
-    set_traffic_light_states. Unlisted elements stay UNKNOWN (0)."""
-    states = np.zeros(num_traffic, dtype=np.int32)
+    set_traffic_light_states. Several lane connectors (straight/left/right
+    from one lane) share one stop-line element: an element on the ego's route
+    is decided by its route connector alone, any other element by the most
+    restrictive reported status. Unreported means GREEN."""
+    states = np.full(num_traffic, LIGHT_STATE_GREEN, dtype=np.int32)
+    on_route = set(str(cid) for cid in route_connector_ids)
+    route_elements = {connector_map[cid] for cid in on_route if cid in connector_map}
     for tl in traffic_light_data:
-        j = connector_map.get(str(tl.lane_connector_id))
-        if j is not None:
-            states[j] = _NUPLAN_LIGHT_STATE.get(tl.status.name, 0)
+        cid = str(tl.lane_connector_id)
+        j = connector_map.get(cid)
+        if j is None:
+            continue
+        state = _NUPLAN_LIGHT_STATE[tl.status.name]
+        if cid in on_route:
+            states[j] = state
+        elif j not in route_elements and _LIGHT_RESTRICTIVENESS[state] < _LIGHT_RESTRICTIVENESS[int(states[j])]:
+            states[j] = state
     return states

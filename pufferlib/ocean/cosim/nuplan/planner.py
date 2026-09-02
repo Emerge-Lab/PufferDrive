@@ -18,14 +18,18 @@ from nuplan.planning.simulation.trajectory.abstract_trajectory import AbstractTr
 from nuplan.planning.simulation.trajectory.interpolated_trajectory import InterpolatedTrajectory
 
 from pufferlib.ocean.cosim import nuplan_bridge as nb
+from pufferlib.ocean.cosim.goals import RouteGoalWindow, route_goals_from_xy
 from pufferlib.ocean.drive.drive import Drive
 
 from pufferlib.ocean.cosim.nuplan_bridge import DEFAULT_ARCH, FAR_AWAY
 from pufferlib.ocean.drive import binding
 
 EGO_OBS_ACCEL_LONG_IDX = 4  # write_ego_obs column order: speed, width, length, steering, accel_long, ...
-EGO_TRACKING_TOL_M = 0.05
+EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrated pose up to log-timestamp jitter
 EGO_TRACKING_TOL_RAD = 0.005
+SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while nuPlan still plans
+NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
+COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 
 
 def clean_policy_state_dict(state_dict):
@@ -119,11 +123,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._policy = None
         self._transform: Optional[nb.NuPlanTransform] = None
         self._connector_map: Dict[str, int] = {}
+        self._route_connector_ids = ()  # lane ids along the Dijkstra route: they decide shared stop-line elements
         self._num_traffic = 0
-        self._route_goals: Optional[np.ndarray] = None
-        self._goal_cursor = 0
+        self._goal_window: Optional[RouteGoalWindow] = None
         self._bev = None  # BEVRenderer, built in _build if debug_bev_dir is set
-        self._last_goal_xy = None  # (gx, gy) selected in the most recent _sync, for BEV capture
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
 
@@ -239,6 +242,8 @@ class PufferDrivePlanner(AbstractPlanner):
         pool wiring), which are not overridable."""
         from pufferlib.ocean.cosim.arch import shadow_env_kwargs
 
+        if self._scenario is None:
+            raise RuntimeError("PufferDrivePlanner needs the scenario injected (requires_scenario)")
         return shadow_env_kwargs(
             cfg,
             defaults=DEFAULT_ARCH,
@@ -246,10 +251,19 @@ class PufferDrivePlanner(AbstractPlanner):
                 **self._env_overrides,
                 "map_dir": str(bin_path),
                 "num_maps": 1,
-                "num_agents": self._num_agents,
-                # lockstep with nuPlan's 10 Hz iterations, not the training dt (mimolette: 0.3)
-                "dt": 0.1,
-                "scenario_length": 1_000_000,
+                # One policy agent (the ego); every other slot is a static partner streamed from nuPlan.
+                "num_agents": 1,
+                "min_agents_per_env": 1,
+                "cosim_partner_slots": self._num_agents - 1,
+                "goal_source": "external",
+                # Mirrors the nuplan_* benchmarks in config/evaluation/benchmark.yaml: a nuPlan route
+                # never ends inside the scenario, so no window-final goal is speed gated.
+                "goal_reach_requires_speed": False,
+                # C_acc conditioning: cap the jerk model's positive accel at nuPlan's comfort bound instead of 2.5
+                "conditioning_accel_scale": COMFORT_ACCEL_MARGIN * NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 / binding.ACCEL_LONG_MAX,
+                # lockstep with nuPlan's planning iterations, not the training dt (mimolette: 0.3)
+                "dt": float(self._scenario.database_interval),
+                "scenario_length": int(self._scenario.get_number_of_iterations()) + SCENARIO_LENGTH_MARGIN_STEPS,
                 "resample_frequency": 0,
                 # External sim owns the episode: a training-config
                 # termination_mode=1 would c_reset() the pool (ego included)
@@ -257,8 +271,7 @@ class PufferDrivePlanner(AbstractPlanner):
                 "termination_mode": 0,
                 # native-eval scenario batching builds zero envs on a map-only bin
                 "eval_mode": False,
-                # Enforcement off (flags still fire): in one endless episode a
-                # "stop" latch is permanent and would freeze the ego for good.
+                # Enforcement off (flags still fire): a "stop" latch would freeze the ego for good.
                 "collision_behavior": "ignore",
                 "offroad_behavior": "ignore",
                 "traffic_light_behavior": "ignore",
@@ -340,13 +353,14 @@ class PufferDrivePlanner(AbstractPlanner):
         )
 
         route_ids = route_roadblock_correction_v2(ego_state, init.map_api, list(init.route_roadblock_ids))
-        centerline = nb.route_centerline(init.map_api, route_ids, ex, ey, float(ego_state.center.heading))
+        centerline, self._route_connector_ids = nb.route_centerline(
+            init.map_api, route_ids, ex, ey, float(ego_state.center.heading)
+        )
         goals = nb.goals_along(centerline, self._goal_spacing)
         if len(goals) == 0:  # degenerate route: fall back to the mission goal
             goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
         goals -= (self._transform.ox, self._transform.oy)
-        self._route_goals = goals
-        self._goal_cursor = 0
+        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals))
 
         # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint
@@ -378,20 +392,19 @@ class PufferDrivePlanner(AbstractPlanner):
         tf = self._transform
         env = self._env
 
-        # ego (slot 0): center pose + global-frame velocity. yaw_rate/accel_long come straight from
-        # nuPlan's own EgoState telemetry (already local-frame, rad/s and m/s^2, no reflection needed
-        # -- see the module docstring), not finite-differenced: PufferDrive's own integrate() may have
-        # already overwritten the ego's previous state by the time this setter would otherwise read it.
+        # ego (slot 0): synced from nuPlan telemetry once, at the scenario's initial state. Afterwards the
+        # shadow env owns the ego: nuPlan's perfect_tracking_controller hands back exactly the pose we
+        # integrated, and re-deriving accel_long/steering from telemetry every tick re-injects
+        # finite-difference accel after every stop and drives the ego into reverse.
         h = float(ego_state.center.heading)
         dcs = ego_state.dynamic_car_state
         v_local = dcs.center_velocity_2d
         vx_g = v_local.x * math.cos(h) - v_local.y * math.sin(h)
         vy_g = v_local.x * math.sin(h) + v_local.y * math.cos(h)
         ex, ey = tf.loc_to_bin(ego_state.center.x, ego_state.center.y)
-        # Under perfect tracking nuPlan hands back exactly the pose we integrated: keep the shadow
-        # ego's own jerk-model state (accel_long, steering) instead of re-deriving it from telemetry,
-        # which re-injects finite-difference accel after every stop and drives the ego into reverse.
-        if not self._ego_matches_last_integrated(ex, ey, h):
+        if self._last_integrated is not None:
+            self._check_ego_tracking(ex, ey, h)
+        else:
             env.set_agent_states(
                 np.array([0], np.int32),
                 np.array([ex], np.float32),
@@ -427,44 +440,23 @@ class PufferDrivePlanner(AbstractPlanner):
         # traffic lights: state array sized to the bin's element count
         if self._num_traffic:
             self._last_light_states = nb.traffic_light_states(
-                traffic_light_data, self._connector_map, self._num_traffic
+                traffic_light_data, self._connector_map, self._num_traffic, self._route_connector_ids
             )
             env.set_traffic_light_states(self._last_light_states)
 
-        # route goals: cursor advances only on arrival (like the CARLA side)
-        goals = self._route_goals
-        goal_radius = self._arch["goal_radius"]
-        cos_h, sin_h = math.cos(h), math.sin(h)
-        while self._goal_cursor < len(goals) - 1:
-            dx, dy = goals[self._goal_cursor, 0] - ex, goals[self._goal_cursor, 1] - ey
-            reached = math.hypot(dx, dy) < goal_radius
-            passed = dx * cos_h + dy * sin_h < -goal_radius  # clearly behind: never pull the ego backwards
-            if not (reached or passed):
-                break
-            self._goal_cursor += 1
-        k = self._arch["num_goals"]
-        indices = [min(self._goal_cursor + i, len(goals) - 1) for i in range(k)]
-        sel = goals[indices]
-        self._last_goal_xy = (sel[:, 0].copy(), sel[:, 1].copy())
-        # Local route direction per goal (previous goal -> goal; ~goal_spacing
-        # apart, adequate at nuPlan's 20 m spacing) for route-aligned lane snapping.
-        dir_sel = np.array([goals[i] - goals[max(i - 1, 0)] for i in indices], np.float32)
-        env.set_agent_goals(
-            0,
-            sel[:, 0].astype(np.float32).copy(),
-            sel[:, 1].astype(np.float32).copy(),
-            np.zeros(k, np.float32),
-            dir_sel[:, 0].copy(),
-            dir_sel[:, 1].copy(),
-        )
+        self._goal_window.sync(ex, ey, h)
 
-    def _ego_matches_last_integrated(self, bin_x: float, bin_y: float, heading: float) -> bool:
-        if self._last_integrated is None:
-            return False
+    def _check_ego_tracking(self, bin_x: float, bin_y: float, heading: float) -> None:
         lx, ly, lh = self._last_integrated
-        return abs(bin_x - lx) < EGO_TRACKING_TOL_M and abs(bin_y - ly) < EGO_TRACKING_TOL_M and abs(
-            _angle_diff(heading, lh)
-        ) < EGO_TRACKING_TOL_RAD
+        if (
+            abs(bin_x - lx) > EGO_TRACKING_TOL_M
+            or abs(bin_y - ly) > EGO_TRACKING_TOL_M
+            or abs(_angle_diff(heading, lh)) > EGO_TRACKING_TOL_RAD
+        ):
+            raise RuntimeError(
+                f"nuPlan ego pose ({bin_x:.3f}, {bin_y:.3f}, {heading:.4f}) diverged from the integrated "
+                f"shadow pose ({lx:.3f}, {ly:.3f}, {lh:.4f}); the planner assumes perfect_tracking_controller"
+            )
 
     # --- planning -------------------------------------------------------------
     def compute_planner_trajectory(self, current_input: PlannerInput) -> AbstractTrajectory:
@@ -477,6 +469,11 @@ class PufferDrivePlanner(AbstractPlanner):
             self._build(ego_state)
 
         self._sync(ego_state, detections, current_input.traffic_light_data)
+        if self._env.tick >= self._arch["scenario_length"] - 1:
+            raise RuntimeError(
+                f"shadow env tick {self._env.tick} reached scenario_length {self._arch['scenario_length']}; "
+                "nuPlan planned more iterations than the scenario declared"
+            )
         obs = np.asarray(self._env.recompute_observations())
 
         if self._policy is None:  # dummy wiring test: constant forward jerk
@@ -512,10 +509,11 @@ class PufferDrivePlanner(AbstractPlanner):
 
         if self._bev is not None:
             try:
+                window = self._goal_window.window
                 self._bev.capture(
-                    self._env.get_global_agent_state(),
+                    self._env.get_global_agent_state(include_static=True),
                     ego_idx=0,
-                    goals=self._last_goal_xy,
+                    goals=(window[:, 0], window[:, 1]),
                     light_states=self._last_light_states,
                 )
                 # AbstractPlanner has no close()/destroy() hook, so save at the

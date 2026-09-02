@@ -39,13 +39,14 @@ import numpy as np
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.cosim import carla_bridge as cb
 from pufferlib.ocean.cosim.arch import shadow_env_kwargs
+from pufferlib.ocean.cosim.goals import RouteGoalWindow
 # carla_scenarios imports carla at module scope (it's pure CARLA-actor
 # manipulation, unlike this module's carla_bridge deps) and is only used
 # inside main() below, so it's imported there too.
 
 DEFAULT_ROUTES = "/scratch/yw4142/CaRL/PlanT/data/longest6.xml"
 FAR_AWAY = 1.0e6  # park surplus PufferDrive agents out of observation range
-GOAL_RADIUS_M = 6.0  # advance the route-goal cursor only when the ego arrives within this
+SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while the co-sim runs
 DEFAULT_VEHICLE_LENGTH_M = 4.5  # fallback size for a parked/dead actor slot (out of obs range anyway)
 DEFAULT_VEHICLE_WIDTH_M = 2.0
 EGO_BLUEPRINT = "vehicle.lincoln.mkz_2017"  # the longest6/CARLA-leaderboard hero vehicle
@@ -247,14 +248,6 @@ def build_route_goals(dense_route, transform, cmap, spacing=20.0):
     return np.array(goals, np.float32)
 
 
-def select_goals(route_goals, cursor, num=3):
-    """The next `num` goals from the cursor (clamped at the route's end), as
-    (gx, gy, gz, gdir_x, gdir_y) arrays for set_agent_goals."""
-    idx = [min(cursor + k, len(route_goals) - 1) for k in range(num)]
-    sel = route_goals[idx]
-    return (sel[:, 0].copy(), sel[:, 1].copy(), sel[:, 2].copy(), sel[:, 3].copy(), sel[:, 4].copy())
-
-
 def attach_chase_camera(world, ego, w=960, h=540):
     """RGB chase camera attached to the ego (behind + above, looking forward).
     Returns (camera_actor, image_queue). Requires CARLA running WITH rendering
@@ -340,10 +333,44 @@ class BEVRenderer:
         plt.close(fig)
 
     def save(self, fps=10):
-        import imageio
-
-        imageio.mimwrite(self.out_path, self.frames, fps=fps, codec="libx264")
+        write_mp4(self.out_path, self.frames, fps=fps)
         print(f"[cosim] wrote {self.out_path} ({len(self.frames)} frames)")
+
+
+class Mp4Writer:
+    """Streams RGB uint8 frames to an mp4 via OpenCV."""
+
+    def __init__(self, out_path, fps):
+        self.out_path = str(out_path)
+        self.fps = float(fps)
+        self.writer = None
+        self.frame_count = 0
+
+    def append_data(self, frame):
+        import cv2
+
+        frame = np.ascontiguousarray(frame)
+        if self.writer is None:
+            height, width = frame.shape[:2]
+            self.writer = cv2.VideoWriter(self.out_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (width, height))
+            if not self.writer.isOpened():
+                raise RuntimeError(f"Mp4Writer({self.out_path}): OpenCV could not open the video writer")
+        self.writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        self.frame_count += 1
+
+    def close(self):
+        if self.writer is not None:
+            self.writer.release()
+            self.writer = None
+
+
+def write_mp4(out_path, frames, fps=10):
+    if not frames:
+        raise ValueError(f"write_mp4({out_path}): no frames")
+    writer = Mp4Writer(out_path, fps)
+    for frame in frames:
+        writer.append_data(frame)
+    writer.close()
 
 
 def main():
@@ -398,21 +425,20 @@ def main():
     # address env 0).
     num_agents = args.num_agents or int(((cfg or {}).get("env") or {}).get("max_agents_per_env", 64))
 
-    # PufferDrive env (gigaflow spawns an agent pool; agent 0 = ego, rest =
-    # background). Env kwargs come from the checkpoint's config.yaml with the
-    # clean-eval profile applied on top (see cosim/arch.py); goal_source="map"
-    # is only the no-checkpoint fallback -- reset-time goals are throwaway (the
-    # co-sim sets the ego's from the route and overwrites all background agents
-    # each tick), and "map" keeps reset independent of the routable lane network.
+    # PufferDrive env: one policy agent (the ego) plus static partner slots
+    # streamed from CARLA. Env kwargs come from the checkpoint's config.yaml with
+    # the clean-eval profile applied on top (see cosim/arch.py).
     env = Drive(
         **shadow_env_kwargs(
             cfg,
-            defaults=dict(goal_source="map"),
             overrides=dict(
                 map_dir=town_bin,
                 num_maps=1,
-                num_agents=num_agents,
-                scenario_length=1_000_000,
+                num_agents=1,
+                min_agents_per_env=1,
+                cosim_partner_slots=num_agents - 1,
+                goal_source="external",
+                scenario_length=args.steps + SCENARIO_LENGTH_MARGIN_STEPS,
                 resample_frequency=0,
                 dt=dt,
                 # External sim owns the episode: a training-config
@@ -429,7 +455,7 @@ def main():
     )
     obs, _ = env.reset()
     obs = np.asarray(obs)
-    n_active = int(env.num_agents)
+    n_slots = 1 + env.cosim_partner_slots
     print(f"[cosim] env reset: obs {obs.shape}, action {env.single_action_space}, dt={dt}, sub_ticks={sub_ticks}")
 
     # Policy (optional) — falls back to a constant forward jerk action.
@@ -446,7 +472,7 @@ def main():
         policy.eval()
         print(f"[cosim] loaded policy from {args.checkpoint}")
     # jerk action: idx = j_long_idx*3 + j_lat_idx; (3,1) = +long jerk, straight (accelerate)
-    dummy_action = np.full((n_active, 1), 3 * 3 + 1, dtype=np.int32)
+    dummy_action = np.full((1, 1), 3 * 3 + 1, dtype=np.int32)
 
     # CARLA
     client = carla.Client(args.carla_host, args.carla_port)
@@ -457,7 +483,7 @@ def main():
     _bin_lanes = cb._bin_lane_points(town_bin)  # bin lane points (== global frame) for diagnostics
     dense_route = densify_route(route_wps)  # fine-sampled route for lane-centered goal placement
     route_goals = build_route_goals(dense_route, transform, cmap)  # fixed 20-m lane-centered goal sequence
-    goal_cursor = 0  # index of the current (not-yet-reached) route goal
+    goal_window = RouteGoalWindow(env, route_goals)
     light_map, num_traffic = cb.map_lights_to_bin(lights, transform, town_bin)
     print(
         f"[cosim] carla: ego + {len(bg)} background + {len(lights)} lights; offset={transform.tx:.1f},{transform.ty:.1f}"
@@ -479,10 +505,9 @@ def main():
     env.set_agent_sizes(
         np.array([0], np.int32), np.array([2.0 * ego_ext.x], np.float32), np.array([2.0 * ego_ext.y], np.float32)
     )
-    gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
-    env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
+    goal_window.sync(ego_state[0], ego_state[1], ego_state[3])
     bg_idx, *_ = read_background(bg, transform)
-    surplus = np.arange(1 + len(bg), n_active, dtype=np.int32)
+    surplus = np.arange(1 + len(bg), n_slots, dtype=np.int32)
     if len(surplus):
         z6 = np.full(len(surplus), FAR_AWAY, np.float32)
         zero = np.zeros_like(z6)
@@ -518,7 +543,7 @@ def main():
                     policy=policy,
                 )
                 env_action = cont_action if env_continuous and cont_action is not None else action
-                act = env_action.cpu().numpy().reshape(n_active, -1)
+                act = env_action.cpu().numpy().reshape(1, -1)
                 if not env_continuous:
                     act = act.astype(np.int32)
         else:
@@ -543,8 +568,8 @@ def main():
         env.set_agent_states(*read_background(actors, transform))
         env.set_agent_sizes(*read_actor_sizes(actors))  # true CARLA bounding-box sizes
         n_used = 1 + len(actors)  # ego + actors; park the rest (count varies)
-        if n_used < n_active:
-            sp = np.arange(n_used, n_active, dtype=np.int32)
+        if n_used < n_slots:
+            sp = np.arange(n_used, n_slots, dtype=np.int32)
             zf = np.full(len(sp), FAR_AWAY, np.float32)
             zz = np.zeros_like(zf)
             env.set_agent_states(sp, zf, zf, zf, zz, zz, zz, zz, zz)
@@ -555,25 +580,20 @@ def main():
                 if 0 <= j < num_traffic:
                     states[j] = state
         env.set_traffic_light_states(states)
-        # advance the goal cursor only once the ego actually reaches the current goal
         ebx, eby = float(ego_bin["x"][0]), float(ego_bin["y"][0])
-        while (
-            goal_cursor < len(route_goals) - 1
-            and np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby) < GOAL_RADIUS_M
-        ):
-            goal_cursor += 1
-        gx, gy, gz, gdx, gdy = select_goals(route_goals, goal_cursor)
-        env.set_agent_goals(0, gx, gy, gz, gdx, gdy)
+        goal_window.sync(ebx, eby, float(ego_bin["heading"][0]))
+        gx, gy = goal_window.window[:, 0], goal_window.window[:, 1]
         obs = np.asarray(env.recompute_observations())
 
         if bev is not None:
-            bev.capture(env.get_global_agent_state(), ego_idx=0, goals=(gx, gy), light_states=states)
+            bev.capture(env.get_global_agent_state(include_static=True), ego_idx=0, goals=(gx, gy), light_states=states)
 
         if step % 10 == 0:
             el = ego.get_location()
             nl = min(lights, key=lambda lt: lt.get_location().distance(el)) if lights else None
             ls = f"{nl.get_state()}@{nl.get_location().distance(el):.0f}m" if nl else "n/a"
-            gd = float(np.hypot(gx[0] - float(ego_bin["x"][0]), gy[0] - float(ego_bin["y"][0])))
+            goal_cursor = goal_window.current_index
+            gd = float(np.hypot(route_goals[goal_cursor, 0] - ebx, route_goals[goal_cursor, 1] - eby))
             near = sum(1 for a in bg if a.is_alive and a.get_location().distance(el) < 40.0)
             wp = cmap.get_waypoint(ego.get_location())  # nearest drivable lane center
             lat = ego.get_location().distance(wp.transform.location) if wp else -1.0
@@ -589,9 +609,7 @@ def main():
     if bev is not None:
         bev.save()
     if carla_frames:
-        import imageio
-
-        imageio.mimwrite(args.carla_view, carla_frames, fps=10, codec="libx264")
+        write_mp4(args.carla_view, carla_frames, fps=10)
         print(f"[cosim] wrote {args.carla_view} ({len(carla_frames)} frames)")
     # Teardown while STILL synchronous: stop sensors, detach the TM from its
     # vehicles, destroy actors, tick to apply — and only then release the world

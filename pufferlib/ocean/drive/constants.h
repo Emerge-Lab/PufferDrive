@@ -114,6 +114,7 @@
 #define GOAL_SOURCE_ROUTE 0 // seed from the agent's own forward route
 #define GOAL_SOURCE_MAP 1   // seed from a uniformly sampled map lane
 #define GOAL_SOURCE_GT 2    // seed directly from the logged ground-truth trajectory
+#define GOAL_SOURCE_EXTERNAL 3 // co-sim: goal windows pushed by the external sim (c_set_agent_goals)
 
 // Dynamics model
 #define DYNAMICS_MODEL_CLASSIC 0
@@ -173,6 +174,9 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
 #define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
+#define COSIM_PARTNER_DEFAULT_LENGTH_M 4.5f // co-sim partner slot box until the external sim sets sizes
+#define COSIM_PARTNER_DEFAULT_WIDTH_M 2.0f
+#define COSIM_PARTNER_DEFAULT_HEIGHT_M 1.5f
 // Replay self-play: logged vehicles failing these are created static instead of policy-controlled
 #define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f
 #define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M

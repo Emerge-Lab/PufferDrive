@@ -24,11 +24,13 @@ export NUPLAN_DATA_ROOT=/home/shared/data/nuplan
 export NUPLAN_MAPS_ROOT=/home/shared/data/nuplan/maps
 export PYTHONPATH=$PD:$CARL_DEVKIT_ROOT:$NUPLAN_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
-export COSIM_DEBUG_BEV=0
-export CALLBACKS="[simulation_log_callback]"
+export COSIM_DEBUG_BEV=1  # shadow-env BEV mp4 per scenario -> $GROUP/bev
+# carl_visualization_callback: nuPlan ground-truth video per scenario -> $GROUP/simulation/<challenge>/<ts>/visualization
+export CALLBACKS="[simulation_log_callback, carl_visualization_callback]"
 export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
-export THREADS_PER_NODE=96
+# Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
+export THREADS_PER_NODE=128
 export GROUP=$PD/experiments/nuplan_val14_k_scaled_0035_1000_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1

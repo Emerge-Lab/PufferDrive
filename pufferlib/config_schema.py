@@ -83,6 +83,7 @@ class GoalSource(Enum):
     route = 0
     map = 1
     gt = 2
+    external = 3
 
 
 @dataclass

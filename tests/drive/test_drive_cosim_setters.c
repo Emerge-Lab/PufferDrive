@@ -30,21 +30,26 @@ static int test_set_agent_sizes_updates_dimensions_radius_and_wheelbase(void) {
     return 0;
 }
 
-static int test_set_agent_sizes_skips_out_of_range_index(void) {
-    // Indices outside [0, num_total_agents) must be skipped, not clamped or crashed on; the valid
-    // entries in the same batch must still apply.
+static int test_set_agent_sizes_rejects_out_of_range_index_and_bad_size(void) {
+    // External input: an index outside [0, num_total_agents) or a non-positive size fails the whole
+    // call (-1) instead of being clamped or skipped; the agent must not be touched.
     Drive env = {0};
     Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
     env.agents = &agent;
     env.num_total_agents = 1;
 
-    int idx[3] = {-1, 0, 5};
-    float length[3] = {1.0f, 8.0f, 1.0f};
-    float width[3] = {1.0f, 3.0f, 1.0f};
-    c_set_agent_sizes(&env, 3, idx, length, width);
+    int bad_idx[1] = {5};
+    float length[1] = {8.0f};
+    float width[1] = {3.0f};
+    EXPECT_EQ_INT(c_set_agent_sizes(&env, 1, bad_idx, length, width), -1);
+    EXPECT_NEAR(agent.sim_length, 4.0f, 1e-6f);
 
+    int idx[1] = {0};
+    float zero_width[1] = {0.0f};
+    EXPECT_EQ_INT(c_set_agent_sizes(&env, 1, idx, length, zero_width), -1);
+    EXPECT_NEAR(agent.sim_length, 4.0f, 1e-6f);
+    EXPECT_EQ_INT(c_set_agent_sizes(&env, 1, idx, length, width), 0);
     EXPECT_NEAR(agent.sim_length, 8.0f, 1e-6f);
-    EXPECT_NEAR(agent.sim_width, 3.0f, 1e-6f);
     return 0;
 }
 
@@ -75,7 +80,7 @@ static int test_set_traffic_light_states_writes_current_timestep_for_lights_only
     env.timestep = 2;
 
     int new_states[2] = {3, 7}; // one entry per traffic element, indexed like env->traffic_elements
-    c_set_traffic_light_states(&env, new_states);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
 
     EXPECT_EQ_INT(light_states[2], 3); // written at the current timestep
     EXPECT_EQ_INT(light_states[0], 99);
@@ -88,25 +93,31 @@ static int test_set_traffic_light_states_writes_current_timestep_for_lights_only
     return 0;
 }
 
-static int test_set_traffic_light_states_skips_out_of_range_or_missing_states(void) {
-    // A timestep outside [0, state_size) or a NULL states buffer (e.g. an element with no logged
-    // schedule) must be skipped rather than read/written out of bounds.
+static int test_set_traffic_light_states_rejects_out_of_range_timestep_and_state(void) {
+    // A timestep outside [0, state_size) or a state outside the enum fails the call (-1) instead of
+    // being skipped; a NULL states buffer (an element with no schedule) is skipped, never dereferenced.
     int light_states[3] = {99, 99, 99};
     TrafficControlElement elements[2];
-    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, light_states);
-    elements[1] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, NULL);
+    elements[0] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, NULL);
+    elements[1] = make_traffic_element(TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT, 3, light_states);
 
     Drive env = {0};
     env.traffic_elements = elements;
     env.num_traffic_elements = 2;
-    env.timestep = 10; // out of range for state_size=3
 
     int new_states[2] = {1, 1};
-    c_set_traffic_light_states(&env, new_states); // must not crash on the NULL-states element either
-
+    env.timestep = 10; // out of range for state_size=3
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), -1);
     EXPECT_EQ_INT(light_states[0], 99);
     EXPECT_EQ_INT(light_states[1], 99);
     EXPECT_EQ_INT(light_states[2], 99);
+
+    env.timestep = 1;
+    int bad_states[2] = {1, TRAFFIC_CONTROL_STATE_OFF + 1};
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, bad_states), -1);
+    EXPECT_EQ_INT(light_states[1], 99);
+    EXPECT_EQ_INT(c_set_traffic_light_states(&env, new_states), 0);
+    EXPECT_EQ_INT(light_states[1], 1);
     return 0;
 }
 
@@ -130,7 +141,7 @@ static int test_set_agent_states_teleport_resets_prev_pose(void) {
     int idx[1] = {0};
     float x[1] = {10.0f}, y[1] = {20.0f}, z[1] = {0.0f}, h[1] = {0.5f};
     float vx[1] = {1.0f}, vy[1] = {0.0f}, yr[1] = {0.0f}, al[1] = {0.0f};
-    c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al);
+    EXPECT_EQ_INT(c_set_agent_states(&env, 1, idx, x, y, z, h, vx, vy, yr, al), 0);
 
     EXPECT_NEAR(agent.prev_x, agent.sim_x, 1e-6f);
     EXPECT_NEAR(agent.prev_y, agent.sim_y, 1e-6f);
@@ -163,7 +174,7 @@ static int test_set_agent_goals_sets_positions_lane_and_count(void) {
     float gz[3] = {1.0f, 2.0f, 3.0f};
     float gdx[3] = {1.0f, 1.0f, 1.0f};
     float gdy[3] = {0.0f, 0.0f, 0.0f};
-    c_set_agent_goals(&env, 0, 3, gx, gy, gz, gdx, gdy);
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, 3, gx, gy, gz, gdx, gdy), 0);
 
     EXPECT_EQ_INT(agent.goal_count, 3);
     EXPECT_EQ_INT(agent.current_goal_idx, 0);
@@ -179,12 +190,12 @@ static int test_set_agent_goals_sets_positions_lane_and_count(void) {
     return 0;
 }
 
-static int test_set_agent_goals_caps_at_max_goals(void) {
-    // A caller passing more waypoints than MAX_GOALS must be clamped, and goal_count must reflect the
-    // clamped count (not the raw waypoint count), or the obs window in write_reward_target_obs reads
-    // past what was actually written.
+static int test_set_agent_goals_rejects_more_than_max_goals(void) {
+    // More waypoints than MAX_GOALS (or none) is invalid external input: the call fails (-1) and the
+    // agent's goal window is left untouched, never silently clamped.
     Drive env = {0};
     Agent agent = {0};
+    agent.goal_count = 2;
     env.agents = &agent;
     env.num_total_agents = 1;
 
@@ -197,15 +208,16 @@ static int test_set_agent_goals_caps_at_max_goals(void) {
         gz[w] = 0.0f;
         gdir[w] = 0.0f;
     }
-    c_set_agent_goals(&env, 0, requested, gx, gy, gz, gdir, gdir);
-
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, requested, gx, gy, gz, gdir, gdir), -1);
+    EXPECT_EQ_INT(agent.goal_count, 2);
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, 0, gx, gy, gz, gdir, gdir), -1);
+    EXPECT_EQ_INT(agent.goal_count, 2);
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 0, MAX_GOALS, gx, gy, gz, gdir, gdir), 0);
     EXPECT_EQ_INT(agent.goal_count, MAX_GOALS);
-    EXPECT_EQ_INT(agent.list_goal_lane[MAX_GOALS - 1], -1);
-    EXPECT_NEAR(agent.list_goal_x[MAX_GOALS - 1], (float) (MAX_GOALS - 1), 1e-6f);
     return 0;
 }
 
-static int test_set_agent_goals_out_of_range_agent_idx_is_noop(void) {
+static int test_set_agent_goals_rejects_out_of_range_agent_idx(void) {
     Drive env = {0};
     Agent agent = {0};
     agent.goal_count = 5; // must survive untouched
@@ -213,7 +225,7 @@ static int test_set_agent_goals_out_of_range_agent_idx_is_noop(void) {
     env.num_total_agents = 1;
 
     float gx[1] = {1.0f}, gy[1] = {1.0f}, gz[1] = {1.0f}, gdir[1] = {0.0f};
-    c_set_agent_goals(&env, 5, 1, gx, gy, gz, gdir, gdir); // agent_idx out of range
+    EXPECT_EQ_INT(c_set_agent_goals(&env, 5, 1, gx, gy, gz, gdir, gdir), -1); // agent_idx out of range
 
     EXPECT_EQ_INT(agent.goal_count, 5);
     return 0;
@@ -222,12 +234,12 @@ static int test_set_agent_goals_out_of_range_agent_idx_is_noop(void) {
 int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
-    RUN_TEST(test_set_agent_sizes_skips_out_of_range_index);
+    RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
     RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
-    RUN_TEST(test_set_traffic_light_states_skips_out_of_range_or_missing_states);
+    RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);
     RUN_TEST(test_set_agent_goals_sets_positions_lane_and_count);
-    RUN_TEST(test_set_agent_goals_caps_at_max_goals);
-    RUN_TEST(test_set_agent_goals_out_of_range_agent_idx_is_noop);
+    RUN_TEST(test_set_agent_goals_rejects_more_than_max_goals);
+    RUN_TEST(test_set_agent_goals_rejects_out_of_range_agent_idx);
     return test_summary(failures);
 }

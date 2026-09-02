@@ -211,6 +211,7 @@ def test_drive_mean_action_is_exact_in_physical_units(monkeypatch):
         num_agents=64,
         map_dir="pufferlib/resources/drive/binaries/carla",
         num_maps=1,
+        allow_map_subset=True,
         scenario_length=200,
         dynamics_model="jerk",
         action_type="continuous",

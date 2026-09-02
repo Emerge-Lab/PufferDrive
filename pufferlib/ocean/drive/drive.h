@@ -182,6 +182,7 @@ struct Drive {
     // Agents
     Agent *agents;
     int num_controllable_agents;
+    int cosim_partner_slots; // gigaflow co-sim: static slots owned by the external sim (never spawned/stepped)
     int active_agent_count;
     int *active_agent_indices;
     int num_total_agents;
@@ -275,7 +276,9 @@ struct Drive {
     float min_goal_spacing;
     float max_goal_spacing;
     float goal_heading_max_deg; // 0 disables the successive-waypoint heading constraint
-    int goal_speed_randomization; // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
+    int goal_speed_randomization;
+    float conditioning_accel_scale; // eval C_acc: scales the positive accel cap (ACCEL_LONG_LIMIT[1]); 1.0 = paper eval
+ // 0 pins the goal-speed coef to goal_speed (paper: v_goal fixed)
     int goal_reach_requires_speed; // 1: final goal is consumed only below goal speed (paper semantics)
     int num_goals;
     int goal_regen_mode;
@@ -2266,7 +2269,7 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
         agent->reward_coefs[REWARD_COEF_REVERSE] = env->reward_reverse;
         agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
         agent->reward_coefs[REWARD_COEF_STEER] = 1.0f;
-        agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+        agent->reward_coefs[REWARD_COEF_ACC] = env->conditioning_accel_scale;
         agent->reward_coefs[REWARD_COEF_SPEED] = env->max_speed_mps / env->base_max_speed_mps;
     }
 }
@@ -2619,6 +2622,11 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
+    if (env->goal_source == GOAL_SOURCE_EXTERNAL) {
+        agent->goal_count = 0;
+        agent->current_goal_idx = 0;
+        return true;
+    }
     if (env->goal_source == GOAL_SOURCE_MAP) {
         if (!generate_new_goals_from_map(env, agent)) {
             printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
@@ -2886,9 +2894,10 @@ void set_active_agents(Drive *env) {
     // In GIGAFLOW mode, spawn agents dynamically on the map
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         int num_agents_to_create = env->num_controllable_agents;
+        int partner_slots = env->cosim_partner_slots;
 
         // Initialize agents for GIGAFLOW mode
-        env->agents = (Agent *) calloc(num_agents_to_create, sizeof(Agent));
+        env->agents = (Agent *) calloc(num_agents_to_create + partner_slots, sizeof(Agent));
         int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
         int successfully_created = 0;
@@ -2903,10 +2912,25 @@ void set_active_agents(Drive *env) {
             }
         }
 
-        env->num_total_agents = num_agents_to_create;
+        env->num_total_agents = num_agents_to_create + partner_slots;
         env->active_agent_indices = (int *) malloc(successfully_created * sizeof(int));
-        env->static_agent_indices = NULL;
+        env->static_agent_indices = partner_slots > 0 ? (int *) malloc(partner_slots * sizeof(int)) : NULL;
         env->expert_static_agent_indices = NULL;
+        for (int k = 0; k < partner_slots; k++) {
+            int partner_idx = num_agents_to_create + k;
+            Agent *partner = &env->agents[partner_idx];
+            partner->id = partner_idx;
+            partner->type = VEHICLE;
+            partner->controller = CONTROLLER_STATIC;
+            partner->sim_length = COSIM_PARTNER_DEFAULT_LENGTH_M;
+            partner->sim_width = COSIM_PARTNER_DEFAULT_WIDTH_M;
+            partner->sim_height = COSIM_PARTNER_DEFAULT_HEIGHT_M;
+            partner->wheelbase = 0.6f * partner->sim_length;
+            update_agent_radius(partner);
+            invalidate_agent(partner);
+            env->static_agent_indices[k] = partner_idx;
+        }
+        env->static_agent_count = partner_slots;
 
         for (int i = 0; i < successfully_created; i++) {
             env->active_agent_indices[i] = active_agent_indices[i];
@@ -2924,7 +2948,7 @@ void set_active_agents(Drive *env) {
                 env->map_name);
         }
         env->active_agent_count = successfully_created;
-        env->num_agents = successfully_created;
+        env->num_agents = successfully_created + partner_slots;
 
         return;
     }
@@ -3369,8 +3393,10 @@ int get_track_id_or_placeholder(Drive *env, int agent_idx) {
     return -1;
 }
 
+// include_static: also write the static partner slots after the active agents (co-sim BEV/debug).
 void c_get_global_agent_state(
     Drive *env,
+    int include_static,
     float *x_out,
     float *y_out,
     float *z_out,
@@ -3378,8 +3404,10 @@ void c_get_global_agent_state(
     int *id_out,
     float *length_out,
     float *width_out) {
-    for (int i = 0; i < env->active_agent_count; i++) {
-        int agent_idx = env->active_agent_indices[i];
+    int count = include_static ? env->num_agents : env->active_agent_count;
+    for (int i = 0; i < count; i++) {
+        int agent_idx = (i < env->active_agent_count) ? env->active_agent_indices[i]
+                                                      : env->static_agent_indices[i - env->active_agent_count];
         Agent *agent = &env->agents[agent_idx];
 
         // For WOSAC, we need the original world coordinates, so we add the world means back
@@ -3615,7 +3643,8 @@ static void refresh_lane_association(Drive *env, Agent *agent) {
 }
 
 // ── Co-simulation external-state setters ─────────────────────────────────────
-void c_set_agent_states(
+// Co-sim setters return 0 on success, -1 on invalid external input (the binding raises).
+int c_set_agent_states(
     Drive *env,
     int count,
     const int *idx,
@@ -3630,7 +3659,10 @@ void c_set_agent_states(
     for (int k = 0; k < count; k++) {
         int agent_idx = idx[k];
         if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
-            continue;
+            return -1;
+        }
+        if (!isfinite(x[k]) || !isfinite(y[k]) || !isfinite(heading[k]) || !isfinite(vx[k]) || !isfinite(vy[k])) {
+            return -1;
         }
         Agent *agent = &env->agents[agent_idx];
         agent->sim_x = x[k] - env->world_mean_x;
@@ -3668,14 +3700,18 @@ void c_set_agent_states(
         // seconds_stopped is intentionally left untouched: c_step already updates it once per tick, before this
         // overwrite runs, so redoing it here would double-count.
     }
+    return 0;
 }
 
 // Overwrite agent bounding-box dimensions
-void c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length, const float *width) {
+int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length, const float *width) {
     for (int k = 0; k < count; k++) {
         int agent_idx = idx[k];
         if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
-            continue;
+            return -1;
+        }
+        if (!(length[k] > 0.0f) || !(width[k] > 0.0f)) {
+            return -1;
         }
         Agent *agent = &env->agents[agent_idx];
         agent->sim_length = length[k];
@@ -3683,20 +3719,34 @@ void c_set_agent_sizes(Drive *env, int count, const int *idx, const float *lengt
         update_agent_radius(agent); // collision broad-phase uses this; stale radius under/over-detects hits
         agent->wheelbase = 0.6f * agent->sim_length; // matches spawn/log-replay sizing (see move_expert)
     }
+    return 0;
 }
 
-void c_set_traffic_light_states(Drive *env, const int *states) {
+int c_set_traffic_light_states(Drive *env, const int *states) {
     int ts = env->timestep;
     for (int i = 0; i < env->num_traffic_elements; i++) {
         TrafficControlElement *traffic = &env->traffic_elements[i];
         if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
             continue;
         }
-        if (traffic->states == NULL || ts < 0 || ts >= traffic->state_size) {
-            continue;
+        if (traffic->states == NULL) {
+            continue; // element without a state schedule cannot hold a state
+        }
+        if (ts < 0 || ts >= traffic->state_size) {
+            return -1;
+        }
+        if (states[i] < TRAFFIC_CONTROL_STATE_UNKNOWN || states[i] > TRAFFIC_CONTROL_STATE_OFF) {
+            return -1;
         }
         traffic->states[ts] = states[i];
     }
+    return 0;
+}
+
+void c_get_agent_goal_progress(Drive *env, int agent_idx, int *current_goal_idx_out, int *goal_count_out) {
+    Agent *agent = &env->agents[agent_idx];
+    *current_goal_idx_out = agent->current_goal_idx;
+    *goal_count_out = agent->goal_count;
 }
 
 // Cosim-only: nearest drivable lane for an externally-set goal waypoint (sim frame), so the
@@ -3766,7 +3816,7 @@ static int find_goal_lane(Drive *env, float goal_x, float goal_y, float route_di
     return best_lane_idx;
 }
 
-void c_set_agent_goals(
+int c_set_agent_goals(
     Drive *env,
     int agent_idx,
     int num_wp,
@@ -3775,14 +3825,14 @@ void c_set_agent_goals(
     const float *gz,
     const float *gdir_x,
     const float *gdir_y) {
-    if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
-        return;
+    if (agent_idx < 0 || agent_idx >= env->num_total_agents || num_wp < 1 || num_wp > MAX_GOALS) {
+        return -1;
     }
     Agent *agent = &env->agents[agent_idx];
-    if (num_wp > MAX_GOALS) {
-        num_wp = MAX_GOALS;
-    }
     for (int w = 0; w < num_wp; w++) {
+        if (!isfinite(gx[w]) || !isfinite(gy[w])) {
+            return -1;
+        }
         agent->list_goal_x[w] = gx[w] - env->world_mean_x;
         agent->list_goal_y[w] = gy[w] - env->world_mean_y;
         agent->list_goal_z[w] = gz[w];
@@ -3796,6 +3846,7 @@ void c_set_agent_goals(
     agent->current_goal_x = agent->list_goal_x[0];
     agent->current_goal_y = agent->list_goal_y[0];
     agent->current_goal_z = agent->list_goal_z[0];
+    return 0;
 }
 // ───────────────────────────────────────
 
@@ -5155,10 +5206,9 @@ void c_step(Drive *env) {
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
             continue;
         }
-        if (env->goal_source == GOAL_SOURCE_GT) {
-            // Replay mode: leave current_goal_idx saturated so the
-            // reached-goal condition won't fire again. Re-generating
-            // route-based goals on WOMD maps fails (removed=1).
+        if (env->goal_source == GOAL_SOURCE_GT || env->goal_source == GOAL_SOURCE_EXTERNAL) {
+            // Replay/co-sim: leave current_goal_idx saturated so the reached-goal condition won't fire
+            // again; the next window comes from the log layout (GT) or c_set_agent_goals (external).
             continue;
         }
         // Rolling slides the window forward by one goal; finite advances the alias to the next goal in the set.
