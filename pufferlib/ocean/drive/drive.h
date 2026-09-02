@@ -233,12 +233,15 @@ struct Drive {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int target_infraction_behavior;
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
     int simulation_mode;
     int termination_mode;
     float inactive_agent_threshold;
+    int adversarial_termination_mode;
+    int target_failure_episode_end;
     int terminate_on_goal;
     int eval_mode;
     int eval_training_render;
@@ -519,6 +522,30 @@ static inline void apply_infraction_behavior(Agent *agent, int behavior) {
         agent->stopped = 1;
     } else if (behavior == INFRACTION_BEHAVIOR_REMOVE && !agent->removed) {
         agent->removed = 1;
+    }
+}
+
+static inline void apply_offroad_behavior(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int target_agent_idx = env->active_agent_indices[0];
+    if (agent_idx != target_agent_idx || env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_NORMAL) {
+        apply_infraction_behavior(agent, env->offroad_behavior);
+        return;
+    }
+    if (env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_REMOVE) {
+        agent->removed = 1;
+    }
+}
+
+static inline void apply_collision_behavior(Drive *env, int agent_idx, int collided_agent_idx) {
+    int target_agent_idx = env->active_agent_indices[0];
+    int target_involved = agent_idx == target_agent_idx || collided_agent_idx == target_agent_idx;
+    if (!target_involved || env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_NORMAL) {
+        apply_infraction_behavior(&env->agents[agent_idx], env->collision_behavior);
+        return;
+    }
+    if (env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_REMOVE) {
+        env->agents[target_agent_idx].removed = 1;
     }
 }
 
@@ -3255,7 +3282,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
         // Current agent is offgrid, treat as offroad
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
+        apply_offroad_behavior(env, agent_idx);
         return;
     }
 
@@ -3500,19 +3527,25 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Priority 1: Handle offroad
     if (is_offroad) {
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
-        apply_infraction_behavior(agent, env->offroad_behavior);
+        apply_offroad_behavior(env, agent_idx);
         return;
     }
 
     // Priority 2: Handle vehicle collision
     int car_collided_with_index = collision_check(env, agent_idx);
     if (car_collided_with_index != -1) {
-        agent->metrics_array[COLLISION_IDX] = 1.0f;
-        if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
-            agent_log->at_fault_collision_rate = 1.0f;
-            agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
+        int target_agent_idx = env->active_agent_indices[0];
+        int ignore_target_collision_for_agent = agent_idx != target_agent_idx
+            && car_collided_with_index == target_agent_idx
+            && env->target_infraction_behavior != TARGET_INFRACTION_BEHAVIOR_NORMAL;
+        if (!ignore_target_collision_for_agent) {
+            agent->metrics_array[COLLISION_IDX] = 1.0f;
+            if (env->compute_eval_metrics && is_at_fault_collision(env, agent_idx, car_collided_with_index)) {
+                agent_log->at_fault_collision_rate = 1.0f;
+                agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
+            }
         }
-        apply_infraction_behavior(agent, env->collision_behavior);
+        apply_collision_behavior(env, agent_idx, car_collided_with_index);
         return;
     }
 
@@ -4611,9 +4644,45 @@ void c_step(Drive *env) {
         }
     }
 
-    if (env->timestep == env->scenario_length || early_reset) {
+    int adversarial_early_reset = 0;
+    int target_failure_early_reset = 0;
+    if (env->adversarial_termination_mode != ADVERSARIAL_TERMINATION_MODE_DISABLED) {
+        int target_agent_idx = env->active_agent_indices[0];
+        int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
+        int active_adversary_count = 0;
+        for (int i = 1; i < env->active_agent_count; i++) {
+            int agent_idx = env->active_agent_indices[i];
+            if (!(env->agents[agent_idx].removed || env->agents[agent_idx].stopped)) {
+                active_adversary_count++;
+            }
+        }
+        int all_adversaries_inactive = active_adversary_count == 0;
+
+        switch (env->adversarial_termination_mode) {
+        case ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE:
+            adversarial_early_reset = all_adversaries_inactive;
+            break;
+        case ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE:
+            adversarial_early_reset = target_inactive;
+            target_failure_early_reset = target_inactive;
+            break;
+        case ADVERSARIAL_TERMINATION_MODE_EITHER:
+            adversarial_early_reset = all_adversaries_inactive || target_inactive;
+            target_failure_early_reset = target_inactive;
+            break;
+        default:
+            assert(0);
+        }
+    }
+
+    if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
-            env->truncations[i] = 1;
+            if (target_failure_early_reset
+                && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
+                env->terminals[i] = 1;
+            } else {
+                env->truncations[i] = 1;
+            }
         }
         add_log(env);
         if (env->eval_mode) {

@@ -66,6 +66,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        target_infraction_behavior="remove",
         use_map_cache=0,
         use_neighbor_cache=1,
         capture_replay=False,
@@ -86,6 +87,8 @@ class Drive(pufferlib.PufferEnv):
         simulation_mode="gigaflow",
         termination_mode=0,
         inactive_agent_threshold=0.4,
+        adversarial_termination_mode="disabled",
+        target_failure_episode_end="terminated",
         terminate_on_goal=False,
         buf=None,
         seed=1,
@@ -209,6 +212,17 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        target_infraction_behavior_values = {
+            "normal": binding.TARGET_INFRACTION_BEHAVIOR_NORMAL,
+            "ignore": binding.TARGET_INFRACTION_BEHAVIOR_IGNORE,
+            "remove": binding.TARGET_INFRACTION_BEHAVIOR_REMOVE,
+        }
+        if target_infraction_behavior not in target_infraction_behavior_values:
+            raise ValueError(
+                "target_infraction_behavior must be one of 'normal', 'ignore', or "
+                f"'remove'. Got: {target_infraction_behavior}"
+            )
+        self.target_infraction_behavior = target_infraction_behavior_values[target_infraction_behavior]
         if use_map_cache not in (0, 1):
             raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
         self.use_map_cache = use_map_cache
@@ -251,6 +265,27 @@ class Drive(pufferlib.PufferEnv):
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
+        adversarial_termination_mode_values = {
+            "disabled": binding.ADVERSARIAL_TERMINATION_MODE_DISABLED,
+            "all_adversaries_inactive": binding.ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE,
+            "target_inactive": binding.ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE,
+            "either": binding.ADVERSARIAL_TERMINATION_MODE_EITHER,
+        }
+        if adversarial_termination_mode not in adversarial_termination_mode_values:
+            raise ValueError(
+                "adversarial_termination_mode must be one of 'disabled', 'all_adversaries_inactive', "
+                f"'target_inactive', or 'either'. Got: {adversarial_termination_mode}"
+            )
+        self.adversarial_termination_mode = adversarial_termination_mode_values[adversarial_termination_mode]
+        target_failure_episode_end_values = {
+            "terminated": binding.TARGET_FAILURE_EPISODE_END_TERMINATED,
+            "truncated": binding.TARGET_FAILURE_EPISODE_END_TRUNCATED,
+        }
+        if target_failure_episode_end not in target_failure_episode_end_values:
+            raise ValueError(
+                f"target_failure_episode_end must be 'terminated' or 'truncated'. Got: {target_failure_episode_end}"
+            )
+        self.target_failure_episode_end = target_failure_episode_end_values[target_failure_episode_end]
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
@@ -546,6 +581,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "target_infraction_behavior": self.target_infraction_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
@@ -570,6 +606,8 @@ class Drive(pufferlib.PufferEnv):
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
+            "adversarial_termination_mode": self.adversarial_termination_mode,
+            "target_failure_episode_end": self.target_failure_episode_end,
             "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
             "max_agents": max_agents,

@@ -105,6 +105,21 @@
 #define INFRACTION_BEHAVIOR_STOP 1
 #define INFRACTION_BEHAVIOR_REMOVE 2
 
+// Special handling for collision/offroad events involving the target
+#define TARGET_INFRACTION_BEHAVIOR_NORMAL 0
+#define TARGET_INFRACTION_BEHAVIOR_IGNORE 1
+#define TARGET_INFRACTION_BEHAVIOR_REMOVE 2
+
+// Target/adversary-aware episode reset conditions
+#define ADVERSARIAL_TERMINATION_MODE_DISABLED 0
+#define ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE 1
+#define ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE 2
+#define ADVERSARIAL_TERMINATION_MODE_EITHER 3
+
+// Gymnasium done signal emitted to all agents when target failure resets the episode
+#define TARGET_FAILURE_EPISODE_END_TERMINATED 0
+#define TARGET_FAILURE_EPISODE_END_TRUNCATED 1
+
 // Goal set refresh policy
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
 #define GOAL_REGEN_ROLLING 1 // slide window: drop reached goal, append one at the frontier

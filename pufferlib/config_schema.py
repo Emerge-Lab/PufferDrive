@@ -43,6 +43,24 @@ class InfractionBehavior(Enum):
     remove = 2
 
 
+class TargetInfractionBehavior(Enum):
+    normal = 0
+    ignore = 1
+    remove = 2
+
+
+class AdversarialTerminationMode(Enum):
+    disabled = 0
+    all_adversaries_inactive = 1
+    target_inactive = 2
+    either = 3
+
+
+class TargetFailureEpisodeEnd(Enum):
+    terminated = 0
+    truncated = 1
+
+
 class ControlMode(Enum):
     control_vehicles = 0
     control_agents = 1
@@ -98,12 +116,15 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    target_infraction_behavior: TargetInfractionBehavior = MISSING
     use_map_cache: int = MISSING
     use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING
     resample_frequency: int = MISSING
     termination_mode: int = MISSING
     inactive_agent_threshold: float = MISSING
+    adversarial_termination_mode: AdversarialTerminationMode = MISSING
+    target_failure_episode_end: TargetFailureEpisodeEnd = MISSING
     terminate_on_goal: int = MISSING
     init_step: int = MISSING
     init_step_spread: bool = MISSING
@@ -145,6 +166,7 @@ class DriveEnvConfig:
     obs_slots_lane_n: int = MISSING
     obs_slots_boundary_n: int = MISSING
     obs_slots_partners_n: int = MISSING
+    target_obs_slots_partners_n: int = MISSING
     obs_slots_traffic_controls_n: int = MISSING
     obs_dropout_lane: float = MISSING
     obs_dropout_boundary: float = MISSING
@@ -163,6 +185,7 @@ class DriveEnvConfig:
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING
     obs_range_partner_m: float = MISSING
+    target_obs_range_partner_m: float = MISSING
     obs_range_traffic_control_m: float = MISSING
     partner_blindness_prob: float = MISSING
     partner_blindness_trigger_prob: float = MISSING
