@@ -274,63 +274,80 @@ def carla_image_to_rgb(img):
 
 
 class BEVRenderer:
-    """Top-down render of the PufferDrive scene (ego red, CARLA-synced background
-    blue, ego goals gold), centered on the ego. Frames -> mp4."""
+    """Top-down render of the PufferDrive scene (ego red, external-sim partners
+    blue, ego goals gold, stop lines colored by light state), centered on the
+    ego. Draws with OpenCV on a numpy canvas (a matplotlib version redrew every
+    road polyline of a city bin per frame: ~1 s/frame). Frames -> mp4."""
 
-    def __init__(self, town_bin, out_path, span=70.0):
+    ROAD_COLOR_LANE = (150, 150, 150)
+    ROAD_COLOR_EDGE = (60, 60, 60)
+    ROAD_COLOR_OTHER = (205, 205, 205)
+    EGO_COLOR = (220, 30, 30)
+    PARTNER_COLOR = (40, 100, 200)
+    GOAL_COLOR = (255, 200, 0)
+    # UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4 (datatypes.h)
+    LIGHT_COLOR = {1: (230, 0, 0), 2: (255, 160, 0), 3: (50, 205, 50), 4: (128, 128, 128), 0: (180, 180, 180)}
+
+    def __init__(self, town_bin, out_path, span=70.0, size_px=480):
         import data_utils.mirror_map_bin as mbin
 
         data = mbin.read_bin(Path(town_bin))
-        self.roads = [(np.asarray(r["x"]), np.asarray(r["y"]), r["type"]) for r in data["roads"]]
-        # traffic-control stop lines (2 endpoints in xy), drawn colored by live state
+        self.roads = [(np.stack([np.asarray(r["x"]), np.asarray(r["y"])], axis=1), int(r["type"])) for r in data["roads"]]
+        bounds = np.array([[xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()] for xy, _ in self.roads]).reshape(-1, 4)
+        self.road_bounds = bounds
         self.traffic = [np.asarray(t["stop_line"], dtype=float).reshape(2, 3)[:, :2] for t in data["traffic"]]
+        self.traffic_centers = np.array([sl.mean(axis=0) for sl in self.traffic]).reshape(-1, 2)
         self.out_path = out_path
-        self.span = span
+        self.span = float(span)
+        self.size_px = int(size_px)
+        self.scale = self.size_px / (2.0 * self.span)
         self.frames = []
 
-    # UNKNOWN=0 RED=1 YELLOW=2 GREEN=3 OFF=4 (datatypes.h)
-    _LIGHT_COLOR = {1: "red", 2: "orange", 3: "limegreen", 4: "0.5", 0: "0.7"}
+    def _to_px(self, xy, ex, ey):
+        px = (np.asarray(xy, dtype=np.float64).reshape(-1, 2) - (ex - self.span, ey + self.span)) * (self.scale, -self.scale)
+        return np.round(px).astype(np.int32).reshape(-1, 1, 2)
+
+    def _box_px(self, x, y, heading, length, width, ex, ey):
+        c, s = math.cos(heading), math.sin(heading)
+        corners = [(length / 2, width / 2), (length / 2, -width / 2), (-length / 2, -width / 2), (-length / 2, width / 2)]
+        return self._to_px([(x + c * dx - s * dy, y + s * dx + c * dy) for dx, dy in corners], ex, ey)
 
     def capture(self, agents, ego_idx=0, goals=None, light_states=None):
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import matplotlib.transforms as mtransforms
-        from matplotlib.patches import Rectangle
+        import cv2
 
         ex, ey = float(agents["x"][ego_idx]), float(agents["y"][ego_idx])
-        fig, ax = plt.subplots(figsize=(6, 6), dpi=80)
-        for rx, ry, rt in self.roads:
-            col = "0.6" if 0 <= rt <= 9 else ("0.25" if 20 <= rt <= 29 else "0.8")
-            ax.plot(rx, ry, color=col, lw=0.6, zorder=1)
+        canvas = np.full((self.size_px, self.size_px, 3), 255, np.uint8)
+        b = self.road_bounds
+        visible = (b[:, 2] >= ex - self.span) & (b[:, 0] <= ex + self.span) & (b[:, 3] >= ey - self.span) & (b[:, 1] <= ey + self.span)
+        for road_idx in np.nonzero(visible)[0]:
+            xy, road_type = self.roads[road_idx]
+            color = self.ROAD_COLOR_LANE if 0 <= road_type <= 9 else (self.ROAD_COLOR_EDGE if 20 <= road_type <= 29 else self.ROAD_COLOR_OTHER)
+            cv2.polylines(canvas, [self._to_px(xy, ex, ey)], False, color, 1, cv2.LINE_AA)
+        if light_states is not None and len(self.traffic):
+            near = np.nonzero(np.all(np.abs(self.traffic_centers - (ex, ey)) <= self.span, axis=1))[0]
+            for j in near:
+                if j >= len(light_states):
+                    break
+                color = self.LIGHT_COLOR.get(int(light_states[j]), self.LIGHT_COLOR[0])
+                cv2.polylines(canvas, [self._to_px(self.traffic[j], ex, ey)], False, color, 3, cv2.LINE_AA)
+                cx, cy = self._to_px(self.traffic_centers[j], ex, ey)[0, 0]
+                cv2.rectangle(canvas, (cx - 4, cy - 4), (cx + 4, cy + 4), color, -1)
+                cv2.rectangle(canvas, (cx - 4, cy - 4), (cx + 4, cy + 4), (0, 0, 0), 1)
         for i in range(len(agents["x"])):
             x, y = float(agents["x"][i]), float(agents["y"][i])
             if abs(x - ex) > self.span or abs(y - ey) > self.span:
                 continue  # surplus agents parked far away
-            h, L, W = float(agents["heading"][i]), float(agents["length"][i]), float(agents["width"][i])
-            rect = Rectangle((-L / 2, -W / 2), L, W, color="red" if i == ego_idx else "tab:blue", alpha=0.95, zorder=3)
-            rect.set_transform(mtransforms.Affine2D().rotate(h).translate(x, y) + ax.transData)
-            ax.add_patch(rect)
+            box = self._box_px(x, y, float(agents["heading"][i]), float(agents["length"][i]), float(agents["width"][i]), ex, ey)
+            cv2.fillPoly(canvas, [box], self.EGO_COLOR if i == ego_idx else self.PARTNER_COLOR, cv2.LINE_AA)
+            cv2.polylines(canvas, [box[:2]], False, (0, 0, 0), 1, cv2.LINE_AA)  # front edge
         if goals is not None:
-            ax.scatter(goals[0], goals[1], c="gold", marker="*", s=70, zorder=4, edgecolors="k", linewidths=0.4)
-        if light_states is not None:
-            for j, sl in enumerate(self.traffic):
-                if j >= len(light_states):
-                    break
-                mx, my = sl[:, 0].mean(), sl[:, 1].mean()
-                if abs(mx - ex) > self.span or abs(my - ey) > self.span:
+            for gx, gy in zip(np.asarray(goals[0]).reshape(-1), np.asarray(goals[1]).reshape(-1)):
+                if abs(gx - ex) > self.span or abs(gy - ey) > self.span:
                     continue
-                c = self._LIGHT_COLOR.get(int(light_states[j]), "0.7")
-                ax.plot(sl[:, 0], sl[:, 1], color=c, lw=3, zorder=2)  # stop line, colored by state
-                ax.scatter([mx], [my], c=c, s=45, marker="s", zorder=4, edgecolors="k", linewidths=0.4)
-        ax.set_xlim(ex - self.span, ex + self.span)
-        ax.set_ylim(ey - self.span, ey + self.span)
-        ax.set_aspect("equal")
-        ax.axis("off")
-        fig.canvas.draw()
-        self.frames.append(np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy())
-        plt.close(fig)
+                cx, cy = self._to_px((gx, gy), ex, ey)[0, 0]
+                cv2.circle(canvas, (int(cx), int(cy)), 6, self.GOAL_COLOR, -1, cv2.LINE_AA)
+                cv2.circle(canvas, (int(cx), int(cy)), 6, (0, 0, 0), 1, cv2.LINE_AA)
+        self.frames.append(canvas)
 
     def save(self, fps=10):
         write_mp4(self.out_path, self.frames, fps=fps)

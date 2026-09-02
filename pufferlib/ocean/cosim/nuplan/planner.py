@@ -29,6 +29,7 @@ EGO_TRACKING_TOL_M = 0.05  # perfect_tracking_controller hands back our integrat
 EGO_TRACKING_TOL_RAD = 0.005
 SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation while nuPlan still plans
 NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
+TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
 
 
@@ -306,6 +307,7 @@ class PufferDrivePlanner(AbstractPlanner):
         self._arch = self._resolve_arch(cfg, bin_path)
         self._env = Drive(**self._arch)
         self._env.reset()
+        torch.set_num_threads(1)  # one scenario per worker process; BLAS threads only fight the other workers
 
         # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
         # gigaflow spawning failed (e.g. a city bin without lane connectivity).
@@ -571,4 +573,8 @@ class PufferDrivePlanner(AbstractPlanner):
             )
 
         n_poses = int(round(self._horizon_seconds / dt))
-        return InterpolatedTrajectory([_state_at(i) for i in range(n_poses + 1)])
+        tail_stride = max(1, int(round(TRAJECTORY_TAIL_SPACING_S / dt)))
+        pose_indices = [0, 1] + list(range(1 + tail_stride, n_poses + 1, tail_stride))
+        if pose_indices[-1] != n_poses:
+            pose_indices.append(n_poses)
+        return InterpolatedTrajectory([_state_at(i) for i in pose_indices])
