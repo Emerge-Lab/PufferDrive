@@ -85,6 +85,18 @@ HIDDEN_DASHBOARD_METRICS = {
 TRAINING_EVAL_KEY_PREFIX = "eval_"
 
 
+def environment_metric_log_key(metric_name):
+    if metric_name.startswith("sdc_reward_components/"):
+        return f"sdc/reward_components/{metric_name.removeprefix('sdc_reward_components/')}"
+    if metric_name.startswith("traffic_reward_components/"):
+        return f"traffic/reward_components/{metric_name.removeprefix('traffic_reward_components/')}"
+    if metric_name.startswith("sdc_"):
+        return f"sdc/{metric_name.removeprefix('sdc_')}"
+    if metric_name.startswith("traffic_"):
+        return f"traffic/{metric_name.removeprefix('traffic_')}"
+    return f"environment/{metric_name}"
+
+
 def torch_device(device):
     if isinstance(device, int):
         return torch.device("cuda", device) if torch.cuda.is_available() else torch.device("cpu")
@@ -1049,7 +1061,7 @@ class PuffeRL:
             "uptime": time.time() - self.start_time,
             "epoch": int(dist_sum(self.epoch, device)),  # VB Why it is a sum ?
             "learning_rate": self.optimizer.param_groups[0]["lr"],
-            **{f"environment/{k}": v for k, v in self.stats.items()},
+            **{environment_metric_log_key(k): v for k, v in self.stats.items()},
             **{f"losses/{k}": v for k, v in self.losses.items()},
             **{f"performance/{k}": v["elapsed"] for k, v in self.profile},
             # **{f'environment/{k}': dist_mean(v, device) for k, v in self.stats.items()},
@@ -2122,7 +2134,7 @@ def sweep(args=None, env_name=None):
 
     sweep = sweep_cls(args["sweep"])
     points_per_run = args["sweep"]["downsample"]
-    target_key = f"environment/{args['sweep']['metric']}"
+    target_key = environment_metric_log_key(args["sweep"]["metric"])
 
     for i in range(args["max_runs"]):
         seed = time.time_ns() & 0xFFFFFFFF

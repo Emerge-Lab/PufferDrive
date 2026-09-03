@@ -2036,6 +2036,12 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+    float sdc_scale = log->sdc_n > 0.0f ? 1.0f / log->sdc_n : 0.0f;
+    float traffic_scale = log->traffic_n > 0.0f ? 1.0f / log->traffic_n : 0.0f;
+
+#define ASSIGN_SPLIT_METRIC(key, aggregate_field, sdc_field)                                                           \
+    assign_to_dict(dict, "sdc_" key, log->sdc_field *sdc_scale);                                                       \
+    assign_to_dict(dict, "traffic_" key, (log->aggregate_field - log->sdc_field) * traffic_scale)
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -2067,6 +2073,41 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
 
+    assign_to_dict(dict, "sdc_n", log->sdc_n * n);
+    assign_to_dict(dict, "traffic_n", log->traffic_n * n);
+    ASSIGN_SPLIT_METRIC("episode_return", episode_return, sdc_episode_return);
+    ASSIGN_SPLIT_METRIC("episode_length", episode_length, sdc_episode_length);
+    ASSIGN_SPLIT_METRIC("offroad_rate", offroad_rate, sdc_offroad_rate);
+    assign_to_dict(dict, "sdc_collision_rate", log->sdc_collision_rate * sdc_scale);
+    assign_to_dict(dict, "traffic_collision_rate", log->traffic_collision_rate * traffic_scale);
+    assign_to_dict(dict, "traffic_sdc_collision_rate", log->traffic_sdc_collision_rate * traffic_scale);
+    assign_to_dict(dict, "traffic_traffic_collision_rate", log->traffic_traffic_collision_rate * traffic_scale);
+    ASSIGN_SPLIT_METRIC("red_light_violation_rate", red_light_violation_rate, sdc_red_light_violation_rate);
+    ASSIGN_SPLIT_METRIC("dnf_rate", dnf_rate, sdc_dnf_rate);
+    ASSIGN_SPLIT_METRIC("score", score, sdc_score);
+    ASSIGN_SPLIT_METRIC("num_goals_reached", num_goals_reached, sdc_num_goals_reached);
+    ASSIGN_SPLIT_METRIC("avg_speed", avg_speed_per_agent, sdc_avg_speed);
+    ASSIGN_SPLIT_METRIC("velocity_progress", velocity_progress_sum, sdc_velocity_progress);
+    ASSIGN_SPLIT_METRIC("lane_center_rate", lane_center_rate, sdc_lane_center_rate);
+    ASSIGN_SPLIT_METRIC("lane_heading_aligned_rate", lane_heading_aligned_rate, sdc_lane_heading_aligned_rate);
+    ASSIGN_SPLIT_METRIC("comfort_violation_rate", comfort_violation_count, sdc_comfort_violation_rate);
+    ASSIGN_SPLIT_METRIC("reward_components/collision", reward_collision, sdc_reward_collision);
+    ASSIGN_SPLIT_METRIC("reward_components/offroad", reward_offroad, sdc_reward_offroad);
+    ASSIGN_SPLIT_METRIC("reward_components/red_light", reward_red_light, sdc_reward_red_light);
+    ASSIGN_SPLIT_METRIC("reward_components/goal", reward_goal, sdc_reward_goal);
+    ASSIGN_SPLIT_METRIC("reward_components/lane_align", reward_lane_align, sdc_reward_lane_align);
+    ASSIGN_SPLIT_METRIC("reward_components/lane_center", reward_lane_center, sdc_reward_lane_center);
+    ASSIGN_SPLIT_METRIC("reward_components/comfort", reward_comfort, sdc_reward_comfort);
+    ASSIGN_SPLIT_METRIC("reward_components/velocity", reward_velocity, sdc_reward_velocity);
+    ASSIGN_SPLIT_METRIC("reward_components/timestep", reward_timestep, sdc_reward_timestep);
+    ASSIGN_SPLIT_METRIC("reward_components/reverse", reward_reverse, sdc_reward_reverse);
+    ASSIGN_SPLIT_METRIC("reward_components/overspeed", reward_overspeed, sdc_reward_overspeed);
+    ASSIGN_SPLIT_METRIC("reward_components/ade", reward_ade, sdc_reward_ade);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_collision_bonus",
+        log->reward_target_collision_bonus * traffic_scale);
+
     if (env->compute_eval_metrics) {
         // Puffer score components
         assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
@@ -2078,7 +2119,19 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "comfort_score", log->comfort_score);
         assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
         assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
+        ASSIGN_SPLIT_METRIC("at_fault_collision_rate", at_fault_collision_rate, sdc_at_fault_collision_rate);
+        ASSIGN_SPLIT_METRIC("ttc_within_bound_rate", ttc_within_bound_rate, sdc_ttc_within_bound_rate);
+        ASSIGN_SPLIT_METRIC("driving_direction_score", driving_direction_score, sdc_driving_direction_score);
+        ASSIGN_SPLIT_METRIC("speed_limit_compliance", speed_limit_compliance, sdc_speed_limit_compliance);
+        ASSIGN_SPLIT_METRIC("making_progress_rate", making_progress_rate, sdc_making_progress_rate);
+        ASSIGN_SPLIT_METRIC("progress_ratio", progress_ratio, sdc_progress_ratio);
+        ASSIGN_SPLIT_METRIC("comfort_score", comfort_score, sdc_comfort_score);
+        ASSIGN_SPLIT_METRIC("multi_lane_time", multi_lane_time, sdc_multi_lane_time);
+        ASSIGN_SPLIT_METRIC("multi_lane_score", multi_lane_score, sdc_multi_lane_score);
+        ASSIGN_SPLIT_METRIC("puffer_score", puffer_score, sdc_puffer_score);
     }
+
+#undef ASSIGN_SPLIT_METRIC
 
     return 0;
 }

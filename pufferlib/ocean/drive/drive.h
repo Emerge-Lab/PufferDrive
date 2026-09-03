@@ -64,6 +64,8 @@ typedef struct GridMap GridMap;
 
 struct Log {
     float n;
+    float sdc_n;
+    float traffic_n;
     float episode_return;
     float episode_length;
     float expert_static_car_count;
@@ -120,6 +122,45 @@ struct Log {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
+    float reward_target_collision_bonus;
+    float traffic_collision_rate;
+    float traffic_sdc_collision_rate;
+    float traffic_traffic_collision_rate;
+    float sdc_episode_return;
+    float sdc_episode_length;
+    float sdc_score;
+    float sdc_offroad_rate;
+    float sdc_collision_rate;
+    float sdc_red_light_violation_rate;
+    float sdc_num_goals_reached;
+    float sdc_comfort_violation_rate;
+    float sdc_velocity_progress;
+    float sdc_lane_center_rate;
+    float sdc_lane_heading_aligned_rate;
+    float sdc_dnf_rate;
+    float sdc_avg_speed;
+    float sdc_at_fault_collision_rate;
+    float sdc_ttc_within_bound_rate;
+    float sdc_driving_direction_score;
+    float sdc_speed_limit_compliance;
+    float sdc_making_progress_rate;
+    float sdc_progress_ratio;
+    float sdc_comfort_score;
+    float sdc_puffer_score;
+    float sdc_multi_lane_time;
+    float sdc_multi_lane_score;
+    float sdc_reward_collision;
+    float sdc_reward_offroad;
+    float sdc_reward_red_light;
+    float sdc_reward_goal;
+    float sdc_reward_lane_align;
+    float sdc_reward_lane_center;
+    float sdc_reward_comfort;
+    float sdc_reward_velocity;
+    float sdc_reward_timestep;
+    float sdc_reward_reverse;
+    float sdc_reward_overspeed;
+    float sdc_reward_ade;
 };
 
 struct GridMapEntity {
@@ -1887,6 +1928,15 @@ static int collision_check(Drive *env, int agent_idx) {
     return car_collided_with_index;
 }
 
+static int active_traffic_log_idx(Drive *env, int agent_idx) {
+    for (int log_idx = EGO_IDX + 1; log_idx < env->active_agent_count; log_idx++) {
+        if (env->active_agent_indices[log_idx] == agent_idx) {
+            return log_idx;
+        }
+    }
+    return -1;
+}
+
 static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     Agent *agent = &env->agents[agent_idx];
     Agent *other = &env->agents[other_idx];
@@ -2159,12 +2209,10 @@ static void add_log(Drive *env) {
         int num_goals_reached = env->logs[i].num_goals_reached;
         episode_log.num_goals_reached += num_goals_reached;
         // Score: 1 per agent that reached its full goal set without being removed/stopped.
-        if (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) {
-            episode_log.score += 1.0f;
-        }
-        if (!offroad && !collided && !red_light_violations && num_goals_reached < 1) {
-            episode_log.dnf_rate += 1.0f;
-        }
+        float agent_score = (num_goals_reached >= env->num_goals && !agent->removed && !agent->stopped) ? 1.0f : 0.0f;
+        episode_log.score += agent_score;
+        float agent_dnf = (!offroad && !collided && !red_light_violations && num_goals_reached < 1) ? 1.0f : 0.0f;
+        episode_log.dnf_rate += agent_dnf;
         episode_log.total_distance_travelled += agent->distance_since_spawn;
         if (total_infractions > 0) {
             episode_log.total_infractions += 1.0f;
@@ -2186,6 +2234,7 @@ static void add_log(Drive *env) {
         episode_log.reward_reverse += env->logs[i].reward_reverse;
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
+        episode_log.reward_target_collision_bonus += env->logs[i].reward_target_collision_bonus;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -2223,6 +2272,50 @@ static void add_log(Drive *env) {
             episode_log.making_progress_rate += making_progress;
             episode_log.puffer_score += env->logs[i].puffer_score;
         }
+        if (i != EGO_IDX) {
+            episode_log.traffic_n += 1.0f;
+            episode_log.traffic_collision_rate += env->logs[i].traffic_collision_rate;
+            episode_log.traffic_sdc_collision_rate += env->logs[i].traffic_sdc_collision_rate;
+            episode_log.traffic_traffic_collision_rate += env->logs[i].traffic_traffic_collision_rate;
+            episode_log.n += 1;
+            continue;
+        }
+        episode_log.sdc_n += 1.0f;
+        episode_log.sdc_episode_return += env->logs[i].episode_return;
+        episode_log.sdc_episode_length += env->logs[i].episode_length;
+        episode_log.sdc_score += agent_score;
+        episode_log.sdc_offroad_rate += offroad;
+        episode_log.sdc_collision_rate += collided;
+        episode_log.sdc_red_light_violation_rate += red_light_violations;
+        episode_log.sdc_num_goals_reached += num_goals_reached;
+        episode_log.sdc_comfort_violation_rate += env->logs[i].comfort_violation_count / safe_timestep;
+        episode_log.sdc_velocity_progress += env->logs[i].velocity_progress_sum / safe_timestep;
+        episode_log.sdc_lane_center_rate += env->logs[i].lane_center_rate / safe_timestep;
+        episode_log.sdc_lane_heading_aligned_rate += env->logs[i].lane_heading_aligned_rate / safe_timestep;
+        episode_log.sdc_dnf_rate += agent_dnf;
+        episode_log.sdc_avg_speed += avg_speed_per_agent / safe_timestep;
+        episode_log.sdc_at_fault_collision_rate += env->logs[i].at_fault_collision_rate;
+        episode_log.sdc_ttc_within_bound_rate += env->logs[i].ttc_within_bound_rate;
+        episode_log.sdc_driving_direction_score += env->logs[i].driving_direction_score;
+        episode_log.sdc_speed_limit_compliance += env->logs[i].speed_limit_compliance;
+        episode_log.sdc_making_progress_rate += env->logs[i].making_progress;
+        episode_log.sdc_progress_ratio += env->logs[i].progress_ratio;
+        episode_log.sdc_comfort_score += env->logs[i].comfort_score;
+        episode_log.sdc_puffer_score += env->logs[i].puffer_score;
+        episode_log.sdc_multi_lane_time += env->logs[i].multi_lane_time;
+        episode_log.sdc_multi_lane_score += env->logs[i].multi_lane_score;
+        episode_log.sdc_reward_collision += env->logs[i].reward_collision;
+        episode_log.sdc_reward_offroad += env->logs[i].reward_offroad;
+        episode_log.sdc_reward_red_light += env->logs[i].reward_red_light;
+        episode_log.sdc_reward_goal += env->logs[i].reward_goal;
+        episode_log.sdc_reward_lane_align += env->logs[i].reward_lane_align;
+        episode_log.sdc_reward_lane_center += env->logs[i].reward_lane_center;
+        episode_log.sdc_reward_comfort += env->logs[i].reward_comfort;
+        episode_log.sdc_reward_velocity += env->logs[i].reward_velocity;
+        episode_log.sdc_reward_timestep += env->logs[i].reward_timestep;
+        episode_log.sdc_reward_reverse += env->logs[i].reward_reverse;
+        episode_log.sdc_reward_overspeed += env->logs[i].reward_overspeed;
+        episode_log.sdc_reward_ade += env->logs[i].reward_ade;
         episode_log.n += 1;
     }
     // Log composition counts per agent so vec_log averaging recovers the per-env value
@@ -3535,6 +3628,18 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     int car_collided_with_index = collision_check(env, agent_idx);
     if (car_collided_with_index != -1) {
         int target_agent_idx = env->active_agent_indices[0];
+        int collided_traffic_log_idx = active_traffic_log_idx(env, car_collided_with_index);
+        if (agent_idx == target_agent_idx && collided_traffic_log_idx != -1) {
+            env->logs[collided_traffic_log_idx].traffic_collision_rate = 1.0f;
+            env->logs[collided_traffic_log_idx].traffic_sdc_collision_rate = 1.0f;
+        } else if (agent_idx != target_agent_idx) {
+            agent_log->traffic_collision_rate = 1.0f;
+            if (car_collided_with_index == target_agent_idx) {
+                agent_log->traffic_sdc_collision_rate = 1.0f;
+            } else if (collided_traffic_log_idx != -1) {
+                agent_log->traffic_traffic_collision_rate = 1.0f;
+            }
+        }
         int ignore_target_collision_for_agent = agent_idx != target_agent_idx
             && car_collided_with_index == target_agent_idx
             && env->target_infraction_behavior != TARGET_INFRACTION_BEHAVIOR_NORMAL;
@@ -4610,6 +4715,7 @@ void c_step(Drive *env) {
         for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
             env->rewards[i] += env->adversarial_target_collision_bonus;
             env->logs[i].episode_return += env->adversarial_target_collision_bonus;
+            env->logs[i].reward_target_collision_bonus += env->adversarial_target_collision_bonus;
         }
     }
 
