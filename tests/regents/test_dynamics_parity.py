@@ -283,6 +283,38 @@ def test_action_gradients_reach_acceleration_and_steering():
     assert torch.any(actions.grad[..., 1] != 0)
 
 
+def test_stationary_agent_backpropagates_through_the_whole_horizon():
+    """A parked adversary must still receive the full multi-step accel gradient.
+
+    C recovers signed speed as sqrt(vx^2 + vy^2), which is flat at an exactly
+    stationary agent. Carrying that derivative would truncate the rollout
+    gradient to its single-step direct effect.
+    """
+    transition_count = 20
+    wheelbase = torch.tensor([3.0], dtype=torch.float32)
+    maximum_speed = torch.tensor([30.0], dtype=torch.float32)
+    transition_valid = torch.ones((1, transition_count), dtype=torch.bool)
+
+    def final_x(action_values, initial_speed_mps):
+        initial_state = torch.tensor([[0.0, 0.0, 0.0, initial_speed_mps, 0.0]], dtype=torch.float32)
+        states = classic_rollout(initial_state, action_values, transition_valid, wheelbase, maximum_speed, 0.1)
+        return states[0, -1, 0]
+
+    for initial_speed_mps in (0.0, 1e-6, 0.5):
+        actions = torch.zeros((1, transition_count, 2), dtype=torch.float32, requires_grad=True)
+        final_x(actions, initial_speed_mps).backward()
+        analytic = float(actions.grad[0, 0, 0])
+        epsilon = 1e-3
+        forward = torch.zeros((1, transition_count, 2), dtype=torch.float32)
+        forward[0, 0, 0] = epsilon
+        backward = torch.zeros((1, transition_count, 2), dtype=torch.float32)
+        backward[0, 0, 0] = -epsilon
+        finite_difference = (
+            float(final_x(forward, initial_speed_mps)) - float(final_x(backward, initial_speed_mps))
+        ) / (2 * epsilon)
+        assert finite_difference == pytest.approx(analytic, rel=1e-3)
+
+
 def test_c_diagnostic_rejects_out_of_contract_actions():
     state = np.zeros((1, 5), dtype=np.float32)
     action = np.asarray([[1.01, 0.0]], dtype=np.float32)

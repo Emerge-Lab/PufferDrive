@@ -112,6 +112,37 @@ def test_front_divergence_masks_steering_but_preserves_acceleration_gradient():
     torch.testing.assert_close(masked[0, 1, :, 1], torch.tensor([7.0, 0.0]))
 
 
+def test_steering_updates_are_damped_by_the_reference_half_step():
+    time_count = 16
+    scenario = _scenario(
+        torch.stack(
+            (
+                _straight_track(0.0, 0.0, 4.0, time_count),
+                _straight_track(8.0, 4.0, 3.0, time_count),
+            )
+        )
+    )
+    full = optimize_frozen_ego_scenario(
+        scenario,
+        config=_optimization_config(iteration_count=1, steering_update_scale=1.0),
+        deterministic_seed=23,
+        show_progress=False,
+    )
+    damped = optimize_frozen_ego_scenario(
+        scenario,
+        config=_optimization_config(iteration_count=1, steering_update_scale=0.5),
+        deterministic_seed=23,
+        show_progress=False,
+    )
+    assert full.best_iteration == 1 and damped.best_iteration == 1
+    baseline = full.initial_actions[..., 1]
+    full_step = full.optimized_actions[..., 1] - baseline
+    damped_step = damped.optimized_actions[..., 1] - baseline
+    assert full_step.abs().sum() > 0
+    torch.testing.assert_close(damped_step, 0.5 * full_step)
+    torch.testing.assert_close(full.optimized_actions[..., 0], damped.optimized_actions[..., 0])
+
+
 def test_braking_scene_optimizes_to_collision_and_preserves_frozen_actions():
     time_count = 13
     scenario = _scenario(
@@ -187,6 +218,31 @@ def test_background_collision_iterates_are_rejected_and_best_feasible_actions_re
     assert torch.equal(result.optimized_actions, result.initial_actions)
 
 
+def test_preexisting_candidate_background_collision_is_a_feasibility_baseline():
+    time_count = 16
+    scenario = _scenario(
+        torch.stack(
+            (
+                _straight_track(100.0, 0.0, 0.0, time_count),
+                _straight_track(0.0, 0.0, 1.0, time_count),
+                _straight_track(0.0, 0.0, 0.0, time_count),
+            )
+        )
+    )
+    config = ReGentSOptimizationConfig(
+        filter=ReGentSFilterConfig(rear_sector_fraction=1.0),
+        costs=ReGentSCostConfig(background_collision_weight=0.0, drivable_area_weight=0.0),
+        learning_rate=0.01,
+        iteration_count=1,
+    )
+    result = optimize_frozen_ego_scenario(scenario, config=config, deterministic_seed=30)
+
+    assert result.failure_reason == "iteration_limit"
+    assert result.background_collision_rejection_count == 0
+    assert not result.background_collision
+    assert result.best_iteration > 0
+
+
 def test_new_offroad_iterates_are_rejected_and_logged_raster_mismatch_is_tolerated():
     time_count = 16
     drivable_mask = torch.zeros((7, 31), dtype=torch.bool)
@@ -251,8 +307,18 @@ def test_capture_frozen_idm_trajectory_uses_native_controller_deterministically(
     first_drive = Drive(**kwargs)
     second_drive = Drive(**kwargs)
     try:
-        first_scenario, first = capture_frozen_idm_trajectory(first_drive, 4, seed=42)
-        second_scenario, second = capture_frozen_idm_trajectory(second_drive, 4, seed=42)
+        first_scenario, first = capture_frozen_idm_trajectory(
+            first_drive,
+            4,
+            seed=42,
+            raster_resolution_meters=2.0,
+        )
+        second_scenario, second = capture_frozen_idm_trajectory(
+            second_drive,
+            4,
+            seed=42,
+            raster_resolution_meters=2.0,
+        )
     finally:
         first_drive.close()
         second_drive.close()
@@ -260,6 +326,7 @@ def test_capture_frozen_idm_trajectory_uses_native_controller_deterministically(
     assert first.source == "c_idm"
     assert first.state.shape == (1, 5, 5)
     assert first.scenario_id == first_scenario.scenario_ids[0]
+    assert first_scenario.drivable_area_rasters[0].transform.resolution_meters_per_pixel == 2.0
     assert second.scenario_id == second_scenario.scenario_ids[0]
     assert torch.equal(first.state, second.state)
     assert torch.equal(first.valid, second.valid)

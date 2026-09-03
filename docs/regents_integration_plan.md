@@ -70,7 +70,7 @@ All pass the mandatory `1e-4` threshold. A 256-transition stress test reached `1
 
 ### Stage 3 — Inverse dynamics (`b6f93aa7b`)
 
-`estimate_expert_actions()` in `inverse_dynamics.py`. Acceleration comes from consecutive signed speeds and first minimizes reachable speed error; steering is analytically seeded from wrapped heading change, then refined by a deterministic bounded search minimizing squared position error plus wheelbase-scaled squared heading error. Steering carries within a contiguous run, resets to neutral at an unobserved run start, and is never inferred across a validity gap. Every inconsistent transition retains its component errors and a combined meter-scaled residual.
+`estimate_expert_actions()` in `inverse_dynamics.py`. Acceleration comes from consecutive signed speeds and first minimizes reachable speed error; steering is analytically seeded from wrapped heading change, then refined by a deterministic bounded search minimizing squared position error plus wheelbase-scaled squared heading error. Steering carries within a contiguous run, resets to neutral at an unobserved run start, and is never inferred across a validity gap. Every inconsistent transition retains its component errors and a combined meter-scaled residual. Offline generation bounds reconstruction to its configured optimization horizon, and the reactive loop reuses that exact prefix result across outer blocks; reconstructing unused logged suffixes cannot affect the prefix and only adds work.
 
 ReGentS itself delegates this to Waymax's expert actor, so only the semantics are shared (consecutive-state local derivatives, wrapped yaw differences, action bounds, validity masking, the `0.6 m/s` low-speed noise guard). The equations must differ: Waymax controls unsigned acceleration and curvature with trapezoidal integration; PufferDrive controls signed acceleration and a rate-limited target wheel angle, updates speed before Euler integration, and uses wheelbase plus slip angle. Copying Waymax's curvature inverse would fail Stage 2.
 
@@ -92,30 +92,30 @@ Exact oriented-box geometry in `geometry.py`, the three paper costs and their we
 Cost contracts:
 
 1. **Ego collision induction** — each candidate's signed box distance to the sole ego at jointly valid timesteps, averaged over that candidate's valid denominator, then hard minimum over candidates.
-2. **Background collision avoidance** — `-min(min(1.25 m, signed_distance))` over distinct jointly valid background pairs and timesteps; neutral zero when fewer than two backgrounds share a valid pair.
-3. **Drivable-area deviation** — four sampled corner potentials per optimized vehicle, averaged over that vehicle's valid timesteps, summed over optimized vehicles.
+2. **Background collision avoidance** — `-min(min(1.25 m, signed_distance))` over distinct jointly valid selected-adversary pairs and timesteps; neutral zero when fewer than two selected adversaries share a valid pair. This matches the reference implementation's `adv_idx` input rather than regularizing replay-only actors.
+3. **Drivable-area deviation** — each optimized vehicle's four sampled corner potentials, summed over corners, averaged over that vehicle's valid timesteps, then summed over optimized vehicles. The reference `calculate_potential_adv_dev` reduces with `sum`, but its cropped Gaussian density is not normalized; PufferDrive uses a normalized full-raster convolution and keeps this term horizon-invariant and comparable to the time-averaged ego cost.
 
 Masked storage becomes non-degenerate internal placeholders before box operations and is excluded before every reduction, so invalid padded boxes never produce NaN gradients and never contribute a value or denominator.
 
 The map-static potential starts from `~drivable_mask`, applies a normalized Gaussian, and adds an out-of-bounds frame; sampling uses the Stage 1 centered transform with `grid_sample(..., align_corners=True)`, bilinear interpolation, and border padding, so points beyond raster coverage are explicitly out of bounds. `prepare_out_of_bounds_rasters()` builds these once per optimization.
 
-Reference defaults: ego/background/drivable weights `1 / 5 / 20`, background truncation `1.25 m`, Gaussian sigma `0.5 m`, finite support `3 sigma` (deterministic normalized convolution replacing the reference code's crop approximation, and part of the cost configuration).
+Reference defaults: ego/background/drivable weights `1 / 5 / 20`, background truncation `1.25 m`, Gaussian sigma `0.5 m`, finite support `3 sigma` (deterministic normalized convolution replacing the reference code's crop approximation, and part of the cost configuration). The transferred `20` coefficient is not yet calibrated for this raster. On smoke scenario 1 at 50 transitions, the initial boundary cost is `2.483`, or `0.02587` mean potential per corner across 24 selected vehicles; its weighted contribution is still `49.667`, versus `0.802` ego collision and `-1.879` background collision. Report both the configured raw reduction and a normalized per-corner diagnostic when tuning this coefficient.
 
 Tests: hand-computed separation/penetration/contact, rotated and randomized SAT, denominators, transforms and outside-map sampling, Gaussian bounds and spatial gradients, `gradcheck` and finite differences, independent nonzero gradients for all three costs, gradients through `classic_rollout`, CPU/GPU consistency, a 20-step Adam fixture with decreasing loss, and a real replay scenario through the full adapter/raster/cost path. CUDA tests skip when unavailable.
 
 ### Stage 5 — Selection, constraints, frozen-ego optimization (`389fc411d`)
 
-`filters.py` selects candidates deterministically; `optimizer.py` runs one-scenario frozen-ego Adam. `capture_frozen_idm_trajectory()` resets a directly instantiated Drive with native C IDM on stable agent zero and replay backgrounds, then captures detached centered ego states. `logged_fixture` remains an explicit source for deterministic tests.
+`filters.py` selects candidates deterministically; `optimizer.py` runs one-scenario frozen-ego Adam. `capture_frozen_idm_trajectory()` resets a directly instantiated Drive with either native C IDM or replay on stable agent zero and replay backgrounds, then captures detached centered ego states. `logged_fixture` remains an explicit source for deterministic tests.
 
 Selection records reason bits rather than compacting agents, excluding: SDC, non-vehicles, insufficient transition coverage, static actors, the paper's non-actionable rear sector, caller-labeled unsuitable scenes, and original collisions. Original-collision labels mirror the reference `overlap_with_ego` — per metadata-bearing agent, exact oriented-box overlap against the sole ego at jointly valid timesteps. Background/background overlap is not labeled. A labeled agent is dropped as a candidate; the scene is filtered `ORIGINAL_COLLISION` only when every candidate-masked agent carries the label. Defaults: at least `50%` and one valid transition; static below `0.2 m` first-to-last displacement or `0.2 m/s` maximum absolute speed; rear occupancy strictly above `80%` within `pi/8` of directly behind the ego. All fractions use only applicable jointly valid states or transitions.
 
 Stage 3 actions initialize every vehicle; only selected valid entries enter the graph. The frozen ego and non-selected actors hold their reference trajectories. Adam defaults: learning rate `1e-3`, betas `0.9 / 0.999`, epsilon `1e-8`, 500 updates. Actions project to `[-1, 1]`, and non-candidate or invalid entries are restored byte-for-byte after every update. `classic_step()`'s zero-speed magnitude uses a forward-equivalent clamp at the dtype's smallest normal value, giving a finite derivative at an exactly stationary state without changing Stage 2 parity.
 
-Front divergence uses wrapped ego-relative bearing and yaw: both strictly inside `(-pi/8, pi/8)`, on the same side, with bearing magnitude below yaw magnitude. Steering updates cancel when red-zone occupancy exceeds `tau_front=0.5`; acceleration updates continue, and Adam steering moments are cleared for canceled entries so momentum cannot bypass the rule.
+Front divergence uses wrapped ego-relative bearing and yaw with separate windows, as in the reference `opt()`: bearing strictly inside `(-pi/8, pi/8)`, yaw strictly inside `(-pi/2, pi/2)`, on the same side, with bearing magnitude below yaw magnitude. Steering updates cancel when red-zone occupancy exceeds `tau_front=0.5`; acceleration updates continue, and Adam steering moments are cleared for canceled entries so momentum cannot bypass the rule. Every surviving steering update is scaled by `steering_update_scale=0.5`, matching the reference's damping of steering relative to acceleration. The scale applies to the post-Adam update rather than the gradient, because Adam's per-parameter normalization makes gradient scaling a no-op.
 
-Success requires a discrete-timestep ego/candidate box overlap with no background/background overlap and no newly introduced off-road corner. Existing raster mismatch on the reference trajectory is the feasibility baseline, so valid source data is never retroactively declared off-road. The optimizer stops on the first feasible collision by default, supports named collision and stagnation early-stops, and otherwise returns the lowest-total-cost feasible iterate. It records filter reasons, adversary index and ID, initial/final component costs, gradient norms, front-divergence iterations, action saturation, maximum inverse reconstruction residual, collision timestep, rejection counts, iteration counts, frozen-ego source, failure reason, and seed.
+Success requires a discrete-timestep ego/candidate box overlap with no newly introduced collision in a candidate-involved background pair and no newly introduced off-road corner. Existing background overlaps and raster mismatch on the reference trajectory are pair-level and agent-level feasibility baselines, matching the C oracle, so valid source data is never retroactively rejected. Pair signatures are evaluated in deterministic chunks without Python scalar geometry loops. The optimizer stops on the first feasible collision by default, supports named collision and stagnation early-stops, and otherwise returns the lowest-total-cost feasible iterate. It records filter reasons, adversary index and ID, initial/final component costs, gradient norms, front-divergence iterations, action saturation, maximum inverse reconstruction residual, collision timestep, rejection counts, iteration counts, frozen-ego source, failure reason, and seed.
 
-Determinism fixture — NuPlan map indices 5 and 8, seeds 47 and 50, 16-transition horizon, five Adam updates at `1e-3`: ego collision cost `2.0703814 -> 1.9595402` and `5.6210895 -> 5.5688214`; total cost `69.4004211 -> 68.1501007` and `19.9497566 -> 18.9804382`.
+Determinism fixture — NuPlan map indices 5 and 8, seeds 47 and 50, 16-transition horizon, five Adam updates at `1e-3`. The recorded totals predate the `0.5` steering damping and must be re-measured before being used as a gate.
 
 ### Stage 6 — C replay, reactive ego, pipeline (`3734f6373`)
 
@@ -129,11 +129,11 @@ Stable-index action injection in C, authoritative replay and the reactive loop i
 
 **C is the success oracle**, measured against a baseline C rollout of the same scenario, seed, and horizon driven by the Stage 3 initial actions under the same mask. Only collision pairs and off-road flags absent from that baseline are attributed to the optimization, so pre-existing logged overlaps neither fail generation nor inflate the background-collision rate. Success requires a new actionable ego/adversary collision, no new background collision, and no new adversary off-road. A reactive ego's divergence from the frozen reference is reported as `maximum_ego_reference_error` and excluded from the parity gate whenever the ego is not replay-controlled.
 
-`run_reactive_idm_generation()` captures a native C IDM ego, detaches it, optimizes adversaries in Torch, reruns C for IDM's response, and repeats to a fixed maximum outer iteration count, stopping on the first C-confirmed success or unchanged actions. No gradient crosses the C simulator or the ego controller; swapping in a learned policy needs no interface change.
+`run_reactive_idm_generation()` captures the configured C IDM or replay ego and detaches it before optimizing adversaries in Torch. With IDM it reruns C for the reactive response and repeats to a fixed maximum outer iteration count, stopping on the first C-confirmed success or unchanged actions. Replay is an explicit open-loop diagnostic mode and is forced to one outer block. No gradient crosses the C simulator or the ego controller; swapping in a learned policy needs no interface change.
 
 Artifacts are pickle-free `npz` files carrying a schema tag, scenario and dataset identity, source map path, a SHA-256 hash over the canonical configuration plus exact map bytes, masks, initial and optimized actions, Torch and C trajectories, C ego actions, both replay metadata blocks, and every metric. `save_generation_artifact()` writes atomically and returns exactly the persisted metadata; `load_generation_artifact()` rejects unknown schemas, mismatched fields, and oversized arrays.
 
-`puffer regents <env_name> <generation_name>` reads `pufferlib/config/evaluation/regents.yaml`, validates it against the `Drive` signature, instantiates `Drive` directly, and never initializes PPO, a policy optimizer, a rollout buffer, or training logging. It writes one artifact per scenario plus `generation_metrics.csv`.
+`puffer regents <env_name> <generation_name>` reads `pufferlib/config/evaluation/regents.yaml`, validates it against the `Drive` signature, instantiates `Drive` directly, and never initializes PPO, a policy optimizer, a rollout buffer, or training logging. It writes one artifact per scenario plus `generation_metrics.csv`. The configured raster resolution is validated as finite and positive and passed through frozen-trajectory export; its default is the adapter's `0.5 m/pixel`, so configuration and actual loss geometry cannot silently differ.
 
 Visualization reuses the existing viewer. With `render_replays: true` (off by default, so generation pays nothing for it), both C rollouts capture the simulator's HTML replay frames via `Drive.get_obs_html_frame()` plus ego observations, and `render_scenario_replays()` passes them to `pufferlib.viz`. Each scenario yields self-contained `.logged` and `.adversarial` pages under `rendered_replays/`, indexed by `build_gallery_index()`, with the ego's captured C actions in the viewer's action channel.
 
@@ -153,12 +153,96 @@ Exit gate passes: optimized actions reproduce in C within Stage 2 tolerance unti
 
 - **Filter yield bounds the result, not the optimizer.** 13 of 16 scenes filter as original-collision with no remaining candidate. The C baseline shows these maps carry many jointly valid overlapping logged boxes, so exact oriented-box overlap on logged data is likely too strict for NuPlan. Per-agent exclusion is already implemented; undecided is whether the ego-overlap test needs a penetration-depth threshold or a jointly-valid-coverage requirement, or whether the yield is accepted. Resolve before quoting a generation success rate as a method result.
 - **Yield is horizon-specific.** The later `regents_nuplan_smoke` run at a 50-transition horizon selected adversaries on maps 0 and 1, which the 16-transition acceptance run filtered as `original_collision,no_candidate`, with no filter code change between them. Never quote a yield without its horizon.
-- **Config drift.** `regents.yaml`'s `regents_nuplan` entry was edited after the acceptance run; its scenario count, horizon, and Adam iteration count all differ from the acceptance settings, so that name no longer reproduces the recorded result — only `experiments/regents/regents_nuplan/` holds it. Restore the settings under that name or move the record to a separate entry before citing the numbers again.
+- **Config drift.** `regents.yaml`'s `regents_nuplan` entry was edited after the acceptance run; its scenario count, horizon, Adam iteration count, and SDC controller differ from the acceptance settings. It is now a replay-ego open-loop run rather than a reactive-IDM run, so that name no longer reproduces the recorded result — only `experiments/regents/regents_nuplan/` holds it. Restore the settings under that name or move the record to a separate entry before citing the numbers again.
 - **Full horizon unvalidated.** The `regents_nuplan_20s` entry (16 scenarios, 200 transitions, the complete 20 s window) exists but `experiments/regents/regents_nuplan_20s/` is empty — started, never completed. Every recorded result is at 16 or 50 transitions, at most 5 s of a 20 s scenario. Parity, yield, runtime, and success rate at full horizon are unmeasured.
+
+### The drivable-area term was charging the map, not the optimization (2026-09-03)
+
+`_rasterize_drivable_area()` paints drivable area as tubes of half `LANE_WIDTH_METERS` (`1.85 m`) around the centerlines of `LANE_FREEWAY` and `LANE_SURFACE_STREET` only. The reference builds its map from **road edges** (`datatypes.is_road_edge`) with a cross-product inside/outside test, which is a different and better-covering definition. The local NuPlan maps do carry `ROAD_EDGE_BOUNDARY` (type 21) geometry that is currently unused.
+
+The centerline-tube definition systematically under-covers, and it charges the logged data. Measured on logged trajectories, per cent of valid box corners the raster calls off-road:
+
+| Scenario | Drivable pixels | Ego corners off-road | Candidate corners off-road |
+| --- | --- | --- | --- |
+| 6 | `8.6%` | `75.0%` | `100.0%` |
+| 4 | `16.1%` | `10.5%` | `25.2%` |
+| 23 | `10.5%` | `0.0%` | `7.2%` |
+| 0, 1, 5, 10, 17 | `10-18%` | `0.0%` | `0-2.5%` |
+
+In scenario 6 the ego's own recorded path sits a median `3.93 m` from the nearest drivable lane centerline, more than twice the tube half-width. These are real recorded vehicles, so this is raster error, not agent behaviour.
+
+Consequence: at weight `20` the drivable term was `52%` of the loss magnitude at iteration 0 on average and over `90%` in six of 25 scenarios, all of it a constant map-mismatch penalty present before any optimization. Its gradient pulls candidates toward lane centerlines rather than toward the ego, which starves the adversarial objective.
+
+**Fix applied - charge only what the optimization introduces.** `drivable_area_deviation_cost()` takes an optional `baseline_corner_potential` and charges `relu(potential - baseline)`. The optimizer samples the baseline once from the reference rollout. This makes the loss agree with the success rule, which already counted only `offroad_signature & ~baseline_offroad_signature`; the two previously disagreed. Iteration-0 drivable cost is now exactly `0` in every scenario.
+
+Result over the 25-scenario set: success `3/25 -> 4/25`, `iteration_limit` `18 -> 15`. Scenario 1 becomes a success; scenarios 11 and 12 move from `iteration_limit` to `c_background_collision`, so background collisions rose `1 -> 3` as the optimizer began pushing harder. The background weight is the next coefficient to look at.
+
+**This is mitigation, not the root fix.** The raster still mislabels drivable area, which continues to distort the term's gradient wherever the map is wrong, and still drives the C off-road oracle. Rebuilding the raster from road edges as the reference does remains open, and is the risk already recorded under "road edges may not encode the same drivable-area semantics".
+
+### Gradient audit and the zero-speed BPTT truncation (2026-09-03)
+
+**Direction is correct, verified against finite differences.** On scenario 0 (map 0, seed 42) the ego is stationary for the whole episode and adversary 6 sits `8.9 m` directly ahead, same heading, also parked and drifting away. The only way to collide is to reverse into the ego. `dL/d(accel) > 0` at all 80 transitions, so gradient descent lowers acceleration and backs the adversary into the ego. Steering gradient is zero while the adversary is parked, which is correct in both formulations: yaw rate is proportional to speed, so steering cannot act at zero speed.
+
+**Bug found and fixed.** `_classic_step()` mirrored C's `update_agent_speed()`, recovering signed speed as `sqrt(vx^2 + vy^2)` resigned onto the heading. Both `clamp_min` and the `where` guarding it are flat at an exactly stationary agent, so `d(signed_speed)/d(speed) = 0` there and the state recurrence was cut: the rollout gradient collapsed to its single-step direct effect. Measured on an isolated 20-transition rollout from `v0 = 0`, `d(final_x)/d(a[0])` was `0.04` against a true `0.80` — short by exactly the horizon. On scenario 0 the accel gradient was `41x` too small, `(N+1)/2` for `N = 80`.
+
+That round trip is the identity on speed, so the fix carries the C value forward and routes the derivative through `speed`: `signed_speed = speed + (c_signed_speed - speed).detach()`. Forward values are bit-identical and all 16 C-parity tests still pass. Scenario 0 analytic-versus-finite-difference agreement went from `97%` error to under `0.5%` at every acceleration transition. Regression test: `test_stationary_agent_backpropagates_through_the_whole_horizon`.
+
+**Impact was small, and the reason matters.** Success stayed at `3/25` and no scenario changed outcome. Adam normalizes per parameter, so a uniformly mis-scaled gradient produces nearly the same update; the truncation preserved sign and roughly the shape. The bug was invisible end-to-end precisely because Adam hides gradient magnitude. It still matters: reported `gradient_norms` were wrong, and any non-Adam optimizer, line search, or gradient-norm stopping rule would have been wrong too.
+
+Reference comparison: Waymax's `InvertibleBicycleModel` integrates `new_vel = speed + accel * dt` the same way, so the acceleration gradient has the same double-integrator structure. It differs in two ways that are already accepted in Stage 3 - it uses curvature rather than a rate-limited wheel angle, and second-order position integration rather than C's Euler step. It also carries unsigned `speed = sqrt(vel_x^2 + vel_y^2)`, so it cannot represent reverse at all; scenario 0's solution requires reverse and is only expressible in the PufferDrive formulation. The reference's `opt()` nudges zero-valued actions to `1e-6` and aborts on non-finite gradients, which is the same zero-speed degeneracy surfacing as NaN there and as silent truncation here.
+
+### The optimization is single-adversary in practice (2026-09-03)
+
+Actions are parameterized for every candidate, but `ego_background_collision_cost()` reduces over candidates with a hard `min`, exactly as the reference `calculate_distance_ego_col` does. A hard min routes subgradient only to the argmin, so **exactly one candidate is ever pulled toward the ego**. Measured at the initial iterate:
+
+| Scenario | Candidates | Receive ego-attraction gradient | Receive any gradient |
+| --- | --- | --- | --- |
+| 1 | 24 | 1 | 16 |
+| 3 | 14 | 1 | 9 |
+| 0 | 2 | 1 | 1 |
+
+Every other candidate receives only constraint gradient from background-collision repulsion and drivable-area deviation, which never points at the ego.
+
+The design intent is that the argmin is a soft selection that can switch as trajectories change, so the adversary need not be chosen up front. That does not happen: over 300 iterations on scenario 3 the argmin never moved off agent 4. Pulling the closest candidate closer only reinforces its argmin status, so the choice is settled at iteration 0 by the initial geometry and is winner-take-all thereafter.
+
+Consequences to decide on, none of them yet acted on:
+
+- The multi-agent parameterization costs optimizer work and perturbs background vehicles off their logged trajectories with no adversarial benefit. Freezing non-argmin candidates, or running one job per candidate, would be cheaper and more faithful to the logged scene.
+- Because selection is fixed by initial geometry, a scenario whose only viable adversary is not the initially closest vehicle can never be found. This is a plausible contributor to the `18/25 iteration_limit` rate and should be tested by seeding one job per candidate.
+- `actionable_collision` requires the C collision to involve `selected_adversary_idx`, which is stricter than the reference's "any ego collision counts". It cost nothing in the current run - every C ego collision was also actionable - but it can discard valid scenarios.
+
+### C fix: per-agent episode state leaked across resets (2026-09-03)
+
+`set_start_position()` reset metrics and agent state only after its per-agent early `continue`s, so an agent invalid at `init_step` never reached `reset_agent_state()`. Its `stopped` / `removed` flags survived `c_reset()` and outlived the episode. `move_dynamics()` freezes a `stopped` agent with `clear_agent_motion()`, so a late-appearing adversary that was stopped in one rollout stayed frozen at zero speed in every later one.
+
+This surfaced as the ReGentS parity gate: `replay_optimized_scenario_in_c()` runs the baseline rollout before the adversarial rollout on the same Drive. On map 18 seed 60, adversary 9 first becomes valid at `t=16`, was stopped at `t=78` of the baseline, and then stayed frozen for the whole adversarial rollout, giving `c_torch_trajectory_error = 67.1 m` against `~1e-5` elsewhere.
+
+Fix: hoist `reset_agent_metrics()` and `reset_agent_state()` above the early `continue`s so every agent resets regardless of validity at `init_step`. Both are pure state clears and consume no RNG, so trajectories stay bit-identical for agents that already reset. `generate_reward_coefs()` deliberately stays where it is: it draws from `env->rng_state` under `reward_randomization`, and moving it would shift the RNG stream for existing runs. The related reward-coef half of this gap remains covered by `start_regents_injection()` setting the neutral speed coefficient.
+
+Measured over the 25-scenario NuPlan set: maximum `c_torch_trajectory_error` `67.118 -> 3.815e-05`, and scenarios over the `1e-4` gate `3 (18, 5, 17) -> 0`. Success rate is unchanged at `3/25`; the three parity rejections become honest optimizer outcomes instead of masking them.
+
+This was not ReGentS-specific. Any replay episode where a late-appearing agent commits an infraction would leave that agent permanently frozen in every subsequent episode of the same env.
+
+### Reference-fidelity audit against `ReGentS/` (2026-09-03)
+
+Three divergences from `ReGentS/method/optim_scenario.py` were found and two were kept:
+
+- **Front-divergence yaw window** used `pi/8` for both bearing and yaw; the reference uses `pi/8` for bearing and `pi/2` for yaw. The whole `[pi/8, pi/2)` yaw band — agents actually turning into the ego path — was misclassified as non-divergent, so the steering-cancellation rule was largely inert. Fixed via `front_yaw_half_angle_radians`.
+- **Steering update damping** was missing. The reference scales every surviving steering update by `0.5`. Fixed via `steering_update_scale`, applied to the post-Adam update because Adam's normalization makes gradient scaling a no-op.
+- **Drivable-area reduction** was changed to the reference's `sum` and then reverted. See cost contract 3: the reference's potential is an unnormalized density, ours is a normalized convolution, so the reduction is not transferable without also transferring the potential scale. Measured: with `sum`, generation collapsed to `0/25` because the off-road term outweighed the ego term by ~50x and the optimizer only polished off-road compliance (scenario 3: total `407 -> 77` while ego cost moved `4.825 -> 4.797`).
+
+A/B over 25 NuPlan scenarios, seed 42, 80-transition horizon, 500 Adam updates, mean drivable reduction:
+
+| Variant | Success | Background-collision rejections |
+| --- | --- | --- |
+| `steering_update_scale=1.0`, yaw `pi/8` (pre-audit) | `2/25` | 1 |
+| `steering_update_scale=0.5`, yaw `pi/2` (reference) | `3/25` | 0 |
+
+Scenario 23 flips to success and scenario 4's background collision disappears. Both fidelity fixes are net positive; neither is tuned.
 
 ## Status review against the general goal (2026-09-03)
 
-Stages 0-6 are implemented and committed as `pufferlib/ocean/regents/` (12 modules) with `tests/regents/` (9 suites, 96 tests passing as of this review), the two C binding entry points, and the `puffer regents` command. This section audits that result against the goal statement at the top of this document rather than against each stage's own exit gate.
+Stages 0-6 are implemented and committed as `pufferlib/ocean/regents/` (12 modules) with `tests/regents/` (9 suites, 95 tests passing and 4 CUDA-dependent tests skipped as of this review), the two C binding entry points, and the `puffer regents` command. This section audits that result against the goal statement at the top of this document rather than against each stage's own exit gate.
 
 ### Initial POC scope
 
@@ -180,7 +264,7 @@ The POC as scoped is complete. Its one measured end-to-end result is `1/16` gene
 | Objective | State | Gap |
 | --- | --- | --- |
 | Benchmark against IDM | Partial | Generation runs IDM and records C-authoritative collision/off-road/infraction outcomes per scenario, but only for the scenario it just generated. There is no evaluation pass over a fixed generated set. |
-| Benchmark against the policy | Not started | Nothing in `pufferlib/ocean/regents/` loads a checkpoint or sets `sdc_controller='policy'`. `run_reactive_idm_generation()` and `capture_frozen_idm_trajectory()` both hard-reject a non-IDM SDC. The stop-gradient interface is ready for the swap; the swap is unwritten. |
+| Benchmark against the policy | Not started | Nothing in `pufferlib/ocean/regents/` loads a checkpoint or sets `sdc_controller='policy'`. `run_reactive_idm_generation()` and `capture_frozen_idm_trajectory()` accept IDM and replay diagnostics but still reject a learned-policy SDC. The stop-gradient interface is ready for the swap; the swap is unwritten. |
 | Comparative analysis IDM vs policy | Not started | `generation.py` reports one controller's rates. No harness runs two controllers over the same adversarial set and contrasts them. |
 | Visual rendering | Partial | Interactive HTML replays and a gallery index ship and were produced for all 16 acceptance scenarios. The `mp4` half is not wired: the headless EGL pipeline in `scripts/render_scenario.py` is never invoked from the ReGentS path. |
 
@@ -217,6 +301,8 @@ Exit gate: the same generation run completes with `sdc_controller=policy`, and a
 - Resolve the Stage 5 original-collision open issue with a measured decision, then requote yield.
 - Route the ReGentS replay path through the headless EGL pipeline for `mp4` output alongside the existing HTML replays.
 - Batch the optimizer across scenarios (M6), preserving per-scenario determinism and the existing reduction semantics.
+
+Retain the vectorized candidate-involved feasibility signature, candidate-only differentiable regularizer, horizon-bounded inverse dynamics, and inverse-prefix reuse as prerequisites for true batching. In the 2026-09-03 two-scenario, 50-transition smoke run, these corrections reduced reported optimization time from `23.4 s` to `6.0 s` while preserving maximum C/Torch error `3.815e-6`. A two-process trial was slower than serial execution on this CPU workload; M6 should stack scenarios inside each worker to amortize Torch work rather than only spawn more one-scenario processes.
 
 ## Proposed code organization
 

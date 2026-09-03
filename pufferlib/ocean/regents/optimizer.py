@@ -2,26 +2,35 @@
 
 import math
 from dataclasses import dataclass, field
-from itertools import combinations
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
 from pufferlib.ocean.drive import binding
-from pufferlib.ocean.regents.adapter import export_drive_scenarios
+from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS, export_drive_scenarios
 from pufferlib.ocean.regents.dynamics import ACTION_ACCELERATION, ACTION_TARGET_STEERING, classic_step
 from pufferlib.ocean.regents.filters import (
     DEFAULT_FRONT_DIVERGENCE_FRACTION,
     PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS,
+    REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS,
     CandidateSelection,
     ReGentSFilterConfig,
     front_divergence_mask,
     select_adversary_candidates,
 )
-from pufferlib.ocean.regents.geometry import oriented_box_corners, signed_box_distance
-from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
-from pufferlib.ocean.regents.losses import ReGentSCostConfig, combined_regents_cost, prepare_out_of_bounds_rasters
+from pufferlib.ocean.regents.geometry import (
+    oriented_box_corners,
+    sample_out_of_bounds_potential,
+    signed_box_distance,
+)
+from pufferlib.ocean.regents.inverse_dynamics import InverseDynamicsResult, estimate_expert_actions
+from pufferlib.ocean.regents.losses import (
+    ReGentSCostConfig,
+    _masked_boxes,
+    combined_regents_cost,
+    prepare_out_of_bounds_rasters,
+)
 from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
     STATE_HEADING,
@@ -41,6 +50,8 @@ DEFAULT_ACTION_SATURATION_TOLERANCE = 1e-6
 DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS = 0.0
 DEFAULT_EARLY_STOP_MINIMUM_IMPROVEMENT = 0.0
 DEFAULT_EARLY_STOP_PATIENCE_ITERATIONS = 0
+DEFAULT_STEERING_UPDATE_SCALE = 0.5
+BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
 
 
 @dataclass(frozen=True)
@@ -80,6 +91,8 @@ class ReGentSOptimizationConfig:
     adam_epsilon: float = DEFAULT_ADAM_EPSILON
     tau_front: float = DEFAULT_FRONT_DIVERGENCE_FRACTION
     front_applicability_half_angle_radians: float = PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS
+    front_yaw_half_angle_radians: float = REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS
+    steering_update_scale: float = DEFAULT_STEERING_UPDATE_SCALE
     action_saturation_tolerance: float = DEFAULT_ACTION_SATURATION_TOLERANCE
     collision_distance_tolerance_meters: float = DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS
     early_stop_on_collision: bool = True
@@ -103,10 +116,16 @@ class ReGentSOptimizationConfig:
                 raise ValueError(f"{name} must be finite and in [0, 1)")
         if not math.isfinite(self.tau_front) or self.tau_front < 0.0 or self.tau_front > 1.0:
             raise ValueError("tau_front must be finite and in [0, 1]")
-        if not math.isfinite(self.front_applicability_half_angle_radians):
-            raise ValueError("front_applicability_half_angle_radians must be finite")
-        if not 0.0 < self.front_applicability_half_angle_radians <= math.pi:
-            raise ValueError("front_applicability_half_angle_radians must be in (0, pi]")
+        for name in ("front_applicability_half_angle_radians", "front_yaw_half_angle_radians"):
+            value = getattr(self, name)
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if not 0.0 < value <= math.pi:
+                raise ValueError(f"{name} must be in (0, pi]")
+        if not math.isfinite(self.steering_update_scale):
+            raise ValueError("steering_update_scale must be finite")
+        if not 0.0 <= self.steering_update_scale <= 1.0:
+            raise ValueError("steering_update_scale must be in [0, 1]")
         if not math.isfinite(self.action_saturation_tolerance):
             raise ValueError("action_saturation_tolerance must be finite")
         if not 0.0 <= self.action_saturation_tolerance < 1.0:
@@ -206,7 +225,13 @@ def _ego_state_from_payload(payload, expected_controller):
     return scenario["scenario_id"], state, bool(validity)
 
 
-def capture_frozen_idm_trajectory(drive, transition_count, *, seed=None):
+def capture_frozen_idm_trajectory(
+    drive,
+    transition_count,
+    *,
+    seed=None,
+    raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
+):
     """Reset one Drive scenario and capture its native C IDM or replay ego rollout.
 
     Backgrounds remain under the Drive configuration's replay controller. The
@@ -227,7 +252,11 @@ def capture_frozen_idm_trajectory(drive, transition_count, *, seed=None):
 
     drive.reset(seed=seed)
     initial_payload = drive.get_state()
-    scenario = export_drive_scenarios(drive, payload=initial_payload)
+    scenario = export_drive_scenarios(
+        drive,
+        payload=initial_payload,
+        raster_resolution_meters=raster_resolution_meters,
+    )
     if transition_count > scenario.max_time_count - 1:
         raise ValueError("transition_count exceeds the exported scenario horizon")
     scenario_ids = []
@@ -397,25 +426,56 @@ def _first_ego_collision(states, state_valid, scenario, candidate_mask, toleranc
     return first_timestep, first_agent_idx
 
 
-def _has_background_collision(states, state_valid, scenario, tolerance_meters, candidate_mask):
+def _candidate_background_pair_indices(scenario, state_valid, candidate_mask):
     background_idx = torch.where(scenario.vehicle_mask[0] & ~scenario.ego_mask[0])[0]
-    candidate_mask_flat = candidate_mask[0]
-    for left_idx_tensor, right_idx_tensor in combinations(background_idx, 2):
-        left_idx = int(left_idx_tensor.item())
-        right_idx = int(right_idx_tensor.item())
-        if not (bool(candidate_mask_flat[left_idx]) or bool(candidate_mask_flat[right_idx])):
-            continue
-        jointly_valid = state_valid[0, left_idx] & state_valid[0, right_idx]
-        if not jointly_valid.any():
-            continue
-        timestep_idx = torch.where(jointly_valid)[0]
-        distance = signed_box_distance(
-            _boxes_for_agent(states, scenario, left_idx, timestep_idx),
-            _boxes_for_agent(states, scenario, right_idx, timestep_idx),
+    if background_idx.numel() < 2:
+        return torch.empty((2, 0), dtype=torch.int64, device=scenario.logged_state.device)
+    local_pairs = torch.triu_indices(
+        background_idx.numel(),
+        background_idx.numel(),
+        offset=1,
+        device=scenario.logged_state.device,
+    )
+    pair_indices = background_idx[local_pairs]
+    candidate_involved = candidate_mask[0, pair_indices[0]] | candidate_mask[0, pair_indices[1]]
+    jointly_valid = state_valid[0, pair_indices[0]] & state_valid[0, pair_indices[1]]
+    ever_jointly_valid = torch.any(jointly_valid, dim=-1)
+    return pair_indices[:, candidate_involved & ever_jointly_valid]
+
+
+def _boxes_for_agents(states, scenario, agent_indices):
+    agent_states = states[0, agent_indices]
+    time_count = agent_states.shape[1]
+    length_meters = scenario.length_meters[0, agent_indices, None].expand(-1, time_count)
+    width_meters = scenario.width_meters[0, agent_indices, None].expand(-1, time_count)
+    return torch.stack(
+        (
+            agent_states[..., STATE_X],
+            agent_states[..., STATE_Y],
+            length_meters,
+            width_meters,
+            agent_states[..., STATE_HEADING],
+        ),
+        dim=-1,
+    )
+
+
+def _background_collision_signature(states, state_valid, scenario, tolerance_meters, pair_indices):
+    pair_count = pair_indices.shape[1]
+    signature = torch.zeros(pair_count, dtype=torch.bool, device=states.device)
+    for chunk_start in range(0, pair_count, BACKGROUND_COLLISION_PAIR_CHUNK_SIZE):
+        chunk_pairs = pair_indices[:, chunk_start : chunk_start + BACKGROUND_COLLISION_PAIR_CHUNK_SIZE]
+        left_indices, right_indices = chunk_pairs
+        distances = signed_box_distance(
+            _boxes_for_agents(states, scenario, left_indices),
+            _boxes_for_agents(states, scenario, right_indices),
         )
-        if torch.any(distance <= tolerance_meters):
-            return True
-    return False
+        jointly_valid = state_valid[0, left_indices] & state_valid[0, right_indices]
+        signature[chunk_start : chunk_start + chunk_pairs.shape[1]] = torch.any(
+            jointly_valid & (distances <= tolerance_meters),
+            dim=-1,
+        )
+    return signature
 
 
 def _candidate_offroad_signature(states, state_valid, scenario, candidate_mask):
@@ -438,6 +498,18 @@ def _candidate_offroad_signature(states, state_valid, scenario, candidate_mask):
         outside |= ~raster_mask[safe_row, safe_column]
         signature[0, candidate_idx, timestep_idx] = outside
     return signature
+
+
+def _baseline_corner_potential(states, state_valid, scenario, out_of_bounds_rasters):
+    """Sample the reference rollout's corner potential, the off-road the log already carries."""
+    boxes = _masked_boxes(states, state_valid, scenario.length_meters, scenario.width_meters)
+    corners = oriented_box_corners(boxes)
+    return torch.stack(
+        [
+            sample_out_of_bounds_potential(corners[scenario_idx], raster)
+            for scenario_idx, raster in enumerate(out_of_bounds_rasters)
+        ]
+    ).detach()
 
 
 def _cost_snapshot(costs):
@@ -503,6 +575,7 @@ def optimize_frozen_ego_scenario(
     horizon_transition_count=None,
     scene_suitable=None,
     show_progress=True,
+    inverse_dynamics=None,
 ):
     """Optimize Stage 3 background actions against one detached ego rollout."""
     if config is None:
@@ -510,7 +583,22 @@ def optimize_frozen_ego_scenario(
     horizon_transition_count = _validate_optimization_inputs(
         scenario, frozen_ego, config, deterministic_seed, horizon_transition_count
     )
-    inverse = estimate_expert_actions(scenario)
+    if inverse_dynamics is None:
+        inverse = estimate_expert_actions(
+            scenario,
+            horizon_transition_count=horizon_transition_count,
+        )
+    else:
+        if not isinstance(inverse_dynamics, InverseDynamicsResult):
+            raise TypeError("inverse_dynamics must be an InverseDynamicsResult")
+        expected_prefix = (scenario.batch_size, scenario.max_agent_count)
+        if inverse_dynamics.action_valid.shape[:2] != expected_prefix:
+            raise ValueError("inverse_dynamics does not match the scenario batch and agent dimensions")
+        if inverse_dynamics.action_valid.shape[-1] < horizon_transition_count:
+            raise ValueError("inverse_dynamics does not cover the optimization horizon")
+        if inverse_dynamics.actions.device != scenario.logged_state.device:
+            raise ValueError("inverse_dynamics and scenario tensors must share a device")
+        inverse = inverse_dynamics
     if frozen_ego is None:
         frozen_ego = _frozen_ego_fixture(scenario, inverse, horizon_transition_count)
     baseline_actions = inverse.actions[:, :, :horizon_transition_count].detach().clone()
@@ -536,6 +624,18 @@ def optimize_frozen_ego_scenario(
     )
     baseline_offroad_signature = _candidate_offroad_signature(
         reference_states, state_valid, scenario, selection.candidate_mask
+    )
+    background_pair_indices = _candidate_background_pair_indices(
+        scenario,
+        state_valid,
+        selection.candidate_mask,
+    )
+    baseline_background_collision_signature = _background_collision_signature(
+        reference_states,
+        state_valid,
+        scenario,
+        config.collision_distance_tolerance_meters,
+        background_pair_indices,
     )
 
     if not bool(selection.scene_eligible[0]):
@@ -577,15 +677,18 @@ def optimize_frozen_ego_scenario(
         device=scenario.logged_state.device,
         dtype=scenario.logged_state.dtype,
     )
+    baseline_corner_potential = _baseline_corner_potential(
+        reference_states, state_valid, scenario, out_of_bounds_rasters
+    )
     action_parameter = torch.nn.Parameter(baseline_actions.clone())
     optimizer = torch.optim.Adam(
         (action_parameter,),
         lr=config.learning_rate,
         betas=(config.adam_beta1, config.adam_beta2),
         eps=config.adam_epsilon,
+        foreach=False,
     )
     candidate_mask = selection.candidate_mask
-    background_mask = scenario.vehicle_mask & ~scenario.ego_mask
     gradient_norms = []
     acceleration_gradient_norms = []
     steering_gradient_norms = []
@@ -634,10 +737,11 @@ def optimize_frozen_ego_scenario(
             scenario.width_meters,
             scenario.ego_mask,
             candidate_mask,
-            background_mask,
+            candidate_mask,
             candidate_mask,
             out_of_bounds_rasters,
             config.costs,
+            baseline_corner_potential,
         )
         if not all(
             torch.isfinite(value).all()
@@ -653,8 +757,15 @@ def optimize_frozen_ego_scenario(
         cost_history.append(snapshot)
         if initial_costs is None:
             initial_costs = snapshot
-        background_collision = _has_background_collision(
-            states.detach(), state_valid, scenario, config.collision_distance_tolerance_meters, candidate_mask
+        background_collision_signature = _background_collision_signature(
+            states.detach(),
+            state_valid,
+            scenario,
+            config.collision_distance_tolerance_meters,
+            background_pair_indices,
+        )
+        background_collision = bool(
+            torch.any(background_collision_signature & ~baseline_background_collision_signature)
         )
         offroad_signature = _candidate_offroad_signature(states.detach(), state_valid, scenario, candidate_mask)
         offroad = bool(torch.any(offroad_signature & ~baseline_offroad_signature))
@@ -713,6 +824,7 @@ def optimize_frozen_ego_scenario(
             candidate_mask,
             tau_front=config.tau_front,
             applicability_half_angle_radians=config.front_applicability_half_angle_radians,
+            yaw_half_angle_radians=config.front_yaw_half_angle_radians,
         )
         masked_gradient = mask_front_divergence_gradients(
             action_parameter.grad,
@@ -740,10 +852,13 @@ def optimize_frozen_ego_scenario(
                 )
             )
             divergent_steering = divergent[..., None]
+            damped_steering = previous_steering + config.steering_update_scale * (
+                action_parameter[..., ACTION_TARGET_STEERING] - previous_steering
+            )
             action_parameter[..., ACTION_TARGET_STEERING] = torch.where(
                 divergent_steering,
                 previous_steering,
-                action_parameter[..., ACTION_TARGET_STEERING],
+                damped_steering,
             )
         _zero_adam_steering_momentum(optimizer, action_parameter, divergent)
         completed_update_count += 1
@@ -772,8 +887,15 @@ def optimize_frozen_ego_scenario(
         collision_agent_idx if success else _selected_adversary(best_states, state_valid, scenario, candidate_mask)
     )
     selected_id = int(scenario.agent_id[0, selected_idx].item()) if selected_idx >= 0 else -1
-    final_background_collision = _has_background_collision(
-        best_states, state_valid, scenario, config.collision_distance_tolerance_meters, candidate_mask
+    final_background_collision_signature = _background_collision_signature(
+        best_states,
+        state_valid,
+        scenario,
+        config.collision_distance_tolerance_meters,
+        background_pair_indices,
+    )
+    final_background_collision = bool(
+        torch.any(final_background_collision_signature & ~baseline_background_collision_signature)
     )
     final_offroad_signature = _candidate_offroad_signature(best_states, state_valid, scenario, candidate_mask)
     final_offroad = bool(torch.any(final_offroad_signature & ~baseline_offroad_signature))

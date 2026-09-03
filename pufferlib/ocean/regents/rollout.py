@@ -7,6 +7,8 @@ import numpy as np
 import torch
 
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
+from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.optimizer import (
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
@@ -353,6 +355,7 @@ def run_reactive_idm_generation(
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
     show_progress=True,
+    raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
 ):
     """Alternate detached native-IDM C rollouts and Torch adversary blocks."""
     if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
@@ -364,7 +367,16 @@ def run_reactive_idm_generation(
     if optimization_config is None:
         optimization_config = ReGentSOptimizationConfig()
 
-    scenario, frozen_ego = capture_frozen_idm_trajectory(drive, horizon_transition_count, seed=deterministic_seed)
+    scenario, frozen_ego = capture_frozen_idm_trajectory(
+        drive,
+        horizon_transition_count,
+        seed=deterministic_seed,
+        raster_resolution_meters=raster_resolution_meters,
+    )
+    inverse_dynamics = estimate_expert_actions(
+        scenario,
+        horizon_transition_count=horizon_transition_count,
+    )
     previous_actions = None
     for outer_iteration_idx in range(maximum_outer_iterations):
         optimization = optimize_frozen_ego_scenario(
@@ -374,6 +386,7 @@ def run_reactive_idm_generation(
             deterministic_seed=deterministic_seed,
             horizon_transition_count=horizon_transition_count,
             show_progress=show_progress,
+            inverse_dynamics=inverse_dynamics,
         )
         replay = replay_optimized_scenario_in_c(
             drive,
@@ -384,6 +397,8 @@ def run_reactive_idm_generation(
             capture_html_frames=capture_html_frames,
         )
         if replay.success:
+            break
+        if torch.equal(optimization.initial_actions, optimization.optimized_actions):
             break
         if previous_actions is not None and torch.equal(previous_actions, optimization.optimized_actions):
             break

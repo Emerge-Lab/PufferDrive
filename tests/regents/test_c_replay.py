@@ -301,6 +301,32 @@ def test_generation_config_rejects_a_horizon_the_drive_guards_would_reject(tmp_p
         load_generation_config(config, "too_long")
 
 
+def test_generation_config_rejects_nonfinite_raster_resolution(tmp_path):
+    config = tmp_path / "regents.yaml"
+    config.write_text(
+        "env:\n  num_maps: 1\ngenerations:\n  - name: broken\n    seed: 1\n"
+        "    scenario_count: 1\n    horizon_transition_count: 1\n"
+        "    maximum_outer_iterations: 1\n    raster_resolution_meters: .nan\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="finite and positive"):
+        load_generation_config(config, "broken")
+
+
+def test_generation_config_uses_the_adapter_raster_resolution_default(tmp_path):
+    config = tmp_path / "regents.yaml"
+    config.write_text(
+        "env:\n  num_maps: 1\ngenerations:\n  - name: defaulted\n    seed: 1\n"
+        "    scenario_count: 1\n    horizon_transition_count: 1\n"
+        "    maximum_outer_iterations: 1\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_generation_config(config, "defaulted")
+
+    assert loaded["raster_resolution_meters"] == 0.5
+
+
 def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
     config = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
     expected_count = config["scenario_count"]

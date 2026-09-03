@@ -131,6 +131,35 @@ def test_inverse_exactly_reconstructs_torch_trajectory_with_heading_wrap():
     assert torch.any(states[..., STATE_HEADING] < -3.0)
 
 
+def test_inverse_horizon_matches_the_full_reconstruction_prefix():
+    initial_state = torch.tensor([[[2.0, -3.0, 0.2, 7.0, 0.0]]], dtype=torch.float32)
+    actions = torch.tensor(
+        [[[[0.1, 0.1], [-0.2, 0.2], [0.3, -0.1], [-0.1, 0.0]]]],
+        dtype=torch.float32,
+    )
+    states = classic_rollout(
+        initial_state,
+        actions,
+        torch.ones(actions.shape[:-1], dtype=torch.bool),
+        torch.tensor([[2.7]], dtype=torch.float32),
+        torch.tensor([[20.0]], dtype=torch.float32),
+        0.1,
+    )
+    scenario = _scenario_batch(states, steering_observed=False)
+
+    full = estimate_expert_actions(scenario)
+    prefix = estimate_expert_actions(scenario, horizon_transition_count=2)
+
+    assert prefix.actions.shape == (1, 1, 2, 2)
+    assert prefix.state_with_estimated_steering.shape == (1, 1, 3, STATE_FEATURE_COUNT)
+    torch.testing.assert_close(prefix.actions, full.actions[:, :, :2])
+    torch.testing.assert_close(
+        prefix.state_with_estimated_steering,
+        full.state_with_estimated_steering[:, :, :3],
+    )
+    torch.testing.assert_close(prefix.residual_meters, full.residual_meters[:, :, :2])
+
+
 def test_inverse_reconstructs_c_limit_and_reverse_trajectory():
     initial_state = np.asarray([[[[0.0, 0.0, -3.0, -1.7, 0.62]]]], dtype=np.float32).reshape(1, 1, 5)
     actions = np.asarray(

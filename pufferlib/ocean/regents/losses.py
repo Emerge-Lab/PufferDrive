@@ -223,12 +223,27 @@ def drivable_area_deviation_cost(
     width_meters,
     optimized_vehicle_mask,
     out_of_bounds_rasters,
+    baseline_corner_potential=None,
 ):
-    """Sum each optimized vehicle's four-corner potential averaged over valid steps."""
+    """Sum each optimized vehicle's four-corner potential averaged over valid steps.
+
+    The reference reduces with `sum`, but its potential is an unnormalized Gaussian
+    density; ours is a normalized convolution, so the horizon-invariant mean is what
+    keeps this term comparable to the ego cost.
+
+    With a baseline, only potential the optimization introduces is charged, matching
+    the success rule that counts newly introduced off-road corners.
+    """
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
     _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
     if len(out_of_bounds_rasters) != states.shape[0]:
         raise ValueError("out_of_bounds_rasters must contain one raster per scenario")
+    if baseline_corner_potential is not None:
+        expected_shape = (*states.shape[:-1], 4)
+        if tuple(baseline_corner_potential.shape) != expected_shape:
+            raise ValueError("baseline_corner_potential must have shape [batch, agent, time, 4]")
+        if baseline_corner_potential.device != states.device or baseline_corner_potential.dtype != states.dtype:
+            raise ValueError("baseline_corner_potential must match the states device and dtype")
     boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     corners = oriented_box_corners(boxes)
 
@@ -240,6 +255,8 @@ def drivable_area_deviation_cost(
         if potential.device != states.device or potential.dtype != states.dtype:
             raise ValueError("Out-of-bounds rasters and states must share device and dtype")
         corner_potential = sample_out_of_bounds_potential(corners[scenario_idx], raster)
+        if baseline_corner_potential is not None:
+            corner_potential = torch.relu(corner_potential - baseline_corner_potential[scenario_idx])
         valid = state_valid[scenario_idx] & optimized_vehicle_mask[scenario_idx, :, None]
         valid_counts = valid.sum(dim=-1)
         potential_sum = torch.where(
@@ -263,6 +280,7 @@ def combined_regents_cost(
     optimized_vehicle_mask,
     out_of_bounds_rasters,
     config=None,
+    baseline_corner_potential=None,
 ):
     """Evaluate and combine the three paper-equivalent costs per scenario."""
     if config is None:
@@ -313,6 +331,7 @@ def combined_regents_cost(
         width_meters,
         optimized_vehicle_mask,
         out_of_bounds_rasters,
+        baseline_corner_potential,
     )
     total = (
         config.ego_collision_weight * ego_collision

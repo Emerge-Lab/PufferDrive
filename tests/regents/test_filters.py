@@ -190,7 +190,7 @@ def _front_states(position_angle, yaw, time_count=5):
     return states
 
 
-def test_front_divergence_covers_both_sides_and_strict_pi_over_eight_boundaries():
+def test_front_divergence_covers_both_sides_and_separate_bearing_and_yaw_windows():
     valid = torch.ones((1, 2, 5), dtype=torch.bool)
     ego_mask = torch.tensor([[True, False]])
     candidate_mask = torch.tensor([[False, True]])
@@ -202,8 +202,14 @@ def test_front_divergence_covers_both_sides_and_strict_pi_over_eight_boundaries(
             ego_mask,
             candidate_mask,
         )
+        wide_yaw = front_divergence_mask(
+            _front_states(sign * math.pi / 16.0, sign * (math.pi / 2.0 - epsilon)),
+            valid,
+            ego_mask,
+            candidate_mask,
+        )
         yaw_boundary = front_divergence_mask(
-            _front_states(sign * math.pi / 16.0, sign * math.pi / 8.0),
+            _front_states(sign * math.pi / 16.0, sign * math.pi / 2.0),
             valid,
             ego_mask,
             candidate_mask,
@@ -215,6 +221,7 @@ def test_front_divergence_covers_both_sides_and_strict_pi_over_eight_boundaries(
             candidate_mask,
         )
         assert inside.tolist() == [[False, True]]
+        assert wide_yaw.tolist() == [[False, True]]
         assert yaw_boundary.tolist() == [[False, False]]
         assert position_boundary.tolist() == [[False, False]]
 

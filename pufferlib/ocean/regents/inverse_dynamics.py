@@ -298,7 +298,12 @@ def _select_bounded_steering(
     return torch.where(heading_residual_valid, best_steering, previous_steering)
 
 
-def estimate_expert_actions(scenario, low_speed_threshold_mps=DEFAULT_LOW_SPEED_THRESHOLD_MPS):
+def estimate_expert_actions(
+    scenario,
+    low_speed_threshold_mps=DEFAULT_LOW_SPEED_THRESHOLD_MPS,
+    *,
+    horizon_transition_count=None,
+):
     """Estimate bounded continuous actions for valid logged vehicle transitions.
 
     Acceleration first selects the closest reachable logged speed. Steering is
@@ -307,14 +312,26 @@ def estimate_expert_actions(scenario, low_speed_threshold_mps=DEFAULT_LOW_SPEED_
     that objective when the updated signed speed is near zero.
     """
     _validate_scenario(scenario, low_speed_threshold_mps)
-    logged_state = scenario.logged_state
+    maximum_transition_count = scenario.max_time_count - 1
+    if horizon_transition_count is None:
+        horizon_transition_count = maximum_transition_count
+    if not isinstance(horizon_transition_count, int) or isinstance(horizon_transition_count, bool):
+        raise TypeError("horizon_transition_count must be an integer")
+    if horizon_transition_count < 1 or horizon_transition_count > maximum_transition_count:
+        raise ValueError(f"horizon_transition_count must be in [1, {maximum_transition_count}]")
+
+    logged_state = scenario.logged_state[:, :, : horizon_transition_count + 1]
     batch_count, agent_count, time_count, _ = logged_state.shape
     transition_count = time_count - 1
     track_count = batch_count * agent_count
-    action_valid = scenario.transition_valid & scenario.vehicle_mask[..., None]
+    action_valid = scenario.transition_valid[:, :, :transition_count] & scenario.vehicle_mask[..., None]
 
     flat_logged_state = logged_state.reshape(track_count, time_count, STATE_FEATURE_COUNT)
-    flat_feature_valid = scenario.state_feature_valid.reshape(track_count, time_count, STATE_FEATURE_COUNT)
+    flat_feature_valid = scenario.state_feature_valid[:, :, :time_count].reshape(
+        track_count,
+        time_count,
+        STATE_FEATURE_COUNT,
+    )
     flat_action_valid = action_valid.reshape(track_count, transition_count)
     flat_wheelbase = scenario.wheelbase_meters.reshape(track_count)
     flat_maximum_speed = scenario.maximum_speed_mps.reshape(track_count)

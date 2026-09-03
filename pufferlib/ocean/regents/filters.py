@@ -18,6 +18,7 @@ DEFAULT_REAR_SECTOR_FRACTION = 0.8
 DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS = math.pi / 8.0
 DEFAULT_FRONT_DIVERGENCE_FRACTION = 0.5
 PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS = math.pi / 8.0
+REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS = math.pi / 2.0
 
 
 class CandidateFilterReason(IntFlag):
@@ -329,8 +330,12 @@ def front_divergence_mask(
     *,
     tau_front=DEFAULT_FRONT_DIVERGENCE_FRACTION,
     applicability_half_angle_radians=PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS,
+    yaw_half_angle_radians=REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS,
 ):
-    """Return candidates whose current rollout occupies the paper's red zone."""
+    """Return candidates whose current rollout occupies the paper's red zone.
+
+    Bearing and yaw use separate windows, as in the reference implementation.
+    """
     if not isinstance(states, torch.Tensor) or not states.is_floating_point():
         raise TypeError("states must be a floating Torch tensor")
     if states.ndim != 4 or states.shape[-1] < STATE_HEADING + 1:
@@ -343,10 +348,14 @@ def front_divergence_mask(
         raise ValueError("ego_mask and candidate_mask must have shape [batch, agent]")
     if not math.isfinite(tau_front) or tau_front < 0.0 or tau_front > 1.0:
         raise ValueError("tau_front must be finite and in [0, 1]")
-    if not math.isfinite(applicability_half_angle_radians):
-        raise ValueError("applicability_half_angle_radians must be finite")
-    if not 0.0 < applicability_half_angle_radians <= math.pi:
-        raise ValueError("applicability_half_angle_radians must be in (0, pi]")
+    for name, value in (
+        ("applicability_half_angle_radians", applicability_half_angle_radians),
+        ("yaw_half_angle_radians", yaw_half_angle_radians),
+    ):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        if not 0.0 < value <= math.pi:
+            raise ValueError(f"{name} must be in (0, pi]")
     if (
         states.device != state_valid.device
         or states.device != ego_mask.device
@@ -370,7 +379,7 @@ def front_divergence_mask(
         jointly_valid = state_valid[batch_idx] & state_valid[batch_idx, ego_idx, None, :]
         applicable = jointly_valid
         in_bounds = relative_bearing.abs() < applicability_half_angle_radians
-        in_bounds &= relative_yaw.abs() < applicability_half_angle_radians
+        in_bounds &= relative_yaw.abs() < yaw_half_angle_radians
         same_side_inside_yaw = relative_bearing * relative_yaw > 0.0
         same_side_inside_yaw &= relative_bearing.abs() < relative_yaw.abs()
         red_zone = applicable & in_bounds & same_side_inside_yaw

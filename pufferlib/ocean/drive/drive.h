@@ -2587,6 +2587,11 @@ static void set_start_position(Drive *env) {
         }
         Agent *agent = &env->agents[i];
 
+        // Every agent resets, including ones invalid at init_step: the paths below
+        // continue early, and stale stopped/removed flags would outlive the episode.
+        reset_agent_metrics(env, i);
+        reset_agent_state(agent);
+
         // Initialize simulation trajectory from logged trajectory at init_step
         if (env->simulation_mode == SIMULATION_MODE_REPLAY) {
             // Clamp init_step to ensure we don't go out of bounds
@@ -2640,9 +2645,6 @@ static void set_start_position(Drive *env) {
             }
         }
 
-        // Reset agent metrics and state
-        reset_agent_metrics(env, i);
-        reset_agent_state(agent);
         generate_reward_coefs(env, agent);
     }
 }

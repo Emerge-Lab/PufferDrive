@@ -92,14 +92,15 @@ def _classic_step(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds
     heading = _wrap_heading_like_c(previous_heading + yaw_rate * dt_seconds)
 
     speed_squared = velocity_x * velocity_x + velocity_y * velocity_y
-    # Preserve the C sqrt result while defining a finite zero-speed derivative
-    # for adversarial optimization. clamp_min is identical for non-subnormal
-    # physical speeds and has zero derivative at the exact stationary point.
     safe_speed_squared = torch.clamp_min(speed_squared, torch.finfo(speed_squared.dtype).tiny)
     speed_magnitude = torch.sqrt(safe_speed_squared)
     speed_magnitude = torch.where(speed_squared > 0.0, speed_magnitude, torch.zeros_like(speed_magnitude))
     velocity_heading_projection = velocity_x * torch.cos(heading) + velocity_y * torch.sin(heading)
-    signed_speed = torch.where(torch.signbit(velocity_heading_projection), -speed_magnitude, speed_magnitude)
+    c_signed_speed = torch.where(torch.signbit(velocity_heading_projection), -speed_magnitude, speed_magnitude)
+    # C recovers signed speed as sqrt(vx^2 + vy^2) resigned onto the heading, which is the
+    # identity on speed. Carrying the C value forward keeps parity; routing the derivative
+    # through speed keeps backpropagation alive at an exactly stationary agent.
+    signed_speed = speed + (c_signed_speed - speed).detach()
     return torch.stack((x_meters, y_meters, heading, signed_speed, steering), dim=-1)
 
 
