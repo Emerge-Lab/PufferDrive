@@ -77,7 +77,7 @@ static void init_reward_env(Drive *env, Agent *agent, Log *log, int *active, flo
     agent->reward_coefs[REWARD_COEF_COLLISION] = 3.0f;
     agent->reward_coefs[REWARD_COEF_OFFROAD] = 4.0f;
     agent->reward_coefs[REWARD_COEF_STOP_LINE] = 5.0f;
-    agent->metrics_array[LANE_ANGLE_IDX] = 1.0f;
+    agent->metrics_array[LANE_HEADING_COSINE_IDX] = 1.0f;
 }
 
 static int test_reward_terminal_components(void) {
@@ -155,7 +155,8 @@ static int test_reward_lane_align_wrong_way(void) {
 
     init_reward_env(&env, &agent, &log, active, reward);
     reward[0] = 0.0f;
-    agent.metrics_array[LANE_ANGLE_IDX] = -1.0f; // cos(θ_f) = -1 → driving against lane
+    agent.metrics_array[LANE_HEADING_COSINE_IDX] = -1.0f; // cos(θ_f) = -1 → driving against lane
+    agent.metrics_array[LANE_HEADING_ERROR_RADIANS_IDX] = M_PI;
     agent.sim_speed_signed = 5.0f;
     agent.reward_coefs[REWARD_COEF_LANE_ALIGN] = 1.0f;
     agent.reward_coefs[REWARD_COEF_VEL_ALIGN] = 1.0f;
