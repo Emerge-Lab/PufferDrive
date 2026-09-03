@@ -32,7 +32,15 @@ SCENARIO_LENGTH_MARGIN_STEPS = 2  # shadow env must never hit its own truncation
 NUPLAN_COMFORT_MAX_LON_ACCEL_MPS2 = 2.40  # ego_lon_acceleration_statistics.yaml max_lon_accel
 TRAJECTORY_TAIL_SPACING_S = 0.5  # constant-velocity tail past the integrated step; the controller only reads t+dt
 COMFORT_ACCEL_MARGIN = 0.96  # nuPlan Savitzky-Golay-smooths the reported accel and overshoots a hard cap by ~0.5%
-GOAL_CONTINUATION_MARGIN_M = 5.0  # first route goal after the endpoint sits this far beyond the goal radius
+ROADBLOCK_GOAL_MARGIN_M = 5.0  # first roadblock goal sits at least this far beyond the goal radius ahead of the ego
+
+
+def startup_jerk_action_bounds(accel_cap_mps3: float, brake_cap_mps3: float):
+    """[lo, hi] of the continuous longitudinal jerk action for the caps (0 = uncapped): the env maps
+    action < 0 onto [JERK_LONG[0], 0] and action > 0 onto [0, JERK_LONG[-1]] m/s³."""
+    lo = -1.0 if brake_cap_mps3 <= 0 else max(-1.0, -brake_cap_mps3 / abs(float(binding.JERK_LONG[0])))
+    hi = 1.0 if accel_cap_mps3 <= 0 else min(1.0, accel_cap_mps3 / float(binding.JERK_LONG[-1]))
+    return lo, hi
 
 
 def clean_policy_state_dict(state_dict):
@@ -81,6 +89,10 @@ class PufferDrivePlanner(AbstractPlanner):
         num_agents: int = 64,
         horizon_seconds: float = 8.0,
         deterministic: bool = True,
+        sliding_goal_window: bool = False,
+        startup_jerk_cap_seconds: float = 1.5,
+        startup_accel_jerk_cap_mps3: float = 0.0,
+        startup_brake_jerk_cap_mps3: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -98,12 +110,18 @@ class PufferDrivePlanner(AbstractPlanner):
         :param map_radius: map extraction / light-matching radius [m].
         :param goal_spacing: goal spacing along the route / logged path fed to the policy [m].
         :param goal_source: "route" (goal windows along the lane-graph route through the route
-            roadblocks) or "gt_map" (one goal: the human's endpoint snapped to the nearest
-            co-directional lane center; once cleared, route goals continue past it like a
-            training goal-window regeneration).
+            roadblocks) or "roadblock" (goal windows of route roadblock centroids, no lane choice).
         :param num_agents: PufferDrive agent-pool size (ego + streamed background).
         :param horizon_seconds: returned trajectory horizon (constant-velocity
             extrapolation past the integrated first step) [s].
+        :param sliding_goal_window: refill the goal window to `num_goals` goals ahead after every
+            consumed goal (default: replace it only once exhausted, as in training), so the policy
+            sees a window-final speed-gated goal only at the true route end.
+        :param startup_jerk_cap_seconds: length of the scenario-start window the jerk caps apply to [s].
+        :param startup_accel_jerk_cap_mps3: cap on the ego's positive (accelerating) longitudinal jerk
+            during the start window [m/s³]; 0 = uncapped. nuPlan's Savitzky-Golay jerk extrapolates at
+            the trajectory edges, so a ramp that starts at t=0 reads ~2x its raw jerk.
+        :param startup_brake_jerk_cap_mps3: same cap for braking jerk; 0 = uncapped.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -118,12 +136,20 @@ class PufferDrivePlanner(AbstractPlanner):
         self._device = device
         self._map_radius = float(map_radius)
         self._goal_spacing = float(goal_spacing)
-        if goal_source not in ("route", "gt_map"):
-            raise ValueError(f"goal_source must be 'route' or 'gt_map', got {goal_source!r}")
+        if goal_source not in ("route", "roadblock"):
+            raise ValueError(f"goal_source must be 'route' or 'roadblock', got {goal_source!r}")
         self._goal_source = goal_source
         self._num_agents = int(num_agents)
         self._horizon_seconds = float(horizon_seconds)
         self._deterministic = deterministic
+        self._sliding_goal_window = bool(sliding_goal_window)
+        self._startup_jerk_cap_seconds = float(startup_jerk_cap_seconds)
+        self._startup_accel_jerk_cap_mps3 = float(startup_accel_jerk_cap_mps3)
+        self._startup_brake_jerk_cap_mps3 = float(startup_brake_jerk_cap_mps3)
+        if min(self._startup_jerk_cap_seconds, self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3) < 0:
+            raise ValueError("startup_jerk_cap_seconds and the startup jerk caps must be >= 0")
+        self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
+        self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
         self._obs_html_dir = Path(obs_html_dir) if obs_html_dir else None
         self._obs_html_max_steps = int(obs_html_max_steps)
@@ -140,11 +166,9 @@ class PufferDrivePlanner(AbstractPlanner):
         self._route_connector_ids = ()  # lane ids along the Dijkstra route: they decide shared stop-line elements
         self._num_traffic = 0
         self._goal_window: Optional[RouteGoalWindow] = None
-        self._route_centerline = np.zeros((0, 2))  # lane-graph route in nuPlan map coordinates
-        self._destination_reached = False  # gt_map: the endpoint goal was cleared, route goals took over
         self._last_integrated = None  # (bin_x, bin_y, heading) the shadow ego was left at by the last step
         self._last_light_states = None  # traffic-light state array from the most recent _sync
-        self._static_on_drivable: Dict[str, bool] = {}  # static object track_token -> stands on the drivable area
+        self._static_on_lane: Dict[str, bool] = {}  # static object track_token -> stands inside a lane polygon
 
     # --- AbstractPlanner interface -------------------------------------------
     def initialize(self, initialization: PlannerInitialization) -> None:
@@ -322,6 +346,15 @@ class PufferDrivePlanner(AbstractPlanner):
         self._env = Drive(**self._arch)
         self._env.reset()
         torch.set_num_threads(1)  # one scenario per worker process; BLAS threads only fight the other workers
+        if max(self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3) > 0:
+            import pufferlib.spaces
+
+            if not isinstance(self._env.single_action_space, pufferlib.spaces.Box):
+                raise RuntimeError("startup jerk caps need a continuous (jerk) env action space")
+            self._startup_jerk_cap_steps = int(round(self._startup_jerk_cap_seconds / float(self._arch["dt"])))
+            self._startup_action_bounds = startup_jerk_action_bounds(
+                self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3
+            )
 
         # Round-trip probe: slot 0 must be the ego we set. It is silently wrong when
         # gigaflow spawning failed (e.g. a city bin without lane connectivity).
@@ -363,8 +396,7 @@ class PufferDrivePlanner(AbstractPlanner):
             self._policy = policy.to(self._device).eval()
 
         # The lane-graph route through the CaRL-corrected route roadblocks always decides the shared
-        # stop-line elements; it also seeds the goals unless goal_source is gt_map (logged ego path,
-        # lane-snapped so the expert's raw positions never leak).
+        # stop-line elements and seeds the route goals.
         from carl_nuplan.planning.simulation.planner.pdm_planner.utils.route_utils import (
             route_roadblock_correction_v2,
         )
@@ -373,22 +405,17 @@ class PufferDrivePlanner(AbstractPlanner):
         centerline, self._route_connector_ids = nb.route_centerline(
             init.map_api, route_ids, ex, ey, float(ego_state.center.heading)
         )
-        self._route_centerline = centerline
-        snapped_count = 0
-        if self._goal_source == "gt_map":
-            goal_xy, goal_heading, snapped = nb.logged_ego_endpoint_goal(self._scenario, init.map_api)
-            snapped_count = int(snapped)
-            goals = (goal_xy - (self._transform.ox, self._transform.oy)).reshape(1, 2)
-            route_goals = np.array(
-                [[goals[0, 0], goals[0, 1], 0.0, np.cos(goal_heading), np.sin(goal_heading)]], dtype=np.float32
+        if self._goal_source == "roadblock":
+            min_ahead_m = float(self._env.goal_radius) + ROADBLOCK_GOAL_MARGIN_M
+            goals = nb.roadblock_centroid_goals(
+                init.map_api, route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m
             )
         else:
             goals = nb.goals_along(centerline, self._goal_spacing)
-            if len(goals) == 0:  # degenerate route: fall back to the mission goal
-                goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
-            goals -= (self._transform.ox, self._transform.oy)
-            route_goals = route_goals_from_xy(goals)
-        self._goal_window = RouteGoalWindow(self._env, route_goals)
+        if len(goals) == 0:  # degenerate route: fall back to the mission goal
+            goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
+        goals -= (self._transform.ox, self._transform.oy)
+        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals), sliding=self._sliding_goal_window)
 
         # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint
@@ -410,7 +437,7 @@ class PufferDrivePlanner(AbstractPlanner):
 
         print(
             f"[pufferdrive_planner] bin={bin_path.name} lights={len(self._connector_map)}/"
-            f"{self._num_traffic} goals={len(goals)} goal_source={self._goal_source} snapped={snapped_count}"
+            f"{self._num_traffic} goals={len(goals)} goal_source={self._goal_source}"
         )
 
     # --- world sync -----------------------------------------------------------
@@ -446,7 +473,7 @@ class PufferDrivePlanner(AbstractPlanner):
         # background (slots 1..): streamed from nuPlan, never simulated here. nuPlan's TrackedObject
         # carries no acceleration/angular-velocity (perception detections, not ego telemetry), but
         # write_partner_obs never reads those fields for non-ego agents, so zero is exact, not a stopgap.
-        objs = nb.partner_tracked_objects(detections.tracked_objects, self._initialization.map_api, self._static_on_drivable)
+        objs = nb.partner_tracked_objects(detections.tracked_objects, self._initialization.map_api, self._static_on_lane)
         if len(objs) > self._num_agents - 1:
             # keep the nearest: devkit ordering is by type/token, so blind
             # truncation could drop a close vehicle while keeping far ones
@@ -471,20 +498,6 @@ class PufferDrivePlanner(AbstractPlanner):
             env.set_traffic_light_states(self._last_light_states)
 
         self._goal_window.sync(ex, ey, h)
-        if self._goal_source == "gt_map" and not self._destination_reached and self._goal_window.exhausted:
-            self._destination_reached = True
-            self._continue_along_route(ego_state.center.x, ego_state.center.y, ex, ey, h)
-
-    def _continue_along_route(self, nuplan_x: float, nuplan_y: float, bin_x: float, bin_y: float, heading: float) -> None:
-        """Endpoint goal cleared: hand the ego route goal windows past its position, like a training regen."""
-        min_ahead_m = float(self._env.goal_radius) + GOAL_CONTINUATION_MARGIN_M
-        goals = nb.route_goals_ahead(self._route_centerline, self._goal_spacing, nuplan_x, nuplan_y, min_ahead_m)
-        if len(goals) == 0:
-            print("[pufferdrive_planner] endpoint goal cleared with no route left ahead: last goal stays")
-            return
-        goals -= (self._transform.ox, self._transform.oy)
-        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals))
-        self._goal_window.sync(bin_x, bin_y, heading)
 
     def _check_ego_tracking(self, bin_x: float, bin_y: float, heading: float) -> None:
         lx, ly, lh = self._last_integrated
@@ -545,6 +558,8 @@ class PufferDrivePlanner(AbstractPlanner):
             act = env_action.cpu().numpy().reshape(self._env.num_agents, -1)
             if not env_continuous:
                 act = act.astype(np.int32)
+            if self._startup_action_bounds is not None and self._env.tick < self._startup_jerk_cap_steps:
+                np.clip(act[:, 0], *self._startup_action_bounds, out=act[:, 0])
             if self._obs_replay is not None:
                 # sample_logits' discrete `action` is the class taken (mode/sample) or the argmax under mean selection
                 action_index = action.cpu().numpy().reshape(-1) if not self._policy.is_continuous else None

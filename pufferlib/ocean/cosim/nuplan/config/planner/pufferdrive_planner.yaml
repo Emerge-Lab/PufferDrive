@@ -9,10 +9,18 @@ pufferdrive_planner:
   device: "cpu"
   map_radius: 400.0 # TODO: load from config
   goal_spacing: 20.0 # TODO: load from config
-  goal_source: route # route (lane-graph route goal windows) | gt_map (one goal: human endpoint snapped to a lane center, then route goals continue past it)
+  goal_source: route # route (lane-graph route goal windows) | roadblock (route roadblock centroid windows)
   num_agents: 64 # TODO: load from config
   horizon_seconds: 8.0 # nuplan default
   deterministic: true
+  # Ablations (defaults = off). sliding_goal_window: refill the goal window after every consumed goal so
+  # the policy never sees a window-final (speed-gated) goal before the route end. Start-up jerk caps
+  # [m/s^3, 0 = off] bound the ego's longitudinal jerk for the first startup_jerk_cap_seconds: nuPlan's
+  # ego_lon_jerk extrapolates at the trajectory edges, ~2x the raw jerk of a ramp that starts at t=0.
+  sliding_goal_window: false
+  startup_jerk_cap_seconds: 1.5
+  startup_accel_jerk_cap_mps3: 0.0
+  startup_brake_jerk_cap_mps3: 0.0
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
   # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario

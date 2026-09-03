@@ -21,15 +21,29 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   nuPlan's ego pose ever diverges from the integrated one (the configs pin
   `perfect_tracking_controller`).
 - Route goals (`goal_source: external`): PDM-style lane-graph route ->
-  goals every `goal_spacing` m. Planner `goal_source: gt_map` (env
-  `GOAL_SOURCE=gt_map`) samples the logged ego path instead, every sample
-  snapped to the nearest co-directional lane center within 6 m (raw pose kept
-  when no lane qualifies). The shadow env consumes the goals of its
+  goals every `goal_spacing` m. Planner `goal_source: roadblock` (env
+  `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route
+  roadblocks instead (off-polygon centroids moved onto a lane baseline, thinned
+  to `goal_spacing`), i.e. the route information CaRL rendered, without a lane
+  choice. Both come from the challenge's route roadblock ids only; the planner
+  never reads the logged ego. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the
-  ego. Lights nuPlan does not report are GREEN (training never produces
+  ego. `sliding_goal_window: true` (env `SLIDING_GOAL_WINDOW=true`) instead
+  refills the window after every consumed goal, so the policy sees a
+  window-final speed-gated goal (which it parks at) only at the true route
+  end. Lights nuPlan does not report are GREEN (training never produces
   UNKNOWN).
+- Start-up jerk caps (`startup_accel_jerk_cap_mps3` /
+  `startup_brake_jerk_cap_mps3`, env `STARTUP_ACCEL_JERK_CAP` /
+  `STARTUP_BRAKE_JERK_CAP`, 0 = off) clip the ego's continuous jerk action for
+  the first `startup_jerk_cap_seconds` (1.5) of each scenario. nuPlan's
+  `ego_lon_jerk` is a Savitzky-Golay derivative that extrapolates at the
+  trajectory edges: the policy's full +4 m/s³ ramp reads 2.2 m/s³ mid-scenario
+  but 5.0 m/s³ when it starts at t=0 (bound 4.13); a 2 m/s³ cap reads 2.9.
+  In the 2026-09-03 val14 run 199 of the 232 lon-jerk comfort failures were in
+  the first 1.5 s.
 - `pufferlib/ocean/cosim/nuplan_bridge.py`
 - `config/` — the Hydra configs that plug the planner in without touching
   nuplan-devkit or `carl_nuplan`: `planner/pufferdrive_planner.yaml` and two

@@ -1,7 +1,6 @@
-"""logged_ego_goals: logged ego samples land on the co-directional lane baseline, never on the
-oncoming lane, and keep the raw pose when no lane is within the snap radius."""
+"""roadblock_centroid_goals: route roadblock centroids become goals from the ego's block on, off-polygon
+centroids snap to a lane baseline, goals behind the ego or too close together are dropped."""
 
-import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,69 +8,41 @@ import pytest
 
 
 nuplan = pytest.importorskip("nuplan")
-from nuplan.common.actor_state.state_representation import StateSE2
 
 from pufferlib.ocean.cosim import nuplan_bridge as nb
 
 
-class _StraightBaseline:
-    def __init__(self, y, heading):
-        self.y, self.heading = y, heading
+class _BlockMap:
+    """Route blocks along x: A [0,40] (ego inside), B [40,60], C [60,70], D an L-bend whose centroid is off-polygon."""
 
-    def get_nearest_pose_from_position(self, point):
-        return StateSE2(point.x, self.y, self.heading)
+    def __init__(self):
+        from shapely.geometry import Polygon
 
+        def block(polygon, lane_xy):
+            path = [SimpleNamespace(x=x, y=y) for x, y in lane_xy]
+            return SimpleNamespace(polygon=polygon, interior_edges=[SimpleNamespace(baseline_path=SimpleNamespace(discrete_path=path))])
 
-class _MapApi:
-    """Two straight lanes along x: y=0 eastbound, y=3.5 westbound."""
+        self.blocks = {
+            "A": block(Polygon([(0, 0), (40, 0), (40, 4), (0, 4)]), [(0, 2), (40, 2)]),
+            "B": block(Polygon([(40, 0), (60, 0), (60, 4), (40, 4)]), [(40, 2), (60, 2)]),
+            "C": block(Polygon([(60, 0), (70, 0), (70, 4), (60, 4)]), [(60, 2), (70, 2)]),
+            "D": block(Polygon([(70, 0), (110, 0), (110, 4), (74, 4), (74, 40), (70, 40)]), [(72, 2), (108, 2), (72, 20), (72, 38)]),
+        }
 
-    def get_proximal_map_objects(self, point, radius, layers):
-        lanes = [
-            SimpleNamespace(baseline_path=_StraightBaseline(0.0, 0.0)),
-            SimpleNamespace(baseline_path=_StraightBaseline(3.5, math.pi)),
-        ]
-        near = [lane for lane in lanes if abs(lane.baseline_path.y - point.y) <= radius]
-        return {layers[0]: near, layers[1]: []}
-
-
-def _scenario(xs, ys):
-    states = [SimpleNamespace(center=StateSE2(x, y, 0.0)) for x, y in zip(xs, ys)]
-    return SimpleNamespace(get_number_of_iterations=lambda: len(states), get_ego_state_at_iteration=lambda i: states[i])
+    def get_map_object(self, block_id, layer):
+        return self.blocks.get(block_id)
 
 
-def test_logged_goals_snap_to_codirectional_lane():
-    xs = np.arange(0.0, 61.0, 1.0)
-    scenario = _scenario(xs, np.full_like(xs, 1.4))  # eastbound, 1.4 m left of its lane center
-    xy, headings, snapped = nb.logged_ego_goals(scenario, _MapApi(), spacing=20.0)
-    assert snapped == len(xy) == 3  # 20 m, 40 m, endpoint
-    np.testing.assert_allclose(xy[:, 0], [20.0, 40.0, 60.0])
-    np.testing.assert_allclose(xy[:, 1], 0.0)  # eastbound lane, never the closer-by-heading westbound one
-    np.testing.assert_allclose(headings, 0.0)
+def test_roadblock_centroid_goals_skip_behind_thin_and_snap_off_polygon_centroids():
+    map_api = _BlockMap()
+    goals = nb.roadblock_centroid_goals(map_api, ["A", "B", "C", "D"], 30.0, 2.0, 0.0, min_spacing=20.0, min_ahead_m=15.0)
+    centroid_d = map_api.blocks["D"].polygon.centroid
+    assert not map_api.blocks["D"].polygon.contains(centroid_d)
+    lane_d = np.array([(72, 2), (108, 2), (72, 20), (72, 38)], dtype=np.float64)
+    snapped_d = lane_d[np.argmin(np.hypot(lane_d[:, 0] - centroid_d.x, lane_d[:, 1] - centroid_d.y))]
+    # A's centroid (20, 2) is behind the ego, C's (65, 2) is 15 m past B's (50, 2): both dropped
+    np.testing.assert_allclose(goals, [[50.0, 2.0], snapped_d])
 
 
-def test_logged_goals_keep_raw_pose_without_lane():
-    xs = np.arange(0.0, 21.0, 1.0)
-    scenario = _scenario(xs, np.full_like(xs, 50.0))
-    xy, _, snapped = nb.logged_ego_goals(scenario, _MapApi(), spacing=20.0)
-    assert snapped == 0
-    np.testing.assert_allclose(xy[:, 1], 50.0)
-
-
-def test_endpoint_goal_snaps_to_codirectional_lane():
-    xy, heading, snapped = nb.logged_ego_endpoint_goal(_scenario([0.0, 10.0, 20.0], [1.2, 1.1, 0.9]), _MapApi())
-    assert snapped and heading == 0.0
-    assert np.allclose(xy, [20.0, 0.0])
-
-
-def test_endpoint_goal_keeps_raw_pose_without_lane():
-    xy, heading, snapped = nb.logged_ego_endpoint_goal(_scenario([0.0, 10.0], [50.0, 50.0]), _MapApi())
-    assert not snapped and heading == 0.0
-    assert np.allclose(xy, [10.0, 50.0])
-
-
-def test_route_goals_ahead_skips_goals_behind_and_too_close():
-    centerline = np.column_stack([np.arange(0.0, 101.0), np.zeros(101)])
-    ahead = nb.route_goals_ahead(centerline, 20.0, 45.0, 0.3, min_ahead_m=12.0)
-    assert np.allclose(ahead[:, 0], [60.0, 80.0, 100.0])
-    assert len(nb.route_goals_ahead(centerline, 20.0, 95.0, 0.0, min_ahead_m=12.0)) == 0
-    assert len(nb.route_goals_ahead(np.zeros((1, 2)), 20.0, 0.0, 0.0, min_ahead_m=12.0)) == 0
+def test_roadblock_centroid_goals_empty_without_blocks():
+    assert nb.roadblock_centroid_goals(_BlockMap(), ["nope"], 0.0, 0.0, 0.0, min_spacing=20.0, min_ahead_m=15.0).shape == (0, 2)

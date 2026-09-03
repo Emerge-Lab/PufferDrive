@@ -35,10 +35,19 @@ export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 export THREADS_PER_NODE=128
-# route: lane-graph route goals; gt_map: logged ego path snapped to the nearest lane center (GIGAFLOW-style)
-export GOAL_SOURCE=gt_map
+# route: lane-graph route goals; roadblock: route roadblock centroids
+export GOAL_SOURCE=roadblock
+# Ablations (see run_nuplan_planner.sh): refill the goal window after every consumed goal; cap the ego's
+# accelerating / braking jerk [m/s^3] for the first 1.5 s of each scenario (0 = off).
+export SLIDING_GOAL_WINDOW=true
+export STARTUP_ACCEL_JERK_CAP=2
+export STARTUP_BRAKE_JERK_CAP=2
+ABLATION_TAG=""
+[ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
+[ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
+[ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
-export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
+export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 
 PATH="$(dirname "$PY"):$PATH" bash "$PD/scripts/kesai/build_ext_if_changed.sh" "$PD" || exit 1
 

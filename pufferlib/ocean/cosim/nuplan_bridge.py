@@ -233,75 +233,36 @@ def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
     return np.asarray(centerline, dtype=np.float64)[indices_along(centerline, spacing)]
 
 
-GOAL_LANE_SNAP_MAX_DIST_M = 6.0  # same radius as Drive's GOAL_LANE_SNAP_MAX_DIST_M
-GOAL_LANE_SNAP_MAX_HEADING_ERROR_RAD = np.pi / 4
-
-
-def snap_to_lane_center(map_api, x: float, y: float, heading: float):
-    """Nearest pose on a lane/lane-connector baseline within the snap radius whose direction agrees with
-    `heading` (co-directional, so neither oncoming nor crossing lanes), or None if no lane qualifies."""
-    from nuplan.common.actor_state.state_representation import Point2D
+def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
+    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on.
+    A centroid outside its (curved) polygon moves to the nearest interior-lane baseline point; leading
+    centroids less than min_ahead_m ahead of the ego are dropped, later ones thinned to min_spacing."""
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+    from shapely.geometry import Point
 
-    point = Point2D(x, y)
-    layers = [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]
-    best_pose, best_dist = None, GOAL_LANE_SNAP_MAX_DIST_M
-    for lanes in map_api.get_proximal_map_objects(point, GOAL_LANE_SNAP_MAX_DIST_M, layers).values():
-        for lane in lanes:
-            pose = lane.baseline_path.get_nearest_pose_from_position(point)
-            heading_error = abs((pose.heading - heading + np.pi) % (2.0 * np.pi) - np.pi)
-            if heading_error > GOAL_LANE_SNAP_MAX_HEADING_ERROR_RAD:
-                continue
-            dist = float(np.hypot(pose.x - x, pose.y - y))
-            if dist < best_dist:
-                best_pose, best_dist = pose, dist
-    return best_pose
-
-
-def logged_ego_goals(scenario, map_api, spacing: float):
-    """Logged ego path sampled every `spacing` m (+ endpoint), each sample snapped to the nearest
-    co-directional lane center so the expert's exact pose never reaches the policy. Returns
-    ((N, 2) xy in nuPlan map coordinates, (N,) headings, snapped count); samples without a lane
-    within the snap radius keep the raw logged pose."""
-    states = [scenario.get_ego_state_at_iteration(i) for i in range(scenario.get_number_of_iterations())]
-    path = np.array([[s.center.x, s.center.y] for s in states], dtype=np.float64)
-    headings = np.array([s.center.heading for s in states], dtype=np.float64)
-    indices = indices_along(path, spacing)
-    xy = path[indices].copy()
-    goal_headings = headings[indices].copy()
-    snapped_count = 0
-    for k in range(len(indices)):
-        pose = snap_to_lane_center(map_api, xy[k, 0], xy[k, 1], goal_headings[k])
-        if pose is None:
+    blocks = []
+    for rid in dict.fromkeys(route_roadblock_ids):
+        block = map_api.get_map_object(str(rid), SemanticMapLayer.ROADBLOCK) or map_api.get_map_object(
+            str(rid), SemanticMapLayer.ROADBLOCK_CONNECTOR
+        )
+        if block is not None and block.interior_edges:
+            blocks.append(block)
+    ego_point = Point(start_x, start_y)
+    start_idx = next((i for i, block in enumerate(blocks) if block.polygon.contains(ego_point)), 0)
+    heading_dir = np.array([np.cos(start_heading), np.sin(start_heading)])
+    goals = []
+    for block in blocks[start_idx:]:
+        centroid = block.polygon.centroid
+        goal = np.array([centroid.x, centroid.y], dtype=np.float64)
+        if not block.polygon.contains(centroid):
+            lane_pts = np.concatenate([[[p.x, p.y] for p in lane.baseline_path.discrete_path] for lane in block.interior_edges])
+            goal = lane_pts[int(np.argmin(np.hypot(*(lane_pts - goal).T)))].astype(np.float64)
+        if not goals and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
             continue
-        xy[k] = (pose.x, pose.y)
-        goal_headings[k] = pose.heading
-        snapped_count += 1
-    return xy, goal_headings, snapped_count
-
-
-def logged_ego_endpoint_goal(scenario, map_api):
-    """Human endpoint (ego pose at the scenario's last iteration) snapped to the nearest co-directional
-    lane center -> ((2,) xy in nuPlan map coordinates, heading, snapped). The raw pose is kept only when
-    no lane is within the snap radius."""
-    state = scenario.get_ego_state_at_iteration(scenario.get_number_of_iterations() - 1)
-    x, y, heading = float(state.center.x), float(state.center.y), float(state.center.heading)
-    pose = snap_to_lane_center(map_api, x, y, heading)
-    if pose is None:
-        return np.array([x, y], dtype=np.float64), heading, False
-    return np.array([pose.x, pose.y], dtype=np.float64), float(pose.heading), True
-
-
-def route_goals_ahead(centerline, spacing: float, x: float, y: float, min_ahead_m: float) -> np.ndarray:
-    """Goals every `spacing` m along `centerline` (+ endpoint) whose arc length is at least `min_ahead_m`
-    past the centerline vertex nearest (x, y) -> (N, 2); empty once the route is used up."""
-    centerline = np.asarray(centerline, dtype=np.float64).reshape(-1, 2)
-    if len(centerline) < 2:
-        return np.zeros((0, 2))
-    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(centerline, axis=0).T))])
-    nearest = int(np.argmin(np.hypot(centerline[:, 0] - x, centerline[:, 1] - y)))
-    indices = indices_along(centerline, spacing)
-    return centerline[indices[cum[indices] >= cum[nearest] + min_ahead_m]]
+        if goals and np.hypot(*(goal - goals[-1])) < min_spacing:
+            continue
+        goals.append(goal)
+    return np.array(goals, dtype=np.float64).reshape(-1, 2)
 
 
 def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
@@ -476,11 +437,12 @@ MOVING_PARTNER_TYPES = ("VEHICLE", "PEDESTRIAN", "BICYCLE")  # the only types th
 STATIC_PARTNER_TYPES = ("TRAFFIC_CONE", "BARRIER", "CZONE_SIGN", "GENERIC_OBJECT")
 
 
-def partner_tracked_objects(tracked_objects, map_api, static_on_drivable: dict):
+def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     """Objects the shadow env should see: moving agents always; static clutter (cones, barriers, signs,
-    generic objects) only when it stands on the drivable area, where nuPlan scores a collision with it.
-    Off-road poles would otherwise fill the nearest-N partner slots as stopped 0.3 m vehicles the policy
-    never saw in training. static_on_drivable: track_token -> bool, filled here (statics never move)."""
+    generic objects) only when it stands inside a lane or lane-connector polygon, where the ego can hit it.
+    The wider drivable area also covers intersection corners and crosswalks, where barrier rows line the
+    curb: those filled the nearest-N partner slots as 0.6 x 3 m stopped vehicles the policy never saw in
+    training. static_on_lane: track_token -> bool, filled here (statics never move)."""
     from nuplan.common.actor_state.state_representation import Point2D
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 
@@ -492,11 +454,16 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_drivable: dict):
             continue
         if type_name not in STATIC_PARTNER_TYPES:
             continue
-        on_drivable = static_on_drivable.get(obj.track_token)
-        if on_drivable is None:
-            on_drivable = bool(map_api.is_in_layer(Point2D(obj.center.x, obj.center.y), SemanticMapLayer.DRIVABLE_AREA))
-            static_on_drivable[obj.track_token] = on_drivable
-        if on_drivable:
+        on_lane = static_on_lane.get(obj.track_token)
+        if on_lane is None:
+            point = Point2D(obj.center.x, obj.center.y)
+            # is_in_layer(LANE_CONNECTOR) tests the centerline layer; the polygon lookup is get_all_map_objects
+            on_lane = bool(
+                map_api.is_in_layer(point, SemanticMapLayer.LANE)
+                or map_api.get_all_map_objects(point, SemanticMapLayer.LANE_CONNECTOR)
+            )
+            static_on_lane[obj.track_token] = on_lane
+        if on_lane:
             kept.append(obj)
     return kept
 

@@ -3,7 +3,9 @@
 The shadow env consumes the goals of its window itself, exactly like training
 with goal_regen_mode=finite (consumed slots are zeroed in the obs, the window
 is replaced only once every goal in it was reached). The co-sim only decides
-WHICH `num_goals` route goals form the next window.
+WHICH `num_goals` route goals form the next window. A sliding window instead
+refills to `num_goals` goals ahead after every consumed goal, so the ego sees a
+window-final (speed-gated) goal only at the true route end.
 """
 
 import math
@@ -15,15 +17,17 @@ ROUTE_MAX_LATERAL_M = 8.0  # farther from the goal polyline the ego is off-route
 
 
 class RouteGoalWindow:
-    def __init__(self, env, route_goals, agent_idx=0):
+    def __init__(self, env, route_goals, agent_idx=0, sliding=False):
         """route_goals: (N, 5) float32 (x, y, z, dir_x, dir_y), bin frame, in
         travel order. dir_* is the local route direction at the goal, used by
-        set_agent_goals' route-aligned lane snapping."""
+        set_agent_goals' route-aligned lane snapping. sliding: advance the
+        window past every consumed goal instead of replacing it once exhausted."""
         self.env = env
         self.goals = np.ascontiguousarray(route_goals, dtype=np.float32).reshape(-1, ROUTE_GOAL_COLUMNS)
         if len(self.goals) == 0:
             raise ValueError("RouteGoalWindow needs at least one route goal")
         self.agent_idx = int(agent_idx)
+        self.sliding = bool(sliding)
         self.num_goals = int(env.num_goals)
         self.goal_radius = float(env.goal_radius)
         segment_lengths = np.hypot(*np.diff(self.goals[:, :2], axis=0).T)
@@ -70,9 +74,10 @@ class RouteGoalWindow:
         return float(self.arc_length[first_goal + k] + t[k] * math.sqrt(length_sq[k])), float(dist[k])
 
     def sync(self, ego_x, ego_y, ego_heading):
-        """Push the next window when the current one is exhausted, or when the ego has driven past
-        its current goal along the route (e.g. in the adjacent lane) without consuming it. An ego far
-        off the route keeps its window: skipping goals there cascades through the whole route."""
+        """Push the next window when the current one is exhausted (sliding: when any goal was
+        consumed), or when the ego has driven past its current goal along the route (e.g. in the
+        adjacent lane) without consuming it. An ego far off the route keeps its window: skipping
+        goals there cascades through the whole route."""
         if not self.pushed:
             self._push(0)
             return
@@ -86,6 +91,8 @@ class RouteGoalWindow:
             )
             passed = lateral <= ROUTE_MAX_LATERAL_M and progress > self.arc_length[self.current_index] + self.goal_radius
             next_start = int(np.searchsorted(self.arc_length, progress, side="right")) if passed else self.window_start
+            if self.sliding and not passed:
+                next_start = self.current_index
         if next_start == self.window_start or next_start >= len(self.goals):
             return  # window still live, or route exhausted: the last window stays saturated
         self._push(next_start)
