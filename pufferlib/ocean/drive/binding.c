@@ -1944,6 +1944,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
+    env->adversarial_drive_reward_weight = (float) unpack(kwargs, "adversarial_drive_reward_weight");
+    env->adversarial_traffic_light_reward_weight = (float) unpack(kwargs, "adversarial_traffic_light_reward_weight");
+    env->adversarial_target_collision_bonus = (float) unpack(kwargs, "adversarial_target_collision_bonus");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");

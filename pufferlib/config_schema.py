@@ -166,6 +166,9 @@ class DriveEnvConfig:
     reward_timestep: float = MISSING
     reward_overspeed: float = MISSING
     reward_ade: float = MISSING
+    adversarial_drive_reward_weight: float = MISSING
+    adversarial_traffic_light_reward_weight: float = MISSING
+    adversarial_target_collision_bonus: float = MISSING
     map_dir: str = MISSING
     num_maps: int = MISSING
     obs_slots_lane_n: int = MISSING

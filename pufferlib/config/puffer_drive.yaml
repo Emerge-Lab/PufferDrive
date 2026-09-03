@@ -144,6 +144,9 @@ env:
   reward_timestep: 2.5e-05
   reward_overspeed: 0.05
   reward_ade: 0.0
+  adversarial_drive_reward_weight: 0.5
+  adversarial_traffic_light_reward_weight: 3.0
+  adversarial_target_collision_bonus: 0.5
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla

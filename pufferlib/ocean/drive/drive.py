@@ -64,6 +64,9 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        adversarial_drive_reward_weight=0.5,
+        adversarial_traffic_light_reward_weight=3.0,
+        adversarial_target_collision_bonus=0.5,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -196,6 +199,9 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        self.adversarial_drive_reward_weight = adversarial_drive_reward_weight
+        self.adversarial_traffic_light_reward_weight = adversarial_traffic_light_reward_weight
+        self.adversarial_target_collision_bonus = adversarial_target_collision_bonus
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -600,6 +606,9 @@ class Drive(pufferlib.PufferEnv):
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
+            "adversarial_drive_reward_weight": self.adversarial_drive_reward_weight,
+            "adversarial_traffic_light_reward_weight": self.adversarial_traffic_light_reward_weight,
+            "adversarial_target_collision_bonus": self.adversarial_target_collision_bonus,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,

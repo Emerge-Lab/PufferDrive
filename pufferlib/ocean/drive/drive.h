@@ -263,6 +263,9 @@ struct Drive {
     float reward_timestep;
     float reward_overspeed;
     float reward_ade;
+    float adversarial_drive_reward_weight;
+    float adversarial_traffic_light_reward_weight;
+    float adversarial_target_collision_bonus;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -3592,6 +3595,8 @@ static void compute_rewards(Drive *env, int i) {
     int agent_idx = env->active_agent_indices[i];
     Agent *agent = &env->agents[agent_idx];
     Log *agent_log = &env->logs[i];
+    float drive_reward_weight = i == EGO_IDX ? 1.0f : env->adversarial_drive_reward_weight;
+    float traffic_light_reward_weight = i == EGO_IDX ? 1.0f : env->adversarial_traffic_light_reward_weight;
 
     // Collision reward
     if (agent->metrics_array[COLLISION_IDX] > 0.0f) {
@@ -3613,7 +3618,7 @@ static void compute_rewards(Drive *env, int i) {
 
     // Red light violation reward
     if (agent->metrics_array[RED_LIGHT_IDX] > 0.0f) {
-        float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE];
+        float reward_red_light = -agent->reward_coefs[REWARD_COEF_STOP_LINE] * traffic_light_reward_weight;
         env->rewards[i] += reward_red_light;
         agent_log->red_light_violation_rate = 1.0f;
         agent_log->reward_red_light += reward_red_light;
@@ -3623,7 +3628,7 @@ static void compute_rewards(Drive *env, int i) {
     if (agent->metrics_array[REACHED_GOAL_IDX] > 0.0f) {
         bool final_waypoint = (agent->current_goal_idx == agent->goal_count);
         bool speeding = (agent->sim_speed > agent->reward_coefs[REWARD_COEF_GOAL_SPEED]);
-        float reward_goal = (final_waypoint && speeding) ? 0.0f : env->reward_goal;
+        float reward_goal = (final_waypoint && speeding) ? 0.0f : env->reward_goal * drive_reward_weight;
         env->rewards[i] += reward_goal;
         agent_log->reward_goal += reward_goal;
     }
@@ -3639,7 +3644,7 @@ static void compute_rewards(Drive *env, int i) {
         = agent->reward_coefs[REWARD_COEF_VEL_ALIGN] * fminf(cos_theta * agent->sim_speed_signed, 0.0f);
     float alignment_bonus = 0.0025f * (1.0f - theta_f / (M_PI / 2.0f));
     float lane_align_reward = agent->reward_coefs[REWARD_COEF_LANE_ALIGN] * env->dt
-        * (against_lane_penalty + vel_aligned_penalty + alignment_bonus);
+        * (against_lane_penalty + vel_aligned_penalty + alignment_bonus) * drive_reward_weight;
     env->rewards[i] += lane_align_reward;
     agent_log->reward_lane_align += lane_align_reward;
 
@@ -3647,22 +3652,23 @@ static void compute_rewards(Drive *env, int i) {
     float lane_center_distance = agent->metrics_array[LANE_DIST_IDX];
     float adjusted_dist = fabsf(lane_center_distance - agent->reward_coefs[REWARD_COEF_CENTER_BIAS]);
     float exp_decay = 0.05f / expf(adjusted_dist - 0.5f);
-    float lane_center_reward
-        = -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt * ((cos_theta > 0.5f) * adjusted_dist - exp_decay);
+    float lane_center_reward = -agent->reward_coefs[REWARD_COEF_LANE_CENTER] * env->dt
+        * ((cos_theta > 0.5f) * adjusted_dist - exp_decay) * drive_reward_weight;
     env->rewards[i] += lane_center_reward;
     agent_log->lane_center_rate += fabsf(lane_center_distance) < 0.5f ? 1.0f : 0.0f;
     agent_log->reward_lane_center += lane_center_reward;
 
     // Comfort reward
     float comfort_violations = agent->metrics_array[COMFORT_VIOLATION_IDX];
-    float comfort_penalty = -agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations;
+    float comfort_penalty = -agent->reward_coefs[REWARD_COEF_COMFORT] * comfort_violations * drive_reward_weight;
     env->rewards[i] += comfort_penalty;
     agent_log->comfort_violation_count += comfort_violations;
     agent_log->reward_comfort += comfort_penalty;
 
     // Velocity reward
     float velocity_progress = agent->metrics_array[VELOCITY_PROGRESS_IDX];
-    float velocity_reward = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress;
+    float velocity_reward
+        = agent->reward_coefs[REWARD_COEF_VELOCITY] * env->dt * velocity_progress * drive_reward_weight;
     env->rewards[i] += velocity_reward;
     agent_log->velocity_progress_sum += velocity_progress;
     agent_log->reward_velocity += velocity_reward;
@@ -3670,27 +3676,28 @@ static void compute_rewards(Drive *env, int i) {
     // Timestep reward
     float accel = sqrtf(agent->accel_long * agent->accel_long + agent->accel_lat * agent->accel_lat);
     if (agent->sim_speed > 0.01f || accel > 0.01f) {
-        float timestep_penalty = -agent->reward_coefs[REWARD_COEF_TIMESTEP] * env->dt;
+        float timestep_penalty = -agent->reward_coefs[REWARD_COEF_TIMESTEP] * env->dt * drive_reward_weight;
         env->rewards[i] += timestep_penalty;
         agent_log->reward_timestep += timestep_penalty;
     }
 
     // Reverse reward
     if (agent->sim_speed_signed < -0.01f) {
-        float reverse_penalty = -agent->reward_coefs[REWARD_COEF_REVERSE] * env->dt;
+        float reverse_penalty = -agent->reward_coefs[REWARD_COEF_REVERSE] * env->dt * drive_reward_weight;
         env->rewards[i] += reverse_penalty;
         agent_log->reward_reverse += reverse_penalty;
     }
 
     // Speed limit reward
-    float speed_reward = -agent->reward_coefs[REWARD_COEF_OVERSPEED] * agent->metrics_array[SPEED_LIMIT_IDX];
+    float speed_reward
+        = -agent->reward_coefs[REWARD_COEF_OVERSPEED] * agent->metrics_array[SPEED_LIMIT_IDX] * drive_reward_weight;
     env->rewards[i] += speed_reward;
     agent_log->reward_overspeed += speed_reward;
 
     // ADE reward
     float current_ade = agent->metrics_array[AVG_DISPLACEMENT_ERROR_IDX];
     if (current_ade > 0.0f && env->reward_ade != 0.0f) {
-        float ade_reward = env->reward_ade * current_ade;
+        float ade_reward = env->reward_ade * current_ade * drive_reward_weight;
         env->rewards[i] += ade_reward;
         agent_log->reward_ade += ade_reward;
     }
@@ -4586,13 +4593,24 @@ void c_step(Drive *env) {
     }
 
     // -> 2. Compute metrics and rewards
+    bool target_collided_this_step = false;
     for (int i = 0; i < env->active_agent_count; i++) {
         int agent_idx = env->active_agent_indices[i];
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             continue;
         }
         compute_metrics(env, agent_idx, i);
+        if (i == EGO_IDX && env->agents[agent_idx].metrics_array[COLLISION_IDX] > 0.0f) {
+            target_collided_this_step = true;
+        }
         compute_rewards(env, i);
+    }
+
+    if (target_collided_this_step) {
+        for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
+            env->rewards[i] += env->adversarial_target_collision_bonus;
+            env->logs[i].episode_return += env->adversarial_target_collision_bonus;
+        }
     }
 
     // Mark terminals for stopped or removed agents
