@@ -427,7 +427,8 @@ class PufferDrivePlanner(AbstractPlanner):
         if len(goals) == 0:  # degenerate route: fall back to the mission goal
             goals = np.array([[init.mission_goal.x, init.mission_goal.y]])
         goals -= (self._transform.ox, self._transform.oy)
-        self._goal_window = RouteGoalWindow(self._env, route_goals_from_xy(goals), sliding=self._sliding_goal_window)
+        route_goals = route_goals_from_xy(goals, origin_xy=self._transform.loc_to_bin(ex, ey))
+        self._goal_window = RouteGoalWindow(self._env, route_goals, sliding=self._sliding_goal_window)
 
         # ego bounding box from nuPlan vehicle parameters (static)
         fp = ego_state.car_footprint

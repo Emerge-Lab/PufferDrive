@@ -36,6 +36,16 @@ class _FakeEnv:
         self.current_goal_idx += 1
 
 
+def test_route_goals_first_direction_comes_from_origin():
+    goals = np.array([[10.0, 40.0], [10.0, 80.0]])  # left turn: goals up the cross street
+    default = route_goals_from_xy(goals)
+    np.testing.assert_allclose(default[0, 3:5], [0.0, 0.0])
+    with_origin = route_goals_from_xy(goals, origin_xy=(0.0, 0.0))
+    np.testing.assert_allclose(with_origin[0, 3:5], [10.0, 40.0])
+    np.testing.assert_allclose(with_origin[1, 3:5], [0.0, 40.0])
+    np.testing.assert_allclose(with_origin[:, :2], goals)
+
+
 def test_batch_window_replaces_only_when_exhausted():
     env = _FakeEnv()
     window = RouteGoalWindow(env, route_goals_from_xy(ROUTE_XY))

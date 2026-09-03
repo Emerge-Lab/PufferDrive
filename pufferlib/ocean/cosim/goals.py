@@ -107,9 +107,12 @@ class RouteGoalWindow:
         self.pushed = True
 
 
-def route_goals_from_xy(goals_xy, goals_z=None):
-    """(N, 2) goal points -> (N, 5) route goals; dir = previous goal -> goal."""
+def route_goals_from_xy(goals_xy, goals_z=None, origin_xy=None):
+    """(N, 2) goal points -> (N, 5) route goals; dir = previous goal -> goal. origin_xy (the ego
+    position) gives the first goal its direction too; without it the first dir is zero and the
+    env snaps that goal to the nearest lane by distance alone (wrong branch at junctions)."""
     xy = np.asarray(goals_xy, dtype=np.float64).reshape(-1, 2)
     z = np.zeros(len(xy)) if goals_z is None else np.asarray(goals_z, dtype=np.float64).reshape(-1)
-    prev = np.vstack([xy[:1], xy[:-1]])
+    first_prev = xy[:1] if origin_xy is None else np.asarray(origin_xy, dtype=np.float64).reshape(1, 2)
+    prev = np.vstack([first_prev, xy[:-1]])
     return np.column_stack([xy, z, xy - prev]).astype(np.float32)
