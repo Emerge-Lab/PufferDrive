@@ -1,0 +1,259 @@
+import copy
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from pufferlib.ocean.drive import binding
+from pufferlib.ocean.drive.drive import Drive
+from pufferlib.ocean.regents.adapter import _rasterize_drivable_area, export_drive_scenarios
+from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_STEERING, STATE_X, STATE_Y
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_MAP = min((REPO_ROOT / "pufferlib/resources/drive/binaries/sdc_replay_test").glob("*.bin"))
+
+
+def _drive_kwargs():
+    return {
+        "map_dir": str(FIXTURE_MAP),
+        "num_maps": 1,
+        "num_agents": 1,
+        "min_agents_per_env": 1,
+        "max_agents_per_env": 1,
+        "num_eval_scenarios": 1,
+        "max_scenarios_per_batch": 1,
+        "eval_map_indices": [0],
+        "eval_scenario_seeds": [42],
+        "seed": 42,
+        "simulation_mode": "replay",
+        "eval_mode": True,
+        "control_mode": "control_sdc_only",
+        "sdc_controller": "idm",
+        "non_sdc_controller": "replay",
+        "non_vehicle_controller": "replay",
+        "action_type": "continuous",
+        "dynamics_model": "classic",
+        "dt": 0.1,
+        "scenario_length": 16,
+        "resample_frequency": 16,
+        "init_step": 0,
+        "init_step_spread": False,
+        "reward_conditioning": False,
+        "reward_randomization": False,
+        "use_neighbor_cache": 0,
+    }
+
+
+@pytest.fixture
+def drive_and_payload():
+    drive = Drive(**_drive_kwargs())
+    drive.reset()
+    state = drive.get_state()
+    payload = state[0] if isinstance(state, list) else state
+    try:
+        yield drive, payload
+    finally:
+        drive.close()
+
+
+def _tensor_bytes(batch):
+    tensor_names = (
+        "logged_state",
+        "state_valid",
+        "state_feature_valid",
+        "transition_valid",
+        "current_state",
+        "current_valid",
+        "agent_present",
+        "agent_metadata_valid",
+        "active_agent_mask",
+        "agent_id",
+        "agent_type",
+        "controller",
+        "trajectory_length",
+        "ego_mask",
+        "vehicle_mask",
+        "candidate_adversary_mask",
+        "logged_length_meters",
+        "logged_width_meters",
+        "length_meters",
+        "width_meters",
+        "wheelbase_meters",
+        "maximum_speed_mps",
+        "log_dt_seconds",
+    )
+    tensor_payload = tuple(getattr(batch, name).numpy().tobytes() for name in tensor_names)
+    raster_payload = tuple(raster.mask.numpy().tobytes() for raster in batch.drivable_area_rasters)
+    return tensor_payload + raster_payload
+
+
+def test_real_scenario_schema_shapes_identity_and_centered_coordinates(drive_and_payload):
+    drive, payload = drive_and_payload
+    batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=1.0)
+
+    assert batch.logged_state.shape == (1, payload["num_total_agents"], payload["length"], 5)
+    assert batch.logged_state.dtype == torch.float32
+    assert batch.state_valid.dtype == torch.bool
+    assert torch.equal(batch.agent_id[0], torch.arange(payload["num_total_agents"]))
+    assert batch.ego_mask[0, 0]
+    assert batch.ego_mask.sum() == 1
+    assert batch.vehicle_mask[0, 0]
+    assert not batch.candidate_adversary_mask[0, 0]
+    assert batch.logged_length_meters.shape == batch.state_valid.shape
+    assert batch.logged_width_meters.shape == batch.state_valid.shape
+    assert batch.logged_length_meters[0, 0, 0] == pytest.approx(payload["agents"][0]["log_length"][0])
+    assert batch.coordinate_frame == "scenario_centered_cartesian"
+    assert abs(batch.logged_state[0, 0, 0, STATE_X]) < 1e-3
+    assert abs(batch.logged_state[0, 0, 0, STATE_Y]) < 1e-3
+    assert torch.all(batch.logged_state[..., STATE_HEADING] <= torch.pi)
+    assert torch.all(batch.logged_state[..., STATE_HEADING] >= -torch.pi)
+
+    first_agent = payload["agents"][0]
+    expected_signed_speed = first_agent["log_velocity_x"][0] * np.cos(first_agent["log_heading"][0])
+    expected_signed_speed += first_agent["log_velocity_y"][0] * np.sin(first_agent["log_heading"][0])
+    assert batch.logged_state[0, 0, 0, STATE_SPEED] == pytest.approx(expected_signed_speed)
+    assert not batch.state_feature_valid[..., STATE_STEERING].any()
+    assert torch.equal(batch.transition_valid, batch.state_valid[:, :, :-1] & batch.state_valid[:, :, 1:])
+
+
+def test_all_invalid_tracks_keep_stable_slots_but_are_not_candidates(drive_and_payload):
+    drive, payload = drive_and_payload
+    batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
+    invalid_track_indices = torch.where(~batch.state_valid[0].any(dim=-1))[0]
+
+    assert invalid_track_indices.numel() > 0
+    assert batch.agent_present[0, invalid_track_indices].all()
+    assert not batch.agent_metadata_valid[0, invalid_track_indices].any()
+    assert not batch.candidate_adversary_mask[0, invalid_track_indices].any()
+    assert torch.equal(batch.agent_id[0, invalid_track_indices], invalid_track_indices)
+
+
+def test_vectorized_payload_is_padded_on_batch_and_agent_axes(drive_and_payload):
+    drive, payload = drive_and_payload
+    second = copy.deepcopy(payload)
+    second["scenario_id"] = f"{payload['scenario_id']}-copy"
+    second["agents"] = second["agents"][:-1]
+    second["num_total_agents"] -= 1
+    second["active_agent_indices"] = [idx for idx in second["active_agent_indices"] if idx < len(second["agents"])]
+    second["active_agent_count"] = len(second["active_agent_indices"])
+    batch = export_drive_scenarios(drive, payload=[payload, second], raster_resolution_meters=2.0)
+
+    assert batch.batch_size == 2
+    assert batch.max_agent_count == payload["num_total_agents"]
+    assert batch.scenario_ids == (payload["scenario_id"], second["scenario_id"])
+    assert not batch.agent_present[1, -1]
+    assert batch.agent_id[1, -1] == -1
+    assert not batch.state_valid[1, -1].any()
+
+
+def test_vectorized_drive_export_preserves_both_scenario_slots():
+    drive_kwargs = _drive_kwargs()
+    drive_kwargs.update(
+        num_agents=2,
+        num_eval_scenarios=2,
+        max_scenarios_per_batch=2,
+        eval_map_indices=[0, 0],
+        eval_scenario_seeds=[42, 43],
+    )
+    drive = Drive(**drive_kwargs)
+    try:
+        drive.reset()
+        batch = export_drive_scenarios(drive, raster_resolution_meters=2.0)
+    finally:
+        drive.close()
+
+    assert batch.batch_size == 2
+    assert batch.agent_present.all()
+    assert len(batch.drivable_area_rasters) == 2
+
+
+def test_current_signed_speed_is_projected_from_velocity(drive_and_payload):
+    drive, payload = drive_and_payload
+    batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
+    agent = payload["agents"][0]
+    expected = agent["sim_vx"] * np.cos(agent["sim_heading"]) + agent["sim_vy"] * np.sin(agent["sim_heading"])
+
+    assert batch.current_state[0, 0, STATE_SPEED] == pytest.approx(expected)
+    assert batch.current_state[0, 0, STATE_STEERING] == pytest.approx(agent["sim_steering"])
+
+
+def test_dt_mismatch_fails_before_conversion(drive_and_payload):
+    drive, payload = drive_and_payload
+    mismatched = copy.deepcopy(payload)
+    mismatched["log_dt"] = 0.2
+
+    with pytest.raises(ValueError, match="does not match simulation dt"):
+        export_drive_scenarios(drive, payload=mismatched, raster_resolution_meters=2.0)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    [
+        ("simulation_mode", binding.SIMULATION_MODE_GIGAFLOW, "simulation_mode='replay'"),
+        ("_action_type_flag", binding.ACTION_TYPE_DISCRETE, "action_type='continuous'"),
+        ("dynamics_model_flag", binding.DYNAMICS_MODEL_JERK, "dynamics_model='classic'"),
+        ("init_step_spread", True, "fixed init_step"),
+        ("reward_conditioning", True, "conditioning and randomization"),
+    ],
+)
+def test_adapter_rejects_unsupported_drive_modes(drive_and_payload, monkeypatch, attribute, value, message):
+    drive, payload = drive_and_payload
+    monkeypatch.setattr(drive, attribute, value)
+
+    with pytest.raises(ValueError, match=message):
+        export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
+
+
+def test_raster_transform_and_lane_width_convention():
+    scenario = {
+        "map_corners": [-2.0, -2.0, 2.0, 2.0],
+        "num_road_elements": 1,
+        "road_elements": [
+            {
+                "id": 0,
+                "type": binding.ROAD_TYPE_LANE_SURFACE_STREET,
+                "segment_size": 2,
+                "x": [-2.0, 2.0],
+                "y": [0.0, 0.0],
+            }
+        ],
+    }
+    raster = _rasterize_drivable_area(scenario, resolution_meters=1.0)
+
+    assert raster.mask.shape == (5, 5)
+    assert raster.mask[2, 2]
+    assert raster.mask[1, 2]
+    assert not raster.mask[0, 2]
+    xy = torch.tensor([[-2.0, -2.0], [2.0, 2.0]])
+    assert torch.equal(raster.transform.world_to_grid(xy), torch.tensor([[0.0, 0.0], [4.0, 4.0]]))
+    assert torch.equal(
+        raster.transform.world_to_normalized_grid(xy),
+        torch.tensor([[-1.0, -1.0], [1.0, 1.0]]),
+    )
+
+
+def test_real_non_offroad_ego_center_is_on_drivable_raster(drive_and_payload):
+    drive, payload = drive_and_payload
+    batch = export_drive_scenarios(drive, payload=payload, raster_resolution_meters=0.5)
+    raster = batch.drivable_area_rasters[0]
+    ego_xy = batch.current_state[0, 0, [STATE_X, STATE_Y]]
+    column, row = raster.transform.world_to_grid(ego_xy).round().to(torch.int64)
+
+    assert payload["agents"][0]["metrics_array"][1] == 0.0
+    assert raster.mask[row, column]
+
+
+def test_same_scenario_and_seed_export_byte_identically():
+    exports = []
+    for _ in range(2):
+        drive = Drive(**_drive_kwargs())
+        try:
+            drive.reset()
+            exports.append(export_drive_scenarios(drive, raster_resolution_meters=2.0))
+        finally:
+            drive.close()
+
+    assert exports[0].scenario_ids == exports[1].scenario_ids
+    assert _tensor_bytes(exports[0]) == _tensor_bytes(exports[1])

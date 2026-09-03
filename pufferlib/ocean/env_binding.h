@@ -1416,6 +1416,14 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "ACTION_TYPE_CONTINUOUS", ACTION_TYPE_CONTINUOUS);
     PyModule_AddIntConstant(m, "DYNAMICS_MODEL_CLASSIC", DYNAMICS_MODEL_CLASSIC);
     PyModule_AddIntConstant(m, "DYNAMICS_MODEL_JERK", DYNAMICS_MODEL_JERK);
+    PyModule_AddIntConstant(m, "AGENT_TYPE_UNKNOWN", UNKNOWN);
+    PyModule_AddIntConstant(m, "AGENT_TYPE_VEHICLE", VEHICLE);
+    PyModule_AddIntConstant(m, "AGENT_TYPE_PEDESTRIAN", PEDESTRIAN);
+    PyModule_AddIntConstant(m, "AGENT_TYPE_CYCLIST", CYCLIST);
+    PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_FREEWAY", LANE_FREEWAY);
+    PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_SURFACE_STREET", LANE_SURFACE_STREET);
+    PyObject_SetAttrString(m, "LANE_WIDTH_METERS", PyFloat_FromDouble(LANE_WIDTH));
+    PyObject_SetAttrString(m, "WHEELBASE_LENGTH_RATIO", PyFloat_FromDouble(WHEELBASE_LENGTH_RATIO));
     PyModule_AddIntConstant(m, "CONTROL_MODE_VEHICLES", CONTROL_MODE_VEHICLES);
     PyModule_AddIntConstant(m, "CONTROL_MODE_AGENTS", CONTROL_MODE_AGENTS);
     PyModule_AddIntConstant(m, "CONTROL_MODE_WOSAC", CONTROL_MODE_WOSAC);

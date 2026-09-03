@@ -12,9 +12,10 @@ The initial scope is deliberately narrow:
 - a frozen logged or IDM ego rollout during each Torch optimization block;
 - IDM as the first reactive ego controller, before a learned ego policy;
 - deterministic, offline scenario generation and evaluation;
-- no PPO loop, policy updates, rollout buffer, or training command in the ReGentS POC.
+- no PPO loop, policy updates, rollout buffer, or training command in the ReGentS POC;
+- **fixed ego policy / IDM:** we do not train or update any ego policy while using ReGentS; the ego policy and IDM are completely fixed (frozen) and run in evaluation/inference mode only.
 
-Jerk dynamics, pedestrians/cyclists, joint policy gradients through the ego policy, and online generation during PPO training are follow-up work. The method reference is the local [ReGentS paper](2409.07830v1.pdf).
+Pedestrians/cyclists, joint policy gradients through the ego policy, and online generation during PPO training are follow-up work. To ensure correct physical model representation and sample-efficient gradients, adversarial actions are strictly defined as acceleration and steering (classic dynamics); jerk dynamics are explicitly excluded from the adversarial planning and optimization process. The method reference is the local [ReGentS paper](../2409.07830v1.pdf). Additionally, the original ReGentS reference codebase has been added directly to this workspace in the `ReGentS/` directory to help guide and ensure the correct integration. If any doubt or ambiguity arises during the implementation of these stages, developers should consult the reference files in `ReGentS/`.
 
 ### Ultimate Goal: Policy & IDM Benchmarking and Visual Rendering
 
@@ -25,11 +26,9 @@ Beyond the initial POC, the ultimate objective of the ReGentS integration is to 
 - **Comparative Analysis:** Contrast the final evaluation metrics (collision rates, off-road events, infraction rates) of the IDM controller versus the trained ego policy to benchmark performance improvements.
 - **Visual Rendering:** Generate high-fidelity rendered videos (`mp4` via the headless EGL pipeline or interactive replays) of these evaluations as soon as rendering capabilities become available for the ReGentS pipeline, ensuring qualitative validation of both adversarial maneuvers and ego reactions.
 
-## Step 0 — Validate IDM as the ego controller
+## Step 0 — Validate IDM as the ego controller (Completed)
 
-Completed 2026-09-03: `puffer eval puffer_drive regents_idm` runs the SDC with native C IDM and replay-controlled backgrounds without checkpoint loading or Torch policy inference, and produces replay files plus an HTML gallery by default.
-Regression coverage verifies deterministic controller routing, ignored policy-buffer actions, logged background motion, and evaluation metrics, while the 100-scenario NuPlan baseline produced 22% collision, 5% at-fault collision, 2% off-road, and 1% red-light violation.
-The baseline used master seed `42`, `init_step=0`, a 200-step horizon, 100 recorded episode seeds, and the first 100 sorted scenario files with selection SHA-256 `d8e98b2c88965044d4074ec47a667638b95d2975e2390e275510364421643ea9`.
+Completed (2026-09-03, Commit `a68e49f7`): Integrated native C IDM controller benchmark scenario config (`regents_idm` in `benchmark.yaml`) and verified deterministic routing, logged background motion, and evaluation metrics without requiring any Torch policy or checkpoint. The NuPlan baseline rollout on 100 scenarios using seed `42` with `init_step=0` was documented, and regression tests were added in `tests/regents/test_stage0_idm.py`.
 
 ## Core contracts
 
@@ -43,25 +42,12 @@ Use one explicit Torch representation throughout the differentiable path:
 
 All APIs must preserve agent identity and use one documented coordinate frame. Invalid entries are represented by masks, not silently repaired. External scenario data and tensor shapes are validated before optimization starts.
 
-## Stage 1 — Expose complete scenarios and build the Torch adapter
+## Stage 1 — Expose complete scenarios and build the Torch adapter (Completed)
 
-Use `Drive.get_state()` as the primary scenario source rather than introducing a second scenario loader. The render/replay state already serializes all C agents, their complete logged positions/headings/velocities/validity, current dynamics state, type and controller metadata, wheelbase and dimensions, road geometry, traffic controls, active/static mappings, and map bounds. The smaller `get_global_*` helpers are not needed for the first implementation.
-
-Work:
-
-- Audit and document the `get_state()` schema, especially the centered coordinate frame, per-agent trajectory lengths, vectorized return format, and the fact that serialized agent `id` is the stable C agent-array index. Derive the SDC mask from PufferDrive's `EGO_IDX == 0` invariant.
-- Build `state.py` dataclasses and `adapter.py` conversion/validation directly from this payload. Convert its Python lists to contiguous NumPy arrays and then perform one explicit conversion to Torch.
-- Derive logged signed speed from `log_velocity_x/y` projected onto `log_heading`. Derive current signed speed from `sim_vx/y` and `sim_heading`; no new field is required for that value.
-- Use the serialized road elements, their types, and `map_corners` to build a deterministic drivable-area raster with a documented origin, resolution, dimensions, and axis convention. Validate the result against existing off-road behavior.
-- Obtain simulation `dt`, configured maximum speed, `init_step`, and `scenario_length` from the Python `Drive` instance. Initially disable reward conditioning/randomization so the effective maximum speed is the configured base maximum.
-- Add fields to `get_state()` only for information that cannot be derived or read from the Python environment. The only expected initial gap is `log_dt`, which should be exposed so temporal alignment can be checked. If variable per-environment `init_step` is enabled later, expose that value per serialized scenario as well.
-- Initially require `simulation_mode=replay`, `action_type=continuous`, `dynamics_model=classic`, and a fixed `init_step`. Fail clearly if `dt` and `log_dt` differ; deterministic trajectory resampling can be added later as a separate feature.
-
-Tests and exit gate:
-
-- Adapter/schema tests cover shapes, dtypes, all-agent indexing, SDC identity, the centered coordinate frame, vectorized scenarios, and invalid timesteps.
-- Resetting the same scenario and seed produces byte-identical exported inputs.
-- A real scenario can be converted into the Torch representation with all contract checks enabled and no identity or timestep ambiguity.
+Completed (2026-09-03, Commit `80d7b938`): Implemented scenario exporting and canonical padding directly from `Drive.get_state()` payloads via `export_drive_scenarios()` in `pufferlib/ocean/regents/adapter.py`.
+- **Schema & Normalization:** State dataclasses defined in `state.py` represent centered Cartesian frames, stable agent indexing, SDC masking (`EGO_IDX == 0`), signed speed derivation from projections, and time-varying/first-valid agent dimensions using a shared `WHEELBASE_LENGTH_RATIO`.
+- **Drivable Area Rasterization:** Built raster-transform structures (`DrivableAreaRaster`, `RasterTransform`) mapping centered simulation space to grids.
+- **Verification:** Exhaustive tests implemented in `tests/regents/test_adapter.py` validating shapes, vectorized padding, dtypes, centered coordinate transform consistency, and byte-identical repeated exports.
 
 ## Stage 2 — Implement differentiable classic dynamics and prove C parity
 
@@ -239,7 +225,7 @@ Keep binding changes in the existing Drive binding files and keep shared mathema
 | M3 | Stable ReGentS optimization against a frozen logged/IDM ego rollout | C replay |
 | M4 | C reproduces optimized scenarios and authoritative metrics | Reactive ego loop |
 | M5 | Deterministic reactive IDM generation and saved artifacts; then learned-policy parity | Training-pipeline experiments |
-| M6 | Separate C/Torch/inverse parity for jerk dynamics | Optional jerk support |
+| M6 | Batching and parallelization of optimization jobs | Multi-scenario generation |
 
 M1 is the first ReGentS model milestone and is a hard gate. In particular, do not tune loss weights to compensate for a dynamics or inverse-dynamics mismatch.
 

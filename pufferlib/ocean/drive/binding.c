@@ -241,6 +241,16 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
+    v = PyFloat_FromDouble((double) env->log_dt);
+    if (!v) {
+        return NULL;
+    }
+    if (PyDict_SetItemString(dict, "log_dt", v) < 0) {
+        Py_DECREF(v);
+        return NULL;
+    }
+    Py_DECREF(v);
+
     v = PyLong_FromLong(env->dynamics_model);
     if (!v) {
         return NULL;
@@ -536,6 +546,68 @@ static PyObject *my_get(PyObject *dict, Env *env) {
                 Py_DECREF(lvy);
             } else {
                 PyDict_SetItemString(agent, "log_velocity_y", Py_None);
+            }
+            if (a->log_length && traj_len > 0) {
+                PyObject *lengths = PyList_New(traj_len);
+                if (!lengths) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                for (int j = 0; j < traj_len; j++) {
+                    PyObject *length = PyFloat_FromDouble((double) a->log_length[j]);
+                    if (!length) {
+                        Py_DECREF(lengths);
+                        Py_DECREF(agent);
+                        Py_DECREF(agents_list);
+                        return NULL;
+                    }
+                    PyList_SetItem(lengths, j, length);
+                }
+                if (PyDict_SetItemString(agent, "log_length", lengths) < 0) {
+                    Py_DECREF(lengths);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(lengths);
+            } else {
+                if (PyDict_SetItemString(agent, "log_length", Py_None) < 0) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+            }
+            if (a->log_width && traj_len > 0) {
+                PyObject *widths = PyList_New(traj_len);
+                if (!widths) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                for (int j = 0; j < traj_len; j++) {
+                    PyObject *width = PyFloat_FromDouble((double) a->log_width[j]);
+                    if (!width) {
+                        Py_DECREF(widths);
+                        Py_DECREF(agent);
+                        Py_DECREF(agents_list);
+                        return NULL;
+                    }
+                    PyList_SetItem(widths, j, width);
+                }
+                if (PyDict_SetItemString(agent, "log_width", widths) < 0) {
+                    Py_DECREF(widths);
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
+                Py_DECREF(widths);
+            } else {
+                if (PyDict_SetItemString(agent, "log_width", Py_None) < 0) {
+                    Py_DECREF(agent);
+                    Py_DECREF(agents_list);
+                    return NULL;
+                }
             }
             if (a->log_valid && traj_len > 0) {
                 PyObject *lv = PyList_New(traj_len);

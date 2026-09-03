@@ -2412,7 +2412,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         spawn_width = spawn_length;
     }
     float spawn_height = 1.5f;
-    float spawn_wheelbase = 0.6f * spawn_length;
+    float spawn_wheelbase = WHEELBASE_LENGTH_RATIO * spawn_length;
 
     // Set spawn position on start lane
     float spawn_x, spawn_y, spawn_z, spawn_heading;
@@ -2580,7 +2580,7 @@ static void set_start_position(Drive *env) {
             agent->sim_width = agent->log_width[step];
             agent->sim_height = agent->log_height[step];
             update_agent_radius(agent);
-            agent->wheelbase = 0.6f * agent->sim_length;
+            agent->wheelbase = WHEELBASE_LENGTH_RATIO * agent->sim_length;
             copy_pose_to_prev(agent);
 
             if (agent->type == UNKNOWN) {
@@ -2832,7 +2832,7 @@ void move_expert(Drive *env, int agent_idx) {
         agent->sim_width = agent->log_width[t];
         agent->sim_height = agent->log_height[t];
         update_agent_radius(agent);
-        agent->wheelbase = 0.6f * agent->sim_length;
+        agent->wheelbase = WHEELBASE_LENGTH_RATIO * agent->sim_length;
     }
     agent->yaw_rate = compute_log_yaw_rate(agent, t, env->dt);
     agent->sim_vx = agent->log_velocity_x[t];
