@@ -21,7 +21,14 @@ from pufferlib.ocean.regents.filters import (
 from pufferlib.ocean.regents.geometry import oriented_box_corners, signed_box_distance
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.losses import ReGentSCostConfig, combined_regents_cost, prepare_out_of_bounds_rasters
-from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_X, STATE_Y, ScenarioBatch
+from pufferlib.ocean.regents.state import (
+    STATE_FEATURE_COUNT,
+    STATE_HEADING,
+    STATE_X,
+    STATE_Y,
+    ScenarioBatch,
+    signed_speed_from_c_velocity,
+)
 
 
 DEFAULT_LEARNING_RATE = 1e-3
@@ -189,7 +196,7 @@ def _ego_state_from_payload(payload):
     if not np.isfinite(values).all():
         raise ValueError("C IDM emitted a non-finite ego state")
     heading = np.float32(math.atan2(math.sin(float(values[2])), math.cos(float(values[2]))))
-    signed_speed = np.float32(values[3] * math.cos(float(heading)) + values[4] * math.sin(float(heading)))
+    signed_speed = np.float32(signed_speed_from_c_velocity(values[3], values[4], heading))
     state = np.asarray((values[0], values[1], heading, signed_speed, values[5]), dtype=np.float32)
     validity = int(ego["sim_valid"])
     if validity not in (0, 1):

@@ -114,7 +114,34 @@ Success requires a discrete-timestep ego/candidate oriented-box overlap with no 
 
 Tests cover every filter, strict positive and negative angular boundaries, the front-divergence steering/acceleration split, native C IDM capture, braking and merging collision generation, rejection of background-collision and newly off-road iterates, exact preservation of frozen actions, and repeat determinism. The fixed NuPlan scenarios at map indices 5 and 8 with seeds 47 and 50, a 16-transition horizon, five Adam updates, and learning rate `1e-3` remain finite and deterministic. Their ego collision costs decrease from `2.0703814` to `1.9595402` and `5.6210895` to `5.5688214`; total costs decrease from `69.4004211` to `68.1501007` and `19.9497566` to `18.9804382`. The complete ReGentS suite passes with 75 tests and two expected CUDA skips. M3 is complete, unlocking Stage 6 C replay.
 
-## Stage 6 — Replay in C, add reactive ego iteration, and integrate the pipeline
+## Stage 6 — Replay in C, add reactive ego iteration, and integrate the pipeline (Completed)
+
+Completed (2026-09-03): Implemented stable-index action injection in the C simulator, authoritative C replay and the reactive IDM loop in `pufferlib/ocean/regents/rollout.py`, portable artifacts in `pufferlib/ocean/regents/artifacts.py`, and an offline generation entry point in `pufferlib/ocean/regents/generation.py` behind `puffer regents`.
+
+`regents_set_action_plan` installs one `[stable_agent, transition, 2]` plan plus its mask, rejecting non-replay, non-vehicle, ego, non-finite, and out-of-range entries, and requiring replay mode with continuous classic dynamics on exactly one environment. `c_step` applies the plan in the expert-static loop by stable simulator index, never by a compacted batch position. `regents_get_events` returns the timestep, the simulator's own moving-OBB collision pairs, and per-agent off-road flags; injected actors get `compute_metrics` against a scratch log so they carry authoritative infraction flags without entering policy episode logs or rewards.
+
+`start_regents_injection` seeds an adversary's first injected transition from its logged state: neutral wheel steering, the logged dimensions and wheelbase, the logged yaw rate, and the logged longitudinal velocity projected on the agent heading. Three C-side gaps that only surface under injection were found and fixed here. `c_reset` returns early whenever `timestep == init_step`, so `set_start_position` cannot be relied on to prepare an injected agent; seeding at the transition is the only order-independent mechanism. Agents invalid at `init_step` never reach `generate_reward_coefs`, leaving `reward_coefs[REWARD_COEF_SPEED]` at zero and clipping the adversary to a zero speed limit, so injection sets the neutral coefficient the exported `maximum_speed_mps` already assumes. Replay actors carry no wheel steering or classic-dynamics speed state at all.
+
+The speed conventions are deliberately different on the two sides and must stay that way. Logged and Torch states use the bicycle model's longitudinal speed, the heading projection of the logged velocity; this is what Stage 1 exports and what the Stage 3 gates were measured against. C's `sim_speed_signed` is the velocity magnitude signed by heading agreement, which is exact for states C integrated itself, so `signed_speed_from_c_velocity()` in `state.py` is used only when reading C state back. The two agree exactly once injection integrates a state and differ by the logged slip angle before it, so speed and steering are compared only at states injection actually produced. Position and heading are compared for every jointly valid agent, the shared initial state is verified rather than scored, and the comparison truncates at the first C collision because collision and infraction responses intentionally change C state.
+
+C is the success oracle, measured against a baseline C rollout of the same scenario, seed, and horizon driven by the Stage 3 initial actions under the same mask. Only collision pairs and off-road flags absent from that baseline are attributed to the optimization, so pre-existing logged overlaps neither fail generation nor inflate the background-collision rate. Success requires a new actionable ego/adversary collision with no new background collision and no new adversary off-road. A reactive ego answers the new adversary, so its divergence from the frozen reference is reported as `maximum_ego_reference_error` and excluded from the parity gate whenever the ego is not replay-controlled.
+
+`run_reactive_idm_generation()` captures a native C IDM ego, detaches it, optimizes adversaries in Torch, reruns C for IDM's response, and repeats to a fixed maximum outer iteration count, stopping on the first C-confirmed success or on unchanged actions. No gradient crosses the C simulator or the ego controller. Replacing IDM with a learned policy needs no change to this interface.
+
+Artifacts are pickle-free `npz` files carrying a schema tag, scenario and dataset identity, the source map path and a SHA-256 hash over the canonical configuration plus the exact map bytes, masks, initial and optimized actions, Torch and C trajectories, C ego actions, both replay metadata blocks, and every optimization and replay metric. `save_generation_artifact()` writes atomically and returns exactly the persisted metadata; `load_generation_artifact()` rejects unknown schemas, mismatched fields, and oversized arrays.
+
+`puffer regents <env_name> <generation_name>` reads `pufferlib/config/evaluation/regents.yaml`, validates it against the `Drive` signature, instantiates `Drive` directly, and never initializes PPO, a policy optimizer, a rollout buffer, or training logging. It writes one artifact per scenario plus `generation_metrics.csv`, and reports generation success, ego, actionable, background-collision and off-road rates, maximum C/Torch trajectory error, optimization runtime, and rejection reasons.
+
+Visualization reuses the existing viewer rather than adding one. With `render_replays: true`, both C rollouts also capture the simulator's own HTML replay frames through `Drive.get_obs_html_frame()` plus the ego observations, and `render_scenario_replays()` hands them to `pufferlib.viz.save_interactive_replay_zlib()` and `render_interactive_replay_zlib()`. Each scenario yields a `.logged` and an `.adversarial` page under `rendered_replays/`, indexed by `pufferlib.viz.build_gallery_index()`. The ego's captured C actions fill the viewer's action channel; the pages are self-contained and reference no external resource. Capture is off by default so a generation run pays nothing for it.
+
+The recorded acceptance run is `regents_nuplan`: the first 16 local NuPlan maps, seeds `42..57`, `init_step=0`, `dt=0.1`, a 16-transition horizon, 500 Adam updates at learning rate `1e-3`, and at most 3 outer iterations. Maximum C/Torch trajectory error was `1.526e-5` across all 16 scenarios, against the mandatory `1e-4` Stage 2 tolerance; the per-scenario maximum never exceeded `1.53e-5` and eleven scenarios were below `1.2e-7`. Total optimization time was 591.6 s. Generation success was `1/16`. Map index 8 with seed 50 produced a C-confirmed actionable ego collision at timestep 11 against adversary index 11, with no background collision and no new off-road corner. The rejections were 13 scenes filtered as `original_collision,no_candidate`, one `initial_reconstruction_collision`, and one `iteration_limit`. The run also rendered 32 replay pages and a gallery index under `experiments/regents/regents_nuplan/rendered_replays/`.
+
+The exit gate passes: optimized actions reproduce in C within the Stage 2 tolerance until a collision response changes the state, C confirms the intended collision, and original and adversarial replays plus every metric regenerate from the saved artifact. M4 and M5's IDM half are complete; learned-policy parity remains.
+
+**Open issue for Stage 5, not a Stage 6 blocker.** Thirteen of sixteen NuPlan scenes are filtered as having an original collision with no remaining candidate, so the offline success rate is bounded by the filter rather than by the optimizer. The C baseline shows the same maps carry many jointly valid overlapping logged boxes, so exact oriented-box overlap on logged data is likely too strict for this dataset. Decide whether the original-collision filter should use a penetration-depth threshold, exclude only the specific colliding pair rather than the scene, or keep exact overlap and accept the yield, before quoting a generation success rate as a method result.
+
+### Original Stage 6 scope
+
 
 The optimized trajectory is only accepted if it reproduces in the C simulator.
 
@@ -167,6 +194,7 @@ pufferlib/ocean/regents/
     optimizer.py
     rollout.py
     artifacts.py
+    generation.py
 
 tests/regents/
     test_stage0_idm.py
@@ -177,11 +205,11 @@ tests/regents/
     test_losses.py
     test_filters.py
     test_optimizer.py
-    test_c_replay.py
+    test_c_replay.py     # Stage 6 replay, reactive loop, artifacts, entry point
 
 pufferlib/config/evaluation/
     benchmark.yaml  # regents_idm Stage 0 benchmark
-    regents.yaml    # Stage 1+ offline generation config
+    regents.yaml    # Stage 6 offline generation config, run by `puffer regents`
 ```
 
 Keep binding changes in the existing Drive binding files and keep shared mathematical constants synchronized from one documented source. Avoid importing ReGentS into the PPO hot path until the offline pipeline is accepted.
@@ -200,6 +228,8 @@ Keep binding changes in the existing Drive binding files and keep shared mathema
 | M6 | Batching and parallelization of optimization jobs | Multi-scenario generation |
 
 M1 is the first ReGentS model milestone and is a hard gate. In particular, do not tune loss weights to compensate for a dynamics or inverse-dynamics mismatch.
+
+S0 through M4 are complete. M5's reactive IDM half is complete; its learned-policy parity half and M6 batching remain.
 
 ## Known risks to resolve early
 

@@ -8,6 +8,7 @@ actual steering angle.
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 
@@ -17,6 +18,13 @@ STATE_HEADING = 2
 STATE_SPEED = 3
 STATE_STEERING = 4
 STATE_FEATURE_COUNT = 5
+
+
+def signed_speed_from_c_velocity(velocity_x, velocity_y, wrapped_heading):
+    """Recover the C simulator's ``sim_speed_signed``: magnitude signed by heading."""
+    magnitude = np.hypot(velocity_x, velocity_y)
+    heading_projection = velocity_x * np.cos(wrapped_heading) + velocity_y * np.sin(wrapped_heading)
+    return np.copysign(magnitude, heading_projection)
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass
 from enum import IntFlag
-from itertools import combinations
 
 import torch
 
@@ -102,9 +101,12 @@ class CandidateSelection:
         ):
             if getattr(self, name).shape != self.candidate_mask.shape:
                 raise ValueError(f"{name} must have shape [batch, agent]")
-        for name in ("scene_eligible", "scene_reason_bits", "original_collision", "original_collision_timestep"):
+        for name in ("scene_eligible", "scene_reason_bits"):
             if getattr(self, name).shape != (batch_count,):
                 raise ValueError(f"{name} must have shape [batch]")
+        for name in ("original_collision", "original_collision_timestep"):
+            if getattr(self, name).shape != self.candidate_mask.shape:
+                raise ValueError(f"{name} must have shape [batch, agent]")
 
     def reasons_for(self, batch_idx, agent_idx):
         reason_bits = int(self.filter_reason_bits[batch_idx, agent_idx].item())
@@ -198,59 +200,52 @@ def _rear_sector_statistics(scenario, horizon_transition_count, half_angle_radia
     return output
 
 
-def _first_scenario_collision_timestep(scenario, state, valid, batch_idx):
-    present_idx = torch.where(scenario.agent_present[batch_idx] & scenario.agent_metadata_valid[batch_idx])[0]
-    first_collision_timestep = None
-    for left_idx_tensor, right_idx_tensor in combinations(present_idx, 2):
-        left_idx = int(left_idx_tensor.item())
-        right_idx = int(right_idx_tensor.item())
-        jointly_valid = valid[batch_idx, left_idx] & valid[batch_idx, right_idx]
+def _ego_overlap_timesteps(scenario, state, valid, batch_idx):
+    """Return the first ego-overlap timestep per agent, mirroring the paper's overlap_with_ego."""
+    agent_count = state.shape[1]
+    first_timestep = torch.full((agent_count,), -1, dtype=torch.int64, device=state.device)
+    ego_positions = torch.where(scenario.ego_mask[batch_idx])[0]
+    if ego_positions.numel() != 1:
+        return first_timestep
+    ego_idx = int(ego_positions.item())
+    present = scenario.agent_present[batch_idx] & scenario.agent_metadata_valid[batch_idx]
+    for agent_idx in range(agent_count):
+        if agent_idx == ego_idx or not bool(present[agent_idx]):
+            continue
+        jointly_valid = valid[batch_idx, ego_idx] & valid[batch_idx, agent_idx]
         if not jointly_valid.any():
             continue
         timestep_idx = torch.where(jointly_valid)[0]
-        left_state = state[batch_idx, left_idx, timestep_idx]
-        right_state = state[batch_idx, right_idx, timestep_idx]
-        left_boxes = torch.stack(
-            (
-                left_state[:, STATE_X],
-                left_state[:, STATE_Y],
-                torch.full_like(left_state[:, STATE_X], scenario.length_meters[batch_idx, left_idx]),
-                torch.full_like(left_state[:, STATE_X], scenario.width_meters[batch_idx, left_idx]),
-                left_state[:, STATE_HEADING],
-            ),
-            dim=-1,
-        )
-        right_boxes = torch.stack(
-            (
-                right_state[:, STATE_X],
-                right_state[:, STATE_Y],
-                torch.full_like(right_state[:, STATE_X], scenario.length_meters[batch_idx, right_idx]),
-                torch.full_like(right_state[:, STATE_X], scenario.width_meters[batch_idx, right_idx]),
-                right_state[:, STATE_HEADING],
-            ),
-            dim=-1,
-        )
-        overlap_idx = torch.where(signed_box_distance(left_boxes, right_boxes) <= 0.0)[0]
-        if overlap_idx.numel() == 0:
-            continue
-        timestep = int(timestep_idx[overlap_idx[0]].item())
-        if first_collision_timestep is None or timestep < first_collision_timestep:
-            first_collision_timestep = timestep
-    return first_collision_timestep
+        boxes = []
+        for index in (ego_idx, agent_idx):
+            agent_state = state[batch_idx, index, timestep_idx]
+            boxes.append(
+                torch.stack(
+                    (
+                        agent_state[:, STATE_X],
+                        agent_state[:, STATE_Y],
+                        torch.full_like(agent_state[:, STATE_X], scenario.length_meters[batch_idx, index]),
+                        torch.full_like(agent_state[:, STATE_X], scenario.width_meters[batch_idx, index]),
+                        agent_state[:, STATE_HEADING],
+                    ),
+                    dim=-1,
+                )
+            )
+        overlap_idx = torch.where(signed_box_distance(boxes[0], boxes[1]) <= 0.0)[0]
+        if overlap_idx.numel():
+            first_timestep[agent_idx] = int(timestep_idx[overlap_idx[0]].item())
+    return first_timestep
 
 
 def _original_collision_labels(scenario, horizon_transition_count):
+    """Label per agent whether its logged trajectory already overlaps the ego."""
     state = scenario.logged_state[:, :, : horizon_transition_count + 1]
     valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
-    collision = torch.zeros(scenario.batch_size, dtype=torch.bool, device=state.device)
-    collision_timestep = torch.full((scenario.batch_size,), -1, dtype=torch.int64, device=state.device)
+    agent_shape = (scenario.batch_size, state.shape[1])
+    collision_timestep = torch.full(agent_shape, -1, dtype=torch.int64, device=state.device)
     for batch_idx in range(scenario.batch_size):
-        timestep = _first_scenario_collision_timestep(scenario, state, valid, batch_idx)
-        if timestep is None:
-            continue
-        collision[batch_idx] = True
-        collision_timestep[batch_idx] = timestep
-    return collision, collision_timestep
+        collision_timestep[batch_idx] = _ego_overlap_timesteps(scenario, state, valid, batch_idx)
+    return collision_timestep >= 0, collision_timestep
 
 
 def select_adversary_candidates(
@@ -297,10 +292,11 @@ def select_adversary_candidates(
     invalid_ego = (ego_count != 1) | (ego_transition_count < config.minimum_valid_transition_count)
     scene_reason_bits = invalid_ego.to(torch.int64) * int(SceneFilterReason.INVALID_EGO)
     scene_reason_bits |= (~scene_suitable).to(torch.int64) * int(SceneFilterReason.CALLER_UNSUITABLE)
-    scene_reason_bits |= original_collision.to(torch.int64) * int(SceneFilterReason.ORIGINAL_COLLISION)
+    all_candidates_collide = (original_collision | ~scenario.candidate_adversary_mask).all(dim=-1)
+    scene_reason_bits |= all_candidates_collide.to(torch.int64) * int(SceneFilterReason.ORIGINAL_COLLISION)
     preliminarily_eligible = scene_reason_bits == 0
     reason_bits |= (~preliminarily_eligible[:, None]).to(torch.int64) * int(CandidateFilterReason.SCENE_UNSUITABLE)
-    reason_bits |= original_collision[:, None].to(torch.int64) * int(CandidateFilterReason.ORIGINAL_COLLISION)
+    reason_bits |= original_collision.to(torch.int64) * int(CandidateFilterReason.ORIGINAL_COLLISION)
 
     candidate_mask = scenario.candidate_adversary_mask & (reason_bits == 0)
     no_candidate = ~candidate_mask.any(dim=-1)

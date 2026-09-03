@@ -36,6 +36,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 
 import pufferlib
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
+from pufferlib.ocean.regents import generation as regents_generation
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
 import pufferlib.sweep
 import pufferlib.utils
@@ -82,6 +83,7 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
+REGENTS_GENERATION_CONFIG_PATH = "pufferlib/config/evaluation/regents.yaml"
 
 
 def torch_device(device):
@@ -2491,8 +2493,29 @@ def load_config(env_name, config_dir=None):
     return args
 
 
+def regents(generation_name, config_path=None, output_dir=None):
+    """Generate ReGentS adversarial scenarios offline, without any training machinery."""
+    config_path = config_path or REGENTS_GENERATION_CONFIG_PATH
+    report = regents_generation.generate_regents_scenarios(config_path, generation_name, output_dir=output_dir)
+    print(f"[REGENTS] {generation_name}: {report.scenario_count} scenarios -> {report.output_dir}")
+    print(
+        f"[REGENTS] success {report.generation_success_rate:.3f} | ego {report.ego_collision_rate:.3f}"
+        f" | actionable {report.actionable_collision_rate:.3f}"
+        f" | background {report.background_collision_rate:.3f} | offroad {report.offroad_rate:.3f}"
+    )
+    print(
+        f"[REGENTS] max C/Torch error {report.maximum_c_torch_trajectory_error:.3e}"
+        f" | optimization {report.total_optimization_seconds:.1f}s"
+    )
+    for reason, count in sorted(report.rejection_reasons.items()):
+        print(f"[REGENTS] rejected {count}x {reason}")
+    if report.replay_index is not None:
+        print(f"[REGENTS] replay gallery {report.replay_index}")
+    return report
+
+
 def main():
-    err = "Usage: puffer [train, eval, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
+    err = "Usage: puffer [train, eval, regents, sweep, controlled_exp, autotune, profile, export] [env_name] [optional args]. --help for more info"
     if len(sys.argv) < 3:
         raise pufferlib.APIUsageError(err)
 
@@ -2505,6 +2528,10 @@ def main():
             raise pufferlib.APIUsageError("Usage: puffer eval [env_name] [benchmark_name] [optional args]")
         benchmark_name = sys.argv.pop(1)
         eval(env_name=env_name, benchmark_names=benchmark_name)
+    elif mode == "regents":
+        if len(sys.argv) < 2:
+            raise pufferlib.APIUsageError("Usage: puffer regents [env_name] [generation_name] [optional args]")
+        regents(generation_name=sys.argv.pop(1))
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

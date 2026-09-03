@@ -193,6 +193,10 @@ struct Drive {
     int *static_agent_indices;
     int expert_static_agent_count;
     int *expert_static_agent_indices;
+    // Offline ReGentS plans are indexed by stable simulator agent index.
+    float *regents_actions;
+    unsigned char *regents_action_mask;
+    int regents_transition_count;
     // Map and spatial queries
     char *map_name;
     RoadMapElement *road_elements;
@@ -2537,6 +2541,41 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     return true;
 }
 
+static bool has_regents_action(Drive *env, int agent_idx, int transition_idx) {
+    if (env->regents_action_mask == NULL || transition_idx < 0 || transition_idx >= env->regents_transition_count) {
+        return false;
+    }
+    return env->regents_action_mask[agent_idx * env->regents_transition_count + transition_idx] != 0;
+}
+
+static bool has_any_regents_action(Drive *env, int agent_idx) {
+    for (int transition_idx = 0; transition_idx < env->regents_transition_count; transition_idx++) {
+        if (has_regents_action(env, agent_idx, transition_idx)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Adversaries start from the logged motion state and the unscaled base speed limit.
+static void start_regents_injection(Drive *env, int agent_idx) {
+    Agent *agent = &env->agents[agent_idx];
+    int step = env->timestep - 1;
+    agent->steering_angle = 0.0f;
+    agent->reward_coefs[REWARD_COEF_SPEED] = 1.0f;
+    agent->sim_length = agent->log_length[step];
+    agent->sim_width = agent->log_width[step];
+    agent->sim_height = agent->log_height[step];
+    update_agent_radius(agent);
+    agent->wheelbase = WHEELBASE_LENGTH_RATIO * agent->sim_length;
+    agent->yaw_rate = compute_log_yaw_rate(agent, step, env->dt);
+    float longitudinal_speed
+        = agent->log_velocity_x[step] * agent->cos_heading + agent->log_velocity_y[step] * agent->sin_heading;
+    agent->sim_vx = longitudinal_speed * agent->cos_heading;
+    agent->sim_vy = longitudinal_speed * agent->sin_heading;
+    update_agent_speed(agent);
+}
+
 static void set_start_position(Drive *env) {
     for (int i = 0; i < env->num_total_agents; i++) {
         int is_active = 0;
@@ -3079,6 +3118,8 @@ void c_close(Drive *env) {
     free(env->obs_neighbor_scratch);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
+    free(env->regents_actions);
+    free(env->regents_action_mask);
     free(env->objects_of_interest);
     free(env->tracks_to_predict);
     free(env->map_name);
@@ -3241,9 +3282,8 @@ static void subsample_road_observation_rows(
 // Core Simulation Functions
 // ========================================
 
-static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
+static void compute_metrics(Drive *env, int agent_idx, Log *agent_log) {
     Agent *agent = &env->agents[agent_idx];
-    Log *agent_log = &env->logs[log_idx];
 
     reset_agent_metrics(env, agent_idx);
 
@@ -4142,7 +4182,7 @@ static void compute_observations(Drive *env) {
     }
 }
 
-static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
+static void move_dynamics(Drive *env, int action_idx, int agent_idx, bool use_regents_action) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
 
@@ -4170,7 +4210,14 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float acceleration = 0.0f;
         float steering = 0.0f;
 
-        if (env->action_type == ACTION_TYPE_DISCRETE) {
+        if (use_regents_action) {
+            int transition_idx = env->timestep - env->init_step - 1;
+            int plan_idx = agent_idx * env->regents_transition_count + transition_idx;
+            acceleration = env->regents_actions[2 * plan_idx];
+            steering = env->regents_actions[2 * plan_idx + 1];
+            acceleration *= ACCELERATION_VALUES[6];
+            steering *= STEERING_VALUES[8];
+        } else if (env->action_type == ACTION_TYPE_DISCRETE) {
             // Interpret action as a single integer: a = accel_idx * num_steer + steer_idx
             int *action_array = (int *) env->actions;
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
@@ -4248,6 +4295,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
     } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
+        assert(!use_regents_action);
         // Extract jerk action components
         float j_long, j_lat;
         if (env->action_type == ACTION_TYPE_DISCRETE) {
@@ -4403,7 +4451,7 @@ void c_reset(Drive *env) {
             env->logs[x] = (Log) {0};
             int agent_idx = env->active_agent_indices[x];
             sample_erratic_flags(env, &env->agents[agent_idx]);
-            compute_metrics(env, agent_idx, x);
+            compute_metrics(env, agent_idx, &env->logs[x]);
         }
         compute_observations(env);
         return;
@@ -4448,7 +4496,7 @@ void c_reset(Drive *env) {
             reset_agent_state(agent);
             sample_erratic_flags(env, agent);
             generate_reward_coefs(env, agent);
-            compute_metrics(env, agent_idx, x);
+            compute_metrics(env, agent_idx, &env->logs[x]);
         }
         compute_observations(env);
         return;
@@ -4491,7 +4539,7 @@ void c_reset(Drive *env) {
         } else {
             generate_new_goals_from_route(env, agent);
         }
-        compute_metrics(env, agent_idx, x);
+        compute_metrics(env, agent_idx, &env->logs[x]);
     }
     compute_observations(env);
 }
@@ -4527,7 +4575,13 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int background_idx = env->expert_static_agent_indices[i];
         Agent *agent = &env->agents[background_idx];
-        if (agent->controller == CONTROLLER_IDM) {
+        int transition_idx = env->timestep - env->init_step - 1;
+        if (has_regents_action(env, background_idx, transition_idx)) {
+            if (!has_regents_action(env, background_idx, transition_idx - 1)) {
+                start_regents_injection(env, background_idx);
+            }
+            move_dynamics(env, background_idx, background_idx, true);
+        } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, background_idx);
@@ -4540,7 +4594,7 @@ void c_step(Drive *env) {
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
         if (agent->controller == CONTROLLER_POLICY) {
-            move_dynamics(env, i, agent_idx);
+            move_dynamics(env, i, agent_idx, false);
         } else if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
@@ -4568,8 +4622,19 @@ void c_step(Drive *env) {
         if (env->agents[agent_idx].stopped || env->agents[agent_idx].removed) {
             continue;
         }
-        compute_metrics(env, agent_idx, i);
+        compute_metrics(env, agent_idx, &env->logs[i]);
         compute_rewards(env, i);
+    }
+
+    // ReGentS-injected replay actors need authoritative C infraction flags,
+    // but do not contribute to policy episode logs or rewards.
+    Log regents_scratch_log = {0};
+    int transition_idx = env->timestep - env->init_step - 1;
+    for (int i = 0; i < env->expert_static_agent_count; i++) {
+        int background_idx = env->expert_static_agent_indices[i];
+        if (has_regents_action(env, background_idx, transition_idx)) {
+            compute_metrics(env, background_idx, &regents_scratch_log);
+        }
     }
 
     // Mark terminals for stopped or removed agents

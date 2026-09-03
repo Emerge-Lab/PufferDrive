@@ -102,13 +102,48 @@ def test_candidate_filter_records_every_agent_reason():
     assert "insufficient_valid_transitions" in selection.reasons_for(0, 5)
 
 
-def test_original_collision_is_labeled_separately_from_scene_unsuitability():
+def test_original_collision_is_labeled_per_agent_against_the_ego():
     states = torch.stack((_linear_track(0.0, 0.0, 2.0), _linear_track(3.0, 0.0, 2.0)))[None]
     selection = select_adversary_candidates(make_scenario(states))
-    assert selection.original_collision.tolist() == [True]
-    assert selection.original_collision_timestep.tolist() == [0]
+    assert selection.original_collision.tolist() == [[False, True]]
+    assert selection.original_collision_timestep.tolist() == [[-1, 0]]
     assert selection.scene_reasons_for(0) == ("original_collision", "no_candidate")
     assert int(selection.filter_reason_bits[0, 1]) & int(CandidateFilterReason.ORIGINAL_COLLISION)
+
+
+def test_background_overlap_away_from_the_ego_keeps_the_scene_and_its_candidates():
+    # Two logged backgrounds overlapping each other is not something the C simulator
+    # ever scores, so it must not disqualify the scene or an uninvolved candidate.
+    states = torch.stack(
+        (
+            _linear_track(0.0, 0.0, 2.0),
+            _linear_track(40.0, 30.0, 2.0),
+            _linear_track(43.0, 30.0, 2.0),
+        )
+    )[None]
+    selection = select_adversary_candidates(make_scenario(states))
+
+    assert selection.original_collision.tolist() == [[False, False, False]]
+    assert selection.scene_eligible.tolist() == [True]
+    assert selection.scene_reasons_for(0) == ()
+    assert selection.candidate_mask.tolist() == [[False, True, True]]
+
+
+def test_only_the_ego_colliding_candidate_is_excluded():
+    states = torch.stack(
+        (
+            _linear_track(0.0, 0.0, 2.0),
+            _linear_track(3.0, 0.0, 2.0),
+            _linear_track(8.0, 4.0, 2.0),
+        )
+    )[None]
+    selection = select_adversary_candidates(make_scenario(states))
+
+    assert selection.original_collision.tolist() == [[False, True, False]]
+    assert selection.scene_eligible.tolist() == [True]
+    assert selection.candidate_mask.tolist() == [[False, False, True]]
+    assert "original_collision" in selection.reasons_for(0, 1)
+    assert "original_collision" not in selection.reasons_for(0, 2)
 
 
 def test_caller_unsuitable_scene_is_recorded_without_mutating_inputs():

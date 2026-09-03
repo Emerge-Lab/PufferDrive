@@ -1,0 +1,78 @@
+# Offline ReGentS adversary generation. Drive is instantiated directly: this path
+# never initializes PPO, a policy optimizer, a rollout buffer, or training logging.
+env:
+  simulation_mode: replay
+  eval_mode: true
+  compute_eval_metrics: true
+  control_mode: control_sdc_only
+  sdc_controller: idm
+  non_sdc_controller: replay
+  non_vehicle_controller: replay
+  action_type: continuous
+  dynamics_model: classic
+  dt: 0.1
+  scenario_length: 200
+  resample_frequency: 200
+  num_agents: 1
+  min_agents_per_env: 1
+  max_agents_per_env: 1
+  num_eval_scenarios: 1
+  max_scenarios_per_batch: 1
+  init_step: 0
+  init_step_spread: false
+  reward_conditioning: false
+  reward_randomization: false
+  terminate_on_goal: false
+  goal_source: route
+  map_dir: pufferlib/resources/drive/binaries/nuplan
+  use_neighbor_cache: 0
+
+generations:
+  # The Stage 3 audit scenarios: the first 16 local NuPlan maps with seeds 42..57.
+  - name: regents_nuplan
+    seed: 42
+    scenario_count: 4
+    horizon_transition_count: 200
+    maximum_outer_iterations: 3
+    raster_resolution_meters: 5.0
+    output_dir: experiments/regents
+    render_replays: true
+    optimizer:
+      learning_rate: 0.001
+      iteration_count: 500
+    env:
+      num_maps: 16
+      scenario_length: 201
+      resample_frequency: 201
+
+  # Full 20 s NuPlan window: 200 transitions at dt=0.1. scenario_length and
+  # resample_frequency sit one step above the horizon so neither guard trips.
+  - name: regents_nuplan_20s
+    seed: 42
+    scenario_count: 16
+    horizon_transition_count: 200
+    maximum_outer_iterations: 3
+    raster_resolution_meters: 5.0
+    output_dir: experiments/regents
+    render_replays: true
+    optimizer:
+      learning_rate: 0.001
+      iteration_count: 500
+    env:
+      num_maps: 16
+      scenario_length: 201
+      resample_frequency: 201
+
+  - name: regents_nuplan_smoke
+    seed: 42
+    scenario_count: 2
+    horizon_transition_count: 50
+    maximum_outer_iterations: 1
+    raster_resolution_meters: 5.0
+    output_dir: experiments/regents
+    render_replays: true
+    optimizer:
+      learning_rate: 0.01
+      iteration_count: 30
+    env:
+      num_maps: 2

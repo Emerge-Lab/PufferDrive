@@ -9,6 +9,8 @@
 #define MY_RESEED
 
 static PyObject *classic_step_diagnostic_py(PyObject *self, PyObject *args);
+static PyObject *regents_set_action_plan_py(PyObject *self, PyObject *args);
+static PyObject *regents_get_events_py(PyObject *self, PyObject *args);
 
 enum {
     DIAGNOSTIC_STATE_X = 0,
@@ -41,10 +43,173 @@ static PyObject *map_cache_live_count_py(
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
     {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
-    {"classic_step_diagnostic", classic_step_diagnostic_py, METH_VARARGS, "Run isolated classic dynamics."}
+    {"classic_step_diagnostic", classic_step_diagnostic_py, METH_VARARGS, "Run isolated classic dynamics."}, \
+    {"regents_set_action_plan", regents_set_action_plan_py, METH_VARARGS, "Install one stable-index action plan."}, \
+    {"regents_get_events", regents_get_events_py, METH_VARARGS, "Read authoritative replay events."}
 // clang-format on
 
 #include "../env_binding.h"
+
+static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "regents_set_action_plan requires a VecEnv, actions, and mask");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (vec == NULL) {
+        return NULL;
+    }
+    if (vec->num_envs != 1) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS action injection requires exactly one C environment");
+        return NULL;
+    }
+    Drive *env = vec->envs[0];
+    PyObject *actions_object = PyTuple_GetItem(args, 1);
+    PyObject *mask_object = PyTuple_GetItem(args, 2);
+    if (!PyArray_Check(actions_object) || !PyArray_Check(mask_object)) {
+        PyErr_SetString(PyExc_TypeError, "ReGentS actions and mask must be NumPy arrays");
+        return NULL;
+    }
+    PyArrayObject *actions_array = (PyArrayObject *) actions_object;
+    PyArrayObject *mask_array = (PyArrayObject *) mask_object;
+    if (PyArray_TYPE(actions_array) != NPY_FLOAT32 || PyArray_TYPE(mask_array) != NPY_BOOL) {
+        PyErr_SetString(PyExc_TypeError, "ReGentS actions must be float32 and mask must be bool");
+        return NULL;
+    }
+    if (!PyArray_IS_C_CONTIGUOUS(actions_array) || !PyArray_IS_C_CONTIGUOUS(mask_array)) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS actions and mask must be C-contiguous");
+        return NULL;
+    }
+    if (PyArray_NDIM(actions_array) != 3 || PyArray_DIM(actions_array, 0) != env->num_total_agents
+        || PyArray_DIM(actions_array, 2) != 2 || PyArray_NDIM(mask_array) != 2
+        || PyArray_DIM(mask_array, 0) != env->num_total_agents
+        || PyArray_DIM(mask_array, 1) != PyArray_DIM(actions_array, 1)) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS actions must be [stable_agent, transition, 2] with a matching mask");
+        return NULL;
+    }
+    npy_intp transition_count_npy = PyArray_DIM(actions_array, 1);
+    if (transition_count_npy < 1 || transition_count_npy > env->scenario_length) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS transition count is outside the configured scenario horizon");
+        return NULL;
+    }
+    if (env->simulation_mode != SIMULATION_MODE_REPLAY || env->action_type != ACTION_TYPE_CONTINUOUS
+        || env->dynamics_model != DYNAMICS_MODEL_CLASSIC) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS injection requires replay mode with continuous classic dynamics");
+        return NULL;
+    }
+
+    int transition_count = (int) transition_count_npy;
+    float *actions = (float *) PyArray_DATA(actions_array);
+    npy_bool *mask = (npy_bool *) PyArray_DATA(mask_array);
+    size_t entry_count = (size_t) env->num_total_agents * (size_t) transition_count;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        for (int transition_idx = 0; transition_idx < transition_count; transition_idx++) {
+            size_t plan_idx = (size_t) agent_idx * (size_t) transition_count + (size_t) transition_idx;
+            if (!isfinite(actions[2 * plan_idx]) || !isfinite(actions[2 * plan_idx + 1])
+                || actions[2 * plan_idx] < -1.0f || actions[2 * plan_idx] > 1.0f || actions[2 * plan_idx + 1] < -1.0f
+                || actions[2 * plan_idx + 1] > 1.0f) {
+                PyErr_SetString(PyExc_ValueError, "ReGentS actions must be finite and within [-1, 1]");
+                return NULL;
+            }
+            if (!mask[plan_idx]) {
+                continue;
+            }
+            if (agent_idx == EGO_IDX || env->agents[agent_idx].type != VEHICLE
+                || env->agents[agent_idx].controller != CONTROLLER_REPLAY) {
+                PyErr_SetString(PyExc_ValueError, "ReGentS may inject only replay-controlled non-ego vehicles");
+                return NULL;
+            }
+        }
+    }
+    float *new_actions = (float *) malloc(2 * entry_count * sizeof(float));
+    unsigned char *new_mask = (unsigned char *) malloc(entry_count * sizeof(unsigned char));
+    if (new_actions == NULL || new_mask == NULL) {
+        free(new_actions);
+        free(new_mask);
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate the ReGentS action plan");
+        return NULL;
+    }
+    memcpy(new_actions, actions, 2 * entry_count * sizeof(float));
+    for (size_t plan_idx = 0; plan_idx < entry_count; plan_idx++) {
+        new_mask[plan_idx] = mask[plan_idx] ? 1 : 0;
+    }
+    free(env->regents_actions);
+    free(env->regents_action_mask);
+    env->regents_actions = new_actions;
+    env->regents_action_mask = new_mask;
+    env->regents_transition_count = transition_count;
+    Py_RETURN_NONE;
+}
+
+static PyObject *regents_get_events_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "regents_get_events requires one VecEnv");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (vec == NULL) {
+        return NULL;
+    }
+    if (vec->num_envs != 1) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS event capture requires exactly one C environment");
+        return NULL;
+    }
+    Drive *env = vec->envs[0];
+    PyObject *result = PyDict_New();
+    PyObject *pairs = PyList_New(0);
+    PyObject *offroad = PyList_New(env->num_total_agents);
+    if (result == NULL || pairs == NULL || offroad == NULL) {
+        Py_XDECREF(result);
+        Py_XDECREF(pairs);
+        Py_XDECREF(offroad);
+        return NULL;
+    }
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        PyObject *flag = PyBool_FromLong(env->agents[agent_idx].metrics_array[OFFROAD_IDX] > 0.0f);
+        if (flag == NULL) {
+            Py_DECREF(result);
+            Py_DECREF(pairs);
+            Py_DECREF(offroad);
+            return NULL;
+        }
+        PyList_SET_ITEM(offroad, agent_idx, flag);
+    }
+    // Only the agents the simulator scores are checked, using its own collision_check.
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        if (agent_idx != EGO_IDX && !has_any_regents_action(env, agent_idx)) {
+            continue;
+        }
+        int other_idx = collision_check(env, agent_idx);
+        if (other_idx < 0) {
+            continue;
+        }
+        int low_idx = agent_idx < other_idx ? agent_idx : other_idx;
+        int high_idx = agent_idx < other_idx ? other_idx : agent_idx;
+        PyObject *pair = Py_BuildValue("(ii)", low_idx, high_idx);
+        if (pair == NULL || PyList_Append(pairs, pair) < 0) {
+            Py_XDECREF(pair);
+            Py_DECREF(result);
+            Py_DECREF(pairs);
+            Py_DECREF(offroad);
+            return NULL;
+        }
+        Py_DECREF(pair);
+    }
+    PyObject *timestep = PyLong_FromLong(env->timestep);
+    if (timestep == NULL || PyDict_SetItemString(result, "timestep", timestep) < 0
+        || PyDict_SetItemString(result, "collision_pairs", pairs) < 0
+        || PyDict_SetItemString(result, "offroad", offroad) < 0) {
+        Py_XDECREF(timestep);
+        Py_DECREF(result);
+        Py_DECREF(pairs);
+        Py_DECREF(offroad);
+        return NULL;
+    }
+    Py_DECREF(timestep);
+    Py_DECREF(pairs);
+    Py_DECREF(offroad);
+    return result;
+}
 
 static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused)), PyObject *args) {
     PyObject *state_object;
@@ -160,7 +325,7 @@ static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused
         env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
         env.dt = (float) dt_seconds;
         env.base_max_speed_mps = maximum_speeds[sample_idx];
-        move_dynamics(&env, 0, 0);
+        move_dynamics(&env, 0, 0, false);
 
         outputs[sample_idx][DIAGNOSTIC_STATE_X] = agent.sim_x;
         outputs[sample_idx][DIAGNOSTIC_STATE_Y] = agent.sim_y;
