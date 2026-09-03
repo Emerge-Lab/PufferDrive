@@ -886,7 +886,7 @@ class Drive(pufferlib.PufferEnv):
 
         return states
 
-    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long):
+    def set_agent_states(self, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long, seconds_stopped=None):
         """Co-sim: overwrite the sim state of agents at global indices `idx`
         (e.g. CARLA background) with world-frame pose/velocity. The C side
         subtracts world_mean, recaches heading trig and recomputes speed.
@@ -894,7 +894,12 @@ class Drive(pufferlib.PufferEnv):
         sim's own physics (e.g. CARLA's get_angular_velocity()/get_acceleration(),
         nuPlan's EgoState.dynamic_car_state) -- not finite-differenced here, since
         this agent's previous state may already have been overwritten this tick by
-        env.step()'s own dynamics before this call runs."""
+        env.step()'s own dynamics before this call runs.
+        `seconds_stopped` (seconds each agent's speed has been below
+        binding.AGENT_STOPPED_SPEED_THRESHOLD) is optional: pass it when the
+        external sim owns the agent's kinematics every tick, so stopped-time is
+        injected as state instead of derived from the dummy in-sim rollout;
+        leave it None to keep c_step's own per-tick accumulation."""
         binding.vec_set_agent_states(
             self.c_envs,
             np.ascontiguousarray(idx, dtype=np.int32),
@@ -906,6 +911,7 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(vy, dtype=np.float32),
             np.ascontiguousarray(yaw_rate, dtype=np.float32),
             np.ascontiguousarray(accel_long, dtype=np.float32),
+            None if seconds_stopped is None else np.ascontiguousarray(seconds_stopped, dtype=np.float32),
         )
 
     # ── Co-simulation external-state setters ─────────────────────────────────────

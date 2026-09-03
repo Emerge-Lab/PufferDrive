@@ -1074,8 +1074,8 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
 // ── Co-simulation external-state setters (mirror vec_get_global_agent_state) ──
 // Co-sim runs a single env (num_envs == 1); these operate on vec->envs[0].
 static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 10) {
-        PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 10 arguments");
+    if (PyTuple_Size(args) != 11) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_states requires 11 arguments");
         return NULL;
     }
     VecEnv *vec = unpack_vecenv(args);
@@ -1091,10 +1091,15 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     PyObject *vy_arr = PyTuple_GetItem(args, 7);
     PyObject *yaw_rate_arr = PyTuple_GetItem(args, 8);
     PyObject *accel_long_arr = PyTuple_GetItem(args, 9);
+    PyObject *seconds_stopped_arr = PyTuple_GetItem(args, 10); // None keeps c_step's accumulation
     if (!PyArray_Check(idx_arr) || !PyArray_Check(x_arr) || !PyArray_Check(y_arr) || !PyArray_Check(z_arr)
         || !PyArray_Check(heading_arr) || !PyArray_Check(vx_arr) || !PyArray_Check(vy_arr)
         || !PyArray_Check(yaw_rate_arr) || !PyArray_Check(accel_long_arr)) {
         PyErr_SetString(PyExc_TypeError, "All arrays must be NumPy arrays");
+        return NULL;
+    }
+    if (seconds_stopped_arr != Py_None && !PyArray_Check(seconds_stopped_arr)) {
+        PyErr_SetString(PyExc_TypeError, "seconds_stopped must be a NumPy array or None");
         return NULL;
     }
     int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
@@ -1106,16 +1111,37 @@ static PyObject *vec_set_agent_states(PyObject *self, PyObject *args) {
     float *vy = (float *) PyArray_DATA((PyArrayObject *) vy_arr);
     float *yaw_rate = (float *) PyArray_DATA((PyArrayObject *) yaw_rate_arr);
     float *accel_long = (float *) PyArray_DATA((PyArrayObject *) accel_long_arr);
+    float *seconds_stopped
+        = seconds_stopped_arr == Py_None ? NULL : (float *) PyArray_DATA((PyArrayObject *) seconds_stopped_arr);
     int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
-    PyObject *value_arrs[8] = {x_arr, y_arr, z_arr, heading_arr, vx_arr, vy_arr, yaw_rate_arr, accel_long_arr};
-    for (int k = 0; k < 8; k++) {
+    PyObject *value_arrs[9]
+        = {x_arr, y_arr, z_arr, heading_arr, vx_arr, vy_arr, yaw_rate_arr, accel_long_arr, seconds_stopped_arr};
+    for (int k = 0; k < 9; k++) {
+        if (value_arrs[k] == Py_None) {
+            continue;
+        }
         if ((int) PyArray_SIZE((PyArrayObject *) value_arrs[k]) != count) {
             PyErr_SetString(PyExc_ValueError, "vec_set_agent_states: every array must have the same length as idx");
             return NULL;
         }
     }
-    if (c_set_agent_states((Drive *) vec->envs[0], count, idx, x, y, z, heading, vx, vy, yaw_rate, accel_long) != 0) {
-        PyErr_SetString(PyExc_ValueError, "vec_set_agent_states: agent index out of range or non-finite state");
+    if (c_set_agent_states(
+            (Drive *) vec->envs[0],
+            count,
+            idx,
+            x,
+            y,
+            z,
+            heading,
+            vx,
+            vy,
+            yaw_rate,
+            accel_long,
+            seconds_stopped)
+        != 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "vec_set_agent_states: agent index out of range, non-finite state or negative seconds_stopped");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1651,6 +1677,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     // norm (obs[0]) is per-env config: env.obs_norm_speed_mps.
     PyModule_AddObject(m, "ACCEL_LONG_NORM", PyFloat_FromDouble(fabsf(ACCEL_LONG_LIMIT[0])));
     PyModule_AddObject(m, "ACCEL_LONG_MAX", PyFloat_FromDouble(ACCEL_LONG_LIMIT[1]));
+    PyModule_AddObject(m, "AGENT_STOPPED_SPEED_THRESHOLD", PyFloat_FromDouble(AGENT_STOPPED_SPEED_THRESHOLD));
     PyModule_AddObject(m, "CONDITIONING_ACC_MIN", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].min_val));
     PyModule_AddObject(m, "CONDITIONING_ACC_MAX", PyFloat_FromDouble(REWARD_BOUNDS[REWARD_COEF_ACC].max_val));
     PyModule_AddIntConstant(m, "ACTION_TYPE_DISCRETE", ACTION_TYPE_DISCRETE);
