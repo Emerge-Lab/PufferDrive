@@ -51,7 +51,7 @@ Completed (2026-09-03, Commit `80d7b938`): Implemented scenario exporting and ca
 
 ## Stage 2 — Implement differentiable classic dynamics and prove C parity (Completed)
 
-Completed (2026-09-03): Implemented pure Torch `classic_step()` and masked `classic_rollout()` in `pufferlib/ocean/regents/dynamics.py`. The CPU `float32` implementation follows the C `move_dynamics()` operation order, including continuous action scaling, steering-rate and angle limits, signed speed clipping, slip angle, position integration at `old_heading + beta`, heading wrapping, and carried actual steering state. A diagnostic binding runs the authoritative C step in isolation, with stochastic and infraction behavior disabled, and returns all five state components.
+Completed (2026-09-03, Commit `7de36bb5c`): Implemented pure Torch `classic_step()` and masked `classic_rollout()` in `pufferlib/ocean/regents/dynamics.py`. The CPU `float32` implementation follows the C `move_dynamics()` operation order, including continuous action scaling, steering-rate and angle limits, signed speed clipping, slip angle, position integration at `old_heading + beta`, heading wrapping, and carried actual steering state. A diagnostic binding runs the authoritative C step in isolation, with stochastic and infraction behavior disabled, and returns all five state components.
 
 The agreed strict parity horizon for the initial POC is 64 transitions, matching its scenario horizon. Tests compare every state component at every step and measured these maximum absolute errors:
 
@@ -61,26 +61,24 @@ The agreed strict parity horizon for the initial POC is 64 transitions, matching
 
 All results pass the mandatory `1e-4` threshold. An exploratory 256-transition random-action stress test reached `1.6404e-4` from accumulated C-libm versus Torch transcendental rounding; any future horizon longer than 64 transitions must establish an appropriate parity approach and acceptance threshold before use. Stage 3 inverse/forward reconstruction remains required before M1 is complete or loss/optimization work may begin.
 
-## Stage 3 — Estimate expert actions with inverse dynamics
+## Stage 3 — Estimate expert actions with inverse dynamics (Completed)
 
-Implement inverse dynamics for valid consecutive logged vehicle states. The result initializes the adversarial action sequence; it is not treated as exact ground-truth control.
+Completed (2026-09-03): Implemented `estimate_expert_actions()` in `pufferlib/ocean/regents/inverse_dynamics.py`. It estimates normalized acceleration from consecutive signed speeds and analytically seeds steering from wrapped heading change, then performs a deterministic bounded steering search. Acceleration first minimizes reachable speed error; conditional on that result, steering minimizes squared position error plus wheelbase-scaled squared heading error. Every inconsistent transition retains its component errors and combined meter-scaled residual. Steering is carried within each contiguous run, reset to neutral at an unobserved run start, and never inferred across a validity gap.
 
-Work:
+The implementation was compared with the paper and its bundled reference code. ReGentS delegates background action estimation to Waymax's expert actor and `InvertibleBicycleModel`; it does not contain a separate inverse implementation. The shared semantics are consecutive-state local derivatives, wrapped yaw differences, action bounds, validity masking, and Waymax's `0.6 m/s` low-speed noise guard. The equations intentionally differ because Waymax controls unsigned acceleration and curvature with trapezoidal position integration, whereas PufferDrive controls signed acceleration and a rate-limited target wheel angle, updates speed before Euler position integration, and uses wheelbase plus slip angle. Copying Waymax's curvature inverse would therefore fail the Stage 2 reference dynamics.
 
-- Compute signed speed from logged velocity projected onto heading. Use finite differences only as an explicitly tested fallback.
-- Compute heading differences with `atan2(sin(delta), cos(delta))` so yaw wrapping is safe.
-- Estimate acceleration from consecutive signed speeds and recover the steering needed by the PufferDrive bicycle equations. Account for the fact that PufferDrive applies the updated speed before position and heading integration.
-- Carry actual steering through the sequence, apply the same steering-rate and angle limits, and convert the recovered physical commands back to normalized actions.
-- Mark actions invalid across gaps. Do not interpolate, pad, or infer through invalid states in the first implementation.
-- Handle near-zero speed as an underdetermined case: keep a deterministic neutral or previous feasible steering estimate and exclude its heading residual from the inverse validation metric.
-- If the logged transition is inconsistent with the classic model, choose the bounded action minimizing a documented one-step state residual and report that residual. Never hide it with clipping or a loose mask.
+Exact forward/inverse tests cover Torch- and C-generated trajectories, yaw wrapping, acceleration and steering limits, and reverse motion at the Stage 2 `1e-4` tolerance. Gap and low-speed tests prove that invalid actions remain masked and low-speed heading residuals are excluded.
 
-Tests and exit gate:
+The fixed initial real-data audit uses the lexicographically first 16 local NuPlan scenarios, seeds `42..57`, `init_step=0`, `dt=0.1`, and all 67,111 valid vehicle transitions. There are 27,339 normal-speed and 39,772 low-speed transitions. Percentiles below are `P50 / P90 / P95 / P99 / max`:
 
-- Exact recovery tests on trajectories generated by the Torch model and by C, including limit cases and reverse motion.
-- Real-data reconstruction reports position, heading, and speed errors by timestep and percentile, split by low-speed and normal-speed transitions.
-- Required milestone: `forward(state_t, inverse(state_t, state_t+1)) ~= state_t+1` on valid real PufferDrive transitions, with acceptance thresholds recorded from an initial dataset audit.
-- Do not start ReGentS optimization until both this gate and the Stage 2 C/Torch parity gate pass.
+| Split | Position error (m) | Heading error (rad) | Speed error (m/s) |
+| --- | --- | --- | --- |
+| Normal speed | `0.04252 / 0.16211 / 0.23694 / 0.47635 / 2.10607` | `0.001442 / 0.006005 / 0.009119 / 0.020494 / 0.440930` | `0 / 9.54e-7 / 9.54e-7 / 0.09736 / 4.25930` |
+| Low speed | `0.01684 / 0.05301 / 0.07534 / 0.17265 / 3.18633` | excluded; diagnostic only | `0 / 0 / 0 / 1.16e-10 / 8.53201` |
+
+The per-timestep mean ranges are `0.03525..0.05448 m` position, `0.001934..0.006410 rad` normal-speed heading, and `4.69e-8..0.03005 m/s` speed. The recorded acceptance gates are: normal-speed P95 position `<= 0.25 m`, heading `<= 0.012 rad`, speed `<= 1e-5 m/s`; low-speed P95 position `<= 0.08 m` and speed `<= 1e-5 m/s`; maximum per-timestep means `<= 0.06 m`, `<= 0.007 rad`, and `<= 0.04 m/s`, respectively. Maxima are diagnostic rather than acceptance gates because logged transitions can violate acceleration and steering constraints; those outliers remain reported and masked only by true trajectory validity.
+
+Both M1 hard gates now pass. Stage 4 loss/geometry work is unlocked, but no optimization work has started.
 
 ## Stage 4 — Implement differentiable geometry and KING/ReGentS costs
 
