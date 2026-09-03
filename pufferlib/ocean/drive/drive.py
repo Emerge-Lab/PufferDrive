@@ -44,6 +44,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        stop_sign_behavior="ignore",
         use_map_cache=False,
         use_neighbor_cache=True,
         capture_replay=False,
@@ -171,6 +172,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        self.stop_sign_behavior = infraction_behavior_values[stop_sign_behavior]
         self.use_map_cache = use_map_cache
         self.capture_replay = bool(capture_replay)
         self.replay_worker_idx = replay_worker_idx
@@ -424,6 +426,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,

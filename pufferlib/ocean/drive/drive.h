@@ -235,6 +235,7 @@ struct Drive {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int stop_sign_behavior;
     int sdc_controller;
     int non_sdc_controller;
     int non_vehicle_controller;
@@ -3638,6 +3639,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Priority 4: Handle stop sign violation
     if (env->stop_signs_enabled && check_stop_sign_violation(env, agent)) {
         agent->metrics_array[STOP_SIGN_IDX] = 1.0f;
+        apply_infraction_behavior(agent, env->stop_sign_behavior);
         return;
     }
 
