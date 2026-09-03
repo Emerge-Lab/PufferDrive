@@ -272,8 +272,8 @@ plt.show()
 # - **Conditioning** (if enabled): 17 reward coefs (goal_radius, goal_speed, collision, offroad, comfort, lane_align, vel_align, lane_center, center_bias, velocity, reverse, stop_line, timestep, overspeed, throttle, steer, acc) + target waypoints
 # - **Target**: static=rel_x,rel_y,rel_z per waypoint; dynamic=rel_x,rel_y,rel_z,heading_cos,heading_sin per waypoint
 # - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, sim_speed_signed, seconds_stopped
-# - **Lanes** (MAX_LANES x 7): rel_x, rel_y, rel_z, seg_length, seg_width, dir_cos, dir_sin
-# - **Boundaries** (MAX_BOUNDS x 7): same as lanes
+# - **Lanes** (MAX_LANES x 9): rel_x, rel_y, rel_z, seg_length, dir_cos, dir_sin, seg_width, goal_dist_abs, goal_dist_rel
+# - **Boundaries** (MAX_BOUNDS x 6): first 6 lane features
 # - **Traffic controls** (MAX_TRAFFIC x 7): rel_x1, rel_y1, rel_x2, rel_y2, rel_z, type, state
 
 # %%
@@ -598,7 +598,7 @@ ax.annotate("EGO", (0, 0), fontsize=9, ha="center", va="center", color="white", 
 for i in range(lanes.shape[0]):
     if np.allclose(lanes[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = lanes[i][:7]
+    rx, ry, rz, length, dc, ds = lanes[i][:6]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
@@ -620,7 +620,7 @@ ax.scatter(
 for i in range(boundaries.shape[0]):
     if np.allclose(boundaries[i], 0):
         continue
-    rx, ry, rz, length, _, dc, ds = boundaries[i][:7]
+    rx, ry, rz, length, dc, ds = boundaries[i][:6]
     ax.plot(
         [rx - dc * length / 2, rx + dc * length / 2],
         [ry - ds * length / 2, ry + ds * length / 2],
@@ -865,7 +865,7 @@ plt.show()
 
 # %%
 # Road per-feature distributions (lanes + boundaries)
-road_labels = ["rel_x", "rel_y", "rel_z", "seg_length", "seg_width", "dir_cos", "dir_sin"]
+road_labels = ["rel_x", "rel_y", "rel_z", "seg_length", "dir_cos", "dir_sin"]
 lf = env.lane_features
 bf = env.boundary_features
 max_lanes = env.obs_slots_lane_kept
@@ -891,7 +891,7 @@ print(
     f"({100 * len(vis_bounds) / (all_bounds.shape[0] * max_bounds):.1f}%)"
 )
 
-fig, axes = plt.subplots(2, 7, figsize=(28, 8))
+fig, axes = plt.subplots(2, 6, figsize=(24, 8))
 for i, label in enumerate(road_labels):
     # Lanes
     axes[0, i].hist(vis_lanes[:, i], bins=80, edgecolor="black", alpha=0.7, color="silver")

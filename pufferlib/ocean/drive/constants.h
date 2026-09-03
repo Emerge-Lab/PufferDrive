@@ -78,6 +78,7 @@
 // Which agents get initialized at reset
 #define INIT_MODE_CREATE_ALL_VALID 0
 #define INIT_MODE_CREATE_ONLY_CONTROLLED 1
+#define INIT_MODE_CREATE_CONTROLLABLE_TYPES 2
 
 // Which initialized agents the policy controls
 #define CONTROL_MODE_VEHICLES 0
@@ -169,11 +170,23 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 // Agent-agent collision
 #define COLLISION_SKIP_DISP_M 0.1f
 #define COLLISION_PAIR_MARGIN_M 0.5f // Extra slack on the radius+displacement quick-check before OBB SAT
+#define SPAWN_CLEARANCE_M 1.5f       // Min box-to-box gap between agents at spawn
+#define SPAWN_OFFROAD_SCALE_FACTOR 1.1f
+// Replay self-play: logged vehicles failing these are created static instead of policy-controlled
+#define REPLAY_SPAWN_EDGE_CLEARANCE_M 0.5f
+#define REPLAY_SPAWN_LONGITUDINAL_CLEARANCE_M SPAWN_CLEARANCE_M
+#define REPLAY_MAX_CONTROLLED_LENGTH_M 6.0f
+#define REPLAY_SPAWN_MAX_LANE_DISTANCE_M 2.5f
 
-// Stop line geometry
+// Stop line geometry (spawn overlap check and IDM braking)
 #define STOP_LINE_DIST_SQ (10.0f * 10.0f)
 #define STOP_LINE_EXTENSION_FACTOR 1.5f
 #define STOP_LINE_HEADING_THRESHOLD (M_PI / 4.0f)
+
+// Red light violation detection
+#define RED_LIGHT_TRIGGER_DIST_SQ (30.0f * 30.0f)
+#define RED_LIGHT_LATERAL_EXTENSION_M 15.0f // Beyond each stop line endpoint, so the line cannot be driven around
+#define RED_LIGHT_ENTER_HEADING_THRESHOLD (M_PI / 2.0f)
 
 #define BEHIND_COS_THRESHOLD -0.8660254f // cos(150 degrees)
 
@@ -206,6 +219,7 @@ static const int ROAD_OFFSETS[25][2]
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
+#define GOAL_HEADING_MAX_ATTEMPTS 8
 #define GT_GOAL_RADIUS_M 6.0f
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 
@@ -226,7 +240,7 @@ static const int ROAD_OFFSETS[25][2]
 
 #define EGO_FEATURES 10
 #define LANE_FEATURES 9
-#define BOUNDARY_FEATURES 9
+#define BOUNDARY_FEATURES 6
 #define PARTNER_FEATURES 9
 #define TRAFFIC_CONTROL_FEATURES 7
 #define GOAL_FEATURES 3
@@ -302,6 +316,7 @@ static const int ROAD_OFFSETS[25][2]
 
 // Stopped-agent detection
 #define AGENT_STOPPED_SPEED_THRESHOLD 0.2f
+#define STANDSTILL_SPEED_EPSILON_MPS 1e-4f
 #define MAX_STOPPED_SECONDS 60.0f
 
 #define METRIC_SCORE_WINDOW_SECONDS 10.0f
@@ -319,5 +334,6 @@ static const int ROAD_OFFSETS[25][2]
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+#define REWARD_F32_FIELDS 13           // Log fields: episode_return + reward_collision .. reward_ade (cumulative)
 
 #endif

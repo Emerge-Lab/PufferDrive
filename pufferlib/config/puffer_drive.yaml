@@ -49,11 +49,13 @@ env:
   # Dynamics model - options: "classic", "jerk"
   dynamics_model: jerk
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
-  reset_accel_on_stop: false
+  reset_accel_on_stop: true
   # Time delta between steps in seconds
   dt: 0.3
   # Base forward speed cap
   base_max_speed_mps: 20.0
+  # Speed cap when reward_randomization is off (eval); null = base_max_speed_mps. Sets C_vel = max_speed_mps / base_max_speed_mps (training range [0.667, 1.5] -> [13.3, 30] m/s)
+  max_speed_mps: null
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
   # Collision behavior - options: "ignore", "stop", "remove"
@@ -62,6 +64,10 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
+  # Skip red light violation detection (metrics, reward, behavior) - 0 off, 1 on
+  disable_red_light_infractions: 0
+  # Cycle the lights of a junction phase-by-phase (TLPHASE1 bins) - 0 independent lights (legacy), 1 on
+  traffic_light_junction_phases: 0
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
   use_map_cache: 1
   # Precompute neighboring road entities for observation queries - 0 off, 1 on
@@ -95,7 +101,10 @@ env:
   # Controller used by non-vehicle agents. "auto" follows non_sdc_controller unless it is "idm", then it uses "replay".
   # options: "auto", "static", "policy", "replay", "idm"
   non_vehicle_controller: auto
-  # Options: "created_all_valid", "create_only_controlled"
+  # Per-agent override, independent of the controllers above: agents flagged mark_as_expert
+  # in the scenario data are forced to log-replay (1) or follow their controller setting (0)
+  replay_expert_agents: 1
+  # Options: "create_all_valid", "create_only_controlled", "create_controllable_types" (uncontrolled ones static)
   init_mode: create_all_valid
   # Enable computation of evaluation-only metrics
   compute_eval_metrics: false
@@ -117,6 +126,9 @@ env:
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
   max_goal_spacing: 200.0
+  # Map goal source only: max lane-heading change (deg) between successive waypoints, re-sampling spacing
+  # up to GOAL_HEADING_MAX_ATTEMPTS times (GIGAFLOW uses 60). 0 disables.
+  goal_heading_max_deg: 60.0
   # --- Rewards ---
   reward_conditioning: true
   reward_randomization: true
@@ -153,7 +165,8 @@ env:
   obs_boundary_stride: 1
   # --- Observation normalization ---
   obs_norm_speed_mps: 60.0
-  obs_norm_goal_offset_m: 200.0
+  # num_goals * max_goal_spacing; goals beyond this collapse to a unit direction vector
+  obs_norm_goal_offset_m: 600.0
   obs_norm_xy_offset_m: 200.0
   obs_norm_veh_length_m: 10.0
   obs_norm_veh_width_m: 5.0
@@ -162,6 +175,9 @@ env:
   obs_norm_z_m: 10.0
   # --- Eval-only ---
   eval_perceived_size_margin_m: 0.1
+  # Eval-only: while standing exactly still, |longitudinal jerk| below this (m/s^3) is zeroed
+  # so leftover mean-action jerk cannot creep the car. 0 disables.
+  eval_standstill_jerk_deadband_mps3: 0.0
   # --- Observation ranges (meters, ego frame) ---
   obs_range_road_front_m: 200.0
   obs_range_road_behind_m: 60.0
@@ -170,18 +186,20 @@ env:
   obs_range_traffic_control_m: 200.0
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
-  # Per-episode probability that an agent is blind to other agents for the whole episode
-  partner_blindness_prob: 0.02
+  # Upper bound of the per-episode blind-agent rate; each episode draws its rate uniformly from [0, this]
+  partner_blindness_prob: 0.05
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
   partner_blindness_trigger_prob: 0.03
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
-  # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
-  phantom_braking_prob: 0.02
+  # Upper bound of the per-episode phantom-braker rate; each episode draws its rate uniformly from [0, this]
+  phantom_braking_prob: 0.1
   # Per-step probability that a flagged phantom-braker actually initiates a brake window
   phantom_braking_trigger_prob: 0.03
   # Duration in seconds of phantom braking once triggered
   phantom_braking_duration_seconds: 3.0
+  # Zero the steering command while a phantom brake is active (false keeps the policy's steering)
+  phantom_braking_freeze_steering: false
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
@@ -230,6 +248,8 @@ train:
   optimizer: adamw
   anneal_lr: true
   precision: bfloat16
+  # false: pure float32 matmuls/convs (no TensorFloat-32); requires precision float32
+  tf32: true
   rollout_dtype: float32
   total_timesteps: 500000000000
   learning_rate: 0.0005
@@ -240,8 +260,13 @@ train:
   vf_coef: 0.5
   vf_clip_coef: null
   max_grad_norm: 0.5
+  separate_grad_clip: true
   normalize_rewards: false
   ent_coef: 0.01
+  # Linearly anneal ent_coef to ent_coef_final over the last (1 - start_frac) of training
+  ent_coef_anneal: false
+  ent_coef_final: 0.001
+  ent_coef_anneal_start_frac: 0.75
   # enable value bootstrap to simulate infinite time horizon
   use_value_bootstrapping: true
   # ---
@@ -271,19 +296,11 @@ train:
   adv_filter_enabled: true
   adv_filter_ewma_beta: 0.25
   adv_filter_threshold_scale: 0.01
+  # Also keep this random fraction of below-threshold transitions; 0 disables the leak
+  adv_filter_leak_fraction: 0.0
   # Rendering options
   render: false
   render_interval: 1000
-  # If True, show exactly what the agent sees in agent observation
-  obs_only: true
-  # Show grid lines
-  show_grid: false
-  # Draws lines from ego agent observed ORUs and road elements to show detection range
-  show_lasers: false
-  # Display human xy logs in the background
-  show_human_logs: true
-  # Options: List[str to path], str to path (e.g., "resources/drive/training/binaries/map_001.bin"), None
-  render_map: none
 sweep:
   method: Protein
   metric: score
@@ -296,9 +313,44 @@ eval:
   max_sdc_replay_workers: 4
   benchmark_config: pufferlib/config/evaluation/benchmark.yaml
   benchmarks: null
+  # Overrides env.map_dir of every selected benchmark; null keeps the benchmark's own map_dir.
+  map_dir: null
+  # Overrides num_scenarios of every selected benchmark; null keeps the benchmark's own count.
+  num_scenarios: null
+  # Overrides env.reward_comfort of every selected benchmark; null keeps the benchmark's value.
+  reward_comfort: null
+  # Overrides env.reward_lane_center of every selected benchmark; null keeps the benchmark's value.
+  reward_lane_center: null
+  # Overrides env.dt of every selected benchmark, rescaling scenario_length to keep its simulated
+  # duration (e.g. 0.0667 = 15 Hz as in Gigaflow's self-play eval); null keeps the benchmark's value.
+  dt: null
+  # Overrides env.goal_radius of every selected benchmark; null keeps the benchmark's value.
+  goal_radius: null
+  # Overrides env.base_max_speed_mps of every selected benchmark (20.0 = Gigaflow's eval speed cap,
+  # C_vel is fixed to 1 since benchmarks disable reward_randomization); null keeps the benchmark's value.
+  base_max_speed_mps: null
+  # Overrides env.goal_regen_mode ("finite" or "rolling") of every selected benchmark; null keeps the benchmark's value.
+  goal_regen_mode: null
+  # Overrides env.goal_source ("route", "map" or "gt") of every selected benchmark; null keeps the benchmark's value.
+  goal_source: null
+  # Overrides env.goal_speed of every selected benchmark; null keeps the benchmark's value.
+  goal_speed: null
+  # Override env.min_goal_spacing / env.max_goal_spacing (meters) of every selected benchmark; null keeps the benchmark's value.
+  min_goal_spacing: null
+  max_goal_spacing: null
+  # Overrides env.obs_slots_partners_n of every selected benchmark (e.g. 40 = Gigaflow's up-to-40
+  # closest observed agents); slots are max-pooled, so any checkpoint transfers. null keeps the
+  # checkpoint's value.
+  obs_slots_partners_n: null
+  # Overrides env.disable_red_light_infractions of every selected benchmark; null keeps the benchmark's value.
+  disable_red_light_infractions: null
   output_name: null
   # Results folder inside the run dir; also names the wandb key prefix final_<output_dir_name>_.
   output_dir_name: eval
+  # First global scenario index this process evaluates; used to shard one benchmark across GPUs.
+  scenario_offset: 0
+  # Fixed results subdir inside the benchmark output dir; null uses a timestamp.
+  output_subdir: null
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
   # Render scenarios where any configured metric is positive.

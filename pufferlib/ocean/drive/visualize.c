@@ -286,6 +286,7 @@ int eval_gif(
         .goal_radius = conf.goal_radius,
         .dt = conf.dt,
         .spawn_initial_speed = conf.spawn_initial_speed,
+        .base_max_speed_mps = conf.base_max_speed_mps,
         .goal_speed = conf.goal_speed,
         .map_name = (char *) map_name,
         .init_step = init_step,

@@ -76,6 +76,7 @@ static inline Drive drive_test_env_config(
     env.goal_speed = 3.0f;
     env.min_goal_spacing = 20.0f;
     env.max_goal_spacing = 60.0f;
+    env.goal_heading_max_deg = 0.0f;
     env.num_goals = 3;
     env.goal_regen_mode = GOAL_REGEN_FINITE;
     env.goal_source = GOAL_SOURCE_ROUTE;

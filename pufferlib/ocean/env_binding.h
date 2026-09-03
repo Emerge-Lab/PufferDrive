@@ -801,8 +801,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 6 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 7 arguments");
         return NULL;
     }
 
@@ -816,9 +816,10 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
     PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
     PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
+    PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array)) {
+        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(rewards_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -828,12 +829,14 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
     memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
+    memset(PyArray_DATA(rewards_f32_array), 0, PyArray_NBYTES(rewards_f32_array));
 
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
     float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
     float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
+    float *rewards_f32 = (float *) PyArray_DATA(rewards_f32_array);
 
     int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
     int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
@@ -844,6 +847,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
     int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
     int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
+    int reward_fields = (int) PyArray_DIM(rewards_f32_array, 2);
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
@@ -912,6 +916,21 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 puffer_f32[puffer_base + 12] = log->speed_violation_sum;
                 puffer_f32[puffer_base + 13] = log->multiplier;
                 puffer_f32[puffer_base + 14] = log->weighted_average;
+
+                int reward_base = (e * agent_cap + agent_idx) * reward_fields;
+                rewards_f32[reward_base + 0] = log->episode_return;
+                rewards_f32[reward_base + 1] = log->reward_collision;
+                rewards_f32[reward_base + 2] = log->reward_offroad;
+                rewards_f32[reward_base + 3] = log->reward_red_light;
+                rewards_f32[reward_base + 4] = log->reward_goal;
+                rewards_f32[reward_base + 5] = log->reward_lane_align;
+                rewards_f32[reward_base + 6] = log->reward_lane_center;
+                rewards_f32[reward_base + 7] = log->reward_comfort;
+                rewards_f32[reward_base + 8] = log->reward_velocity;
+                rewards_f32[reward_base + 9] = log->reward_timestep;
+                rewards_f32[reward_base + 10] = log->reward_reverse;
+                rewards_f32[reward_base + 11] = log->reward_overspeed;
+                rewards_f32[reward_base + 12] = log->reward_ade;
             }
         }
 
@@ -1396,6 +1415,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
+    PyModule_AddIntConstant(m, "REWARD_F32_FIELDS", REWARD_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);
     PyModule_AddIntConstant(m, "NUM_REWARD_COEFS", NUM_REWARD_COEFS);
     PyModule_AddIntConstant(m, "GOAL_REGEN_FINITE", GOAL_REGEN_FINITE);
@@ -1422,6 +1442,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "CONTROL_MODE_SDC_ONLY", CONTROL_MODE_SDC_ONLY);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ALL_VALID", INIT_MODE_CREATE_ALL_VALID);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ONLY_CONTROLLED", INIT_MODE_CREATE_ONLY_CONTROLLED);
+    PyModule_AddIntConstant(m, "INIT_MODE_CREATE_CONTROLLABLE_TYPES", INIT_MODE_CREATE_CONTROLLABLE_TYPES);
     PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
     PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
 

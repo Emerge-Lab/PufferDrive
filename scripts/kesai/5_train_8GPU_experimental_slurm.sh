@@ -94,7 +94,7 @@ if [ ${TRAIN_STATUS} -ne 0 ]; then
     exit ${TRAIN_STATUS}
 fi
 if [ ! -f ${MODEL_PATH} ]; then
-    echo "Training finished but ${MODEL_PATH} is missing; skipping evaluation."
+    echo "Training did not produce ${MODEL_PATH}; skipping evaluation."
     exit 1
 fi
 

@@ -77,6 +77,8 @@ METRIC_LABELS = [
 ]
 
 PAYLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+OBS_QUANTIZE_FRAME_CHUNK = 64
+REPLAY_COMPRESSION_LEVEL = 1
 SIMULATOR_FIGSIZE = (20.0, 20.0)
 SIMULATOR_DPI = 100
 SIMULATOR_GOAL_RADIUS_METERS = 2.0
@@ -126,6 +128,7 @@ def _obs_scales(
     inverse_xy_scale = None if obs_norm_xy_offset_m == 0 else 1.0 / obs_norm_xy_offset_m
     return {
         "obs_norm_goal_offset_m": obs_norm_goal_offset_m,
+        "meters_to_position": 1.0 if inverse_xy_scale is None else inverse_xy_scale,
         "veh_width_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_width_m * inverse_xy_scale,
         "veh_len_to_position": 1.0 if inverse_xy_scale is None else obs_norm_veh_length_m * inverse_xy_scale,
         "goal_to_position": 1.0 if inverse_xy_scale is None else obs_norm_goal_offset_m * inverse_xy_scale,
@@ -573,11 +576,14 @@ def plot_observation(
     obs_norm_veh_width_m=10.0,
     obs_norm_veh_length_m=15.0,
     obs_norm_road_seg_length_m=5.0,
+    true_length_m=None,
+    true_width_m=None,
 ) -> np.ndarray:
     """Plot observation in ego-centric frame.
 
     Args:
         obs: flattened observation tensor
+        true_length_m/true_width_m: physical ego size, drawn dashed when it differs from the observed size
     """
     fig, ax = plt.subplots(figsize=(20, 20))
 
@@ -620,6 +626,21 @@ def plot_observation(
             zorder=10,
         )
     )
+    if true_length_m is not None and true_width_m is not None:
+        true_length = true_length_m / obs_norm_xy_offset_m
+        true_width = true_width_m / obs_norm_xy_offset_m
+        ax.add_patch(
+            mpatches.Rectangle(
+                (-true_length / 2, -true_width / 2),
+                true_length,
+                true_width,
+                facecolor="none",
+                edgecolor="#FFD700",
+                linewidth=2,
+                linestyle="--",
+                zorder=12,
+            )
+        )
     # SDC label above the vehicle
     ax.text(
         0,
@@ -692,7 +713,7 @@ def plot_observation(
         count_lane += 1
         rel_x, rel_y = lane_obs[i][0], lane_obs[i][1]
         length = lane_obs[i][3] * rl2p
-        dir_cos, dir_sin = lane_obs[i][5], lane_obs[i][6]
+        dir_cos, dir_sin = lane_obs[i][4], lane_obs[i][5]
         # idx 7 = goal_dist_abs (0 near goal lane -> 1 far/unreachable); green->red colormap
         color = plt.cm.RdYlGn_r(float(lane_obs[i][7])) if obs_goal_lane_distance else "lightgrey"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
@@ -711,7 +732,7 @@ def plot_observation(
         count_boundary += 1
         rel_x, rel_y = boundary_obs[i][0], boundary_obs[i][1]
         length = boundary_obs[i][3] * rl2p
-        dir_cos, dir_sin = boundary_obs[i][5], boundary_obs[i][6]
+        dir_cos, dir_sin = boundary_obs[i][4], boundary_obs[i][5]
         color = "black"
         ax.scatter(rel_x, rel_y, color=color, s=10, zorder=1)
         ax.plot(
@@ -783,7 +804,7 @@ def plot_observation(
 
 def _pack_replay_binary(header, chunks):
     packed = {}
-    blob_parts = []
+    arrays = []
     offset = 0
     dtype_names = {
         np.dtype(np.float32): "float32",
@@ -794,21 +815,25 @@ def _pack_replay_binary(header, chunks):
     for name, arr in chunks.items():
         arr = np.ascontiguousarray(arr)
         dtype = dtype_names[arr.dtype]
-        raw = arr.tobytes()
-        packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": len(raw)}
-        blob_parts.append(raw)
-        offset += len(raw)
+        packed[name] = {"dtype": dtype, "shape": list(arr.shape), "offset": offset, "nbytes": arr.nbytes}
+        offset += arr.nbytes
         pad = (-offset) % 4
-        if pad:
-            blob_parts.append(b"\0" * pad)
-            offset += pad
+        arrays.append((arr, pad))
+        offset += pad
 
     header = dict(header)
     header["chunks"] = packed
     header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
     pad = (-(4 + len(header_bytes))) % 4
-    payload = struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad) + b"".join(blob_parts)
-    return zlib.compress(payload, level=3)
+    # Streamed so the uncompressed blob is never materialized alongside its copies
+    compressor = zlib.compressobj(level=REPLAY_COMPRESSION_LEVEL)
+    compressed_parts = [compressor.compress(struct.pack("<I", len(header_bytes)) + header_bytes + (b"\0" * pad))]
+    for arr, pad in arrays:
+        compressed_parts.append(compressor.compress(memoryview(arr).cast("B")))
+        if pad:
+            compressed_parts.append(compressor.compress(b"\0" * pad))
+    compressed_parts.append(compressor.flush())
+    return b"".join(compressed_parts)
 
 
 def encode_interactive_replay(scenario, replay):
@@ -853,15 +878,28 @@ def encode_interactive_replay(scenario, replay):
         env_cfg["obs_slots_boundary_n"], env_cfg.get("obs_dropout_boundary", 0.0)
     )
 
-    observation_scale = 1.0
+    # int16 quantization with a per-dimension scale: raw count/enum dims must not coarsen the [-1, 1] dims
+    observation_scale_per_dim = None
     quantized_observations = None
     if replay.get("obs") is not None:
-        observations_f32 = np.asarray(replay["obs"], dtype=np.float32)
-        if observations_f32.size:
-            observation_scale = float(np.max(np.abs(observations_f32))) / 32767.0
-        if observation_scale == 0.0:
-            observation_scale = 1.0
-        quantized_observations = np.round(observations_f32 / observation_scale).astype(np.int16)
+        observations = np.asarray(replay["obs"])
+        observation_scale_per_dim = np.ones(observations.shape[2], dtype=np.float32)
+        if observations.size:
+            observation_abs_max = np.zeros(observations.shape[2], dtype=np.float32)
+            for frame_start in range(0, observations.shape[0], OBS_QUANTIZE_FRAME_CHUNK):
+                frame_chunk = observations[frame_start : frame_start + OBS_QUANTIZE_FRAME_CHUNK].astype(np.float32)
+                np.maximum(observation_abs_max, np.max(np.abs(frame_chunk), axis=(0, 1)), out=observation_abs_max)
+            observation_scale_per_dim = observation_abs_max / 32767.0
+            observation_scale_per_dim[observation_scale_per_dim == 0.0] = 1.0
+        # (agent, dim, frame) with wrapping int16 frame deltas: keeps an agent's time series inside the deflate window
+        frame_count, agent_count, obs_dim = observations.shape
+        quantized_observations = np.empty((agent_count, obs_dim, frame_count), dtype=np.int16)
+        for agent_idx in range(agent_count):
+            agent_frames = observations[:, agent_idx, :].astype(np.float32)
+            agent_quantized = np.round(agent_frames / observation_scale_per_dim).astype(np.int16).T
+            agent_delta = quantized_observations[agent_idx]
+            agent_delta[:, 0] = agent_quantized[:, 0]
+            np.subtract(agent_quantized[:, 1:], agent_quantized[:, :-1], out=agent_delta[:, 1:])
 
     chunks = {
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
@@ -879,8 +917,11 @@ def encode_interactive_replay(scenario, replay):
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("rewards_f32") is not None:
+        chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
+        chunks["obs_scale"] = observation_scale_per_dim.astype(np.float32)
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -933,7 +974,7 @@ def encode_interactive_replay(scenario, replay):
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
-        "obs_scale": observation_scale,
+        "obs_layout": "agent_dim_frame_delta" if replay.get("obs") is not None else None,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
         "num_goals": int(env_cfg["num_goals"]),
@@ -957,8 +998,6 @@ def encode_interactive_replay(scenario, replay):
 
 
 def _render_interactive_replay_payload(compressed_payload, filename):
-    payload = base64.b64encode(compressed_payload).decode("ascii")
-
     html_template = """
 <!DOCTYPE html>
 <html data-theme="light">
@@ -1082,6 +1121,12 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Position x / y / heading</div>
             <div class="mono dim" style="font-size:11.5px"><span id="tel-x">0</span>, <span id="tel-y">0</span>, <span id="tel-h">0</span></div>
             <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
+            <button type="button" id="reward-header" class="toggle-header" data-target="reward-grid"><span>Reward</span><span>&#9662;</span></button>
+            <div id="reward-grid" class="grid toggle-body"></div>
+            <button type="button" id="ego-obs-header" class="toggle-header" data-target="ego-obs-grid"><span>Ego observation</span><span>&#9662;</span></button>
+            <div id="ego-obs-grid" class="grid toggle-body"></div>
+            <button type="button" id="cond-obs-header" class="toggle-header" data-target="cond-obs-grid"><span>Conditioning</span><span>&#9662;</span></button>
+            <div id="cond-obs-grid" class="grid toggle-body"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1089,7 +1134,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>&#9662;</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
-        <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
+        <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation (dashed = true footprint)</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
         <div id="controls" class="panel">
             <button id="btnPlay" class="btn icon" onclick="toggle()"></button>
             <span class="mono step-counter"><span id="stepNow">0</span><span class="dim"> / </span><span id="stepTotal">0</span></span>
@@ -1104,6 +1149,9 @@ __PAYLOAD_CHUNKS__
         const METRIC_LABELS = __METRIC_LABELS__;
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
+        const EGO_OBS_LABELS = ["speed","width","length","steer","accel lon","accel lat","lane dist","lane angle cos","speed limit","stopped"];
+        const REWARD_LABELS = ["collision","offroad","red light","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
+        const EGO_COND_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","C_throttle","C_steer","C_acc","C_vel"];
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
@@ -1222,7 +1270,9 @@ self.onmessage = async event => {
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
+            if (C.obs && !C.obs_scale) C.obs_scale = new Float32Array(H.obs_dim).fill(H.obs_scale === undefined ? 1 : H.obs_scale); // pre-per-dim replays
+            if (C.obs && H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, o = C.obs; for (let row = 0; row < o.length; row += T) for (let t = row + 1; t < row + T; t++) o[t] += o[t-1]; }
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -1386,26 +1436,34 @@ self.onmessage = async event => {
         function heatColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (HEAT_STOPS.length - 1), i = Math.floor(f), k = f - i, a = HEAT_STOPS[i], b = HEAT_STOPS[Math.min(i + 1, HEAT_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
+        function obsRow(frame, slot) {
+            const D = H.obs_dim, S = C.obs_scale, raw = C.obs, row = new Float32Array(D);
+            if (H.obs_layout === "agent_dim_frame_delta") { const T = H.frames, base = slot * D * T + frame; for (let k = 0; k < D; k++) row[k] = raw[base + k * T] * S[k]; }
+            else { const base = (frame * H.active_count + slot) * D; for (let k = 0; k < D; k++) row[k] = raw[base + k] * S[k]; }
+            return row;
+        }
         function selectedGoals(frame, agent) {
             if (!C.obs || !agent || agent.slot < 0) return [];
-            const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale;
+            const base = 0, obs = obsRow(frame, agent.slot);
+            const v = (o) => obs[o];
             let p = base + H.ego_dim;
             if (H.reward_conditioning) p += H.reward_coef_count;
-            const scale = H.scales.obs_norm_goal_offset_m * Q;
+            const scale = H.scales.obs_norm_goal_offset_m;
             const out = [];
             for (let i=0;i<H.num_goals;i++) {
                 const o = p + i * H.goal_features;
                 let empty = true;
                 for (let j=0;j<H.goal_features;j++) if (obs[o+j] !== 0) empty = false;
                 if (empty) continue;
-                const rx = obs[o] * scale, ry = obs[o+1] * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
+                const rx = v(o) * scale, ry = v(o+1) * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
                 out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch});
             }
             return out;
         }
         function decodeObs(frame, slot) {
             if (!C.obs || slot < 0 || slot >= H.active_count) return null;
-            const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale, LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
+            const base = 0, obs = obsRow(frame, slot), LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
+            const v = (o) => obs[o];
             let p = base; const egoStart = p; p += H.ego_dim;
             if (H.reward_conditioning) p += H.reward_coef_count;
             const targetStart = p; p += H.num_goals * H.goal_features;
@@ -1415,13 +1473,13 @@ self.onmessage = async event => {
             const trafficStart = p;
             const rot = (x,y) => [-y,x];
             const zero = (off,n) => { for(let i=0;i<n;i++) if(obs[off+i] !== 0) return false; return true; };
-            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), cs=rot(obs[o+5]*Q,obs[o+6]*Q); out.push([xy[0],xy[1],obs[o+3]*Q*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
-            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(obs[o]*Q,obs[o+1]*Q), h=Math.atan2(obs[o+6],obs[o+5]); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:obs[o+3]*Q*H.scales.veh_len_to_position,w:obs[o+4]*Q*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
-            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position*Q, xy=rot(obs[o]*scale, obs[o+1]*scale); gps.push(xy); }
-            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(obs[o]*Q,obs[o+1]*Q), b=rot(obs[o+2]*Q,obs[o+3]*Q); controls.push({type:Math.round(obs[o+5]*Q), state:Math.round(obs[o+6]*Q), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
-            return {ego:{w:obs[egoStart+1]*Q*H.scales.veh_width_to_position,l:obs[egoStart+2]*Q*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
+            const roads = (start,count,poolName,feat) => { const out=[]; for(let i=0;i<count;i++){ const o=start+i*feat; if(zero(o,feat)) continue; let xy=rot(v(o),v(o+1)), cs=rot(v(o+4),v(o+5)); out.push([xy[0],xy[1],v(o+3)*H.scales.road_length_to_position,cs[0],cs[1],poolAt(poolName,frame,slot,i)]); } return out; };
+            const partners = []; for(let i=0;i<H.obs_slots_partners_n;i++){ const o=partnersStart+i*H.partner_features; if(zero(o,H.partner_features)) continue; let xy=rot(v(o),v(o+1)), h=Math.atan2(v(o+6),v(o+5)); h = ((h + Math.PI/2 + Math.PI) % (2*Math.PI)) - Math.PI; partners.push({x:xy[0],y:xy[1],l:v(o+3)*H.scales.veh_len_to_position,w:v(o+4)*H.scales.veh_width_to_position,h:h,pool:poolAt("pool_partner",frame,slot,i)}); }
+            const gps = []; for(let i=0;i<H.num_goals;i++){ const o=targetStart+i*H.goal_features; if(zero(o,H.goal_features)) continue; let scale=H.scales.goal_to_position, xy=rot(v(o)*scale, v(o+1)*scale); gps.push(xy); }
+            const controls = []; for(let i=0;i<H.traffic_obs_count;i++){ const o=trafficStart+i*TF; if(zero(o,TF)) continue; let a=rot(v(o),v(o+1)), b=rot(v(o+2),v(o+3)); controls.push({type:Math.round(v(o+5)), state:Math.round(v(o+6)), x1:a[0], y1:a[1], x2:b[0], y2:b[1], pool:poolAt("pool_traffic",frame,slot,i)}); }
+            return {ego:{w:v(egoStart+1)*H.scales.veh_width_to_position,l:v(egoStart+2)*H.scales.veh_len_to_position}, partners, lanes:roads(lanesStart,H.lane_count,"pool_lane",LF), bounds:roads(boundsStart,H.boundary_count,"pool_boundary",BF), gps, traffic_controls:controls};
         }
-        function drawObs(frame) {
+        function drawObs(frame, trueSize) {
             resizeObsCanvas();
             const scale = (Math.min(obsC.width, obsC.height) / 2) * obsZoom, px = dpr / scale;
             const showAll = obsMode !== 1, showPool = obsMode !== 0, bothMode = obsMode === 2;
@@ -1439,7 +1497,7 @@ self.onmessage = async event => {
             for(const g of frame.gps){ obsCtx.fillStyle="magenta"; obsCtx.beginPath(); obsCtx.arc(g[0],g[1],5*px,0,7); obsCtx.fill(); }
             for(const t of frame.traffic_controls){ if(showAll){ obsCtx.strokeStyle = bothMode ? "#000" : (t.type === 1 ? trafficColor({state:t.state}) : (t.type === 2 ? "#cc0000" : "#ffd700")); obsCtx.lineWidth=2.5*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } if(showPool && t.pool > 0){ obsCtx.strokeStyle=poolColor(t.pool/poolMax); obsCtx.lineWidth=pw(t.pool/poolMax)+0.8*px; obsCtx.beginPath(); obsCtx.moveTo(t.x1,t.y1); obsCtx.lineTo(t.x2,t.y2); obsCtx.stroke(); } }
             for(const p of frame.partners){ const win = showPool && p.pool > 0; if(!showAll && !win) continue; obsCtx.save(); obsCtx.translate(p.x,p.y); obsCtx.rotate(p.h); if(showAll){ obsCtx.fillStyle=bothMode?"rgba(0,0,0,.55)":"rgba(136,136,136,.8)"; obsCtx.strokeStyle=bothMode?"#000":"#333"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-p.l/2,-p.w/2,p.l,p.w); obsCtx.fill(); obsCtx.stroke(); } if(win){ obsCtx.strokeStyle=poolColor(p.pool/poolMax); obsCtx.lineWidth=pw(p.pool/poolMax); obsCtx.strokeRect(-p.l/2,-p.w/2,p.l,p.w); } obsCtx.restore(); }
-            if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); obsCtx.restore(); }
+            if(frame.ego){ obsCtx.save(); obsCtx.rotate(Math.PI/2); obsCtx.fillStyle="rgba(0,102,255,.8)"; obsCtx.strokeStyle="#000"; obsCtx.lineWidth=1.5*px; obsCtx.beginPath(); obsCtx.rect(-frame.ego.l/2,-frame.ego.w/2,frame.ego.l,frame.ego.w); obsCtx.fill(); obsCtx.stroke(); if(trueSize){ obsCtx.strokeStyle="#ffd700"; obsCtx.setLineDash([3*px,2*px]); obsCtx.strokeRect(-trueSize.l/2,-trueSize.w/2,trueSize.l,trueSize.w); obsCtx.setLineDash([]); } obsCtx.restore(); }
             obsCtx.restore();
             if(showPool && poolMax > 1) drawPoolLegend(poolMax);
         }
@@ -1456,6 +1514,21 @@ self.onmessage = async event => {
             mg.innerHTML = METRIC_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
             const pg = document.getElementById('puffer-grid');
             pg.innerHTML = PUFFER_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
+            const rg = document.getElementById('reward-grid');
+            const rewardLabels = ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)));
+            rg.innerHTML = C.rewards_f32 ? rewardLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('reward-header').style.display = C.rewards_f32 ? '' : 'none';
+            const eg = document.getElementById('ego-obs-grid');
+            const egoLabels = EGO_OBS_LABELS.slice(0, H.ego_dim);
+            while (egoLabels.length < H.ego_dim) egoLabels.push(`ego[${egoLabels.length}]`);
+            eg.innerHTML = C.obs ? egoLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('ego-obs-header').style.display = C.obs ? '' : 'none';
+            const cg = document.getElementById('cond-obs-grid');
+            const showCond = C.obs && H.reward_conditioning;
+            const condLabels = EGO_COND_LABELS.slice(0, H.reward_coef_count);
+            while (condLabels.length < H.reward_coef_count) condLabels.push(`coef[${condLabels.length}]`);
+            cg.innerHTML = showCond ? condLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('cond-obs-header').style.display = showCond ? '' : 'none';
             const pol = document.getElementById('policy-grid');
             let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
@@ -1478,6 +1551,9 @@ self.onmessage = async event => {
                 polV: pol.querySelector('[data-pol=v]'), polE: pol.querySelector('[data-pol=e]'),
                 heat: [...pol.querySelectorAll('.heat-cell')],
                 acts: [...pol.querySelectorAll('.pol-act')], means: [...pol.querySelectorAll('.pol-mean')], stds: [...pol.querySelectorAll('.pol-std')],
+                egoObs: [...eg.querySelectorAll('.num')],
+                rewardCells: [...rg.querySelectorAll('.num')],
+                condObs: [...cg.querySelectorAll('.num')],
                 polLp: pol.querySelector('[data-pol=lp]'),
                 discrete, actionDims,
             };
@@ -1523,11 +1599,25 @@ self.onmessage = async event => {
             for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
             for (let i=0;i<refs.metric.length;i++) refs.metric[i].textContent = C.metrics_f32[mb+i].toFixed(2);
             for (let i=0;i<refs.puffer.length;i++) refs.puffer[i].textContent = C.puffer_f32[pb+i].toFixed(3);
+            if (refs.rewardCells.length) {
+                // rewards_f32 rows are cumulative Log sums; step value = difference to the previous frame.
+                const rb = (f * H.agent_cap + agent.idx) * F.rf, rbPrev = ((f-1) * H.agent_cap + agent.idx) * F.rf;
+                const cum = i => C.rewards_f32[rb + i], stepDelta = i => f > 0 ? cum(i) - C.rewards_f32[rbPrev + i] : cum(i);
+                const fmtReward = v => v === 0 ? "0" : (Math.abs(v) >= 1e-4 ? v.toFixed(5) : v.toExponential(1));
+                refs.rewardCells[0].textContent = cum(0).toFixed(3);
+                refs.rewardCells[1].textContent = fmtReward(stepDelta(0));
+                for (let i=2;i<refs.rewardCells.length;i++) refs.rewardCells[i].textContent = fmtReward(stepDelta(i-1));
+            }
+            if (refs.egoObs.length && agent.slot >= 0) {
+                const egoRow = obsRow(f, agent.slot);
+                for (let i=0;i<refs.egoObs.length;i++) refs.egoObs[i].textContent = egoRow[i].toFixed(3);
+                for (let i=0;i<refs.condObs.length;i++) refs.condObs[i].textContent = egoRow[H.ego_dim+i].toFixed(3);
+            }
             updatePolicy(f, agent);
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
-            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs); } else obsBox.style.display='none';
+            const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs, {l:agent.l*H.scales.meters_to_position, w:agent.w*H.scales.meters_to_position}); } else obsBox.style.display='none';
         }
         function draw(force=false) {
             if(!H) return;
@@ -1565,18 +1655,21 @@ self.onmessage = async event => {
 </body>
 </html>
     """
-    payload_chunks = "\n".join(
-        f'    <script type="application/octet-stream" class="payload-chunk">'
-        f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
-        for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
-    )
-    final_html = (
-        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
-        .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
-        .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
-    )
+    html_template = html_template.replace(
+        "__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":"))
+    ).replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+    html_head, html_tail = html_template.split("__PAYLOAD_CHUNKS__")
+    # Streamed per chunk: a whole-page string would be several copies of a multi-hundred-MB payload
+    raw_chunk_size = PAYLOAD_CHUNK_SIZE // 4 * 3
     with open(filename, "w") as f:
-        f.write(final_html)
+        f.write(html_head)
+        for chunk_start in range(0, len(compressed_payload), raw_chunk_size):
+            if chunk_start:
+                f.write("\n")
+            f.write('    <script type="application/octet-stream" class="payload-chunk">')
+            f.write(base64.b64encode(compressed_payload[chunk_start : chunk_start + raw_chunk_size]).decode("ascii"))
+            f.write("</script>")
+        f.write(html_tail)
 
 
 def save_interactive_replay_zlib(scenario, replay, filename):

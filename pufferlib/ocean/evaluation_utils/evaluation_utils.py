@@ -9,6 +9,7 @@ import yaml
 import pufferlib
 import pufferlib.pytorch
 import pufferlib.utils
+from pufferlib.config_schema import GoalSource
 
 
 MAX_C_SEED = 2**31 - 1
@@ -62,6 +63,18 @@ def _positive_int(value, label):
     return value
 
 
+def _positive_float(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise pufferlib.APIUsageError(f"{label} must be a positive number")
+    return float(value)
+
+
+def _non_negative_float(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise pufferlib.APIUsageError(f"{label} must be a non-negative number")
+    return float(value)
+
+
 def _resolve_map_indices(map_dir, map_names):
     """Map each logged map name back to its index in the sorted .bin map set."""
     if os.path.isfile(map_dir) and str(map_dir).endswith(".bin"):
@@ -96,12 +109,18 @@ def validate_training_evaluation_config(args):
     if not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip():
         raise pufferlib.APIUsageError("train.evaluation_benchmarks must select at least one benchmark")
 
-    load_benchmark_config(eval_config["benchmark_config"], evaluation_benchmarks)
+    load_benchmark_config(
+        eval_config["benchmark_config"], evaluation_benchmarks, eval_config["map_dir"], eval_config["num_scenarios"]
+    )
     return True
 
 
-def load_benchmark_config(config_path, selected_names):
+def load_benchmark_config(config_path, selected_names, map_dir_override=None, num_scenarios_override=None):
     """Load the shared environment and selected benchmarks."""
+    if map_dir_override is not None and (not isinstance(map_dir_override, str) or not map_dir_override):
+        raise pufferlib.APIUsageError("eval.map_dir must be a non-empty path")
+    if num_scenarios_override is not None:
+        _positive_int(num_scenarios_override, "eval.num_scenarios")
     config = _load_yaml_mapping(config_path, "benchmark config")
     environment_config = _require_mapping(config.get("env"), "benchmark config env")
     unknown_env_keys = set(environment_config) - _drive_env_keys()
@@ -139,7 +158,11 @@ def load_benchmark_config(config_path, selected_names):
     resolved_benchmarks = []
     for name in selected_names:
         benchmark = configured_benchmarks[name]
+        if num_scenarios_override is not None:
+            benchmark = {**benchmark, "num_scenarios": num_scenarios_override}
         benchmark_environment_config = _require_mapping(benchmark.get("env"), f"Benchmark {name} env")
+        if map_dir_override is not None:
+            benchmark_environment_config = {**benchmark_environment_config, "map_dir": map_dir_override}
         unknown_env_keys = set(benchmark_environment_config) - _drive_env_keys()
         if unknown_env_keys:
             raise pufferlib.APIUsageError(
@@ -295,17 +318,64 @@ def build_benchmark_args(base_args, benchmark, environment_config):
     else:
         args["env"].update(copy.deepcopy(environment_config))
         args["env"].update(copy.deepcopy(benchmark_environment_config))
+        for reward_key in ("reward_comfort", "reward_lane_center"):
+            reward_override = args["eval"].get(reward_key)
+            if reward_override is not None:
+                args["env"][reward_key] = _non_negative_float(reward_override, f"eval.{reward_key}")
+        goal_radius_override = args["eval"].get("goal_radius")
+        if goal_radius_override is not None:
+            args["env"]["goal_radius"] = _positive_float(goal_radius_override, "eval.goal_radius")
+        base_max_speed_override = args["eval"].get("base_max_speed_mps")
+        if base_max_speed_override is not None:
+            args["env"]["base_max_speed_mps"] = _positive_float(base_max_speed_override, "eval.base_max_speed_mps")
+        goal_speed_override = args["eval"].get("goal_speed")
+        if goal_speed_override is not None:
+            args["env"]["goal_speed"] = _non_negative_float(goal_speed_override, "eval.goal_speed")
+        for spacing_key in ("min_goal_spacing", "max_goal_spacing"):
+            spacing_override = args["eval"].get(spacing_key)
+            if spacing_override is not None:
+                args["env"][spacing_key] = _positive_float(spacing_override, f"eval.{spacing_key}")
+        if args["env"]["min_goal_spacing"] > args["env"]["max_goal_spacing"]:
+            raise pufferlib.APIUsageError("env.min_goal_spacing must be <= env.max_goal_spacing")
+        goal_regen_mode_override = args["eval"].get("goal_regen_mode")
+        if goal_regen_mode_override is not None:
+            if goal_regen_mode_override not in ("finite", "rolling"):
+                raise pufferlib.APIUsageError('eval.goal_regen_mode must be "finite" or "rolling"')
+            args["env"]["goal_regen_mode"] = goal_regen_mode_override
+        goal_source_override = args["eval"].get("goal_source")
+        if goal_source_override is not None:
+            if goal_source_override not in GoalSource.__members__:
+                raise pufferlib.APIUsageError(f"eval.goal_source must be one of {list(GoalSource.__members__)}")
+            args["env"]["goal_source"] = goal_source_override
+        partner_slots_override = args["eval"].get("obs_slots_partners_n")
+        if partner_slots_override is not None:
+            args["env"]["obs_slots_partners_n"] = _positive_int(partner_slots_override, "eval.obs_slots_partners_n")
+        red_light_override = args["eval"].get("disable_red_light_infractions")
+        if red_light_override is not None:
+            if red_light_override not in (0, 1):
+                raise pufferlib.APIUsageError("eval.disable_red_light_infractions must be 0 or 1")
+            args["env"]["disable_red_light_infractions"] = red_light_override
+        scenario_length = _positive_int(benchmark_environment_config["scenario_length"], "scenario_length")
+        dt_override = args["eval"].get("dt")
+        if dt_override is not None:
+            dt_override = _positive_float(dt_override, "eval.dt")
+            benchmark_dt = _positive_float(args["env"]["dt"], "env.dt")
+            scenario_length = max(1, int(round(scenario_length * benchmark_dt / dt_override)))
+            args["env"]["dt"] = dt_override
+            args["env"]["scenario_length"] = scenario_length
     args["env"]["num_agents"] = eval_agent_count
     args["env"]["resample_frequency"] = args["env"]["scenario_length"]
     args["num_scenarios"] = benchmark["num_scenarios"]
     return args
 
 
-def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_length, capture_replay=False):
+def _plan_benchmark_eval_workers(
+    args, num_scenarios, num_workers, scenario_length, capture_replay=False, scenario_offset=0
+):
     """One disjoint contiguous map window per worker; together they cover the set once."""
     scenarios_per_worker, remainder = divmod(num_scenarios, num_workers)
     worker_env_kwargs = []
-    next_map_idx = 0
+    next_map_idx = scenario_offset
     for worker_idx in range(num_workers):
         worker_num_scenarios = scenarios_per_worker + (1 if worker_idx < remainder else 0)
         env_kwargs = copy.deepcopy(args["env"])

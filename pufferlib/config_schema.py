@@ -17,6 +17,7 @@ and PascalCase for C class names and values: every C #define is
 """
 
 from dataclasses import dataclass
+from typing import Optional
 from enum import Enum
 
 from omegaconf import MISSING
@@ -70,6 +71,7 @@ class NonVehicleController(Enum):
 class InitMode(Enum):
     create_all_valid = 0
     create_only_controlled = 1
+    create_controllable_types = 2
 
 
 class GoalRegen(Enum):
@@ -94,10 +96,13 @@ class DriveEnvConfig:
     reset_accel_on_stop: bool = MISSING
     dt: float = MISSING
     base_max_speed_mps: float = MISSING
+    max_speed_mps: Optional[float] = None
     spawn_initial_speed: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    disable_red_light_infractions: int = MISSING
+    traffic_light_junction_phases: int = MISSING
     use_map_cache: int = MISSING
     use_neighbor_cache: int = MISSING
     scenario_length: int = MISSING
@@ -112,6 +117,7 @@ class DriveEnvConfig:
     sdc_controller: Controller = MISSING
     non_sdc_controller: Controller = MISSING
     non_vehicle_controller: NonVehicleController = MISSING
+    replay_expert_agents: int = MISSING
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
     eval_training_render: bool = MISSING
@@ -123,6 +129,7 @@ class DriveEnvConfig:
     num_goals: int = MISSING
     min_goal_spacing: float = MISSING
     max_goal_spacing: float = MISSING
+    goal_heading_max_deg: float = MISSING
     reward_conditioning: bool = MISSING
     reward_randomization: bool = MISSING
     reward_log_sampling: bool = MISSING
@@ -159,6 +166,7 @@ class DriveEnvConfig:
     obs_norm_road_seg_width_m: float = MISSING
     obs_norm_z_m: float = MISSING
     eval_perceived_size_margin_m: float = MISSING
+    eval_standstill_jerk_deadband_mps3: float = MISSING
     obs_range_road_front_m: float = MISSING
     obs_range_road_behind_m: float = MISSING
     obs_range_road_side_m: float = MISSING
@@ -170,6 +178,7 @@ class DriveEnvConfig:
     phantom_braking_prob: float = MISSING
     phantom_braking_trigger_prob: float = MISSING
     phantom_braking_duration_seconds: float = MISSING
+    phantom_braking_freeze_steering: bool = MISSING
 
 
 # env_name -> structured schema for the `env` section. Envs without an entry

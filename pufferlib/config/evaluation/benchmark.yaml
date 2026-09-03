@@ -4,7 +4,7 @@ env:
   collision_behavior: stop
   offroad_behavior: stop
   traffic_light_behavior: stop
-  dt: 0.1
+  dt: 0.0667
   reward_randomization: false
   reward_collision: 3.0
   reward_offroad: 3.0
@@ -18,9 +18,9 @@ env:
   reward_lane_center: 0.0038
   reward_timestep: 0.000025
   reward_reverse: 0.005
-  goal_speed: 20.0
+  goal_speed: 3.0
   goal_source: "route"
-  goal_radius: 2.0
+  goal_radius: 10.0
   goal_regen_mode: "finite"
   min_goal_spacing: 30.0
   max_goal_spacing: 30.0
@@ -91,8 +91,11 @@ benchmarks:
       max_scenarios_per_batch: null
       scenario_length: 200
       control_mode: control_vehicles
+      init_mode: create_controllable_types
+      replay_expert_agents: 0
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
+      disable_red_light_infractions: 1
 
   - name: nuplan_single
     seed: 42
@@ -105,3 +108,4 @@ benchmarks:
       control_mode: control_sdc_only
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
+      disable_red_light_infractions: 1

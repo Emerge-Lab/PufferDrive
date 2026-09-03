@@ -113,6 +113,80 @@ static int test_map_goals_carry_lane_and_track_slot_zero(void) {
     return 0;
 }
 
+static float lane_heading_at_point(const Drive *env, int lane_idx, float x, float y) {
+    const RoadMapElement *lane = &env->road_elements[lane_idx];
+    int best_vertex_idx = 0;
+    float best_dist_sq = 1e30f;
+    for (int vertex_idx = 0; vertex_idx < lane->segment_size; vertex_idx++) {
+        float dx = lane->x[vertex_idx] - x;
+        float dy = lane->y[vertex_idx] - y;
+        float dist_sq = dx * dx + dy * dy;
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_vertex_idx = vertex_idx;
+        }
+    }
+    return lane->headings[best_vertex_idx];
+}
+
+static int count_goal_heading_violations(Drive *env, float max_heading_deg, int regen_count, int *out_pair_count) {
+    env->goal_heading_max_deg = max_heading_deg;
+    float max_heading_rad = 60.0f * (float) M_PI / 180.0f;
+    int violation_count = 0;
+    *out_pair_count = 0;
+    Agent *agent = &env->agents[env->active_agent_indices[0]];
+    for (int regen_idx = 0; regen_idx < regen_count; regen_idx++) {
+        if (!generate_new_goals_from_map(env, agent)) {
+            continue;
+        }
+        for (int slot = 1; slot < agent->goal_count; slot++) {
+            float prev_heading = lane_heading_at_point(
+                env,
+                agent->list_goal_lane[slot - 1],
+                agent->list_goal_x[slot - 1],
+                agent->list_goal_y[slot - 1]);
+            float heading = lane_heading_at_point(
+                env,
+                agent->list_goal_lane[slot],
+                agent->list_goal_x[slot],
+                agent->list_goal_y[slot]);
+            (*out_pair_count)++;
+            if (fabsf(normalize_heading(heading - prev_heading)) > max_heading_rad) {
+                violation_count++;
+            }
+        }
+    }
+    return violation_count;
+}
+
+static int test_map_goal_heading_constraint_reduces_turns(void) {
+    // goal_heading_max_deg re-samples spacings whose landing heading turns more than the limit; with the
+    // constraint on, successive goals should turn >60 deg far less often than with it off (0 = disabled).
+    srand(11);
+    Drive env = drive_test_env_config(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 32, 0);
+    env.goal_source = GOAL_SOURCE_MAP;
+    env.num_goals = 4;
+    env.min_goal_spacing = 20.0f;
+    env.max_goal_spacing = 200.0f;
+    allocate(&env);
+    c_reset(&env);
+
+    int free_pair_count = 0, constrained_pair_count = 0;
+    int free_violations = count_goal_heading_violations(&env, 0.0f, 2000, &free_pair_count);
+    int constrained_violations = count_goal_heading_violations(&env, 60.0f, 2000, &constrained_pair_count);
+    printf(
+        "  heading>60deg pairs: unconstrained %d/%d, constrained %d/%d\n",
+        free_violations,
+        free_pair_count,
+        constrained_violations,
+        constrained_pair_count);
+    EXPECT_TRUE(free_pair_count > 500 && constrained_pair_count > 500);
+    // Constrained violation rate must be under 60% of the unconstrained rate (Town01 T-junctions leave a residue).
+    EXPECT_TRUE(constrained_violations * free_pair_count * 10 < free_violations * constrained_pair_count * 6);
+    free_allocated(&env);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Route goal source (walks the agent's own route).
 // ---------------------------------------------------------------------------
@@ -250,6 +324,7 @@ int main(void) {
     RUN_TEST(test_commit_goals_back_align_pads_front_with_lane_minus_one);
     RUN_TEST(test_map_goal_source_no_attrition);
     RUN_TEST(test_map_goals_carry_lane_and_track_slot_zero);
+    RUN_TEST(test_map_goal_heading_constraint_reduces_turns);
     RUN_TEST(test_route_goals_full_set_or_removed);
     RUN_TEST(test_route_goals_front_aligned_with_lanes);
     RUN_TEST(test_roll_goals_slides_window_and_appends);

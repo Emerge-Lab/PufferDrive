@@ -159,7 +159,7 @@ class EvalReplayCapture:
         self.pending_replays = []
 
 
-def _render_eval_replays(episode_summaries, out_dir):
+def _render_eval_replays(episode_summaries, out_dir, max_renderer_count=None):
     """Render captured eval replays as navigable HTML pages plus an index."""
     render_dir = os.path.join(out_dir, "rendered_replays")
     os.makedirs(render_dir, exist_ok=True)
@@ -185,6 +185,8 @@ def _render_eval_replays(episode_summaries, out_dir):
 
     if replay_paths:
         html_renderer_count = min(os.cpu_count() or 1, len(replay_paths))
+        if max_renderer_count is not None:
+            html_renderer_count = min(html_renderer_count, max_renderer_count)
         with ThreadPoolExecutor(max_workers=html_renderer_count) as html_renderer:
             rendered_replays = html_renderer.map(
                 pufferlib.viz.render_interactive_replay_zlib,
