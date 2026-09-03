@@ -275,3 +275,51 @@ def test_real_replay_reconstruction_metrics_are_finite_and_split_by_speed():
     assert torch.stack(timestep_mean_position).max() <= TIMESTEP_MEAN_POSITION_LIMIT_METERS
     assert torch.stack(timestep_mean_heading).max() <= TIMESTEP_MEAN_HEADING_LIMIT_RADIANS
     assert torch.stack(timestep_mean_speed).max() <= TIMESTEP_MEAN_SPEED_LIMIT_MPS
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_inverse_dynamics_cpu_gpu_consistency():
+    initial_state = torch.tensor([[[2.0, -3.0, 3.13, 7.0, 0.0]]], dtype=torch.float32)
+    steering_targets = torch.tensor([0.02, 0.04, 0.06, 0.08, 0.06, 0.04], dtype=torch.float32)
+    actions = torch.stack(
+        (
+            torch.tensor([0.1, -0.2, 0.3, -0.1, 0.0, 0.2]),
+            steering_targets / float(binding.STEERING_LIMIT_RADIANS),
+        ),
+        dim=-1,
+    ).reshape(1, 1, -1, 2)
+    states = classic_rollout(
+        initial_state,
+        actions,
+        torch.ones(actions.shape[:-1], dtype=torch.bool),
+        torch.tensor([[2.7]], dtype=torch.float32),
+        torch.tensor([[20.0]], dtype=torch.float32),
+        0.1,
+    )
+    scenario_cpu = _scenario_batch(states, steering_observed=False)
+    scenario_gpu = scenario_cpu.to("cuda")
+
+    result_cpu = estimate_expert_actions(scenario_cpu)
+    result_gpu = estimate_expert_actions(scenario_gpu)
+
+    torch.testing.assert_close(result_gpu.actions.cpu(), result_cpu.actions, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(
+        result_gpu.predicted_next_state.cpu(), result_cpu.predicted_next_state, atol=1e-5, rtol=1e-5
+    )
+    torch.testing.assert_close(
+        result_gpu.state_with_estimated_steering.cpu(), result_cpu.state_with_estimated_steering, atol=1e-5, rtol=1e-5
+    )
+    torch.testing.assert_close(
+        result_gpu.position_error_meters.cpu(), result_cpu.position_error_meters, atol=1e-5, rtol=1e-5
+    )
+    torch.testing.assert_close(
+        result_gpu.heading_error_radians.cpu(), result_cpu.heading_error_radians, atol=1e-5, rtol=1e-5
+    )
+    torch.testing.assert_close(result_gpu.speed_error_mps.cpu(), result_cpu.speed_error_mps, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(result_gpu.residual_meters.cpu(), result_cpu.residual_meters, atol=1e-5, rtol=1e-5)
+
+    assert (result_gpu.action_valid.cpu() == result_cpu.action_valid).all()
+    assert (result_gpu.state_feature_valid.cpu() == result_cpu.state_feature_valid).all()
+    assert (result_gpu.low_speed_mask.cpu() == result_cpu.low_speed_mask).all()
+    assert (result_gpu.heading_residual_valid.cpu() == result_cpu.heading_residual_valid).all()
+    assert (result_gpu.model_consistent.cpu() == result_cpu.model_consistent).all()

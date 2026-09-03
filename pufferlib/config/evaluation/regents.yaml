@@ -32,7 +32,7 @@ generations:
   - name: regents_nuplan
     seed: 42
     scenario_count: 4
-    horizon_transition_count: 200
+    horizon_transition_count: 50
     maximum_outer_iterations: 3
     raster_resolution_meters: 5.0
     output_dir: experiments/regents
@@ -41,7 +41,7 @@ generations:
       learning_rate: 0.001
       iteration_count: 100
     env:
-      num_maps: 16
+      num_maps: 4
       scenario_length: 201
       resample_frequency: 201
 

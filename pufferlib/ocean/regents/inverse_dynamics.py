@@ -97,8 +97,6 @@ def _validate_scenario(scenario, low_speed_threshold_mps):
         raise ValueError("low_speed_threshold_mps must be finite and non-negative")
     if not math.isfinite(scenario.dt_seconds) or scenario.dt_seconds <= 0:
         raise ValueError("scenario dt_seconds must be finite and positive")
-    if scenario.logged_state.device.type != "cpu":
-        raise ValueError("Stage 3 inverse dynamics currently requires CPU tensors")
     if scenario.max_time_count < 2:
         raise ValueError("inverse dynamics requires at least two logged timesteps")
     if not torch.isfinite(scenario.log_dt_seconds).all():
@@ -321,18 +319,20 @@ def estimate_expert_actions(scenario, low_speed_threshold_mps=DEFAULT_LOW_SPEED_
     flat_wheelbase = scenario.wheelbase_meters.reshape(track_count)
     flat_maximum_speed = scenario.maximum_speed_mps.reshape(track_count)
 
-    actions = torch.zeros((track_count, transition_count, 2), dtype=torch.float32)
+    actions = torch.zeros((track_count, transition_count, 2), dtype=torch.float32, device=logged_state.device)
     estimated_state = flat_logged_state.clone()
     estimated_feature_valid = flat_feature_valid.clone()
-    predicted_next_state = torch.zeros((track_count, transition_count, STATE_FEATURE_COUNT), dtype=torch.float32)
-    position_error = torch.zeros((track_count, transition_count), dtype=torch.float32)
+    predicted_next_state = torch.zeros(
+        (track_count, transition_count, STATE_FEATURE_COUNT), dtype=torch.float32, device=logged_state.device
+    )
+    position_error = torch.zeros((track_count, transition_count), dtype=torch.float32, device=logged_state.device)
     heading_error = torch.zeros_like(position_error)
     speed_error = torch.zeros_like(position_error)
     residual = torch.zeros_like(position_error)
     low_speed_mask = torch.zeros_like(flat_action_valid)
     heading_residual_valid = torch.zeros_like(flat_action_valid)
     model_consistent = torch.zeros_like(flat_action_valid)
-    carried_steering = torch.zeros(track_count, dtype=torch.float32)
+    carried_steering = torch.zeros(track_count, dtype=torch.float32, device=logged_state.device)
 
     for timestep in range(transition_count):
         active_track_idx = torch.where(flat_action_valid[:, timestep])[0]

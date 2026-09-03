@@ -343,3 +343,33 @@ def test_fixed_real_scenario_optimization_is_finite_deterministic_and_reduces_co
     assert torch.isfinite(first.optimized_states).all()
     assert torch.equal(first.optimized_actions, repeated.optimized_actions)
     assert first.final_costs == repeated.final_costs
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_optimizer_cpu_gpu_consistency():
+    time_count = 13
+    scenario_cpu = _scenario(
+        torch.stack(
+            (
+                _straight_track(0.0, 0.0, 5.0, time_count),
+                _straight_track(12.0, 0.0, 3.0, time_count),
+            )
+        )
+    )
+    config = _optimization_config()
+    result_cpu = optimize_frozen_ego_scenario(scenario_cpu, config=config, deterministic_seed=17)
+
+    scenario_gpu = scenario_cpu.to("cuda")
+    result_gpu = optimize_frozen_ego_scenario(scenario_gpu, config=config, deterministic_seed=17)
+
+    torch.testing.assert_close(result_gpu.optimized_actions.cpu(), result_cpu.optimized_actions, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(result_gpu.optimized_states.cpu(), result_cpu.optimized_states, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(result_gpu.state_valid.cpu(), result_cpu.state_valid)
+    assert (result_gpu.optimized_action_mask.cpu() == result_cpu.optimized_action_mask).all()
+
+    if result_cpu.initial_costs is not None:
+        assert math.isclose(result_gpu.initial_costs.total, result_cpu.initial_costs.total, abs_tol=1e-4)
+    if result_cpu.final_costs is not None:
+        assert math.isclose(result_gpu.final_costs.total, result_cpu.final_costs.total, abs_tol=1e-4)
+
+    assert result_gpu.success == result_cpu.success
