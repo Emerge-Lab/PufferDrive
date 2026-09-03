@@ -30,8 +30,8 @@ env:
   partner_blindness_trigger_prob: 0.0
   phantom_braking_prob: 0.0
   phantom_braking_trigger_prob: 0.0
-  use_neighbor_cache: 1
-  termination_mode: 0
+  use_neighbor_cache: true
+  termination_mode: false
 
 benchmarks:
   - name: carla
@@ -92,7 +92,7 @@ benchmarks:
       scenario_length: 200
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/nuplan
-      use_neighbor_cache: 0
+      use_neighbor_cache: false
 
   - name: nuplan_single
     seed: 42
@@ -104,4 +104,4 @@ benchmarks:
       max_scenarios_per_batch: 16
       control_mode: control_sdc_only
       map_dir: pufferlib/resources/drive/binaries/nuplan
-      use_neighbor_cache: 0
+      use_neighbor_cache: false

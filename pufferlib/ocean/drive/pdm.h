@@ -34,6 +34,7 @@
 #define PDM_MAX_LOOKAHEAD 120.0f
 #define PDM_DEFAULT_DESIRED_SPEED 15.0f
 #define PDM_MAX_AGENT_CANDIDATES 256
+#define PDM_MINIMUM_LEAD_DISTANCE_METERS 0.1f
 #define PDM_NUM_ROUTE_EXIT_CANDIDATES 8
 #define PDM_ROUTE_PROJECTION_SEGMENT_RADIUS 8
 #define PDM_AGENT_QUERY_MARGIN 5.0f
@@ -173,7 +174,7 @@ static int pdm_collect_route_candidates(Drive *env, int ego_idx, float lookahead
         float dx = other->sim_x - ego->sim_x;
         float dy = other->sim_y - ego->sim_y;
         float max_dist = lookahead + 0.5f * ego->sim_length + 0.5f * other->sim_length + PDM_AGENT_QUERY_MARGIN
-            + 2.0f * IDM_BBOX_MARGIN;
+            + 2.0f * IDM_BBOX_MARGIN_METERS;
         if (dx * dx + dy * dy > max_dist * max_dist) {
             continue;
         }
@@ -195,9 +196,9 @@ static float pdm_compute_idm_acceleration(Drive *env, Agent *agent, float desire
         float s_star = PDM_MIN_SPACING
             + fmaxf(0.0f,
                     current_speed * PDM_SAFE_TIME_HEADWAY
-                        + current_speed * (current_speed - leader.leader_speed)
+                        + current_speed * (current_speed - leader.leader_speed_mps)
                             / (2.0f * sqrtf(PDM_MAX_ACCEL * PDM_MAX_DECEL)));
-        float lead_dist = fmaxf(leader.gap, IDM_MINIMUM_LEAD_DISTANCE);
+        float lead_dist = fmaxf(leader.gap_meters, PDM_MINIMUM_LEAD_DISTANCE_METERS);
         leader_term = (s_star / lead_dist) * (s_star / lead_dist);
     }
 
@@ -399,7 +400,7 @@ static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent) 
     best.lane_idx = -1;
     best.segment_idx = 0;
     best.t = 0.0f;
-    best.dist_sq = INFINITY;
+    best.distance_squared_meters = INFINITY;
 
     if (agent->route == NULL || agent->route_length <= 0) {
         return best;
@@ -474,13 +475,13 @@ static IDMLaneProjection pdm_project_from_route_state(Drive *env, Agent *agent) 
             float err_z = agent->sim_z - pz;
             float dist_sq = err_x * err_x + err_y * err_y + err_z * err_z;
 
-            if (dist_sq < best.dist_sq) {
+            if (dist_sq < best.distance_squared_meters) {
                 best.valid = 1;
                 best.route_idx = route_idx;
                 best.lane_idx = lane_idx;
                 best.segment_idx = seg_idx;
                 best.t = t;
-                best.dist_sq = dist_sq;
+                best.distance_squared_meters = dist_sq;
             }
         }
     }
@@ -771,7 +772,7 @@ static int pdm_sample_hits_agent(const Agent *sample, Agent *other) {
     float dx = other->sim_x - sample->sim_x;
     float dy = other->sim_y - sample->sim_y;
     float local_radius = 0.5f * sample->sim_length + 0.5f * other->sim_length + sample->sim_width + other->sim_width
-        + 1.0f + 2.0f * IDM_BBOX_MARGIN;
+        + 1.0f + 2.0f * IDM_BBOX_MARGIN_METERS;
     if (dx * dx + dy * dy > local_radius * local_radius) {
         return 0;
     }
@@ -780,8 +781,8 @@ static int pdm_sample_hits_agent(const Agent *sample, Agent *other) {
     Agent sample_expanded = *sample;
     sample_expanded.sim_length = sample->sim_length + 2.0f * PDM_COLLISION_BBOX_MARGIN;
     sample_expanded.sim_width = sample->sim_width + 2.0f * PDM_COLLISION_BBOX_MARGIN;
-    other_expanded.sim_length = other->sim_length + 2.0f * (IDM_BBOX_MARGIN + PDM_COLLISION_BBOX_MARGIN);
-    other_expanded.sim_width = other->sim_width + 2.0f * (IDM_BBOX_MARGIN + PDM_COLLISION_BBOX_MARGIN);
+    other_expanded.sim_length = other->sim_length + 2.0f * (IDM_BBOX_MARGIN_METERS + PDM_COLLISION_BBOX_MARGIN);
+    other_expanded.sim_width = other->sim_width + 2.0f * (IDM_BBOX_MARGIN_METERS + PDM_COLLISION_BBOX_MARGIN);
     return check_obb_collision(&sample_expanded, &other_expanded);
 }
 
@@ -802,8 +803,8 @@ static IDMLeader pdm_find_leader_by_offset_route_boxes(
     int candidates[PDM_MAX_AGENT_CANDIDATES];
     int num_candidates = pdm_collect_route_candidates(env, agent_idx, lookahead, candidates, PDM_MAX_AGENT_CANDIDATES);
 
-    for (float sample_s = IDM_ROUTE_SAMPLE_DS; sample_s <= lookahead + PDM_DISTANCE_EPSILON;
-         sample_s += IDM_ROUTE_SAMPLE_DS) {
+    for (float sample_s = IDM_ROUTE_SAMPLE_DISTANCE_METERS; sample_s <= lookahead + PDM_DISTANCE_EPSILON;
+         sample_s += IDM_ROUTE_SAMPLE_DISTANCE_METERS) {
         PDMRolloutStep sample_step = {0};
         if (!pdm_sample_offset_route_pose(env, route, projection, sample_s, offset, &sample_step)) {
             break;

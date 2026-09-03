@@ -3878,12 +3878,13 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
 
 static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     if (env->reward_conditioning) {
+        const RewardBound *reward_bounds = env->reward_log_sampling ? REWARD_BOUNDS_LOG : REWARD_BOUNDS;
         for (int coef_idx = 0; coef_idx < NUM_REWARD_COEFS; coef_idx++) {
-            float lo = REWARD_BOUNDS[coef_idx].min_val;
-            float hi = REWARD_BOUNDS[coef_idx].max_val;
+            float lo = reward_bounds[coef_idx].min_val;
+            float hi = reward_bounds[coef_idx].max_val;
             float coef = ego->reward_coefs[coef_idx];
             float normalized_coef;
-            if (REWARD_BOUNDS[coef_idx].log_scale) {
+            if (reward_bounds[coef_idx].log_scale) {
                 // Match the log-uniform sampling so the conditioning signal stays even across [-1, 1].
                 float clamped = fmaxf(lo, fminf(hi, coef));
                 normalized_coef = (logf(clamped) - logf(lo)) / (logf(hi) - logf(lo));
