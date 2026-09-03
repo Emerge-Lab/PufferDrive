@@ -54,6 +54,34 @@ static int test_set_agent_sizes_rejects_out_of_range_index_and_bad_size(void) {
 }
 
 // ---------------------------------------------------------------------------
+// c_set_agent_speed_caps
+// ---------------------------------------------------------------------------
+
+static int test_set_agent_speed_caps_sets_cap_and_rejects_bad_input(void) {
+    Drive env = {0};
+    Agent agent = drive_test_agent(0.0f, 0.0f, 0.0f);
+    env.agents = &agent;
+    env.num_total_agents = 1;
+
+    int idx[1] = {0};
+    float cap[1] = {6.7f};
+    EXPECT_EQ_INT(c_set_agent_speed_caps(&env, 1, idx, cap), 0);
+    EXPECT_NEAR(agent.external_speed_cap_mps, 6.7f, 1e-6f);
+
+    int bad_idx[1] = {1};
+    EXPECT_EQ_INT(c_set_agent_speed_caps(&env, 1, bad_idx, cap), -1);
+    float negative_cap[1] = {-1.0f};
+    EXPECT_EQ_INT(c_set_agent_speed_caps(&env, 1, idx, negative_cap), -1);
+    float nan_cap[1] = {NAN};
+    EXPECT_EQ_INT(c_set_agent_speed_caps(&env, 1, idx, nan_cap), -1);
+    EXPECT_NEAR(agent.external_speed_cap_mps, 6.7f, 1e-6f);
+    float off[1] = {0.0f};
+    EXPECT_EQ_INT(c_set_agent_speed_caps(&env, 1, idx, off), 0);
+    EXPECT_NEAR(agent.external_speed_cap_mps, 0.0f, 1e-6f);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // c_set_traffic_light_states
 // ---------------------------------------------------------------------------
 
@@ -261,6 +289,7 @@ int main(void) {
     int failures = 0;
     RUN_TEST(test_set_agent_sizes_updates_dimensions_radius_and_wheelbase);
     RUN_TEST(test_set_agent_sizes_rejects_out_of_range_index_and_bad_size);
+    RUN_TEST(test_set_agent_speed_caps_sets_cap_and_rejects_bad_input);
     RUN_TEST(test_set_traffic_light_states_writes_current_timestep_for_lights_only);
     RUN_TEST(test_set_traffic_light_states_rejects_out_of_range_timestep_and_state);
     RUN_TEST(test_set_agent_states_teleport_resets_prev_pose);

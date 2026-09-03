@@ -526,6 +526,7 @@ static void reset_agent_state(Agent *agent) {
     agent->jerk_long = 0.0f;
     agent->jerk_lat = 0.0f;
     agent->steering_angle = 0.0f;
+    agent->external_speed_cap_mps = 0.0f;
     agent->distance_since_spawn = 0.0f;
     agent->seconds_stopped = 0.0f;
     agent->lane_curvature = 0.0f;
@@ -3815,6 +3816,20 @@ int c_set_agent_sizes(Drive *env, int count, const int *idx, const float *length
     return 0;
 }
 
+int c_set_agent_speed_caps(Drive *env, int count, const int *idx, const float *cap_mps) {
+    for (int k = 0; k < count; k++) {
+        int agent_idx = idx[k];
+        if (agent_idx < 0 || agent_idx >= env->num_total_agents) {
+            return -1;
+        }
+        if (!(cap_mps[k] >= 0.0f)) {
+            return -1;
+        }
+        env->agents[agent_idx].external_speed_cap_mps = cap_mps[k];
+    }
+    return 0;
+}
+
 int c_set_traffic_light_states(Drive *env, const int *states) {
     int ts = env->timestep;
     for (int i = 0; i < env->num_traffic_elements; i++) {
@@ -4729,6 +4744,19 @@ static void compute_observations(Drive *env) {
     }
 }
 
+// Longitudinal accel allowed under the external speed cap: below the cap a jerk-limited approach
+// (a = sqrt(2 j h) reaches 0 exactly at the cap), above it a bounded brake; the cut from the current
+// accel is itself limited to the approach jerk.
+static float speed_cap_accel(const Agent *agent, float a_long_new, float signed_speed, float dt) {
+    float headroom = agent->external_speed_cap_mps - signed_speed;
+    float a_allowed = headroom > 0.0f ? sqrtf(2.0f * SPEED_CAP_APPROACH_JERK_MPS3 * headroom)
+                                      : fmaxf(-SPEED_CAP_BRAKE_MPS2, headroom / dt);
+    if (a_long_new <= a_allowed) {
+        return a_long_new;
+    }
+    return fminf(a_long_new, fmaxf(a_allowed, agent->accel_long - SPEED_CAP_APPROACH_JERK_MPS3 * dt));
+}
+
 static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
     copy_pose_to_prev(agent);
@@ -4904,6 +4932,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         // Calculate new velocity using trapezoidal integration
         float v_dot_heading = agent->sim_vx * heading_x + agent->sim_vy * heading_y;
         float signed_v = copysignf(sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy), v_dot_heading);
+        if (agent->external_speed_cap_mps > 0.0f) {
+            a_long_new = speed_cap_accel(agent, a_long_new, signed_v, env->dt);
+        }
         float v_new = signed_v + 0.5f * (a_long_new + agent->accel_long) * env->dt;
 
         // Zero-crossing: snap to 0 when crossing zero

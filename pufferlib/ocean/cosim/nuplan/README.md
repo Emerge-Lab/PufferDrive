@@ -26,7 +26,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   roadblocks instead (off-polygon centroids moved onto a lane baseline, thinned
   to `goal_spacing`), i.e. the route information CaRL rendered, without a lane
   choice. Both come from the challenge's route roadblock ids only; the planner
-  never reads the logged ego. The shadow env consumes the goals of its
+  never reads the logged ego. Eval hack `lane_speed_cap_below_mps` (env
+  `LANE_SPEED_CAP_BELOW_MPS`): inside lanes whose nuPlan limit is below the
+  threshold the shadow ego's speed is capped at limit + margin through a
+  jerk-limited accel envelope in the C dynamics; the policy is not told. Off by
+  default, script 9 sets 8.33 m/s (30 km/h). The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the

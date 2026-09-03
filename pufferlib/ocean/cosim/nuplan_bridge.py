@@ -281,6 +281,26 @@ def extend_route_past_loop_cut(corrected_ids, raw_ids):
     return corrected + raw[raw.index(corrected[-1]) + 1 :]
 
 
+def lane_speed_cap_mps(map_api, x: float, y: float, cap_below_mps: float, margin_mps: float) -> float:
+    """Speed cap for a pose in a slow zone -> limit + margin [m/s], 0.0 (no cap) elsewhere. The limit is
+    nuPlan's own, resolved like its speed_limit_compliance metric: the lane under the pose, else the max
+    over the lanes adjoining the lane connectors under it; unknown limits mean no cap."""
+    from nuplan.common.actor_state.state_representation import Point2D
+    from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+
+    point = Point2D(x, y)
+    lane = map_api.get_one_map_object(point, SemanticMapLayer.LANE)
+    if lane is not None:
+        limits = [lane.speed_limit_mps]
+    else:
+        connectors = map_api.get_all_map_objects(point, SemanticMapLayer.LANE_CONNECTOR)
+        limits = [edge.speed_limit_mps for c in connectors for edge in c.outgoing_edges + c.incoming_edges]
+    if not limits or not all(limits):
+        return 0.0
+    limit = max(limits)
+    return float(limit + margin_mps) if limit < cap_below_mps else 0.0
+
+
 def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:
     """Human-driven ego per scenario iteration -> (N, 5) float32 [x, y, heading, length, width], bin frame."""
     iteration_count = scenario.get_number_of_iterations()

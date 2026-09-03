@@ -1179,6 +1179,35 @@ static PyObject *vec_set_agent_sizes(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *vec_set_agent_speed_caps(PyObject *self, PyObject *args) {
+    if (PyTuple_Size(args) != 3) {
+        PyErr_SetString(PyExc_TypeError, "vec_set_agent_speed_caps requires 3 arguments");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (!vec) {
+        return NULL;
+    }
+    PyObject *idx_arr = PyTuple_GetItem(args, 1);
+    PyObject *cap_arr = PyTuple_GetItem(args, 2);
+    if (!PyArray_Check(idx_arr) || !PyArray_Check(cap_arr)) {
+        PyErr_SetString(PyExc_TypeError, "All arrays must be NumPy arrays");
+        return NULL;
+    }
+    int *idx = (int *) PyArray_DATA((PyArrayObject *) idx_arr);
+    float *cap_mps = (float *) PyArray_DATA((PyArrayObject *) cap_arr);
+    int count = (int) PyArray_SIZE((PyArrayObject *) idx_arr);
+    if ((int) PyArray_SIZE((PyArrayObject *) cap_arr) != count) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_speed_caps: cap_mps must have the same length as idx");
+        return NULL;
+    }
+    if (c_set_agent_speed_caps((Drive *) vec->envs[0], count, idx, cap_mps) != 0) {
+        PyErr_SetString(PyExc_ValueError, "vec_set_agent_speed_caps: agent index out of range or negative/NaN cap");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *vec_recompute_observations(PyObject *self, PyObject *args) {
     VecEnv *vec = unpack_vecenv(args);
     if (!vec) {
@@ -1564,6 +1593,10 @@ static PyMethodDef methods[]
         vec_set_agent_sizes,
         METH_VARARGS,
         "Overwrite agent bounding-box sizes from an external source (co-sim)"},
+       {"vec_set_agent_speed_caps",
+        vec_set_agent_speed_caps,
+        METH_VARARGS,
+        "Set per-agent external forward speed caps in m/s (0 = off) from an external source (co-sim)"},
        {"vec_recompute_observations",
         vec_recompute_observations,
         METH_VARARGS,

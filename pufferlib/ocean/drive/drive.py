@@ -926,6 +926,15 @@ class Drive(pufferlib.PufferEnv):
             np.ascontiguousarray(width, dtype=np.float32),
         )
 
+    def set_agent_speed_caps(self, idx, cap_mps):
+        """cap the forward speed of agents at global indices `idx` (m/s, 0 = no cap); the jerk dynamics
+        ramp the accel down before the cap instead of clipping the speed."""
+        binding.vec_set_agent_speed_caps(
+            self.c_envs,
+            np.ascontiguousarray(idx, dtype=np.int32),
+            np.ascontiguousarray(cap_mps, dtype=np.float32),
+        )
+
     def recompute_observations(self):
         """recompute observations from current state without stepping
         dynamics or advancing the timestep (call after set_agent_states)."""

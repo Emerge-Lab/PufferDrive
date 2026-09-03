@@ -42,10 +42,14 @@ export GOAL_SOURCE=roadblock
 export SLIDING_GOAL_WINDOW=true
 export STARTUP_ACCEL_JERK_CAP=2
 export STARTUP_BRAKE_JERK_CAP=2
+# Speed cap in slow zones: below 30 km/h (8.33 m/s) the ego may not exceed the nuPlan lane limit (+ margin); 0 = off.
+export LANE_SPEED_CAP_BELOW_MPS=8.33
+export LANE_SPEED_CAP_MARGIN_MPS=0
 ABLATION_TAG=""
 [ "$SLIDING_GOAL_WINDOW" = "true" ] && ABLATION_TAG="${ABLATION_TAG}_slide"
 [ "$STARTUP_ACCEL_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jacc${STARTUP_ACCEL_JERK_CAP}"
 [ "$STARTUP_BRAKE_JERK_CAP" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_jbrk${STARTUP_BRAKE_JERK_CAP}"
+[ "$LANE_SPEED_CAP_BELOW_MPS" != "0" ] && ABLATION_TAG="${ABLATION_TAG}_cap${LANE_SPEED_CAP_BELOW_MPS}mps"
 # results live in the model's own eval folder, next to the PufferDrive benchmark evals
 export GROUP=$RUN_DIR/eval/nuplan_val14_${GOAL_SOURCE}${ABLATION_TAG}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}
 

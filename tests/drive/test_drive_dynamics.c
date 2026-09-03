@@ -36,6 +36,60 @@ static int test_jerk_action_clipping(void) {
     return 0;
 }
 
+static int test_jerk_external_speed_cap_ramps_accel_down_before_the_cap(void) {
+    // Full-throttle agent 0.3 m/s below its cap: the accel is cut, but by at most the approach jerk per
+    // step, and the trapezoidal speed update stays at the cap (+ one step of residual accel).
+    srand(23);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.action_type = 1;
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    float cap = 6.7f;
+    agent->external_speed_cap_mps = cap;
+    agent->reward_coefs[REWARD_COEF_ACC] = 1.0f;
+    agent->reward_coefs[REWARD_COEF_THROTTLE] = 1.0f;
+    agent->sim_vx = (cap - 0.3f) * agent->cos_heading;
+    agent->sim_vy = (cap - 0.3f) * agent->sin_heading;
+    agent->accel_long = ACCEL_LONG_LIMIT[1];
+    ((float (*)[2]) env.actions)[0][0] = 1.0f; // max accelerating jerk
+    ((float (*)[2]) env.actions)[0][1] = 0.0f;
+    float allowed = sqrtf(2.0f * SPEED_CAP_APPROACH_JERK_MPS3 * 0.3f);
+    move_dynamics(&env, 0, env.active_agent_indices[0]);
+    EXPECT_TRUE(agent->accel_long < ACCEL_LONG_LIMIT[1]);
+    EXPECT_TRUE(agent->accel_long >= allowed - 1e-4f);
+    EXPECT_TRUE(agent->accel_long >= ACCEL_LONG_LIMIT[1] - SPEED_CAP_APPROACH_JERK_MPS3 * env.dt - 1e-4f);
+    float speed = sqrtf(agent->sim_vx * agent->sim_vx + agent->sim_vy * agent->sim_vy);
+    EXPECT_TRUE(speed <= cap + ACCEL_LONG_LIMIT[1] * env.dt);
+    free_allocated(&env);
+    return 0;
+}
+
+static int test_jerk_external_speed_cap_brakes_above_the_cap_and_is_off_at_zero(void) {
+    srand(23);
+    Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
+    env.action_type = 1;
+    env.dynamics_model = DYNAMICS_MODEL_JERK;
+    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    agent->sim_vx = 10.0f * agent->cos_heading;
+    agent->sim_vy = 10.0f * agent->sin_heading;
+    agent->accel_long = 0.0f;
+    ((float (*)[2]) env.actions)[0][0] = 0.0f;
+    ((float (*)[2]) env.actions)[0][1] = 0.0f;
+    agent->external_speed_cap_mps = 6.7f;
+    move_dynamics(&env, 0, env.active_agent_indices[0]);
+    EXPECT_TRUE(agent->accel_long < 0.0f);
+    EXPECT_TRUE(agent->accel_long >= -SPEED_CAP_APPROACH_JERK_MPS3 * env.dt - 1e-4f);
+
+    agent->sim_vx = 10.0f * agent->cos_heading;
+    agent->sim_vy = 10.0f * agent->sin_heading;
+    agent->accel_long = 0.0f;
+    agent->external_speed_cap_mps = 0.0f;
+    move_dynamics(&env, 0, env.active_agent_indices[0]);
+    EXPECT_NEAR(agent->accel_long, 0.0f, 1e-6f);
+    free_allocated(&env);
+    return 0;
+}
+
 static int test_dynamics_stopped_agent_clears_motion(void) {
     Drive env = {0};
     Agent agent = drive_test_agent(5.0f, 3.0f, 0.5f);
@@ -102,6 +156,8 @@ int main(void) {
     int failures = 0;
     RUN_TEST(test_classic_action_clipping);
     RUN_TEST(test_jerk_action_clipping);
+    RUN_TEST(test_jerk_external_speed_cap_ramps_accel_down_before_the_cap);
+    RUN_TEST(test_jerk_external_speed_cap_brakes_above_the_cap_and_is_off_at_zero);
     RUN_TEST(test_dynamics_stopped_agent_clears_motion);
     RUN_TEST(test_dynamics_removed_agent_invalidated);
     RUN_TEST(test_neutral_actions_zero_out);

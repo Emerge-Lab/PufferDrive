@@ -136,6 +136,7 @@ struct Agent {
     float jerk_lat;
     float steering_angle;
     float wheelbase;
+    float external_speed_cap_mps; // co-sim eval: >0 caps forward speed with a jerk-limited approach, 0 = off
 
     // Reward conditioning coefficients (per-agent, randomized at spawn)
     float reward_coefs[NUM_REWARD_COEFS];

@@ -93,6 +93,8 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_jerk_cap_seconds: float = 1.5,
         startup_accel_jerk_cap_mps3: float = 0.0,
         startup_brake_jerk_cap_mps3: float = 0.0,
+        lane_speed_cap_below_mps: float = 0.0,
+        lane_speed_cap_margin_mps: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -122,6 +124,11 @@ class PufferDrivePlanner(AbstractPlanner):
             during the start window [m/s³]; 0 = uncapped. nuPlan's Savitzky-Golay jerk extrapolates at
             the trajectory edges, so a ramp that starts at t=0 reads ~2x its raw jerk.
         :param startup_brake_jerk_cap_mps3: same cap for braking jerk; 0 = uncapped.
+        :param lane_speed_cap_below_mps: eval hack: in lanes whose nuPlan speed limit is below this
+            [m/s], cap the shadow ego's speed at limit + lane_speed_cap_margin_mps (the policy is not
+            told; the jerk dynamics ramp the accel down before the cap). 0 = off.
+        :param lane_speed_cap_margin_mps: added to the lane limit when the cap is active [m/s]; nuPlan's
+            metric scores every m/s above the limit, so 0 is the faithful value.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -148,6 +155,10 @@ class PufferDrivePlanner(AbstractPlanner):
         self._startup_brake_jerk_cap_mps3 = float(startup_brake_jerk_cap_mps3)
         if min(self._startup_jerk_cap_seconds, self._startup_accel_jerk_cap_mps3, self._startup_brake_jerk_cap_mps3) < 0:
             raise ValueError("startup_jerk_cap_seconds and the startup jerk caps must be >= 0")
+        self._lane_speed_cap_below_mps = float(lane_speed_cap_below_mps)
+        self._lane_speed_cap_margin_mps = float(lane_speed_cap_margin_mps)
+        if min(self._lane_speed_cap_below_mps, self._lane_speed_cap_margin_mps) < 0:
+            raise ValueError("lane_speed_cap_below_mps and lane_speed_cap_margin_mps must be >= 0")
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
         self._startup_action_bounds = None  # (lo, hi) on the continuous jerk action while the cap is live
         self._env_overrides = env_overrides or {}
@@ -497,6 +508,16 @@ class PufferDrivePlanner(AbstractPlanner):
                 traffic_light_data, self._connector_map, self._num_traffic, self._route_connector_ids
             )
             env.set_traffic_light_states(self._last_light_states)
+
+        if self._lane_speed_cap_below_mps > 0:
+            cap_mps = nb.lane_speed_cap_mps(
+                self._initialization.map_api,
+                ego_state.center.x,
+                ego_state.center.y,
+                self._lane_speed_cap_below_mps,
+                self._lane_speed_cap_margin_mps,
+            )
+            env.set_agent_speed_caps(np.array([0], np.int32), np.array([cap_mps], np.float32))
 
         self._goal_window.sync(ex, ey, h)
 

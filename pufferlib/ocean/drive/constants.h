@@ -137,6 +137,8 @@
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
+#define SPEED_CAP_APPROACH_JERK_MPS3 4.0f // external speed cap: accel ramps down at the policy's own max jerk
+#define SPEED_CAP_BRAKE_MPS2 2.0f         // external speed cap: max decel once above the cap
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
 #define NUM_JERK_LONG_ACTIONS 4

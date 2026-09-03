@@ -37,6 +37,8 @@
 #   SLIDING_GOAL_WINDOW=true|false  refill the goal window after every consumed goal (default false).
 #   STARTUP_ACCEL_JERK_CAP / STARTUP_BRAKE_JERK_CAP  [m/s^3] ego jerk caps for the first
 #             STARTUP_JERK_CAP_SECONDS (default 1.5) of every scenario; unset/0 = off.
+#   LANE_SPEED_CAP_BELOW_MPS / LANE_SPEED_CAP_MARGIN_MPS  [m/s] cap the ego's speed at
+#             (nuPlan lane limit + margin) inside lanes whose limit is below the threshold; unset/0 = off.
 #   COSIM_OBS_HTML=all|failures|infractions|0   interactive observation replay (exact policy
 #             input/outputs per step, pufferlib.viz HTML) -> $GROUP/obs_html. all: every
 #             scenario. failures (default): only scenarios scoring below
@@ -81,6 +83,8 @@ EXTRA_ARGS+=("planner.pufferdrive_planner.city_bin_dir=$CITY_BIN_DIR")
 [ -n "${STARTUP_JERK_CAP_SECONDS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_jerk_cap_seconds=$STARTUP_JERK_CAP_SECONDS")
 [ -n "${STARTUP_ACCEL_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_accel_jerk_cap_mps3=$STARTUP_ACCEL_JERK_CAP")
 [ -n "${STARTUP_BRAKE_JERK_CAP:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.startup_brake_jerk_cap_mps3=$STARTUP_BRAKE_JERK_CAP")
+[ -n "${LANE_SPEED_CAP_BELOW_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.lane_speed_cap_below_mps=$LANE_SPEED_CAP_BELOW_MPS")
+[ -n "${LANE_SPEED_CAP_MARGIN_MPS:-}" ] && EXTRA_ARGS+=("planner.pufferdrive_planner.lane_speed_cap_margin_mps=$LANE_SPEED_CAP_MARGIN_MPS")
 [ -n "${WORKER:-}" ] && EXTRA_ARGS+=("worker=$WORKER")
 [ -n "${THREADS_PER_NODE:-}" ] && EXTRA_ARGS+=("worker.threads_per_node=$THREADS_PER_NODE")
 [ -n "${LIMIT_TOTAL_SCENARIOS:-}" ] && EXTRA_ARGS+=("scenario_filter.limit_total_scenarios=$LIMIT_TOTAL_SCENARIOS")
