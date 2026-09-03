@@ -1363,6 +1363,18 @@ static int add_float_table_constant(PyObject *module_obj, const char *name, cons
     return 0;
 }
 
+static int add_float_constant(PyObject *module_obj, const char *name, float value) {
+    PyObject *python_value = PyFloat_FromDouble((double) value);
+    if (python_value == NULL) {
+        return -1;
+    }
+    if (PyModule_AddObject(module_obj, name, python_value) < 0) {
+        Py_DECREF(python_value);
+        return -1;
+    }
+    return 0;
+}
+
 PyMODINIT_FUNC PyInit_binding(void) {
     import_array();
     PyObject *m = PyModule_Create(&module); // Changed variable name from 'module' to 'm'
@@ -1422,16 +1434,23 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "AGENT_TYPE_CYCLIST", CYCLIST);
     PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_FREEWAY", LANE_FREEWAY);
     PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_SURFACE_STREET", LANE_SURFACE_STREET);
-    PyObject_SetAttrString(m, "LANE_WIDTH_METERS", PyFloat_FromDouble(LANE_WIDTH));
-    PyObject_SetAttrString(m, "WHEELBASE_LENGTH_RATIO", PyFloat_FromDouble(WHEELBASE_LENGTH_RATIO));
     PyModule_AddIntConstant(m, "CONTROL_MODE_VEHICLES", CONTROL_MODE_VEHICLES);
     PyModule_AddIntConstant(m, "CONTROL_MODE_AGENTS", CONTROL_MODE_AGENTS);
     PyModule_AddIntConstant(m, "CONTROL_MODE_WOSAC", CONTROL_MODE_WOSAC);
     PyModule_AddIntConstant(m, "CONTROL_MODE_SDC_ONLY", CONTROL_MODE_SDC_ONLY);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ALL_VALID", INIT_MODE_CREATE_ALL_VALID);
     PyModule_AddIntConstant(m, "INIT_MODE_CREATE_ONLY_CONTROLLED", INIT_MODE_CREATE_ONLY_CONTROLLED);
-    PyObject_SetAttrString(m, "MULTI_LANE_FULL_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_FULL_SCORE_TIME));
-    PyObject_SetAttrString(m, "MULTI_LANE_HALF_SCORE_TIME", PyFloat_FromDouble(MULTI_LANE_HALF_SCORE_TIME));
+    if (add_float_constant(m, "LANE_WIDTH_METERS", LANE_WIDTH) < 0
+        || add_float_constant(m, "WHEELBASE_LENGTH_RATIO", WHEELBASE_LENGTH_RATIO) < 0
+        || add_float_constant(m, "MAX_BACKWARD_SPEED_MPS", MAX_BACKWARD_SPEED) < 0
+        || add_float_constant(m, "STEERING_LIMIT_RADIANS", STEERING_LIMIT) < 0
+        || add_float_constant(m, "STEERING_RATE_LIMIT_RADIANS_PER_SECOND", STEERING_RATE_LIMIT_RADIANS_PER_SECOND) < 0
+        || add_float_constant(m, "REAR_AXLE_RATIO", REAR_AXLE_RATIO) < 0
+        || add_float_constant(m, "MULTI_LANE_FULL_SCORE_TIME", MULTI_LANE_FULL_SCORE_TIME) < 0
+        || add_float_constant(m, "MULTI_LANE_HALF_SCORE_TIME", MULTI_LANE_HALF_SCORE_TIME) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
 
     // Action discretization tables: the policy decodes discrete actions with the
     // exact values the sim uses, so the two can never drift apart.

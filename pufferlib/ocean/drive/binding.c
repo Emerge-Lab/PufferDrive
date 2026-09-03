@@ -8,6 +8,17 @@
 #define MY_GET
 #define MY_RESEED
 
+static PyObject *classic_step_diagnostic_py(PyObject *self, PyObject *args);
+
+enum {
+    DIAGNOSTIC_STATE_X = 0,
+    DIAGNOSTIC_STATE_Y = 1,
+    DIAGNOSTIC_STATE_HEADING = 2,
+    DIAGNOSTIC_STATE_SPEED = 3,
+    DIAGNOSTIC_STATE_STEERING = 4,
+    DIAGNOSTIC_STATE_FEATURE_COUNT = 5,
+};
+
 // Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
 static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
     return PyLong_FromLong((long) g_map_cache_count);
@@ -29,10 +40,136 @@ static PyObject *map_cache_live_count_py(
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"classic_step_diagnostic", classic_step_diagnostic_py, METH_VARARGS, "Run isolated classic dynamics."}
 // clang-format on
 
 #include "../env_binding.h"
+
+static PyObject *classic_step_diagnostic_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    PyObject *state_object;
+    PyObject *action_object;
+    PyObject *wheelbase_object;
+    PyObject *maximum_speed_object;
+    double dt_seconds;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOOOd",
+            &state_object,
+            &action_object,
+            &wheelbase_object,
+            &maximum_speed_object,
+            &dt_seconds)) {
+        return NULL;
+    }
+    if (!PyArray_Check(state_object) || !PyArray_Check(action_object) || !PyArray_Check(wheelbase_object)
+        || !PyArray_Check(maximum_speed_object)) {
+        PyErr_SetString(PyExc_TypeError, "Diagnostic inputs must be NumPy arrays");
+        return NULL;
+    }
+
+    PyArrayObject *state_array = (PyArrayObject *) state_object;
+    PyArrayObject *action_array = (PyArrayObject *) action_object;
+    PyArrayObject *wheelbase_array = (PyArrayObject *) wheelbase_object;
+    PyArrayObject *maximum_speed_array = (PyArrayObject *) maximum_speed_object;
+    if (PyArray_TYPE(state_array) != NPY_FLOAT32 || PyArray_TYPE(action_array) != NPY_FLOAT32
+        || PyArray_TYPE(wheelbase_array) != NPY_FLOAT32 || PyArray_TYPE(maximum_speed_array) != NPY_FLOAT32) {
+        PyErr_SetString(PyExc_TypeError, "Diagnostic inputs must use float32");
+        return NULL;
+    }
+    if (!PyArray_IS_C_CONTIGUOUS(state_array) || !PyArray_IS_C_CONTIGUOUS(action_array)
+        || !PyArray_IS_C_CONTIGUOUS(wheelbase_array) || !PyArray_IS_C_CONTIGUOUS(maximum_speed_array)) {
+        PyErr_SetString(PyExc_ValueError, "Diagnostic inputs must be C-contiguous");
+        return NULL;
+    }
+    if (PyArray_NDIM(state_array) != 2 || PyArray_DIM(state_array, 1) != DIAGNOSTIC_STATE_FEATURE_COUNT
+        || PyArray_NDIM(action_array) != 2 || PyArray_DIM(action_array, 1) != 2 || PyArray_NDIM(wheelbase_array) != 1
+        || PyArray_NDIM(maximum_speed_array) != 1) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Diagnostic shapes must be state [sample, 5], action [sample, 2], and metadata [sample]");
+        return NULL;
+    }
+    npy_intp sample_count = PyArray_DIM(state_array, 0);
+    if (sample_count <= 0 || PyArray_DIM(action_array, 0) != sample_count
+        || PyArray_DIM(wheelbase_array, 0) != sample_count || PyArray_DIM(maximum_speed_array, 0) != sample_count) {
+        PyErr_SetString(PyExc_ValueError, "Diagnostic inputs must have the same positive sample count");
+        return NULL;
+    }
+    if (!isfinite(dt_seconds) || dt_seconds <= 0.0 || dt_seconds > 10.0) {
+        PyErr_SetString(PyExc_ValueError, "Diagnostic dt_seconds must be finite and in (0, 10]");
+        return NULL;
+    }
+
+    npy_intp output_dimensions[2] = {sample_count, DIAGNOSTIC_STATE_FEATURE_COUNT};
+    PyObject *output_object = PyArray_SimpleNew(2, output_dimensions, NPY_FLOAT32);
+    if (output_object == NULL) {
+        return NULL;
+    }
+    float (*states)[DIAGNOSTIC_STATE_FEATURE_COUNT]
+        = (float (*)[DIAGNOSTIC_STATE_FEATURE_COUNT]) PyArray_DATA(state_array);
+    float (*actions)[2] = (float (*)[2]) PyArray_DATA(action_array);
+    float *wheelbases = (float *) PyArray_DATA(wheelbase_array);
+    float *maximum_speeds = (float *) PyArray_DATA(maximum_speed_array);
+    float (*outputs)[DIAGNOSTIC_STATE_FEATURE_COUNT]
+        = (float (*)[DIAGNOSTIC_STATE_FEATURE_COUNT]) PyArray_DATA((PyArrayObject *) output_object);
+
+    for (npy_intp sample_idx = 0; sample_idx < sample_count; sample_idx++) {
+        for (int feature_idx = 0; feature_idx < DIAGNOSTIC_STATE_FEATURE_COUNT; feature_idx++) {
+            if (!isfinite(states[sample_idx][feature_idx])) {
+                PyErr_SetString(PyExc_ValueError, "Diagnostic state contains NaN or Inf");
+                Py_DECREF(output_object);
+                return NULL;
+            }
+        }
+        if (!isfinite(actions[sample_idx][0]) || !isfinite(actions[sample_idx][1]) || actions[sample_idx][0] < -1.0f
+            || actions[sample_idx][0] > 1.0f || actions[sample_idx][1] < -1.0f || actions[sample_idx][1] > 1.0f) {
+            PyErr_SetString(PyExc_ValueError, "Diagnostic actions must be finite and within [-1, 1]");
+            Py_DECREF(output_object);
+            return NULL;
+        }
+        if (!isfinite(wheelbases[sample_idx]) || wheelbases[sample_idx] <= 0.0f || !isfinite(maximum_speeds[sample_idx])
+            || maximum_speeds[sample_idx] <= 0.0f) {
+            PyErr_SetString(PyExc_ValueError, "Diagnostic wheelbase and maximum speed must be finite and positive");
+            Py_DECREF(output_object);
+            return NULL;
+        }
+
+        float diagnostic_action[1][2] = {{actions[sample_idx][0], actions[sample_idx][1]}};
+        Agent agent = {0};
+        agent.type = VEHICLE;
+        agent.sim_x = states[sample_idx][DIAGNOSTIC_STATE_X];
+        agent.sim_y = states[sample_idx][DIAGNOSTIC_STATE_Y];
+        agent.sim_heading = states[sample_idx][DIAGNOSTIC_STATE_HEADING];
+        agent.cos_heading = cosf(agent.sim_heading);
+        agent.sin_heading = sinf(agent.sim_heading);
+        agent.sim_speed = fabsf(states[sample_idx][DIAGNOSTIC_STATE_SPEED]);
+        agent.sim_speed_signed = states[sample_idx][DIAGNOSTIC_STATE_SPEED];
+        agent.steering_angle = states[sample_idx][DIAGNOSTIC_STATE_STEERING];
+        agent.wheelbase = wheelbases[sample_idx];
+        agent.sim_valid = 1;
+        agent.reward_coefs[REWARD_COEF_SPEED] = 1.0f;
+
+        // Degenerate bounds make update_agent_z() return without querying map geometry.
+        GridMap diagnostic_grid = {0};
+        Drive env = {0};
+        env.agents = &agent;
+        env.actions = &diagnostic_action[0][0];
+        env.grid_map = &diagnostic_grid;
+        env.action_type = ACTION_TYPE_CONTINUOUS;
+        env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
+        env.dt = (float) dt_seconds;
+        env.base_max_speed_mps = maximum_speeds[sample_idx];
+        move_dynamics(&env, 0, 0);
+
+        outputs[sample_idx][DIAGNOSTIC_STATE_X] = agent.sim_x;
+        outputs[sample_idx][DIAGNOSTIC_STATE_Y] = agent.sim_y;
+        outputs[sample_idx][DIAGNOSTIC_STATE_HEADING] = agent.sim_heading;
+        outputs[sample_idx][DIAGNOSTIC_STATE_SPEED] = agent.sim_speed_signed;
+        outputs[sample_idx][DIAGNOSTIC_STATE_STEERING] = agent.steering_angle;
+    }
+    return output_object;
+}
 
 // Seeds are 63-bit non-negative so they survive int64 round-trips (numpy, pandas, CSV).
 static int unpack_seed(PyObject *kwargs, uint64_t *seed_out) {

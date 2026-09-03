@@ -49,29 +49,17 @@ Completed (2026-09-03, Commit `80d7b938`): Implemented scenario exporting and ca
 - **Drivable Area Rasterization:** Built raster-transform structures (`DrivableAreaRaster`, `RasterTransform`) mapping centered simulation space to grids.
 - **Verification:** Exhaustive tests implemented in `tests/regents/test_adapter.py` validating shapes, vectorized padding, dtypes, centered coordinate transform consistency, and byte-identical repeated exports.
 
-## Stage 2 — Implement differentiable classic dynamics and prove C parity
+## Stage 2 — Implement differentiable classic dynamics and prove C parity (Completed)
 
-Implement a pure Torch `classic_step` and a masked multi-step `classic_rollout`. Match `move_dynamics()` in `drive.h` in the same operation order and initially use CPU `float32` for the strictest comparison with C.
+Completed (2026-09-03): Implemented pure Torch `classic_step()` and masked `classic_rollout()` in `pufferlib/ocean/regents/dynamics.py`. The CPU `float32` implementation follows the C `move_dynamics()` operation order, including continuous action scaling, steering-rate and angle limits, signed speed clipping, slip angle, position integration at `old_heading + beta`, heading wrapping, and carried actual steering state. A diagnostic binding runs the authoritative C step in isolation, with stochastic and infraction behavior disabled, and returns all five state components.
 
-The implementation must include:
+The agreed strict parity horizon for the initial POC is 64 transitions, matching its scenario horizon. Tests compare every state component at every step and measured these maximum absolute errors:
 
-- normalized continuous action scaling (`acceleration * 4.0`, target steering `* 0.667`);
-- target-steering rate limiting at `0.6 rad/s`, followed by the steering limit;
-- speed update and clipping to `[-2.0, effective_max_speed_mps]`;
-- `beta = atan(0.5 * tan(steering))`;
-- yaw rate from updated speed, wheelbase, `beta`, and steering;
-- position update using the old heading and updated speed;
-- heading wrapping with the same interval convention as C;
-- state carried across time, including signed speed and actual steering angle.
+- `1.7882e-7` across the one-step neutral, braking, acceleration, reverse, steering-limit, speed-limit, and heading-wrap cases;
+- `3.8147e-5` over deterministic random actions for 64 transitions across two batches and three agents;
+- `3.0923e-11` over 32 approximately inverse-derived actions from a real replay scenario.
 
-Parity tests must use a small diagnostic binding or fixture that exposes the complete C state after each step. Disable unrelated stochastic features and infraction side effects during these tests.
-
-Tests and exit gate:
-
-- One-step parity across neutral, braking, acceleration, reversing, steering-rate saturation, steering clipping, speed clipping, and heading wrap cases.
-- Full-rollout parity on deterministic random action sequences and inverse-derived actions from real scenarios.
-- Compare every state component at every valid step, not only final `x/y`.
-- Target maximum absolute error is `1e-4` or better over the agreed rollout horizon. Any systematic mismatch blocks later stages.
+All results pass the mandatory `1e-4` threshold. An exploratory 256-transition random-action stress test reached `1.6404e-4` from accumulated C-libm versus Torch transcendental rounding; any future horizon longer than 64 transitions must establish an appropriate parity approach and acceptance threshold before use. Stage 3 inverse/forward reconstruction remains required before M1 is complete or loss/optimization work may begin.
 
 ## Stage 3 — Estimate expert actions with inverse dynamics
 

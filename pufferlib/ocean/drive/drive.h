@@ -4194,7 +4194,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         }
 
         // Limit the steering rate similar to the jerk model
-        float delta_steer = clip(steering - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
+        float max_steering_delta = STEERING_RATE_LIMIT_RADIANS_PER_SECOND * env->dt;
+        float delta_steer = clip(steering - agent->steering_angle, -max_steering_delta, max_steering_delta);
         steering = clip(agent->steering_angle + delta_steer, -STEERING_LIMIT, STEERING_LIMIT);
         agent->steering_angle = steering;
 
@@ -4338,7 +4339,8 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
         float steering_angle = atanf(signed_curvature * agent->wheelbase);
 
         // Apply steering rate limit (±0.6 rad/s)
-        float delta_steer = clip(steering_angle - agent->steering_angle, -0.6f * env->dt, 0.6f * env->dt);
+        float max_steering_delta = STEERING_RATE_LIMIT_RADIANS_PER_SECOND * env->dt;
+        float delta_steer = clip(steering_angle - agent->steering_angle, -max_steering_delta, max_steering_delta);
 
         // Apply steering position limit (±0.55 rad)
         float new_steering_angle = clip(agent->steering_angle + delta_steer, -0.55f, 0.55f);
