@@ -1716,25 +1716,42 @@ def eval(
     if failure_replay_csv is not None and render_filter is None:
         raise pufferlib.APIUsageError("eval.failure_replay_csv requires eval.render_filter")
 
-    report_to_wandb = bool(args["wandb"]) and not use_training_config
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
+    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
+    preview_policy_requirements = []
+    for benchmark in benchmarks:
+        preview_args = drive_benchmark.build_benchmark_args(args, benchmark, environment_config)
+        preview_args = OmegaConf.to_container(
+            OmegaConf.merge(OmegaConf.create(dict(preview_args)), cli_override_config),
+            resolve=True,
+        )
+        preview_policy_requirements.append(drive_benchmark.environment_requires_policy(preview_args["env"]))
+    any_benchmark_requires_policy = any(preview_policy_requirements)
+
     if use_training_config:
-        if policy is None:
+        if any_benchmark_requires_policy and policy is None:
             raise pufferlib.APIUsageError("Training evaluation requires the live policy")
         base_args = copy.deepcopy(args)
         environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
         environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
-    else:
+    elif any_benchmark_requires_policy:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
+    else:
+        base_args = copy.deepcopy(args)
+        checkpoint_config_path = None
     base_args["env"]["eval_training_render"] = eval_training_render
 
+    report_to_wandb = bool(args["wandb"]) and not use_training_config and checkpoint_config_path is not None
     wandb_run_identity = (
         drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
     )
     if eval_output_dir is None:
-        run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
-        eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
+        if checkpoint_config_path is not None:
+            run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
+            eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
+        else:
+            eval_output_dir = os.path.join(base_args["train"]["data_dir"], eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
     failure_replay_output_dir = None
@@ -1747,7 +1764,6 @@ def eval(
         failure_replay_output_dir = os.path.dirname(failure_replay_csv)
     benchmark_results = {}
     evaluation_policy_cache = {"policy": policy}
-    cli_override_config = OmegaConf.from_dotlist(cli_overrides)
     for benchmark in benchmarks:
         run_args = drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
         run_args = OmegaConf.to_container(
@@ -1756,6 +1772,8 @@ def eval(
         )
         run_args["env"]["eval_training_render"] = eval_training_render
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        benchmark_requires_policy = drive_benchmark.environment_requires_policy(run_args["env"])
+        benchmark_renders_scenarios = render_scenarios or benchmark["render_scenarios"]
         if eval_training_render:
             run_args["env"]["compute_eval_metrics"] = True
             run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
@@ -1793,6 +1811,7 @@ def eval(
                 eval_config["capture_observations"],
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
+                use_policy=benchmark_requires_policy,
             )
             continue
 
@@ -1803,10 +1822,10 @@ def eval(
             num_scenarios,
             num_workers,
             run_args["env"]["scenario_length"],
-            capture_replay=render_scenarios,
+            capture_replay=benchmark_renders_scenarios,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
-        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None
+        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if benchmark_renders_scenarios else None
         summaries = _run_eval_rollout(
             run_args,
             env_name,
@@ -1816,8 +1835,9 @@ def eval(
             num_scenarios,
             policy=policy,
             replay_output_dir=replay_output_dir,
-            capture_observations=render_scenarios and eval_config["capture_observations"],
+            capture_observations=benchmark_renders_scenarios and eval_config["capture_observations"],
             evaluation_policy_cache=evaluation_policy_cache,
+            use_policy=benchmark_requires_policy,
         )
         summary = drive_benchmark._write_eval_reports(summaries, benchmark_output_dir, num_scenarios)
         benchmark_results[benchmark["name"]] = {
@@ -1825,7 +1845,7 @@ def eval(
             "summary": summary,
         }
 
-        if render_scenarios:
+        if benchmark_renders_scenarios:
             drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir)
         elif render_filter is not None:
             _render_eval_failures(
@@ -1838,6 +1858,7 @@ def eval(
                 eval_config["capture_observations"],
                 max_rendered_failures,
                 evaluation_policy_cache=evaluation_policy_cache,
+                use_policy=benchmark_requires_policy,
             )
 
     if wandb_run_identity is not None:
@@ -2047,8 +2068,9 @@ def _run_eval_rollout(
     capture_observations=False,
     episode_id_offset=0,
     evaluation_policy_cache=None,
+    use_policy=True,
 ):
-    """Roll out a deterministic policy over the workers and gather evaluation episode summaries."""
+    """Roll out policy- or environment-controlled workers and gather episode summaries."""
     num_workers = len(worker_env_kwargs)
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
@@ -2067,7 +2089,7 @@ def _run_eval_rollout(
     scenario_progress = None
     try:
         agents_per_batch = vecenv.agents_per_batch
-        inference_agents_per_batch = recorded_agents_per_batch or agents_per_batch
+        inference_agents_per_batch = (recorded_agents_per_batch or agents_per_batch) if use_policy else agents_per_batch
         if agents_per_batch > inference_agents_per_batch:
             raise pufferlib.APIUsageError(
                 f"Replay environment batch has {agents_per_batch} agents, which exceeds the "
@@ -2079,52 +2101,57 @@ def _run_eval_rollout(
                 f"{inference_agents_per_batch} agents to preserve the recorded batch shape"
             )
 
-        rollout_seed = args["train"]["seed"]
-        torch.manual_seed(rollout_seed)
-        if evaluation_policy_cache is None:
-            evaluation_policy_cache = {"policy": policy}
-        policy = evaluation_policy_cache["policy"]
-        if policy is None:
-            policy = load_policy(args, vecenv, env_name)
-            evaluation_policy_cache["policy"] = policy
-        policy.eval()
-        if "policy_forward_eval" not in evaluation_policy_cache:
-            policy_forward_eval = policy.forward_eval
-            eval_sample_logits = pufferlib.pytorch.sample_logits
-            if args["train"]["compile"]:
-                compile_kwargs = {
-                    "mode": args["train"]["compile_mode"],
-                    "fullgraph": args["train"]["compile_fullgraph"],
-                }
-                policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
-                eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
-            evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
-            evaluation_policy_cache["sample_logits"] = eval_sample_logits
-        policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
-        eval_sample_logits = evaluation_policy_cache["sample_logits"]
-        # A discrete policy on a continuous env emits a discrete class that the
-        # policy's own table maps back to the continuous action the env expects.
-        action_selection = args["eval"]["action_selection"]
-        uncompiled_policy = base_policy(policy)
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
-        discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
-        device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
-        if use_bfloat16 and not torch.cuda.is_bf16_supported():
-            raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
-        eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
+        rollout_seed = args["train"]["seed"]
+        policy_obs_tensor = None
+        recurrent_state = None
+        policy_forward_eval = None
+        eval_sample_logits = None
+        uncompiled_policy = None
+        discrete_policy_on_continuous_env = False
+        device = None
+        eval_amp_context = None
+        if use_policy:
+            torch.manual_seed(rollout_seed)
+            if evaluation_policy_cache is None:
+                evaluation_policy_cache = {"policy": policy}
+            policy = evaluation_policy_cache["policy"]
+            if policy is None:
+                policy = load_policy(args, vecenv, env_name)
+                evaluation_policy_cache["policy"] = policy
+            policy.eval()
+            if "policy_forward_eval" not in evaluation_policy_cache:
+                policy_forward_eval = policy.forward_eval
+                eval_sample_logits = pufferlib.pytorch.sample_logits
+                if args["train"]["compile"]:
+                    compile_kwargs = {
+                        "mode": args["train"]["compile_mode"],
+                        "fullgraph": args["train"]["compile_fullgraph"],
+                    }
+                    policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
+                    eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
+                evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
+                evaluation_policy_cache["sample_logits"] = eval_sample_logits
+            policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
+            eval_sample_logits = evaluation_policy_cache["sample_logits"]
+            uncompiled_policy = base_policy(policy)
+            discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
+            device = torch_device(args["train"]["device"])
+            use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+            if use_bfloat16 and not torch.cuda.is_bf16_supported():
+                raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+            eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
+
         obs, _ = vecenv.reset(rollout_seed)
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
-        policy_obs_tensor = None
-        if padding_agent_count:
+        if use_policy and padding_agent_count:
             policy_obs_tensor = torch.zeros(
                 (inference_agents_per_batch, *obs.shape[1:]),
                 dtype=torch.as_tensor(obs).dtype,
                 device=device,
             )
-        recurrent_state = None
-        if args["train"].get("use_rnn", False):
+        if use_policy and args["train"].get("use_rnn", False):
             recurrent_state = {
                 "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
                 "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
@@ -2147,34 +2174,40 @@ def _run_eval_rollout(
         episode_summaries = []
         scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
         for _ in range(total_steps):
-            with torch.no_grad(), eval_amp_context:
-                environment_obs_tensor = torch.as_tensor(obs, device=device)
-                if padding_agent_count:
-                    policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
-                else:
-                    policy_obs_tensor = environment_obs_tensor
-                if recurrent_state is None:
-                    logits, value = policy_forward_eval(policy_obs_tensor)
-                else:
-                    logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
-                action, logprob, entropy, cont_action = eval_sample_logits(
-                    logits,
-                    action_selection=action_selection,
-                    env_continuous=env_continuous,
-                    policy=uncompiled_policy,
-                )
-                if discrete_policy_on_continuous_env:
-                    # raw_action stays the discrete class (what the replay logs record),
-                    # while the env is stepped with its continuous counterpart.
-                    raw_action = action[:agents_per_batch].cpu().numpy()
-                    continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
-                    action = continuous_actions[:agents_per_batch].float().cpu().numpy()
-                else:
-                    raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
-                    action = raw_action
+            logits = value = logprob = entropy = None
+            if use_policy:
+                with torch.no_grad(), eval_amp_context:
+                    environment_obs_tensor = torch.as_tensor(obs, device=device)
+                    if padding_agent_count:
+                        policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                    else:
+                        policy_obs_tensor = environment_obs_tensor
+                    if recurrent_state is None:
+                        logits, value = policy_forward_eval(policy_obs_tensor)
+                    else:
+                        logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
+                    action, logprob, entropy, cont_action = eval_sample_logits(
+                        logits,
+                        action_selection=args["eval"]["action_selection"],
+                        env_continuous=env_continuous,
+                        policy=uncompiled_policy,
+                    )
+                    if discrete_policy_on_continuous_env:
+                        # raw_action stays the discrete class (what the replay logs record),
+                        # while the env is stepped with its continuous counterpart.
+                        raw_action = action[:agents_per_batch].cpu().numpy()
+                        continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
+                        action = continuous_actions[:agents_per_batch].float().cpu().numpy()
+                    else:
+                        raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                        action = raw_action
+            else:
+                action_dtype = getattr(vecenv.action_space, "dtype", np.float32)
+                raw_action = np.zeros(vecenv.action_space.shape, dtype=action_dtype)
+                action = raw_action
             if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-            _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
+            _require_finite_eval_batch(action, "evaluation actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
                 replay_capture.capture_frame(
@@ -2276,6 +2309,7 @@ def _render_eval_failures(
     capture_observations,
     max_rendered_failures,
     evaluation_policy_cache=None,
+    use_policy=True,
 ):
     configured_render_filter = run_args["eval"]["render_filter"]
     selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
@@ -2353,6 +2387,7 @@ def _render_eval_failures(
             capture_observations=capture_observations,
             episode_id_offset=len(summaries),
             evaluation_policy_cache=evaluation_policy_cache,
+            use_policy=use_policy,
         )
         summaries.extend(wave_summaries)
     summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))

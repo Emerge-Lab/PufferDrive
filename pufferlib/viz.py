@@ -876,9 +876,11 @@ def encode_interactive_replay(scenario, replay):
         "traffic_i16": replay["traffic_i16"].astype(np.int16, copy=False),
         "raw_action": replay["raw_action"].astype(np.float32, copy=False),
         "clipped_action": replay["clipped_action"].astype(np.float32, copy=False),
-        "value": replay["value"].astype(np.float32, copy=False),
-        "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("value") is not None:
+        chunks["value"] = replay["value"].astype(np.float32, copy=False)
+    if replay.get("entropy") is not None:
+        chunks["entropy"] = replay["entropy"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
     if replay.get("policy_probs") is not None:
@@ -1081,7 +1083,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             </div>
             <div class="label">Position x / y / heading</div>
             <div class="mono dim" style="font-size:11.5px"><span id="tel-x">0</span>, <span id="tel-y">0</span>, <span id="tel-h">0</span></div>
-            <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
+            <div class="label" id="control-label">Policy</div><div id="policy-grid" class="grid"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1448,8 +1450,9 @@ self.onmessage = async event => {
             // Panel structure is identical across agents/frames — build the DOM once, update textContent per frame.
             // keyed on captured probs: a discrete policy on the continuous env still records them
             const discrete = !!C.policy_probs;
+            const hasPolicy = !!(C.value || C.entropy || C.policy_probs || C.policy_mean);
             const actionDims = H.chunks.raw_action.shape.length > 2 ? H.chunks.raw_action.shape[2] : 1;
-            const key = (discrete ? 'd' : 'c') + actionDims;
+            const key = (discrete ? 'd' : 'c') + actionDims + (hasPolicy ? 'p' : 'e');
             if (refs && panelKey === key) return;
             panelKey = key;
             const mg = document.getElementById('metrics-grid');
@@ -1457,7 +1460,10 @@ self.onmessage = async event => {
             const pg = document.getElementById('puffer-grid');
             pg.innerHTML = PUFFER_LABELS.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('');
             const pol = document.getElementById('policy-grid');
-            let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
+            document.getElementById('control-label').textContent = hasPolicy ? 'Policy' : 'Environment controller';
+            let html = '';
+            if (C.value) html += '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div>';
+            if (C.entropy) html += '<div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
             if (discrete) {
                 // Probability heatmap over the 2D action grid (rows x cols), index i = row * cols.length + col.
@@ -1466,10 +1472,12 @@ self.onmessage = async event => {
                 html += '<div class="heat-lab"></div>' + cols.map(v=>`<div class="heat-lab">${v.toFixed(1)}</div>`).join('');
                 for (let r=0;r<rows.length;r++) { html += `<div class="heat-lab">${rows[r].toFixed(1)}</div>`; for (let cI=0;cI<cols.length;cI++) html += '<div class="heat-cell"></div>'; }
                 html += `</div><div class="heat-cap">${jerk ? 'jerk_long &#8595; / jerk_lat &#8594;' : 'accel &#8595; / steer &#8594;'}</div>`;
-            } else {
+            } else if (hasPolicy) {
                 labels = H.action_type === "continuous" ? (H.dynamics_model === "jerk" ? ["jerk_long","jerk_lat"] : ["accel","steer"]) : Array.from({length:actionDims}, (_,i)=>`p${i}`);
                 labels.forEach(l => html += `<div class="item"><span class="name">${l}</span><span class="num pol-act">-</span></div>`);
                 if (C.policy_mean) { labels.forEach(l => html += `<div class="item"><span class="name">mean ${l}</span><span class="num pol-mean">-</span></div><div class="item"><span class="name">std ${l}</span><span class="num pol-std">-</span></div>`); html += '<div class="item"><span class="name">log prob</span><span class="num" data-pol="lp">-</span></div>'; }
+            } else {
+                html = '<div class="item"><span class="name">actions executed inside the simulator</span></div>';
             }
             pol.innerHTML = html;
             refs = {
@@ -1485,8 +1493,8 @@ self.onmessage = async event => {
         function updatePolicy(frame, agent) {
             if (agent.slot < 0) return;
             const s = frame * H.active_count + agent.slot;
-            refs.polV.textContent = C.value[s].toFixed(3);
-            refs.polE.textContent = C.entropy[s].toFixed(3);
+            if (refs.polV) refs.polV.textContent = C.value[s].toFixed(3);
+            if (refs.polE) refs.polE.textContent = C.entropy[s].toFixed(3);
             const ab = s * refs.actionDims;
             if (refs.discrete) {
                 const n = refs.heat.length, pb = s * n, selected = Math.round(C.raw_action[ab]);

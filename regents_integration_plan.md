@@ -14,7 +14,7 @@ The initial scope is deliberately narrow:
 - deterministic, offline scenario generation and evaluation;
 - no PPO loop, policy updates, rollout buffer, or training command in the ReGentS POC.
 
-Jerk dynamics, pedestrians/cyclists, joint policy gradients through the ego policy, and online generation during PPO training are follow-up work. The method reference is the local [ReGentS paper](../2409.07830v1.pdf).
+Jerk dynamics, pedestrians/cyclists, joint policy gradients through the ego policy, and online generation during PPO training are follow-up work. The method reference is the local [ReGentS paper](2409.07830v1.pdf).
 
 ### Ultimate Goal: Policy & IDM Benchmarking and Visual Rendering
 
@@ -27,37 +27,9 @@ Beyond the initial POC, the ultimate objective of the ReGentS integration is to 
 
 ## Step 0 — Validate IDM as the ego controller
 
-Before implementing any ReGentS module, validate the existing IDM controller path for the SDC. PufferDrive already accepts `sdc_controller=idm` and dispatches an IDM-controlled active agent through `move_idm()`, so this step should add a supported configuration and regression coverage rather than another controller implementation.
-
-Initial configuration:
-
-- `simulation_mode=replay`;
-- `eval_mode=true` and `compute_eval_metrics=true`;
-- `control_mode=control_sdc_only`;
-- `sdc_controller=idm`;
-- background vehicles and non-vehicles on logged replay;
-- `reward_conditioning=false` and `reward_randomization=false`;
-- one fixed scenario, `init_step`, and exact evaluation seed;
-- replay capture enabled when producing visual artifacts.
-
-Work and exit gate:
-
-- Add a focused integration test that constructs `Drive` directly in evaluation mode, resets a real replay scenario, and verifies agent index 0 is active with `CONTROLLER_IDM` while background actors use `CONTROLLER_REPLAY`.
-- Step through a short rollout without meaningful policy actions and verify that the SDC is moved by IDM, background actors follow their logged states, and `get_state()` captures the resulting trajectory.
-- Repeat with the same seed and assert identical states and controller assignments.
-- Confirm collision, off-road, and termination handling remain available for the IDM SDC.
-- Record the exact configuration overrides used by the ReGentS POC. Any controller-routing or reset bug discovered here is fixed before Stage 1.
-
-Do not invoke `puffer train` for this workflow. The eventual user-facing command should be a dedicated offline ReGentS generation/evaluation entry point backed by an evaluation config.
-
-
-### Step 0 validation record (2026-09-02)
-
-S0 passed on the first 100 unique, lexicographically sorted `.bin` files in `pufferlib/resources/drive/binaries/nuplan` using seed `42`, `init_step=0`, and a 200-step horizon. The selected filenames have SHA-256 `d8e98b2c88965044d4074ec47a667638b95d2975e2390e275510364421643ea9`; the directory contained 101 files at evaluation time, so the resolved output records the exact 100-file selection rather than cycling or sampling with replacement.
-
-The supported entry point is `puffer regents puffer_drive stage0 [key=value overrides]`, backed by `pufferlib/config/evaluation/regents.yaml`; `python -m pufferlib.ocean.regents.stage0` is also supported. That config records the exact POC overrides: replay/evaluation mode, evaluation metrics enabled, SDC-only control with IDM at index 0, replay controllers for every background type, continuous actions with classic dynamics, fixed `dt=0.1`, disabled reward conditioning/randomization and init-step spread, and stop handling for collision/off-road/traffic-light infractions. Replay capture is optional and disabled for the metrics-only baseline.
-
-The validation repeats an eight-step `get_state()` trajectory on one pinned scenario and exact seed, compares serialized simulator states and controller assignments byte-for-byte, verifies arbitrary policy-buffer actions do not affect the IDM SDC, and checks valid background state fields against their logged values after each step. All 100 scenarios then passed controller routing, logged-background, metric-availability, and truncation checks. Baseline outcomes were 22% collision, 5% at-fault collision, 2% off-road, and 1% red-light violation. These rates are recorded baselines, not S0 pass thresholds. No controller-routing or reset bug was found.
+Completed 2026-09-03: `puffer eval puffer_drive regents_idm` runs the SDC with native C IDM and replay-controlled backgrounds without checkpoint loading or Torch policy inference, and produces replay files plus an HTML gallery by default.
+Regression coverage verifies deterministic controller routing, ignored policy-buffer actions, logged background motion, and evaluation metrics, while the 100-scenario NuPlan baseline produced 22% collision, 5% at-fault collision, 2% off-road, and 1% red-light violation.
+The baseline used master seed `42`, `init_step=0`, a 200-step horizon, 100 recorded episode seeds, and the first 100 sorted scenario files with selection SHA-256 `d8e98b2c88965044d4074ec47a667638b95d2975e2390e275510364421643ea9`.
 
 ## Core contracts
 
@@ -239,6 +211,7 @@ pufferlib/ocean/regents/
     artifacts.py
 
 tests/regents/
+    test_stage0_idm.py
     test_adapter.py
     test_dynamics_parity.py
     test_inverse_dynamics.py
@@ -249,7 +222,8 @@ tests/regents/
     test_c_replay.py
 
 pufferlib/config/evaluation/
-    regents.yaml
+    benchmark.yaml  # regents_idm Stage 0 benchmark
+    regents.yaml    # Stage 1+ offline generation config
 ```
 
 Keep binding changes in the existing Drive binding files and keep shared mathematical constants synchronized from one documented source. Avoid importing ReGentS into the PPO hot path until the offline pipeline is accepted.

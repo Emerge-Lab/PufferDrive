@@ -20,6 +20,23 @@ FAILURE_RENDER_FILTER_COLUMNS = (
     "red_light_violation_rate",
 )
 
+POLICY_CONTROLLER = "policy"
+
+
+def environment_requires_policy(environment_config):
+    """Whether any agent category active in this control mode can use a policy."""
+    control_mode = environment_config.get("control_mode")
+    if control_mode == "control_sdc_only":
+        controller_keys = ("sdc_controller",)
+    elif control_mode == "control_vehicles":
+        controller_keys = ("sdc_controller", "non_sdc_controller")
+    elif control_mode in ("control_agents", "control_wosac"):
+        controller_keys = ("sdc_controller", "non_sdc_controller", "non_vehicle_controller")
+    else:
+        raise pufferlib.APIUsageError(f"Cannot resolve controllers for control_mode={control_mode!r}")
+
+    return any(environment_config.get(key) == POLICY_CONTROLLER for key in controller_keys)
+
 
 def _drive_env_keys():
     from pufferlib.ocean.drive.drive import Drive
@@ -152,6 +169,9 @@ def load_benchmark_config(config_path, selected_names):
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= MAX_C_SEED:
             raise pufferlib.APIUsageError(f"Benchmark {name} seed must be an integer in [0, {MAX_C_SEED}]")
         num_scenarios = _positive_int(benchmark.get("num_scenarios"), f"Benchmark {name} num_scenarios")
+        render_scenarios = benchmark.get("render_scenarios", False)
+        if not isinstance(render_scenarios, bool):
+            raise pufferlib.APIUsageError(f"Benchmark {name} render_scenarios must be a boolean")
         num_maps = _positive_int(benchmark_environment_config.get("num_maps"), f"Benchmark {name} env num_maps")
         control_mode = benchmark_environment_config.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
@@ -195,6 +215,7 @@ def load_benchmark_config(config_path, selected_names):
                 "name": name,
                 "seed": seed,
                 "num_scenarios": num_scenarios,
+                "render_scenarios": render_scenarios,
                 "env": resolved_environment_config,
             }
         )
