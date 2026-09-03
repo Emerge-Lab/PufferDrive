@@ -166,6 +166,31 @@ def _replay_bundle(env_config, frames, ego_actions):
     return bundle
 
 
+def save_loss_history_csv(destination, scenario_idx, result):
+    """Write the optimization loss history to a CSV file per scenario/map."""
+    optimization = result.optimization
+    if not hasattr(optimization, "cost_history") or not optimization.cost_history:
+        return
+    losses_dir = Path(destination) / "losses"
+    losses_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = losses_dir / f"scenario_{scenario_idx:05d}.losses.csv"
+    with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            ["iteration", "total_loss", "ego_collision_cost", "background_collision_cost", "drivable_area_cost"]
+        )
+        for idx, snap in enumerate(optimization.cost_history):
+            writer.writerow(
+                [
+                    idx,
+                    snap.total,
+                    snap.ego_collision,
+                    snap.background_collision,
+                    snap.drivable_area,
+                ]
+            )
+
+
 def render_scenario_replays(destination, scenario_idx, result, env_config):
     """Write logged and adversarial replays as interactive HTML with the shared viewer."""
     import pufferlib.viz
@@ -175,6 +200,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
         raise ValueError("Replay rendering requires capture_html_frames")
     render_dir = Path(destination) / RENDER_DIR_NAME
     render_dir.mkdir(parents=True, exist_ok=True)
+    replays_dir = Path(destination) / "replays"
+    replays_dir.mkdir(parents=True, exist_ok=True)
     rendered = {}
     sources = (("logged", replay.baseline_frames), ("adversarial", replay.adversarial_frames))
     for label, frames in sources:
@@ -182,7 +209,7 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
         bundle = _replay_bundle(env_config, frames, replay.ego_actions)
         bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
         bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
-        binary_path = render_dir / f"{stem}.replay.zlib"
+        binary_path = replays_dir / f"{stem}.replay.zlib"
         html_path = render_dir / f"{stem}.html"
         pufferlib.viz.save_interactive_replay_zlib(replay.scenario_payload, bundle, str(binary_path))
         pufferlib.viz.render_interactive_replay_zlib(str(binary_path), str(html_path))
@@ -262,8 +289,11 @@ def _generate_single_scenario_worker(
         finally:
             drive.close()
         elapsed_seconds = time.perf_counter() - started_at
-        artifact_path = destination / f"scenario_{scenario_idx:05d}.npz"
+        npz_dir = Path(destination) / "npz"
+        npz_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
         save_generation_artifact(artifact_path, result, generation, str(map_path))
+        save_loss_history_csv(destination, scenario_idx, result)
         row = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
         rendered_files = {}
         if render_replays:
@@ -317,13 +347,16 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
                     horizon_transition_count=generation["horizon_transition_count"],
                     maximum_outer_iterations=generation["maximum_outer_iterations"],
                     capture_html_frames=render_replays,
-                    show_progress=False,
+                    show_progress=True,
                 )
             finally:
                 drive.close()
             elapsed_seconds = time.perf_counter() - started_at
-            artifact_path = destination / f"scenario_{scenario_idx:05d}.npz"
+            npz_dir = Path(destination) / "npz"
+            npz_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
             save_generation_artifact(artifact_path, result, generation, str(map_paths[scenario_idx]))
+            save_loss_history_csv(destination, scenario_idx, result)
             rows[scenario_idx] = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
             if render_replays:
                 rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))

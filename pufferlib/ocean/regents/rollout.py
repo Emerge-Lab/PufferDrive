@@ -355,8 +355,10 @@ def run_reactive_idm_generation(
     show_progress=True,
 ):
     """Alternate detached native-IDM C rollouts and Torch adversary blocks."""
-    if drive.sdc_controller != binding.CONTROLLER_IDM:
-        raise ValueError("Reactive IDM generation requires sdc_controller='idm'")
+    if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
+        raise ValueError("Reactive IDM generation requires sdc_controller='idm' or 'replay'")
+    if drive.sdc_controller == binding.CONTROLLER_REPLAY:
+        maximum_outer_iterations = 1
     if not isinstance(maximum_outer_iterations, int) or maximum_outer_iterations < 1:
         raise ValueError("maximum_outer_iterations must be a positive integer")
     if optimization_config is None:
@@ -387,11 +389,12 @@ def run_reactive_idm_generation(
             break
         previous_actions = optimization.optimized_actions.detach().clone()
         ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
+        source = "c_idm" if drive.sdc_controller == binding.CONTROLLER_IDM else "c_replay"
         frozen_ego = FrozenEgoTrajectory(
             state=replay.states[:, ego_idx].detach().clone(),
             valid=replay.state_valid[:, ego_idx].detach().clone(),
             scenario_id=scenario.scenario_ids[0],
-            source="c_idm",
+            source=source,
         )
     return ReactiveGenerationResult(
         scenario=scenario,

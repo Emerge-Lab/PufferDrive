@@ -169,7 +169,7 @@ def test_reactive_idm_generation_confirms_an_actionable_collision_in_c():
 
 
 def test_reactive_idm_generation_requires_an_idm_ego():
-    drive = _drive(8, 50, "replay")
+    drive = _drive(8, 50, "policy")
     try:
         with pytest.raises(ValueError, match="sdc_controller"):
             run_reactive_idm_generation(
@@ -308,7 +308,7 @@ def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
 
     assert report.scenario_count == expected_count
     expected_files = [f"scenario_{i:05d}.npz" for i in range(expected_count)]
-    assert sorted(path.name for path in tmp_path.glob("*.npz")) == expected_files
+    assert sorted(path.name for path in (tmp_path / "npz").glob("*.npz")) == expected_files
     assert (tmp_path / "generation_metrics.csv").is_file()
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0

@@ -63,8 +63,8 @@ class FrozenEgoTrajectory:
             raise ValueError("Frozen ego state and validity must share a device")
         if not isinstance(self.scenario_id, str) or not self.scenario_id:
             raise ValueError("Frozen ego scenario_id must be a non-empty string")
-        if self.source not in ("c_idm", "logged_fixture"):
-            raise ValueError("Frozen ego source must be 'c_idm' or 'logged_fixture'")
+        if self.source not in ("c_idm", "logged_fixture", "c_replay"):
+            raise ValueError("Frozen ego source must be 'c_idm', 'logged_fixture', or 'c_replay'")
         if not torch.isfinite(self.state[self.valid]).all():
             raise ValueError("Frozen valid ego states contain NaN or Inf")
 
@@ -165,6 +165,7 @@ class ReGentSOptimizationResult:
     offroad_rejection_count: int
     failure_reason: str | None
     frozen_ego_source: str
+    cost_history: tuple[CostSnapshot, ...] = ()
 
 
 def _single_scenario_payload(payload):
@@ -175,14 +176,14 @@ def _single_scenario_payload(payload):
     raise ValueError("Frozen IDM capture requires exactly one Drive scenario")
 
 
-def _ego_state_from_payload(payload):
+def _ego_state_from_payload(payload, expected_controller):
     scenario = _single_scenario_payload(payload)
     agents = scenario.get("agents")
     if not isinstance(agents, list) or not agents:
         raise ValueError("Drive state contains no ego agent")
     ego = agents[0]
-    if int(ego.get("id", -1)) != 0 or int(ego.get("controller", -1)) != binding.CONTROLLER_IDM:
-        raise ValueError("Stable agent zero must be controlled by C IDM")
+    if int(ego.get("id", -1)) != 0 or int(ego.get("controller", -1)) != expected_controller:
+        raise ValueError(f"Stable agent zero must be controlled by {expected_controller}")
     values = np.asarray(
         (
             ego["sim_x"],
@@ -195,26 +196,26 @@ def _ego_state_from_payload(payload):
         dtype=np.float32,
     )
     if not np.isfinite(values).all():
-        raise ValueError("C IDM emitted a non-finite ego state")
+        raise ValueError("C SDC emitted a non-finite ego state")
     heading = np.float32(math.atan2(math.sin(float(values[2])), math.cos(float(values[2]))))
     signed_speed = np.float32(signed_speed_from_c_velocity(values[3], values[4], heading))
     state = np.asarray((values[0], values[1], heading, signed_speed, values[5]), dtype=np.float32)
     validity = int(ego["sim_valid"])
     if validity not in (0, 1):
-        raise ValueError("C IDM emitted invalid ego validity")
+        raise ValueError("C SDC emitted invalid ego validity")
     return scenario["scenario_id"], state, bool(validity)
 
 
 def capture_frozen_idm_trajectory(drive, transition_count, *, seed=None):
-    """Reset one Drive scenario and capture its native C IDM ego rollout.
+    """Reset one Drive scenario and capture its native C IDM or replay ego rollout.
 
     Backgrounds remain under the Drive configuration's replay controller. The
     caller owns the Drive instance and remains responsible for closing it.
     """
     if not isinstance(transition_count, int) or transition_count < 1:
         raise ValueError("transition_count must be a positive integer")
-    if drive.sdc_controller != binding.CONTROLLER_IDM:
-        raise ValueError("Frozen ego capture requires sdc_controller='idm'")
+    if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
+        raise ValueError("Frozen ego capture requires sdc_controller='idm' or 'replay'")
     if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:
         raise ValueError("Frozen ego capture requires non_sdc_controller='replay'")
     if drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
@@ -232,24 +233,25 @@ def capture_frozen_idm_trajectory(drive, transition_count, *, seed=None):
     scenario_ids = []
     states = []
     validity = []
-    scenario_id, state, valid = _ego_state_from_payload(initial_payload)
+    scenario_id, state, valid = _ego_state_from_payload(initial_payload, drive.sdc_controller)
     scenario_ids.append(scenario_id)
     states.append(state)
     validity.append(valid)
     neutral_actions = np.zeros_like(drive.actions)
     for _ in range(transition_count):
         drive.step(neutral_actions)
-        scenario_id, state, valid = _ego_state_from_payload(drive.get_state())
+        scenario_id, state, valid = _ego_state_from_payload(drive.get_state(), drive.sdc_controller)
         scenario_ids.append(scenario_id)
         states.append(state)
         validity.append(valid)
     if any(item != scenario.scenario_ids[0] for item in scenario_ids):
         raise RuntimeError("Drive changed scenario during frozen IDM capture")
+    source = "c_idm" if drive.sdc_controller == binding.CONTROLLER_IDM else "c_replay"
     frozen_ego = FrozenEgoTrajectory(
         state=torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])),
         valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_)[None, ...])),
         scenario_id=scenario.scenario_ids[0],
-        source="c_idm",
+        source=source,
     )
     return scenario, frozen_ego
 
@@ -566,6 +568,7 @@ def optimize_frozen_ego_scenario(
             offroad_rejection_count=0,
             failure_reason="scene_filtered:" + ",".join(selection.scene_reasons_for(0)),
             frozen_ego_source=frozen_ego.source,
+            cost_history=(),
         )
 
     out_of_bounds_rasters = prepare_out_of_bounds_rasters(
@@ -593,6 +596,7 @@ def optimize_frozen_ego_scenario(
     best_total = math.inf
     best_iteration = 0
     initial_costs = None
+    cost_history = []
     collision_timestep = None
     collision_agent_idx = -1
     success = False
@@ -646,6 +650,7 @@ def optimize_frozen_ego_scenario(
                 loss=f"{costs.total.item():.4f}", best=f"{best_total:.4f}" if best_total != math.inf else "inf"
             )
         snapshot = _cost_snapshot(costs)
+        cost_history.append(snapshot)
         if initial_costs is None:
             initial_costs = snapshot
         background_collision = _has_background_collision(
@@ -803,4 +808,5 @@ def optimize_frozen_ego_scenario(
         offroad_rejection_count=offroad_rejection_count,
         failure_reason=failure_reason,
         frozen_ego_source=frozen_ego.source,
+        cost_history=tuple(cost_history),
     )

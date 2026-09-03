@@ -1659,21 +1659,28 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         present_metrics.update(metrics.keys())
 
     FAILURE_FILTERS = (
-        ("offroad", "offroad_rate", "Off-road"),
-        ("collision", "collision_rate", "Collisions"),
-        ("atfault", "at_fault_collision_rate", "At-fault collisions"),
-        ("redlight", "red_light_violation_rate", "Red-light violations"),
+        ("offroad", ("offroad_rate", "offroad"), "Off-road"),
+        ("collision", ("collision_rate", "collision"), "Collisions"),
+        ("atfault", ("at_fault_collision_rate", "at_fault"), "At-fault collisions"),
+        ("redlight", ("red_light_violation_rate", "red_light"), "Red-light violations"),
+        ("gensuccess", ("generation_success",), "Success"),
     )
-    available_failure_filters = [
-        failure_filter for failure_filter in FAILURE_FILTERS if failure_filter[1] in present_metrics
-    ]
+    available_failure_filters = []
+    for filter_key, metric_keys, filter_label in FAILURE_FILTERS:
+        if isinstance(metric_keys, str):
+            metric_keys = (metric_keys,)
+        if any(k in present_metrics for k in metric_keys):
+            available_failure_filters.append((filter_key, metric_keys, filter_label))
 
     failure_flags = {}
     for filename in files:
         metrics = metrics_map.get(filename, {})
-        failure_flags[filename] = {
-            filter_key: metrics.get(metric_key, 0) > 0 for filter_key, metric_key, _ in FAILURE_FILTERS
-        }
+        flags = {}
+        for filter_key, metric_keys, _ in FAILURE_FILTERS:
+            if isinstance(metric_keys, str):
+                metric_keys = (metric_keys,)
+            flags[filter_key] = any(metrics.get(k, 0) > 0 for k in metric_keys)
+        failure_flags[filename] = flags
 
     options_html = "\n".join(
         (
@@ -1739,6 +1746,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             --collision: #b42318;
             --atfault: #7e22ce;
             --redlight: #d92d20;
+            --gensuccess: #027a48;
         }
 
         * { box-sizing: border-box; }
@@ -1837,6 +1845,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         .collision-dot { background: var(--collision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
+        .gensuccess-dot { background: var(--gensuccess); }
 
         select {
             cursor: pointer;
@@ -2067,6 +2076,11 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             color: var(--redlight);
         }
 
+        .scenario-badge.gensuccess {
+            border-left: 3px solid var(--gensuccess);
+            color: var(--gensuccess);
+        }
+
         #viewer {
             flex: 1 1 auto;
             width: 100%;
@@ -2203,6 +2217,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
             if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
             if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
+            if (selectedOption.dataset.gensuccess === 'true') addFailureBadge('Success', 'gensuccess');
             if (!currentFailures.childElementCount) {
                 const badge = document.createElement('span');
                 badge.className = 'scenario-badge';
