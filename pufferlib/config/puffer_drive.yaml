@@ -126,7 +126,6 @@ env:
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
-  # Penalty coefficient shared by red-light and stop-sign violations
   reward_stop_line: 1.0
   reward_comfort: 0.05
   reward_lane_align: 0.025

@@ -1687,7 +1687,7 @@ static bool check_stop_sign_violation(Drive *env, Agent *agent) {
             continue;
         }
         if (fabsf(compute_heading_diff(agent->sim_heading, traffic_control->heading))
-            > STOP_SIGN_HEADING_THRESHOLD + STOP_SIGN_HEADING_TOLERANCE) {
+            > STOP_LINE_HEADING_THRESHOLD + STOP_SIGN_HEADING_TOLERANCE) {
             continue;
         }
 
@@ -1702,7 +1702,7 @@ static bool check_stop_sign_violation(Drive *env, Agent *agent) {
         float dx = agent->sim_x - midpoint_x;
         float dy = agent->sim_y - midpoint_y;
         float distance_sq = dx * dx + dy * dy;
-        if (distance_sq > STOP_SIGN_DIST_SQ) {
+        if (distance_sq > STOP_LINE_DIST_SQ) {
             continue;
         }
         near_stop_sign = true;
@@ -1722,7 +1722,11 @@ static bool check_stop_sign_violation(Drive *env, Agent *agent) {
             = stopped_before_stop_line || (before_stop_line && agent->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD);
     }
 
-    bool stop_satisfied = agent->stop_sign_stopped_timestep_count >= STOP_SIGN_REQUIRED_STOP_TIMESTEPS;
+    int required_stop_steps = (int) (STOP_SIGN_REQUIRED_STOP_DURATION / env->dt);
+    if (required_stop_steps < 1) {
+        required_stop_steps = 1;
+    }
+    bool stop_satisfied = agent->stop_sign_stopped_timestep_count >= required_stop_steps;
     if (crossed_stop_line) {
         agent->stop_sign_stopped_timestep_count = 0;
         return !stop_satisfied;
