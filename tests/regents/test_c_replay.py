@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NUPLAN_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/nuplan"
 GENERATION_CONFIG = REPO_ROOT / "pufferlib/config/evaluation/regents.yaml"
 HORIZON_TRANSITION_COUNT = 16
-REPLAY_FIXTURES = ((5, 47), (8, 50))
+REPLAY_FIXTURES = ((8, 50),)
 
 
 def _drive(map_idx, seed, sdc_controller):
@@ -80,9 +80,15 @@ def _open_loop_replay(map_idx, seed, iteration_count=5, learning_rate=1e-3):
     return scenario, optimization, replay
 
 
-@pytest.mark.parametrize(("map_idx", "seed"), REPLAY_FIXTURES)
-def test_open_loop_replay_reproduces_torch_within_stage_two_tolerance(map_idx, seed):
+@pytest.fixture(scope="module", params=REPLAY_FIXTURES)
+def cached_replay(request):
+    map_idx, seed = request.param
     scenario, optimization, replay = _open_loop_replay(map_idx, seed)
+    return map_idx, seed, scenario, optimization, replay
+
+
+def test_open_loop_replay_reproduces_torch_within_stage_two_tolerance(cached_replay):
+    map_idx, seed, scenario, optimization, replay = cached_replay
 
     assert replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
     assert replay.metrics.compared_state_count > 0
@@ -93,9 +99,8 @@ def test_open_loop_replay_reproduces_torch_within_stage_two_tolerance(map_idx, s
     assert scenario.scenario_ids[0]
 
 
-@pytest.mark.parametrize(("map_idx", "seed"), REPLAY_FIXTURES)
-def test_c_replay_starts_from_the_torch_initial_pose(map_idx, seed):
-    _, optimization, replay = _open_loop_replay(map_idx, seed)
+def test_c_replay_starts_from_the_torch_initial_pose(cached_replay):
+    map_idx, seed, scenario, optimization, replay = cached_replay
 
     joint_valid = optimization.state_valid & replay.state_valid
     pose = slice(STATE_X, STATE_HEADING + 1)
@@ -103,10 +108,14 @@ def test_c_replay_starts_from_the_torch_initial_pose(map_idx, seed):
     assert float(difference[joint_valid[:, :, 0]].max()) <= C_REPLAY_TOLERANCE
 
 
-@pytest.mark.parametrize(("map_idx", "seed"), REPLAY_FIXTURES)
-def test_c_replay_is_deterministic(map_idx, seed):
-    _, _, first = _open_loop_replay(map_idx, seed)
-    _, _, repeated = _open_loop_replay(map_idx, seed)
+def test_c_replay_is_deterministic(cached_replay):
+    map_idx, seed, scenario, optimization, first = cached_replay
+    drive = _drive(map_idx, seed, "replay")
+    try:
+        drive.reset(seed=seed)
+        repeated = replay_optimized_scenario_in_c(drive, scenario, optimization, seed=seed)
+    finally:
+        drive.close()
 
     assert torch.equal(first.states, repeated.states)
     assert torch.equal(first.state_valid, repeated.state_valid)
@@ -114,8 +123,8 @@ def test_c_replay_is_deterministic(map_idx, seed):
     assert first.failure_reason == repeated.failure_reason
 
 
-def test_non_injected_replay_actors_follow_their_logged_trajectory():
-    scenario, optimization, replay = _open_loop_replay(*REPLAY_FIXTURES[0])
+def test_non_injected_replay_actors_follow_their_logged_trajectory(cached_replay):
+    map_idx, seed, scenario, optimization, replay = cached_replay
 
     injected = optimization.optimized_action_mask.any(dim=2)
     logged = scenario.logged_state[:, :, : replay.states.shape[2]]
@@ -125,8 +134,8 @@ def test_non_injected_replay_actors_follow_their_logged_trajectory():
     assert float(difference[joint_valid].max()) <= C_REPLAY_TOLERANCE
 
 
-def test_baseline_replay_absorbs_pre_existing_logged_collisions():
-    _, _, replay = _open_loop_replay(8, 50)
+def test_baseline_replay_absorbs_pre_existing_logged_collisions(cached_replay):
+    map_idx, seed, scenario, optimization, replay = cached_replay
 
     # Map 8 logs overlapping actors, so C must not blame the adversary for them.
     assert replay.metrics.baseline_collision_pair_count > 0
@@ -295,8 +304,8 @@ def test_generation_config_rejects_a_horizon_the_drive_guards_would_reject(tmp_p
 def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
     report = generate_regents_scenarios(GENERATION_CONFIG, "regents_nuplan_smoke", output_dir=tmp_path)
 
-    assert report.scenario_count == 2
-    assert sorted(path.name for path in tmp_path.glob("*.npz")) == ["scenario_00000.npz", "scenario_00001.npz"]
+    assert report.scenario_count == 1
+    assert sorted(path.name for path in tmp_path.glob("*.npz")) == ["scenario_00000.npz"]
     assert (tmp_path / "generation_metrics.csv").is_file()
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0

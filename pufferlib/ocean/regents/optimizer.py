@@ -6,6 +6,7 @@ from itertools import combinations
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.adapter import export_drive_scenarios
@@ -602,7 +603,8 @@ def optimize_frozen_ego_scenario(
     background_collision_rejection_count = 0
     offroad_rejection_count = 0
 
-    for iteration in range(config.iteration_count + 1):
+    pbar = tqdm(range(config.iteration_count + 1), desc="Optimizing", leave=False)
+    for iteration in pbar:
         states, state_valid = _compose_rollout(
             scenario,
             inverse,
@@ -629,6 +631,10 @@ def optimize_frozen_ego_scenario(
         ):
             failure_reason = "nonfinite_loss"
             break
+        if iteration % 10 == 0:
+            pbar.set_postfix(
+                loss=f"{costs.total.item():.4f}", best=f"{best_total:.4f}" if best_total != math.inf else "inf"
+            )
         snapshot = _cost_snapshot(costs)
         if initial_costs is None:
             initial_costs = snapshot

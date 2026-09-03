@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from tqdm import tqdm
+
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
@@ -235,7 +237,8 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     env_config = _full_env_config(generation["env"])
     rows = []
     rendered_files = {}
-    for scenario_idx in range(generation["scenario_count"]):
+    pbar = tqdm(range(generation["scenario_count"]), desc="Generating scenarios")
+    for scenario_idx in pbar:
         seed = generation["seed"] + scenario_idx
         drive = _build_drive(generation["env"], scenario_idx, seed)
         started_at = time.perf_counter()
@@ -256,6 +259,9 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
         rows.append(_metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path))
         if render_replays:
             rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))
+        success_so_far = sum(row["generation_success"] for row in rows)
+        success_rate = success_so_far / len(rows) if rows else 0.0
+        pbar.set_postfix(success=f"{success_rate:.1%}")
     if rendered_files:
         import pufferlib.viz
 

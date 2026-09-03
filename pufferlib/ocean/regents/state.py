@@ -6,7 +6,7 @@ The feature order is x, y, wrapped heading, signed longitudinal speed, and
 actual steering angle.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 import numpy as np
 import torch
@@ -18,6 +18,16 @@ STATE_HEADING = 2
 STATE_SPEED = 3
 STATE_STEERING = 4
 STATE_FEATURE_COUNT = 5
+
+
+def moved_to_device(instance, device):
+    """Return a frozen dataclass copy with every tensor field on ``device``."""
+    moved = {}
+    for field in fields(instance):
+        value = getattr(instance, field.name)
+        if isinstance(value, torch.Tensor):
+            moved[field.name] = value.to(device)
+    return replace(instance, **moved)
 
 
 def signed_speed_from_c_velocity(velocity_x, velocity_y, wrapped_heading):
@@ -73,6 +83,9 @@ class DrivableAreaRaster:
             raise TypeError(f"Drivable raster must be bool, got {self.mask.dtype}")
         if tuple(self.mask.shape) != expected_shape:
             raise ValueError(f"Drivable raster shape must be {expected_shape}, got {tuple(self.mask.shape)}")
+
+    def to(self, device):
+        return moved_to_device(self, device)
 
 
 @dataclass(frozen=True)
@@ -182,6 +195,15 @@ class ScenarioBatch:
             raise TypeError("log_dt_seconds must use torch.float32")
         if len(self.drivable_area_rasters) != batch_count:
             raise ValueError("drivable_area_rasters must have one entry per batch item")
+
+    def to(self, device):
+        """Return this batch with every tensor and raster on ``device``."""
+        moved = moved_to_device(self, device)
+        return replace(moved, drivable_area_rasters=tuple(r.to(device) for r in self.drivable_area_rasters))
+
+    @property
+    def device(self):
+        return self.logged_state.device
 
     @property
     def batch_size(self):

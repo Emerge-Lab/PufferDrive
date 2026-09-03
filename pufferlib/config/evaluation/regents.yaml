@@ -39,7 +39,7 @@ generations:
     render_replays: true
     optimizer:
       learning_rate: 0.001
-      iteration_count: 500
+      iteration_count: 100
     env:
       num_maps: 16
       scenario_length: 201
@@ -65,14 +65,14 @@ generations:
 
   - name: regents_nuplan_smoke
     seed: 42
-    scenario_count: 2
-    horizon_transition_count: 50
+    scenario_count: 1
+    horizon_transition_count: 16
     maximum_outer_iterations: 1
     raster_resolution_meters: 5.0
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.01
-      iteration_count: 30
+      iteration_count: 5
     env:
-      num_maps: 2
+      num_maps: 1

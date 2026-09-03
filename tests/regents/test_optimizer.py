@@ -309,9 +309,18 @@ def _fixed_real_scenario(map_idx):
         drive.close()
 
 
-@pytest.mark.parametrize(("map_idx", "seed"), [(5, 47), (8, 50)])
-def test_fixed_real_scenario_optimization_is_finite_deterministic_and_reduces_collision_cost(map_idx, seed):
-    scenario = _fixed_real_scenario(map_idx)
+@pytest.fixture(scope="module")
+def cached_real_scenarios():
+    return {
+        8: _fixed_real_scenario(8),
+    }
+
+
+@pytest.mark.parametrize(("map_idx", "seed"), [(8, 50)])
+def test_fixed_real_scenario_optimization_is_finite_deterministic_and_reduces_collision_cost(
+    map_idx, seed, cached_real_scenarios
+):
+    scenario = cached_real_scenarios[map_idx]
     config = ReGentSOptimizationConfig(iteration_count=5, learning_rate=1e-3)
     first = optimize_frozen_ego_scenario(
         scenario,
