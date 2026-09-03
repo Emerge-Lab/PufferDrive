@@ -14,6 +14,7 @@ import yaml
 
 import pufferlib
 from pufferlib import pufferl
+from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -96,7 +97,7 @@ def _write_benchmark_config(
                 "env": {
                     "eval_mode": 1,
                     "compute_eval_metrics": True,
-                    "termination_mode": 0,
+                    "termination_mode": False,
                     "obs_dropout_lane": 0.0,
                     "obs_dropout_boundary": 0.0,
                     "partner_blindness_prob": 0.0,
@@ -150,7 +151,7 @@ def _standalone_eval_args(benchmark_config_path):
             "max_agents_per_env": 8,
             "num_maps": CARLA_MAP_COUNT,
             "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "scenario_length": CARLA_SCENARIO_LENGTH,
             "resample_frequency": CARLA_SCENARIO_LENGTH,
             "action_type": "discrete",
@@ -189,7 +190,7 @@ def carla_evaluation(tmp_path_factory):
         scenario_length=CARLA_SCENARIO_LENGTH,
         max_agents_per_env=8,
         control_mode="control_vehicles",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
     )
     args = _standalone_eval_args(benchmark_config_path)
     multiprocessing_calls = []
@@ -306,7 +307,6 @@ def test_seed_replay_writes_exactly_identical_metrics(carla_evaluation):
     environment_config["obs_dropout_lane"] = args["env"]["obs_dropout_lane"]
     environment_config["obs_dropout_boundary"] = args["env"]["obs_dropout_boundary"]
     replay_args = drive_benchmark.build_benchmark_args(args, benchmarks[0], environment_config)
-    replay_args["env"]["num_agents"] = replay_args["eval"]["num_agents"]
 
     map_indices = drive_benchmark._resolve_map_indices(
         replay_args["env"]["map_dir"],
@@ -376,7 +376,7 @@ def _replay_render_args():
             "non_sdc_controller": "replay",
             "scenario_length": 64,
             "resample_frequency": 64,
-            "termination_mode": 0,
+            "termination_mode": False,
             "terminate_on_goal": False,
             "goal_source": "gt",
             "num_goals": 3,
@@ -466,7 +466,7 @@ def _write_training_benchmark(tmp_path):
         scenario_length=TRAIN_HORIZON,
         max_agents_per_env=TRAIN_AGENTS_PER_ENV,
         control_mode="control_vehicles",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
     )
 
 
@@ -490,7 +490,7 @@ def _training_args(tmp_path, benchmark_config_path, evaluation_enabled):
             "max_agents_per_env": TRAIN_AGENTS_PER_ENV,
             "num_maps": 2,
             "map_dir": str(CARLA_MAP_DIR),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "scenario_length": TRAIN_HORIZON,
             "resample_frequency": TRAIN_HORIZON,
         }
@@ -698,7 +698,7 @@ def _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir):
             "max_agents_per_env": SDC_MAX_AGENTS_PER_ENV,
             "num_maps": SDC_SCENARIO_COUNT,
             "map_dir": str(map_dir),
-            "use_map_cache": 1,
+            "use_map_cache": True,
             "simulation_mode": "replay",
             "control_mode": "control_sdc_only",
             "scenario_length": SDC_SCENARIO_LENGTH,
@@ -738,7 +738,7 @@ def _run_sdc_eval(output_root, map_dir, benchmark_name, max_scenarios_per_batch)
         scenario_length=SDC_SCENARIO_LENGTH,
         max_agents_per_env=None,
         control_mode="control_sdc_only",
-        use_neighbor_cache=1,
+        use_neighbor_cache=True,
         max_scenarios_per_batch=max_scenarios_per_batch,
     )
     args = _sdc_eval_args(benchmark_config_path, benchmark_name, map_dir)
@@ -787,20 +787,11 @@ def test_batch_cap_bounds_resident_envs(sdc_replay_map_dir):
         capped.close()
 
 
-def test_batch_cap_rejects_non_positive_values(sdc_replay_map_dir):
-    with pytest.raises(ValueError, match="max_scenarios_per_batch"):
-        Drive(
-            num_agents=SDC_SCENARIO_COUNT,
-            num_maps=SDC_SCENARIO_COUNT,
-            map_dir=str(sdc_replay_map_dir),
-            simulation_mode="replay",
-            control_mode="control_sdc_only",
-            eval_mode=1,
-            num_eval_scenarios=SDC_SCENARIO_COUNT,
-            min_agents_per_env=1,
-            max_agents_per_env=SDC_MAX_AGENTS_PER_ENV,
-            max_scenarios_per_batch=0,
-        )
+def test_batch_cap_rejects_non_positive_values():
+    args = _load_config()
+    args["env"]["max_scenarios_per_batch"] = 0
+    with pytest.raises(pufferlib.APIUsageError, match="max_scenarios_per_batch"):
+        validate_puffer_drive_config(args, "test")
 
 
 def test_batch_cap_preserves_scenario_coverage(tmp_path, sdc_replay_map_dir):

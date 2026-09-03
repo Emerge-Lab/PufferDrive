@@ -64,7 +64,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         non_sdc_controller="replay",
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,
-        termination_mode=0,
+        termination_mode=False,
         terminate_on_goal=terminate_on_goal,
         report_interval=1,
         num_goals=NUM_GOALS,
@@ -106,7 +106,7 @@ def _alias_waypoint_index(agent_state, waypoints):
 
 
 def test_each_goal_fire_burns_exactly_one_waypoint():
-    """Full episode with terminate_on_goal=0: every reached-goal fire must
+    """Full episode with terminate_on_goal disabled: every reached-goal fire must
     advance the goal alias to the immediately-next waypoint (exactly one
     burned), the alias must never move without a fire, and once the final
     waypoint is consumed no further fires may occur (saturation)."""
@@ -161,7 +161,7 @@ def test_each_goal_fire_burns_exactly_one_waypoint():
         env.close()
 
     assert truncated_at == SCENARIO_LENGTH, (
-        f"With terminate_on_goal=0 the episode must run to scenario_length="
+        f"With terminate_on_goal disabled the episode must run to scenario_length="
         f"{SCENARIO_LENGTH}, but truncated at {truncated_at}."
     )
     assert consumed_count == NUM_GOALS, (
@@ -171,7 +171,7 @@ def test_each_goal_fire_burns_exactly_one_waypoint():
 
 
 def test_goal_termination_accounts_for_every_waypoint():
-    """With terminate_on_goal=1, the episode may only truncate once every
+    """With terminate_on_goal enabled, the episode may only truncate once every
     waypoint has been individually consumed: waypoints consumed before stepping
     (post-reset alias index) + fires observed while stepping + the one fire on
     the truncating step must equal num_goals. Burn-through would

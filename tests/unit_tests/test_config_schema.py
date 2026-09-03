@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Structured-config schema tests: load_config validates the env section of
-puffer_drive against pufferlib.config_schema.DriveEnvConfig at load time.
+"""PufferDrive schema and final resolved-config checker tests.
 
 Run: python -m unittest tests.unit_tests.test_config_schema
 """
@@ -11,14 +10,13 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from omegaconf.errors import ConfigKeyError, ValidationError
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import pufferlib
 from pufferlib.config_schema import (
     ActionType,
-    ControlMode,
     Controller,
+    ControlMode,
     DynamicsModel,
     GoalRegen,
     GoalSource,
@@ -26,8 +24,11 @@ from pufferlib.config_schema import (
     InitMode,
     NonVehicleController,
     SimulationMode,
+    normalize_puffer_drive_config,
+    validate_puffer_drive_config,
 )
 from pufferlib.ocean.drive import binding
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.pufferl import load_config
 
 
@@ -56,35 +57,102 @@ _DRIFT_CHECKED_ENUMS = [
 class TestConfigSchema(unittest.TestCase):
     @patch("sys.argv", ["pufferl.py"])
     def test_valid_config_loads_with_plain_strings(self):
-        """Schema validation must not change the plain-dict contract: enum
+        """Final validation must not change the plain-dict contract: enum
         fields come back as their string names, not Enum members."""
         args = load_config("puffer_drive")
+        self.assertIsNone(validate_puffer_drive_config(args, "test"))
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
+        self.assertIsInstance(args["render"], bool)
+        self.assertIsInstance(args["save_frames"], bool)
+        for field_name in (
+            "use_map_cache",
+            "use_neighbor_cache",
+            "termination_mode",
+            "terminate_on_goal",
+        ):
+            self.assertIsInstance(args["env"][field_name], bool)
+
+    @patch("sys.argv", ["pufferl.py", "render=true", "env.use_map_cache=false"])
+    def test_boolean_cli_overrides_load(self):
+        args = load_config("puffer_drive")
+
+        self.assertIs(args["render"], True)
+        self.assertIs(args["env"]["use_map_cache"], False)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_legacy_zero_or_one_values_normalize_to_booleans(self):
+        args = load_config("puffer_drive")
+        args["render"] = 1
+        args["save_frames"] = 0
+        args["env"].update(
+            {
+                "use_map_cache": 1,
+                "use_neighbor_cache": 0,
+                "termination_mode": 1,
+                "terminate_on_goal": 0,
+            }
+        )
+
+        normalized = normalize_puffer_drive_config(args, "test")
+
+        self.assertIs(normalized["render"], True)
+        self.assertIs(normalized["save_frames"], False)
+        self.assertIs(normalized["env"]["use_map_cache"], True)
+        self.assertIs(normalized["env"]["use_neighbor_cache"], False)
+        self.assertIs(normalized["env"]["termination_mode"], True)
+        self.assertIs(normalized["env"]["terminate_on_goal"], False)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_evaluation_benchmarks_accepts_comma_separated_string(self):
+        args = load_config("puffer_drive")
+        args["train"]["evaluation_interval_epochs"] = 1
+        args["train"]["evaluation_benchmarks"] = "carla_fast,womd_single"
+
+        normalized = normalize_puffer_drive_config(args, "test")
+        self.assertIsNone(validate_puffer_drive_config(normalized, "test"))
+        self.assertTrue(drive_benchmark.validate_training_evaluation_config(normalized))
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_evaluation_benchmarks_rejects_list(self):
+        args = load_config("puffer_drive")
+        args["train"]["evaluation_interval_epochs"] = 1
+        args["train"]["evaluation_benchmarks"] = ["carla_fast", "womd_single"]
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
+            normalize_puffer_drive_config(args, "test")
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "evaluation_benchmarks"):
+            validate_puffer_drive_config(args, "test")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=sotp"])
     def test_enum_typo_fails_at_load(self):
-        with self.assertRaisesRegex(ValidationError, "expected one of"):
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.collision_behavior while loading: Invalid value 'sotp'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.num_agents=lots"])
     def test_wrong_type_fails_at_load(self):
-        with self.assertRaisesRegex(ValidationError, "could not be converted"):
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.num_agents while loading: Value 'lots'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "+env.collission_behavior=stop"])
     def test_unknown_env_key_fails_at_load(self):
         """Keys force-added with + that the schema doesn't declare are
-        rejected (plain overrides of unknown keys already fail in compose)."""
-        with self.assertRaisesRegex(ConfigKeyError, "collission_behavior"):
+        rejected as soon as Hydra composition finishes."""
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.collission_behavior while loading: Key 'collission_behavior'",
+        ):
             load_config("puffer_drive")
 
     @patch("sys.argv", ["pufferl.py", "env.collision_behavior=1"])
     def test_enum_accepts_c_int_value(self):
-        """OmegaConf coerces enum *values* as well as names. This is safe
-        exactly because the schema ints mirror drive.h (see the sync test
-        below) — the coerced member round-trips to the right name."""
         args = load_config("puffer_drive")
         self.assertEqual(args["env"]["collision_behavior"], "stop")
 
@@ -120,6 +188,116 @@ class TestConfigSchema(unittest.TestCase):
                 continue
             const_name = f"CONTROLLER_{member.name.upper()}"
             self.assertEqual(getattr(binding, const_name), member.value)
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_training_batch_relationships_are_checked(self):
+        args = load_config("puffer_drive")
+
+        invalid = {**args, "train": {**args["train"], "batch_size": "auto", "bptt_horizon": "auto"}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "batch_size and bptt_horizon"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {**args, "train": {**args["train"], "minibatch_size": 10, "max_minibatch_size": 6}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "max_minibatch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {**args, "train": {**args["train"], "batch_size": 8, "minibatch_size": 16}}
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "train.batch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        invalid = {
+            **args,
+            "train": {
+                **args["train"],
+                "batch_size": 32,
+                "minibatch_size": 10,
+                "max_minibatch_size": 10,
+                "bptt_horizon": 4,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "bptt_horizon"):
+            validate_puffer_drive_config(invalid, "test")
+
+        # Test derived batch_size < minibatch_size when batch_size is auto
+        invalid = {
+            **args,
+            "vec": {**args["vec"], "num_envs": 1},
+            "env": {**args["env"], "num_agents": 4},
+            "train": {
+                **args["train"],
+                "batch_size": "auto",
+                "bptt_horizon": 2,
+                "minibatch_size": 1024,
+                "max_minibatch_size": 1024,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "derived batch_size"):
+            validate_puffer_drive_config(invalid, "test")
+
+        # Test total_agents > segments when neither is auto
+        invalid = {
+            **args,
+            "vec": {**args["vec"], "num_envs": 16},
+            "env": {**args["env"], "num_agents": 4},
+            "train": {
+                **args["train"],
+                "batch_size": 32,
+                "bptt_horizon": 2,
+                "minibatch_size": 16,
+                "max_minibatch_size": 16,
+            },
+        }
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "total agents .* must be <= segments"):
+            validate_puffer_drive_config(invalid, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_semantic_error_separates_field_path_from_context(self):
+        args = load_config("puffer_drive")
+        args["env"]["obs_lane_stride"] = 0
+
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            r"at env\.obs_lane_stride during training: must be a positive integer",
+        ):
+            validate_puffer_drive_config(args, "training")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_continuous_policy_rejects_discrete_environment(self):
+        args = load_config("puffer_drive")
+        args["env"]["action_type"] = "discrete"
+        args["policy"]["action_type"] = "continuous"
+
+        with self.assertRaisesRegex(
+            pufferlib.APIUsageError,
+            "policy.action_type.*cannot be continuous when env.action_type is discrete",
+        ):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_discrete_policy_accepts_continuous_environment(self):
+        args = load_config("puffer_drive")
+        args["env"]["action_type"] = "continuous"
+        args["policy"]["action_type"] = "discrete"
+
+        self.assertIsNone(validate_puffer_drive_config(args, "test"))
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_failure_replay_rejects_scenario_rendering(self):
+        args = load_config("puffer_drive")
+        args["eval"]["failure_replay_csv"] = "failures.csv"
+        args["eval"]["render_filter"] = "collision"
+        args["eval"]["render_scenarios"] = True
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "scenario rendering"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_remote_load_id_requires_tracker(self):
+        args = load_config("puffer_drive")
+        args["load_id"] = "remote-run"
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "load_id"):
+            validate_puffer_drive_config(args, "test")
 
 
 if __name__ == "__main__":
