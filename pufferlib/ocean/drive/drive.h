@@ -1693,6 +1693,12 @@ static bool check_stop_sign_violation(Drive *env, Agent *agent) {
 
         float midpoint_x = 0.5f * (traffic_control->stop_line[0] + traffic_control->stop_line[3]);
         float midpoint_y = 0.5f * (traffic_control->stop_line[1] + traffic_control->stop_line[4]);
+        float midpoint_z = 0.5f * (traffic_control->stop_line[2] + traffic_control->stop_line[5]);
+        if (fabsf(agent->sim_z - midpoint_z) > Z_BUFFER) {
+            continue;
+        }
+
+        crossed_stop_line = crossed_stop_line || agent_front_crossed_stop_line(agent, traffic_control);
         float dx = agent->sim_x - midpoint_x;
         float dy = agent->sim_y - midpoint_y;
         float distance_sq = dx * dx + dy * dy;
@@ -1700,7 +1706,6 @@ static bool check_stop_sign_violation(Drive *env, Agent *agent) {
             continue;
         }
         near_stop_sign = true;
-        crossed_stop_line = crossed_stop_line || agent_front_crossed_stop_line(agent, traffic_control);
 
         float line_dx = traffic_control->stop_line[3] - traffic_control->stop_line[0];
         float line_dy = traffic_control->stop_line[4] - traffic_control->stop_line[1];
