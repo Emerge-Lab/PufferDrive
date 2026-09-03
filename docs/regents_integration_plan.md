@@ -80,25 +80,25 @@ The per-timestep mean ranges are `0.03525..0.05448 m` position, `0.001934..0.006
 
 Both M1 hard gates now pass. Stage 4 loss/geometry work is unlocked, but no optimization work has started.
 
-## Stage 4 — Implement differentiable geometry and KING/ReGentS costs
+## Stage 4 — Implement differentiable geometry and KING/ReGentS costs (Completed)
 
-Implement the three paper costs independently before combining them:
+Completed (2026-09-03): Implemented exact differentiable oriented-box geometry in `pufferlib/ocean/regents/geometry.py` and the three independent paper costs plus their weighted composition in `pufferlib/ocean/regents/losses.py`.
 
-1. ego-background collision induction: minimum over candidate adversaries of their validity-masked, time-averaged signed bounding-box distance to ego;
-2. background-background collision avoidance: penalize the minimum truncated distance between distinct background actors;
-3. drivable-area deviation: sample a Gaussian-smoothed out-of-bounds raster at the four corners of each optimized vehicle box and average over valid steps.
+The WOSAC audit retained only its low-level box-corner, Minkowski-sum, and convex-polygon distance primitives. ReGentS does not use WOSAC's rounded-box approximation, evaluation-shaped masking, in-place operations, or all-pairs allocation. Its sharp-box distance is positive for separation, zero at contact, and negative for penetration; randomized tests match the C simulator's four-axis SAT collision sign away from numerical boundaries. Background pairs are evaluated in deterministic chunks of 4,096 pairs, bounding temporary geometry memory by `O(chunk_size * timesteps)` while preserving the exact hard-min reduction.
 
-The existing WOSAC Torch geometry in `pufferlib/ocean/evaluation_utils/wosac/` is a strong reuse candidate. Before reuse, verify that its rounded-box distance, validity behavior, sign convention, in-place operations, and memory scaling match the optimization requirements. Put any ReGentS-specific semantics behind the new `geometry.py` API rather than importing evaluation details throughout the optimizer.
+The cost contracts are:
 
-Work and tests:
+1. ego collision induction computes each candidate's signed box distance to the sole ego at jointly valid timesteps, averages using that candidate's valid denominator, then takes the hard minimum over candidates;
+2. background collision avoidance computes `-min(min(1.25 m, signed_distance))` over distinct jointly valid background pairs and timesteps, returning the neutral value zero when fewer than two backgrounds have a jointly valid pair;
+3. drivable-area deviation sums the four sampled corner potentials for each optimized vehicle, averages each vehicle over only its valid timesteps, then sums optimized vehicles as in the paper's actor/corner sums.
 
-- Implement oriented box corners and a signed separation/penetration distance with a collision sign that agrees with the C OBB check away from numerical boundaries.
-- Construct the out-of-bounds raster once per map. Use `torch.nn.functional.grid_sample` with an explicit world-to-normalized-grid transform and tested boundary behavior.
-- Apply masks before reductions so invalid actors/timesteps cannot win a `min` or alter a mean denominator.
-- Keep the three weights and the KING truncation/Gaussian parameters named and configurable. Optional plausibility or action-deviation regularizers must be labeled as extensions, not paper-equivalent ReGentS.
-- Add hand-computed unit cases, transform tests, CPU/GPU consistency checks, `torch.autograd.gradcheck` where practical, finite-difference comparisons, and tests that useful gradients reach acceleration and steering actions.
+Masked storage is replaced with non-degenerate internal geometry placeholders before box operations, then excluded before every reduction; placeholders never contribute a value or denominator. This prevents invalid padded boxes from producing NaN gradients without repairing or treating invalid scenario state as observed.
 
-Exit gate: each cost has correct values, masks, and finite nonzero gradients in representative isolated scenes, and the combined loss decreases in a small synthetic optimization.
+The map-static potential starts from `~drivable_mask`, applies a normalized Gaussian with configurable sigma and cutoff, and adds an out-of-bounds frame. Sampling uses the Stage 1 centered world transform, `grid_sample(..., align_corners=True)`, bilinear interpolation, and border padding, so points beyond raster coverage are explicitly out of bounds. `prepare_out_of_bounds_rasters()` constructs these fields once before optimization and transfers them to the optimization device/dtype.
+
+Named reference defaults follow the bundled ReGentS implementation: ego/background/drivable weights `1 / 5 / 20`, background truncation `1.25 m`, and Gaussian sigma `0.5 m`. The finite Gaussian support is explicitly set to `3 sigma`; this replaces the reference code's crop-based approximation with deterministic normalized convolution and is part of the cost configuration.
+
+Tests cover hand-computed separation, penetration and contact; rotated and randomized SAT cases; validity and denominator behavior; world/grid transforms and outside-map sampling; Gaussian bounds and spatial gradients; geometry and raster `gradcheck`; finite differences; independent finite nonzero gradients for all three costs; acceleration and steering gradients through `classic_rollout`; CPU/GPU consistency checks; and a 20-step synthetic Adam fixture whose combined loss decreases. A canonical real replay scenario also produces finite values through the complete adapter/raster/cost path. The Stage 4 focused suite passes on CPU; CUDA consistency tests are present and skip when CUDA is unavailable. M2 is complete, unlocking Stage 5 frozen-ego generation.
 
 ## Stage 5 — Add ReGentS selection, constraints, and frozen-ego optimization
 
