@@ -137,7 +137,7 @@
 #define STEERING_LIMIT 0.667f
 static const float REAR_AXLE_RATIO = 0.5f;
 static const float ACCEL_LONG_LIMIT[2] = {-5.0f, 2.5f};
-#define SPEED_CAP_APPROACH_JERK_MPS3 4.0f // external speed cap: accel ramps down at the policy's own max jerk
+#define SPEED_CAP_APPROACH_JERK_MPS3 2.0f // external speed cap: half the policy's max jerk; nuPlan's edge-extrapolated jerk reads a 4 m/s³ cut at t=0 as 5.2 (bound 4.13), 2 m/s³ as 2.8
 #define SPEED_CAP_BRAKE_MPS2 2.0f         // external speed cap: max decel once above the cap
 static const float ACCEL_LAT_LIMIT[2] = {-4.0f, 4.0f};
 
