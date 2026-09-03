@@ -461,7 +461,8 @@ class PuffeRL:
 
     def _build_target_mask(self, info, device):
         target_mask = torch.zeros(self.vecenv.agents_per_batch, dtype=torch.bool, device=device)
-        if self.target_actor is None:
+        sdc_controller = self.vecenv.driver_env.sdc_controller_str
+        if self.target_actor is None and sdc_controller == "policy":
             return target_mask
 
         agents_per_worker = self.vecenv.driver_env.num_agents
@@ -1725,7 +1726,10 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
 
     target_policy = None
     target_policy_path = args["train"].get("target_policy")
-    if target_policy_path is not None:
+    sdc_controller = args["env"]["sdc_controller"]
+    if sdc_controller != "policy" and target_policy_path is not None:
+        print(f"Skipping train.target_policy because env.sdc_controller={sdc_controller!r}")
+    elif target_policy_path is not None:
         target_args = _prepare_target_policy_args(args, target_policy_path)
         target_args["policy_name"] = "TargetDrive"
         target_policy = load_policy(target_args, vecenv, env_name)
