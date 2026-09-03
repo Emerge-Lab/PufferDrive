@@ -86,7 +86,9 @@ static inline Drive drive_test_env_config(
     env.obs_slots_boundary_kept = 32;
     env.obs_slots_partners_n = 16;
     env.obs_slots_traffic_controls_n = 4;
-    env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
+    env.traffic_lights_enabled = 1;
+    env.stop_signs_enabled = 0;
+    env.yield_signs_enabled = 0;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
     env.spawn_initial_speed = 0.0f;

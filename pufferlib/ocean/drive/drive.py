@@ -96,7 +96,9 @@ class Drive(pufferlib.PufferEnv):
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
-        traffic_control_scope=0,
+        traffic_lights_enabled=True,
+        stop_signs_enabled=False,
+        yield_signs_enabled=False,
         starting_map=0,
         obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
@@ -208,7 +210,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
-        self.traffic_control_scope = traffic_control_scope
+        self.traffic_lights_enabled = traffic_lights_enabled
+        self.stop_signs_enabled = stop_signs_enabled
+        self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
@@ -435,7 +439,9 @@ class Drive(pufferlib.PufferEnv):
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
-            "traffic_control_scope": self.traffic_control_scope,
+            "traffic_lights_enabled": self.traffic_lights_enabled,
+            "stop_signs_enabled": self.stop_signs_enabled,
+            "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,

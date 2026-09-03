@@ -62,8 +62,9 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
-  # Traffic controls in scope: 0 - traffic lights, 1 - traffic lights and stop signs, 2 - all controls
-  traffic_control_scope: 1
+  traffic_lights_enabled: true
+  stop_signs_enabled: true
+  yield_signs_enabled: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
   # Precompute neighboring road entities for observation queries

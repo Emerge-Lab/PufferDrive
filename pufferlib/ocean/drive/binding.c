@@ -1905,7 +1905,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
-    env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
+    env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
+    env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
+    env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");

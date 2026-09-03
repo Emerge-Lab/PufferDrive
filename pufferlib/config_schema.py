@@ -238,7 +238,9 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
-    traffic_control_scope: int = MISSING
+    traffic_lights_enabled: bool = MISSING
+    stop_signs_enabled: bool = MISSING
+    yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
     scenario_length: int = _constrained_field(POSITIVE_INT_CONSTRAINT)

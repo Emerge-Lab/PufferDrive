@@ -34,19 +34,6 @@ static inline int is_controllable_agent(int type) {
     return (type == VEHICLE || type == PEDESTRIAN || type == CYCLIST);
 }
 
-static inline int traffic_control_in_scope(int type, int scope) {
-    if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS) {
-        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
-    } else if (scope == TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN) {
-        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN;
-    } else if (scope == TRAFFIC_CONTROL_SCOPE_ALL) {
-        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || type == TRAFFIC_CONTROL_TYPE_STOP_SIGN
-            || type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN;
-    } else {
-        return type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT;
-    }
-}
-
 struct Agent {
     int id;
     int type;

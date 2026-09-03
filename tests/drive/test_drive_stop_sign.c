@@ -15,8 +15,11 @@ static TrafficControlElement drive_test_stop_sign(void) {
     return stop_sign;
 }
 
+#define STOP_SIGN_REQUIRED_STOP_TIMESTEPS 5
+
 static Drive drive_test_stop_sign_env(TrafficControlElement *stop_sign) {
     Drive env = {0};
+    env.dt = 0.1f;
     env.num_traffic_elements = 1;
     env.traffic_elements = stop_sign;
     return env;
@@ -103,14 +106,14 @@ static int test_lane_match_does_not_gate_crossing(void) {
     return 0;
 }
 
-static int test_beyond_five_meters_does_not_accumulate_stop(void) {
+static int test_beyond_ten_meters_does_not_accumulate_stop(void) {
     TrafficControlElement stop_sign = drive_test_stop_sign();
     Drive env = drive_test_stop_sign_env(&stop_sign);
-    Agent agent = drive_test_stop_sign_agent(-5.0f, 0.0f);
+    Agent agent = drive_test_stop_sign_agent(-10.0f, 0.0f);
     EXPECT_FALSE(check_stop_sign_violation(&env, &agent));
     EXPECT_EQ_INT(agent.stop_sign_stopped_timestep_count, 1);
 
-    agent.sim_x = -5.1f;
+    agent.sim_x = -10.1f;
     copy_pose_to_prev(&agent);
     EXPECT_FALSE(check_stop_sign_violation(&env, &agent));
     EXPECT_EQ_INT(agent.stop_sign_stopped_timestep_count, 0);
@@ -155,13 +158,13 @@ static int test_wrong_heading_is_ignored(void) {
     return 0;
 }
 
-static int test_ninety_degree_heading_is_in_scope(void) {
+static int test_forty_five_degree_heading_is_in_scope(void) {
     TrafficControlElement stop_sign = drive_test_stop_sign();
     Drive env = drive_test_stop_sign_env(&stop_sign);
     Agent agent = drive_test_stop_sign_agent(-3.0f, 0.0f);
-    agent.sim_heading = M_PI / 2.0f;
-    agent.cos_heading = 0.0f;
-    agent.sin_heading = 1.0f;
+    agent.sim_heading = M_PI / 5.0f;
+    agent.cos_heading = cosf(M_PI / 5.0f);
+    agent.sin_heading = sinf(M_PI / 5.0f);
     copy_pose_to_prev(&agent);
     EXPECT_FALSE(check_stop_sign_violation(&env, &agent));
     EXPECT_EQ_INT(agent.stop_sign_stopped_timestep_count, 1);
@@ -175,10 +178,10 @@ int main(void) {
     RUN_TEST(test_partial_stop_flags_crossing);
     RUN_TEST(test_moving_resets_partial_stop);
     RUN_TEST(test_lane_match_does_not_gate_crossing);
-    RUN_TEST(test_beyond_five_meters_does_not_accumulate_stop);
+    RUN_TEST(test_beyond_ten_meters_does_not_accumulate_stop);
     RUN_TEST(test_stop_after_line_does_not_qualify);
     RUN_TEST(test_leaving_proximity_resets_stop);
     RUN_TEST(test_wrong_heading_is_ignored);
-    RUN_TEST(test_ninety_degree_heading_is_in_scope);
+    RUN_TEST(test_forty_five_degree_heading_is_in_scope);
     return test_summary(failures);
 }

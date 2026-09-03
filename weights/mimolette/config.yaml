@@ -79,7 +79,9 @@ env:
   simulation_mode: gigaflow
   spawn_initial_speed: 0.0
   termination_mode: 1
-  traffic_control_scope: 0
+  traffic_lights_enabled: true
+  stop_signs_enabled: false
+  yield_signs_enabled: false
   traffic_light_behavior: 1
   use_map_cache: 1
 env_name: puffer_drive

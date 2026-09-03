@@ -277,7 +277,9 @@ struct Drive {
     int obs_slots_lane_n;
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
-    int traffic_control_scope;
+    int traffic_lights_enabled;
+    int stop_signs_enabled;
+    int yield_signs_enabled;
     int obs_lane_stride;
     int obs_boundary_stride;
     int obs_slots_lane_kept;
@@ -3627,15 +3629,14 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     // Priority 3: Handle red light violation
-    if (env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
+    if (env->traffic_lights_enabled && env->obs_slots_traffic_controls_n && check_red_light_violation(env, agent_idx)) {
         agent->metrics_array[RED_LIGHT_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->traffic_light_behavior);
         return;
     }
 
     // Priority 4: Handle stop sign violation
-    if (env->traffic_control_scope >= TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN
-        && check_stop_sign_violation(env, agent)) {
+    if (env->stop_signs_enabled && check_stop_sign_violation(env, agent)) {
         agent->metrics_array[STOP_SIGN_IDX] = 1.0f;
         return;
     }
@@ -4181,7 +4182,10 @@ static int write_traffic_control_obs(Drive *env, Agent *ego, float *obs, int obs
 
     for (int j = 0; j < env->num_traffic_elements; j++) {
         TrafficControlElement *tc = &env->traffic_elements[j];
-        if (!traffic_control_in_scope(tc->type, env->traffic_control_scope)) {
+        if (tc->type == TRAFFIC_CONTROL_TYPE_NONE
+            || (tc->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && !env->traffic_lights_enabled)
+            || (tc->type == TRAFFIC_CONTROL_TYPE_STOP_SIGN && !env->stop_signs_enabled)
+            || (tc->type == TRAFFIC_CONTROL_TYPE_YIELD_SIGN && !env->yield_signs_enabled)) {
             continue;
         }
         float mid_x = (tc->stop_line[0] + tc->stop_line[3]) * 0.5f;

@@ -95,11 +95,6 @@
 #define SIMULATION_MODE_GIGAFLOW 0
 #define SIMULATION_MODE_REPLAY 1
 
-// Which traffic controls are enforced
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS 0
-#define TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS_STOP_SIGN 1
-#define TRAFFIC_CONTROL_SCOPE_ALL 2
-
 // What happens to an agent on collision/infraction
 #define INFRACTION_BEHAVIOR_IGNORE 0
 #define INFRACTION_BEHAVIOR_STOP 1

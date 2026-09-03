@@ -58,7 +58,9 @@ typedef struct {
     float obs_dropout_boundary;
     int obs_slots_partners_n;
     int obs_slots_traffic_controls_n;
-    int traffic_control_scope;
+    int traffic_lights_enabled;
+    int stop_signs_enabled;
+    int yield_signs_enabled;
     float obs_norm_goal_offset_m;
     float obs_norm_xy_offset_m;
     float obs_norm_veh_length_m;
@@ -249,8 +251,24 @@ static int handler(void *config, const char *section, const char *name, const ch
         env_config->obs_slots_partners_n = atoi(value);
     } else if (MATCH("env", "obs_slots_traffic_controls_n")) {
         env_config->obs_slots_traffic_controls_n = atoi(value);
-    } else if (MATCH("env", "traffic_control_scope")) {
-        env_config->traffic_control_scope = atoi(value);
+    } else if (MATCH("env", "traffic_lights_enabled")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->traffic_lights_enabled = 1;
+        } else {
+            env_config->traffic_lights_enabled = 0;
+        }
+    } else if (MATCH("env", "stop_signs_enabled")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->stop_signs_enabled = 1;
+        } else {
+            env_config->stop_signs_enabled = 0;
+        }
+    } else if (MATCH("env", "yield_signs_enabled")) {
+        if (strcmp(value, "True") == 0 || strcmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+            env_config->yield_signs_enabled = 1;
+        } else {
+            env_config->yield_signs_enabled = 0;
+        }
     } else if (MATCH("env", "obs_norm_goal_offset_m")) {
         env_config->obs_norm_goal_offset_m = atof(value);
     } else if (MATCH("env", "obs_norm_xy_offset_m")) {
