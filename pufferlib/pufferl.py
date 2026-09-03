@@ -1900,6 +1900,11 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     return all_logs
 
 
+def _evaluation_uses_policy(env_config):
+    controller_keys = ("sdc_controller", "non_sdc_controller", "non_vehicle_controller")
+    return any(env_config[controller_key] == "policy" for controller_key in controller_keys)
+
+
 def eval(
     env_name,
     args=None,
@@ -1953,15 +1958,21 @@ def eval(
         environment_config["obs_dropout_lane"] = base_args["env"]["obs_dropout_lane"]
         environment_config["obs_dropout_boundary"] = base_args["env"]["obs_dropout_boundary"]
         checkpoint_config_path = None
+    elif args["load_model_path"] is None:
+        base_args = copy.deepcopy(args)
+        checkpoint_config_path = None
     else:
         base_args, checkpoint_config_path = drive_benchmark.load_checkpoint_architecture(args)
     base_args["env"]["eval_training_render"] = eval_training_render
 
+    if report_to_wandb and checkpoint_config_path is None:
+        raise pufferlib.APIUsageError("Checkpoint-free baseline evaluation cannot report to a training run")
     wandb_run_identity = (
         drive_benchmark.load_checkpoint_run_identity(checkpoint_config_path) if report_to_wandb else None
     )
     if eval_output_dir is None:
-        run_dir = drive_benchmark.resolve_run_dir(base_args["load_model_path"])
+        model_path = base_args["load_model_path"]
+        run_dir = drive_benchmark.resolve_run_dir(model_path) if model_path is not None else os.getcwd()
         eval_output_dir = os.path.join(run_dir, eval_config["output_dir_name"])
     if eval_output_subdir is None:
         eval_output_subdir = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1984,6 +1995,9 @@ def eval(
         )
         run_args["env"]["eval_training_render"] = eval_training_render
         run_args["env"]["num_agents"] = run_args["eval"]["num_agents"]
+        uses_policy = _evaluation_uses_policy(run_args["env"])
+        if uses_policy and policy is None and run_args["load_model_path"] is None:
+            raise pufferlib.APIUsageError("Evaluation with policy controllers requires load_model_path")
         if eval_training_render:
             run_args["env"]["compute_eval_metrics"] = True
             run_args["env"]["resample_frequency"] = run_args["env"]["scenario_length"]
@@ -2311,48 +2325,51 @@ def _run_eval_rollout(
         torch.manual_seed(rollout_seed)
         if evaluation_policy_cache is None:
             evaluation_policy_cache = {"policy": policy}
+        uses_policy = _evaluation_uses_policy(args["env"])
         policy = evaluation_policy_cache["policy"]
-        if policy is None:
-            policy = load_policy(args, vecenv, env_name)
-            evaluation_policy_cache["policy"] = policy
-        policy.eval()
-        if "policy_forward_eval" not in evaluation_policy_cache:
-            policy_forward_eval = policy.forward_eval
-            eval_sample_logits = pufferlib.pytorch.sample_logits
-            if args["train"]["compile"]:
-                compile_kwargs = {
-                    "mode": args["train"]["compile_mode"],
-                    "fullgraph": args["train"]["compile_fullgraph"],
-                }
-                policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
-                eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
-            evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
-            evaluation_policy_cache["sample_logits"] = eval_sample_logits
-        policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
-        eval_sample_logits = evaluation_policy_cache["sample_logits"]
+        if uses_policy:
+            if policy is None:
+                policy = load_policy(args, vecenv, env_name)
+                evaluation_policy_cache["policy"] = policy
+            policy.eval()
+            if "policy_forward_eval" not in evaluation_policy_cache:
+                policy_forward_eval = policy.forward_eval
+                eval_sample_logits = pufferlib.pytorch.sample_logits
+                if args["train"]["compile"]:
+                    compile_kwargs = {
+                        "mode": args["train"]["compile_mode"],
+                        "fullgraph": args["train"]["compile_fullgraph"],
+                    }
+                    policy_forward_eval = torch.compile(policy_forward_eval, **compile_kwargs)
+                    eval_sample_logits = torch.compile(eval_sample_logits, **compile_kwargs)
+                evaluation_policy_cache["policy_forward_eval"] = policy_forward_eval
+                evaluation_policy_cache["sample_logits"] = eval_sample_logits
+            policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
+            eval_sample_logits = evaluation_policy_cache["sample_logits"]
         # A discrete policy on a continuous env emits a discrete class that the
         # policy's own table maps back to the continuous action the env expects.
-        action_selection = args["eval"]["action_selection"]
-        uncompiled_policy = base_policy(policy)
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
-        discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
-        device = torch_device(args["train"]["device"])
-        use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
-        if use_bfloat16 and not torch.cuda.is_bf16_supported():
-            raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
-        eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
+        if uses_policy:
+            action_selection = args["eval"]["action_selection"]
+            uncompiled_policy = base_policy(policy)
+            discrete_policy_on_continuous_env = env_continuous and not uncompiled_policy.is_continuous
+            device = torch_device(args["train"]["device"])
+            use_bfloat16 = args["train"]["precision"] == "bfloat16" and is_cuda_device(device)
+            if use_bfloat16 and not torch.cuda.is_bf16_supported():
+                raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
+            eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
         obs, _ = vecenv.reset(rollout_seed)
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
-        if padding_agent_count:
+        if uses_policy and padding_agent_count:
             policy_obs_tensor = torch.zeros(
                 (inference_agents_per_batch, *obs.shape[1:]),
                 dtype=torch.as_tensor(obs).dtype,
                 device=device,
             )
         recurrent_state = None
-        if args["train"].get("use_rnn", False):
+        if uses_policy and args["train"].get("use_rnn", False):
             recurrent_state = {
                 "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
                 "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
@@ -2361,6 +2378,8 @@ def _run_eval_rollout(
         capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
         replay_capture = None
         if replay_output_dir is not None:
+            if not uses_policy:
+                raise pufferlib.APIUsageError("Baseline-only evaluation does not support replay capture")
             replay_capture = drive_eval_replay.EvalReplayCapture(
                 args,
                 policy,
@@ -2375,34 +2394,37 @@ def _run_eval_rollout(
         episode_summaries = []
         scenario_progress = tqdm(total=expected_episodes, desc=desc, unit="scenario")
         for _ in range(total_steps):
-            with torch.no_grad(), eval_amp_context:
-                environment_obs_tensor = torch.as_tensor(obs, device=device)
-                if padding_agent_count:
-                    policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
-                else:
-                    policy_obs_tensor = environment_obs_tensor
-                if recurrent_state is None:
-                    logits, value = policy_forward_eval(policy_obs_tensor)
-                else:
-                    logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
-                action, logprob, entropy, cont_action = eval_sample_logits(
-                    logits,
-                    action_selection=action_selection,
-                    env_continuous=env_continuous,
-                    policy=uncompiled_policy,
-                )
-                if discrete_policy_on_continuous_env:
-                    # raw_action stays the discrete class (what the replay logs record),
-                    # while the env is stepped with its continuous counterpart.
-                    raw_action = action[:agents_per_batch].cpu().numpy()
-                    continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
-                    action = continuous_actions[:agents_per_batch].float().cpu().numpy()
-                else:
-                    raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
-                    action = raw_action
+            if uses_policy:
+                with torch.no_grad(), eval_amp_context:
+                    environment_obs_tensor = torch.as_tensor(obs, device=device)
+                    if padding_agent_count:
+                        policy_obs_tensor[:agents_per_batch].copy_(environment_obs_tensor)
+                    else:
+                        policy_obs_tensor = environment_obs_tensor
+                    if recurrent_state is None:
+                        logits, value = policy_forward_eval(policy_obs_tensor)
+                    else:
+                        logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
+                    action, logprob, entropy, cont_action = eval_sample_logits(
+                        logits,
+                        action_selection=action_selection,
+                        env_continuous=env_continuous,
+                        policy=uncompiled_policy,
+                    )
+                    if discrete_policy_on_continuous_env:
+                        # raw_action stays the discrete class (what the replay logs record),
+                        # while the env is stepped with its continuous counterpart.
+                        raw_action = action[:agents_per_batch].cpu().numpy()
+                        continuous_actions = cont_action.reshape(-1, *vecenv.single_action_space.shape)
+                        action = continuous_actions[:agents_per_batch].float().cpu().numpy()
+                    else:
+                        raw_action = action[:agents_per_batch].cpu().numpy().reshape(vecenv.action_space.shape)
+                        action = raw_action
+            else:
+                action = np.zeros(vecenv.action_space.shape, dtype=vecenv.action_space.dtype)
             if env_continuous:
                 action = np.clip(action, vecenv.action_space.low, vecenv.action_space.high)
-            _require_finite_eval_batch(action, "policy actions", num_workers, worker_env_kwargs)
+            _require_finite_eval_batch(action, "evaluation actions", num_workers, worker_env_kwargs)
 
             if replay_capture is not None:
                 replay_capture.capture_frame(

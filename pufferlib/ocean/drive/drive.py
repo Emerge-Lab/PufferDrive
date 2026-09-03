@@ -7,6 +7,11 @@ from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
 
+PDM_MIN_HORIZON_SECONDS = 0.5
+PDM_MAX_HORIZON_SECONDS = 8.0
+PDM_MIN_PLANNING_DT_SECONDS = 0.1
+PDM_MAX_PLANNING_DT_SECONDS = 1.0
+
 
 def map_dir_missing_message(map_dir):
     """Error text for a nonexistent map_dir. When its basename is a dataset
@@ -74,6 +79,8 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
+        pdm_horizon=4.0,
+        pdm_planning_dt=0.5,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
@@ -151,6 +158,19 @@ class Drive(pufferlib.PufferEnv):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.pdm_horizon = float(pdm_horizon)
+        self.pdm_planning_dt = float(pdm_planning_dt)
+        if not PDM_MIN_HORIZON_SECONDS <= self.pdm_horizon <= PDM_MAX_HORIZON_SECONDS:
+            raise ValueError(
+                f"pdm_horizon must be in [{PDM_MIN_HORIZON_SECONDS}, {PDM_MAX_HORIZON_SECONDS}]. "
+                f"Got: {self.pdm_horizon}"
+            )
+        if not PDM_MIN_PLANNING_DT_SECONDS <= self.pdm_planning_dt <= PDM_MAX_PLANNING_DT_SECONDS:
+            raise ValueError(
+                f"pdm_planning_dt must be in "
+                f"[{PDM_MIN_PLANNING_DT_SECONDS}, {PDM_MAX_PLANNING_DT_SECONDS}]. "
+                f"Got: {self.pdm_planning_dt}"
+            )
         self.goal_speed = float(goal_speed)
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
@@ -432,8 +452,9 @@ class Drive(pufferlib.PufferEnv):
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
             "corridor_idm": binding.CONTROLLER_CORRIDOR_IDM,
+            "pdm": binding.CONTROLLER_PDM,
         }
-        controller_options = "'static', 'policy', 'replay', 'idm', or 'corridor_idm'"
+        controller_options = "'static', 'policy', 'replay', 'idm', 'corridor_idm', or 'pdm'"
         if self.sdc_controller_str not in controller_values:
             raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
         if self.non_sdc_controller_str not in controller_values:
@@ -441,7 +462,7 @@ class Drive(pufferlib.PufferEnv):
                 f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
             )
         if self.non_vehicle_controller_str == "auto":
-            if self.non_sdc_controller_str in ("idm", "corridor_idm"):
+            if self.non_sdc_controller_str in ("idm", "corridor_idm", "pdm"):
                 self.non_vehicle_controller_str = "replay"
             else:
                 self.non_vehicle_controller_str = self.non_sdc_controller_str
@@ -603,6 +624,8 @@ class Drive(pufferlib.PufferEnv):
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "pdm_horizon": self.pdm_horizon,
+            "pdm_planning_dt": self.pdm_planning_dt,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),

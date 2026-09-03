@@ -56,6 +56,9 @@ env:
   base_max_speed_mps: 20.0
   # Optional nonzero launch speed for gigaflow random spawns
   spawn_initial_speed: 0.0
+  # PDM rollout horizon and planning interval in seconds
+  pdm_horizon: 4.0
+  pdm_planning_dt: 0.1
   # Collision behavior - options: "ignore", "stop", "remove"
   collision_behavior: stop
   # Offroad behavior - options: "ignore", "stop", "remove"
@@ -93,13 +96,13 @@ env:
   # options: "control_vehicles", "control_agents", "control_tracks_to_predict", "control_sdc_only"
   control_mode: control_vehicles
   # Controller used by agent 0, the canonical SDC/target.
-  # options: "static", "policy", "replay", "idm", "corridor_idm"
+  # options: "static", "policy", "replay", "idm", "corridor_idm", "pdm"
   sdc_controller: policy
   # Controller used by non-SDC vehicles.
-  # options: "static", "policy", "replay", "idm", "corridor_idm"
+  # options: "static", "policy", "replay", "idm", "corridor_idm", "pdm"
   non_sdc_controller: policy
   # Controller used by non-vehicle agents. "auto" uses replay for vehicle baselines, otherwise follows non_sdc_controller.
-  # options: "auto", "static", "policy", "replay", "idm", "corridor_idm"
+  # options: "auto", "static", "policy", "replay", "idm", "corridor_idm", "pdm"
   non_vehicle_controller: auto
   # Options: "created_all_valid", "create_only_controlled"
   init_mode: create_all_valid

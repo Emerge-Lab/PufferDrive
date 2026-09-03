@@ -74,6 +74,7 @@ class Controller(Enum):
     replay = 2
     idm = 3
     corridor_idm = 4
+    pdm = 5
 
 
 class NonVehicleController(Enum):
@@ -84,6 +85,7 @@ class NonVehicleController(Enum):
     replay = 2
     idm = 3
     corridor_idm = 4
+    pdm = 5
 
 
 class InitMode(Enum):
@@ -114,6 +116,8 @@ class DriveEnvConfig:
     dt: float = MISSING
     base_max_speed_mps: float = MISSING
     spawn_initial_speed: float = MISSING
+    pdm_horizon: float = MISSING
+    pdm_planning_dt: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING

@@ -91,6 +91,7 @@
 #define CONTROLLER_REPLAY 2
 #define CONTROLLER_IDM 3
 #define CONTROLLER_CORRIDOR_IDM 4
+#define CONTROLLER_PDM 5
 
 // Episode generation
 #define SIMULATION_MODE_GIGAFLOW 0

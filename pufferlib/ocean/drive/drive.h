@@ -226,6 +226,8 @@ struct Drive {
     float dt;
     float base_max_speed_mps;
     float spawn_initial_speed;
+    float pdm_horizon_seconds;
+    float pdm_planning_dt_seconds;
     int dynamics_model;
     int reset_accel_on_stop;
     int init_mode;
@@ -1213,6 +1215,47 @@ static bool generate_new_goals_from_map(Drive *env, Agent *agent) {
     return true;
 }
 
+static bool controller_uses_route_goals(int controller) {
+    return controller == CONTROLLER_IDM || controller == CONTROLLER_CORRIDOR_IDM || controller == CONTROLLER_PDM;
+}
+
+static bool generate_agent_goals(Drive *env, Agent *agent) {
+    if (controller_uses_route_goals(agent->controller) || env->goal_source == GOAL_SOURCE_ROUTE) {
+        if (agent->route_length == 0) {
+            if (agent->current_lane_idx == -1 || !compute_new_route(env, agent, agent->current_lane_idx)) {
+                return false;
+            }
+        }
+        return generate_new_goals_from_route(env, agent);
+    }
+
+    if (env->goal_source == GOAL_SOURCE_MAP) {
+        return generate_new_goals_from_map(env, agent);
+    }
+
+    int start_step = env->init_step > 0 ? env->init_step : 0;
+    int remaining_steps = agent->trajectory_size - 1 - start_step;
+    if (remaining_steps < 1) {
+        remaining_steps = 1;
+    }
+    for (int goal_idx = 0; goal_idx < env->num_goals; goal_idx++) {
+        int trajectory_step = start_step + (goal_idx + 1) * remaining_steps / env->num_goals;
+        if (trajectory_step >= agent->trajectory_size) {
+            trajectory_step = agent->trajectory_size - 1;
+        }
+        agent->list_goal_x[goal_idx] = agent->log_trajectory_x[trajectory_step];
+        agent->list_goal_y[goal_idx] = agent->log_trajectory_y[trajectory_step];
+        agent->list_goal_z[goal_idx] = agent->log_trajectory_z[trajectory_step];
+        agent->list_goal_lane[goal_idx] = -1;
+    }
+    agent->goal_count = env->num_goals;
+    agent->current_goal_idx = 0;
+    agent->current_goal_x = agent->list_goal_x[0];
+    agent->current_goal_y = agent->list_goal_y[0];
+    agent->current_goal_z = agent->list_goal_z[0];
+    return true;
+}
+
 static int roll_goals(Drive *env, Agent *agent) {
     // Rolling target type: drop the reached goal, slide the window left, and append one new goal at the
     // frontier by walking forward from the previous last goal (along the route for route source, else
@@ -1238,7 +1281,8 @@ static int roll_goals(Drive *env, Agent *agent) {
     const int *walk_route = NULL;
     int walk_route_length = 0;
     int walk_start_idx = seed_lane_idx;
-    if (env->goal_source == GOAL_SOURCE_ROUTE && agent->route != NULL) {
+    if ((controller_uses_route_goals(agent->controller) || env->goal_source == GOAL_SOURCE_ROUTE)
+        && agent->route != NULL) {
         int reached_lane_idx = agent->list_goal_lane[agent->current_goal_idx - 1];
         for (int route_idx = agent->current_route_idx; route_idx < agent->route_length; route_idx++) {
             if (agent->route[route_idx] != reached_lane_idx) {
@@ -2418,6 +2462,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     if (agent->route != NULL) {
         free(agent->route);
         agent->route = NULL;
+        agent->route_length = 0;
     }
 
     agent->id = num_agents;
@@ -2426,6 +2471,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->type = VEHICLE;
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
+    agent->controller = agent_idx == EGO_IDX ? env->sdc_controller : env->non_sdc_controller;
 
     float spawn_length, spawn_width;
     if (env->eval_mode && !env->eval_training_render) {
@@ -2545,24 +2591,10 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->yaw_rate = 0.0f;
     update_agent_speed(agent);
 
-    if (env->goal_source == GOAL_SOURCE_MAP) {
-        if (!generate_new_goals_from_map(env, agent)) {
-            printf("[GIGAFLOW WARNING] -> Failed to generate map goals for agent %d\n", agent_idx);
-            return false;
-        }
-        return true;
-    }
-
-    if (!compute_new_route(env, agent, start_lane_idx)) {
-        printf("[GIGAFLOW WARNING] -> Failed to compute a new route for agent %d\n", agent_idx);
-        return false; // Failed to compute new goal
-    }
-
-    // Compute initial goal
-    if (!generate_new_goals_from_route(env, agent)) {
+    if (!generate_agent_goals(env, agent)) {
+        printf("[GIGAFLOW WARNING] -> Failed to generate goals for agent %d\n", agent_idx);
         return false;
     }
-
     return true;
 }
 
@@ -3031,46 +3063,11 @@ void init(Drive *env) {
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
 
-    if (env->goal_source == GOAL_SOURCE_GT) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int agent_idx = env->active_agent_indices[i];
-            Agent *agent = &env->agents[agent_idx];
-            // For replay mode, always place goals along the logged
-            // trajectory. Route-based goal generation can produce goals that
-            // diverge from the actual path the SDC should follow.
-            {
-                int start = env->init_step > 0 ? env->init_step : 0;
-                int remaining = agent->trajectory_size - 1 - start;
-                if (remaining < 1) {
-                    remaining = 1;
-                }
-                int num_wp = env->num_goals;
-                for (int g = 0; g < num_wp; g++) {
-                    int t = start + (g + 1) * remaining / num_wp;
-                    if (t >= agent->trajectory_size) {
-                        t = agent->trajectory_size - 1;
-                    }
-                    agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                    agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                    agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                    agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-                }
-                agent->goal_count = num_wp;
-                agent->current_goal_idx = 0;
-                agent->current_goal_x = agent->list_goal_x[0];
-                agent->current_goal_y = agent->list_goal_y[0];
-                agent->current_goal_z = agent->list_goal_z[0];
-            }
-        }
-    } else if (env->goal_source == GOAL_SOURCE_MAP) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *agent = &env->agents[env->active_agent_indices[i]];
-            generate_new_goals_from_map(env, agent);
-        }
-    } else if (env->goal_source == GOAL_SOURCE_ROUTE) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            Agent *agent = &env->agents[env->active_agent_indices[i]];
-            generate_new_goals_from_route(env, agent);
+    for (int i = 0; i < env->active_agent_count; i++) {
+        Agent *agent = &env->agents[env->active_agent_indices[i]];
+        if (!generate_agent_goals(env, agent)) {
+            invalidate_agent(agent);
+            agent->removed = 1;
         }
     }
 }
@@ -4431,6 +4428,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 }
 
 #include "idm.h"
+#include "pdm.h"
 
 void c_reset(Drive *env) {
     if (env->timestep == 0) {
@@ -4504,30 +4502,9 @@ void c_reset(Drive *env) {
         sample_erratic_flags(env, agent);
         generate_reward_coefs(env, agent);
 
-        if (env->goal_source == GOAL_SOURCE_GT) {
-            int start = env->init_step > 0 ? env->init_step : 0;
-            int remaining = agent->trajectory_size - 1 - start;
-            if (remaining < 1) {
-                remaining = 1;
-            }
-            int num_wp = env->num_goals;
-            for (int g = 0; g < num_wp; g++) {
-                int t = start + (g + 1) * remaining / num_wp;
-                if (t >= agent->trajectory_size) {
-                    t = agent->trajectory_size - 1;
-                }
-                agent->list_goal_x[g] = agent->log_trajectory_x[t];
-                agent->list_goal_y[g] = agent->log_trajectory_y[t];
-                agent->list_goal_z[g] = agent->log_trajectory_z[t];
-                agent->list_goal_lane[g] = -1; // logged goals have no lane idx (no GPS lane-distance)
-            }
-            agent->goal_count = num_wp;
-            agent->current_goal_idx = 0;
-            agent->current_goal_x = agent->list_goal_x[0];
-            agent->current_goal_y = agent->list_goal_y[0];
-            agent->current_goal_z = agent->list_goal_z[0];
-        } else {
-            generate_new_goals_from_route(env, agent);
+        if (!generate_agent_goals(env, agent)) {
+            invalidate_agent(agent);
+            agent->removed = 1;
         }
         compute_metrics(env, agent_idx, x);
     }
@@ -4569,6 +4546,8 @@ void c_step(Drive *env) {
             move_idm(env, background_idx);
         } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
             move_corridor_idm(env, background_idx);
+        } else if (agent->controller == CONTROLLER_PDM) {
+            move_pdm(env, background_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, background_idx);
         }
@@ -4585,6 +4564,8 @@ void c_step(Drive *env) {
             move_idm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {
             move_corridor_idm(env, agent_idx);
+        } else if (agent->controller == CONTROLLER_PDM) {
+            move_pdm(env, agent_idx);
         } else if (agent->controller == CONTROLLER_REPLAY && env->simulation_mode == SIMULATION_MODE_REPLAY) {
             move_expert(env, agent_idx);
         }
@@ -4707,7 +4688,7 @@ void c_step(Drive *env) {
         if (agent->metrics_array[REACHED_GOAL_IDX] == 0.0f) {
             continue;
         }
-        if (env->goal_source == GOAL_SOURCE_GT) {
+        if (env->goal_source == GOAL_SOURCE_GT && !controller_uses_route_goals(agent->controller)) {
             // Replay mode: leave current_goal_idx saturated so the
             // reached-goal condition won't fire again. Re-generating
             // route-based goals on WOMD maps fails (removed=1).
@@ -4731,8 +4712,7 @@ void c_step(Drive *env) {
         }
         // On regen failure remove the agent (route helper self-invalidates; the extra call is idempotent),
         // otherwise a stale current_goal_idx >= goal_count leaves an empty goal window and the agent freezes.
-        bool regen_ok = (env->goal_source == GOAL_SOURCE_MAP) ? generate_new_goals_from_map(env, agent)
-                                                              : generate_new_goals_from_route(env, agent);
+        bool regen_ok = generate_agent_goals(env, agent);
         if (!regen_ok) {
             invalidate_agent(agent);
             agent->removed = 1;
