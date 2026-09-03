@@ -62,6 +62,8 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
+  # Traffic controls in scope: 0 - traffic lights, 1 - traffic lights and stop signs, 2 - all controls
+  traffic_control_scope: 1
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
   # Precompute neighboring road entities for observation queries
@@ -124,6 +126,7 @@ env:
   reward_goal: 1.0
   reward_collision: 1.5
   reward_offroad: 1.5
+  # Penalty coefficient shared by red-light and stop-sign violations
   reward_stop_line: 1.0
   reward_comfort: 0.05
   reward_lane_align: 0.025

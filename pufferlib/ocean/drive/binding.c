@@ -2033,6 +2033,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
+    assign_to_dict(dict, "stop_sign_violation_rate", log->stop_sign_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
@@ -2047,6 +2048,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/stop_sign", log->reward_stop_sign);
     assign_to_dict(dict, "reward_components/goal", log->reward_goal);
     assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
     assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);
