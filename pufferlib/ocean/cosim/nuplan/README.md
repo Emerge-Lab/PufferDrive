@@ -30,7 +30,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   `LANE_SPEED_CAP_BELOW_MPS`): inside lanes whose nuPlan limit is below the
   threshold the shadow ego's speed is capped at limit + margin through a
   jerk-limited accel envelope in the C dynamics; the policy is not told. Off by
-  default, script 9 sets 8.33 m/s (30 km/h). The shadow env consumes the goals of its
+  default, script 9 sets 8.33 m/s (30 km/h). Eval hack `pedestrian_min_size_m` (env
+  `PEDESTRIAN_MIN_SIZE_M`): pedestrian and bicycle partner boxes are grown to at least
+  this size in the policy's observation (training spawns nothing below 0.8 x 0.8 m,
+  nuPlan pedestrians are 0.4-0.8 m); nuPlan still scores the true boxes. Off by
+  default, script 9 sets 0.8 m. The shadow env consumes the goals of its
   `num_goals` window itself exactly like training (`goal_regen_mode: finite`,
   consumed slots zeroed in the obs); the planner pushes the next window only
   when the current one is exhausted or its current goal is clearly behind the

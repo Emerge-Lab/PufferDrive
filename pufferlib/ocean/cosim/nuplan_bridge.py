@@ -504,6 +504,18 @@ def partner_tracked_objects(tracked_objects, map_api, static_on_lane: dict):
     return kept
 
 
+VRU_PARTNER_TYPE_IDS = (_NUPLAN_AGENT_TYPE["PEDESTRIAN"], _NUPLAN_AGENT_TYPE["BICYCLE"])
+
+
+def floor_vru_partner_sizes(types, lengths, widths, min_size_m: float):
+    """Pedestrian/bicycle boxes below min_size_m on either axis grow to min_size_m (training never
+    spawns agents under 0.8 x 0.8 m; nuPlan pedestrians are mostly 0.4-0.8 m). Other types untouched."""
+    vru = np.isin(types, VRU_PARTNER_TYPE_IDS)
+    lengths = np.where(vru, np.maximum(lengths, min_size_m), lengths).astype(np.float32)
+    widths = np.where(vru, np.maximum(widths, min_size_m), widths).astype(np.float32)
+    return lengths, widths
+
+
 def tracked_objects_to_arrays(tracked_objects, transform: NuPlanTransform, first_slot: int = 1):
     """nuPlan DetectionsTracks agents -> (idx, x, y, z, h, vx, vy, types, lengths, widths)
     arrays in the bin frame, filling PufferDrive slots first_slot..N."""

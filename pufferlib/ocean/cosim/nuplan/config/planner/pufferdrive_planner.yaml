@@ -24,6 +24,8 @@ pufferdrive_planner:
   # eval hack: cap the ego's speed at (lane limit + margin) inside lanes whose nuPlan limit is below this [m/s]; 0 = off
   lane_speed_cap_below_mps: 0.0
   lane_speed_cap_margin_mps: 0.0
+  # eval hack: grow pedestrian/bicycle partner boxes to at least this size [m] in the policy's obs (training min 0.8); 0 = off
+  pedestrian_min_size_m: 0.0
   env_overrides:
     obs_slots_partners_n: 40 # GIGAFLOW eval value (Table A4); slots are max-pooled, so any checkpoint transfers
   # Write the interactive pufferlib.viz observation replay (exact policy input/outputs) per scenario

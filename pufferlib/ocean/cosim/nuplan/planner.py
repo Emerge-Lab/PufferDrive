@@ -95,6 +95,7 @@ class PufferDrivePlanner(AbstractPlanner):
         startup_brake_jerk_cap_mps3: float = 0.0,
         lane_speed_cap_below_mps: float = 0.0,
         lane_speed_cap_margin_mps: float = 0.0,
+        pedestrian_min_size_m: float = 0.0,
         env_overrides: Optional[Dict] = None,
         obs_html_dir: Optional[str] = None,
         obs_html_max_steps: int = 800,
@@ -129,6 +130,9 @@ class PufferDrivePlanner(AbstractPlanner):
             told; the jerk dynamics ramp the accel down before the cap). 0 = off.
         :param lane_speed_cap_margin_mps: added to the lane limit when the cap is active [m/s]; nuPlan's
             metric scores every m/s above the limit, so 0 is the faithful value.
+        :param pedestrian_min_size_m: eval hack: pedestrian and bicycle partner boxes are grown to at
+            least this length and width [m] before the policy sees them (training spawns nothing below
+            0.8 x 0.8 m, nuPlan pedestrians are 0.4-0.8 m); nuPlan keeps scoring the true boxes. 0 = off.
         :param env_overrides: Drive env kwargs overriding DEFAULT_ARCH.
         :param obs_html_dir: write the interactive pufferlib.viz observation replay per
             scenario (the exact obs the policy received, its outputs and encoder pool winners).
@@ -157,6 +161,9 @@ class PufferDrivePlanner(AbstractPlanner):
             raise ValueError("startup_jerk_cap_seconds and the startup jerk caps must be >= 0")
         self._lane_speed_cap_below_mps = float(lane_speed_cap_below_mps)
         self._lane_speed_cap_margin_mps = float(lane_speed_cap_margin_mps)
+        self._pedestrian_min_size_m = float(pedestrian_min_size_m)
+        if self._pedestrian_min_size_m < 0:
+            raise ValueError("pedestrian_min_size_m must be >= 0")
         if min(self._lane_speed_cap_below_mps, self._lane_speed_cap_margin_mps) < 0:
             raise ValueError("lane_speed_cap_below_mps and lane_speed_cap_margin_mps must be >= 0")
         self._startup_jerk_cap_steps = 0  # resolved in _build from the scenario dt
@@ -494,7 +501,9 @@ class PufferDrivePlanner(AbstractPlanner):
             objs.sort(key=lambda o: (o.center.x - ox) ** 2 + (o.center.y - oy) ** 2)
             objs = objs[: self._num_agents - 1]
         if objs:
-            idx, x, y, z, hh, vx, vy, _tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
+            idx, x, y, z, hh, vx, vy, tp, ln, wd = nb.tracked_objects_to_arrays(objs, tf)
+            if self._pedestrian_min_size_m > 0:
+                ln, wd = nb.floor_vru_partner_sizes(tp, ln, wd, self._pedestrian_min_size_m)
             env.set_agent_states(idx, x, y, z, hh, vx, vy, np.zeros_like(vx), np.zeros_like(vx))
             env.set_agent_sizes(idx, ln, wd)
         surplus = np.arange(1 + len(objs), self._num_agents, dtype=np.int32)
