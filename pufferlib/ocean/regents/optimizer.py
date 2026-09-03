@@ -395,11 +395,14 @@ def _first_ego_collision(states, state_valid, scenario, candidate_mask, toleranc
     return first_timestep, first_agent_idx
 
 
-def _has_background_collision(states, state_valid, scenario, tolerance_meters):
+def _has_background_collision(states, state_valid, scenario, tolerance_meters, candidate_mask):
     background_idx = torch.where(scenario.vehicle_mask[0] & ~scenario.ego_mask[0])[0]
+    candidate_mask_flat = candidate_mask[0]
     for left_idx_tensor, right_idx_tensor in combinations(background_idx, 2):
         left_idx = int(left_idx_tensor.item())
         right_idx = int(right_idx_tensor.item())
+        if not (bool(candidate_mask_flat[left_idx]) or bool(candidate_mask_flat[right_idx])):
+            continue
         jointly_valid = state_valid[0, left_idx] & state_valid[0, right_idx]
         if not jointly_valid.any():
             continue
@@ -497,6 +500,7 @@ def optimize_frozen_ego_scenario(
     deterministic_seed=0,
     horizon_transition_count=None,
     scene_suitable=None,
+    show_progress=True,
 ):
     """Optimize Stage 3 background actions against one detached ego rollout."""
     if config is None:
@@ -603,8 +607,14 @@ def optimize_frozen_ego_scenario(
     background_collision_rejection_count = 0
     offroad_rejection_count = 0
 
-    pbar = tqdm(range(config.iteration_count + 1), desc="Optimizing", leave=False)
-    for iteration in pbar:
+    if show_progress:
+        pbar = tqdm(range(config.iteration_count + 1), desc="Optimizing", leave=False)
+        iterator = pbar
+    else:
+        iterator = range(config.iteration_count + 1)
+        pbar = None
+
+    for iteration in iterator:
         states, state_valid = _compose_rollout(
             scenario,
             inverse,
@@ -631,7 +641,7 @@ def optimize_frozen_ego_scenario(
         ):
             failure_reason = "nonfinite_loss"
             break
-        if iteration % 10 == 0:
+        if iteration % 10 == 0 and pbar is not None:
             pbar.set_postfix(
                 loss=f"{costs.total.item():.4f}", best=f"{best_total:.4f}" if best_total != math.inf else "inf"
             )
@@ -639,7 +649,7 @@ def optimize_frozen_ego_scenario(
         if initial_costs is None:
             initial_costs = snapshot
         background_collision = _has_background_collision(
-            states.detach(), state_valid, scenario, config.collision_distance_tolerance_meters
+            states.detach(), state_valid, scenario, config.collision_distance_tolerance_meters, candidate_mask
         )
         offroad_signature = _candidate_offroad_signature(states.detach(), state_valid, scenario, candidate_mask)
         offroad = bool(torch.any(offroad_signature & ~baseline_offroad_signature))
@@ -758,7 +768,7 @@ def optimize_frozen_ego_scenario(
     )
     selected_id = int(scenario.agent_id[0, selected_idx].item()) if selected_idx >= 0 else -1
     final_background_collision = _has_background_collision(
-        best_states, state_valid, scenario, config.collision_distance_tolerance_meters
+        best_states, state_valid, scenario, config.collision_distance_tolerance_meters, candidate_mask
     )
     final_offroad_signature = _candidate_offroad_signature(best_states, state_valid, scenario, candidate_mask)
     final_offroad = bool(torch.any(final_offroad_signature & ~baseline_offroad_signature))

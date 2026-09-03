@@ -954,6 +954,8 @@ def encode_interactive_replay(scenario, replay):
         "scales": scales,
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
+        "selected_adversary_idx": int(replay.get("selected_adversary_idx", -1)),
+        "selected_adversary_id": int(replay.get("selected_adversary_id", -1)),
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1259,6 +1261,9 @@ self.onmessage = async event => {
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
         }
         function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && id === H.selected_adversary_id) {
+                return "#ff007f"; // Neon pink/magenta for adversarial agent
+            }
             return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
         }
         function agentHasInfraction(frame, idx) {
@@ -1308,6 +1313,9 @@ self.onmessage = async event => {
             ctx.restore();
         }
         function drawPerturbationOutlines(a) {
+            if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && a.id === H.selected_adversary_id) {
+                drawPerturbationOutline(a, "#ff007f", [4, 2], 3);
+            }
             if (a.phantomBrakingActive) {
                 drawPerturbationOutline(a, PHANTOM_BRAKING_OUTLINE_COLOR, [], 3);
             }
@@ -1547,7 +1555,37 @@ self.onmessage = async event => {
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             drawGhosts(f);
-            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            for(const a of getFrameAgents(f)){
+                ctx.save();
+                ctx.translate(a.x,a.y);
+                ctx.rotate(a.h);
+                drawAgentBody(a, darkMode?'#fff':'#111');
+                drawPerturbationOutlines(a);
+                ctx.restore();
+
+                ctx.save();
+                ctx.translate(a.x,a.y);
+                if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1);
+
+                const isAdversary = H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && a.id === H.selected_adversary_id;
+                ctx.fillStyle = isAdversary ? "#ff007f" : colors.text;
+                ctx.font = isAdversary ? 'bold '+(14/cam.z)+'px system-ui' : '600 '+(14/cam.z)+'px system-ui';
+                ctx.textAlign = 'center';
+                const labelText = isAdversary ? a.id + " [ADV]" : String(a.id);
+                ctx.fillText(labelText, 0, (isEgoCam && target) ? a.w/2+.5 : -a.w/2-.5);
+                ctx.restore();
+
+                if(a.id === followedId){
+                    ctx.save();
+                    ctx.translate(a.x,a.y);
+                    ctx.strokeStyle=colors.accent;
+                    ctx.lineWidth=3/cam.z;
+                    ctx.beginPath();
+                    ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
             if(target){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;

@@ -2,6 +2,8 @@
 
 import csv
 import inspect
+import multiprocessing as mp
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,10 +106,15 @@ def load_generation_config(config_path, generation_name):
         raise ValueError(f"ReGentS generation config has unsupported env keys: {', '.join(sorted(unknown_keys))}")
 
     optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
+    num_workers = selected.get("num_workers", 1)
+    if num_workers != "auto":
+        _require_positive_int(num_workers, "num_workers")
+
     resolved = {
         "name": generation_name,
         "seed": _require_positive_int(selected.get("seed"), "seed"),
         "scenario_count": _require_positive_int(selected.get("scenario_count"), "scenario_count"),
+        "num_workers": num_workers,
         "horizon_transition_count": _require_positive_int(
             selected.get("horizon_transition_count"), "horizon_transition_count"
         ),
@@ -173,6 +180,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     for label, frames in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
         bundle = _replay_bundle(env_config, frames, replay.ego_actions)
+        bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
+        bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
         binary_path = render_dir / f"{stem}.replay.zlib"
         html_path = render_dir / f"{stem}.html"
         pufferlib.viz.save_interactive_replay_zlib(replay.scenario_payload, bundle, str(binary_path))
@@ -222,6 +231,55 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
     }
 
 
+def _generate_single_scenario_worker(
+    scenario_idx,
+    generation,
+    optimization_config,
+    destination,
+    map_path,
+    env_config,
+    render_replays,
+):
+    """Worker function to generate a single ReGentS scenario in a separate process."""
+    import traceback
+    import torch
+
+    torch.set_num_threads(1)
+    seed = generation["seed"] + scenario_idx
+    try:
+        drive = _build_drive(generation["env"], scenario_idx, seed)
+        started_at = time.perf_counter()
+        try:
+            result = run_reactive_idm_generation(
+                drive,
+                optimization_config,
+                deterministic_seed=seed,
+                horizon_transition_count=generation["horizon_transition_count"],
+                maximum_outer_iterations=generation["maximum_outer_iterations"],
+                capture_html_frames=render_replays,
+                show_progress=False,
+            )
+        finally:
+            drive.close()
+        elapsed_seconds = time.perf_counter() - started_at
+        artifact_path = destination / f"scenario_{scenario_idx:05d}.npz"
+        save_generation_artifact(artifact_path, result, generation, str(map_path))
+        row = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
+        rendered_files = {}
+        if render_replays:
+            rendered_files = render_scenario_replays(destination, scenario_idx, result, env_config)
+        return scenario_idx, row, rendered_files
+    except Exception as e:
+        print(f"\n[ERROR] Worker failed for scenario {scenario_idx}:")
+        traceback.print_exc()
+        raise e
+
+
+def _generate_single_scenario_worker_wrapper(args):
+    """Wrapper to unpack arguments for multiprocessing Pool."""
+    return _generate_single_scenario_worker(*args)
+
+
 def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     generation = load_generation_config(config_path, generation_name)
@@ -235,33 +293,79 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
 
     render_replays = generation["render_replays"]
     env_config = _full_env_config(generation["env"])
-    rows = []
+    rows = [None] * generation["scenario_count"]
     rendered_files = {}
-    pbar = tqdm(range(generation["scenario_count"]), desc="Generating scenarios")
-    for scenario_idx in pbar:
-        seed = generation["seed"] + scenario_idx
-        drive = _build_drive(generation["env"], scenario_idx, seed)
-        started_at = time.perf_counter()
-        try:
-            result = run_reactive_idm_generation(
-                drive,
+
+    num_workers = generation.get("num_workers", 1)
+    if num_workers == "auto":
+        import os
+
+        num_workers = os.cpu_count() or 1
+    num_workers = min(num_workers, generation["scenario_count"])
+
+    if num_workers <= 1:
+        pbar = tqdm(range(generation["scenario_count"]), desc="Generating scenarios")
+        for scenario_idx in pbar:
+            seed = generation["seed"] + scenario_idx
+            drive = _build_drive(generation["env"], scenario_idx, seed)
+            started_at = time.perf_counter()
+            try:
+                result = run_reactive_idm_generation(
+                    drive,
+                    optimization_config,
+                    deterministic_seed=seed,
+                    horizon_transition_count=generation["horizon_transition_count"],
+                    maximum_outer_iterations=generation["maximum_outer_iterations"],
+                    capture_html_frames=render_replays,
+                    show_progress=False,
+                )
+            finally:
+                drive.close()
+            elapsed_seconds = time.perf_counter() - started_at
+            artifact_path = destination / f"scenario_{scenario_idx:05d}.npz"
+            save_generation_artifact(artifact_path, result, generation, str(map_paths[scenario_idx]))
+            rows[scenario_idx] = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
+            if render_replays:
+                rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))
+            success_so_far = sum(row["generation_success"] for row in rows if row is not None)
+            completed_so_far = sum(1 for row in rows if row is not None)
+            success_rate = success_so_far / completed_so_far if completed_so_far else 0.0
+            pbar.set_postfix(success=f"{success_rate:.1%}")
+    else:
+        import multiprocessing
+
+        ctx = multiprocessing.get_context("spawn")
+
+        tasks = [
+            (
+                scenario_idx,
+                generation,
                 optimization_config,
-                deterministic_seed=seed,
-                horizon_transition_count=generation["horizon_transition_count"],
-                maximum_outer_iterations=generation["maximum_outer_iterations"],
-                capture_html_frames=render_replays,
+                destination,
+                map_paths[scenario_idx],
+                env_config,
+                render_replays,
             )
-        finally:
-            drive.close()
-        elapsed_seconds = time.perf_counter() - started_at
-        artifact_path = destination / f"scenario_{scenario_idx:05d}.npz"
-        save_generation_artifact(artifact_path, result, generation, str(map_paths[scenario_idx]))
-        rows.append(_metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path))
-        if render_replays:
-            rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))
-        success_so_far = sum(row["generation_success"] for row in rows)
-        success_rate = success_so_far / len(rows) if rows else 0.0
-        pbar.set_postfix(success=f"{success_rate:.1%}")
+            for scenario_idx in range(generation["scenario_count"])
+        ]
+
+        success_count = 0
+        completed_count = 0
+
+        with ctx.Pool(processes=num_workers) as pool:
+            iterator = pool.imap_unordered(_generate_single_scenario_worker_wrapper, tasks)
+            pbar = tqdm(iterator, total=len(tasks), desc="Generating scenarios (parallel)")
+            for scenario_idx, row, worker_rendered in pbar:
+                rows[scenario_idx] = row
+                rendered_files.update(worker_rendered)
+
+                completed_count += 1
+                if row["generation_success"]:
+                    success_count += 1
+
+                success_rate = success_count / completed_count
+                pbar.set_postfix(success=f"{success_rate:.1%}")
+
     if rendered_files:
         import pufferlib.viz
 

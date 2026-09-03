@@ -302,10 +302,13 @@ def test_generation_config_rejects_a_horizon_the_drive_guards_would_reject(tmp_p
 
 
 def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
+    config = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
+    expected_count = config["scenario_count"]
     report = generate_regents_scenarios(GENERATION_CONFIG, "regents_nuplan_smoke", output_dir=tmp_path)
 
-    assert report.scenario_count == 1
-    assert sorted(path.name for path in tmp_path.glob("*.npz")) == ["scenario_00000.npz"]
+    assert report.scenario_count == expected_count
+    expected_files = [f"scenario_{i:05d}.npz" for i in range(expected_count)]
+    assert sorted(path.name for path in tmp_path.glob("*.npz")) == expected_files
     assert (tmp_path / "generation_metrics.csv").is_file()
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0

@@ -31,17 +31,18 @@ generations:
   # The Stage 3 audit scenarios: the first 16 local NuPlan maps with seeds 42..57.
   - name: regents_nuplan
     seed: 42
-    scenario_count: 4
-    horizon_transition_count: 50
-    maximum_outer_iterations: 3
+    scenario_count: 10
+    num_workers: auto
+    horizon_transition_count: 200
+    maximum_outer_iterations: 1
     raster_resolution_meters: 5.0
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.001
-      iteration_count: 100
+      iteration_count: 250
     env:
-      num_maps: 4
+      num_maps: 10
       scenario_length: 201
       resample_frequency: 201
 
@@ -50,6 +51,7 @@ generations:
   - name: regents_nuplan_20s
     seed: 42
     scenario_count: 16
+    num_workers: auto
     horizon_transition_count: 200
     maximum_outer_iterations: 3
     raster_resolution_meters: 5.0
@@ -65,14 +67,15 @@ generations:
 
   - name: regents_nuplan_smoke
     seed: 42
-    scenario_count: 1
+    scenario_count: 2
+    num_workers: auto
     horizon_transition_count: 16
-    maximum_outer_iterations: 1
+    maximum_outer_iterations: 2
     raster_resolution_meters: 5.0
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.01
-      iteration_count: 5
+      iteration_count: 20
     env:
-      num_maps: 1
+      num_maps: 2

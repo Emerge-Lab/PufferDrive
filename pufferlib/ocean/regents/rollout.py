@@ -352,6 +352,7 @@ def run_reactive_idm_generation(
     maximum_outer_iterations=3,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
+    show_progress=True,
 ):
     """Alternate detached native-IDM C rollouts and Torch adversary blocks."""
     if drive.sdc_controller != binding.CONTROLLER_IDM:
@@ -370,6 +371,7 @@ def run_reactive_idm_generation(
             optimization_config,
             deterministic_seed=deterministic_seed,
             horizon_transition_count=horizon_transition_count,
+            show_progress=show_progress,
         )
         replay = replay_optimized_scenario_in_c(
             drive,
