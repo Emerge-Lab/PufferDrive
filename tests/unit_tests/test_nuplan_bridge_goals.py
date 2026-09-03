@@ -30,7 +30,10 @@ class _BlockMap:
         }
 
     def get_map_object(self, block_id, layer):
-        return self.blocks.get(block_id)
+        block = self.blocks.get(block_id)
+        if block is not None:
+            block.id = block_id
+        return block
 
 
 def test_roadblock_centroid_goals_skip_behind_thin_and_snap_off_polygon_centroids():
@@ -44,5 +47,22 @@ def test_roadblock_centroid_goals_skip_behind_thin_and_snap_off_polygon_centroid
     np.testing.assert_allclose(goals, [[50.0, 2.0], snapped_d])
 
 
-def test_roadblock_centroid_goals_empty_without_blocks():
+def test_roadblock_centroid_goals_follow_the_route_through_turns():
+    # ego at the end of A facing east; a route that turns back west after B keeps its goals (only the ego
+    # block's own centroid is heading-gated), and the repeated block id of a loop is kept as a revisit
+    map_api = _BlockMap()
+    goals = nb.roadblock_centroid_goals(map_api, ["A", "B", "A", "B"], 30.0, 2.0, 0.0, min_spacing=10.0, min_ahead_m=15.0)
+    np.testing.assert_allclose(goals, [[50.0, 2.0], [20.0, 2.0], [50.0, 2.0]])
+
+
+def test_roadblock_centroid_goals_start_at_the_nearest_block_and_empty_without_blocks():
+    goals = nb.roadblock_centroid_goals(_BlockMap(), ["A", "B", "C"], 45.0, 9.0, 0.0, min_spacing=10.0, min_ahead_m=2.0)
+    np.testing.assert_allclose(goals, [[50.0, 2.0], [65.0, 2.0]])  # ego beside B: A is never visited
     assert nb.roadblock_centroid_goals(_BlockMap(), ["nope"], 0.0, 0.0, 0.0, min_spacing=20.0, min_ahead_m=15.0).shape == (0, 2)
+
+
+def test_extend_route_past_loop_cut_appends_the_logged_remainder():
+    assert nb.extend_route_past_loop_cut(["1", "2", "3"], ["1", "2", "3", "4", "2", "5"]) == ["1", "2", "3", "4", "2", "5"]
+    assert nb.extend_route_past_loop_cut(["9", "1", "2"], ["1", "2", "3"]) == ["9", "1", "2", "3"]  # prepended start fix
+    assert nb.extend_route_past_loop_cut(["1", "2"], ["1", "2"]) == ["1", "2"]
+    assert nb.extend_route_past_loop_cut([], ["1"]) == []

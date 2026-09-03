@@ -234,35 +234,51 @@ def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
 
 
 def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
-    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on.
-    A centroid outside its (curved) polygon moves to the nearest interior-lane baseline point; leading
-    centroids less than min_ahead_m ahead of the ego are dropped, later ones thinned to min_spacing."""
+    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on
+    (the block containing the ego, else the nearest one). The ego block's own centroid is dropped when it
+    is behind the ego or less than min_ahead_m ahead; later centroids follow the route regardless of the
+    ego heading (turns). A centroid outside its (curved) polygon moves to the nearest interior-lane
+    baseline point; consecutive goals closer than min_spacing are thinned."""
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
     from shapely.geometry import Point
 
     blocks = []
-    for rid in dict.fromkeys(route_roadblock_ids):
+    for rid in route_roadblock_ids:
         block = map_api.get_map_object(str(rid), SemanticMapLayer.ROADBLOCK) or map_api.get_map_object(
             str(rid), SemanticMapLayer.ROADBLOCK_CONNECTOR
         )
-        if block is not None and block.interior_edges:
-            blocks.append(block)
+        if block is None or not block.interior_edges or (blocks and blocks[-1].id == block.id):
+            continue
+        blocks.append(block)
+    if not blocks:
+        return np.zeros((0, 2))
     ego_point = Point(start_x, start_y)
-    start_idx = next((i for i, block in enumerate(blocks) if block.polygon.contains(ego_point)), 0)
+    start_idx = int(np.argmin([block.polygon.distance(ego_point) for block in blocks]))
     heading_dir = np.array([np.cos(start_heading), np.sin(start_heading)])
     goals = []
-    for block in blocks[start_idx:]:
+    for block_idx in range(start_idx, len(blocks)):
+        block = blocks[block_idx]
         centroid = block.polygon.centroid
         goal = np.array([centroid.x, centroid.y], dtype=np.float64)
         if not block.polygon.contains(centroid):
             lane_pts = np.concatenate([[[p.x, p.y] for p in lane.baseline_path.discrete_path] for lane in block.interior_edges])
             goal = lane_pts[int(np.argmin(np.hypot(*(lane_pts - goal).T)))].astype(np.float64)
-        if not goals and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
+        if block_idx == start_idx and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
             continue
         if goals and np.hypot(*(goal - goals[-1])) < min_spacing:
             continue
         goals.append(goal)
     return np.array(goals, dtype=np.float64).reshape(-1, 2)
+
+def extend_route_past_loop_cut(corrected_ids, raw_ids):
+    """CaRL's route correction cuts the route where a later roadblock overlaps an earlier one (a loop),
+    which its Dijkstra needs; goal windows follow the route in travel order, so the logged remainder
+    after the cut is appended again -> [str ids]."""
+    corrected = [str(rid) for rid in corrected_ids]
+    raw = [str(rid) for rid in raw_ids]
+    if not corrected or corrected[-1] not in raw:
+        return corrected
+    return corrected + raw[raw.index(corrected[-1]) + 1 :]
 
 
 def logged_ego_boxes(scenario, transform: NuPlanTransform) -> np.ndarray:

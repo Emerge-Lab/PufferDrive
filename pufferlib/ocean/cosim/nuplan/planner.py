@@ -407,8 +407,9 @@ class PufferDrivePlanner(AbstractPlanner):
         )
         if self._goal_source == "roadblock":
             min_ahead_m = float(self._env.goal_radius) + ROADBLOCK_GOAL_MARGIN_M
+            goal_route_ids = nb.extend_route_past_loop_cut(route_ids, init.route_roadblock_ids)
             goals = nb.roadblock_centroid_goals(
-                init.map_api, route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m
+                init.map_api, goal_route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m
             )
         else:
             goals = nb.goals_along(centerline, self._goal_spacing)
