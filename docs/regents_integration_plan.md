@@ -100,33 +100,19 @@ Named reference defaults follow the bundled ReGentS implementation: ego/backgrou
 
 Tests cover hand-computed separation, penetration and contact; rotated and randomized SAT cases; validity and denominator behavior; world/grid transforms and outside-map sampling; Gaussian bounds and spatial gradients; geometry and raster `gradcheck`; finite differences; independent finite nonzero gradients for all three costs; acceleration and steering gradients through `classic_rollout`; CPU/GPU consistency checks; and a 20-step synthetic Adam fixture whose combined loss decreases. A canonical real replay scenario also produces finite values through the complete adapter/raster/cost path. The Stage 4 focused suite passes on CPU; CUDA consistency tests are present and skip when CUDA is unavailable. M2 is complete, unlocking Stage 5 frozen-ego generation.
 
-## Stage 5 — Add ReGentS selection, constraints, and frozen-ego optimization
+## Stage 5 — Add ReGentS selection, constraints, and frozen-ego optimization (Completed)
 
-First optimize against a frozen ego trajectory. Use a C rollout with the ego controlled by IDM for the first POC; the logged ego trajectory remains a useful deterministic fixture for unit and regression tests. Freezing the captured IDM trajectory within an optimization block isolates adversary optimization from controller feedback while exercising the controller intended for the first end-to-end demonstration.
+Completed (2026-09-03): Implemented deterministic candidate selection in `pufferlib/ocean/regents/filters.py` and one-scenario frozen-ego Adam optimization in `pufferlib/ocean/regents/optimizer.py`. `capture_frozen_idm_trajectory()` resets a directly instantiated Drive configured with native C IDM for stable agent zero and replay for backgrounds, captures detached centered ego states, and feeds the same `ScenarioBatch` and frozen trajectory into the optimizer. Logged ego states remain an explicit `logged_fixture` source for deterministic tests.
 
-Candidate filtering:
+Candidate selection records reason bits rather than silently compacting agents. It excludes the SDC, non-vehicles, insufficient transition coverage, static actors, the paper's non-actionable rear sector, caller-labeled unsuitable scenes, and original collisions. Original collision labels use exact oriented-box overlap for every jointly valid metadata-bearing actor pair. The named reference defaults are at least `50%` and one valid transition, static first-to-last displacement below `0.2 m` or maximum absolute speed below `0.2 m/s`, and rear occupancy strictly greater than `80%` within `pi/8` of directly behind the ego. The optimization horizon is explicit and all fractions use only the applicable jointly valid states or transitions.
 
-- exclude the SDC and non-vehicles;
-- require a configurable fraction/count of valid transitions over the optimization horizon;
-- exclude already invalid or unsuitable scenes, and separately label scenes that already contain a collision;
-- exclude static vehicles using a named displacement/speed threshold;
-- exclude rear/convergent adversaries that remain in the paper's non-actionable rear sector for more than a configurable fraction of the original scenario.
+Stage 3 actions initialize the result for every vehicle, while only selected, valid action entries enter the differentiable graph. The frozen ego and non-selected actors stay on their captured/logged reference trajectories during an optimization block. Adam defaults to learning rate `1e-3`, betas `0.9 / 0.999`, epsilon `1e-8`, and 500 updates; actions are projected to `[-1, 1]` and non-candidate or invalid entries are restored byte-for-byte after every update. The zero-speed magnitude calculation in `classic_step()` now uses a forward-equivalent clamp at the dtype's smallest normal value, defining a finite derivative at an exactly stationary state without changing Stage 2 C parity.
 
-Optimization:
+Front divergence uses wrapped ego-relative bearing and yaw. Both must lie strictly inside the paper's `(-pi/8, pi/8)` applicability bounds, the bearing and yaw must be on the same side, and the bearing magnitude must be smaller than the yaw magnitude. Steering updates are canceled when red-zone occupancy is strictly greater than the named `tau_front=0.5`; acceleration updates remain active. Adam steering moments are cleared for canceled entries so momentum cannot bypass the rule.
 
-- Initialize background actions from Stage 3 and optimize only candidate, valid actions with Adam.
-- Clamp/project normalized actions to `[-1, 1]` after each update. Preserve non-candidate and invalid actions exactly.
-- Implement the ReGentS front-divergence rule explicitly: for a candidate that spends more than `tau_front` of applicable timesteps in the front red zone, cancel its steering-action update while retaining its acceleration update. Use wrapped ego-relative yaw/position angles and the paper's `pi/8` applicability bounds.
-- Make all thresholds, cost weights, learning-rate settings, iteration count, and early-stop rules named configuration values.
-- Stop on a verified ego-adversary box overlap, but also retain the best feasible iterate so a failed generation job has a useful diagnostic result.
-- Record the selected adversary, filter reasons, initial/final costs, gradient norms, action saturation, reconstruction error, collision timestep, and deterministic seed.
+Success requires a discrete-timestep ego/candidate oriented-box overlap with no background/background overlap and no newly introduced off-road vehicle corner. Existing raster mismatch on the logged/reference trajectory is retained as the feasibility baseline rather than retroactively declaring valid source data off-road; only new corner violations are rejected. The optimizer stops on the first feasible collision by default, supports named collision and stagnation early-stop settings, and otherwise returns the lowest-total-cost feasible iterate. It records selection/filter reasons, stable adversary index and ID, initial/final component costs, total/acceleration/steering gradient norms, front-divergence iterations, action saturation, maximum inverse reconstruction residual, collision timestep, constraint rejection counts, iteration counts, frozen-ego source, failure reason, and deterministic seed.
 
-Tests and exit gate:
-
-- Unit tests cover every filter and both sides of each angular boundary.
-- A front-divergence fixture proves steering gradients are masked and acceleration gradients remain active.
-- End-to-end synthetic scenes cover braking, merging, background-collision rejection, and off-road rejection.
-- On a small fixed real-scenario suite, optimization is deterministic, reduces the intended collision cost, and produces no NaN/Inf values.
+Tests cover every filter, strict positive and negative angular boundaries, the front-divergence steering/acceleration split, native C IDM capture, braking and merging collision generation, rejection of background-collision and newly off-road iterates, exact preservation of frozen actions, and repeat determinism. The fixed NuPlan scenarios at map indices 5 and 8 with seeds 47 and 50, a 16-transition horizon, five Adam updates, and learning rate `1e-3` remain finite and deterministic. Their ego collision costs decrease from `2.0703814` to `1.9595402` and `5.6210895` to `5.5688214`; total costs decrease from `69.4004211` to `68.1501007` and `19.9497566` to `18.9804382`. The complete ReGentS suite passes with 75 tests and two expected CUDA skips. M3 is complete, unlocking Stage 6 C replay.
 
 ## Stage 6 — Replay in C, add reactive ego iteration, and integrate the pipeline
 
