@@ -138,7 +138,15 @@ def _html_frame_arrays(agent_count, traffic_count):
     }
 
 
-def _capture_c_rollout(drive, transition_count, expected_scenario_id, agent_count, seed, capture_html_frames=False):
+def _capture_c_rollout(
+    drive,
+    transition_count,
+    expected_scenario_id,
+    agent_count,
+    seed,
+    capture_html_frames=False,
+    capture_observations=False,
+):
     """Reset and step one installed action plan, recording states and C events."""
     drive.reset(seed=seed)
     payload_scenario, initial_state, initial_valid, _ = _current_states(drive.get_state(), agent_count)
@@ -157,11 +165,13 @@ def _capture_c_rollout(drive, transition_count, expected_scenario_id, agent_coun
         traffic_count = max(len(payload_scenario.get("traffic_elements") or []), 1)
         scratch = _html_frame_arrays(agent_count, traffic_count)
         html_frames = {key: [] for key in scratch}
-        html_frames["obs"] = []
+        if capture_observations:
+            html_frames["obs"] = []
         drive.get_obs_html_frame(*(scratch[key] for key in scratch))
         for key, array in scratch.items():
             html_frames[key].append(array[0].copy())
-        html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
+        if capture_observations:
+            html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
     for transition_idx in range(transition_count):
         drive.step(neutral_actions)
         payload_scenario, state, valid, ego_action = _current_states(drive.get_state(), agent_count)
@@ -174,7 +184,8 @@ def _capture_c_rollout(drive, transition_count, expected_scenario_id, agent_coun
             drive.get_obs_html_frame(*(scratch[key] for key in scratch))
             for key, array in scratch.items():
                 html_frames[key].append(array[0].copy())
-            html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
+            if capture_observations:
+                html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
         events = binding.regents_get_events(drive.c_envs)
         pairs = tuple(sorted(tuple(sorted(int(index) for index in pair)) for pair in events["collision_pairs"]))
         if pairs:
@@ -229,9 +240,14 @@ def replay_optimized_scenario_in_c(
     seed=None,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
+    capture_observations=False,
 ):
     """Replay optimized background controls in C and use C as the success oracle."""
     _validate_replay_inputs(drive, scenario, optimization, tolerance)
+    if not isinstance(capture_html_frames, bool) or not isinstance(capture_observations, bool):
+        raise TypeError("capture_html_frames and capture_observations must be booleans")
+    if capture_observations and not capture_html_frames:
+        raise ValueError("capture_observations requires capture_html_frames")
     transition_count = optimization.optimized_actions.shape[2]
     if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
         raise ValueError("C replay horizon must end before Drive resamples")
@@ -246,9 +262,25 @@ def replay_optimized_scenario_in_c(
     # so only events the optimization introduced are attributed to the adversary.
     try:
         binding.regents_set_action_plan(drive.c_envs, baseline_plan, action_mask)
-        baseline = _capture_c_rollout(drive, transition_count, scenario_id, agent_count, seed, capture_html_frames)
+        baseline = _capture_c_rollout(
+            drive,
+            transition_count,
+            scenario_id,
+            agent_count,
+            seed,
+            capture_html_frames,
+            capture_observations,
+        )
         binding.regents_set_action_plan(drive.c_envs, optimized_plan, action_mask)
-        adversarial = _capture_c_rollout(drive, transition_count, scenario_id, agent_count, seed, capture_html_frames)
+        adversarial = _capture_c_rollout(
+            drive,
+            transition_count,
+            scenario_id,
+            agent_count,
+            seed,
+            capture_html_frames,
+            capture_observations,
+        )
     finally:
         binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
 
@@ -354,6 +386,7 @@ def run_reactive_idm_generation(
     maximum_outer_iterations=3,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
+    capture_observations=False,
     show_progress=True,
     raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
 ):
@@ -395,6 +428,7 @@ def run_reactive_idm_generation(
             seed=deterministic_seed,
             tolerance=tolerance,
             capture_html_frames=capture_html_frames,
+            capture_observations=capture_observations,
         )
         if replay.success:
             break

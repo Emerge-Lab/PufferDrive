@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 import torch
@@ -9,12 +7,11 @@ from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents import classic_rollout, estimate_expert_actions, export_drive_scenarios
 from pufferlib.ocean.regents.inverse_dynamics import DEFAULT_LOW_SPEED_THRESHOLD_MPS
 from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_STEERING
+from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-NUPLAN_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/nuplan"
 EXACT_RECONSTRUCTION_ATOL = 1e-4
-AUDIT_SCENARIO_COUNT = 16
+AUDIT_SCENARIO_COUNT = len(REGENTS_AUDIT_SCENARIO_IDS)
 NORMAL_SPEED_POSITION_P95_LIMIT_METERS = 0.25
 LOW_SPEED_POSITION_P95_LIMIT_METERS = 0.08
 NORMAL_SPEED_HEADING_P95_LIMIT_RADIANS = 0.012
@@ -43,15 +40,16 @@ def _c_rollout(initial_state, actions, wheelbase_meters, maximum_speed_mps, dt_s
 
 
 def _real_replay_drive():
+    map_paths, map_indices, _ = resolve_nuplan_scenarios()
     return Drive(
         map_dir=str(NUPLAN_MAP_DIR),
-        num_maps=AUDIT_SCENARIO_COUNT,
+        num_maps=len(map_paths),
         num_agents=AUDIT_SCENARIO_COUNT,
         min_agents_per_env=1,
         max_agents_per_env=1,
         num_eval_scenarios=AUDIT_SCENARIO_COUNT,
         max_scenarios_per_batch=AUDIT_SCENARIO_COUNT,
-        eval_map_indices=list(range(AUDIT_SCENARIO_COUNT)),
+        eval_map_indices=map_indices,
         eval_scenario_seeds=[42 + scenario_idx for scenario_idx in range(AUDIT_SCENARIO_COUNT)],
         seed=42,
         simulation_mode="replay",
@@ -188,6 +186,7 @@ def test_real_replay_reconstruction_metrics_are_finite_and_meet_the_p95_gates():
     finally:
         drive.close()
 
+    assert scenario.scenario_ids == REGENTS_AUDIT_SCENARIO_IDS
     result = estimate_expert_actions(scenario)
     valid = result.action_valid
     normal_speed = valid & result.heading_residual_valid

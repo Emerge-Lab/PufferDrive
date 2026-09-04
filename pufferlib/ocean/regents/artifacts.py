@@ -10,7 +10,9 @@ import numpy as np
 from pufferlib.ocean.regents.rollout import ReactiveGenerationResult
 
 
-ARTIFACT_SCHEMA = "pufferdrive_regents_generation_v1"
+ARTIFACT_SCHEMA = "pufferdrive_regents_generation_v2"
+SUPPORTED_ARTIFACT_SCHEMAS = ("pufferdrive_regents_generation_v1", ARTIFACT_SCHEMA)
+BACKGROUND_COLLISION_LOSS_SCOPE = "candidate_pairs"
 MAX_ARTIFACT_ARRAY_ELEMENTS = 100_000_000
 
 
@@ -25,8 +27,17 @@ def source_configuration_hash(configuration, map_path):
     return digest.hexdigest()
 
 
-def _cost_dict(costs):
-    return None if costs is None else asdict(costs)
+def _cost_dict(costs, scenario):
+    if costs is None:
+        return None
+    values = asdict(costs)
+    for endpoint in ("first", "second"):
+        index_key = f"background_collision_{endpoint}_agent_idx"
+        agent_idx = values[index_key]
+        values[f"background_collision_{endpoint}_agent_id"] = (
+            int(scenario.agent_id[0, agent_idx].item()) if agent_idx >= 0 else -1
+        )
+    return values
 
 
 def save_generation_artifact(path, result, source_configuration, map_path):
@@ -50,6 +61,7 @@ def save_generation_artifact(path, result, source_configuration, map_path):
         "init_step": scenario.init_step,
         "outer_iteration_count": result.outer_iteration_count,
         "optimization": {
+            "background_collision_loss_scope": BACKGROUND_COLLISION_LOSS_SCOPE,
             "success": optimization.success,
             "failure_reason": optimization.failure_reason,
             "selected_adversary_idx": optimization.selected_adversary_idx,
@@ -59,10 +71,13 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "collision_timestep": optimization.collision_timestep,
             "iteration_count": optimization.iteration_count,
             "best_iteration": optimization.best_iteration,
-            "initial_costs": _cost_dict(optimization.initial_costs),
-            "final_costs": _cost_dict(optimization.final_costs),
+            "initial_costs": _cost_dict(optimization.initial_costs, scenario),
+            "final_costs": _cost_dict(optimization.final_costs, scenario),
             "background_collision": optimization.background_collision,
             "offroad": optimization.offroad,
+            "baseline_background_collision_pair_count": optimization.baseline_background_collision_pair_count,
+            "background_collision_rejection_count": optimization.background_collision_rejection_count,
+            "offroad_rejection_count": optimization.offroad_rejection_count,
             "failure_reasons_by_agent": [
                 optimization.selection.reasons_for(0, agent_idx) for agent_idx in range(scenario.max_agent_count)
             ],
@@ -124,6 +139,6 @@ def load_generation_artifact(path):
     if metadata_array.dtype != np.uint8 or metadata_array.ndim != 1:
         raise ValueError("Artifact metadata must be a one-dimensional uint8 array")
     metadata = json.loads(metadata_array.tobytes().decode("utf-8"))
-    if metadata.get("schema") != ARTIFACT_SCHEMA:
+    if metadata.get("schema") not in SUPPORTED_ARTIFACT_SCHEMAS:
         raise ValueError("Unknown ReGentS artifact schema")
     return metadata, arrays

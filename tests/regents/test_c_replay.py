@@ -18,6 +18,7 @@ from pufferlib.ocean.regents.generation import (
     generate_regents_scenarios,
     load_generation_config,
     render_scenario_replays,
+    save_loss_history_csv,
 )
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
 from pufferlib.ocean.regents.rollout import (
@@ -26,25 +27,28 @@ from pufferlib.ocean.regents.rollout import (
     run_reactive_idm_generation,
 )
 from pufferlib.ocean.regents.state import STATE_HEADING, STATE_X
+from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-NUPLAN_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/nuplan"
 GENERATION_CONFIG = REPO_ROOT / "pufferlib/config/evaluation/regents.yaml"
 HORIZON_TRANSITION_COUNT = 16
 REPLAY_FIXTURES = ((8, 50),)
 
 
 def _drive(map_idx, seed, sdc_controller):
+    if map_idx < 0 or map_idx >= len(REGENTS_AUDIT_SCENARIO_IDS):
+        raise ValueError(f"Pinned ReGentS fixture index must be in [0, {len(REGENTS_AUDIT_SCENARIO_IDS)})")
+    map_paths, map_indices, _ = resolve_nuplan_scenarios()
     return Drive(
         map_dir=str(NUPLAN_MAP_DIR),
-        num_maps=map_idx + 1,
+        num_maps=len(map_paths),
         num_agents=1,
         min_agents_per_env=1,
         max_agents_per_env=1,
         num_eval_scenarios=1,
         max_scenarios_per_batch=1,
-        eval_map_indices=[map_idx],
+        eval_map_indices=[map_indices[map_idx]],
         eval_scenario_seeds=[seed],
         seed=42,
         simulation_mode="replay",
@@ -100,7 +104,7 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     assert replay.baseline_states.shape == replay.states.shape
     assert replay.ego_actions.shape == (1, HORIZON_TRANSITION_COUNT, 2)
     assert torch.isfinite(replay.states[replay.state_valid]).all()
-    assert scenario.scenario_ids[0]
+    assert scenario.scenario_ids == (REGENTS_AUDIT_SCENARIO_IDS[map_idx],)
 
     pose = slice(STATE_X, STATE_HEADING + 1)
     joint_valid = optimization.state_valid & replay.state_valid
@@ -138,6 +142,14 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     injection_drive = _drive(map_idx, seed, "replay")
     try:
         injection_drive.reset(seed=seed)
+        with pytest.raises(ValueError, match="capture_observations requires capture_html_frames"):
+            replay_optimized_scenario_in_c(
+                injection_drive,
+                scenario,
+                optimization,
+                seed=seed,
+                capture_observations=True,
+            )
         agent_count = len(injection_drive.get_state()[0]["agents"])
         actions = np.zeros((agent_count, HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
         mask = np.zeros((agent_count, HORIZON_TRANSITION_COUNT), dtype=np.bool_)
@@ -182,7 +194,8 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert 1 <= result.outer_iteration_count <= 3
     assert result.optimization.frozen_ego_source == "c_idm"
 
-    map_path = sorted(NUPLAN_MAP_DIR.glob("*.bin"))[8]
+    _, _, fixture_paths = resolve_nuplan_scenarios()
+    map_path = fixture_paths[8]
     artifact_path = tmp_path / "scenario.npz"
     saved = save_generation_artifact(artifact_path, result, {"fixture": "test"}, str(map_path))
     metadata, arrays = load_generation_artifact(artifact_path)
@@ -190,10 +203,19 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert metadata["scenario_id"] == result.scenario.scenario_ids[0]
     assert metadata["deterministic_seed"] == 50
     assert len(metadata["source_configuration_hash"]) == 64
+    assert metadata["optimization"]["background_collision_loss_scope"] == "candidate_pairs"
     assert (
         metadata["optimization"]["ego_collision_loss_adversary_id"]
         == result.optimization.ego_collision_loss_adversary_id
     )
+    initial_costs = metadata["optimization"]["initial_costs"]
+    assert "background_collision_first_agent_id" in initial_costs
+    assert "background_collision_second_agent_id" in initial_costs
+    assert "background_collision_timestep_idx" in initial_costs
+    assert "background_collision_signed_distance_meters" in initial_costs
+    assert "background_collision_truncated" in initial_costs
+    assert metadata["optimization"]["baseline_background_collision_pair_count"] >= 0
+    assert metadata["optimization"]["background_collision_rejection_count"] >= 0
     assert np.array_equal(arrays["optimized_actions"], result.optimization.optimized_actions.detach().numpy())
     assert np.array_equal(arrays["c_states"], result.replay.states.numpy())
     assert arrays["original_states"].shape[1] == result.scenario.max_agent_count
@@ -201,9 +223,29 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     frames = result.replay.adversarial_frames
     assert frames is not None
     assert frames["agent_f32"].shape[0] == HORIZON_TRANSITION_COUNT + 1
-    assert frames["obs"].shape[0] == HORIZON_TRANSITION_COUNT + 1
+    assert "obs" not in frames
+    assert "obs" not in result.replay.baseline_frames
     assert result.replay.baseline_frames["agent_f32"].shape == frames["agent_f32"].shape
     assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_ids[0]
+
+    save_loss_history_csv(tmp_path, 8, result)
+    loss_header = (tmp_path / "losses/scenario_00008.losses.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "background_collision_first_agent_id" in loss_header
+    assert "background_collision_signed_distance_meters" in loss_header
+
+    observation_drive = _drive(8, 50, "idm")
+    try:
+        observation_replay = replay_optimized_scenario_in_c(
+            observation_drive,
+            result.scenario,
+            result.optimization,
+            seed=50,
+            capture_html_frames=True,
+            capture_observations=True,
+        )
+    finally:
+        observation_drive.close()
+    assert observation_replay.adversarial_frames["obs"].shape[:2] == (HORIZON_TRANSITION_COUNT + 1, 1)
 
     rendered = render_scenario_replays(
         tmp_path, 8, result, _full_env_config({"map_dir": str(NUPLAN_MAP_DIR), "dt": 0.1})
@@ -212,7 +254,9 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     for name in rendered:
         page = (tmp_path / RENDER_DIR_NAME / name).read_text(encoding="utf-8")
         assert "<title>PufferDrive Replay</title>" in page
-        assert 'const ADVERSARY_COLOR = "#654321";' in page
+        assert 'const ADVERSARY_COLOR = "#a16207";' in page
+        assert 'const LOSS_ADVERSARY_COLOR = "#c026d3";' in page
+        assert "isLossAdversary ? LOSS_ADVERSARY_COLOR" in page
         assert 'a.id + " [LOSS ADV]"' in page
         assert "Ego collision loss adversary" in page
         assert "http://" not in page and "https://" not in page
@@ -223,6 +267,10 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
         candidate_indices = torch.where(result.optimization.selection.candidate_mask[0])[0]
         expected_candidate_ids = result.scenario.agent_id[0, candidate_indices].tolist()
         assert header["candidate_adversary_ids"] == expected_candidate_ids
+        assert header["active_count"] == 1
+        assert header["obs_dim"] == 0
+        assert "obs" not in header["chunks"]
+        assert header["chunks"]["raw_action"]["shape"] == [HORIZON_TRANSITION_COUNT + 1, 1, 2]
         assert header["ego_collision_loss_adversary_idx"] == result.optimization.ego_collision_loss_adversary_idx
         assert header["ego_collision_loss_adversary_id"] == result.optimization.ego_collision_loss_adversary_id
 
@@ -285,9 +333,21 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
         "    maximum_outer_iterations: 1\n",
         encoding="utf-8",
     )
-    assert load_generation_config(config, "defaulted")["raster_resolution_meters"] == 0.5
+    defaulted = load_generation_config(config, "defaulted")
+    assert defaulted["raster_resolution_meters"] == 0.5
+    assert not defaulted["capture_observations"]
+
+    config.write_text(
+        "env:\n  num_maps: 1\ngenerations:\n  - name: broken\n    seed: 1\n"
+        "    scenario_count: 1\n    horizon_transition_count: 1\n"
+        "    maximum_outer_iterations: 1\n    capture_observations: 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(TypeError, match="capture_observations must be a boolean"):
+        load_generation_config(config, "broken")
 
     smoke = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
+    assert not smoke["capture_observations"]
     expected_count = smoke["scenario_count"]
     report = generate_regents_scenarios(GENERATION_CONFIG, "regents_nuplan_smoke", output_dir=tmp_path)
     assert report.scenario_count == expected_count

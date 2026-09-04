@@ -80,7 +80,7 @@ class FrozenEgoTrajectory:
 
     state: torch.Tensor
     valid: torch.Tensor
-    scenario_id: str
+    scenario_ids: tuple[str, ...]
     source: str
 
     def __post_init__(self):
@@ -92,8 +92,10 @@ class FrozenEgoTrajectory:
             raise ValueError("Frozen ego validity must be bool [batch, time]")
         if self.valid.device != self.state.device:
             raise ValueError("Frozen ego state and validity must share a device")
-        if not isinstance(self.scenario_id, str) or not self.scenario_id:
-            raise ValueError("Frozen ego scenario_id must be a non-empty string")
+        if not isinstance(self.scenario_ids, tuple) or len(self.scenario_ids) != self.state.shape[0]:
+            raise ValueError("Frozen ego scenario_ids must be one string per batch row")
+        if not all(isinstance(item, str) and item for item in self.scenario_ids):
+            raise ValueError("Frozen ego scenario_ids must be non-empty strings")
         if self.source not in ("c_idm", "logged_fixture", "c_replay"):
             raise ValueError("Frozen ego source must be 'c_idm', 'logged_fixture', or 'c_replay'")
         if not torch.isfinite(self.state[self.valid]).all():
@@ -178,6 +180,11 @@ class CostSnapshot:
     background_collision: float
     drivable_area: float
     total: float
+    background_collision_first_agent_idx: int
+    background_collision_second_agent_idx: int
+    background_collision_timestep_idx: int
+    background_collision_signed_distance_meters: float
+    background_collision_truncated: bool
 
 
 @dataclass(frozen=True)
@@ -209,6 +216,7 @@ class ReGentSOptimizationResult:
     success: bool
     background_collision: bool
     offroad: bool
+    baseline_background_collision_pair_count: int
     background_collision_rejection_count: int
     offroad_rejection_count: int
     failure_reason: str | None
@@ -465,42 +473,31 @@ def _compose_rollout(
     return torch.stack(rollout, dim=2), state_valid
 
 
-def _boxes_for_agent(states, scenario, agent_idx, timestep_idx):
-    agent_state = states[0, agent_idx, timestep_idx]
-    return torch.stack(
-        (
-            agent_state[:, STATE_X],
-            agent_state[:, STATE_Y],
-            torch.full_like(agent_state[:, STATE_X], scenario.length_meters[0, agent_idx]),
-            torch.full_like(agent_state[:, STATE_X], scenario.width_meters[0, agent_idx]),
-            agent_state[:, STATE_HEADING],
-        ),
-        dim=-1,
-    )
+def _candidate_ego_distances(states, state_valid, scenario, candidate_indices):
+    """Return per-candidate ego box distances and joint validity over the full horizon."""
+    ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
+    boxes = _masked_boxes(states, state_valid, scenario.length_meters, scenario.width_meters)[0]
+    distances = signed_box_distance(boxes[candidate_indices], boxes[ego_idx][None])
+    jointly_valid = state_valid[0, candidate_indices] & state_valid[0, ego_idx][None]
+    return distances, jointly_valid
 
 
 def _first_ego_collision(states, state_valid, scenario, candidate_mask, tolerance_meters):
-    ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
-    first_timestep = None
-    first_agent_idx = -1
-    for candidate_idx_tensor in torch.where(candidate_mask[0])[0]:
-        candidate_idx = int(candidate_idx_tensor.item())
-        jointly_valid = state_valid[0, ego_idx] & state_valid[0, candidate_idx]
-        if not jointly_valid.any():
-            continue
-        timestep_idx = torch.where(jointly_valid)[0]
-        distance = signed_box_distance(
-            _boxes_for_agent(states, scenario, ego_idx, timestep_idx),
-            _boxes_for_agent(states, scenario, candidate_idx, timestep_idx),
-        )
-        overlap_idx = torch.where(distance <= tolerance_meters)[0]
-        if overlap_idx.numel() == 0:
-            continue
-        timestep = int(timestep_idx[overlap_idx[0]].item())
-        if first_timestep is None or (timestep, candidate_idx) < (first_timestep, first_agent_idx):
-            first_timestep = timestep
-            first_agent_idx = candidate_idx
-    return first_timestep, first_agent_idx
+    candidate_indices = torch.where(candidate_mask[0])[0]
+    if candidate_indices.numel() == 0:
+        return None, -1
+    distances, jointly_valid = _candidate_ego_distances(states, state_valid, scenario, candidate_indices)
+    overlapping = jointly_valid & (distances <= tolerance_meters)
+    # Timestep-major keys rank the earliest overlap first, ties going to the lowest
+    # agent index because candidate_indices is ascending.
+    candidate_count, timestep_count = overlapping.shape
+    timestep_keys = torch.arange(timestep_count, device=overlapping.device) * candidate_count
+    ranking_keys = timestep_keys[None] + torch.arange(candidate_count, device=overlapping.device)[:, None]
+    no_overlap_key = candidate_count * timestep_count
+    best_key = int(torch.where(overlapping, ranking_keys, no_overlap_key).min().item())
+    if best_key == no_overlap_key:
+        return None, -1
+    return best_key // candidate_count, int(candidate_indices[best_key % candidate_count].item())
 
 
 def _candidate_background_pair_indices(scenario, state_valid, candidate_mask):
@@ -559,21 +556,21 @@ def _candidate_offroad_signature(states, state_valid, scenario, candidate_mask):
     raster = scenario.drivable_area_rasters[0]
     raster_mask = raster.mask.to(states.device)
     signature = torch.zeros((*states.shape[:3], 4), dtype=torch.bool, device=states.device)
-    for candidate_idx_tensor in torch.where(candidate_mask[0])[0]:
-        candidate_idx = int(candidate_idx_tensor.item())
-        timestep_idx = torch.where(state_valid[0, candidate_idx])[0]
-        if timestep_idx.numel() == 0:
-            continue
-        corners = oriented_box_corners(_boxes_for_agent(states, scenario, candidate_idx, timestep_idx))
-        grid = raster.transform.world_to_grid(corners)
-        column = torch.round(grid[..., 0]).to(torch.int64)
-        row = torch.round(grid[..., 1]).to(torch.int64)
-        outside = (column < 0) | (column >= raster.transform.width)
-        outside |= (row < 0) | (row >= raster.transform.height)
-        safe_column = column.clamp(0, raster.transform.width - 1)
-        safe_row = row.clamp(0, raster.transform.height - 1)
-        outside |= ~raster_mask[safe_row, safe_column]
-        signature[0, candidate_idx, timestep_idx] = outside
+    candidate_indices = torch.where(candidate_mask[0])[0]
+    if candidate_indices.numel() == 0:
+        return signature
+    boxes = _masked_boxes(states, state_valid, scenario.length_meters, scenario.width_meters)
+    corners = oriented_box_corners(boxes[0, candidate_indices])
+    grid = raster.transform.world_to_grid(corners)
+    column = torch.round(grid[..., 0]).to(torch.int64)
+    row = torch.round(grid[..., 1]).to(torch.int64)
+    outside = (column < 0) | (column >= raster.transform.width)
+    outside |= (row < 0) | (row >= raster.transform.height)
+    safe_column = column.clamp(0, raster.transform.width - 1)
+    safe_row = row.clamp(0, raster.transform.height - 1)
+    outside |= ~raster_mask[safe_row, safe_column]
+    # Invalid timesteps carry a placeholder box, so they never enter the signature.
+    signature[0, candidate_indices] = outside & state_valid[0, candidate_indices][..., None]
     return signature
 
 
@@ -595,6 +592,11 @@ def _cost_snapshot(costs):
         background_collision=float(costs.background_collision.detach().item()),
         drivable_area=float(costs.drivable_area.detach().item()),
         total=float(costs.total.detach().item()),
+        background_collision_first_agent_idx=int(costs.background_collision_first_agent_idx.item()),
+        background_collision_second_agent_idx=int(costs.background_collision_second_agent_idx.item()),
+        background_collision_timestep_idx=int(costs.background_collision_timestep_idx.item()),
+        background_collision_signed_distance_meters=float(costs.background_collision_signed_distance_meters.item()),
+        background_collision_truncated=bool(costs.background_collision_truncated.item()),
     )
 
 
@@ -607,24 +609,17 @@ def _saturation_fraction(actions, optimized_action_mask, tolerance):
 
 
 def _selected_adversary(states, state_valid, scenario, candidate_mask):
-    ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
-    selected_idx = -1
-    selected_distance = math.inf
-    for candidate_idx_tensor in torch.where(candidate_mask[0])[0]:
-        candidate_idx = int(candidate_idx_tensor.item())
-        jointly_valid = state_valid[0, ego_idx] & state_valid[0, candidate_idx]
-        timestep_idx = torch.where(jointly_valid)[0]
-        if timestep_idx.numel() == 0:
-            continue
-        distance = signed_box_distance(
-            _boxes_for_agent(states, scenario, ego_idx, timestep_idx),
-            _boxes_for_agent(states, scenario, candidate_idx, timestep_idx),
-        ).mean()
-        scalar_distance = float(distance.detach().item())
-        if (scalar_distance, candidate_idx) < (selected_distance, selected_idx):
-            selected_distance = scalar_distance
-            selected_idx = candidate_idx
-    return selected_idx
+    candidate_indices = torch.where(candidate_mask[0])[0]
+    if candidate_indices.numel() == 0:
+        return -1
+    distances, jointly_valid = _candidate_ego_distances(states, state_valid, scenario, candidate_indices)
+    jointly_valid_counts = jointly_valid.sum(dim=-1)
+    summed_distances = torch.where(jointly_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
+    mean_distances = (summed_distances / jointly_valid_counts.clamp_min(1)).detach()
+    mean_distances = mean_distances.masked_fill(jointly_valid_counts == 0, math.inf)
+    if not torch.isfinite(mean_distances).any():
+        return -1
+    return int(candidate_indices[int(torch.argmin(mean_distances).item())].item())
 
 
 def _zero_adam_steering_momentum(optimizer, action_parameter, divergent_agent_mask):
@@ -714,6 +709,7 @@ def optimize_frozen_ego_scenario(
         config.collision_distance_tolerance_meters,
         background_pair_indices,
     )
+    baseline_background_collision_pair_count = int(baseline_background_collision_signature.sum().item())
 
     if not bool(selection.scene_eligible[0]):
         return ReGentSOptimizationResult(
@@ -744,6 +740,7 @@ def optimize_frozen_ego_scenario(
             success=False,
             background_collision=False,
             offroad=False,
+            baseline_background_collision_pair_count=baseline_background_collision_pair_count,
             background_collision_rejection_count=0,
             offroad_rejection_count=0,
             failure_reason="scene_filtered:" + ",".join(selection.scene_reasons_for(0)),
@@ -780,6 +777,7 @@ def optimize_frozen_ego_scenario(
         foreach=False,
     )
     candidate_mask = selection.candidate_mask
+    background_vehicle_mask = candidate_mask
     gradient_norms = []
     acceleration_gradient_norms = []
     steering_gradient_norms = []
@@ -835,7 +833,7 @@ def optimize_frozen_ego_scenario(
             scenario.width_meters,
             scenario.ego_mask,
             candidate_mask,
-            candidate_mask,
+            background_vehicle_mask,
             candidate_mask,
             out_of_bounds_rasters,
             config.costs,
@@ -1029,6 +1027,7 @@ def optimize_frozen_ego_scenario(
         success=success,
         background_collision=final_background_collision,
         offroad=final_offroad,
+        baseline_background_collision_pair_count=baseline_background_collision_pair_count,
         background_collision_rejection_count=background_collision_rejection_count,
         offroad_rejection_count=offroad_rejection_count,
         failure_reason=failure_reason,

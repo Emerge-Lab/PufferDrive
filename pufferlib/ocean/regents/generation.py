@@ -25,6 +25,7 @@ from pufferlib.ocean.regents.rollout import run_reactive_idm_generation
 
 METRICS_FILE_NAME = "generation_metrics.csv"
 RENDER_DIR_NAME = "rendered_replays"
+REGENTS_ACTIVE_AGENT_COUNT = 1
 METRIC_FIELD_NAMES = (
     "scenario_index",
     "scenario_id",
@@ -34,6 +35,8 @@ METRIC_FIELD_NAMES = (
     "ego_collision",
     "actionable_collision",
     "background_collision",
+    "baseline_background_collision_pair_count",
+    "background_collision_rejection_count",
     "offroad",
     "c_torch_trajectory_error",
     "ego_reference_error",
@@ -113,6 +116,9 @@ def load_generation_config(config_path, generation_name):
     num_workers = selected.get("num_workers", 1)
     if num_workers != "auto":
         _require_positive_int(num_workers, "num_workers")
+    capture_observations = selected.get("capture_observations", False)
+    if not isinstance(capture_observations, bool):
+        raise TypeError("capture_observations must be a boolean")
 
     resolved = {
         "name": generation_name,
@@ -128,6 +134,7 @@ def load_generation_config(config_path, generation_name):
         "raster_resolution_meters": float(selected.get("raster_resolution_meters", DEFAULT_RASTER_RESOLUTION_METERS)),
         "output_dir": str(selected.get("output_dir", "experiments/regents")),
         "render_replays": bool(selected.get("render_replays", False)),
+        "capture_observations": capture_observations,
         "optimizer": optimizer,
         "env": environment,
     }
@@ -163,10 +170,15 @@ def _replay_bundle(env_config, frames, ego_actions):
     frames = dict(frames)
     observations = frames.pop("obs", None)
     frame_count = frames["agent_f32"].shape[0]
-    actions = np.zeros((frame_count, max(ego_actions.shape[1], 1), 2), dtype=np.float32)
-    actions[1:, : ego_actions.shape[1]] = ego_actions[0].detach().cpu().numpy()[: frame_count - 1, None, :]
+    expected_ego_action_shape = (1, frame_count - 1, 2)
+    if tuple(ego_actions.shape) != expected_ego_action_shape:
+        raise ValueError(f"Captured ReGentS ego actions must have shape {expected_ego_action_shape}")
+    actions = np.zeros((frame_count, REGENTS_ACTIVE_AGENT_COUNT, 2), dtype=np.float32)
+    actions[1:, 0] = ego_actions[0].detach().cpu().numpy()
     bundle = {"env": env_config, **frames, "raw_action": actions, "clipped_action": actions}
     if observations is not None:
+        if observations.ndim != 3 or observations.shape[:2] != (frame_count, REGENTS_ACTIVE_AGENT_COUNT):
+            raise ValueError("Captured ReGentS observations must have shape [frame, one active ego, feature]")
         bundle["obs"] = observations
     return bundle
 
@@ -182,9 +194,32 @@ def save_loss_history_csv(destination, scenario_idx, result):
     with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(
-            ["iteration", "total_loss", "ego_collision_cost", "background_collision_cost", "drivable_area_cost"]
+            [
+                "iteration",
+                "total_loss",
+                "ego_collision_cost",
+                "background_collision_cost",
+                "drivable_area_cost",
+                "background_collision_first_agent_idx",
+                "background_collision_first_agent_id",
+                "background_collision_second_agent_idx",
+                "background_collision_second_agent_id",
+                "background_collision_timestep_idx",
+                "background_collision_signed_distance_meters",
+                "background_collision_truncated",
+            ]
         )
         for idx, snap in enumerate(optimization.cost_history):
+            first_agent_id = (
+                int(result.scenario.agent_id[0, snap.background_collision_first_agent_idx].item())
+                if snap.background_collision_first_agent_idx >= 0
+                else -1
+            )
+            second_agent_id = (
+                int(result.scenario.agent_id[0, snap.background_collision_second_agent_idx].item())
+                if snap.background_collision_second_agent_idx >= 0
+                else -1
+            )
             writer.writerow(
                 [
                     idx,
@@ -192,6 +227,13 @@ def save_loss_history_csv(destination, scenario_idx, result):
                     snap.ego_collision,
                     snap.background_collision,
                     snap.drivable_area,
+                    snap.background_collision_first_agent_idx,
+                    first_agent_id,
+                    snap.background_collision_second_agent_idx,
+                    second_agent_id,
+                    snap.background_collision_timestep_idx,
+                    snap.background_collision_signed_distance_meters,
+                    int(snap.background_collision_truncated),
                 ]
             )
 
@@ -260,6 +302,8 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "ego_collision": int(metrics.ego_collision),
         "actionable_collision": int(metrics.actionable_collision),
         "background_collision": int(metrics.background_collision),
+        "baseline_background_collision_pair_count": result.optimization.baseline_background_collision_pair_count,
+        "background_collision_rejection_count": result.optimization.background_collision_rejection_count,
         "offroad": int(metrics.offroad),
         "c_torch_trajectory_error": metrics.maximum_trajectory_error,
         "ego_reference_error": metrics.maximum_ego_reference_error,
@@ -303,6 +347,7 @@ def _generate_one_scenario(task):
                 horizon_transition_count=generation["horizon_transition_count"],
                 maximum_outer_iterations=generation["maximum_outer_iterations"],
                 capture_html_frames=render_replays,
+                capture_observations=generation["capture_observations"],
                 show_progress=show_progress,
                 raster_resolution_meters=generation["raster_resolution_meters"],
             )

@@ -61,6 +61,11 @@ class ReGentSCosts:
     background_collision: torch.Tensor
     drivable_area: torch.Tensor
     total: torch.Tensor
+    background_collision_first_agent_idx: torch.Tensor
+    background_collision_second_agent_idx: torch.Tensor
+    background_collision_timestep_idx: torch.Tensor
+    background_collision_signed_distance_meters: torch.Tensor
+    background_collision_truncated: torch.Tensor
 
 
 def prepare_out_of_bounds_rasters(
@@ -170,17 +175,21 @@ def ego_background_collision_cost(
     return averaged_distances.min(dim=-1).values
 
 
-def background_collision_avoidance_cost(
+def _background_collision_avoidance_cost_and_diagnostics(
     states,
     state_valid,
     length_meters,
     width_meters,
-    background_mask,
+    background_vehicle_mask,
+    optimized_vehicle_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
 ):
-    """Return negative truncated minimum distance among distinct backgrounds."""
+    """Return the paper hard-min cost and its deterministic winning pair."""
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
-    _validate_agent_mask(background_mask, states, "background_mask")
+    _validate_agent_mask(background_vehicle_mask, states, "background_vehicle_mask")
+    _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
+    if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
+        raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
     if not isinstance(truncation_meters, (float, int)) or not math.isfinite(truncation_meters):
         raise ValueError("truncation_meters must be a finite positive scalar")
     if truncation_meters <= 0:
@@ -188,10 +197,20 @@ def background_collision_avoidance_cost(
 
     boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     scenario_costs = []
+    first_agent_indices = []
+    second_agent_indices = []
+    timestep_indices = []
+    signed_distances_meters = []
+    truncation_states = []
     for scenario_idx in range(states.shape[0]):
-        background_indices = torch.where(background_mask[scenario_idx])[0]
+        background_indices = torch.where(background_vehicle_mask[scenario_idx])[0]
         if background_indices.numel() < 2:
             scenario_costs.append(states.new_zeros(()))
+            first_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            second_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            timestep_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            signed_distances_meters.append(states.new_zeros(()))
+            truncation_states.append(torch.tensor(False, dtype=torch.bool, device=states.device))
             continue
         local_pairs = torch.triu_indices(
             background_indices.numel(),
@@ -200,7 +219,26 @@ def background_collision_avoidance_cost(
             device=states.device,
         )
         pair_indices = background_indices[local_pairs]
+        optimized_pair = optimized_vehicle_mask[scenario_idx, pair_indices[0]]
+        optimized_pair |= optimized_vehicle_mask[scenario_idx, pair_indices[1]]
+        pair_valid = state_valid[scenario_idx, pair_indices[0]] & state_valid[scenario_idx, pair_indices[1]]
+        eligible_pair = optimized_pair & torch.any(pair_valid, dim=-1)
+        pair_indices = pair_indices[:, eligible_pair]
+        pair_valid = pair_valid[eligible_pair]
+        if pair_indices.shape[1] == 0:
+            scenario_costs.append(states.new_zeros(()))
+            first_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            second_agent_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            timestep_indices.append(torch.tensor(-1, dtype=torch.int64, device=states.device))
+            signed_distances_meters.append(states.new_zeros(()))
+            truncation_states.append(torch.tensor(False, dtype=torch.bool, device=states.device))
+            continue
+
         chunk_minima = []
+        chunk_raw_minima = []
+        chunk_first_agent_indices = []
+        chunk_second_agent_indices = []
+        chunk_timestep_indices = []
         for chunk_start in range(0, pair_indices.shape[1], PAIRWISE_DISTANCE_CHUNK_SIZE):
             chunk_pairs = pair_indices[:, chunk_start : chunk_start + PAIRWISE_DISTANCE_CHUNK_SIZE]
             first_indices, second_indices = chunk_pairs
@@ -208,12 +246,56 @@ def background_collision_avoidance_cost(
                 boxes[scenario_idx, first_indices],
                 boxes[scenario_idx, second_indices],
             )
-            pair_valid = state_valid[scenario_idx, first_indices] & state_valid[scenario_idx, second_indices]
-            truncated = torch.clamp_max(distances, float(truncation_meters))
-            chunk_minima.append(torch.where(pair_valid, truncated, torch.full_like(truncated, torch.inf)).min())
+            chunk_valid = pair_valid[chunk_start : chunk_start + chunk_pairs.shape[1]]
+            masked_distances = torch.where(chunk_valid, distances, torch.full_like(distances, torch.inf))
+            truncated_distances = torch.clamp_max(distances, float(truncation_meters))
+            chunk_minima.append(
+                torch.where(chunk_valid, truncated_distances, torch.full_like(truncated_distances, torch.inf)).min()
+            )
+            flat_winner_idx = torch.argmin(masked_distances.reshape(-1))
+            pair_winner_idx = torch.div(flat_winner_idx, states.shape[2], rounding_mode="floor")
+            chunk_raw_minima.append(masked_distances.reshape(-1)[flat_winner_idx].detach())
+            chunk_first_agent_indices.append(first_indices[pair_winner_idx])
+            chunk_second_agent_indices.append(second_indices[pair_winner_idx])
+            chunk_timestep_indices.append(flat_winner_idx % states.shape[2])
         minimum = torch.stack(chunk_minima).min()
-        scenario_costs.append(torch.where(torch.isfinite(minimum), -minimum, states.new_zeros(())))
-    return torch.stack(scenario_costs)
+        scenario_costs.append(-minimum)
+        winning_chunk_idx = int(torch.argmin(torch.stack(chunk_raw_minima)).item())
+        winning_distance = chunk_raw_minima[winning_chunk_idx]
+        first_agent_indices.append(chunk_first_agent_indices[winning_chunk_idx])
+        second_agent_indices.append(chunk_second_agent_indices[winning_chunk_idx])
+        timestep_indices.append(chunk_timestep_indices[winning_chunk_idx])
+        signed_distances_meters.append(winning_distance)
+        truncation_states.append(winning_distance >= float(truncation_meters))
+    return (
+        torch.stack(scenario_costs),
+        torch.stack(first_agent_indices),
+        torch.stack(second_agent_indices),
+        torch.stack(timestep_indices),
+        torch.stack(signed_distances_meters),
+        torch.stack(truncation_states),
+    )
+
+
+def background_collision_avoidance_cost(
+    states,
+    state_valid,
+    length_meters,
+    width_meters,
+    background_vehicle_mask,
+    optimized_vehicle_mask,
+    truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
+):
+    """Return the paper hard-min over pairs with an optimized endpoint."""
+    return _background_collision_avoidance_cost_and_diagnostics(
+        states,
+        state_valid,
+        length_meters,
+        width_meters,
+        background_vehicle_mask,
+        optimized_vehicle_mask,
+        truncation_meters,
+    )[0]
 
 
 def drivable_area_deviation_cost(
@@ -276,7 +358,7 @@ def combined_regents_cost(
     width_meters,
     ego_mask,
     candidate_adversary_mask,
-    background_mask,
+    background_vehicle_mask,
     optimized_vehicle_mask,
     out_of_bounds_rasters,
     config=None,
@@ -291,7 +373,7 @@ def combined_regents_cost(
     for name, mask in (
         ("ego_mask", ego_mask),
         ("candidate_adversary_mask", candidate_adversary_mask),
-        ("background_mask", background_mask),
+        ("background_vehicle_mask", background_vehicle_mask),
         ("optimized_vehicle_mask", optimized_vehicle_mask),
     ):
         _validate_agent_mask(mask, states, name)
@@ -304,10 +386,10 @@ def combined_regents_cost(
             raise ValueError("Out-of-bounds raster Gaussian sigma does not match the cost config")
         if not math.isclose(raster.gaussian_truncate_sigma, config.gaussian_truncate_sigma):
             raise ValueError("Out-of-bounds raster Gaussian truncation does not match the cost config")
-    if torch.any(ego_mask & background_mask):
-        raise ValueError("The ego agent cannot be included in background_mask")
-    if torch.any(optimized_vehicle_mask & ~background_mask):
-        raise ValueError("optimized_vehicle_mask must be a subset of background_mask")
+    if torch.any(ego_mask & background_vehicle_mask):
+        raise ValueError("The ego agent cannot be included in background_vehicle_mask")
+    if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
+        raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
     ego_collision = ego_background_collision_cost(
         states,
         state_valid,
@@ -316,12 +398,20 @@ def combined_regents_cost(
         ego_mask,
         candidate_adversary_mask,
     )
-    background_collision = background_collision_avoidance_cost(
+    (
+        background_collision,
+        background_collision_first_agent_idx,
+        background_collision_second_agent_idx,
+        background_collision_timestep_idx,
+        background_collision_signed_distance_meters,
+        background_collision_truncated,
+    ) = _background_collision_avoidance_cost_and_diagnostics(
         states,
         state_valid,
         length_meters,
         width_meters,
-        background_mask,
+        background_vehicle_mask,
+        optimized_vehicle_mask,
         config.background_distance_truncation_meters,
     )
     drivable_area = drivable_area_deviation_cost(
@@ -338,4 +428,14 @@ def combined_regents_cost(
         + config.background_collision_weight * background_collision
         + config.drivable_area_weight * drivable_area
     )
-    return ReGentSCosts(ego_collision, background_collision, drivable_area, total)
+    return ReGentSCosts(
+        ego_collision,
+        background_collision,
+        drivable_area,
+        total,
+        background_collision_first_agent_idx,
+        background_collision_second_agent_idx,
+        background_collision_timestep_idx,
+        background_collision_signed_distance_meters,
+        background_collision_truncated,
+    )

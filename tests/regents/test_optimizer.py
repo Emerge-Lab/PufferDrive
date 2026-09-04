@@ -206,6 +206,39 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions():
 
 def test_infeasible_iterates_are_rejected_against_a_logged_baseline():
     """New background collisions and off-road excursions are rejected; logged ones are not."""
+    mixed_control = optimize_frozen_ego_scenario(
+        _scenario(
+            torch.stack(
+                (
+                    _straight_track(100.0, 0.0, 0.0, 8),
+                    _straight_track(0.0, 0.0, 2.0, 8),
+                    _straight_track(30.0, 0.0, 0.0, 8),
+                    _straight_track(6.0, 0.0, 1.0, 8),
+                )
+            )
+        ),
+        config=ReGentSOptimizationConfig(
+            filter=ReGentSFilterConfig(rear_sector_fraction=1.0),
+            costs=ReGentSCostConfig(ego_collision_weight=0.0, drivable_area_weight=0.0),
+            learning_rate=0.1,
+            iteration_count=20,
+            early_stop_on_collision=False,
+        ),
+        deterministic_seed=28,
+        show_progress=False,
+    )
+    assert mixed_control.selection.candidate_mask.tolist() == [[False, True, False, True]]
+    assert mixed_control.initial_costs.background_collision_first_agent_idx == 1
+    assert mixed_control.initial_costs.background_collision_second_agent_idx == 3
+    assert mixed_control.initial_costs.background_collision_timestep_idx == 7
+    assert mixed_control.initial_costs.background_collision > -1.25
+    assert mixed_control.final_costs.background_collision == -1.25
+    assert mixed_control.final_costs.background_collision_truncated
+    assert torch.any(mixed_control.optimized_actions[0, 1] != mixed_control.initial_actions[0, 1])
+    assert torch.equal(mixed_control.optimized_actions[0, 2], mixed_control.initial_actions[0, 2])
+    assert torch.any(mixed_control.optimized_actions[0, 3] != mixed_control.initial_actions[0, 3])
+    assert not mixed_control.background_collision
+
     rejection_config = ReGentSOptimizationConfig(
         filter=ReGentSFilterConfig(rear_sector_fraction=1.0),
         costs=ReGentSCostConfig(background_collision_weight=0.0, drivable_area_weight=0.0),

@@ -1018,6 +1018,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         #perturbation-legend { margin-top:10px; padding-top:8px; border-top:1px solid var(--border); }
         .perturbation-key { display:flex; align-items:center; gap:8px; margin-top:5px; color:var(--muted); font-size:10px; font-weight:600; }
         .perturbation-line { width:28px; height:0; border-top:3px solid; }
+        .perturbation-line.adversary { border-color:#a16207; border-top-style:dashed; }
+        .perturbation-line.loss-adversary { border-color:#c026d3; border-top-style:dashed; }
         .perturbation-line.blindness { border-color:#6d28d9; border-top-style:dashed; }
         .perturbation-line.phantom-braking { border-color:#b45309; }
         /* Agent panel: dark instrument-cluster surface in both themes — scoped variable overrides restyle all children. */
@@ -1066,6 +1068,11 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Scenario ID</div><div class="value mono" id="meta-id" style="font-size:11px">-</div>
             <div class="label">Agents (active / total)</div><div class="value mono" id="meta-agents">-</div>
             <div class="label" id="meta-loss-adversary-label">Ego collision loss adversary</div><div class="value mono" id="meta-loss-adversary">-</div>
+            <div id="regents-adversary-legend" style="display:none">
+                <div class="label">ReGentS adversaries</div>
+                <div class="perturbation-key"><span class="perturbation-line adversary"></span><span>Candidate ADV</span></div>
+                <div class="perturbation-key"><span class="perturbation-line loss-adversary"></span><span>Loss ADV</span></div>
+            </div>
             <div id="perturbation-legend">
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
@@ -1118,7 +1125,8 @@ __PAYLOAD_CHUNKS__
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
         const STATIC_AGENT_COLOR = "#4a505a";
         const INFRACTION_AGENT_COLOR = "#d92d20";
-        const ADVERSARY_COLOR = "#654321";
+        const ADVERSARY_COLOR = "#a16207";
+        const LOSS_ADVERSARY_COLOR = "#c026d3";
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
@@ -1238,6 +1246,7 @@ self.onmessage = async event => {
             if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1) adversaryIds.add(H.selected_adversary_id);
             egoCollisionLossAdversaryId = H.ego_collision_loss_adversary_id ?? -1;
             if (egoCollisionLossAdversaryId !== -1) adversaryIds.add(egoCollisionLossAdversaryId);
+            document.getElementById('regents-adversary-legend').style.display = adversaryIds.size ? '' : 'none';
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
@@ -1274,6 +1283,7 @@ self.onmessage = async event => {
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
         }
         function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            if (id === egoCollisionLossAdversaryId) return LOSS_ADVERSARY_COLOR;
             if (adversaryIds.has(id)) return ADVERSARY_COLOR;
             return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
         }
@@ -1324,7 +1334,11 @@ self.onmessage = async event => {
             ctx.restore();
         }
         function drawPerturbationOutlines(a) {
-            if (adversaryIds.has(a.id)) drawPerturbationOutline(a, ADVERSARY_COLOR, [4, 2], 3);
+            if (a.id === egoCollisionLossAdversaryId) {
+                drawPerturbationOutline(a, LOSS_ADVERSARY_COLOR, [4, 2], 3);
+            } else if (adversaryIds.has(a.id)) {
+                drawPerturbationOutline(a, ADVERSARY_COLOR, [4, 2], 3);
+            }
             if (a.phantomBrakingActive) {
                 drawPerturbationOutline(a, PHANTOM_BRAKING_OUTLINE_COLOR, [], 3);
             }
@@ -1577,10 +1591,11 @@ self.onmessage = async event => {
                 if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1);
 
                 const isAdversary = adversaryIds.has(a.id);
-                ctx.fillStyle = isAdversary ? ADVERSARY_COLOR : colors.text;
+                const isLossAdversary = a.id === egoCollisionLossAdversaryId;
+                ctx.fillStyle = isLossAdversary ? LOSS_ADVERSARY_COLOR : (isAdversary ? ADVERSARY_COLOR : colors.text);
                 ctx.font = isAdversary ? 'bold '+(14/cam.z)+'px system-ui' : '600 '+(14/cam.z)+'px system-ui';
                 ctx.textAlign = 'center';
-                const labelText = a.id === egoCollisionLossAdversaryId
+                const labelText = isLossAdversary
                     ? a.id + " [LOSS ADV]"
                     : (isAdversary ? a.id + " [ADV]" : String(a.id));
                 ctx.fillText(labelText, 0, (isEgoCam && target) ? a.w/2+.5 : -a.w/2-.5);

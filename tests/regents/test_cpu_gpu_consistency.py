@@ -57,6 +57,14 @@ def test_every_differentiable_stage_agrees_between_cpu_and_gpu(synthetic_scenari
         (gpu.ego_collision, gpu.background_collision, gpu.drivable_area, gpu.total),
     ):
         torch.testing.assert_close(gpu_value.cpu(), cpu_value, atol=CONSISTENCY_ATOL, rtol=CONSISTENCY_ATOL)
+    for name in (
+        "background_collision_first_agent_idx",
+        "background_collision_second_agent_idx",
+        "background_collision_timestep_idx",
+        "background_collision_signed_distance_meters",
+        "background_collision_truncated",
+    ):
+        torch.testing.assert_close(getattr(gpu, name).cpu(), getattr(cpu, name))
 
     steering_targets = torch.tensor([0.02, 0.04, 0.06, 0.08, 0.06, 0.04], dtype=torch.float32)
     actions = torch.stack(

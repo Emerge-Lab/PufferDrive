@@ -1,7 +1,5 @@
 """Shared scenario builders for the ReGentS tests."""
 
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -15,10 +13,7 @@ from pufferlib.ocean.regents.state import (
     RasterTransform,
     ScenarioBatch,
 )
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-NUPLAN_MAP_DIR = REPO_ROOT / "pufferlib/resources/drive/binaries/nuplan"
+from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
 
 
 def _scenario_batch(states, state_valid=None, steering_observed=True, wheelbase_meters=2.7, maximum_speed_mps=20.0):
@@ -74,15 +69,18 @@ def _scenario_batch(states, state_valid=None, steering_observed=True, wheelbase_
 
 
 def _real_scenario(map_idx):
+    if map_idx < 0 or map_idx >= len(REGENTS_AUDIT_SCENARIO_IDS):
+        raise ValueError(f"Pinned ReGentS fixture index must be in [0, {len(REGENTS_AUDIT_SCENARIO_IDS)})")
+    map_paths, map_indices, _ = resolve_nuplan_scenarios()
     drive = Drive(
         map_dir=str(NUPLAN_MAP_DIR),
-        num_maps=map_idx + 1,
+        num_maps=len(map_paths),
         num_agents=1,
         min_agents_per_env=1,
         max_agents_per_env=1,
         num_eval_scenarios=1,
         max_scenarios_per_batch=1,
-        eval_map_indices=[map_idx],
+        eval_map_indices=[map_indices[map_idx]],
         eval_scenario_seeds=[42 + map_idx],
         seed=42,
         simulation_mode="replay",
