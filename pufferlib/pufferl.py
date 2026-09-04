@@ -1681,12 +1681,10 @@ def eval(
     selected_benchmarks = benchmark_names if benchmark_names is not None else eval_config["benchmarks"]
     eval_config["benchmarks"] = selected_benchmarks
     output_name = eval_config["output_name"]
-    render_scenarios = eval_config["render_scenarios"]
     render_filter = eval_config["render_filter"]
     max_rendered_failures = eval_config["max_rendered_failures"]
     failure_replay_csv = eval_config["failure_replay_csv"]
     eval_training_render = args["env"]["eval_training_render"]
-    render_scenarios = render_scenarios or eval_training_render
 
     report_to_wandb = bool(args["wandb"]) and not use_training_config
     environment_config, benchmarks = drive_benchmark.load_benchmark_config(benchmark_config_path, selected_benchmarks)
@@ -1722,6 +1720,7 @@ def eval(
             environment_config,
             cli_overrides,
         )
+        render_scenarios = eval_config["render_scenarios"] or run_args["env"]["eval_training_render"]
         output_directory_name = benchmark["name"]
         if output_name is not None:
             output_directory_name = f"{output_directory_name}_{output_name}"
