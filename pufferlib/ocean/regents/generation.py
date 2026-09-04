@@ -20,7 +20,7 @@ from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig
-from pufferlib.ocean.regents.rollout import run_reactive_idm_generation
+from pufferlib.ocean.regents.rollout import run_reactive_idm_generation_batch
 
 
 METRICS_FILE_NAME = "generation_metrics.csv"
@@ -119,12 +119,14 @@ def load_generation_config(config_path, generation_name):
     capture_observations = selected.get("capture_observations", False)
     if not isinstance(capture_observations, bool):
         raise TypeError("capture_observations must be a boolean")
+    batch_size = _require_positive_int(selected.get("batch_size", 1), "batch_size")
 
     resolved = {
         "name": generation_name,
         "seed": _require_positive_int(selected.get("seed"), "seed"),
         "scenario_count": _require_positive_int(selected.get("scenario_count"), "scenario_count"),
         "num_workers": num_workers,
+        "batch_size": batch_size,
         "horizon_transition_count": _require_positive_int(
             selected.get("horizon_transition_count"), "horizon_transition_count"
         ),
@@ -317,17 +319,21 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
     }
 
 
-def _generate_one_scenario(task):
-    """Generate, C-verify, and persist one scenario. Runs in-process or in a spawned worker."""
+def _generate_scenario_batch(task):
+    """Generate, C-verify, and persist one batch of scenarios. Runs in-process or spawned.
+
+    The batch shares a single Adam loop; each scenario keeps its own Drive, so the C
+    capture and replay contracts are per-scenario as before.
+    """
     import traceback
     import torch
 
     (
-        scenario_idx,
+        scenario_indices,
         generation,
         optimization_config,
         destination,
-        map_path,
+        map_paths,
         env_config,
         render_replays,
         show_progress,
@@ -335,15 +341,17 @@ def _generate_one_scenario(task):
     ) = task
     if worker_torch_thread_count is not None:
         torch.set_num_threads(worker_torch_thread_count)
-    seed = generation["seed"] + scenario_idx
+    seeds = [generation["seed"] + scenario_idx for scenario_idx in scenario_indices]
     try:
-        drive = _build_drive(generation["env"], scenario_idx, seed)
+        drives = [
+            _build_drive(generation["env"], scenario_idx, seed) for scenario_idx, seed in zip(scenario_indices, seeds)
+        ]
         started_at = time.perf_counter()
         try:
-            result = run_reactive_idm_generation(
-                drive,
+            results = run_reactive_idm_generation_batch(
+                drives,
                 optimization_config,
-                deterministic_seed=seed,
+                deterministic_seeds=seeds,
                 horizon_transition_count=generation["horizon_transition_count"],
                 maximum_outer_iterations=generation["maximum_outer_iterations"],
                 capture_html_frames=render_replays,
@@ -352,21 +360,25 @@ def _generate_one_scenario(task):
                 raster_resolution_meters=generation["raster_resolution_meters"],
             )
         finally:
-            drive.close()
-        elapsed_seconds = time.perf_counter() - started_at
+            for drive in drives:
+                drive.close()
+        # One shared loop, so per-scenario wall clock is only meaningful as a batch share.
+        elapsed_seconds = (time.perf_counter() - started_at) / len(scenario_indices)
         npz_dir = Path(destination) / "npz"
         npz_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
-        save_generation_artifact(artifact_path, result, generation, str(map_path))
-        save_loss_history_csv(destination, scenario_idx, result)
-        row = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
-        rendered_files = (
-            render_scenario_replays(destination, scenario_idx, result, env_config) if render_replays else {}
-        )
-        return scenario_idx, row, rendered_files
+        rows = []
+        rendered_files = {}
+        for scenario_idx, seed, map_path, result in zip(scenario_indices, seeds, map_paths, results):
+            artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
+            save_generation_artifact(artifact_path, result, generation, str(map_path))
+            save_loss_history_csv(destination, scenario_idx, result)
+            rows.append(_metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path))
+            if render_replays:
+                rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))
+        return scenario_indices, rows, rendered_files
     except Exception:
         # A spawned worker only ships the exception repr back, so log the real traceback here.
-        print(f"\n[ERROR] Generation failed for scenario {scenario_idx}:")
+        print(f"\n[ERROR] Generation failed for scenarios {list(scenario_indices)}:")
         traceback.print_exc()
         raise
 
@@ -388,43 +400,49 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     rows = [None] * generation["scenario_count"]
     rendered_files = {}
 
+    batch_size = generation["batch_size"]
+    scenario_batches = [
+        tuple(range(start, min(start + batch_size, generation["scenario_count"])))
+        for start in range(0, generation["scenario_count"], batch_size)
+    ]
     num_workers = generation["num_workers"]
     if num_workers == "auto":
         num_workers = os.cpu_count() or 1
-    num_workers = min(num_workers, generation["scenario_count"])
+    num_workers = min(num_workers, len(scenario_batches))
     tasks = [
         (
-            scenario_idx,
+            scenario_indices,
             generation,
             optimization_config,
             destination,
-            map_paths[scenario_idx],
+            [map_paths[scenario_idx] for scenario_idx in scenario_indices],
             env_config,
             render_replays,
             num_workers <= 1,
             1 if num_workers > 1 else None,
         )
-        for scenario_idx in range(generation["scenario_count"])
+        for scenario_indices in scenario_batches
     ]
 
     if num_workers <= 1:
         pool = None
-        completions = map(_generate_one_scenario, tasks)
+        completions = map(_generate_scenario_batch, tasks)
         description = "Generating scenarios"
     else:
         pool = multiprocessing.get_context("spawn").Pool(processes=num_workers)
-        completions = pool.imap_unordered(_generate_one_scenario, tasks)
+        completions = pool.imap_unordered(_generate_scenario_batch, tasks)
         description = "Generating scenarios (parallel)"
 
     success_count = 0
     completed_count = 0
     try:
         pbar = tqdm(completions, total=len(tasks), desc=description)
-        for scenario_idx, row, scenario_rendered in pbar:
-            rows[scenario_idx] = row
+        for scenario_indices, batch_rows, scenario_rendered in pbar:
             rendered_files.update(scenario_rendered)
-            completed_count += 1
-            success_count += int(row["generation_success"])
+            for scenario_idx, row in zip(scenario_indices, batch_rows):
+                rows[scenario_idx] = row
+                completed_count += 1
+                success_count += int(row["generation_success"])
             pbar.set_postfix(success=f"{success_count / completed_count:.1%}")
     finally:
         if pool is not None:

@@ -35,6 +35,8 @@ generations:
     seed: 42
     scenario_count: 50
     num_workers: 24
+    # Scenarios in a batch share one Adam loop; 8 measured fastest on 24 workers.
+    batch_size: 8
     horizon_transition_count: 100
     maximum_outer_iterations: 1
     raster_resolution_meters: 0.5
@@ -56,6 +58,7 @@ generations:
     seed: 42
     scenario_count: 16
     num_workers: 16
+    batch_size: 8
     horizon_transition_count: 200
     maximum_outer_iterations: 3
     raster_resolution_meters: 0.5
@@ -73,6 +76,7 @@ generations:
   - name: regents_nuplan_smoke
     seed: 42
     scenario_count: 2
+    batch_size: 2
     num_workers: 1
     horizon_transition_count: 50
     maximum_outer_iterations: 2
