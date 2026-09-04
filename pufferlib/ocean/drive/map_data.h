@@ -5,6 +5,14 @@
 // Grid Map Functions
 // ========================================
 
+// Odd grid width covering the furthest configured road-observation distance.
+static int compute_vision_range(Drive *env) {
+    int vision_half_range = (int) ceilf(
+        fmaxf(fmaxf(env->obs_range_road_front_m, env->obs_range_road_behind_m), env->obs_range_road_side_m)
+        / GRID_CELL_SIZE);
+    return 2 * vision_half_range + 1;
+}
+
 static int get_grid_index(Drive *env, float x1, float y1) {
     if (env->grid_map->top_left_x >= env->grid_map->bottom_right_x
         || env->grid_map->bottom_right_y >= env->grid_map->top_left_y) {
@@ -91,6 +99,8 @@ static int init_grid_map(Drive *env) {
     float grid_height = top_left_y - bottom_right_y;
     if (!first_valid_point || !isfinite(grid_width) || !isfinite(grid_height)) {
         fprintf(stderr, "[ERROR] -> Map has no valid road geometry extent for grid\n");
+        free(env->grid_map);
+        env->grid_map = NULL;
         return 1;
     }
     env->grid_map->grid_cols = ceil(grid_width / GRID_CELL_SIZE);
@@ -104,6 +114,8 @@ static int init_grid_map(Drive *env) {
             env->grid_map->grid_rows,
             grid_width,
             grid_height);
+        free(env->grid_map);
+        env->grid_map = NULL;
         return 1;
     }
     int grid_cell_count = (int) grid_cell_count_wide;
@@ -750,6 +762,22 @@ static void map_cache_insert(struct SharedMapData *entry) {
     g_map_cache[g_map_cache_count++] = entry;
 }
 
+static struct SharedMapData *map_cache_store(Drive *env) {
+    struct SharedMapData *entry = (struct SharedMapData *) calloc(1, sizeof(struct SharedMapData));
+    entry->map_name = strdup(env->map_name);
+    entry->road_elements = env->road_elements;
+    entry->num_road_elements = env->num_road_elements;
+    entry->grid_map = env->grid_map;
+    entry->neighbor_offsets = env->neighbor_offsets;
+    entry->lane_graph = env->lane_graph;
+    entry->obs_lane_stride = env->obs_lane_stride;
+    entry->obs_boundary_stride = env->obs_boundary_stride;
+    entry->ref_count = 1;
+    entry->owner_pid = getpid();
+    map_cache_insert(entry);
+    return entry;
+}
+
 static void free_grid_map(GridMap *grid_map) {
     if (grid_map == NULL) {
         return;
@@ -792,6 +820,110 @@ static void free_shared_map_data(struct SharedMapData *shared) {
         }
     }
     free(shared);
+}
+
+// Free binary-loaded scenario data and owned geometry, or release borrowed geometry.
+static void free_loaded_map_data(Drive *env) {
+    for (int i = 0; i < env->num_total_agents; i++) {
+        free_agent(&env->agents[i]);
+    }
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        free_traffic_element(&env->traffic_elements[i]);
+    }
+    free(env->agents);
+    free(env->traffic_elements);
+    if (env->shared_map != NULL) {
+        env->shared_map->ref_count--;
+        if (env->shared_map->ref_count <= 0 && env->shared_map->owner_pid == getpid()) {
+            free_shared_map_data(env->shared_map);
+        }
+        env->shared_map = NULL;
+    } else {
+        for (int i = 0; i < env->num_road_elements; i++) {
+            free_road_element(&env->road_elements[i]);
+        }
+        free(env->road_elements);
+        free(env->neighbor_offsets);
+        free_grid_map(env->grid_map);
+        free_lane_graph(&env->lane_graph);
+    }
+    free(env->objects_of_interest);
+    free(env->tracks_to_predict);
+    free(env->map_name);
+}
+
+// Release all preload references atomically; restore prior references on a cache miss.
+static int release_preloaded_map_cache(Drive *config, const char **map_files, int num_map_files) {
+    if (num_map_files == 0) {
+        return 0;
+    }
+    struct SharedMapData **released = (struct SharedMapData **) malloc(num_map_files * sizeof(struct SharedMapData *));
+    if (released == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < num_map_files; i++) {
+        Drive env = *config;
+        env.map_name = (char *) map_files[i];
+        struct SharedMapData *shared = map_cache_lookup(&env);
+        if (shared == NULL || shared->ref_count <= 0) {
+            for (int released_idx = 0; released_idx < i; released_idx++) {
+                released[released_idx]->ref_count++;
+            }
+            fprintf(stderr, "[ERROR] -> map_cache release miss (config drift): %s\n", env.map_name);
+            free(released);
+            return -1;
+        }
+        shared->ref_count--;
+        released[i] = shared;
+    }
+    free(released);
+    for (int cache_idx = 0; cache_idx < g_map_cache_count; cache_idx++) {
+        struct SharedMapData *shared = g_map_cache[cache_idx];
+        if (shared != NULL && shared->ref_count == 0 && shared->owner_pid == getpid()) {
+            free_shared_map_data(shared);
+        }
+    }
+    return 0;
+}
+
+// Keep one cache reference per map and discard temporary per-scenario data after loading.
+static int preload_map_cache(Drive *config, const char **map_files, int num_map_files) {
+    for (int i = 0; i < num_map_files; i++) {
+        Drive env = *config;
+        env.map_name = strdup(map_files[i]);
+        struct SharedMapData *shared = map_cache_lookup(&env);
+        if (shared != NULL) {
+            env.grid_map = shared->grid_map;
+            env.neighbor_offsets = shared->neighbor_offsets;
+            if (env.use_neighbor_cache && env.grid_map->neighbor_cache_entities == NULL) {
+                cache_neighbor_offsets(&env);
+            }
+            shared->ref_count++;
+            free(env.map_name);
+            continue;
+        }
+        if (load_map_binary(env.map_name, &env) != 0) {
+            fprintf(stderr, "[ERROR] -> Failed to load map binary: %s\n", env.map_name);
+            free_loaded_map_data(&env);
+            release_preloaded_map_cache(config, map_files, i);
+            return -1;
+        }
+        if (init_grid_map(&env) != 0) {
+            fprintf(stderr, "[ERROR] -> Failed to build grid map for map: %s\n", env.map_name);
+            free_loaded_map_data(&env);
+            release_preloaded_map_cache(config, map_files, i);
+            return -1;
+        }
+        env.grid_map->vision_range = compute_vision_range(&env);
+        init_neighbor_offsets(&env);
+        if (env.use_neighbor_cache) {
+            cache_neighbor_offsets(&env);
+        }
+        env.shared_map = map_cache_store(&env);
+        env.shared_map->ref_count++;
+        free_loaded_map_data(&env);
+    }
+    return g_map_cache_count;
 }
 
 #endif
