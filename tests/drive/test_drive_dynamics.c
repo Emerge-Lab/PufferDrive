@@ -6,12 +6,12 @@ static int test_classic_action_clipping(void) {
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     env.action_type = 1;
     env.dynamics_model = DYNAMICS_MODEL_CLASSIC;
-    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    Agent *agent = &env.agents[0];
     agent->sim_speed_signed = env.base_max_speed_mps * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
     ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[6] * 10.0f; // large acceleration
     ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[8] * 10.0f;     // large steering
-    move_dynamics(&env, 0, env.active_agent_indices[0]);
+    move_dynamics(&env, 0);
     EXPECT_TRUE(agent->sim_speed_signed <= env.base_max_speed_mps);
     EXPECT_TRUE(agent->steering_angle <= STEERING_LIMIT);
     free_allocated(&env);
@@ -23,12 +23,12 @@ static int test_jerk_action_clipping(void) {
     Drive env = drive_test_make_env(drive_carla_map(), SIMULATION_MODE_GIGAFLOW, 1, 0);
     env.action_type = 1;
     env.dynamics_model = DYNAMICS_MODEL_JERK;
-    Agent *agent = &env.agents[env.active_agent_indices[0]];
+    Agent *agent = &env.agents[0];
     agent->sim_speed_signed = env.base_max_speed_mps * 0.9f;
     agent->steering_angle = STEERING_LIMIT * 0.9f;
     ((float (*)[2]) env.actions)[0][0] = ACCELERATION_VALUES[0] * 10.0f; // large braking
     ((float (*)[2]) env.actions)[0][1] = STEERING_VALUES[0] * 10.0f;     // large steering
-    move_dynamics(&env, 0, env.active_agent_indices[0]);
+    move_dynamics(&env, 0);
     EXPECT_TRUE(agent->accel_long >= ACCEL_LONG_LIMIT[0]);
     EXPECT_TRUE(agent->accel_lat <= ACCEL_LAT_LIMIT[1]);
     EXPECT_TRUE(agent->steering_angle <= STEERING_LIMIT);
@@ -46,7 +46,7 @@ static int test_dynamics_stopped_agent_clears_motion(void) {
     update_agent_speed(&agent);
     agent.steering_angle = 0.3f;
 
-    move_dynamics(&env, 0, 0);
+    move_dynamics(&env, 0);
 
     EXPECT_NEAR(agent.sim_vx, 0.0f, 1e-6f);
     EXPECT_NEAR(agent.sim_speed, 0.0f, 1e-6f);
@@ -61,7 +61,7 @@ static int test_dynamics_removed_agent_invalidated(void) {
     env.dt = 0.1f;
     agent.removed = 1;
 
-    move_dynamics(&env, 0, 0);
+    move_dynamics(&env, 0);
 
     EXPECT_EQ_INT(agent.sim_valid, 0);
     EXPECT_NEAR(agent.sim_x, INVALID_POSITION, 1e-3f);

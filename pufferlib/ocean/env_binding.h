@@ -869,7 +869,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
 
-            agent_i32[i32_base + 0] = i;
+            agent_i32[i32_base + 0] = a->id;
             agent_i32[i32_base + 1] = a->type;
             agent_i32[i32_base + 2] = a->sim_valid;
             agent_i32[i32_base + 3] = a->active_agent;
@@ -883,36 +883,30 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
         }
 
-        if (drive->active_agent_indices) {
-            for (int j = 0; j < drive->active_agent_count; j++) {
-                int agent_idx = drive->active_agent_indices[j];
-                if (agent_idx < 0 || agent_idx >= agent_count) {
-                    continue;
-                }
-                int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
-                int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
-                agent_i32[i32_base + 7] = j;
+        for (int agent_idx = 0; agent_idx < drive->num_agents && agent_idx < agent_count; agent_idx++) {
+            int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
+            int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
+            agent_i32[i32_base + 7] = agent_idx;
 
-                if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
-                    continue;
-                }
-                Log *log = &drive->logs[j];
-                puffer_f32[puffer_base + 0] = log->puffer_score;
-                puffer_f32[puffer_base + 1] = log->no_at_fault;
-                puffer_f32[puffer_base + 2] = log->no_offroad;
-                puffer_f32[puffer_base + 3] = log->no_red_light;
-                puffer_f32[puffer_base + 4] = log->making_progress;
-                puffer_f32[puffer_base + 5] = log->driving_direction_score;
-                puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
-                puffer_f32[puffer_base + 7] = log->progress_ratio;
-                puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
-                puffer_f32[puffer_base + 9] = log->comfort_score;
-                puffer_f32[puffer_base + 10] = log->multi_lane_score;
-                puffer_f32[puffer_base + 11] = log->wrong_way_distance;
-                puffer_f32[puffer_base + 12] = log->speed_violation_sum;
-                puffer_f32[puffer_base + 13] = log->multiplier;
-                puffer_f32[puffer_base + 14] = log->weighted_average;
+            if (!drive->compute_eval_metrics || !drive->logs || agent_idx >= drive->logs_capacity) {
+                continue;
             }
+            Log *log = &drive->logs[agent_idx];
+            puffer_f32[puffer_base + 0] = log->puffer_score;
+            puffer_f32[puffer_base + 1] = log->no_at_fault;
+            puffer_f32[puffer_base + 2] = log->no_offroad;
+            puffer_f32[puffer_base + 3] = log->no_red_light;
+            puffer_f32[puffer_base + 4] = log->making_progress;
+            puffer_f32[puffer_base + 5] = log->driving_direction_score;
+            puffer_f32[puffer_base + 6] = log->ttc_puffer_rate;
+            puffer_f32[puffer_base + 7] = log->progress_ratio;
+            puffer_f32[puffer_base + 8] = log->speed_limit_compliance;
+            puffer_f32[puffer_base + 9] = log->comfort_score;
+            puffer_f32[puffer_base + 10] = log->multi_lane_score;
+            puffer_f32[puffer_base + 11] = log->wrong_way_distance;
+            puffer_f32[puffer_base + 12] = log->speed_violation_sum;
+            puffer_f32[puffer_base + 13] = log->multiplier;
+            puffer_f32[puffer_base + 14] = log->weighted_average;
         }
 
         for (int i = 0; i < traffic_count; i++) {
@@ -1044,7 +1038,7 @@ static PyObject *vec_get_global_agent_state(PyObject *self, PyObject *args) {
             &width_base[offset]);
 
         // Move offset forward by the number of agents in this environment
-        offset += drive->active_agent_count;
+        offset += drive->num_agents;
     }
 
     Py_RETURN_NONE;
@@ -1164,8 +1158,8 @@ static PyObject *vec_get_global_ground_truth_trajectories(PyObject *self, PyObje
             &scenario_id_base[agent_offset]);
 
         // Move offsets forward
-        agent_offset += drive->active_agent_count;
-        traj_offset += drive->active_agent_count * num_timesteps;
+        agent_offset += drive->num_agents;
+        traj_offset += drive->num_agents * num_timesteps;
     }
 
     Py_RETURN_NONE;

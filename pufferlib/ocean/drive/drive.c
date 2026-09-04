@@ -85,7 +85,6 @@ void demo() {
         .map_name = map_path,
         // Standalone binaries run from the repo root.
         .resource_root = "pufferlib/resources/drive",
-        .num_controllable_agents = conf.max_agents_per_env,
         .num_max_agents = conf.max_agents_per_env,
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
@@ -148,7 +147,7 @@ void demo() {
     c_reset(&env);
     c_render(&env, 0);
     Weights *weights = load_weights("resources/drive/puffer_drive_weights.bin");
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    DriveNet *net = init_drivenet(weights, env.num_agents, env.dynamics_model);
     int accel_delta = 2;
     int steer_delta = 4;
     while (!WindowShouldClose()) {
@@ -187,7 +186,7 @@ void demo() {
                 }
             }
             if (IsKeyPressed(KEY_TAB)) {
-                env.human_agent_idx = (env.human_agent_idx + 1) % env.active_agent_count;
+                env.human_agent_idx = (env.human_agent_idx + 1) % env.num_agents;
             }
         }
         c_step(&env);
@@ -214,7 +213,7 @@ void performance_test() {
         .human_agent_idx = 0,
         .map_name = strdup(conf.map_dir),
         .ini_file = strdup(ini_file),
-        .num_controllable_agents = conf.max_agents_per_env,
+        .num_max_agents = conf.max_agents_per_env,
         // From conf
         .action_type = conf.action_type,
         .dynamics_model = conf.dynamics_model,
@@ -255,7 +254,6 @@ void performance_test() {
         .reward_conditioning = conf.reward_conditioning,
         .reward_randomization = conf.reward_randomization,
         .compute_eval_metrics = conf.compute_eval_metrics,
-        .num_max_agents = conf.max_agents_per_env,
         .obs_slots_lane_n = conf.obs_slots_lane_n,
         .obs_slots_boundary_n = conf.obs_slots_boundary_n,
         .obs_lane_stride = conf.obs_lane_stride,
@@ -298,7 +296,7 @@ void performance_test() {
     while (time(NULL) - start < test_time) {
         // Set random discrete actions for all agents
         int (*actions)[2] = (int (*)[2]) env.actions;
-        for (int j = 0; j < env.active_agent_count; j++) {
+        for (int j = 0; j < env.num_agents; j++) {
             actions[j][0] = rand() % 7;
             actions[j][1] = rand() % 13;
         }
@@ -309,9 +307,9 @@ void performance_test() {
     step_time = (ts_step_end.tv_sec - ts_step_start.tv_sec) + (ts_step_end.tv_nsec - ts_step_start.tv_nsec) / 1e9;
 
     long end = time(NULL);
-    printf("Steps: %d | Agents: %d\n", i, env.active_agent_count);
+    printf("Steps: %d | Agents: %d\n", i, env.num_agents);
     printf("Step loop time: %.4f s\n", step_time);
-    printf("SPS: %ld\n", (i * env.active_agent_count) / (end - start));
+    printf("SPS: %ld\n", (i * env.num_agents) / (end - start));
 
     free_allocated(&env);
 

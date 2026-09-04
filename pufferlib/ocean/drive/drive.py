@@ -473,8 +473,7 @@ class Drive(pufferlib.PufferEnv):
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
             "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
-            "max_agents": max_agents,
-            "max_agents_per_env": self.max_agents_per_env,
+            "num_max_agents": max_agents,
             "init_step": self._sample_init_step(),
             "init_mode": self.init_mode,
             "control_mode": self.control_mode,
@@ -767,7 +766,7 @@ class Drive(pufferlib.PufferEnv):
         map_path = scenario.get("map_name")
         if not isinstance(map_path, str) or not map_path:
             raise RuntimeError("Replay capture requires a non-empty scenario map_name")
-        active_agent_count = int(scenario["active_agent_count"])
+        num_agents = int(scenario["num_agents"])
         return {
             "metadata": {
                 "map_name": os.path.basename(map_path).split(".")[0],
@@ -779,7 +778,7 @@ class Drive(pufferlib.PufferEnv):
                 "dynamics_model": self.dynamics_model,
                 "worker_idx": self.replay_worker_idx,
                 "active_agent_offset": active_agent_offset,
-                "active_agent_count": active_agent_count,
+                "num_agents": num_agents,
             },
             "scenario": scenario,
             "agent_capacity": len(scenario["agents"] or []),
@@ -793,7 +792,7 @@ class Drive(pufferlib.PufferEnv):
         self._replay_captures = []
         for scenario in scenarios:
             self._replay_captures.append(self._create_replay_capture(scenario, active_agent_offset))
-            active_agent_offset += int(scenario["active_agent_count"])
+            active_agent_offset += int(scenario["num_agents"])
         env_count = len(self._replay_captures)
         agent_capacity = max((capture["agent_capacity"] for capture in self._replay_captures), default=0)
         traffic_capacity = max(

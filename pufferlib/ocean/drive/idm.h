@@ -110,14 +110,8 @@ static int idm_collect_route_candidates(
     Agent *ego = &env->agents[ego_idx];
     int candidate_count = 0;
 
-    for (int i = 0; i < env->num_agents && candidate_count < max_candidate_count; i++) {
-        int other_idx = -1;
-        if (i < env->active_agent_count) {
-            other_idx = env->active_agent_indices[i];
-        } else {
-            other_idx = env->static_agent_indices[i - env->active_agent_count];
-        }
-        if (other_idx == -1 || other_idx == ego_idx) {
+    for (int other_idx = 0; other_idx < env->num_total_agents && candidate_count < max_candidate_count; other_idx++) {
+        if (other_idx == ego_idx) {
             continue;
         }
 

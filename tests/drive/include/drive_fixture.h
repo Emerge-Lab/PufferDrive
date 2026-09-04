@@ -94,8 +94,7 @@ static inline Drive drive_test_env_config(
     env.termination_mode = 0;
     env.inactive_agent_threshold = 0.4f;
     env.map_name = drive_test_strdup(map_file);
-    env.num_controllable_agents = num_agents;
-    env.num_max_agents = 64;
+    env.num_max_agents = num_agents;
     env.init_step = 0;
     env.timestep = 0;
     env.init_mode = INIT_MODE_CREATE_ALL_VALID;
@@ -149,13 +148,13 @@ static inline void drive_set_neutral_actions(Drive *env) {
             int num_steer = sizeof(STEERING_VALUES) / sizeof(STEERING_VALUES[0]);
             neutral = (num_accel / 2) * num_steer + (num_steer / 2);
         }
-        for (int i = 0; i < env->active_agent_count; i++) {
+        for (int i = 0; i < env->num_agents; i++) {
             actions[i] = neutral;
         }
         return;
     }
     float (*actions)[2] = (float (*)[2]) env->actions;
-    for (int i = 0; i < env->active_agent_count; i++) {
+    for (int i = 0; i < env->num_agents; i++) {
         actions[i][0] = 0.0f;
         actions[i][1] = 0.0f;
     }

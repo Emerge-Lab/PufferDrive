@@ -123,8 +123,8 @@ void renderTopDownView(
 
     // Draw human replay trajectories if enabled
     if (log_trajectories) {
-        for (int i = 0; i < env->active_agent_count; i++) {
-            int idx = env->active_agent_indices[i];
+        for (int i = 0; i < env->num_agents; i++) {
+            int idx = i;
             Vector3 prev_point = {0};
             bool has_prev = false;
 
@@ -165,7 +165,7 @@ void renderTopDownView(
 
 void renderAgentView(Drive *env, Client *client, int map_height, int obs_only, int lasers, int show_grid) {
     // Agent perspective camera following the selected agent
-    int agent_idx = env->active_agent_indices[env->human_agent_idx];
+    int agent_idx = env->human_agent_idx;
     Agent *agent = &env->agents[agent_idx];
 
     BeginDrawing();
@@ -289,7 +289,6 @@ int eval_gif(
         .goal_speed = conf.goal_speed,
         .map_name = (char *) map_name,
         .init_step = init_step,
-        .num_controllable_agents = max_controlled_agents,
         .collision_behavior = conf.collision_behavior,
         .offroad_behavior = conf.offroad_behavior,
         .compute_eval_metrics = conf.compute_eval_metrics,
@@ -348,8 +347,8 @@ int eval_gif(
     if (weights == NULL) {
         RAISE_FILE_ERROR(policy_name);
     }
-    printf("Active agents in map: %d\n", env.active_agent_count);
-    DriveNet *net = init_drivenet(weights, env.active_agent_count, env.dynamics_model);
+    printf("Active agents in map: %d\n", env.num_agents);
+    DriveNet *net = init_drivenet(weights, env.num_agents, env.dynamics_model);
 
     int frame_count = env.scenario_length > 0 ? env.scenario_length : TRAJECTORY_LENGTH_DEFAULT;
     int log_trajectory = log_trajectories;
@@ -437,7 +436,7 @@ int eval_gif(
         printf("Recording agent view...\n");
         for (int i = 0; i < frame_count; i++) {
             // Check if selected agent has reached the first goal and stop recording
-            int human_idx = env.active_agent_indices[env.human_agent_idx];
+            int human_idx = env.human_agent_idx;
             if (env.agents[human_idx].reached_goal_this_episode) {
                 break;
             }

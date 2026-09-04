@@ -442,13 +442,9 @@ def plot_simulator_state(scenario, timestep: int = 0) -> np.ndarray:
     _render_roads(ax, road_data)
     _render_traffic(ax, traffic_data, timestep)
 
-    _render_agents(
-        ax,
-        scenario.get("agents", []),
-        scenario.get("active_agent_indices", []),
-        scenario.get("static_agent_indices", []),
-        px_per_meter,
-    )
+    agents = scenario.get("agents", [])
+    num_agents = int(scenario.get("num_agents", 0))
+    _render_agents(ax, agents, range(num_agents), range(num_agents, len(agents)), px_per_meter)
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
@@ -895,17 +891,15 @@ def encode_interactive_replay(scenario, replay):
     # (esp. control_sdc_only, 1 active agent). Frame-aligned: frame f = logged pose at timestep init_step + f.
     # Fields: x, y, heading, length, width; width <= 0 marks frames with no valid logged pose.
     agents = scenario.get("agents", []) or []
-    active_indices = scenario.get("active_agent_indices", []) or []
     expert_indices = [agent_idx for agent_idx, agent in enumerate(agents) if int(agent.get("mark_as_expert", 0)) == 1]
     frame_count = int(replay["agent_f32"].shape[0])
     active_count = int(replay["raw_action"].shape[1])
     init_step = int(env_cfg.get("init_step", 0))
     ghost = np.zeros((frame_count, max(1, active_count), 5), dtype=np.float32)
-    for slot in range(min(active_count, len(active_indices))):
-        agent_idx = active_indices[slot]
-        if agent_idx < 0 or agent_idx >= len(agents):
+    for slot in range(min(active_count, len(agents))):
+        if slot < 0 or slot >= len(agents):
             continue
-        a = agents[agent_idx]
+        a = agents[slot]
         lx = np.asarray(a.get("log_trajectory_x") or [], dtype=np.float32)
         ly = np.asarray(a.get("log_trajectory_y") or [], dtype=np.float32)
         lh = np.asarray(a.get("log_heading") or [], dtype=np.float32)
