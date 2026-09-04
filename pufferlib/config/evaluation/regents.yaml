@@ -41,7 +41,7 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.01
+      learning_rate: 0.001
       iteration_count: 500
     env:
       num_maps: 25
@@ -78,7 +78,7 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.01
+      learning_rate: 0.001
       iteration_count: 20
     env:
       num_maps: 2
