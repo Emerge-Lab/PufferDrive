@@ -388,8 +388,8 @@ def _project_parameter(action_parameter, steering_parameter_limit):
 def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_seed, horizon_transition_count):
     if not isinstance(scenario, ScenarioBatch):
         raise TypeError("scenario must be a ScenarioBatch")
-    if scenario.batch_size != 1:
-        raise ValueError("Stage 5 optimizes exactly one scenario per job")
+    if scenario.batch_size < 1:
+        raise ValueError("scenario must contain at least one scenario")
     if not isinstance(config, ReGentSOptimizationConfig):
         raise TypeError("config must be a ReGentSOptimizationConfig")
     if not isinstance(deterministic_seed, int) or deterministic_seed < 0 or deterministic_seed >= 2**63:
@@ -404,8 +404,9 @@ def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_se
     if frozen_ego is not None:
         if not isinstance(frozen_ego, FrozenEgoTrajectory):
             raise TypeError("frozen_ego must be a FrozenEgoTrajectory")
-        if frozen_ego.state.shape != (1, horizon_transition_count + 1, STATE_FEATURE_COUNT):
-            raise ValueError("Frozen ego state does not match the optimization horizon")
+        expected_frozen_shape = (scenario.batch_size, horizon_transition_count + 1, STATE_FEATURE_COUNT)
+        if frozen_ego.state.shape != expected_frozen_shape:
+            raise ValueError("Frozen ego state does not match the optimization batch and horizon")
         if frozen_ego.scenario_ids != scenario.scenario_ids:
             raise ValueError("Frozen ego scenario_ids do not match the ScenarioBatch")
         if frozen_ego.state.device != scenario.logged_state.device:
@@ -414,13 +415,14 @@ def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_se
 
 
 def _frozen_ego_fixture(scenario, inverse, horizon_transition_count):
-    ego_idx = torch.where(scenario.ego_mask[0])[0]
-    if ego_idx.numel() != 1:
-        raise ValueError("Logged frozen ego fixture requires exactly one ego")
-    ego_idx = int(ego_idx.item())
+    if not torch.all(scenario.ego_mask.sum(dim=-1) == 1):
+        raise ValueError("Logged frozen ego fixture requires exactly one ego per scenario")
+    ego_indices = _ego_indices(scenario.ego_mask)
+    batch_indices = torch.arange(scenario.batch_size, device=scenario.ego_mask.device)
+    horizon_slice = slice(None, horizon_transition_count + 1)
     return FrozenEgoTrajectory(
-        state=inverse.state_with_estimated_steering[:, ego_idx, : horizon_transition_count + 1].detach().clone(),
-        valid=scenario.state_valid[:, ego_idx, : horizon_transition_count + 1].detach().clone(),
+        state=inverse.state_with_estimated_steering[batch_indices, ego_indices, horizon_slice].detach().clone(),
+        valid=scenario.state_valid[batch_indices, ego_indices, horizon_slice].detach().clone(),
         scenario_ids=scenario.scenario_ids,
         source="logged_fixture",
     )
@@ -441,11 +443,12 @@ def _compose_rollout(
     if optimized_agent_mask.dtype != torch.bool or optimized_agent_mask.shape != scenario.ego_mask.shape:
         raise ValueError("optimized_agent_mask must be bool [batch, agent]")
     optimized_transition_valid = transition_valid & optimized_agent_mask[..., None]
-    ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
+    ego_indices = _ego_indices(scenario.ego_mask).to(actions.device)
+    batch_indices = torch.arange(scenario.batch_size, device=actions.device)
     reference_state = reference_state.clone()
-    reference_state[:, ego_idx] = frozen_ego.state
+    reference_state[batch_indices, ego_indices] = frozen_ego.state
     state_valid = scenario.state_valid[:, :, : horizon_transition_count + 1].to(actions.device).clone()
-    state_valid[:, ego_idx] = frozen_ego.valid
+    state_valid[batch_indices, ego_indices] = frozen_ego.valid
 
     current_state = reference_state[:, :, 0]
     rollout = [current_state]
@@ -465,7 +468,7 @@ def _compose_rollout(
             )
             next_state[active_idx] = proposed_state
         current_state = next_state
-        current_state[:, ego_idx] = frozen_ego.state[:, timestep + 1]
+        current_state[batch_indices, ego_indices] = frozen_ego.state[:, timestep + 1]
         rollout.append(current_state)
     return torch.stack(rollout, dim=2), state_valid
 
