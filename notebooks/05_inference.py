@@ -247,11 +247,21 @@ for t in range(HORIZON):
 ego_ts = np.array(ego_features_over_time)
 
 if dyn_model == "jerk":
-    labels = ["speed", "width", "length", "steering", "accel_long", "accel_lat", "lcenter", "lalign", "speed_limit"]
+    labels = [
+        "speed",
+        "width",
+        "length",
+        "steering",
+        "accel_long",
+        "accel_lat",
+        "lcenter",
+        "lane_heading_error",
+        "speed_limit",
+    ]
     plot_idxs = [0, 3, 4, 5]  # speed, steering, accel_long, accel_lat
 else:
-    labels = ["speed", "width", "length", "lcenter", "lalign", "speed_limit"]
-    plot_idxs = [0, 3, 4, 5]  # speed, lcenter, lalign, speed_limit
+    labels = ["speed", "width", "length", "lcenter", "lane_heading_error", "speed_limit"]
+    plot_idxs = [0, 3, 4, 5]  # speed, lcenter, lane_heading_error, speed_limit
 
 fig, axes = plt.subplots(len(plot_idxs), 1, figsize=(14, 3 * len(plot_idxs)), sharex=True)
 for i, idx in enumerate(plot_idxs):
@@ -268,7 +278,7 @@ plt.show()
 # ## Observation layer breakdown
 #
 # Obs layout (all ego-centric, normalized):
-# - **Ego**: speed, width, length, [jerk: steering, accel_long, accel_lat], lane_center_dist, lane_angle, speed_limit
+# - **Ego**: speed, width, length, [jerk: steering, accel_long, accel_lat], lane_center_dist, lane_heading_error, speed_limit
 # - **Conditioning** (if enabled): 17 reward coefs (goal_radius, goal_speed, collision, offroad, comfort, lane_align, vel_align, lane_center, center_bias, velocity, reverse, stop_line, timestep, overspeed, throttle, steer, acc) + target waypoints
 # - **Target**: static=rel_x,rel_y,rel_z per waypoint; dynamic=rel_x,rel_y,rel_z,heading_cos,heading_sin per waypoint
 # - **Partners** (MAX_PARTNERS x 9): rel_x, rel_y, rel_z, length, width, heading_cos, heading_sin, sim_speed_signed, seconds_stopped

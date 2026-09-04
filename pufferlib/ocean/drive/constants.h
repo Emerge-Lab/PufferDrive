@@ -265,26 +265,27 @@ static const int ROAD_OFFSETS[25][2]
 // =====================================================================================
 
 // Indices into Agent.metrics_array; NUM_METRICS must stay equal to the index count
-#define NUM_METRICS 18
-#define COLLISION_IDX 0
-#define OFFROAD_IDX 1
-#define RED_LIGHT_IDX 2
-#define STOP_SIGN_IDX 3
-#define REACHED_GOAL_IDX 4
-#define LANE_DIST_IDX 5
-#define LANE_ANGLE_IDX 6
-#define COMFORT_VIOLATION_IDX 7
-#define VELOCITY_PROGRESS_IDX 8
-#define SPEED_LIMIT_IDX 9
-#define AVG_DISPLACEMENT_ERROR_IDX 10
-#define PROGRESSION_IDX 11
+#define NUM_METRICS 19
+#define COLLISION_IDX 0                  // Vehicle collision flag, {0, 1}
+#define OFFROAD_IDX 1                    // Off-road flag, {0, 1}
+#define RED_LIGHT_IDX 2                  // Red-light violation flag, {0, 1}
+#define STOP_SIGN_IDX 3                  // Stop-sign violation flag, {0, 1}
+#define REACHED_GOAL_IDX 4               // Goal reached this step, {0, 1}
+#define LANE_DIST_IDX 5                  // Signed lane-center offset, meters
+#define LANE_HEADING_ERROR_RADIANS_IDX 6 // Signed heading error, radians
+#define LANE_HEADING_COSINE_IDX 7        // cos(heading error), [-1, 1]
+#define COMFORT_VIOLATION_IDX 8          // Acceleration and jerk violation count
+#define VELOCITY_PROGRESS_IDX 9          // Forward lane alignment, [0, 1]
+#define SPEED_LIMIT_IDX 10               // Speed-limit violation flag, {0, 1}
+#define AVG_DISPLACEMENT_ERROR_IDX 11    // Running replay displacement error, meters
+#define PROGRESSION_IDX 12               // Reserved route-progression metric
 // Evaluation metrics
-#define AT_FAULT_COLLISION_IDX 12
-#define TTC_IDX 13
-#define DISTANCE_TO_COLLISION_IDX 14
-#define PROGRESS_RATIO_IDX 15
-#define MULTI_LANE_TIME_IDX 16
-#define MULTI_LANE_SCORE_IDX 17
+#define AT_FAULT_COLLISION_IDX 13    // At-fault collision flag, {0, 1}
+#define TTC_IDX 14                   // Minimum vehicle time-to-collision, seconds
+#define DISTANCE_TO_COLLISION_IDX 15 // Minimum vehicle collision distance, meters
+#define PROGRESS_RATIO_IDX 16        // Reserved episode-progress ratio
+#define MULTI_LANE_TIME_IDX 17       // Cumulative multi-lane occupancy, seconds
+#define MULTI_LANE_SCORE_IDX 18      // Multi-lane compliance score, {0, 0.5, 1}
 
 // Time to collision
 #define DEFAULT_TTC 5.0f              // when no vehicle ahead

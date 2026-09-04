@@ -3204,10 +3204,14 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     reset_agent_metrics(env, agent_idx);
 
     if (agent->sim_x == INVALID_POSITION) {
+        agent->previous_lane_idx = agent->current_lane_idx;
+        agent->current_lane_idx = -1;
         return; // invalid agent position
     }
     if (get_grid_index(env, agent->sim_x, agent->sim_y) == -1) {
         // Current agent is offgrid, treat as offroad
+        agent->previous_lane_idx = agent->current_lane_idx;
+        agent->current_lane_idx = -1;
         agent->metrics_array[OFFROAD_IDX] = 1.0f;
         apply_infraction_behavior(agent, env->offroad_behavior);
         return;
@@ -3399,15 +3403,17 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         if (env->compute_eval_metrics && edge_dist > MULTI_LANE_THRESHOLD && agent->sim_speed > 0.0f) {
             agent_log->multi_lane_time += env->dt;
         }
-        // theta_f = angle relative to lane heading
+        // theta_f = heading difference between agent and lane (left = negative, right = positive)
         float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
-        agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
+        agent->metrics_array[LANE_HEADING_COSINE_IDX] = cosf(theta_f);
+        agent->metrics_array[LANE_HEADING_ERROR_RADIANS_IDX] = theta_f;
     } else {
         // Agent not on any lane
         agent->previous_lane_idx = -1;
         agent->current_lane_idx = -1;
         agent->metrics_array[LANE_DIST_IDX] = LANE_DISTANCE_NORMALIZATION; // Max distance (far from lane)
-        agent->metrics_array[LANE_ANGLE_IDX] = 0.0f;                       // Perpendicular (no alignment)
+        agent->metrics_array[LANE_HEADING_COSINE_IDX] = 0.0f;
+        agent->metrics_array[LANE_HEADING_ERROR_RADIANS_IDX] = 0.0f;
     }
 
     // Update cumulative metrics
@@ -3429,7 +3435,7 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     // Velocity metric - forward progress aligned with lane
     const float VELOCITY_MIN_SPEED = 2.5f; // m/s
     if (agent->sim_speed_signed > VELOCITY_MIN_SPEED && lane_idx != -1) {
-        float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
+        float cos_theta = agent->metrics_array[LANE_HEADING_COSINE_IDX];
         agent->metrics_array[VELOCITY_PROGRESS_IDX] = fmaxf(cos_theta, 0.0f);
         if (env->compute_eval_metrics && cos_theta < 0.0f) {
             agent_log->wrong_way_distance += agent->sim_speed_signed * env->dt;
@@ -3552,9 +3558,11 @@ static void compute_rewards(Drive *env, int i) {
         agent_log->reward_goal += reward_goal;
     }
 
-    // Get lane angle metric: cos(θ_f) where θ_f = heading diff from lane
-    float cos_theta = agent->metrics_array[LANE_ANGLE_IDX];
-    float theta_f = acosf(fminf(fmaxf(cos_theta, -1.0f), 1.0f)); // Get |θ_f| from cos
+    float theta_f = M_PI / 2.0f;
+    float cos_theta = agent->metrics_array[LANE_HEADING_COSINE_IDX];
+    if (agent->current_lane_idx != -1) {
+        theta_f = fabsf(agent->metrics_array[LANE_HEADING_ERROR_RADIANS_IDX]);
+    }
     agent_log->lane_heading_aligned_rate += (cos_theta >= LANE_ALIGN_COS_THRESHOLD) ? 1.0f : 0.0f;
 
     // Rl-align: min(cos,0) + vel_align*min(cos*v,0) + 0.0025*(1-|θ|/(π/2))
@@ -3680,7 +3688,7 @@ static int write_ego_obs(Drive *env, Agent *ego, float *obs, int obs_idx) {
     obs[obs_idx++] = ego->accel_long / fabsf(ACCEL_LONG_LIMIT[0]);
     obs[obs_idx++] = ego->accel_lat / ACCEL_LAT_LIMIT[1];
     obs[obs_idx++] = fmaxf(-1.0f, fminf(1.0f, ego->metrics_array[LANE_DIST_IDX] / LANE_DISTANCE_NORMALIZATION));
-    obs[obs_idx++] = ego->metrics_array[LANE_ANGLE_IDX];
+    obs[obs_idx++] = ego->metrics_array[LANE_HEADING_ERROR_RADIANS_IDX] / M_PI;
     float current_lane_speed_limit
         = (ego->current_lane_idx != -1) ? env->road_elements[ego->current_lane_idx].speed_limit : -1.0f;
     obs[obs_idx++] = current_lane_speed_limit / env->obs_norm_speed_mps;
