@@ -793,6 +793,12 @@ def optimize_frozen_ego_scenarios(
     failure_reason = [None] * batch_size
     for scenario_idx in torch.where(~active)[0].tolist():
         failure_reason[scenario_idx] = "scene_filtered:" + ",".join(selection.scene_reasons_for(scenario_idx))
+    # The ego-collision cost requires every scenario it sees to own a candidate, so a
+    # filtered scene must be kept out of the shared loss rather than merely deactivated.
+    eligible_rows = torch.where(selection.scene_eligible)[0]
+    eligible_indices = eligible_rows.tolist()
+    eligible_rasters = tuple(out_of_bounds_rasters[scenario_idx] for scenario_idx in eligible_indices)
+    eligible_corner_potential = baseline_corner_potential[eligible_rows]
 
     best_actions = baseline_actions.clone()
     best_states = reference_states.detach().clone()
@@ -840,21 +846,23 @@ def optimize_frozen_ego_scenarios(
             selection.candidate_mask,
         )
         costs = combined_regents_cost(
-            states,
-            state_valid,
-            scenario.length_meters,
-            scenario.width_meters,
-            scenario.ego_mask,
-            candidate_mask,
-            background_vehicle_mask,
-            candidate_mask,
-            out_of_bounds_rasters,
+            states[eligible_rows],
+            state_valid[eligible_rows],
+            scenario.length_meters[eligible_rows],
+            scenario.width_meters[eligible_rows],
+            scenario.ego_mask[eligible_rows],
+            candidate_mask[eligible_rows],
+            background_vehicle_mask[eligible_rows],
+            candidate_mask[eligible_rows],
+            eligible_rasters,
             config.costs,
-            baseline_corner_potential,
+            eligible_corner_potential,
         )
-        finite_costs = torch.isfinite(costs.total)
+        eligible_finite = torch.isfinite(costs.total)
         for value in (costs.ego_collision, costs.background_collision, costs.drivable_area):
-            finite_costs = finite_costs & torch.isfinite(value)
+            eligible_finite = eligible_finite & torch.isfinite(value)
+        finite_costs = torch.ones(batch_size, dtype=torch.bool, device=active.device)
+        finite_costs[eligible_rows] = eligible_finite
         for scenario_idx in torch.where(active & ~finite_costs)[0].tolist():
             failure_reason[scenario_idx] = "nonfinite_loss"
         active = active & finite_costs
@@ -881,11 +889,12 @@ def optimize_frozen_ego_scenarios(
         active_indices = torch.where(active)[0].tolist()
 
         if pbar is not None and iteration % 10 == 0:
-            pbar.set_postfix(loss=f"{float(costs.total[active].mean().item()):.4f}", live=len(active_indices))
+            live_loss = costs.total[active[eligible_rows]]
+            pbar.set_postfix(loss=f"{float(live_loss.mean().item()):.4f}", live=len(active_indices))
 
         stop_now = []
         for scenario_idx in active_indices:
-            snapshot = _cost_snapshot(costs, scenario_idx)
+            snapshot = _cost_snapshot(costs, eligible_indices.index(scenario_idx))
             cost_history[scenario_idx].append(snapshot)
             if initial_costs[scenario_idx] is None:
                 initial_costs[scenario_idx] = snapshot
@@ -945,7 +954,8 @@ def optimize_frozen_ego_scenarios(
             break
 
         optimizer.zero_grad(set_to_none=True)
-        torch.where(active, costs.total, torch.zeros_like(costs.total)).sum().backward()
+        eligible_active = active[eligible_rows]
+        torch.where(eligible_active, costs.total, torch.zeros_like(costs.total)).sum().backward()
         if action_parameter.grad is None:
             for scenario_idx in torch.where(active)[0].tolist():
                 failure_reason[scenario_idx] = "nonfinite_gradient"

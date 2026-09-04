@@ -383,6 +383,37 @@ def _generate_scenario_batch(task):
         raise
 
 
+def _scenario_agent_count(environment, scenario_idx, seed):
+    """Probe one map's agent count. Building a Drive and reading its state costs ~11 ms."""
+    drive = _build_drive(environment, scenario_idx, seed)
+    try:
+        payload = drive.get_state()
+        scenario = payload[0] if isinstance(payload, list) else payload
+        return int(scenario["num_total_agents"])
+    finally:
+        drive.close()
+
+
+def _agent_count_ordered_batches(generation, batch_size):
+    """Group scenarios of similar size together.
+
+    Collation pads every scenario in a batch up to the batch's agent count, so mixing a
+    3-agent scene with a 326-agent one makes the small one 100x more expensive than it
+    needs to be. Ordering by agent count first keeps padding waste near the floor;
+    ties break on index so the grouping stays deterministic.
+    """
+    scenario_count = generation["scenario_count"]
+    if batch_size == 1:
+        return [(scenario_idx,) for scenario_idx in range(scenario_count)]
+    counts = [
+        (_scenario_agent_count(generation["env"], scenario_idx, generation["seed"] + scenario_idx), scenario_idx)
+        for scenario_idx in range(scenario_count)
+    ]
+    counts.sort()
+    ordered = [scenario_idx for _, scenario_idx in counts]
+    return [tuple(ordered[start : start + batch_size]) for start in range(0, scenario_count, batch_size)]
+
+
 def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     overall_start = time.perf_counter()
@@ -400,14 +431,18 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     rows = [None] * generation["scenario_count"]
     rendered_files = {}
 
-    batch_size = generation["batch_size"]
-    scenario_batches = [
-        tuple(range(start, min(start + batch_size, generation["scenario_count"])))
-        for start in range(0, generation["scenario_count"], batch_size)
-    ]
     num_workers = generation["num_workers"]
     if num_workers == "auto":
         num_workers = os.cpu_count() or 1
+    # Batching only pays once every worker still has a batch: a batch too large leaves
+    # cores idle, which costs far more than the per-iteration overhead it saves.
+    batch_size = max(1, min(generation["batch_size"], generation["scenario_count"] // num_workers))
+    if batch_size != generation["batch_size"]:
+        print(
+            f"Clamping batch_size {generation['batch_size']} to {batch_size} so all "
+            f"{num_workers} workers keep a batch across {generation['scenario_count']} scenarios"
+        )
+    scenario_batches = _agent_count_ordered_batches(generation, batch_size)
     num_workers = min(num_workers, len(scenario_batches))
     tasks = [
         (
