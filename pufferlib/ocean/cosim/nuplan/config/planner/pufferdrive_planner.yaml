@@ -9,7 +9,7 @@ pufferdrive_planner:
   device: "cpu"
   map_radius: 400.0 # TODO: load from config
   goal_spacing: 20.0 # TODO: load from config
-  goal_source: route # route (lane-graph route goal windows) | roadblock (route roadblock centroid windows)
+  goal_source: route # route (lane-graph route goal windows) | roadblock (route roadblock centroid windows) | roadblock_lane (roadblock goals on the lane continuing the ego lane)
   num_agents: 64 # TODO: load from config
   horizon_seconds: 8.0 # nuplan default
   deterministic: true

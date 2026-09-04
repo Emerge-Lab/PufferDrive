@@ -113,7 +113,9 @@ class PufferDrivePlanner(AbstractPlanner):
         :param map_radius: map extraction / light-matching radius [m].
         :param goal_spacing: goal spacing along the route / logged path fed to the policy [m].
         :param goal_source: "route" (goal windows along the lane-graph route through the route
-            roadblocks) or "roadblock" (goal windows of route roadblock centroids, no lane choice).
+            roadblocks), "roadblock" (goal windows of route roadblock centroids, no lane choice) or
+            "roadblock_lane" (roadblock goals on the lane continuing the ego's own lane, a lane change
+            only where the lane graph forces one).
         :param num_agents: PufferDrive agent-pool size (ego + streamed background).
         :param horizon_seconds: returned trajectory horizon (constant-velocity
             extrapolation past the integrated first step) [s].
@@ -147,8 +149,8 @@ class PufferDrivePlanner(AbstractPlanner):
         self._device = device
         self._map_radius = float(map_radius)
         self._goal_spacing = float(goal_spacing)
-        if goal_source not in ("route", "roadblock"):
-            raise ValueError(f"goal_source must be 'route' or 'roadblock', got {goal_source!r}")
+        if goal_source not in ("route", "roadblock", "roadblock_lane"):
+            raise ValueError(f"goal_source must be 'route', 'roadblock' or 'roadblock_lane', got {goal_source!r}")
         self._goal_source = goal_source
         self._num_agents = int(num_agents)
         self._horizon_seconds = float(horizon_seconds)
@@ -423,12 +425,14 @@ class PufferDrivePlanner(AbstractPlanner):
         centerline, self._route_connector_ids = nb.route_centerline(
             init.map_api, route_ids, ex, ey, float(ego_state.center.heading)
         )
-        if self._goal_source == "roadblock":
+        if self._goal_source in ("roadblock", "roadblock_lane"):
             min_ahead_m = float(self._env.goal_radius) + ROADBLOCK_GOAL_MARGIN_M
             goal_route_ids = nb.extend_route_past_loop_cut(route_ids, init.route_roadblock_ids)
-            goals = nb.roadblock_centroid_goals(
-                init.map_api, goal_route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m
-            )
+            goal_args = (init.map_api, goal_route_ids, ex, ey, float(ego_state.center.heading), self._goal_spacing, min_ahead_m)
+            if self._goal_source == "roadblock_lane":
+                goals = nb.roadblock_lane_goals(*goal_args)
+            else:
+                goals = nb.roadblock_centroid_goals(*goal_args)
         else:
             goals = nb.goals_along(centerline, self._goal_spacing)
         if len(goals) == 0:  # degenerate route: fall back to the mission goal

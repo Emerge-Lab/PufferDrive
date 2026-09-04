@@ -25,7 +25,11 @@ Zero changes to nuplan-devkit or CaRL's `carl_nuplan`. Hydra loads any planner v
   `GOAL_SOURCE=roadblock`) uses the centroids of the CaRL-corrected route
   roadblocks instead (off-polygon centroids moved onto a lane baseline, thinned
   to `goal_spacing`), i.e. the route information CaRL rendered, without a lane
-  choice. Both come from the challenge's route roadblock ids only; the planner
+  choice. `goal_source: roadblock_lane` keeps the roadblock goals but puts each
+  on the lane that continues the ego's own lane through the route (a lane
+  change only where the lane graph forces one), so multi-lane roads stop
+  pulling the ego toward the road centre. All come from the challenge's route
+  roadblock ids only; the planner
   never reads the logged ego. Eval hack `lane_speed_cap_below_mps` (env
   `LANE_SPEED_CAP_BELOW_MPS`): inside lanes whose nuPlan limit is below the
   threshold the shadow ego's speed is capped at limit + margin through a

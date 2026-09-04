@@ -35,7 +35,7 @@ export CHALLENGES=closed_loop_reactive_agents_pufferdrive
 export WORKER=ray_distributed
 # Per-worker memory is small now (1 policy agent + partner slots, light buffers sized to the scenario), so this is CPU-bound.
 export THREADS_PER_NODE=128
-# route: lane-graph route goals; roadblock: route roadblock centroids
+# route: lane-graph route goals; roadblock: route roadblock centroids; roadblock_lane: roadblock goals on the lane continuing the ego lane
 export GOAL_SOURCE=roadblock
 # Ablations (see run_nuplan_planner.sh): refill the goal window after every consumed goal; cap the ego's
 # accelerating / braking jerk [m/s^3] for the first 1.5 s of each scenario (0 = off).

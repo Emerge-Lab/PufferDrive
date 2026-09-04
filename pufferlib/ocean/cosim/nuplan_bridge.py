@@ -233,14 +233,9 @@ def goals_along(centerline: np.ndarray, spacing: float) -> np.ndarray:
     return np.asarray(centerline, dtype=np.float64)[indices_along(centerline, spacing)]
 
 
-def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
-    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on
-    (the block containing the ego, else the nearest one). The ego block's own centroid is dropped when it
-    is behind the ego or less than min_ahead_m ahead; later centroids follow the route regardless of the
-    ego heading (turns). A centroid outside its (curved) polygon moves to the nearest interior-lane
-    baseline point; consecutive goals closer than min_spacing are thinned."""
+def _route_blocks(map_api, route_roadblock_ids):
+    """Route roadblock ids -> [roadblock or roadblock connector] with interior lanes, consecutive repeats merged."""
     from nuplan.common.maps.maps_datatypes import SemanticMapLayer
-    from shapely.geometry import Point
 
     blocks = []
     for rid in route_roadblock_ids:
@@ -250,6 +245,84 @@ def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, sta
         if block is None or not block.interior_edges or (blocks and blocks[-1].id == block.id):
             continue
         blocks.append(block)
+    return blocks
+
+
+def _baseline_xy(lane) -> np.ndarray:
+    return np.array([[p.x, p.y] for p in lane.baseline_path.discrete_path], dtype=np.float64)
+
+
+def _ego_lane(lanes, x, y, heading):
+    """The lane nearest to the pose among the co-directional ones (baseline heading within 90 deg at the
+    nearest point), else the nearest lane of all."""
+    heading_dir = np.array([np.cos(heading), np.sin(heading)])
+    best_key, best_lane = None, None
+    for lane in lanes:
+        pts = _baseline_xy(lane)
+        k = int(np.argmin(np.hypot(*(pts - (x, y)).T)))
+        seg = pts[min(k + 1, len(pts) - 1)] - pts[max(k - 1, 0)]
+        key = (seg @ heading_dir <= 0.0, float(np.hypot(*(pts[k] - (x, y)))))
+        if best_key is None or key < best_key:
+            best_key, best_lane = key, lane
+    return best_lane
+
+
+def _continuing_lane(block, prev_lane, next_block, prev_xy):
+    """The block's lane the previous lane flows into and that flows on into the next route block; when no
+    lane does both, one that flows on beats one that only flows in (change lanes early, not late); ties go
+    to the lane nearest prev_xy."""
+    successor_ids = {edge.id for edge in prev_lane.outgoing_edges}
+
+    def key(lane):
+        flows_in = lane.id in successor_ids
+        flows_on = next_block is None or any(edge.get_roadblock_id() == next_block.id for edge in lane.outgoing_edges)
+        return (not (flows_in and flows_on), not flows_on, not flows_in, float(np.min(np.hypot(*(_baseline_xy(lane) - prev_xy).T))))
+
+    return min(block.interior_edges, key=key)
+
+
+def roadblock_lane_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
+    """Route roadblock goals on lane baselines chosen for lane continuity -> (N, 2) in nuPlan map coordinates.
+    Blocks, start block, min_ahead_m and min_spacing as in roadblock_centroid_goals; each block's goal is the
+    point nearest its centroid on the block's continuing lane (see _continuing_lane, seeded with the ego's
+    lane), so goals cue a lane change only where the lane graph forces one instead of pulling toward the
+    road centre on multi-lane roads."""
+    from shapely.geometry import Point
+
+    blocks = _route_blocks(map_api, route_roadblock_ids)
+    if not blocks:
+        return np.zeros((0, 2))
+    start_idx = int(np.argmin([block.polygon.distance(Point(start_x, start_y)) for block in blocks]))
+    heading_dir = np.array([np.cos(start_heading), np.sin(start_heading)])
+    lane = _ego_lane(blocks[start_idx].interior_edges, start_x, start_y, start_heading)
+    prev_xy = np.array([start_x, start_y], dtype=np.float64)
+    goals = []
+    for block_idx in range(start_idx, len(blocks)):
+        block = blocks[block_idx]
+        if block_idx > start_idx:
+            next_block = blocks[block_idx + 1] if block_idx + 1 < len(blocks) else None
+            lane = _continuing_lane(block, lane, next_block, prev_xy)
+        centroid = block.polygon.centroid
+        pts = _baseline_xy(lane)
+        goal = pts[int(np.argmin(np.hypot(pts[:, 0] - centroid.x, pts[:, 1] - centroid.y)))]
+        if block_idx == start_idx and (goal - (start_x, start_y)) @ heading_dir < min_ahead_m:
+            continue
+        if goals and np.hypot(*(goal - goals[-1])) < min_spacing:
+            continue
+        goals.append(goal)
+        prev_xy = goal
+    return np.array(goals, dtype=np.float64).reshape(-1, 2)
+
+
+def roadblock_centroid_goals(map_api, route_roadblock_ids, start_x, start_y, start_heading, min_spacing: float, min_ahead_m: float):
+    """Route roadblock centroids as goals -> (N, 2) in nuPlan map coordinates, from the ego's roadblock on
+    (the block containing the ego, else the nearest one). The ego block's own centroid is dropped when it
+    is behind the ego or less than min_ahead_m ahead; later centroids follow the route regardless of the
+    ego heading (turns). A centroid outside its (curved) polygon moves to the nearest interior-lane
+    baseline point; consecutive goals closer than min_spacing are thinned."""
+    from shapely.geometry import Point
+
+    blocks = _route_blocks(map_api, route_roadblock_ids)
     if not blocks:
         return np.zeros((0, 2))
     ego_point = Point(start_x, start_y)
