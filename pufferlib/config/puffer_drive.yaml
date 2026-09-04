@@ -3,9 +3,9 @@ load_id: null
 render_mode: auto
 video_path: videos
 num_scenarios: 3
-render: 0
+render: false
 agent_index: null
-save_frames: 0
+save_frames: false
 gif_path: eval.gif
 fps: 15
 max_runs: 200
@@ -62,21 +62,23 @@ env:
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: stop
-  # Share static map geometry (roads/grid/lane-graph) across envs using the same map - 0 off, 1 on
-  use_map_cache: 1
-  # Precompute neighboring road entities for observation queries - 0 off, 1 on
-  use_neighbor_cache: 1
+  # Share static map geometry (roads/grid/lane-graph) across envs using the same map
+  use_map_cache: true
+  # Load all configured maps before fork so workers inherit shared geometry
+  preload_map_cache: false
+  # Precompute neighboring road entities for observation queries
+  use_neighbor_cache: true
   # Number of steps before reset
   scenario_length: 2560
   # Frequency of resampling scenario (in steps), 0 to disable
   resample_frequency: 256000
-  # End of episode - options: 0 - scenario_length, 1 - early reset when too many agents are removed
-  termination_mode: 1
-  # Ratio of inactive agents (stopped/removed) that triggers early reset (used when termination_mode = 1)
+  # End the episode early when too many agents are inactive; otherwise use scenario_length
+  termination_mode: true
+  # Ratio of inactive agents (stopped/removed) that triggers early reset
   inactive_agent_threshold: 0.4
   # End the episode as soon as the agent reaches its final goal. Only active in
   # control_sdc_only replay mode (single active agent).
-  terminate_on_goal: 0
+  terminate_on_goal: false
   # Determines which step of the trajectory to initialize the agents at upon reset
   init_step: 0
   # allows to initiate the C environment at random init points - works in replay mode only:

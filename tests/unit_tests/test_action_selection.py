@@ -17,6 +17,7 @@ import sys
 import pytest
 import torch
 
+import pufferlib
 import pufferlib.pytorch as P
 
 # 3 discrete classes -> fixed 2D continuous embedding, mirroring Drive's
@@ -160,23 +161,6 @@ def test_mean_rejects_discrete_env():
 VALID_ACTION_SELECTIONS = (P.ACTION_SELECT_SAMPLE, P.ACTION_SELECT_MODE, P.ACTION_SELECT_MEAN)
 
 
-def _eval_args(action_selection):
-    # Minimal args for pufferl.eval; validation runs before any benchmark loading.
-    return {
-        "eval": {
-            "action_selection": action_selection,
-            "benchmark_config": "pufferlib/config/evaluation/benchmark.yaml",
-            "benchmarks": None,
-            "output_name": None,
-            "render_scenarios": False,
-            "render_filter": None,
-            "max_rendered_failures": None,
-            "failure_replay_csv": None,
-            "max_sdc_replay_workers": 1,
-        }
-    }
-
-
 def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
     # Guards the key itself: a config refactor that drops or renames
     # eval.action_selection must fail here, not at the first eval run.
@@ -188,12 +172,12 @@ def test_shipped_config_declares_a_valid_action_selection(monkeypatch):
     assert args["eval"]["action_selection"] in VALID_ACTION_SELECTIONS
 
 
-def test_eval_rejects_invalid_action_selection():
-    import pufferlib
+def test_config_rejects_invalid_action_selection(monkeypatch):
     import pufferlib.pufferl as pufferl
 
+    monkeypatch.setattr(sys, "argv", ["puffer", "eval.action_selection=banana"])
     with pytest.raises(pufferlib.APIUsageError):
-        pufferl.eval(env_name="puffer_drive", args=_eval_args("banana"))
+        pufferl.load_config("puffer_drive")
 
 
 # --------------------------------------------------------------------------
