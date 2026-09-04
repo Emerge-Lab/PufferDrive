@@ -59,6 +59,7 @@ class GenerationReport:
     offroad_rate: float
     maximum_c_torch_trajectory_error: float
     total_optimization_seconds: float
+    wall_clock_seconds: float
     rejection_reasons: dict
 
 
@@ -215,6 +216,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
         bundle["candidate_adversary_ids"] = candidate_adversary_ids
         bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
         bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
+        bundle["ego_collision_loss_adversary_idx"] = result.optimization.ego_collision_loss_adversary_idx
+        bundle["ego_collision_loss_adversary_id"] = result.optimization.ego_collision_loss_adversary_id
         binary_path = replays_dir / f"{stem}.replay.zlib"
         html_path = render_dir / f"{stem}.html"
         pufferlib.viz.save_interactive_replay_zlib(replay.scenario_payload, bundle, str(binary_path))
@@ -325,6 +328,7 @@ def _generate_one_scenario(task):
 
 def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
+    overall_start = time.perf_counter()
     generation = load_generation_config(config_path, generation_name)
     destination = Path(output_dir) if output_dir is not None else Path(generation["output_dir"]) / generation_name
     destination.mkdir(parents=True, exist_ok=True)
@@ -399,6 +403,7 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
             continue
         rejection_reasons[row["failure_reason"]] = rejection_reasons.get(row["failure_reason"], 0) + 1
     scenario_count = len(rows)
+    wall_clock_seconds = time.perf_counter() - overall_start
     return GenerationReport(
         output_dir=destination,
         replay_index=(destination / RENDER_DIR_NAME / "index.html") if rendered_files else None,
@@ -410,5 +415,6 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
         offroad_rate=sum(row["offroad"] for row in rows) / scenario_count,
         maximum_c_torch_trajectory_error=max(row["c_torch_trajectory_error"] for row in rows),
         total_optimization_seconds=sum(row["optimization_seconds"] for row in rows),
+        wall_clock_seconds=wall_clock_seconds,
         rejection_reasons=rejection_reasons,
     )

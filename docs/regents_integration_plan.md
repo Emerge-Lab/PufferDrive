@@ -15,7 +15,7 @@ Initial scope is one scenario per job, `classic` dynamics, continuous accelerati
 - Judge optimized C events relative to a baseline C rollout so logged overlaps and raster errors are not attributed to optimization.
 - The reactive loop alternates a frozen C ego rollout, Torch adversary optimization, and C replay for a bounded number of iterations. No gradient crosses C or the ego controller.
 - Artifacts carry schema/version, dataset/scenario identity, exact config and map hash, masks, initial/optimized actions, Torch/C trajectories, controller actions, metadata, and metrics. Writes are atomic and pickle-free; loads reject unknown or inconsistent data.
-- Logged and adversarial HTML replays label every post-filter adversary candidate and render each in dark brown; the selected adversary remains separate metadata for outcome attribution.
+- Logged and adversarial HTML replays label every post-filter adversary candidate and render each in dark brown. The candidate supplying the final hard-min ego-collision loss is labeled `LOSS ADV` and printed in scenario metadata; the selected adversary remains separate metadata for outcome attribution.
 
 ## Status: offline POC complete
 

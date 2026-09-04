@@ -54,6 +54,8 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "failure_reason": optimization.failure_reason,
             "selected_adversary_idx": optimization.selected_adversary_idx,
             "selected_adversary_id": optimization.selected_adversary_id,
+            "ego_collision_loss_adversary_idx": optimization.ego_collision_loss_adversary_idx,
+            "ego_collision_loss_adversary_id": optimization.ego_collision_loss_adversary_id,
             "collision_timestep": optimization.collision_timestep,
             "iteration_count": optimization.iteration_count,
             "best_iteration": optimization.best_iteration,

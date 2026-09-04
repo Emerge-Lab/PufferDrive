@@ -177,6 +177,7 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert not result.replay.metrics.background_collision
     assert not result.replay.metrics.offroad
     assert result.replay.metrics.first_collision_pair == (0, result.optimization.selected_adversary_idx)
+    assert result.optimization.ego_collision_loss_adversary_idx >= 0
     assert result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
     assert 1 <= result.outer_iteration_count <= 3
     assert result.optimization.frozen_ego_source == "c_idm"
@@ -189,6 +190,10 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert metadata["scenario_id"] == result.scenario.scenario_ids[0]
     assert metadata["deterministic_seed"] == 50
     assert len(metadata["source_configuration_hash"]) == 64
+    assert (
+        metadata["optimization"]["ego_collision_loss_adversary_id"]
+        == result.optimization.ego_collision_loss_adversary_id
+    )
     assert np.array_equal(arrays["optimized_actions"], result.optimization.optimized_actions.detach().numpy())
     assert np.array_equal(arrays["c_states"], result.replay.states.numpy())
     assert arrays["original_states"].shape[1] == result.scenario.max_agent_count
@@ -208,6 +213,8 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
         page = (tmp_path / RENDER_DIR_NAME / name).read_text(encoding="utf-8")
         assert "<title>PufferDrive Replay</title>" in page
         assert 'const ADVERSARY_COLOR = "#654321";' in page
+        assert 'a.id + " [LOSS ADV]"' in page
+        assert "Ego collision loss adversary" in page
         assert "http://" not in page and "https://" not in page
         replay_path = tmp_path / "replays" / name.replace(".html", ".replay.zlib")
         replay_payload = zlib.decompress(replay_path.read_bytes())
@@ -216,6 +223,8 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
         candidate_indices = torch.where(result.optimization.selection.candidate_mask[0])[0]
         expected_candidate_ids = result.scenario.agent_id[0, candidate_indices].tolist()
         assert header["candidate_adversary_ids"] == expected_candidate_ids
+        assert header["ego_collision_loss_adversary_idx"] == result.optimization.ego_collision_loss_adversary_idx
+        assert header["ego_collision_loss_adversary_id"] == result.optimization.ego_collision_loss_adversary_id
 
     # A non-IDM ego is rejected before any optimization work happens.
     policy_drive = _drive(8, 50, "policy")
@@ -289,6 +298,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0
     assert report.total_optimization_seconds > 0.0
+    assert report.wall_clock_seconds > 0.0
     assert sum(report.rejection_reasons.values()) == report.scenario_count - int(
         report.generation_success_rate * report.scenario_count
     )

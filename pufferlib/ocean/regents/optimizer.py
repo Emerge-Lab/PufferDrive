@@ -192,6 +192,8 @@ class ReGentSOptimizationResult:
     final_costs: CostSnapshot | None
     selected_adversary_idx: int
     selected_adversary_id: int
+    ego_collision_loss_adversary_idx: int
+    ego_collision_loss_adversary_id: int
     gradient_norms: tuple[float, ...]
     acceleration_gradient_norms: tuple[float, ...]
     steering_gradient_norms: tuple[float, ...]
@@ -725,6 +727,8 @@ def optimize_frozen_ego_scenario(
             final_costs=None,
             selected_adversary_idx=-1,
             selected_adversary_id=-1,
+            ego_collision_loss_adversary_idx=-1,
+            ego_collision_loss_adversary_id=-1,
             gradient_norms=(),
             acceleration_gradient_norms=(),
             steering_gradient_norms=(),
@@ -979,9 +983,9 @@ def optimize_frozen_ego_scenario(
     frozen_storage_mask = ~selection.optimized_action_mask[..., None].expand_as(best_actions)
     if not torch.equal(best_actions[frozen_storage_mask], baseline_actions[frozen_storage_mask]):
         raise RuntimeError("Optimizer changed a non-candidate or invalid action")
-    selected_idx = (
-        collision_agent_idx if success else _selected_adversary(best_states, state_valid, scenario, candidate_mask)
-    )
+    ego_collision_loss_adversary_idx = _selected_adversary(best_states, state_valid, scenario, candidate_mask)
+    ego_collision_loss_adversary_id = int(scenario.agent_id[0, ego_collision_loss_adversary_idx].item())
+    selected_idx = collision_agent_idx if success else ego_collision_loss_adversary_idx
     selected_id = int(scenario.agent_id[0, selected_idx].item()) if selected_idx >= 0 else -1
     final_background_collision_signature = _background_collision_signature(
         best_states,
@@ -1006,6 +1010,8 @@ def optimize_frozen_ego_scenario(
         final_costs=final_costs,
         selected_adversary_idx=selected_idx,
         selected_adversary_id=selected_id,
+        ego_collision_loss_adversary_idx=ego_collision_loss_adversary_idx,
+        ego_collision_loss_adversary_id=ego_collision_loss_adversary_id,
         gradient_norms=tuple(gradient_norms),
         acceleration_gradient_norms=tuple(acceleration_gradient_norms),
         steering_gradient_norms=tuple(steering_gradient_norms),

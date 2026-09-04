@@ -161,6 +161,8 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions():
     assert first.success
     assert first.collision_timestep is not None
     assert first.selected_adversary_idx == 1
+    assert first.ego_collision_loss_adversary_idx == 1
+    assert first.ego_collision_loss_adversary_id == 1
     assert first.final_costs.ego_collision < first.initial_costs.ego_collision
     assert first.failure_reason is None
     assert torch.equal(first.optimized_actions, repeated.optimized_actions)

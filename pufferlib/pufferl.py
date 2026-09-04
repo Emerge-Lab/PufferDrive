@@ -2505,7 +2505,7 @@ def regents(generation_name, config_path=None, output_dir=None):
     )
     print(
         f"[REGENTS] max C/Torch error {report.maximum_c_torch_trajectory_error:.3e}"
-        f" | optimization {report.total_optimization_seconds:.1f}s"
+        f" | optimization cumulative {report.total_optimization_seconds:.1f}s (wall {report.wall_clock_seconds:.1f}s)"
     )
     success_count = report.scenario_count - sum(report.rejection_reasons.values())
     print(f"[REGENTS] success {success_count}x")

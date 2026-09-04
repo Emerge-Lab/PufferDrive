@@ -957,6 +957,8 @@ def encode_interactive_replay(scenario, replay):
         "candidate_adversary_ids": [int(agent_id) for agent_id in replay.get("candidate_adversary_ids", [])],
         "selected_adversary_idx": int(replay.get("selected_adversary_idx", -1)),
         "selected_adversary_id": int(replay.get("selected_adversary_id", -1)),
+        "ego_collision_loss_adversary_idx": int(replay.get("ego_collision_loss_adversary_idx", -1)),
+        "ego_collision_loss_adversary_id": int(replay.get("ego_collision_loss_adversary_id", -1)),
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1063,6 +1065,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Map</div><div class="value" id="meta-map">-</div>
             <div class="label">Scenario ID</div><div class="value mono" id="meta-id" style="font-size:11px">-</div>
             <div class="label">Agents (active / total)</div><div class="value mono" id="meta-agents">-</div>
+            <div class="label" id="meta-loss-adversary-label">Ego collision loss adversary</div><div class="value mono" id="meta-loss-adversary">-</div>
             <div id="perturbation-legend">
                 <div class="label">Active perturbations</div>
                 <div class="perturbation-key"><span class="perturbation-line blindness"></span><span>Partner blindness</span></div>
@@ -1122,7 +1125,7 @@ __PAYLOAD_CHUNKS__
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
-        let adversaryIds = new Set();
+        let adversaryIds = new Set(), egoCollisionLossAdversaryId = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
@@ -1233,9 +1236,14 @@ self.onmessage = async event => {
             expertAgentIndices = new Set(H.expert_indices);
             adversaryIds = new Set(H.candidate_adversary_ids || []);
             if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1) adversaryIds.add(H.selected_adversary_id);
+            egoCollisionLossAdversaryId = H.ego_collision_loss_adversary_id ?? -1;
+            if (egoCollisionLossAdversaryId !== -1) adversaryIds.add(egoCollisionLossAdversaryId);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
+            document.getElementById('meta-loss-adversary').textContent = egoCollisionLossAdversaryId === -1 ? '-' : egoCollisionLossAdversaryId;
+            document.getElementById('meta-loss-adversary-label').style.display = egoCollisionLossAdversaryId === -1 ? 'none' : '';
+            document.getElementById('meta-loss-adversary').style.display = egoCollisionLossAdversaryId === -1 ? 'none' : '';
             showGhost = (H.active_count === 1) && !!(H.chunks && H.chunks.ghost_f32);
             const ov = H.eval_overrides || {}, ovKeys = Object.keys(ov);
             if (ovKeys.length) document.getElementById('overrides-body').innerHTML = ovKeys.map(k=>`<div class="item"><span class="name">${k}</span><span class="num">${ov[k]}</span></div>`).join('');
@@ -1572,7 +1580,9 @@ self.onmessage = async event => {
                 ctx.fillStyle = isAdversary ? ADVERSARY_COLOR : colors.text;
                 ctx.font = isAdversary ? 'bold '+(14/cam.z)+'px system-ui' : '600 '+(14/cam.z)+'px system-ui';
                 ctx.textAlign = 'center';
-                const labelText = isAdversary ? a.id + " [ADV]" : String(a.id);
+                const labelText = a.id === egoCollisionLossAdversaryId
+                    ? a.id + " [LOSS ADV]"
+                    : (isAdversary ? a.id + " [ADV]" : String(a.id));
                 ctx.fillText(labelText, 0, (isEgoCam && target) ? a.w/2+.5 : -a.w/2-.5);
                 ctx.restore();
 
