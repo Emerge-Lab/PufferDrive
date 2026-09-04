@@ -21,7 +21,13 @@ from pufferlib.ocean.regents.optimizer import (
     parameter_from_drive_actions,
     steering_conversion_metadata,
 )
-from pufferlib.ocean.regents.state import DrivableAreaRaster, RasterTransform, ScenarioBatch
+from pufferlib.ocean.regents.optimizer import optimize_frozen_ego_scenarios
+from pufferlib.ocean.regents.state import (
+    DrivableAreaRaster,
+    RasterTransform,
+    ScenarioBatch,
+    collate_scenarios,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -398,3 +404,77 @@ def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(r
     # Same scenario and seed, different steering variable, so the iterates must differ.
     assert torch.equal(wheel_angle.initial_actions, curvature.initial_actions)
     assert not torch.equal(wheel_angle.optimized_actions, curvature.optimized_actions)
+
+
+def test_batched_optimization_matches_one_scenario_at_a_time():
+    """A shared Adam loop must not change any scenario's verdict, including under padding."""
+    braking = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
+    # A third agent gives this scene a different agent count, so collation has to pad.
+    merging = _scenario(
+        torch.stack(
+            (
+                _straight_track(0.0, 0.0, 4.0, 13),
+                _straight_track(8.0, 4.0, 3.0, 13),
+                _straight_track(20.0, -4.0, 2.0, 13),
+            )
+        )
+    )
+    config = _optimization_config()
+    singles = [
+        optimize_frozen_ego_scenario(scene, config=config, deterministic_seed=17, show_progress=False)
+        for scene in (braking, merging)
+    ]
+
+    collated = collate_scenarios([braking, merging])
+    assert collated.batch_size == 2
+    assert collated.max_agent_count == 3
+    batched = optimize_frozen_ego_scenarios(collated, config=config, deterministic_seed=17, show_progress=False)
+
+    assert len(batched) == 2
+    for single, many in zip(singles, batched):
+        assert single.success == many.success
+        assert single.failure_reason == many.failure_reason
+        assert single.collision_timestep == many.collision_timestep
+        assert single.selected_adversary_id == many.selected_adversary_id
+        assert single.ego_collision_loss_adversary_id == many.ego_collision_loss_adversary_id
+        assert single.background_collision == many.background_collision
+        assert single.offroad == many.offroad
+        assert single.iteration_count == many.iteration_count
+        torch.testing.assert_close(many.final_costs.total, single.final_costs.total, rtol=0.0, atol=1e-4)
+        # Padding never leaks into a scenario's own agents.
+        agent_count = single.optimized_actions.shape[1]
+        torch.testing.assert_close(
+            many.optimized_actions[:, :agent_count],
+            single.optimized_actions,
+            rtol=0.0,
+            atol=1e-3,
+        )
+
+
+def test_collating_scenarios_pads_without_making_padded_agents_visible():
+    """Padded lanes must be invalid everywhere so no consumer can read them."""
+    small = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
+    large = _scenario(
+        torch.stack(
+            (
+                _straight_track(0.0, 0.0, 4.0, 13),
+                _straight_track(8.0, 4.0, 3.0, 13),
+                _straight_track(20.0, -4.0, 2.0, 13),
+                _straight_track(30.0, 8.0, 1.0, 13),
+            )
+        )
+    )
+    collated = collate_scenarios([small, large])
+    assert collated.max_agent_count == 4
+    assert collated.scenario_ids == ("synthetic", "synthetic")
+    assert len(collated.drivable_area_rasters) == 2
+    padded = collated.state_valid[0, 2:]
+    assert not padded.any()
+    assert not collated.agent_present[0, 2:].any()
+    assert not collated.ego_mask[0, 2:].any()
+    assert torch.equal(collated.agent_id[0, 2:], torch.full((2,), -1, dtype=torch.int64))
+    # A padded agent still needs finite geometry so masked math cannot produce inf.
+    assert torch.isfinite(collated.wheelbase_meters).all()
+    assert (collated.length_meters > 0).all()
+    with pytest.raises(ValueError, match="single-scenario"):
+        collate_scenarios([collated])
