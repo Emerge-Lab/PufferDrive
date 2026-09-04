@@ -1971,6 +1971,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
+    env->stop_sign_behavior = (int) unpack(kwargs, "stop_sign_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
@@ -1995,7 +1996,9 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
-    env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
+    env->traffic_lights_enabled = (bool) unpack(kwargs, "traffic_lights_enabled");
+    env->stop_signs_enabled = (bool) unpack(kwargs, "stop_signs_enabled");
+    env->yield_signs_enabled = (bool) unpack(kwargs, "yield_signs_enabled");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
     env->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
     env->dt = (float) unpack(kwargs, "dt");
@@ -2123,6 +2126,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "collision_rate", log->collision_rate);
     assign_to_dict(dict, "episode_return", log->episode_return);
     assign_to_dict(dict, "red_light_violation_rate", log->red_light_violation_rate);
+    assign_to_dict(dict, "stop_sign_violation_rate", log->stop_sign_violation_rate);
     assign_to_dict(dict, "comfort_violation_count", log->comfort_violation_count);
     // assign_to_dict(dict, "avg_displacement_error", log->avg_displacement_error);
     assign_to_dict(dict, "velocity_progress_sum", log->velocity_progress_sum);
@@ -2137,6 +2141,7 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/collision", log->reward_collision);
     assign_to_dict(dict, "reward_components/offroad", log->reward_offroad);
     assign_to_dict(dict, "reward_components/red_light", log->reward_red_light);
+    assign_to_dict(dict, "reward_components/stop_sign", log->reward_stop_sign);
     assign_to_dict(dict, "reward_components/goal", log->reward_goal);
     assign_to_dict(dict, "reward_components/lane_align", log->reward_lane_align);
     assign_to_dict(dict, "reward_components/lane_center", log->reward_lane_center);

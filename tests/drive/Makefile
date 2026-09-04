@@ -24,6 +24,7 @@ UNIT_SRCS := \
 	test_drive_goals.c \
 	test_drive_metrics.c \
 	test_drive_red_light.c \
+	test_drive_stop_sign.c \
 	test_drive_dynamics.c \
 	test_drive_map_cache.c \
 	test_drive_idm.c
