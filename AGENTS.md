@@ -10,12 +10,8 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 
 ## Current Goal: ReGentS
 - The current branch goal is to integrate ReGentS safety-critical scenario generation into PufferDrive. The local method reference is `2409.07830v1.pdf`.
-- `docs/regents_integration_plan.md` is the source of truth for scope, sequencing, interfaces, acceptance gates, and known risks.
-- Before starting any ReGentS implementation, review, or design task, read the plan and re-read the relevant stage. Check it again before moving to another stage and before handing work off.
 - Update the plan whenever a ReGentS decision, assumption, interface, milestone, threshold, or scope changes. Do not let implementation and the plan silently diverge; the user's latest direction wins and must be reflected in the plan.
 - ReGentS is initially an offline generation/evaluation workflow. Instantiate Drive in evaluation mode; do not route the POC through PPO or `puffer train`. Adam optimizes temporary adversary actions, not policy parameters.
-- Step 0 validates IDM as the SDC controller. The C simulator remains the reference implementation; the differentiable path lives in PyTorch; implement continuous `classic` dynamics before jerk dynamics.
-- Do not begin ReGentS loss/optimization work until both hard gates pass: C classic rollout matches Torch, and forward/inverse reconstruction is validated on real scenarios.
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`

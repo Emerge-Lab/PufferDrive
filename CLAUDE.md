@@ -10,12 +10,8 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 
 ## Current Goal: ReGentS
 - The current branch goal is to integrate ReGentS safety-critical scenario generation into PufferDrive. The local method reference is `2409.07830v1.pdf`.
-- `docs/regents_integration_plan.md` is the source of truth for scope, sequencing, interfaces, acceptance gates, and known risks.
-- Before starting any ReGentS implementation, review, or design task, read the plan and re-read the relevant stage. Check it again before moving to another stage and before handing work off.
 - Update the plan whenever a ReGentS decision, assumption, interface, milestone, threshold, or scope changes. Do not let implementation and the plan silently diverge; the user's latest direction wins and must be reflected in the plan.
 - ReGentS is initially an offline generation/evaluation workflow. Instantiate Drive in evaluation mode; do not route the POC through PPO or `puffer train`. Adam optimizes temporary adversary actions, not policy parameters.
-- Step 0 validates IDM as the SDC controller. The C simulator remains the reference implementation; the differentiable path lives in PyTorch; implement continuous `classic` dynamics before jerk dynamics.
-- Do not begin ReGentS loss/optimization work until both hard gates pass: C classic rollout matches Torch, and forward/inverse reconstruction is validated on real scenarios.
 
 ## Commands
 - **Rebuild C (mandatory after .c/.h change):** `python setup.py build_ext --inplace --force`
@@ -29,7 +25,7 @@ Activate venv before `python`/`puffer`: `source .venv/bin/activate`
 - **Data:** flat struct arrays + integer indices. No nested ownership / `**` unless the map/grid truly needs it.
 - **Loops bounded:** iterate known counts; every `while` needs an explicit max-iteration counter.
 - **Named constants for all magic values** (`GRID_CELL_SIZE`, `DEFAULT_TTC`); never raw `15.0f`/`64` in logic. Centralize enum-like mode constants near the top.
-- **Comments: default none, hard max 1 line.** Code must be readable without them. Write one only for a non-obvious invariant, unit/frame convention, or a "why not the obvious thing" (good: `// reward flags mutually exclusive`, `// angles in ego frame, radians`). Banned: restating what the line does, multi-line explanations, rationale/history essays, cross-file pointers (`// see drive.h`), section headers (`// 1. Encoders`), docstrings on self-evident functions. If it needs a paragraph, rename things until it doesn't. Never add a comment to a line the request didn't already change.
+- **Comments explain invariants, not syntax** (good: "reward flags mutually exclusive"). Code readable without comments.
 - **Check non-void returns when correctness depends on it** (loading, init, map/grid build, spawning).
 - **Zero compiler warnings** — warnings are bugs until proven otherwise.
 - **Perf:** zero Python overhead in C hot paths; no malloc/free in `c_step`, obs gen, collision, reward.

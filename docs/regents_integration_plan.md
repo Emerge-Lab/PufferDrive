@@ -111,7 +111,21 @@ Selection records reason bits rather than compacting agents, excluding: SDC, non
 
 Stage 3 actions initialize every vehicle; only selected valid entries enter the graph. The frozen ego and non-selected actors hold their reference trajectories. Adam defaults: learning rate `1e-3`, betas `0.9 / 0.999`, epsilon `1e-8`, 500 updates. Actions project to `[-1, 1]`, and non-candidate or invalid entries are restored byte-for-byte after every update. `classic_step()`'s zero-speed magnitude uses a forward-equivalent clamp at the dtype's smallest normal value, giving a finite derivative at an exactly stationary state without changing Stage 2 parity.
 
-Front divergence uses wrapped ego-relative bearing and yaw with separate windows, as in the reference `opt()`: bearing strictly inside `(-pi/8, pi/8)`, yaw strictly inside `(-pi/2, pi/2)`, on the same side, with bearing magnitude below yaw magnitude. Steering updates cancel when red-zone occupancy exceeds `tau_front=0.5`; acceleration updates continue, and Adam steering moments are cleared for canceled entries so momentum cannot bypass the rule. Every surviving steering update is scaled by `steering_update_scale=0.5`, matching the reference's damping of steering relative to acceleration. The scale applies to the post-Adam update rather than the gradient, because Adam's per-parameter normalization makes gradient scaling a no-op.
+Front divergence uses wrapped ego-relative bearing and yaw with separate windows, as in the reference `opt()`: bearing strictly inside `(-pi/8, pi/8)`, yaw strictly inside `(-pi/2, pi/2)`, on the same side, with bearing magnitude below yaw magnitude. Steering updates cancel when red-zone occupancy exceeds `tau_front=0.5`; acceleration updates continue, and Adam steering moments are cleared for canceled entries so momentum cannot bypass the rule. Every surviving steering update is scaled by `steering_update_scale`, applied to the post-Adam update rather than the gradient because Adam's per-parameter normalization makes gradient scaling a no-op. The reference uses `0.5`, damping steering relative to acceleration; PufferDrive defaults to `4.0`.
+
+The reference value is not transferable because the action spaces carry different units: Waymax controls curvature bounded at `0.3 1/m`, PufferDrive a wheel angle bounded at `0.667 rad`. The scale is therefore a steering-only step size, equivalent to a per-channel learning rate that leaves acceleration at `learning_rate`. A scale above one extrapolates past the Adam step, so the update is re-clamped to `[-1, 1]` after the blend; without that clamp `4.0` drives actions out of contract.
+
+Measured over the 25-scenario NuPlan set at `lr=1e-3`, 500 iterations, everything else fixed:
+
+| `steering_update_scale` | Success | `iteration_limit` | Background collisions | Off-road |
+| --- | --- | --- | --- | --- |
+| `0.5` (reference) | `4/25` | 15 | 4 | 2 |
+| `1.0` | `5/25` | 14 | 4 | 1 |
+| `2.0` | `5/25` | 14 | 4 | 1 |
+| **`4.0`** | **`8/25`** | **11** | 4 | 1 |
+| `8.0` | `7/25` | 12 | 4 | 1 |
+
+Success doubles at `4.0` with no increase in constraint violations, and the curve is unimodal with a mild decline at `8.0`. At `0.5` the peak steering excursion was only `3.5-15.8` degrees of wheel angle over a full 8 s horizon; at `4.0` it is `11.3-34.4` degrees. Caveat: `n = 25`, so treat the exact optimum as provisional.
 
 Success requires a discrete-timestep ego/candidate box overlap with no newly introduced collision in a candidate-involved background pair and no newly introduced off-road corner. Existing background overlaps and raster mismatch on the reference trajectory are pair-level and agent-level feasibility baselines, matching the C oracle, so valid source data is never retroactively rejected. Pair signatures are evaluated in deterministic chunks without Python scalar geometry loops. The optimizer stops on the first feasible collision by default, supports named collision and stagnation early-stops, and otherwise returns the lowest-total-cost feasible iterate. It records filter reasons, adversary index and ID, initial/final component costs, gradient norms, front-divergence iterations, action saturation, maximum inverse reconstruction residual, collision timestep, rejection counts, iteration counts, frozen-ego source, failure reason, and seed.
 

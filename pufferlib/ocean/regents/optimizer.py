@@ -50,7 +50,8 @@ DEFAULT_ACTION_SATURATION_TOLERANCE = 1e-6
 DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS = 0.0
 DEFAULT_EARLY_STOP_MINIMUM_IMPROVEMENT = 0.0
 DEFAULT_EARLY_STOP_PATIENCE_ITERATIONS = 0
-DEFAULT_STEERING_UPDATE_SCALE = 0.5
+DEFAULT_STEERING_UPDATE_SCALE = 4.0
+MAXIMUM_STEERING_UPDATE_SCALE = 10.0
 BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
 
 
@@ -124,8 +125,8 @@ class ReGentSOptimizationConfig:
                 raise ValueError(f"{name} must be in (0, pi]")
         if not math.isfinite(self.steering_update_scale):
             raise ValueError("steering_update_scale must be finite")
-        if not 0.0 <= self.steering_update_scale <= 1.0:
-            raise ValueError("steering_update_scale must be in [0, 1]")
+        if not 0.0 <= self.steering_update_scale <= MAXIMUM_STEERING_UPDATE_SCALE:
+            raise ValueError(f"steering_update_scale must be in [0, {MAXIMUM_STEERING_UPDATE_SCALE}]")
         if not math.isfinite(self.action_saturation_tolerance):
             raise ValueError("action_saturation_tolerance must be finite")
         if not 0.0 <= self.action_saturation_tolerance < 1.0:
@@ -860,6 +861,8 @@ def optimize_frozen_ego_scenario(
                 previous_steering,
                 damped_steering,
             )
+            # A scale above one extrapolates past the Adam step and can leave the box.
+            action_parameter.clamp_(-1.0, 1.0)
         _zero_adam_steering_momentum(optimizer, action_parameter, divergent)
         completed_update_count += 1
 
