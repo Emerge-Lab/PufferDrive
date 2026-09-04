@@ -105,9 +105,49 @@ Load a checkpoint for gradient-free inference through `CONTROLLER_POLICY`. Allow
 
 **Exit:** policy-targeted generation completes and one table compares both controllers on a fixed artifact set.
 
+### Scenario batching (implemented, off by default)
+
+`optimize_frozen_ego_scenarios` runs any number of scenarios in one Adam loop;
+`collate_scenarios` pads them to a shared agent and time count. Generation schedules
+one batch per pool task via `batch_size`, ordering scenarios by agent count first.
+Capture and C replay stay per-Drive, so no C contract changed.
+
+**Correctness.** Batch size 1 reproduces the previous implementation exactly. Across a
+240-scenario NuPlan run, batch 2 matched batch 1 on 239 of 240 scenarios; the one
+difference was a `collision_timestep` of 82 against 83, with identical success,
+adversary, and infraction verdicts. Scenarios stay independent because each loss reads
+only its own actions, so the summed batch loss gives each row the gradient it would get
+alone; a stopped scenario is masked out and its parameters restored after each step.
+
+**Measured effect.** Batching removes per-iteration Python and dispatch overhead
+(`_compose_rollout` is 30.8 ms of a ~67 ms iteration) but raises each worker's working
+set. Those pull in opposite directions:
+
+| setting | result |
+| --- | --- |
+| 1 worker, 8 scenarios, 100 iterations | 99 s at batch 1, 73 s at batch 8 (1.36x faster) |
+| 24 workers, 240 scenarios, 100 iterations | 313 s at batch 1, 449 s at batch 2 (1.43x slower) |
+| in-worker CPU, same 240 scenarios | 6973 s at batch 1, 8888 s at batch 2 (+27%) |
+
+The regression is contention, not scheduling: per-scenario CPU time itself rises once 24
+workers compete. `batch_size` therefore defaults to 1, which is the fastest setting for a
+24-worker run on this machine; raise it only when workers sit well below core count.
+
+An earlier synthetic benchmark predicted 2.09x. It was wrong twice over: it replicated one
+scenario, so every batch member shared an agent count and a drivable-area raster. Real
+agent counts run from 3 to 326, and padding in file order wastes 33% of the work at batch
+2 and 54% at batch 8. Agent-count ordering recovers that to 96% and 84%, and is why
+`_agent_count_ordered_batches` exists, but it does not recover the contention cost.
+
+Two levers remain if batching is wanted at full worker count. `_background_collision_signature`
+costs 9.8 ms per iteration and grows with the square of the background agent count, which is
+what makes large scenes expensive to hold in a batch. Batches also run until every member
+stops, worth about 77% efficiency at batch 8 given the observed iteration spread (min 1,
+median 501, p75 501). Neither is addressed.
+
 ### Stage 10 — Full validation and scale
 
-Set long-horizon parity criteria; complete the 200-transition run; report parity, yield, success, and runtime; resolve original-collision filtering; rebuild drivable topology; add headless EGL MP4 beside HTML; and batch scenarios within workers while preserving per-scenario determinism and reductions. A measured CPU trial found simple multiprocessing slower than serial.
+Set long-horizon parity criteria; complete the 200-transition run; report parity, yield, success, and runtime; resolve original-collision filtering; rebuild drivable topology; and add headless EGL MP4 beside HTML. Batching within workers is implemented and verified but is off by default; see the batching section above for why it does not pay at 24 workers. A measured CPU trial found simple multiprocessing slower than serial.
 
 **Exit:** a reproducible full-horizon set can be generated efficiently, rendered, and evaluated under both controllers.
 
