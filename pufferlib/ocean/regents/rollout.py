@@ -442,7 +442,7 @@ def run_reactive_idm_generation(
         frozen_ego = FrozenEgoTrajectory(
             state=replay.states[:, ego_idx].detach().clone(),
             valid=replay.state_valid[:, ego_idx].detach().clone(),
-            scenario_id=scenario.scenario_ids[0],
+            scenario_ids=scenario.scenario_ids,
             source=source,
         )
     return ReactiveGenerationResult(

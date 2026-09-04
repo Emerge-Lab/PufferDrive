@@ -316,7 +316,7 @@ def capture_frozen_idm_trajectory(
     frozen_ego = FrozenEgoTrajectory(
         state=torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])),
         valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_)[None, ...])),
-        scenario_id=scenario.scenario_ids[0],
+        scenario_ids=scenario.scenario_ids,
         source=source,
     )
     return scenario, frozen_ego
@@ -409,8 +409,8 @@ def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_se
             raise TypeError("frozen_ego must be a FrozenEgoTrajectory")
         if frozen_ego.state.shape != (1, horizon_transition_count + 1, STATE_FEATURE_COUNT):
             raise ValueError("Frozen ego state does not match the optimization horizon")
-        if frozen_ego.scenario_id != scenario.scenario_ids[0]:
-            raise ValueError("Frozen ego scenario_id does not match the ScenarioBatch")
+        if frozen_ego.scenario_ids != scenario.scenario_ids:
+            raise ValueError("Frozen ego scenario_ids do not match the ScenarioBatch")
         if frozen_ego.state.device != scenario.logged_state.device:
             raise ValueError("Frozen ego and scenario tensors must share a device")
     return horizon_transition_count
@@ -424,7 +424,7 @@ def _frozen_ego_fixture(scenario, inverse, horizon_transition_count):
     return FrozenEgoTrajectory(
         state=inverse.state_with_estimated_steering[:, ego_idx, : horizon_transition_count + 1].detach().clone(),
         valid=scenario.state_valid[:, ego_idx, : horizon_transition_count + 1].detach().clone(),
-        scenario_id=scenario.scenario_ids[0],
+        scenario_ids=scenario.scenario_ids,
         source="logged_fixture",
     )
 
