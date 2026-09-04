@@ -26,10 +26,17 @@ static PyObject *map_cache_live_count_py(
     return PyLong_FromLong(live);
 }
 
+static PyObject *map_cache_preload_py(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs);
+static PyObject *map_cache_release_py(PyObject *self __attribute__((unused)), PyObject *args, PyObject *kwargs);
+
 // clang-format off
 #define MY_METHODS \
     {"map_cache_size", map_cache_size_py, METH_NOARGS, "Map cache slot count."}, \
-    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}
+    {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
+    {"map_cache_preload", (PyCFunction) map_cache_preload_py, METH_VARARGS | METH_KEYWORDS, \
+     "Build and retain configured map geometry for forked workers."}, \
+    {"map_cache_release", (PyCFunction) map_cache_release_py, METH_VARARGS | METH_KEYWORDS, \
+     "Release map geometry retained for forked workers."}
 // clang-format on
 
 #include "../env_binding.h"
@@ -1794,6 +1801,89 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyTuple_SetItem(tuple, 1, resized_map_ids);
     PyTuple_SetItem(tuple, 2, final_env_count);
     return tuple;
+}
+
+static int unpack_map_cache_args(PyObject *kwargs, Drive *config, const char ***paths, int *num_map_files) {
+    PyObject *map_files = PyDict_GetItemString(kwargs, "map_files");
+    if (map_files == NULL || !PyList_Check(map_files)) {
+        PyErr_SetString(PyExc_TypeError, "map_files must be a list of strings");
+        return -1;
+    }
+    Py_ssize_t map_file_count = PyList_Size(map_files);
+    if (map_file_count <= 0 || map_file_count > INT_MAX) {
+        PyErr_SetString(PyExc_ValueError, "map_files must contain between 1 and INT_MAX paths");
+        return -1;
+    }
+    *num_map_files = (int) map_file_count;
+    config->use_map_cache = 1;
+    config->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
+    config->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
+    config->obs_boundary_stride = (int) unpack(kwargs, "obs_boundary_stride");
+    config->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
+    config->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
+    config->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+    if (config->use_neighbor_cache < 0 || config->use_neighbor_cache > 1 || config->obs_lane_stride < 1
+        || config->obs_boundary_stride < 1 || !isfinite(config->obs_range_road_front_m)
+        || !isfinite(config->obs_range_road_behind_m) || !isfinite(config->obs_range_road_side_m)
+        || config->obs_range_road_front_m < 0.0f || config->obs_range_road_behind_m < 0.0f
+        || config->obs_range_road_side_m < 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "invalid map cache configuration");
+        return -1;
+    }
+    *paths = (const char **) malloc(*num_map_files * sizeof(char *));
+    if (*paths == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    for (int i = 0; i < *num_map_files; i++) {
+        (*paths)[i] = PyUnicode_AsUTF8(PyList_GetItem(map_files, i));
+        if ((*paths)[i] == NULL) {
+            free(*paths);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static PyObject *map_cache_preload_py(
+    PyObject *self __attribute__((unused)),
+    PyObject *args __attribute__((unused)),
+    PyObject *kwargs) {
+    Drive config = {0};
+    const char **paths;
+    int num_map_files;
+    if (unpack_map_cache_args(kwargs, &config, &paths, &num_map_files) != 0) {
+        return NULL;
+    }
+    int cached = preload_map_cache(&config, paths, num_map_files);
+    free(paths);
+    if (cached < 0) {
+        PyErr_SetString(PyExc_RuntimeError, "map_cache_preload failed to load or build a map binary");
+        return NULL;
+    }
+    return PyLong_FromLong((long) cached);
+}
+
+static PyObject *map_cache_release_py(
+    PyObject *self __attribute__((unused)),
+    PyObject *args __attribute__((unused)),
+    PyObject *kwargs) {
+    Drive config = {0};
+    const char **paths;
+    int num_map_files;
+    if (unpack_map_cache_args(kwargs, &config, &paths, &num_map_files) != 0) {
+        return NULL;
+    }
+    int released = release_preloaded_map_cache(&config, paths, num_map_files);
+    free(paths);
+    if (released != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "map_cache_release failed: preload configuration drifted");
+        return NULL;
+    }
+    Py_RETURN_NONE;
 }
 
 static int my_init(Env *env, PyObject *args, PyObject *kwargs) {

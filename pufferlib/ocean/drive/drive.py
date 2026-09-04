@@ -45,6 +45,7 @@ class Drive(pufferlib.PufferEnv):
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
         use_map_cache=False,
+        preload_map_cache=False,
         use_neighbor_cache=True,
         capture_replay=False,
         replay_worker_idx=0,
@@ -82,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         non_sdc_controller="policy",
         non_vehicle_controller="auto",
         map_dir=None,
+        config_only=False,
         goal_regen_mode="finite",
         goal_source="route",
         obs_goal_lane_distance=False,
@@ -169,7 +171,12 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
-        self.use_map_cache = use_map_cache
+        self.use_map_cache = bool(use_map_cache)
+        self.preload_map_cache = bool(preload_map_cache)
+        if self.preload_map_cache and not self.use_map_cache:
+            raise ValueError("preload_map_cache requires use_map_cache to be true")
+        self._map_cache_preloaded = False
+        self._preloaded_map_cache_kwargs = None
         self.capture_replay = bool(capture_replay)
         self.replay_worker_idx = replay_worker_idx
         self._replay_captures = []
@@ -332,6 +339,11 @@ class Drive(pufferlib.PufferEnv):
 
         self.current_num_eval_scenarios = self._next_eval_batch_size()
 
+        self.num_agents = num_agents
+        self.c_envs = None
+        if config_only:
+            return
+
         # Iterate through all maps to count total agents that can be initialized for each map
         agent_offsets, map_ids, num_envs = binding.shared(
             map_files=self.map_files,
@@ -360,7 +372,6 @@ class Drive(pufferlib.PufferEnv):
         # stops stepping and emitting so it can't re-process or double-count.
         self._eval_exhausted = self.eval_mode and self.current_num_eval_scenarios == 0
 
-        self.num_agents = num_agents
         self.agent_offsets = agent_offsets
         self.map_ids = map_ids
         self.num_envs = num_envs
@@ -383,6 +394,23 @@ class Drive(pufferlib.PufferEnv):
             env_ids.append(env_id)
 
         self.c_envs = binding.vectorize(*env_ids)
+
+    def preload_shared_resources(self):
+        if not self.preload_map_cache or self._map_cache_preloaded:
+            return 0
+        preload_kwargs = {
+            "map_files": self.map_files[: self.num_maps],
+            "use_neighbor_cache": self.use_neighbor_cache,
+            "obs_lane_stride": self.obs_lane_stride,
+            "obs_boundary_stride": self.obs_boundary_stride,
+            "obs_range_road_front_m": self.obs_range_road_front_m,
+            "obs_range_road_behind_m": self.obs_range_road_behind_m,
+            "obs_range_road_side_m": self.obs_range_road_side_m,
+        }
+        cached = binding.map_cache_preload(**preload_kwargs)
+        self._preloaded_map_cache_kwargs = preload_kwargs
+        self._map_cache_preloaded = True
+        return cached
 
     def _env_init_kwargs(self, map_file, max_agents):
         # render_mode_flag: 0 = live viewer (RENDER_WINDOW), 1 = headless batch
@@ -837,7 +865,14 @@ class Drive(pufferlib.PufferEnv):
         )
 
     def close(self):
+        if self._map_cache_preloaded:
+            binding.map_cache_release(**self._preloaded_map_cache_kwargs)
+            self._map_cache_preloaded = False
+            self._preloaded_map_cache_kwargs = None
+        if self.c_envs is None:
+            return
         binding.vec_close(self.c_envs)
+        self.c_envs = None
 
     def get_state(self):
         try:
