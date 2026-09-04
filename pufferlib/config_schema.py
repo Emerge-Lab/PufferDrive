@@ -243,6 +243,7 @@ class DriveEnvConfig:
     stop_signs_enabled: bool = MISSING
     yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
+    preload_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
     scenario_length: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     resample_frequency: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
@@ -551,6 +552,8 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
+    if env["preload_map_cache"] and not env["use_map_cache"]:
+        _raise_config_error(context, "env.preload_map_cache", "requires env.use_map_cache to be true")
 
     if env["reward_randomization"] and not env["reward_conditioning"]:
         _raise_config_error(context, "env.reward_randomization", "requires env.reward_conditioning")

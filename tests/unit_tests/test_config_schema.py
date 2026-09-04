@@ -68,6 +68,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIsInstance(args["save_frames"], bool)
         for field_name in (
             "use_map_cache",
+            "preload_map_cache",
             "use_neighbor_cache",
             "termination_mode",
             "terminate_on_goal",
@@ -89,6 +90,7 @@ class TestConfigSchema(unittest.TestCase):
         args["env"].update(
             {
                 "use_map_cache": 1,
+                "preload_map_cache": 0,
                 "use_neighbor_cache": 0,
                 "termination_mode": 1,
                 "terminate_on_goal": 0,
@@ -100,6 +102,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIs(normalized["render"], True)
         self.assertIs(normalized["save_frames"], False)
         self.assertIs(normalized["env"]["use_map_cache"], True)
+        self.assertIs(normalized["env"]["preload_map_cache"], False)
         self.assertIs(normalized["env"]["use_neighbor_cache"], False)
         self.assertIs(normalized["env"]["termination_mode"], True)
         self.assertIs(normalized["env"]["terminate_on_goal"], False)
@@ -297,6 +300,15 @@ class TestConfigSchema(unittest.TestCase):
         args["load_id"] = "remote-run"
 
         with self.assertRaisesRegex(pufferlib.APIUsageError, "load_id"):
+            validate_puffer_drive_config(args, "test")
+
+    @patch("sys.argv", ["pufferl.py"])
+    def test_preload_map_cache_requires_use_map_cache(self):
+        args = load_config("puffer_drive")
+        args["env"]["preload_map_cache"] = True
+        args["env"]["use_map_cache"] = False
+
+        with self.assertRaisesRegex(pufferlib.APIUsageError, "preload_map_cache"):
             validate_puffer_drive_config(args, "test")
 
 
