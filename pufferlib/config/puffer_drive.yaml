@@ -65,7 +65,7 @@ env:
   # Stop sign behavior - options: "ignore", "stop", "remove"
   stop_sign_behavior: stop
   traffic_lights_enabled: true
-  stop_signs_enabled: true
+  stop_signs_enabled: false
   yield_signs_enabled: false
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
   use_map_cache: true
