@@ -791,6 +791,12 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
         control_mode = benchmark_environment.get("control_mode")
         if not isinstance(control_mode, str) or not control_mode:
             _raise_config_error(context, f"{benchmark_path}.env.control_mode", "must be a non-empty string")
+        if benchmark_environment.get("eval_training_render") and simulation_mode != "gigaflow":
+            _raise_config_error(
+                context,
+                f"{benchmark_path}.env.eval_training_render",
+                "is only supported in gigaflow mode",
+            )
 
         seed = benchmark.get("seed")
         if seed is None:

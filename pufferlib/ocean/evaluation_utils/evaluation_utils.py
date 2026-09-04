@@ -239,6 +239,9 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
 
 def build_benchmark_args(base_args, benchmark, environment_config, cli_overrides=()):
     """Compose and validate final arguments for one benchmark evaluation."""
+    if benchmark["env"].get("eval_training_render"):
+        base_args = copy.deepcopy(base_args)
+        base_args["env"]["eval_training_render"] = True
     eval_training_render = base_args["env"]["eval_training_render"]
     validation_context = f"evaluation.{benchmark['name']}"
     if eval_training_render:

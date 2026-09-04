@@ -58,6 +58,19 @@ benchmarks:
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
 
+  - name: carla_render
+    seed: 42
+    num_scenarios: 8
+    env:
+      simulation_mode: gigaflow
+      num_maps: 8
+      max_agents_per_env: 50
+      max_scenarios_per_batch: null
+      scenario_length: 500
+      control_mode: control_vehicles
+      map_dir: pufferlib/resources/drive/binaries/carla
+      eval_training_render: true
+
   - name: womd_multi
     seed: 42
     num_scenarios: 1000

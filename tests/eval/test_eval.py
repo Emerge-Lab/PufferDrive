@@ -1,3 +1,4 @@
+import copy
 import json
 import random
 import struct
@@ -13,6 +14,7 @@ import torch
 import yaml
 
 import pufferlib
+import pufferlib.pytorch
 from pufferlib import pufferl
 from pufferlib.config_schema import validate_puffer_drive_config
 from pufferlib.ocean.drive.drive import Drive
@@ -25,6 +27,7 @@ CARLA_SCENARIO_COUNT = 7
 CARLA_WORKER_COUNT = 2
 CARLA_MAP_COUNT = 4
 CARLA_SCENARIO_LENGTH = 32
+BENCHMARK_SCENARIO_LENGTH = 48
 TRAIN_EPOCH_COUNT = 7
 TRAIN_EVAL_INTERVAL = 3
 TRAIN_HORIZON = 16
@@ -451,6 +454,54 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
     assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+
+
+def _write_render_benchmark_config(tmp_path):
+    """One plain and one render benchmark, differing only by eval_training_render."""
+    config_path = _write_benchmark_config(
+        tmp_path / "render_benchmark.yaml",
+        name="carla_test",
+        map_dir=CARLA_MAP_DIR,
+        simulation_mode="gigaflow",
+        num_maps=CARLA_MAP_COUNT,
+        num_scenarios=CARLA_SCENARIO_COUNT,
+        scenario_length=BENCHMARK_SCENARIO_LENGTH,
+        max_agents_per_env=8,
+        control_mode="control_vehicles",
+        use_neighbor_cache=True,
+    )
+    config = yaml.safe_load(config_path.read_text())
+    render_benchmark = copy.deepcopy(config["benchmarks"][0])
+    render_benchmark["name"] = "carla_test_render"
+    render_benchmark["env"]["eval_training_render"] = True
+    config["benchmarks"].append(render_benchmark)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return config_path
+
+
+def test_render_benchmark_scopes_training_render_to_its_own_entry(tmp_path):
+    benchmark_config_path = _write_render_benchmark_config(tmp_path)
+    selected_benchmarks = "carla_test,carla_test_render"
+    base_args = _standalone_eval_args(benchmark_config_path)
+    base_args["eval"]["benchmarks"] = selected_benchmarks
+    environment_config, benchmarks = drive_benchmark.load_benchmark_config(
+        benchmark_config_path,
+        selected_benchmarks,
+    )
+    run_args = {
+        benchmark["name"]: drive_benchmark.build_benchmark_args(base_args, benchmark, environment_config)
+        for benchmark in benchmarks
+    }
+
+    plain_args = run_args["carla_test"]
+    assert plain_args["env"]["eval_training_render"] is False
+    assert plain_args["env"]["scenario_length"] == BENCHMARK_SCENARIO_LENGTH
+    assert plain_args["eval"]["action_selection"] == "mode"
+
+    render_args = run_args["carla_test_render"]
+    assert render_args["env"]["eval_training_render"] is True
+    assert render_args["env"]["scenario_length"] == CARLA_SCENARIO_LENGTH
+    assert render_args["eval"]["action_selection"] == pufferlib.pytorch.ACTION_SELECT_SAMPLE
 
 
 def _write_training_benchmark(tmp_path):
