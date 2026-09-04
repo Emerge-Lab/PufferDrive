@@ -53,6 +53,13 @@ typedef struct {
     float z;
 } DepthPoint;
 
+typedef struct {
+    int lane_idx;
+    int geometry_idx;
+    float signed_distance;
+    float heading;
+} LaneSelection;
+
 typedef struct Drive Drive;
 typedef struct Client Client;
 typedef struct Log Log;
@@ -3197,6 +3204,90 @@ static void subsample_road_observation_rows(
 // Core Simulation Functions
 // ========================================
 
+static int is_direct_lane_transition(const Drive *env, int from_lane_idx, int to_lane_idx) {
+    const RoadMapElement *from_lane = &env->road_elements[from_lane_idx];
+    for (int exit_idx = 0; exit_idx < from_lane->num_exits; exit_idx++) {
+        if (from_lane->exit_lanes[exit_idx] == to_lane_idx) {
+            return 1;
+        }
+    }
+    const RoadMapElement *to_lane = &env->road_elements[to_lane_idx];
+    for (int entry_idx = 0; entry_idx < to_lane->num_entries; entry_idx++) {
+        if (to_lane->entry_lanes[entry_idx] == from_lane_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static LaneSelection find_current_lane(
+    const Drive *env,
+    const Agent *agent,
+    const GridMapEntity *entity_list,
+    int entity_count) {
+    LaneSelection selection = {.lane_idx = -1, .geometry_idx = -1};
+    float best_score = INFINITY;
+    float max_distance = 3.0f * agent->sim_width;
+    float max_distance_sq = max_distance * max_distance;
+
+    for (int entity_list_idx = 0; entity_list_idx < entity_count; entity_list_idx++) {
+        GridMapEntity entity = entity_list[entity_list_idx];
+        const RoadMapElement *lane = &env->road_elements[entity.entity_idx];
+        if (!is_drivable_road_lane(lane->type)) {
+            continue;
+        }
+
+        int geometry_idx = entity.geometry_idx;
+        float segment_dx = lane->x[geometry_idx + 1] - lane->x[geometry_idx];
+        float segment_dy = lane->y[geometry_idx + 1] - lane->y[geometry_idx];
+        float segment_length_sq = segment_dx * segment_dx + segment_dy * segment_dy;
+        if (segment_length_sq <= 1e-6f) {
+            continue;
+        }
+
+        float agent_dx = agent->sim_x - lane->x[geometry_idx];
+        float agent_dy = agent->sim_y - lane->y[geometry_idx];
+        float projection = clip((agent_dx * segment_dx + agent_dy * segment_dy) / segment_length_sq, 0.0f, 1.0f);
+        float distance_x = agent_dx - projection * segment_dx;
+        float distance_y = agent_dy - projection * segment_dy;
+        float distance_sq = distance_x * distance_x + distance_y * distance_y;
+        if (distance_sq > max_distance_sq) {
+            continue;
+        }
+
+        float lane_z = lane->z[geometry_idx] + projection * (lane->z[geometry_idx + 1] - lane->z[geometry_idx]);
+        if (fabsf(lane_z - agent->sim_z) > Z_BUFFER) {
+            continue;
+        }
+
+        float lane_heading = lane->headings[geometry_idx];
+        float heading_penalty = fabsf(compute_heading_diff(agent->sim_heading, lane_heading)) / M_PI;
+        float switch_penalty = 0.0f;
+        if (agent->current_lane_idx != -1 && agent->current_lane_idx != entity.entity_idx) {
+            switch_penalty = is_direct_lane_transition(env, agent->current_lane_idx, entity.entity_idx)
+                ? LANE_SWITCH_THRESHOLD
+                : LANE_DISCONNECTED_SWITCH_THRESHOLD;
+        }
+        float score_without_distance = LANE_SELECTION_HEADING_WEIGHT * heading_penalty + switch_penalty;
+        float maximum_better_distance
+            = (best_score - score_without_distance) * LANE_DISTANCE_NORMALIZATION / LANE_SELECTION_DISTANCE_WEIGHT;
+        if (maximum_better_distance <= 0.0f || distance_sq >= maximum_better_distance * maximum_better_distance) {
+            continue;
+        }
+
+        float distance = sqrtf(distance_sq);
+        float score = LANE_SELECTION_DISTANCE_WEIGHT * distance / LANE_DISTANCE_NORMALIZATION
+            + LANE_SELECTION_HEADING_WEIGHT * heading_penalty + switch_penalty;
+        float cross = segment_dx * agent_dy - segment_dy * agent_dx;
+        best_score = score;
+        selection.lane_idx = entity.entity_idx;
+        selection.geometry_idx = geometry_idx;
+        selection.signed_distance = cross >= 0.0f ? -distance : distance;
+        selection.heading = lane_heading;
+    }
+    return selection;
+}
+
 static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     Agent *agent = &env->agents[agent_idx];
     Log *agent_log = &env->logs[log_idx];
@@ -3229,11 +3320,6 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
 
     bool is_offroad = false;
 
-    // Track best candidate by combined distance/heading score
-    float best_score = 1e9f;
-    int lane_idx = -1;
-    float signed_lane_distance = 0.0f, lane_heading = 0.0f;
-
     GridMapEntity entity_list[ROAD_QUERY_ENTITY_COUNT];
     int list_size = get_neighbors_entities(
         env,
@@ -3248,143 +3334,27 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
         is_offroad = true;
     }
 
-    // Vehicle-width based distance threshold (3x width)
-    float max_distance_threshold = 3.0f * agent->sim_width;
-
-    int checked_lanes[MAX_CHECKED_LANES];
-    int num_checked_lanes = 0;
-
-    // Loop through road entities and compute associated metrics (offroad, lane alignment)
+    // Check road edges separately; lane selection scores each nearby segment once.
     for (int i = 0; i < list_size; i++) {
-        if (entity_list[i].entity_idx == -1) {
-            continue;
-        }
-
         int entity_idx = entity_list[i].entity_idx;
         int geometry_idx = entity_list[i].geometry_idx;
         RoadMapElement *element = &env->road_elements[entity_idx];
-
-        // Check for offroad crossing with road edges
-        if (is_road_edge(element->type)) {
-            float abs_dz = fabsf(element->z[geometry_idx] - agent->sim_z);
-            if (abs_dz > Z_BUFFER) {
-                continue;
-            }
-            is_offroad = check_segment_crosses_moving_box(
-                element->x[geometry_idx],
-                element->y[geometry_idx],
-                element->x[geometry_idx + 1],
-                element->y[geometry_idx + 1],
-                agent);
+        if (!is_road_edge(element->type) || fabsf(element->z[geometry_idx] - agent->sim_z) > Z_BUFFER) {
+            continue;
         }
-
+        is_offroad = check_segment_crosses_moving_box(
+            element->x[geometry_idx],
+            element->y[geometry_idx],
+            element->x[geometry_idx + 1],
+            element->y[geometry_idx + 1],
+            agent);
         if (is_offroad) {
             break;
         }
-
-        if (!is_drivable_road_lane(element->type)) {
-            continue;
-        }
-
-        int already_checked = 0;
-        for (int c = 0; c < num_checked_lanes; c++) {
-            if (checked_lanes[c] == entity_idx) {
-                already_checked = 1;
-                break;
-            }
-        }
-        if (already_checked) {
-            continue;
-        }
-        if (num_checked_lanes < MAX_CHECKED_LANES) {
-            checked_lanes[num_checked_lanes++] = entity_idx;
-        }
-
-        // Find closest segment on this lane (signed distance: left = negative, right = positive)
-        int closest_seg_idx = 0;
-        float signed_dist = 1e9f;
-        int num_segments = element->segment_size - 1;
-        if (num_segments >= 1) {
-            float min_dist_sq = 1e18f;
-            float closest_cross = 0.0f;
-            for (int seg_idx = 0; seg_idx < num_segments; seg_idx++) {
-                float seg_start_x = element->x[seg_idx];
-                float seg_start_y = element->y[seg_idx];
-                float seg_end_x = element->x[seg_idx + 1];
-                float seg_end_y = element->y[seg_idx + 1];
-                float seg_dx = seg_end_x - seg_start_x;
-                float seg_dy = seg_end_y - seg_start_y;
-                float seg_length_sq = seg_dx * seg_dx + seg_dy * seg_dy;
-                float to_agent_x = agent->sim_x - seg_start_x;
-                float to_agent_y = agent->sim_y - seg_start_y;
-                float cross = seg_dx * to_agent_y - seg_dy * to_agent_x;
-                float dist_sq;
-                if (seg_length_sq > 1e-6f) {
-                    float t = (to_agent_x * seg_dx + to_agent_y * seg_dy) / seg_length_sq;
-                    if (t <= 0.0f) {
-                        dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-                    } else if (t >= 1.0f) {
-                        float dxe = agent->sim_x - seg_end_x;
-                        float dye = agent->sim_y - seg_end_y;
-                        dist_sq = dxe * dxe + dye * dye;
-                    } else {
-                        dist_sq = (cross * cross) / seg_length_sq;
-                    }
-                } else {
-                    dist_sq = to_agent_x * to_agent_x + to_agent_y * to_agent_y;
-                }
-                if (dist_sq < min_dist_sq) {
-                    min_dist_sq = dist_sq;
-                    closest_seg_idx = seg_idx;
-                    closest_cross = cross;
-                }
-            }
-            float abs_dist_val = sqrtf(min_dist_sq);
-            signed_dist = (closest_cross >= 0.0f) ? -abs_dist_val : abs_dist_val;
-        }
-
-        float abs_dist = fabsf(signed_dist);
-        if (abs_dist > max_distance_threshold) {
-            continue;
-        }
-
-        // Multi-segment lane heading (more weight on center segment)
-        float avg_lane_heading = 0.0f;
-        float total_weight = 0.0f;
-        int seg_start = (closest_seg_idx > 0) ? (closest_seg_idx - 1) : closest_seg_idx;
-        int seg_end
-            = (closest_seg_idx < element->segment_size - 2) ? (closest_seg_idx + 1) : (element->segment_size - 2);
-        for (int seg_idx = seg_start; seg_idx <= seg_end; seg_idx++) {
-            if (seg_idx < 0 || seg_idx >= element->segment_size - 1) {
-                continue;
-            }
-            float seg_heading = element->headings[seg_idx];
-            float weight = (seg_idx == closest_seg_idx) ? 2.0f : 1.0f;
-            if (total_weight == 0.0f) {
-                avg_lane_heading = seg_heading;
-            } else {
-                float angle_diff = compute_heading_diff(seg_heading, avg_lane_heading);
-                avg_lane_heading += weight * angle_diff / (total_weight + weight);
-            }
-            total_weight += weight;
-        }
-
-        float heading_diff = compute_heading_diff(agent->sim_heading, avg_lane_heading);
-        float heading_penalty = fabsf(heading_diff) / M_PI;
-        float distance_penalty = abs_dist / LANE_DISTANCE_NORMALIZATION;
-        float score
-            = LANE_SELECTION_DISTANCE_WEIGHT * distance_penalty + LANE_SELECTION_HEADING_WEIGHT * heading_penalty;
-        if (agent->current_lane_idx != entity_idx && agent->current_lane_idx != -1) {
-            score += LANE_SWITCH_THRESHOLD;
-        }
-
-        if (score < best_score) {
-            best_score = score;
-            lane_idx = entity_idx;
-            signed_lane_distance = signed_dist;
-            lane_heading = avg_lane_heading;
-        }
     }
+
+    LaneSelection lane_selection = find_current_lane(env, agent, entity_list, list_size);
+    int lane_idx = lane_selection.lane_idx;
 
     // Update lane alignment metric (running average)
     if (lane_idx != -1) {
@@ -3393,14 +3363,14 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
 
         // Lane distance and angle metrics
         // x_f = lateral offset from lane center (left = negative, right = positive)
-        agent->metrics_array[LANE_DIST_IDX] = signed_lane_distance;
+        agent->metrics_array[LANE_DIST_IDX] = lane_selection.signed_distance;
         // Multi-lane detection: vehicle edge exceeds lane boundary
-        float edge_dist = fabsf(signed_lane_distance) + agent->sim_width / 2.0f;
+        float edge_dist = fabsf(lane_selection.signed_distance) + agent->sim_width / 2.0f;
         if (env->compute_eval_metrics && edge_dist > MULTI_LANE_THRESHOLD && agent->sim_speed > 0.0f) {
             agent_log->multi_lane_time += env->dt;
         }
         // theta_f = angle relative to lane heading
-        float theta_f = compute_heading_diff(agent->sim_heading, lane_heading);
+        float theta_f = compute_heading_diff(agent->sim_heading, lane_selection.heading);
         agent->metrics_array[LANE_ANGLE_IDX] = cosf(theta_f); // Store cos(θ_f)
     } else {
         // Agent not on any lane
