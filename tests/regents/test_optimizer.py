@@ -349,9 +349,9 @@ def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(r
         second_drive.close()
     assert first.source == "c_idm"
     assert first.state.shape == (1, 5, 5)
-    assert first.scenario_id == first_scenario.scenario_ids[0]
+    assert first.scenario_ids == first_scenario.scenario_ids
     assert first_scenario.drivable_area_rasters[0].transform.resolution_meters_per_pixel == 2.0
-    assert second.scenario_id == second_scenario.scenario_ids[0]
+    assert second.scenario_ids == second_scenario.scenario_ids
     assert torch.equal(first.state, second.state)
     assert torch.equal(first.valid, second.valid)
     captured = optimize_frozen_ego_scenario(
