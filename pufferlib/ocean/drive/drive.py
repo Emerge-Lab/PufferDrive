@@ -55,11 +55,13 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
-        gigaflow_spawn_mode="target_proximity",
+        gigaflow_spawn_mode="targeted",
         adversary_spawn_radius_meters=25.0,
         spawn_clearance_meters=1.0,
         adversary_retention_radius_meters=35.0,
         adversary_retention_grace_seconds=1.0,
+        route_relevance_horizon_meters=35.0,
+        route_relevance_scene_attempts=10,
         pdm_horizon=4.0,
         pdm_planning_dt=0.5,
         goal_speed=3.0,
@@ -140,13 +142,15 @@ class Drive(pufferlib.PufferEnv):
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.gigaflow_spawn_mode = {
-            "global": binding.GIGAFLOW_SPAWN_MODE_GLOBAL,
-            "target_proximity": binding.GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY,
+            "uniform": binding.GIGAFLOW_SPAWN_MODE_UNIFORM,
+            "targeted": binding.GIGAFLOW_SPAWN_MODE_TARGETED,
         }[gigaflow_spawn_mode]
         self.adversary_spawn_radius_meters = float(adversary_spawn_radius_meters)
         self.spawn_clearance_meters = float(spawn_clearance_meters)
         self.adversary_retention_radius_meters = float(adversary_retention_radius_meters)
         self.adversary_retention_grace_seconds = float(adversary_retention_grace_seconds)
+        self.route_relevance_horizon_meters = float(route_relevance_horizon_meters)
+        self.route_relevance_scene_attempts = int(route_relevance_scene_attempts)
         self.pdm_horizon = float(pdm_horizon)
         self.pdm_planning_dt = float(pdm_planning_dt)
         self.goal_speed = float(goal_speed)
@@ -500,6 +504,8 @@ class Drive(pufferlib.PufferEnv):
             "spawn_clearance_meters": self.spawn_clearance_meters,
             "adversary_retention_radius_meters": self.adversary_retention_radius_meters,
             "adversary_retention_grace_seconds": self.adversary_retention_grace_seconds,
+            "route_relevance_horizon_meters": self.route_relevance_horizon_meters,
+            "route_relevance_scene_attempts": self.route_relevance_scene_attempts,
             "pdm_horizon": self.pdm_horizon,
             "pdm_planning_dt": self.pdm_planning_dt,
             "goal_speed": self.goal_speed,

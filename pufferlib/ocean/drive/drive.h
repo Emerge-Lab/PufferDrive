@@ -273,6 +273,8 @@ struct Drive {
     float adversary_retention_radius_meters;
     float adversary_retention_grace_seconds;
     int adversary_out_of_range_step_count;
+    float route_relevance_horizon_meters;
+    int route_relevance_scene_attempts;
     float pdm_horizon_seconds;
     float pdm_planning_dt_seconds;
     int dynamics_model;
@@ -2536,7 +2538,7 @@ static bool sample_global_spawn_lane(Drive *env, int *lane_idx, int *geometry_id
     return true;
 }
 
-static bool sample_target_proximity_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
+static bool sample_targeted_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
     Agent *target = &env->agents[EGO_IDX];
     float radius_meters = env->adversary_spawn_radius_meters;
     float radius_squared_meters = radius_meters * radius_meters;
@@ -2581,6 +2583,132 @@ static bool sample_target_proximity_spawn_lane(Drive *env, int *lane_idx, int *g
         }
     }
     return candidate_count > 0;
+}
+
+typedef struct RouteRelevancePoint {
+    float x;
+    float y;
+    float z;
+    int lane_idx;
+} RouteRelevancePoint;
+
+static int sample_forward_route_for_relevance(
+    Drive *env,
+    Agent *agent,
+    RouteRelevancePoint *points,
+    int max_point_count) {
+    points[0] = (RouteRelevancePoint) {
+        .x = agent->sim_x,
+        .y = agent->sim_y,
+        .z = agent->sim_z,
+        .lane_idx = agent->current_lane_idx,
+    };
+    float start_s_on_lane = compute_lane_progress(
+        &env->road_elements[agent->current_lane_idx],
+        agent->sim_x,
+        agent->sim_y,
+        agent->cos_heading,
+        agent->sin_heading,
+        true,
+        NULL);
+    int point_count = 1;
+    for (int sample_idx = 1; sample_idx < max_point_count; sample_idx++) {
+        float distance_meters
+            = fminf(sample_idx * ROUTE_RELEVANCE_SAMPLE_SPACING_METERS, env->route_relevance_horizon_meters);
+        int route_cursor_idx;
+        float s_on_lane;
+        if (!route_point_at_distance(
+                env,
+                agent->route,
+                agent->route_length,
+                agent->current_route_idx,
+                start_s_on_lane,
+                distance_meters,
+                &points[point_count].x,
+                &points[point_count].y,
+                &points[point_count].z,
+                &points[point_count].lane_idx,
+                &route_cursor_idx,
+                &s_on_lane)) {
+            break;
+        }
+        point_count++;
+    }
+    return point_count;
+}
+
+static bool route_segments_intersect_at_same_elevation(
+    RouteRelevancePoint *first_start,
+    RouteRelevancePoint *first_end,
+    RouteRelevancePoint *second_start,
+    RouteRelevancePoint *second_end) {
+    float first_delta_x = first_end->x - first_start->x;
+    float first_delta_y = first_end->y - first_start->y;
+    float second_delta_x = second_end->x - second_start->x;
+    float second_delta_y = second_end->y - second_start->y;
+    float denominator = first_delta_x * second_delta_y - first_delta_y * second_delta_x;
+    if (fabsf(denominator) <= ROUTE_INTERSECTION_EPSILON) {
+        return false;
+    }
+
+    float start_delta_x = second_start->x - first_start->x;
+    float start_delta_y = second_start->y - first_start->y;
+    float first_fraction = (start_delta_x * second_delta_y - start_delta_y * second_delta_x) / denominator;
+    float second_fraction = (start_delta_x * first_delta_y - start_delta_y * first_delta_x) / denominator;
+    if (first_fraction < 0.0f || first_fraction > 1.0f || second_fraction < 0.0f || second_fraction > 1.0f) {
+        return false;
+    }
+
+    float first_z = first_start->z + first_fraction * (first_end->z - first_start->z);
+    float second_z = second_start->z + second_fraction * (second_end->z - second_start->z);
+    return fabsf(first_z - second_z) <= Z_BUFFER;
+}
+
+static bool forward_routes_are_relevant(Drive *env, Agent *target, Agent *adversary) {
+    int max_point_count = (int) ceilf(env->route_relevance_horizon_meters / ROUTE_RELEVANCE_SAMPLE_SPACING_METERS) + 1;
+    RouteRelevancePoint target_points[max_point_count];
+    RouteRelevancePoint adversary_points[max_point_count];
+    int target_point_count = sample_forward_route_for_relevance(env, target, target_points, max_point_count);
+    int adversary_point_count = sample_forward_route_for_relevance(env, adversary, adversary_points, max_point_count);
+
+    for (int target_point_idx = 0; target_point_idx < target_point_count; target_point_idx++) {
+        for (int adversary_point_idx = 0; adversary_point_idx < adversary_point_count; adversary_point_idx++) {
+            if (target_points[target_point_idx].lane_idx == adversary_points[adversary_point_idx].lane_idx) {
+                return true;
+            }
+        }
+    }
+
+    for (int target_segment_idx = 1; target_segment_idx < target_point_count; target_segment_idx++) {
+        for (int adversary_segment_idx = 1; adversary_segment_idx < adversary_point_count; adversary_segment_idx++) {
+            if (route_segments_intersect_at_same_elevation(
+                    &target_points[target_segment_idx - 1],
+                    &target_points[target_segment_idx],
+                    &adversary_points[adversary_segment_idx - 1],
+                    &adversary_points[adversary_segment_idx])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool gigaflow_scene_has_route_relevance(Drive *env, int *agent_indices, int agent_count) {
+    Agent *target = &env->agents[agent_indices[EGO_IDX]];
+    if (target->removed || target->route == NULL) {
+        return false;
+    }
+
+    for (int active_idx = 1; active_idx < agent_count; active_idx++) {
+        Agent *adversary = &env->agents[agent_indices[active_idx]];
+        if (adversary->removed || adversary->route == NULL) {
+            continue;
+        }
+        if (forward_routes_are_relevant(env, target, adversary)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
@@ -2638,6 +2766,8 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->type = VEHICLE;
     agent->active_agent = 1;
     agent->mark_as_expert = 0;
+    agent->stopped = 0;
+    agent->removed = 0;
     agent->controller = agent_idx == EGO_IDX ? env->sdc_controller : env->non_sdc_controller;
 
     float spawn_length, spawn_width;
@@ -2665,11 +2795,9 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // Sampling rejection loop
     for (int attempt = 0; attempt < GIGAFLOW_MAX_SPAWN_ATTEMPTS; attempt++) {
         int geometry_idx;
-        bool use_target_proximity
-            = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY && agent_idx != EGO_IDX;
-        bool sampled_lane = use_target_proximity
-            ? sample_target_proximity_spawn_lane(env, &start_lane_idx, &geometry_idx)
-            : sample_global_spawn_lane(env, &start_lane_idx, &geometry_idx);
+        bool use_targeted_spawn = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGETED && agent_idx != EGO_IDX;
+        bool sampled_lane = use_targeted_spawn ? sample_targeted_spawn_lane(env, &start_lane_idx, &geometry_idx)
+                                               : sample_global_spawn_lane(env, &start_lane_idx, &geometry_idx);
         if (!sampled_lane) {
             continue;
         }
@@ -2747,6 +2875,29 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         return false;
     }
     return true;
+}
+
+static int spawn_gigaflow_scene(Drive *env, int *agent_indices, int agent_count) {
+    bool use_targeted_spawn = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGETED;
+    int scene_attempt_count = use_targeted_spawn ? env->route_relevance_scene_attempts : 1;
+    int successfully_created = 0;
+    for (int scene_attempt = 0; scene_attempt < scene_attempt_count; scene_attempt++) {
+        successfully_created = 0;
+        for (int active_idx = 0; active_idx < agent_count; active_idx++) {
+            int agent_idx = agent_indices[active_idx];
+            if (spawn_agent(env, agent_idx, active_idx)) {
+                successfully_created++;
+                continue;
+            }
+            invalidate_agent(&env->agents[agent_idx]);
+            env->agents[agent_idx].removed = 1;
+        }
+
+        if (!use_targeted_spawn || gigaflow_scene_has_route_relevance(env, agent_indices, agent_count)) {
+            return successfully_created;
+        }
+    }
+    return successfully_created;
 }
 
 static void set_start_position(Drive *env) {
@@ -2902,16 +3053,17 @@ void set_active_agents(Drive *env) {
         env->agents = (Agent *) calloc(num_agents_to_create, sizeof(Agent));
         int *active_agent_indices = (int *) malloc(num_agents_to_create * sizeof(int));
 
+        for (int agent_idx = 0; agent_idx < num_agents_to_create; agent_idx++) {
+            active_agent_indices[agent_idx] = agent_idx;
+        }
+        spawn_gigaflow_scene(env, active_agent_indices, num_agents_to_create);
+
         int successfully_created = 0;
-        for (int i = 0; i < num_agents_to_create; i++) {
-            if (spawn_agent(env, i, i)) {
-                active_agent_indices[successfully_created] = i;
-                successfully_created++;
-            } else {
-                // Failed spawn: ensure agent is properly invalidated
-                invalidate_agent(&env->agents[i]);
-                env->agents[i].removed = 1;
+        for (int agent_idx = 0; agent_idx < num_agents_to_create; agent_idx++) {
+            if (env->agents[agent_idx].removed) {
+                continue;
             }
+            active_agent_indices[successfully_created++] = agent_idx;
         }
 
         env->num_total_agents = num_agents_to_create;
@@ -4619,19 +4771,7 @@ void c_reset(Drive *env) {
     begin_episode_rng(env);
     if (env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         generate_traffic_light_states(env);
-        int num_reset = 0;
-        for (int x = 0; x < env->active_agent_count; x++) {
-            int agent_idx = env->active_agent_indices[x];
-
-            // Respawn agent at new random position
-            if (spawn_agent(env, agent_idx, num_reset)) {
-                num_reset++;
-            } else {
-                // Failed spawn: ensure agent is properly invalidated
-                invalidate_agent(&env->agents[agent_idx]);
-                env->agents[agent_idx].removed = 1;
-            }
-        }
+        int num_reset = spawn_gigaflow_scene(env, env->active_agent_indices, env->active_agent_count);
 
         if (num_reset != env->active_agent_count) {
             printf(

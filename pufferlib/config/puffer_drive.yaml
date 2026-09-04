@@ -56,12 +56,14 @@ env:
   base_max_speed_mps: 20.0
   # Optional fixed launch speed for Gigaflow spawns
   spawn_initial_speed: 0.0
-  # Gigaflow spawning: global or target_proximity
-  gigaflow_spawn_mode: target_proximity
+  # Gigaflow spawning: uniform or targeted
+  gigaflow_spawn_mode: targeted
   adversary_spawn_radius_meters: 25.0
   spawn_clearance_meters: 1.0
   adversary_retention_radius_meters: 35.0
   adversary_retention_grace_seconds: 1.0
+  route_relevance_horizon_meters: 35.0
+  route_relevance_scene_attempts: 10
   # PDM rollout horizon and planning interval in seconds
   pdm_horizon: 4.0
   pdm_planning_dt: 0.1

@@ -121,8 +121,8 @@
 #define ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY 5
 
 // How vehicles are placed on Gigaflow maps
-#define GIGAFLOW_SPAWN_MODE_GLOBAL 0
-#define GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY 1
+#define GIGAFLOW_SPAWN_MODE_UNIFORM 0
+#define GIGAFLOW_SPAWN_MODE_TARGETED 1
 
 // Gymnasium done signal emitted to all agents when target failure resets the episode
 #define TARGET_FAILURE_EPISODE_END_TERMINATED 0
@@ -230,6 +230,9 @@ static const int ROAD_OFFSETS[25][2]
 #define MAX_ROUTE_LENGTH 64
 #define ROUTE_TARGET_DISTANCE 1000.0f
 #define ROUTE_EXIT_MAX_CANDIDATES 5
+#define ROUTE_RELEVANCE_SAMPLE_SPACING_METERS 1.0f
+#define ROUTE_RELEVANCE_MAX_HORIZON_METERS 1000.0f
+#define ROUTE_INTERSECTION_EPSILON 1e-5f
 #define GT_GOAL_RADIUS_M 6.0f
 #define LANE_GRAPH_DISTANCE_NORM_M 500.0f // normalization for the GPS lane-distance feature
 

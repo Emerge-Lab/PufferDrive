@@ -141,7 +141,10 @@ class AdversarialTerminationMode(Enum):
     target_inactive_or_no_nearby_adversary = 5
 
 
-GigaflowSpawnMode = Enum("GigaflowSpawnMode", {"global": 0, "target_proximity": 1})
+GigaflowSpawnMode = Enum(
+    "GigaflowSpawnMode",
+    {"uniform": 0, "targeted": 1},
+)
 
 
 class TargetFailureEpisodeEnd(Enum):
@@ -270,6 +273,8 @@ class DriveEnvConfig:
     spawn_clearance_meters: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     adversary_retention_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     adversary_retention_grace_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    route_relevance_horizon_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    route_relevance_scene_attempts: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     pdm_horizon: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     pdm_planning_dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     collision_behavior: InfractionBehavior = MISSING
@@ -597,6 +602,8 @@ def _validate_cross_field_constraints(config, context):
             "env.adversary_spawn_radius_meters",
             "must not exceed env.adversary_retention_radius_meters",
         )
+    if env["route_relevance_horizon_meters"] > 1000.0:
+        _raise_config_error(context, "env.route_relevance_horizon_meters", "must not exceed 1000 meters")
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
     if not PDM_MIN_HORIZON_SECONDS <= env["pdm_horizon"] <= PDM_MAX_HORIZON_SECONDS:

@@ -1918,8 +1918,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_clearance_meters = (float) unpack(kwargs, "spawn_clearance_meters");
     env->adversary_retention_radius_meters = (float) unpack(kwargs, "adversary_retention_radius_meters");
     env->adversary_retention_grace_seconds = (float) unpack(kwargs, "adversary_retention_grace_seconds");
-    if (env->gigaflow_spawn_mode < GIGAFLOW_SPAWN_MODE_GLOBAL
-        || env->gigaflow_spawn_mode > GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY) {
+    env->route_relevance_horizon_meters = (float) unpack(kwargs, "route_relevance_horizon_meters");
+    env->route_relevance_scene_attempts = (int) unpack(kwargs, "route_relevance_scene_attempts");
+    if (env->gigaflow_spawn_mode < GIGAFLOW_SPAWN_MODE_UNIFORM
+        || env->gigaflow_spawn_mode > GIGAFLOW_SPAWN_MODE_TARGETED) {
         PyErr_SetString(PyExc_ValueError, "invalid gigaflow_spawn_mode");
         return -1;
     }
@@ -1927,6 +1929,12 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         || env->adversary_retention_radius_meters < env->adversary_spawn_radius_meters
         || env->spawn_clearance_meters < 0.0f || env->adversary_retention_grace_seconds <= 0.0f) {
         PyErr_SetString(PyExc_ValueError, "invalid adversarial spawn distance or duration");
+        return -1;
+    }
+    if (env->route_relevance_horizon_meters <= 0.0f
+        || env->route_relevance_horizon_meters > ROUTE_RELEVANCE_MAX_HORIZON_METERS
+        || env->route_relevance_scene_attempts <= 0) {
+        PyErr_SetString(PyExc_ValueError, "invalid route relevance horizon or attempt count");
         return -1;
     }
     env->pdm_horizon_seconds = (float) unpack(kwargs, "pdm_horizon");
