@@ -208,9 +208,11 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     replays_dir.mkdir(parents=True, exist_ok=True)
     rendered = {}
     sources = (("logged", replay.baseline_frames), ("adversarial", replay.adversarial_frames))
+    candidate_adversary_ids = result.scenario.agent_id[0][result.optimization.selection.candidate_mask[0]].tolist()
     for label, frames in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
         bundle = _replay_bundle(env_config, frames, replay.ego_actions)
+        bundle["candidate_adversary_ids"] = candidate_adversary_ids
         bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
         bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
         binary_path = replays_dir / f"{stem}.replay.zlib"

@@ -35,13 +35,19 @@ from pufferlib.ocean.regents.losses import (
     prepare_out_of_bounds_rasters,
 )
 from pufferlib.ocean.regents.optimizer import (
+    STEERING_PARAMETERIZATION_CURVATURE,
+    STEERING_PARAMETERIZATION_WHEEL_ANGLE,
+    STEERING_PARAMETERIZATIONS,
     CostSnapshot,
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
     ReGentSOptimizationResult,
     capture_frozen_idm_trajectory,
+    drive_actions_from_parameter,
     mask_front_divergence_gradients,
     optimize_frozen_ego_scenario,
+    parameter_from_drive_actions,
+    steering_conversion_metadata,
 )
 from pufferlib.ocean.regents.rollout import (
     CReplayMetrics,
@@ -56,10 +62,19 @@ from pufferlib.ocean.regents.state import (
     ScenarioBatch,
     signed_speed_from_c_velocity,
 )
+from pufferlib.ocean.regents.waymax_actions import (
+    WaymaxActionConversion,
+    curvature_from_target_steering,
+    drive_action_from_waymax_action,
+    target_steering_from_curvature,
+)
 
 
 __all__ = [
     "ARTIFACT_SCHEMA",
+    "STEERING_PARAMETERIZATIONS",
+    "STEERING_PARAMETERIZATION_CURVATURE",
+    "STEERING_PARAMETERIZATION_WHEEL_ANGLE",
     "CReplayMetrics",
     "CReplayResult",
     "CandidateFilterReason",
@@ -79,13 +94,17 @@ __all__ = [
     "ScenarioBatch",
     "SceneFilterReason",
     "SmoothedOutOfBoundsRaster",
+    "WaymaxActionConversion",
     "background_collision_avoidance_cost",
     "build_smoothed_out_of_bounds_raster",
     "capture_frozen_idm_trajectory",
     "classic_rollout",
     "classic_step",
     "combined_regents_cost",
+    "curvature_from_target_steering",
     "drivable_area_deviation_cost",
+    "drive_action_from_waymax_action",
+    "drive_actions_from_parameter",
     "ego_background_collision_cost",
     "estimate_expert_actions",
     "export_drive_scenarios",
@@ -96,6 +115,7 @@ __all__ = [
     "mask_front_divergence_gradients",
     "optimize_frozen_ego_scenario",
     "oriented_box_corners",
+    "parameter_from_drive_actions",
     "prepare_out_of_bounds_rasters",
     "replay_optimized_scenario_in_c",
     "run_reactive_idm_generation",
@@ -105,4 +125,6 @@ __all__ = [
     "signed_box_distance",
     "signed_speed_from_c_velocity",
     "source_configuration_hash",
+    "steering_conversion_metadata",
+    "target_steering_from_curvature",
 ]

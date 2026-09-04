@@ -9,7 +9,12 @@ from tqdm import tqdm
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS, export_drive_scenarios
-from pufferlib.ocean.regents.dynamics import ACTION_ACCELERATION, ACTION_TARGET_STEERING, classic_step
+from pufferlib.ocean.regents.dynamics import (
+    ACTION_ACCELERATION,
+    ACTION_TARGET_STEERING,
+    TARGET_STEERING_SCALE_RADIANS,
+    classic_step,
+)
 from pufferlib.ocean.regents.filters import (
     DEFAULT_FRONT_DIVERGENCE_FRACTION,
     PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS,
@@ -39,6 +44,11 @@ from pufferlib.ocean.regents.state import (
     ScenarioBatch,
     signed_speed_from_c_velocity,
 )
+from pufferlib.ocean.regents.waymax_actions import (
+    NORMALIZED_CURVATURE_LIMIT,
+    curvature_from_target_steering,
+    target_steering_from_curvature,
+)
 
 
 DEFAULT_LEARNING_RATE = 1e-3
@@ -53,6 +63,15 @@ DEFAULT_EARLY_STOP_PATIENCE_ITERATIONS = 0
 DEFAULT_STEERING_UPDATE_SCALE = 4.0
 MAXIMUM_STEERING_UPDATE_SCALE = 10.0
 BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
+
+# Steering may be optimized as the simulator's normalized target wheel angle or as the
+# reference's path curvature. The two carry different units, so each keeps its own
+# update scale; `DEFAULT_CURVATURE_STEERING_UPDATE_SCALE` is the ReGentS value.
+STEERING_PARAMETERIZATION_WHEEL_ANGLE = "wheel_angle"
+STEERING_PARAMETERIZATION_CURVATURE = "curvature"
+STEERING_PARAMETERIZATIONS = (STEERING_PARAMETERIZATION_WHEEL_ANGLE, STEERING_PARAMETERIZATION_CURVATURE)
+DEFAULT_STEERING_PARAMETERIZATION = STEERING_PARAMETERIZATION_WHEEL_ANGLE
+DEFAULT_CURVATURE_STEERING_UPDATE_SCALE = 0.5
 
 
 @dataclass(frozen=True)
@@ -94,6 +113,8 @@ class ReGentSOptimizationConfig:
     front_applicability_half_angle_radians: float = PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS
     front_yaw_half_angle_radians: float = REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS
     steering_update_scale: float = DEFAULT_STEERING_UPDATE_SCALE
+    steering_parameterization: str = DEFAULT_STEERING_PARAMETERIZATION
+    curvature_steering_update_scale: float = DEFAULT_CURVATURE_STEERING_UPDATE_SCALE
     action_saturation_tolerance: float = DEFAULT_ACTION_SATURATION_TOLERANCE
     collision_distance_tolerance_meters: float = DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS
     early_stop_on_collision: bool = True
@@ -123,10 +144,14 @@ class ReGentSOptimizationConfig:
                 raise ValueError(f"{name} must be finite")
             if not 0.0 < value <= math.pi:
                 raise ValueError(f"{name} must be in (0, pi]")
-        if not math.isfinite(self.steering_update_scale):
-            raise ValueError("steering_update_scale must be finite")
-        if not 0.0 <= self.steering_update_scale <= MAXIMUM_STEERING_UPDATE_SCALE:
-            raise ValueError(f"steering_update_scale must be in [0, {MAXIMUM_STEERING_UPDATE_SCALE}]")
+        for name in ("steering_update_scale", "curvature_steering_update_scale"):
+            value = getattr(self, name)
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            if not 0.0 <= value <= MAXIMUM_STEERING_UPDATE_SCALE:
+                raise ValueError(f"{name} must be in [0, {MAXIMUM_STEERING_UPDATE_SCALE}]")
+        if self.steering_parameterization not in STEERING_PARAMETERIZATIONS:
+            raise ValueError(f"steering_parameterization must be one of {STEERING_PARAMETERIZATIONS}")
         if not math.isfinite(self.action_saturation_tolerance):
             raise ValueError("action_saturation_tolerance must be finite")
         if not 0.0 <= self.action_saturation_tolerance < 1.0:
@@ -173,6 +198,7 @@ class ReGentSOptimizationResult:
     front_divergence_iterations: tuple[int, ...]
     initial_action_saturation_fraction: float
     final_action_saturation_fraction: float
+    steering_parameterization: str
     maximum_reconstruction_error_meters: float
     collision_timestep: int | None
     iteration_count: int
@@ -302,6 +328,54 @@ def mask_front_divergence_gradients(action_gradient, optimized_action_mask, dive
         torch.zeros_like(masked[..., ACTION_TARGET_STEERING]),
     )
     return torch.stack((masked[..., ACTION_ACCELERATION], masked_steering), dim=-1)
+
+
+def steering_conversion_metadata(scenario, optimized_action_mask, device):
+    """Return per-transition wheelbase and the curvature a full wheel angle reaches."""
+    wheelbase_meters = scenario.wheelbase_meters.to(device)
+    optimized_agent = optimized_action_mask.any(dim=-1)
+    usable = torch.isfinite(wheelbase_meters) & (wheelbase_meters > 0.0)
+    if torch.any(optimized_agent & ~usable):
+        raise ValueError("an optimized agent has a non-positive or non-finite wheelbase")
+    # Frozen agents never reach the converter; the placeholder only keeps the math finite.
+    safe_wheelbase = torch.where(optimized_agent, wheelbase_meters, torch.ones_like(wheelbase_meters))
+    transition_count = optimized_action_mask.shape[-1]
+    wheelbase_over_time = safe_wheelbase[..., None].expand(*safe_wheelbase.shape, transition_count).contiguous()
+    return wheelbase_over_time, NORMALIZED_CURVATURE_LIMIT / safe_wheelbase[..., None]
+
+
+def parameter_from_drive_actions(drive_actions, steering_parameterization, wheelbase_over_time):
+    """Express normalized simulator actions in the optimizer's steering parameterization."""
+    if steering_parameterization == STEERING_PARAMETERIZATION_WHEEL_ANGLE:
+        return drive_actions
+    curvature_per_meter = curvature_from_target_steering(
+        drive_actions[..., ACTION_TARGET_STEERING] * TARGET_STEERING_SCALE_RADIANS,
+        wheelbase_over_time,
+    )
+    return torch.stack((drive_actions[..., ACTION_ACCELERATION], curvature_per_meter), dim=-1)
+
+
+def drive_actions_from_parameter(action_parameter, steering_parameterization, wheelbase_over_time):
+    """Express optimizer parameters as the normalized actions the simulator consumes."""
+    if steering_parameterization == STEERING_PARAMETERIZATION_WHEEL_ANGLE:
+        return action_parameter
+    steering_radians, _ = target_steering_from_curvature(
+        action_parameter[..., ACTION_TARGET_STEERING], wheelbase_over_time
+    )
+    return torch.stack(
+        (action_parameter[..., ACTION_ACCELERATION], steering_radians / TARGET_STEERING_SCALE_RADIANS),
+        dim=-1,
+    )
+
+
+def _project_parameter(action_parameter, steering_parameter_limit):
+    """Clamp acceleration to the action box and steering to its parameterization's limit."""
+    action_parameter[..., ACTION_ACCELERATION] = torch.clamp(action_parameter[..., ACTION_ACCELERATION], -1.0, 1.0)
+    action_parameter[..., ACTION_TARGET_STEERING] = torch.clamp(
+        action_parameter[..., ACTION_TARGET_STEERING],
+        -steering_parameter_limit,
+        steering_parameter_limit,
+    )
 
 
 def _validate_optimization_inputs(scenario, frozen_ego, config, deterministic_seed, horizon_transition_count):
@@ -502,7 +576,7 @@ def _candidate_offroad_signature(states, state_valid, scenario, candidate_mask):
 
 
 def _baseline_corner_potential(states, state_valid, scenario, out_of_bounds_rasters):
-    """Sample the reference rollout's corner potential, the off-road the log already carries."""
+    """Return the detached constant used to zero-center the absolute boundary loss."""
     boxes = _masked_boxes(states, state_valid, scenario.length_meters, scenario.width_meters)
     corners = oriented_box_corners(boxes)
     return torch.stack(
@@ -657,6 +731,7 @@ def optimize_frozen_ego_scenario(
             front_divergence_iterations=(),
             initial_action_saturation_fraction=initial_saturation,
             final_action_saturation_fraction=initial_saturation,
+            steering_parameterization=config.steering_parameterization,
             maximum_reconstruction_error_meters=maximum_reconstruction_error,
             collision_timestep=None,
             iteration_count=0,
@@ -681,7 +756,18 @@ def optimize_frozen_ego_scenario(
     baseline_corner_potential = _baseline_corner_potential(
         reference_states, state_valid, scenario, out_of_bounds_rasters
     )
-    action_parameter = torch.nn.Parameter(baseline_actions.clone())
+    wheelbase_over_time, achievable_curvature = steering_conversion_metadata(
+        scenario, selection.optimized_action_mask, baseline_actions.device
+    )
+    in_curvature_space = config.steering_parameterization == STEERING_PARAMETERIZATION_CURVATURE
+    steering_update_scale = (
+        config.curvature_steering_update_scale if in_curvature_space else config.steering_update_scale
+    )
+    steering_parameter_limit = achievable_curvature if in_curvature_space else baseline_actions.new_ones(())
+    baseline_parameter = parameter_from_drive_actions(
+        baseline_actions, config.steering_parameterization, wheelbase_over_time
+    )
+    action_parameter = torch.nn.Parameter(baseline_parameter.clone())
     optimizer = torch.optim.Adam(
         (action_parameter,),
         lr=config.learning_rate,
@@ -723,10 +809,17 @@ def optimize_frozen_ego_scenario(
         pbar = None
 
     for iteration in iterator:
+        # Frozen entries take the baseline verbatim so a curvature round trip cannot
+        # perturb an action the optimizer is not allowed to change.
+        drive_actions = torch.where(
+            selection.optimized_action_mask[..., None],
+            drive_actions_from_parameter(action_parameter, config.steering_parameterization, wheelbase_over_time),
+            baseline_actions,
+        )
         states, state_valid = _compose_rollout(
             scenario,
             inverse,
-            action_parameter,
+            drive_actions,
             frozen_ego,
             horizon_transition_count,
             selection.candidate_mask,
@@ -783,7 +876,7 @@ def optimize_frozen_ego_scenario(
         improved = feasible and snapshot.total < best_total - config.early_stop_minimum_improvement
         if improved:
             best_total = snapshot.total
-            best_actions = action_parameter.detach().clone()
+            best_actions = drive_actions.detach().clone()
             best_states = states.detach().clone()
             best_costs = snapshot
             best_iteration = iteration
@@ -799,7 +892,7 @@ def optimize_frozen_ego_scenario(
         if generated_collision and snapshot.total < best_success_total:
             success = True
             best_success_total = snapshot.total
-            best_success_actions = action_parameter.detach().clone()
+            best_success_actions = drive_actions.detach().clone()
             best_success_states = states.detach().clone()
             best_success_costs = snapshot
             best_success_iteration = iteration
@@ -844,16 +937,16 @@ def optimize_frozen_ego_scenario(
         previous_steering = action_parameter.detach()[..., ACTION_TARGET_STEERING].clone()
         optimizer.step()
         with torch.no_grad():
-            action_parameter.clamp_(-1.0, 1.0)
+            _project_parameter(action_parameter, steering_parameter_limit)
             action_parameter.copy_(
                 torch.where(
                     selection.optimized_action_mask[..., None],
                     action_parameter,
-                    baseline_actions,
+                    baseline_parameter,
                 )
             )
             divergent_steering = divergent[..., None]
-            damped_steering = previous_steering + config.steering_update_scale * (
+            damped_steering = previous_steering + steering_update_scale * (
                 action_parameter[..., ACTION_TARGET_STEERING] - previous_steering
             )
             action_parameter[..., ACTION_TARGET_STEERING] = torch.where(
@@ -862,7 +955,7 @@ def optimize_frozen_ego_scenario(
                 damped_steering,
             )
             # A scale above one extrapolates past the Adam step and can leave the box.
-            action_parameter.clamp_(-1.0, 1.0)
+            _project_parameter(action_parameter, steering_parameter_limit)
         _zero_adam_steering_momentum(optimizer, action_parameter, divergent)
         completed_update_count += 1
 
@@ -921,6 +1014,7 @@ def optimize_frozen_ego_scenario(
         final_action_saturation_fraction=_saturation_fraction(
             best_actions, selection.optimized_action_mask, config.action_saturation_tolerance
         ),
+        steering_parameterization=config.steering_parameterization,
         maximum_reconstruction_error_meters=maximum_reconstruction_error,
         collision_timestep=collision_timestep,
         iteration_count=completed_update_count,

@@ -954,6 +954,7 @@ def encode_interactive_replay(scenario, replay):
         "scales": scales,
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
+        "candidate_adversary_ids": [int(agent_id) for agent_id in replay.get("candidate_adversary_ids", [])],
         "selected_adversary_idx": int(replay.get("selected_adversary_idx", -1)),
         "selected_adversary_id": int(replay.get("selected_adversary_id", -1)),
     }
@@ -1114,12 +1115,14 @@ __PAYLOAD_CHUNKS__
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
         const STATIC_AGENT_COLOR = "#4a505a";
         const INFRACTION_AGENT_COLOR = "#d92d20";
+        const ADVERSARY_COLOR = "#654321";
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
+        let adversaryIds = new Set();
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
@@ -1228,6 +1231,8 @@ self.onmessage = async event => {
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
             expertAgentIndices = new Set(H.expert_indices);
+            adversaryIds = new Set(H.candidate_adversary_ids || []);
+            if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1) adversaryIds.add(H.selected_adversary_id);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
             document.getElementById('meta-agents').textContent = H.active_count + ' / ' + H.total_agents;
@@ -1261,9 +1266,7 @@ self.onmessage = async event => {
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
         }
         function colorForAgent(id, isActive, isExpert, hasInfraction) {
-            if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && id === H.selected_adversary_id) {
-                return "#ff007f"; // Neon pink/magenta for adversarial agent
-            }
+            if (adversaryIds.has(id)) return ADVERSARY_COLOR;
             return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
         }
         function agentHasInfraction(frame, idx) {
@@ -1313,9 +1316,7 @@ self.onmessage = async event => {
             ctx.restore();
         }
         function drawPerturbationOutlines(a) {
-            if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && a.id === H.selected_adversary_id) {
-                drawPerturbationOutline(a, "#ff007f", [4, 2], 3);
-            }
+            if (adversaryIds.has(a.id)) drawPerturbationOutline(a, ADVERSARY_COLOR, [4, 2], 3);
             if (a.phantomBrakingActive) {
                 drawPerturbationOutline(a, PHANTOM_BRAKING_OUTLINE_COLOR, [], 3);
             }
@@ -1567,8 +1568,8 @@ self.onmessage = async event => {
                 ctx.translate(a.x,a.y);
                 if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1);
 
-                const isAdversary = H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1 && a.id === H.selected_adversary_id;
-                ctx.fillStyle = isAdversary ? "#ff007f" : colors.text;
+                const isAdversary = adversaryIds.has(a.id);
+                ctx.fillStyle = isAdversary ? ADVERSARY_COLOR : colors.text;
                 ctx.font = isAdversary ? 'bold '+(14/cam.z)+'px system-ui' : '600 '+(14/cam.z)+'px system-ui';
                 ctx.textAlign = 'center';
                 const labelText = isAdversary ? a.id + " [ADV]" : String(a.id);

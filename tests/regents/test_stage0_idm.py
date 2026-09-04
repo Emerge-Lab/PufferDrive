@@ -117,7 +117,19 @@ def _assert_controller_routing(scenario):
     assert all(agent["controller"] == binding.CONTROLLER_REPLAY for agent in scenario["agents"][1:])
 
 
-def test_real_replay_routes_idm_and_replays_background_deterministically():
+POLICY_REQUIREMENT_CASES = [
+    ("control_sdc_only", "idm", "policy", "policy", False),
+    ("control_sdc_only", "policy", "replay", "replay", True),
+    ("control_vehicles", "idm", "replay", "policy", False),
+    ("control_vehicles", "idm", "policy", "replay", True),
+    ("control_agents", "idm", "replay", "replay", False),
+    ("control_agents", "idm", "replay", "policy", True),
+    ("control_wosac", "idm", "replay", "policy", True),
+]
+
+
+def test_real_replay_routes_idm_replays_background_and_scopes_the_policy_requirement():
+    """Native controller routing, action-independent IDM determinism, and policy gating."""
     first_scenarios, first_snapshots = _rollout_prefix(action_value=0.0)
     repeated_scenarios, repeated_snapshots = _rollout_prefix(action_value=0.0)
     _, ignored_action_snapshots = _rollout_prefix(action_value=1.0)
@@ -139,33 +151,15 @@ def test_real_replay_routes_idm_and_replays_background_deterministically():
             checked_background_count += 1
     assert checked_background_count > 0
 
-
-@pytest.mark.parametrize(
-    ("control_mode", "sdc_controller", "non_sdc_controller", "non_vehicle_controller", "expected"),
-    [
-        ("control_sdc_only", "idm", "policy", "policy", False),
-        ("control_sdc_only", "policy", "replay", "replay", True),
-        ("control_vehicles", "idm", "replay", "policy", False),
-        ("control_vehicles", "idm", "policy", "replay", True),
-        ("control_agents", "idm", "replay", "replay", False),
-        ("control_agents", "idm", "replay", "policy", True),
-        ("control_wosac", "idm", "replay", "policy", True),
-    ],
-)
-def test_policy_requirement_follows_active_controller_categories(
-    control_mode,
-    sdc_controller,
-    non_sdc_controller,
-    non_vehicle_controller,
-    expected,
-):
-    environment_config = {
-        "control_mode": control_mode,
-        "sdc_controller": sdc_controller,
-        "non_sdc_controller": non_sdc_controller,
-        "non_vehicle_controller": non_vehicle_controller,
-    }
-    assert drive_benchmark.environment_requires_policy(environment_config) is expected
+    # A policy is required only when an actively controlled category routes to it.
+    for control_mode, sdc, non_sdc, non_vehicle, expected in POLICY_REQUIREMENT_CASES:
+        environment_config = {
+            "control_mode": control_mode,
+            "sdc_controller": sdc,
+            "non_sdc_controller": non_sdc,
+            "non_vehicle_controller": non_vehicle,
+        }
+        assert drive_benchmark.environment_requires_policy(environment_config) is expected, environment_config
 
 
 def _write_idm_benchmark(config_path):
@@ -246,7 +240,15 @@ def _read_replay_header(replay_path):
     return json.loads(payload[4 : 4 + header_length])
 
 
-def test_puffer_eval_runs_idm_without_checkpoint_or_policy(tmp_path, monkeypatch):
+def test_puffer_eval_runs_idm_without_a_checkpoint_but_still_demands_one_for_policy(tmp_path, monkeypatch):
+    """Stage 0 runs through the standard eval command with no policy loaded anywhere."""
+    calls = []
+    monkeypatch.setattr(pufferl, "eval", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(sys, "argv", ["puffer", "eval", "puffer_drive", "regents_idm"])
+    pufferl.main()
+    assert calls == [{"env_name": "puffer_drive", "benchmark_names": "regents_idm"}]
+    monkeypatch.undo()
+
     benchmark_config_path = tmp_path / "benchmark.yaml"
     _write_idm_benchmark(benchmark_config_path)
     args = _checkpoint_free_eval_args(tmp_path, benchmark_config_path)
@@ -279,8 +281,7 @@ def test_puffer_eval_runs_idm_without_checkpoint_or_policy(tmp_path, monkeypatch
     assert resolved["checkpoint_config"] is None
     assert resolved["args"]["env"]["sdc_controller"] == "idm"
 
-    replay_path = next((benchmark_output / "replays").glob("*.replay.zlib"))
-    replay_header = _read_replay_header(replay_path)
+    replay_header = _read_replay_header(next((benchmark_output / "replays").glob("*.replay.zlib")))
     assert {"obs", "raw_action", "clipped_action"} <= set(replay_header["chunks"])
     assert {"value", "entropy", "policy_probs", "policy_mean"}.isdisjoint(replay_header["chunks"])
     rendered_pages = [
@@ -289,29 +290,25 @@ def test_puffer_eval_runs_idm_without_checkpoint_or_policy(tmp_path, monkeypatch
     assert len(rendered_pages) == 1
     assert (benchmark_output / "rendered_replays/index.html").is_file()
 
-
-def test_policy_benchmark_still_requires_a_checkpoint(tmp_path):
-    benchmark_config_path = tmp_path / "benchmark.yaml"
-    _write_idm_benchmark(benchmark_config_path)
-    benchmark_config = yaml.safe_load(benchmark_config_path.read_text())
-    benchmark_config["benchmarks"][0]["env"]["sdc_controller"] = "policy"
-    benchmark_config_path.write_text(yaml.safe_dump(benchmark_config, sort_keys=False))
-    args = _checkpoint_free_eval_args(tmp_path, benchmark_config_path)
-    args["eval"]["render_scenarios"] = False
-    args["eval"]["capture_observations"] = False
-
+    # Switching the ego to a policy must fail loudly rather than silently skipping it,
+    # so the guards that assert no policy is loaded have to come off first.
+    monkeypatch.undo()
+    policy_config = yaml.safe_load(benchmark_config_path.read_text())
+    policy_config["benchmarks"][0]["env"]["sdc_controller"] = "policy"
+    benchmark_config_path.write_text(yaml.safe_dump(policy_config, sort_keys=False))
+    policy_args = _checkpoint_free_eval_args(tmp_path, benchmark_config_path)
+    policy_args["eval"]["render_scenarios"] = False
+    policy_args["eval"]["capture_observations"] = False
     with pytest.raises(pufferlib.APIUsageError, match="valid load_model_path checkpoint"):
         pufferl.eval(
             env_name="puffer_drive",
-            args=args,
+            args=policy_args,
             eval_output_subdir="run",
             benchmark_names="regents_idm_test",
         )
 
 
-def test_stage0_uses_standard_eval_command(monkeypatch):
-    calls = []
-    monkeypatch.setattr(pufferl, "eval", lambda **kwargs: calls.append(kwargs))
-    monkeypatch.setattr(sys, "argv", ["puffer", "eval", "puffer_drive", "regents_idm"])
-    pufferl.main()
-    assert calls == [{"env_name": "puffer_drive", "benchmark_names": "regents_idm"}]
+def _read_replay_header(replay_path):
+    payload = zlib.decompress(replay_path.read_bytes())
+    header_length = struct.unpack_from("<I", payload)[0]
+    return json.loads(payload[4 : 4 + header_length])

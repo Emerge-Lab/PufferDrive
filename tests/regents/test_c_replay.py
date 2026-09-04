@@ -1,4 +1,7 @@
+import json
 import math
+import struct
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -87,7 +90,8 @@ def cached_replay(request):
     return map_idx, seed, scenario, optimization, replay
 
 
-def test_open_loop_replay_reproduces_torch_within_stage_two_tolerance(cached_replay):
+def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay):
+    """C is authoritative: parity, shared initial pose, untouched actors, and repeatability."""
     map_idx, seed, scenario, optimization, replay = cached_replay
 
     assert replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
@@ -98,52 +102,61 @@ def test_open_loop_replay_reproduces_torch_within_stage_two_tolerance(cached_rep
     assert torch.isfinite(replay.states[replay.state_valid]).all()
     assert scenario.scenario_ids[0]
 
-
-def test_c_replay_starts_from_the_torch_initial_pose(cached_replay):
-    map_idx, seed, scenario, optimization, replay = cached_replay
-
-    joint_valid = optimization.state_valid & replay.state_valid
     pose = slice(STATE_X, STATE_HEADING + 1)
-    difference = torch.abs(replay.states[:, :, 0, pose] - optimization.optimized_states[:, :, 0, pose])
-    assert float(difference[joint_valid[:, :, 0]].max()) <= C_REPLAY_TOLERANCE
+    joint_valid = optimization.state_valid & replay.state_valid
+    initial_difference = torch.abs(replay.states[:, :, 0, pose] - optimization.optimized_states[:, :, 0, pose])
+    assert float(initial_difference[joint_valid[:, :, 0]].max()) <= C_REPLAY_TOLERANCE
 
-
-def test_c_replay_is_deterministic(cached_replay):
-    map_idx, seed, scenario, optimization, first = cached_replay
-    drive = _drive(map_idx, seed, "replay")
-    try:
-        drive.reset(seed=seed)
-        repeated = replay_optimized_scenario_in_c(drive, scenario, optimization, seed=seed)
-    finally:
-        drive.close()
-
-    assert torch.equal(first.states, repeated.states)
-    assert torch.equal(first.state_valid, repeated.state_valid)
-    assert first.metrics == repeated.metrics
-    assert first.failure_reason == repeated.failure_reason
-
-
-def test_non_injected_replay_actors_follow_their_logged_trajectory(cached_replay):
-    map_idx, seed, scenario, optimization, replay = cached_replay
-
+    # Actors without an injected plan must still follow their logged trajectory.
     injected = optimization.optimized_action_mask.any(dim=2)
     logged = scenario.logged_state[:, :, : replay.states.shape[2]]
-    joint_valid = optimization.state_valid & replay.state_valid & ~injected[..., None]
-    pose = slice(STATE_X, STATE_HEADING + 1)
-    difference = torch.abs(replay.states[..., pose] - logged[..., pose])
-    assert float(difference[joint_valid].max()) <= C_REPLAY_TOLERANCE
-
-
-def test_baseline_replay_absorbs_pre_existing_logged_collisions(cached_replay):
-    map_idx, seed, scenario, optimization, replay = cached_replay
+    logged_difference = torch.abs(replay.states[..., pose] - logged[..., pose])
+    assert float(logged_difference[joint_valid & ~injected[..., None]].max()) <= C_REPLAY_TOLERANCE
 
     # Map 8 logs overlapping actors, so C must not blame the adversary for them.
     assert replay.metrics.baseline_collision_pair_count > 0
     assert not replay.metrics.background_collision
     assert replay.failure_reason != "c_background_collision"
 
+    # Frames are opt-in so the default path stays cheap.
+    assert replay.adversarial_frames is None
+    assert replay.baseline_frames is None
+    assert replay.scenario_payload is None
 
-def test_reactive_idm_generation_confirms_an_actionable_collision_in_c():
+    drive = _drive(map_idx, seed, "replay")
+    try:
+        drive.reset(seed=seed)
+        repeated = replay_optimized_scenario_in_c(drive, scenario, optimization, seed=seed)
+    finally:
+        drive.close()
+    assert torch.equal(replay.states, repeated.states)
+    assert torch.equal(replay.state_valid, repeated.state_valid)
+    assert replay.metrics == repeated.metrics
+    assert replay.failure_reason == repeated.failure_reason
+
+    # The injection binding refuses the ego and any out-of-contract action plan.
+    injection_drive = _drive(map_idx, seed, "replay")
+    try:
+        injection_drive.reset(seed=seed)
+        agent_count = len(injection_drive.get_state()[0]["agents"])
+        actions = np.zeros((agent_count, HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
+        mask = np.zeros((agent_count, HORIZON_TRANSITION_COUNT), dtype=np.bool_)
+        mask[0] = True
+        with pytest.raises(ValueError, match="replay-controlled non-ego vehicles"):
+            binding.regents_set_action_plan(injection_drive.c_envs, actions, mask)
+        mask[:] = False
+        actions[1, 0, 0] = 1.5
+        with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
+            binding.regents_set_action_plan(injection_drive.c_envs, actions, mask)
+        actions[1, 0, 0] = math.nan
+        with pytest.raises(ValueError, match="finite"):
+            binding.regents_set_action_plan(injection_drive.c_envs, actions, mask)
+    finally:
+        injection_drive.close()
+
+
+def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifact(tmp_path):
+    """The reactive loop, its C-confirmed outcome, artifact persistence, and rendering."""
     drive = _drive(8, 50, "idm")
     try:
         result = run_reactive_idm_generation(
@@ -152,6 +165,7 @@ def test_reactive_idm_generation_confirms_an_actionable_collision_in_c():
             deterministic_seed=50,
             horizon_transition_count=HORIZON_TRANSITION_COUNT,
             maximum_outer_iterations=3,
+            capture_html_frames=True,
         )
     finally:
         drive.close()
@@ -167,58 +181,10 @@ def test_reactive_idm_generation_confirms_an_actionable_collision_in_c():
     assert 1 <= result.outer_iteration_count <= 3
     assert result.optimization.frozen_ego_source == "c_idm"
 
-
-def test_reactive_idm_generation_requires_an_idm_ego():
-    drive = _drive(8, 50, "policy")
-    try:
-        with pytest.raises(ValueError, match="sdc_controller"):
-            run_reactive_idm_generation(
-                drive,
-                deterministic_seed=50,
-                horizon_transition_count=HORIZON_TRANSITION_COUNT,
-            )
-    finally:
-        drive.close()
-
-
-def test_injection_binding_rejects_the_ego_and_out_of_range_actions():
-    drive = _drive(8, 50, "replay")
-    try:
-        drive.reset(seed=50)
-        agent_count = len(drive.get_state()[0]["agents"])
-        actions = np.zeros((agent_count, HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
-        mask = np.zeros((agent_count, HORIZON_TRANSITION_COUNT), dtype=np.bool_)
-        mask[0] = True
-        with pytest.raises(ValueError, match="replay-controlled non-ego vehicles"):
-            binding.regents_set_action_plan(drive.c_envs, actions, mask)
-        mask[:] = False
-        actions[1, 0, 0] = 1.5
-        with pytest.raises(ValueError, match=r"within \[-1, 1\]"):
-            binding.regents_set_action_plan(drive.c_envs, actions, mask)
-        actions[1, 0, 0] = math.nan
-        with pytest.raises(ValueError, match="finite"):
-            binding.regents_set_action_plan(drive.c_envs, actions, mask)
-    finally:
-        drive.close()
-
-
-def test_generation_artifact_round_trips(tmp_path):
-    drive = _drive(8, 50, "idm")
-    try:
-        result = run_reactive_idm_generation(
-            drive,
-            ReGentSOptimizationConfig(iteration_count=5, learning_rate=1e-2),
-            deterministic_seed=50,
-            horizon_transition_count=HORIZON_TRANSITION_COUNT,
-            maximum_outer_iterations=1,
-        )
-    finally:
-        drive.close()
     map_path = sorted(NUPLAN_MAP_DIR.glob("*.bin"))[8]
     artifact_path = tmp_path / "scenario.npz"
     saved = save_generation_artifact(artifact_path, result, {"fixture": "test"}, str(map_path))
     metadata, arrays = load_generation_artifact(artifact_path)
-
     assert metadata == saved
     assert metadata["scenario_id"] == result.scenario.scenario_ids[0]
     assert metadata["deterministic_seed"] == 50
@@ -227,21 +193,6 @@ def test_generation_artifact_round_trips(tmp_path):
     assert np.array_equal(arrays["c_states"], result.replay.states.numpy())
     assert arrays["original_states"].shape[1] == result.scenario.max_agent_count
 
-
-def test_replay_frames_render_through_the_shared_viewer(tmp_path):
-    drive = _drive(8, 50, "idm")
-    try:
-        result = run_reactive_idm_generation(
-            drive,
-            ReGentSOptimizationConfig(iteration_count=5, learning_rate=1e-2),
-            deterministic_seed=50,
-            horizon_transition_count=HORIZON_TRANSITION_COUNT,
-            maximum_outer_iterations=1,
-            capture_html_frames=True,
-        )
-    finally:
-        drive.close()
-
     frames = result.replay.adversarial_frames
     assert frames is not None
     assert frames["agent_f32"].shape[0] == HORIZON_TRANSITION_COUNT + 1
@@ -249,39 +200,49 @@ def test_replay_frames_render_through_the_shared_viewer(tmp_path):
     assert result.replay.baseline_frames["agent_f32"].shape == frames["agent_f32"].shape
     assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_ids[0]
 
-    environment = _full_env_config({"map_dir": str(NUPLAN_MAP_DIR), "dt": 0.1})
-    rendered = render_scenario_replays(tmp_path, 8, result, environment)
+    rendered = render_scenario_replays(
+        tmp_path, 8, result, _full_env_config({"map_dir": str(NUPLAN_MAP_DIR), "dt": 0.1})
+    )
     assert sorted(rendered) == ["scenario_00008.adversarial.html", "scenario_00008.logged.html"]
     for name in rendered:
         page = (tmp_path / RENDER_DIR_NAME / name).read_text(encoding="utf-8")
         assert "<title>PufferDrive Replay</title>" in page
+        assert 'const ADVERSARY_COLOR = "#654321";' in page
         assert "http://" not in page and "https://" not in page
+        replay_path = tmp_path / "replays" / name.replace(".html", ".replay.zlib")
+        replay_payload = zlib.decompress(replay_path.read_bytes())
+        header_length = struct.unpack_from("<I", replay_payload)[0]
+        header = json.loads(replay_payload[4 : 4 + header_length])
+        candidate_indices = torch.where(result.optimization.selection.candidate_mask[0])[0]
+        expected_candidate_ids = result.scenario.agent_id[0, candidate_indices].tolist()
+        assert header["candidate_adversary_ids"] == expected_candidate_ids
+
+    # A non-IDM ego is rejected before any optimization work happens.
+    policy_drive = _drive(8, 50, "policy")
+    try:
+        with pytest.raises(ValueError, match="sdc_controller"):
+            run_reactive_idm_generation(
+                policy_drive, deterministic_seed=50, horizon_transition_count=HORIZON_TRANSITION_COUNT
+            )
+    finally:
+        policy_drive.close()
 
 
-def test_replay_frames_are_absent_unless_capture_is_requested():
-    _, _, replay = _open_loop_replay(8, 50, iteration_count=1)
-
-    assert replay.adversarial_frames is None
-    assert replay.baseline_frames is None
-    assert replay.scenario_payload is None
-
-
-def test_generation_config_rejects_unknown_names_and_env_keys(tmp_path):
+def test_generation_config_is_validated_and_the_offline_entry_point_writes_artifacts(tmp_path):
+    """Every config guard, the raster default, and one end-to-end smoke generation."""
     with pytest.raises(ValueError, match="Unknown ReGentS generation"):
         load_generation_config(GENERATION_CONFIG, "missing_generation")
-    broken = tmp_path / "regents.yaml"
-    broken.write_text(
+
+    config = tmp_path / "regents.yaml"
+    config.write_text(
         "env:\n  not_a_drive_argument: 1\ngenerations:\n"
         "  - name: broken\n    seed: 1\n    scenario_count: 1\n"
         "    horizon_transition_count: 1\n    maximum_outer_iterations: 1\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="unsupported env keys"):
-        load_generation_config(broken, "broken")
+        load_generation_config(config, "broken")
 
-
-def test_generation_config_rejects_a_horizon_the_drive_guards_would_reject(tmp_path):
-    config = tmp_path / "regents.yaml"
     config.write_text(
         "env:\n  scenario_length: 200\n  resample_frequency: 200\n"
         "generations:\n  - name: too_long\n    seed: 1\n    scenario_count: 1\n"
@@ -300,9 +261,6 @@ def test_generation_config_rejects_a_horizon_the_drive_guards_would_reject(tmp_p
     with pytest.raises(ValueError, match="must be below env.scenario_length=200"):
         load_generation_config(config, "too_long")
 
-
-def test_generation_config_rejects_nonfinite_raster_resolution(tmp_path):
-    config = tmp_path / "regents.yaml"
     config.write_text(
         "env:\n  num_maps: 1\ngenerations:\n  - name: broken\n    seed: 1\n"
         "    scenario_count: 1\n    horizon_transition_count: 1\n"
@@ -312,29 +270,21 @@ def test_generation_config_rejects_nonfinite_raster_resolution(tmp_path):
     with pytest.raises(ValueError, match="finite and positive"):
         load_generation_config(config, "broken")
 
-
-def test_generation_config_uses_the_adapter_raster_resolution_default(tmp_path):
-    config = tmp_path / "regents.yaml"
     config.write_text(
         "env:\n  num_maps: 1\ngenerations:\n  - name: defaulted\n    seed: 1\n"
         "    scenario_count: 1\n    horizon_transition_count: 1\n"
         "    maximum_outer_iterations: 1\n",
         encoding="utf-8",
     )
+    assert load_generation_config(config, "defaulted")["raster_resolution_meters"] == 0.5
 
-    loaded = load_generation_config(config, "defaulted")
-
-    assert loaded["raster_resolution_meters"] == 0.5
-
-
-def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
-    config = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
-    expected_count = config["scenario_count"]
+    smoke = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
+    expected_count = smoke["scenario_count"]
     report = generate_regents_scenarios(GENERATION_CONFIG, "regents_nuplan_smoke", output_dir=tmp_path)
-
     assert report.scenario_count == expected_count
-    expected_files = [f"scenario_{i:05d}.npz" for i in range(expected_count)]
-    assert sorted(path.name for path in (tmp_path / "npz").glob("*.npz")) == expected_files
+    assert sorted(path.name for path in (tmp_path / "npz").glob("*.npz")) == [
+        f"scenario_{i:05d}.npz" for i in range(expected_count)
+    ]
     assert (tmp_path / "generation_metrics.csv").is_file()
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0
@@ -342,3 +292,11 @@ def test_offline_generation_entry_point_writes_artifacts_and_metrics(tmp_path):
     assert sum(report.rejection_reasons.values()) == report.scenario_count - int(
         report.generation_success_rate * report.scenario_count
     )
+
+
+def test_pufferl_regents_prints_success(tmp_path, capsys):
+    from pufferlib import pufferl
+
+    pufferl.regents("regents_nuplan_smoke", config_path=GENERATION_CONFIG, output_dir=tmp_path)
+    captured = capsys.readouterr()
+    assert "[REGENTS] success" in captured.out

@@ -2507,6 +2507,8 @@ def regents(generation_name, config_path=None, output_dir=None):
         f"[REGENTS] max C/Torch error {report.maximum_c_torch_trajectory_error:.3e}"
         f" | optimization {report.total_optimization_seconds:.1f}s"
     )
+    success_count = report.scenario_count - sum(report.rejection_reasons.values())
+    print(f"[REGENTS] success {success_count}x")
     for reason, count in sorted(report.rejection_reasons.items()):
         print(f"[REGENTS] rejected {count}x {reason}")
     if report.replay_index is not None:

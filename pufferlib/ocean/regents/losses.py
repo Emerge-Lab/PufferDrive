@@ -231,8 +231,8 @@ def drivable_area_deviation_cost(
     density; ours is a normalized convolution, so the horizon-invariant mean is what
     keeps this term comparable to the ego cost.
 
-    With a baseline, only potential the optimization introduces is charged, matching
-    the success rule that counts newly introduced off-road corners.
+    A detached baseline shifts the reported value without changing the absolute
+    ReGentS potential gradient. Improvements may therefore make this term negative.
     """
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
     _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
@@ -256,7 +256,7 @@ def drivable_area_deviation_cost(
             raise ValueError("Out-of-bounds rasters and states must share device and dtype")
         corner_potential = sample_out_of_bounds_potential(corners[scenario_idx], raster)
         if baseline_corner_potential is not None:
-            corner_potential = torch.relu(corner_potential - baseline_corner_potential[scenario_idx])
+            corner_potential = corner_potential - baseline_corner_potential[scenario_idx]
         valid = state_valid[scenario_idx] & optimized_vehicle_mask[scenario_idx, :, None]
         valid_counts = valid.sum(dim=-1)
         potential_sum = torch.where(
