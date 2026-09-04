@@ -117,6 +117,12 @@
 #define ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE 1
 #define ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE 2
 #define ADVERSARIAL_TERMINATION_MODE_EITHER 3
+#define ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY 4
+#define ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY 5
+
+// How vehicles are placed on Gigaflow maps
+#define GIGAFLOW_SPAWN_MODE_GLOBAL 0
+#define GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY 1
 
 // Gymnasium done signal emitted to all agents when target failure resets the episode
 #define TARGET_FAILURE_EPISODE_END_TERMINATED 0
@@ -172,6 +178,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 
 #define INVALID_POSITION -10000.0f
 #define EGO_IDX 0 // Ego agent is always at index 0 in the agents array
+#define GIGAFLOW_MAX_SPAWN_ATTEMPTS 30
 
 // Lane fitting: score = distance_weight * dist_term + heading_weight * heading_term
 #define LANE_SELECTION_DISTANCE_WEIGHT 0.7f

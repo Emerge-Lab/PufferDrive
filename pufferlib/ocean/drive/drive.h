@@ -267,6 +267,12 @@ struct Drive {
     float dt;
     float base_max_speed_mps;
     float spawn_initial_speed;
+    int gigaflow_spawn_mode;
+    float adversary_spawn_radius_meters;
+    float spawn_clearance_meters;
+    float adversary_retention_radius_meters;
+    float adversary_retention_grace_seconds;
+    int adversary_out_of_range_step_count;
     float pdm_horizon_seconds;
     float pdm_planning_dt_seconds;
     int dynamics_model;
@@ -2488,28 +2494,93 @@ static void generate_traffic_light_states(Drive *env) {
 }
 
 static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tmp_agent) {
-    float min_safe_dist_sq = (tmp_agent->sim_length + 5.0f) * (tmp_agent->sim_length + 5.0f);
-
     for (int i = 0; i < num_existing_agents; i++) {
         Agent *other = &env->agents[i];
 
         if (other->sim_x == INVALID_POSITION || other->sim_valid != 1) {
             continue;
         }
-
-        float dx = other->sim_x - tmp_agent->sim_x;
-        float dy = other->sim_y - tmp_agent->sim_y;
-        float dist_sq = dx * dx + dy * dy;
-
-        if (dist_sq > min_safe_dist_sq) {
-            continue;
-        }
-        if (check_obb_collision(tmp_agent, other)) {
+        Agent expanded_candidate = *tmp_agent;
+        Agent expanded_other = *other;
+        expanded_candidate.sim_length += env->spawn_clearance_meters;
+        expanded_candidate.sim_width += env->spawn_clearance_meters;
+        expanded_other.sim_length += env->spawn_clearance_meters;
+        expanded_other.sim_width += env->spawn_clearance_meters;
+        if (check_obb_collision(&expanded_candidate, &expanded_other)) {
             return true;
         }
     }
 
     return false;
+}
+
+static bool sample_global_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
+    int drivable_cell_list_idx = rng_below(&env->rng_state, env->grid_map->num_drivable_grid_cell);
+    int grid_idx = env->grid_map->grid_index_drivable[drivable_cell_list_idx];
+    GridMapEntity lane_candidates[MAX_ENTITIES_PER_CELL];
+    int candidate_count = 0;
+
+    for (int entity_idx = 0; entity_idx < env->grid_map->cell_entities_count[grid_idx]; entity_idx++) {
+        GridMapEntity entity = env->grid_map->cells[grid_idx][entity_idx];
+        if (is_drivable_road_lane(env->road_elements[entity.entity_idx].type)) {
+            lane_candidates[candidate_count++] = entity;
+        }
+    }
+    if (candidate_count == 0) {
+        return false;
+    }
+
+    GridMapEntity chosen_entity = lane_candidates[rng_below(&env->rng_state, candidate_count)];
+    *lane_idx = chosen_entity.entity_idx;
+    *geometry_idx = chosen_entity.geometry_idx;
+    return true;
+}
+
+static bool sample_target_proximity_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
+    Agent *target = &env->agents[EGO_IDX];
+    float radius_meters = env->adversary_spawn_radius_meters;
+    float radius_squared_meters = radius_meters * radius_meters;
+    int min_grid_x = (int) floorf((target->sim_x - radius_meters - env->grid_map->top_left_x) / GRID_CELL_SIZE);
+    int max_grid_x = (int) floorf((target->sim_x + radius_meters - env->grid_map->top_left_x) / GRID_CELL_SIZE);
+    int min_grid_y = (int) floorf((target->sim_y - radius_meters - env->grid_map->bottom_right_y) / GRID_CELL_SIZE);
+    int max_grid_y = (int) floorf((target->sim_y + radius_meters - env->grid_map->bottom_right_y) / GRID_CELL_SIZE);
+    min_grid_x = min_grid_x < 0 ? 0 : min_grid_x;
+    min_grid_y = min_grid_y < 0 ? 0 : min_grid_y;
+    max_grid_x = max_grid_x >= env->grid_map->grid_cols ? env->grid_map->grid_cols - 1 : max_grid_x;
+    max_grid_y = max_grid_y >= env->grid_map->grid_rows ? env->grid_map->grid_rows - 1 : max_grid_y;
+
+    int candidate_count = 0;
+    int region_column_count = max_grid_x - min_grid_x + 1;
+    int region_row_count = max_grid_y - min_grid_y + 1;
+    int region_cell_count = region_column_count * region_row_count;
+    for (int region_cell_idx = 0; region_cell_idx < region_cell_count; region_cell_idx++) {
+        int grid_x = min_grid_x + region_cell_idx % region_column_count;
+        int grid_y = min_grid_y + region_cell_idx / region_column_count;
+        int grid_idx = grid_y * env->grid_map->grid_cols + grid_x;
+        for (int entity_list_idx = 0; entity_list_idx < env->grid_map->cell_entities_count[grid_idx];
+             entity_list_idx++) {
+            GridMapEntity entity = env->grid_map->cells[grid_idx][entity_list_idx];
+            RoadMapElement *lane = &env->road_elements[entity.entity_idx];
+            if (!is_drivable_road_lane(lane->type)) {
+                continue;
+            }
+            if (fabsf(lane->z[entity.geometry_idx] - target->sim_z) > Z_BUFFER) {
+                continue;
+            }
+            float delta_x_meters = lane->x[entity.geometry_idx] - target->sim_x;
+            float delta_y_meters = lane->y[entity.geometry_idx] - target->sim_y;
+            if (delta_x_meters * delta_x_meters + delta_y_meters * delta_y_meters > radius_squared_meters) {
+                continue;
+            }
+
+            candidate_count++;
+            if (rng_below(&env->rng_state, candidate_count) == 0) {
+                *lane_idx = entity.entity_idx;
+                *geometry_idx = entity.geometry_idx;
+            }
+        }
+    }
+    return candidate_count > 0;
 }
 
 static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
@@ -2592,39 +2663,23 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     bool is_agent_spawned = false;
 
     // Sampling rejection loop
-    // TARGET: Only one attempt should be sufficient in most cases
-    const int MAX_SPAWN_ATTEMPTS = 30;
-    for (int attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-        int chosen_lane_idx = -1;
-
-        int list_idx = rng_below(&env->rng_state, env->grid_map->num_drivable_grid_cell);
-        int grid_idx = env->grid_map->grid_index_drivable[list_idx];
-
-        GridMapEntity cell_candidates[MAX_ENTITIES_PER_CELL];
-        int candidate_count = 0;
-
-        for (int i = 0; i < env->grid_map->cell_entities_count[grid_idx]; i++) {
-            GridMapEntity entity = env->grid_map->cells[grid_idx][i];
-
-            if (is_drivable_road_lane(env->road_elements[entity.entity_idx].type)) {
-                cell_candidates[candidate_count++] = entity;
-            }
-        }
-
-        if (candidate_count == 0) {
+    for (int attempt = 0; attempt < GIGAFLOW_MAX_SPAWN_ATTEMPTS; attempt++) {
+        int geometry_idx;
+        bool use_target_proximity
+            = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY && agent_idx != EGO_IDX;
+        bool sampled_lane = use_target_proximity
+            ? sample_target_proximity_spawn_lane(env, &start_lane_idx, &geometry_idx)
+            : sample_global_spawn_lane(env, &start_lane_idx, &geometry_idx);
+        if (!sampled_lane) {
             continue;
         }
 
-        GridMapEntity chosen_entity = cell_candidates[rng_below(&env->rng_state, candidate_count)];
-        chosen_lane_idx = chosen_entity.entity_idx;
-
-        start_lane_idx = chosen_lane_idx;
         start_lane = &env->road_elements[start_lane_idx];
 
-        spawn_x = start_lane->x[chosen_entity.geometry_idx];
-        spawn_y = start_lane->y[chosen_entity.geometry_idx];
-        spawn_z = start_lane->z[chosen_entity.geometry_idx];
-        spawn_heading = start_lane->headings[chosen_entity.geometry_idx];
+        spawn_x = start_lane->x[geometry_idx];
+        spawn_y = start_lane->y[geometry_idx];
+        spawn_z = start_lane->z[geometry_idx];
+        spawn_heading = start_lane->headings[geometry_idx];
 
         Agent tmp_agent = {0};
         tmp_agent.sim_x = spawn_x;
@@ -2645,7 +2700,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         update_agent_radius(&tmp_agent);
         tmp_agent.current_lane_idx = start_lane_idx;
 
-        if (check_spawn_collision(env, num_agents, &tmp_agent)) {
+        if (check_spawn_collision(env, agent_idx, &tmp_agent)) {
             continue;
         }
 
@@ -4544,6 +4599,7 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 #include "pdm.h"
 
 void c_reset(Drive *env) {
+    env->adversary_out_of_range_step_count = 0;
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);
@@ -4622,6 +4678,32 @@ void c_reset(Drive *env) {
         compute_metrics(env, agent_idx, x);
     }
     compute_observations(env);
+}
+
+static bool adversary_proximity_grace_expired(Drive *env, int target_agent_idx) {
+    Agent *target = &env->agents[target_agent_idx];
+    float retention_radius_squared_meters
+        = env->adversary_retention_radius_meters * env->adversary_retention_radius_meters;
+    int nearby_adversary_count = 0;
+    for (int active_idx = 1; active_idx < env->active_agent_count; active_idx++) {
+        Agent *adversary = &env->agents[env->active_agent_indices[active_idx]];
+        if (adversary->removed || adversary->stopped) {
+            continue;
+        }
+        if (fabsf(adversary->sim_z - target->sim_z) > Z_BUFFER) {
+            continue;
+        }
+        float delta_x_meters = adversary->sim_x - target->sim_x;
+        float delta_y_meters = adversary->sim_y - target->sim_y;
+        if (delta_x_meters * delta_x_meters + delta_y_meters * delta_y_meters <= retention_radius_squared_meters) {
+            nearby_adversary_count++;
+        }
+    }
+
+    env->adversary_out_of_range_step_count
+        = nearby_adversary_count > 0 ? 0 : env->adversary_out_of_range_step_count + 1;
+    int grace_step_count = (int) ceilf(env->adversary_retention_grace_seconds / env->dt);
+    return env->adversary_out_of_range_step_count >= grace_step_count;
 }
 
 void c_step(Drive *env) {
@@ -4767,6 +4849,12 @@ void c_step(Drive *env) {
             }
         }
         int all_adversaries_inactive = active_adversary_count == 0;
+        int proximity_mode = env->adversarial_termination_mode == ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY
+            || env->adversarial_termination_mode == ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY;
+        int no_nearby_adversary = 0;
+        if (proximity_mode && env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
+            no_nearby_adversary = adversary_proximity_grace_expired(env, target_agent_idx);
+        }
 
         switch (env->adversarial_termination_mode) {
         case ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE:
@@ -4778,6 +4866,13 @@ void c_step(Drive *env) {
             break;
         case ADVERSARIAL_TERMINATION_MODE_EITHER:
             adversarial_early_reset = all_adversaries_inactive || target_inactive;
+            target_failure_early_reset = target_inactive;
+            break;
+        case ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY:
+            adversarial_early_reset = no_nearby_adversary;
+            break;
+        case ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY:
+            adversarial_early_reset = target_inactive || no_nearby_adversary;
             target_failure_early_reset = target_inactive;
             break;
         default:

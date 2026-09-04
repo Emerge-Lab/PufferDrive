@@ -55,6 +55,11 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
+        gigaflow_spawn_mode="target_proximity",
+        adversary_spawn_radius_meters=25.0,
+        spawn_clearance_meters=1.0,
+        adversary_retention_radius_meters=35.0,
+        adversary_retention_grace_seconds=1.0,
         pdm_horizon=4.0,
         pdm_planning_dt=0.5,
         goal_speed=3.0,
@@ -62,15 +67,15 @@ class Drive(pufferlib.PufferEnv):
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
-        min_agents_per_env=32,
-        max_agents_per_env=64,
+        min_agents_per_env=2,
+        max_agents_per_env=8,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
         simulation_mode="gigaflow",
         termination_mode=False,
         inactive_agent_threshold=0.4,
-        adversarial_termination_mode="disabled",
+        adversarial_termination_mode="target_inactive_or_no_nearby_adversary",
         target_failure_episode_end="terminated",
         terminate_on_goal=False,
         buf=None,
@@ -134,6 +139,14 @@ class Drive(pufferlib.PufferEnv):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.gigaflow_spawn_mode = {
+            "global": binding.GIGAFLOW_SPAWN_MODE_GLOBAL,
+            "target_proximity": binding.GIGAFLOW_SPAWN_MODE_TARGET_PROXIMITY,
+        }[gigaflow_spawn_mode]
+        self.adversary_spawn_radius_meters = float(adversary_spawn_radius_meters)
+        self.spawn_clearance_meters = float(spawn_clearance_meters)
+        self.adversary_retention_radius_meters = float(adversary_retention_radius_meters)
+        self.adversary_retention_grace_seconds = float(adversary_retention_grace_seconds)
         self.pdm_horizon = float(pdm_horizon)
         self.pdm_planning_dt = float(pdm_planning_dt)
         self.goal_speed = float(goal_speed)
@@ -220,6 +233,10 @@ class Drive(pufferlib.PufferEnv):
             "all_adversaries_inactive": binding.ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE,
             "target_inactive": binding.ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE,
             "either": binding.ADVERSARIAL_TERMINATION_MODE_EITHER,
+            "no_nearby_adversary": binding.ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY,
+            "target_inactive_or_no_nearby_adversary": (
+                binding.ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY
+            ),
         }[adversarial_termination_mode]
         self.target_failure_episode_end = {
             "terminated": binding.TARGET_FAILURE_EPISODE_END_TERMINATED,
@@ -478,6 +495,11 @@ class Drive(pufferlib.PufferEnv):
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "gigaflow_spawn_mode": self.gigaflow_spawn_mode,
+            "adversary_spawn_radius_meters": self.adversary_spawn_radius_meters,
+            "spawn_clearance_meters": self.spawn_clearance_meters,
+            "adversary_retention_radius_meters": self.adversary_retention_radius_meters,
+            "adversary_retention_grace_seconds": self.adversary_retention_grace_seconds,
             "pdm_horizon": self.pdm_horizon,
             "pdm_planning_dt": self.pdm_planning_dt,
             "goal_speed": self.goal_speed,

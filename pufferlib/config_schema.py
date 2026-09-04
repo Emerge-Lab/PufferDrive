@@ -137,6 +137,11 @@ class AdversarialTerminationMode(Enum):
     all_adversaries_inactive = 1
     target_inactive = 2
     either = 3
+    no_nearby_adversary = 4
+    target_inactive_or_no_nearby_adversary = 5
+
+
+GigaflowSpawnMode = Enum("GigaflowSpawnMode", {"global": 0, "target_proximity": 1})
 
 
 class TargetFailureEpisodeEnd(Enum):
@@ -260,6 +265,11 @@ class DriveEnvConfig:
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    gigaflow_spawn_mode: GigaflowSpawnMode = MISSING
+    adversary_spawn_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    spawn_clearance_meters: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    adversary_retention_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
+    adversary_retention_grace_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     pdm_horizon: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     pdm_planning_dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     collision_behavior: InfractionBehavior = MISSING
@@ -581,6 +591,12 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step", "must be smaller than env.scenario_length")
     if env["spawn_initial_speed"] > env["base_max_speed_mps"]:
         _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
+    if env["adversary_spawn_radius_meters"] > env["adversary_retention_radius_meters"]:
+        _raise_config_error(
+            context,
+            "env.adversary_spawn_radius_meters",
+            "must not exceed env.adversary_retention_radius_meters",
+        )
     if env["min_goal_spacing"] > env["max_goal_spacing"]:
         _raise_config_error(context, "env.min_goal_spacing", "must not exceed env.max_goal_spacing")
     if not PDM_MIN_HORIZON_SECONDS <= env["pdm_horizon"] <= PDM_MAX_HORIZON_SECONDS:

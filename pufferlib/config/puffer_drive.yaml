@@ -42,8 +42,8 @@ env:
   # Total number of agents in the environments
   num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
-  min_agents_per_env: 1
-  max_agents_per_env: 120
+  min_agents_per_env: 2
+  max_agents_per_env: 8
   # Actions type - options: "discrete", "continuous"
   action_type: continuous
   # Dynamics model - options: "classic", "jerk"
@@ -51,11 +51,17 @@ env:
   # Jerk dynamics: Zero both accelerations when velocity crosses zero
   reset_accel_on_stop: false
   # Time delta between steps in seconds
-  dt: 0.3
+  dt: 0.1
   # Base forward speed cap
   base_max_speed_mps: 20.0
-  # Optional nonzero launch speed for gigaflow random spawns
+  # Optional fixed launch speed for Gigaflow spawns
   spawn_initial_speed: 0.0
+  # Gigaflow spawning: global or target_proximity
+  gigaflow_spawn_mode: target_proximity
+  adversary_spawn_radius_meters: 25.0
+  spawn_clearance_meters: 1.0
+  adversary_retention_radius_meters: 35.0
+  adversary_retention_grace_seconds: 1.0
   # PDM rollout horizon and planning interval in seconds
   pdm_horizon: 4.0
   pdm_planning_dt: 0.1
@@ -76,11 +82,12 @@ env:
   # Frequency of resampling scenario (in steps), 0 to disable
   resample_frequency: 256000
   # End the episode early when too many agents are inactive; otherwise use scenario_length
-  termination_mode: true
+  termination_mode: false
   # Ratio of inactive agents (stopped/removed) that triggers early reset
   inactive_agent_threshold: 0.4
-  # Options: disabled, all_adversaries_inactive, target_inactive, either
-  adversarial_termination_mode: disabled
+  # Options: disabled, all_adversaries_inactive, target_inactive, either,
+  # no_nearby_adversary, target_inactive_or_no_nearby_adversary
+  adversarial_termination_mode: target_inactive_or_no_nearby_adversary
   # Done signal sent to all agents when target failure resets the episode.
   target_failure_episode_end: terminated
   # End the episode as soon as the agent reaches its final goal. Only active in
