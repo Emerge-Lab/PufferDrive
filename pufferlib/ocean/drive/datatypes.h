@@ -172,6 +172,8 @@ struct TrafficControlElement {
     float heading;
     int num_controlled_lanes;
     int *controlled_lanes;
+    int junction_id;
+    int phase_idx;
 };
 
 struct LaneGraph {

@@ -312,6 +312,138 @@ static int get_neighbors_entities(
 // Map Loading Functions
 // ========================================
 
+#define TRAFFIC_PHASE_SECTION_TAG "TLPHASE1"
+#define TRAFFIC_PHASE_SECTION_TAG_LEN 8
+#define LANE_WIDTH_SECTION_TAG "LANEWID1"
+#define LANE_WIDTH_SECTION_TAG_LEN 8
+
+static int is_first_traffic_junction_element(Drive *drive, int traffic_element_idx) {
+    int junction_id = drive->traffic_elements[traffic_element_idx].junction_id;
+    for (int i = 0; i < traffic_element_idx; i++) {
+        if (drive->traffic_elements[i].junction_id == junction_id) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int traffic_junction_max_phase_idx(Drive *drive, int junction_id) {
+    int max_phase_idx = -1;
+    for (int i = 0; i < drive->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &drive->traffic_elements[i];
+        if (traffic_element->junction_id == junction_id && traffic_element->phase_idx > max_phase_idx) {
+            max_phase_idx = traffic_element->phase_idx;
+        }
+    }
+    return max_phase_idx;
+}
+
+static int traffic_junction_has_phase(Drive *drive, int junction_id, int phase_idx) {
+    for (int i = 0; i < drive->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &drive->traffic_elements[i];
+        if (traffic_element->junction_id == junction_id && traffic_element->phase_idx == phase_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int validate_traffic_phase_groups(Drive *drive) {
+    for (int i = 0; i < drive->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &drive->traffic_elements[i];
+        if (traffic_element->junction_id < 0 || !is_first_traffic_junction_element(drive, i)) {
+            continue;
+        }
+        int max_phase_idx = traffic_junction_max_phase_idx(drive, traffic_element->junction_id);
+        for (int phase_idx = 0; phase_idx <= max_phase_idx; phase_idx++) {
+            if (!traffic_junction_has_phase(drive, traffic_element->junction_id, phase_idx)) {
+                printf(
+                    "[ERROR] -> Traffic junction %d is missing phase %d.\n",
+                    traffic_element->junction_id,
+                    phase_idx);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int load_traffic_phase_section(FILE *file, Drive *drive) {
+    char tag[TRAFFIC_PHASE_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), TRAFFIC_PHASE_SECTION_TAG_LEN, file);
+    if (tag_bytes_read == 0) {
+        if (ferror(file)) {
+            return -1;
+        }
+        for (int i = 0; i < drive->num_traffic_elements; i++) {
+            drive->traffic_elements[i].junction_id = -1;
+            drive->traffic_elements[i].phase_idx = -1;
+        }
+        return 0;
+    }
+    if (tag_bytes_read != TRAFFIC_PHASE_SECTION_TAG_LEN
+        || memcmp(tag, TRAFFIC_PHASE_SECTION_TAG, TRAFFIC_PHASE_SECTION_TAG_LEN) != 0) {
+        printf("[ERROR] -> Unexpected bytes after map metadata.\n");
+        return -1;
+    }
+    for (int i = 0; i < drive->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &drive->traffic_elements[i];
+        if (fread(&traffic_element->junction_id, sizeof(int), 1, file) != 1
+            || fread(&traffic_element->phase_idx, sizeof(int), 1, file) != 1) {
+            printf("[ERROR] -> Truncated %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
+            return -1;
+        }
+        int has_junction = traffic_element->junction_id >= 0;
+        int has_phase = traffic_element->phase_idx >= 0 && traffic_element->phase_idx < drive->num_traffic_elements;
+        if (traffic_element->junction_id < -1 || traffic_element->phase_idx < -1 || has_junction != has_phase
+            || (has_junction && traffic_element->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT)) {
+            printf(
+                "[ERROR] -> Traffic element %d has invalid junction_id %d / phase_idx %d.\n",
+                i,
+                traffic_element->junction_id,
+                traffic_element->phase_idx);
+            return -1;
+        }
+    }
+    return validate_traffic_phase_groups(drive);
+}
+
+static int load_lane_width_section(FILE *file, Drive *drive) {
+    char tag[LANE_WIDTH_SECTION_TAG_LEN];
+    size_t tag_bytes_read = fread(tag, sizeof(char), LANE_WIDTH_SECTION_TAG_LEN, file);
+    if (tag_bytes_read == 0) {
+        return ferror(file) ? -1 : 0;
+    }
+    if (tag_bytes_read != LANE_WIDTH_SECTION_TAG_LEN
+        || memcmp(tag, LANE_WIDTH_SECTION_TAG, LANE_WIDTH_SECTION_TAG_LEN) != 0) {
+        printf("[ERROR] -> Unexpected bytes after %s section.\n", TRAFFIC_PHASE_SECTION_TAG);
+        return -1;
+    }
+    for (int i = 0; i < drive->num_road_elements; i++) {
+        RoadMapElement *road = &drive->road_elements[i];
+        if (!is_road_lane(road->type)) {
+            continue;
+        }
+        for (int point_idx = 0; point_idx < road->segment_size; point_idx++) {
+            float width_meters;
+            if (fread(&width_meters, sizeof(float), 1, file) != 1) {
+                printf("[ERROR] -> Truncated %s section at lane %d.\n", LANE_WIDTH_SECTION_TAG, i);
+                return -1;
+            }
+            if (!isfinite(width_meters) || width_meters <= 0.0f || width_meters > MAX_LANE_WIDTH_METERS) {
+                printf("[ERROR] -> Lane %d point %d has invalid width %f.\n", i, point_idx, width_meters);
+                return -1;
+            }
+        }
+    }
+    char trailing_byte;
+    if (fread(&trailing_byte, sizeof(char), 1, file) == 1 || ferror(file)) {
+        printf("[ERROR] -> Trailing bytes after %s section.\n", LANE_WIDTH_SECTION_TAG);
+        return -1;
+    }
+    return 0;
+}
+
 int load_map_binary(const char *filename, Drive *drive) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
@@ -720,6 +852,11 @@ int load_map_binary(const char *filename, Drive *drive) {
         }
     } else {
         drive->tracks_to_predict = NULL;
+    }
+
+    if (load_traffic_phase_section(file, drive) != 0 || load_lane_width_section(file, drive) != 0) {
+        fclose(file);
+        return -1;
     }
 
     fclose(file);

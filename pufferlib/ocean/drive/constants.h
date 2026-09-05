@@ -194,6 +194,7 @@ static const float STEERING_VALUES[NUM_STEERING_ACTIONS]
 #define LANE_ALIGN_COS_THRESHOLD 0.5f
 #define MAX_CHECKED_LANES 32
 #define LANE_WIDTH 3.7f
+#define MAX_LANE_WIDTH_METERS 50.0f
 #define LANE_MARGIN 0.2f
 
 // Agent-agent collision

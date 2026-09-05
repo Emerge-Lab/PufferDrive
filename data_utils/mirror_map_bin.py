@@ -27,6 +27,10 @@ import struct
 from pathlib import Path
 
 
+TRAFFIC_PHASE_SECTION_TAG = b"TLPHASE1"
+LANE_WIDTH_SECTION_TAG = b"LANEWID1"
+
+
 def _is_lane(road_type: int) -> bool:
     return 0 <= road_type <= 9
 
@@ -137,6 +141,22 @@ def read_bin(path: Path) -> dict:
         (n_ttp,) = _read("<i", f)
         tracks_to_predict = _read_i_array(f, n_ttp)
 
+        phase_tag = f.read(len(TRAFFIC_PHASE_SECTION_TAG))
+        has_phase_section = phase_tag == TRAFFIC_PHASE_SECTION_TAG
+        assert has_phase_section or phase_tag == b"", f"unexpected bytes after metadata in {path}"
+        for traffic_element in traffic:
+            traffic_element["junction_id"], traffic_element["phase_idx"] = (
+                _read("<ii", f) if has_phase_section else (-1, -1)
+            )
+
+        width_tag = f.read(len(LANE_WIDTH_SECTION_TAG))
+        has_width_section = width_tag == LANE_WIDTH_SECTION_TAG
+        assert has_width_section or width_tag == b"", f"unexpected bytes after phase section in {path}"
+        if has_width_section:
+            for road in roads:
+                if _is_lane(road["type"]):
+                    road["widths"] = _read_f_array(f, road["S"])
+
         trailing = f.read()
         assert not trailing, f"{len(trailing)} unparsed trailing bytes in {path}"
 
@@ -152,13 +172,15 @@ def read_bin(path: Path) -> dict:
         "log_dt": log_dt,
         "objects_of_interest": objects_of_interest,
         "tracks_to_predict": tracks_to_predict,
+        "has_phase_section": has_phase_section,
+        "has_width_section": has_width_section,
     }
 
 
 def mirror(data: dict) -> dict:
     """Reflect across the x-axis: negate y for every position, vy for every
     velocity, heading → -heading. Lane-graph distances, segment lengths,
-    cumulative lengths, and all int IDs are reflection-invariant."""
+    cumulative lengths, lane widths, and all int IDs are reflection-invariant."""
     for a in data["agents"]:
         c = a["cols"]
         c["y"] = tuple(-v for v in c["y"])
@@ -263,6 +285,15 @@ def write_bin(data: dict, path: Path):
         f.write(struct.pack("<i", len(data["tracks_to_predict"])))
         if data["tracks_to_predict"]:
             f.write(struct.pack(f"<{len(data['tracks_to_predict'])}i", *data["tracks_to_predict"]))
+        if data["has_phase_section"]:
+            f.write(TRAFFIC_PHASE_SECTION_TAG)
+            for traffic_element in traffic:
+                f.write(struct.pack("<ii", traffic_element["junction_id"], traffic_element["phase_idx"]))
+        if data["has_width_section"]:
+            f.write(LANE_WIDTH_SECTION_TAG)
+            for road in roads:
+                if _is_lane(road["type"]) and road["S"]:
+                    f.write(struct.pack(f"<{road['S']}f", *road["widths"]))
 
 
 def main():
