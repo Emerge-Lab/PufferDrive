@@ -47,6 +47,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        traffic_light_junction_phases=False,
         target_infraction_behavior="remove",
         use_map_cache=False,
         use_neighbor_cache=True,
@@ -206,6 +207,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        self.traffic_light_junction_phases = traffic_light_junction_phases
         self.target_infraction_behavior = {
             "normal": binding.TARGET_INFRACTION_BEHAVIOR_NORMAL,
             "ignore": binding.TARGET_INFRACTION_BEHAVIOR_IGNORE,
@@ -483,6 +485,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "traffic_light_junction_phases": self.traffic_light_junction_phases,
             "target_infraction_behavior": self.target_infraction_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,

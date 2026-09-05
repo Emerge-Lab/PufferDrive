@@ -286,6 +286,7 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    traffic_light_junction_phases: bool = MISSING
     target_infraction_behavior: TargetInfractionBehavior = MISSING
     use_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
