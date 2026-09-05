@@ -56,6 +56,8 @@ env:
   base_max_speed_mps: 20.0
   # Optional fixed launch speed for Gigaflow spawns
   spawn_initial_speed: 0.0
+  # Gigaflow initial speed: fixed or random
+  spawn_speed_mode: random
   # Gigaflow spawning: uniform or targeted
   gigaflow_spawn_mode: targeted
   adversary_spawn_radius_meters: 25.0

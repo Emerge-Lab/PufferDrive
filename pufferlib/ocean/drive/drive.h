@@ -267,6 +267,7 @@ struct Drive {
     float dt;
     float base_max_speed_mps;
     float spawn_initial_speed;
+    int spawn_speed_mode;
     int gigaflow_spawn_mode;
     float adversary_spawn_radius_meters;
     float spawn_clearance_meters;
@@ -2516,6 +2517,30 @@ static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tm
     return false;
 }
 
+static bool check_spawn_future_collision(Drive *env, int num_existing_agents, Agent *candidate) {
+    for (int agent_idx = 0; agent_idx < num_existing_agents; agent_idx++) {
+        Agent *other = &env->agents[agent_idx];
+        if (other->sim_x == INVALID_POSITION || other->sim_valid != 1) {
+            continue;
+        }
+
+        Agent future_candidate = *candidate;
+        Agent future_other = *other;
+        copy_pose_to_prev(&future_candidate);
+        copy_pose_to_prev(&future_other);
+        future_candidate.sim_x += future_candidate.sim_vx * SPAWN_COLLISION_FORECAST_SECONDS;
+        future_candidate.sim_y += future_candidate.sim_vy * SPAWN_COLLISION_FORECAST_SECONDS;
+        future_other.sim_x += future_other.sim_vx * SPAWN_COLLISION_FORECAST_SECONDS;
+        future_other.sim_y += future_other.sim_vy * SPAWN_COLLISION_FORECAST_SECONDS;
+        float candidate_displacement = candidate->sim_speed * SPAWN_COLLISION_FORECAST_SECONDS;
+        float other_displacement = other->sim_speed * SPAWN_COLLISION_FORECAST_SECONDS;
+        if (check_moving_obb_collision(&future_candidate, &future_other, candidate_displacement, other_displacement)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool sample_global_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
     int drivable_cell_list_idx = rng_below(&env->rng_state, env->grid_map->num_drivable_grid_cell);
     int grid_idx = env->grid_map->grid_index_drivable[drivable_cell_list_idx];
@@ -2583,6 +2608,17 @@ static bool sample_targeted_spawn_lane(Drive *env, int *lane_idx, int *geometry_
         }
     }
     return candidate_count > 0;
+}
+
+static float sample_spawn_speed(Drive *env, RoadMapElement *lane) {
+    if (env->spawn_speed_mode == SPAWN_SPEED_MODE_FIXED) {
+        return clip(env->spawn_initial_speed, 0.0f, env->base_max_speed_mps);
+    }
+
+    int speed_bin_idx = rng_below(&env->rng_state, SPAWN_SPEED_BIN_COUNT);
+    float speed_fraction = (float) speed_bin_idx / (float) (SPAWN_SPEED_BIN_COUNT - 1);
+    float lane_speed_limit = clip(lane->speed_limit, 0.0f, env->base_max_speed_mps);
+    return speed_fraction * lane_speed_limit;
 }
 
 typedef struct RouteRelevancePoint {
@@ -2787,7 +2823,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     float spawn_wheelbase = 0.6f * spawn_length;
 
     // Set spawn position on start lane
-    float spawn_x, spawn_y, spawn_z, spawn_heading;
+    float spawn_x, spawn_y, spawn_z, spawn_heading, spawn_speed;
     RoadMapElement *start_lane;
     int start_lane_idx;
     bool is_agent_spawned = false;
@@ -2827,8 +2863,16 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         tmp_agent.sim_height = spawn_height;
         update_agent_radius(&tmp_agent);
         tmp_agent.current_lane_idx = start_lane_idx;
+        spawn_speed = sample_spawn_speed(env, start_lane);
+        tmp_agent.sim_vx = spawn_speed * tmp_agent.cos_heading;
+        tmp_agent.sim_vy = spawn_speed * tmp_agent.sin_heading;
+        update_agent_speed(&tmp_agent);
 
         if (check_spawn_collision(env, agent_idx, &tmp_agent)) {
+            continue;
+        }
+
+        if (check_spawn_future_collision(env, agent_idx, &tmp_agent)) {
             continue;
         }
 
@@ -2864,7 +2908,6 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     agent->sim_valid = 1;
     agent->wheelbase = spawn_wheelbase;
     agent->current_lane_idx = start_lane_idx;
-    float spawn_speed = clip(env->spawn_initial_speed, 0.0f, env->base_max_speed_mps);
     agent->sim_vx = spawn_speed * agent->cos_heading;
     agent->sim_vy = spawn_speed * agent->sin_heading;
     agent->yaw_rate = 0.0f;

@@ -1913,6 +1913,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->spawn_speed_mode = (int) unpack(kwargs, "spawn_speed_mode");
     env->gigaflow_spawn_mode = (int) unpack(kwargs, "gigaflow_spawn_mode");
     env->adversary_spawn_radius_meters = (float) unpack(kwargs, "adversary_spawn_radius_meters");
     env->spawn_clearance_meters = (float) unpack(kwargs, "spawn_clearance_meters");
@@ -1923,6 +1924,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     if (env->gigaflow_spawn_mode < GIGAFLOW_SPAWN_MODE_UNIFORM
         || env->gigaflow_spawn_mode > GIGAFLOW_SPAWN_MODE_TARGETED) {
         PyErr_SetString(PyExc_ValueError, "invalid gigaflow_spawn_mode");
+        return -1;
+    }
+    if (env->spawn_speed_mode < SPAWN_SPEED_MODE_FIXED || env->spawn_speed_mode > SPAWN_SPEED_MODE_RANDOM) {
+        PyErr_SetString(PyExc_ValueError, "invalid spawn_speed_mode");
         return -1;
     }
     if (env->adversary_spawn_radius_meters <= 0.0f

@@ -147,6 +147,11 @@ GigaflowSpawnMode = Enum(
 )
 
 
+class SpawnSpeedMode(Enum):
+    fixed = 0
+    random = 1
+
+
 class TargetFailureEpisodeEnd(Enum):
     terminated = 0
     truncated = 1
@@ -268,6 +273,7 @@ class DriveEnvConfig:
     dt: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     base_max_speed_mps: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    spawn_speed_mode: SpawnSpeedMode = MISSING
     gigaflow_spawn_mode: GigaflowSpawnMode = MISSING
     adversary_spawn_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_clearance_meters: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)

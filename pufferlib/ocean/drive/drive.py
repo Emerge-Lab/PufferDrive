@@ -55,6 +55,7 @@ class Drive(pufferlib.PufferEnv):
         dt=0.1,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
+        spawn_speed_mode="random",
         gigaflow_spawn_mode="targeted",
         adversary_spawn_radius_meters=25.0,
         spawn_clearance_meters=1.0,
@@ -141,6 +142,10 @@ class Drive(pufferlib.PufferEnv):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
+        self.spawn_speed_mode = {
+            "fixed": binding.SPAWN_SPEED_MODE_FIXED,
+            "random": binding.SPAWN_SPEED_MODE_RANDOM,
+        }[spawn_speed_mode]
         self.gigaflow_spawn_mode = {
             "uniform": binding.GIGAFLOW_SPAWN_MODE_UNIFORM,
             "targeted": binding.GIGAFLOW_SPAWN_MODE_TARGETED,
@@ -499,6 +504,7 @@ class Drive(pufferlib.PufferEnv):
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "spawn_speed_mode": self.spawn_speed_mode,
             "gigaflow_spawn_mode": self.gigaflow_spawn_mode,
             "adversary_spawn_radius_meters": self.adversary_spawn_radius_meters,
             "spawn_clearance_meters": self.spawn_clearance_meters,
