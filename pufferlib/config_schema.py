@@ -296,6 +296,7 @@ class DriveEnvConfig:
     inactive_agent_threshold: float = _constrained_field(PROBABILITY_CONSTRAINT)
     adversarial_termination_mode: AdversarialTerminationMode = MISSING
     target_failure_episode_end: TargetFailureEpisodeEnd = MISSING
+    target_collision_continuation_seconds: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     terminate_on_goal: bool = MISSING
     init_step: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
     init_step_spread: bool = MISSING
@@ -334,7 +335,9 @@ class DriveEnvConfig:
     reward_ade: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     adversarial_drive_reward_weight: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     adversarial_traffic_light_reward_weight: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
-    adversarial_target_collision_bonus: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
+    adversarial_target_genuine_failure_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    adversarial_target_adversary_forced_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
+    adversarial_target_unavoidable_reward: float = _constrained_field(FINITE_NUMBER_CONSTRAINT)
     map_dir: str = MISSING
     num_maps: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     obs_slots_lane_n: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)

@@ -1951,6 +1951,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
     env->adversarial_termination_mode = (int) unpack(kwargs, "adversarial_termination_mode");
     env->target_failure_episode_end = (int) unpack(kwargs, "target_failure_episode_end");
+    env->target_collision_continuation_seconds = (float) unpack(kwargs, "target_collision_continuation_seconds");
+    if (env->target_collision_continuation_seconds <= 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "target_collision_continuation_seconds must be positive");
+        return -1;
+    }
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
@@ -1976,7 +1981,11 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
     env->adversarial_drive_reward_weight = (float) unpack(kwargs, "adversarial_drive_reward_weight");
     env->adversarial_traffic_light_reward_weight = (float) unpack(kwargs, "adversarial_traffic_light_reward_weight");
-    env->adversarial_target_collision_bonus = (float) unpack(kwargs, "adversarial_target_collision_bonus");
+    env->adversarial_target_genuine_failure_reward
+        = (float) unpack(kwargs, "adversarial_target_genuine_failure_reward");
+    env->adversarial_target_adversary_forced_reward
+        = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
+    env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
@@ -2135,8 +2144,16 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     ASSIGN_SPLIT_METRIC("reward_components/ade", reward_ade, sdc_reward_ade);
     assign_to_dict(
         dict,
-        "traffic_reward_components/target_collision_bonus",
-        log->reward_target_collision_bonus * traffic_scale);
+        "traffic_reward_components/target_genuine_failure",
+        log->reward_target_genuine_failure * traffic_scale);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_adversary_forced",
+        log->reward_target_adversary_forced * traffic_scale);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_unavoidable",
+        log->reward_target_unavoidable * traffic_scale);
     float target_collision_count = log->sdc_target_collision_count;
     float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
     float avoidable_collision_count = log->sdc_target_avoidable_collision_count;

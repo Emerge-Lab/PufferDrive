@@ -96,6 +96,7 @@ env:
   adversarial_termination_mode: target_inactive_or_no_nearby_adversary
   # Done signal sent to all agents when target failure resets the episode.
   target_failure_episode_end: terminated
+  target_collision_continuation_seconds: 2.0
   # End the episode as soon as the agent reaches its final goal. Only active in
   # control_sdc_only replay mode (single active agent).
   terminate_on_goal: false
@@ -159,7 +160,9 @@ env:
   reward_ade: 0.0
   adversarial_drive_reward_weight: 0.5
   adversarial_traffic_light_reward_weight: 3.0
-  adversarial_target_collision_bonus: 0.5
+  adversarial_target_genuine_failure_reward: 10.0
+  adversarial_target_adversary_forced_reward: 1.0
+  adversarial_target_unavoidable_reward: -0.1
   # --- Map ---
   # Path to map used for training
   map_dir: pufferlib/resources/drive/binaries/carla
@@ -212,9 +215,9 @@ env:
 policy:
   # Encoder layer (per-encoder embedding width)
   ego_input_size: 128
-  partner_input_size: 256
-  lane_input_size: 256
-  boundary_input_size: 256
+  partner_input_size: 128
+  lane_input_size: 128
+  boundary_input_size: 128
   traffic_control_input_size: 128
   context_input_size: 128
   # Encoder activation - options: "relu", "tanh", "gelu"
@@ -222,7 +225,7 @@ policy:
   encoder_layer_norm: true
   mask_padded_features: false
   # Shared backbone layer
-  backbone_hidden_size: 1024
+  backbone_hidden_size: 768
   backbone_num_layers: 3
   # Backbone activation - options: "relu", "tanh", "gelu"
   backbone_activation: gelu
@@ -236,7 +239,7 @@ policy:
   critic_num_layers: 1
   critic_head_layer_norm: false
   # Dual or shared actor-critic backbone
-  shared_network: false
+  shared_network: true
   action_type: discrete
 rnn:
   input_size: 512

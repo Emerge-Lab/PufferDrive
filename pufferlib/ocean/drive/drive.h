@@ -122,7 +122,9 @@ struct Log {
     float reward_reverse;
     float reward_overspeed;
     float reward_ade;
-    float reward_target_collision_bonus;
+    float reward_target_genuine_failure;
+    float reward_target_adversary_forced;
+    float reward_target_unavoidable;
     float traffic_collision_rate;
     float traffic_sdc_collision_rate;
     float traffic_traffic_collision_rate;
@@ -302,6 +304,8 @@ struct Drive {
     float inactive_agent_threshold;
     int adversarial_termination_mode;
     int target_failure_episode_end;
+    float target_collision_continuation_seconds;
+    int target_collision_continuation_remaining_step_count;
     int terminate_on_goal;
     int eval_mode;
     int eval_training_render;
@@ -323,7 +327,9 @@ struct Drive {
     float reward_ade;
     float adversarial_drive_reward_weight;
     float adversarial_traffic_light_reward_weight;
-    float adversarial_target_collision_bonus;
+    float adversarial_target_genuine_failure_reward;
+    float adversarial_target_adversary_forced_reward;
+    float adversarial_target_unavoidable_reward;
     int target_hit_this_step;
     int target_hit_hitter_idx_this_step;
     float target_hit_responsibility_this_step;
@@ -2795,7 +2801,9 @@ static void add_log(Drive *env) {
         episode_log.reward_reverse += env->logs[i].reward_reverse;
         episode_log.reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.reward_ade += env->logs[i].reward_ade;
-        episode_log.reward_target_collision_bonus += env->logs[i].reward_target_collision_bonus;
+        episode_log.reward_target_genuine_failure += env->logs[i].reward_target_genuine_failure;
+        episode_log.reward_target_adversary_forced += env->logs[i].reward_target_adversary_forced;
+        episode_log.reward_target_unavoidable += env->logs[i].reward_target_unavoidable;
         // Comfort and velocity metrics (normalized per timestep)
         episode_log.comfort_violation_count += env->logs[i].comfort_violation_count / safe_timestep;
         episode_log.velocity_progress_sum += env->logs[i].velocity_progress_sum / safe_timestep;
@@ -5565,6 +5573,7 @@ static float pairwise_obb_ttc_route(
 
 void c_reset(Drive *env) {
     env->adversary_out_of_range_step_count = 0;
+    env->target_collision_continuation_remaining_step_count = TARGET_COLLISION_CONTINUATION_INACTIVE_STEP_COUNT;
     env->target_hit_this_step = 0;
     env->target_hit_hitter_idx_this_step = -1;
     env->target_hit_responsibility_this_step = 0.0f;
@@ -5722,10 +5731,13 @@ void c_step(Drive *env) {
     }
     // Move active agents with policy actions
     for (int i = 0; i < env->active_agent_count; i++) {
-        env->logs[i].score = 0.0f;
-        env->logs[i].episode_length += 1;
         int agent_idx = env->active_agent_indices[i];
         Agent *agent = &env->agents[agent_idx];
+        if (agent->removed || agent->stopped) {
+            continue;
+        }
+        env->logs[i].score = 0.0f;
+        env->logs[i].episode_length += 1;
         if (agent->controller == CONTROLLER_POLICY) {
             move_dynamics(env, i, agent_idx);
         } else if (agent->controller == CONTROLLER_IDM) {
@@ -5768,10 +5780,31 @@ void c_step(Drive *env) {
     }
 
     if (target_collided_this_step) {
+        env->target_collision_continuation_remaining_step_count
+            = (int) ceilf(env->target_collision_continuation_seconds / env->dt);
+    }
+
+    if (env->target_hit_this_step) {
+        float target_collision_reward;
+        float genuine_failure_reward = 0.0f;
+        float adversary_forced_reward = 0.0f;
+        float unavoidable_reward = 0.0f;
+        if (env->target_last_avoidable_braking_seconds_before_collision == NO_AVOIDABLE_BRAKING_TIME_SECONDS) {
+            target_collision_reward = env->adversarial_target_unavoidable_reward;
+            unavoidable_reward = target_collision_reward;
+        } else if (env->target_reaction_window_danger_episode) {
+            target_collision_reward = env->adversarial_target_genuine_failure_reward;
+            genuine_failure_reward = target_collision_reward;
+        } else {
+            target_collision_reward = env->adversarial_target_adversary_forced_reward;
+            adversary_forced_reward = target_collision_reward;
+        }
         for (int i = EGO_IDX + 1; i < env->active_agent_count; i++) {
-            env->rewards[i] += env->adversarial_target_collision_bonus;
-            env->logs[i].episode_return += env->adversarial_target_collision_bonus;
-            env->logs[i].reward_target_collision_bonus += env->adversarial_target_collision_bonus;
+            env->rewards[i] += target_collision_reward;
+            env->logs[i].episode_return += target_collision_reward;
+            env->logs[i].reward_target_genuine_failure += genuine_failure_reward;
+            env->logs[i].reward_target_adversary_forced += adversary_forced_reward;
+            env->logs[i].reward_target_unavoidable += unavoidable_reward;
         }
     }
 
@@ -5811,6 +5844,7 @@ void c_step(Drive *env) {
 
     int adversarial_early_reset = 0;
     int target_failure_early_reset = 0;
+    int target_collision_continuation_active = 0;
     if (env->adversarial_termination_mode != ADVERSARIAL_TERMINATION_MODE_DISABLED) {
         int target_agent_idx = env->active_agent_indices[0];
         int target_inactive = env->agents[target_agent_idx].removed || env->agents[target_agent_idx].stopped;
@@ -5822,10 +5856,22 @@ void c_step(Drive *env) {
             }
         }
         int all_adversaries_inactive = active_adversary_count == 0;
+        target_collision_continuation_active = env->target_collision_continuation_remaining_step_count
+            > TARGET_COLLISION_CONTINUATION_INACTIVE_STEP_COUNT;
+        int target_collision_continuation_expired = 0;
+        if (target_collision_continuation_active && !target_collided_this_step) {
+            env->target_collision_continuation_remaining_step_count--;
+            target_collision_continuation_expired = env->target_collision_continuation_remaining_step_count
+                == TARGET_COLLISION_CONTINUATION_INACTIVE_STEP_COUNT;
+        }
+        if (target_collision_continuation_active) {
+            target_inactive = 0;
+        }
         int proximity_mode = env->adversarial_termination_mode == ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY
             || env->adversarial_termination_mode == ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY;
         int no_nearby_adversary = 0;
-        if (proximity_mode && env->simulation_mode == SIMULATION_MODE_GIGAFLOW) {
+        if (proximity_mode && env->simulation_mode == SIMULATION_MODE_GIGAFLOW
+            && !target_collision_continuation_active) {
             no_nearby_adversary = adversary_proximity_grace_expired(env, target_agent_idx);
         }
 
@@ -5851,10 +5897,18 @@ void c_step(Drive *env) {
         default:
             assert(0);
         }
+        if (target_collision_continuation_active
+            && (all_adversaries_inactive || target_collision_continuation_expired)) {
+            adversarial_early_reset = 1;
+            target_failure_early_reset = 0;
+        }
     }
 
     if (env->timestep == env->scenario_length || early_reset || adversarial_early_reset) {
         for (int i = 0; i < env->active_agent_count; i++) {
+            if (target_collision_continuation_active && env->terminals[i]) {
+                continue;
+            }
             if (target_failure_early_reset
                 && env->target_failure_episode_end == TARGET_FAILURE_EPISODE_END_TERMINATED) {
                 env->terminals[i] = 1;

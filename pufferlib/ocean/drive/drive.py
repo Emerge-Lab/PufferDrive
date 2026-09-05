@@ -39,7 +39,9 @@ class Drive(pufferlib.PufferEnv):
         reward_ade=0.0,
         adversarial_drive_reward_weight=0.5,
         adversarial_traffic_light_reward_weight=3.0,
-        adversarial_target_collision_bonus=0.5,
+        adversarial_target_genuine_failure_reward=10.0,
+        adversarial_target_adversary_forced_reward=1.0,
+        adversarial_target_unavoidable_reward=-0.1,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -81,6 +83,7 @@ class Drive(pufferlib.PufferEnv):
         inactive_agent_threshold=0.4,
         adversarial_termination_mode="target_inactive_or_no_nearby_adversary",
         target_failure_episode_end="terminated",
+        target_collision_continuation_seconds=2.0,
         terminate_on_goal=False,
         buf=None,
         seed=1,
@@ -184,7 +187,9 @@ class Drive(pufferlib.PufferEnv):
         self.reward_ade = reward_ade
         self.adversarial_drive_reward_weight = adversarial_drive_reward_weight
         self.adversarial_traffic_light_reward_weight = adversarial_traffic_light_reward_weight
-        self.adversarial_target_collision_bonus = adversarial_target_collision_bonus
+        self.adversarial_target_genuine_failure_reward = adversarial_target_genuine_failure_reward
+        self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
+        self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
@@ -253,6 +258,7 @@ class Drive(pufferlib.PufferEnv):
             "terminated": binding.TARGET_FAILURE_EPISODE_END_TERMINATED,
             "truncated": binding.TARGET_FAILURE_EPISODE_END_TRUNCATED,
         }[target_failure_episode_end]
+        self.target_collision_continuation_seconds = float(target_collision_continuation_seconds)
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
@@ -481,7 +487,9 @@ class Drive(pufferlib.PufferEnv):
             "reward_ade": self.reward_ade,
             "adversarial_drive_reward_weight": self.adversarial_drive_reward_weight,
             "adversarial_traffic_light_reward_weight": self.adversarial_traffic_light_reward_weight,
-            "adversarial_target_collision_bonus": self.adversarial_target_collision_bonus,
+            "adversarial_target_genuine_failure_reward": self.adversarial_target_genuine_failure_reward,
+            "adversarial_target_adversary_forced_reward": self.adversarial_target_adversary_forced_reward,
+            "adversarial_target_unavoidable_reward": self.adversarial_target_unavoidable_reward,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
@@ -523,6 +531,7 @@ class Drive(pufferlib.PufferEnv):
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
             "adversarial_termination_mode": self.adversarial_termination_mode,
             "target_failure_episode_end": self.target_failure_episode_end,
+            "target_collision_continuation_seconds": self.target_collision_continuation_seconds,
             "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
             "max_agents": max_agents,

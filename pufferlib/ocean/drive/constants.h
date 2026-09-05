@@ -133,6 +133,7 @@
 // Gymnasium done signal emitted to all agents when target failure resets the episode
 #define TARGET_FAILURE_EPISODE_END_TERMINATED 0
 #define TARGET_FAILURE_EPISODE_END_TRUNCATED 1
+#define TARGET_COLLISION_CONTINUATION_INACTIVE_STEP_COUNT 0
 
 // Goal set refresh policy
 #define GOAL_REGEN_FINITE 0  // regenerate the full goal set once all are reached
