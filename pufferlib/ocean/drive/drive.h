@@ -285,6 +285,7 @@ struct Drive {
     int collision_behavior;
     int offroad_behavior;
     int traffic_light_behavior;
+    int traffic_light_junction_phases;
     int target_infraction_behavior;
     int sdc_controller;
     int non_sdc_controller;
@@ -2407,93 +2408,200 @@ static void generate_reward_coefs(Drive *env, Agent *agent) {
     }
 }
 
-static void generate_traffic_light_states(Drive *env) {
-    int steps = env->scenario_length;
-    float dt = env->dt;
-    int training_mode = !env->eval_mode || env->eval_training_render;
+typedef struct {
+    int green_step_count;
+    int yellow_step_count;
+    int red_step_count;
+    int phase_count;
+    int offset;
+} TrafficLightCycle;
 
-    // 20% chance: disable ALL lights for this episode
-    int disable_all = training_mode && (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB);
+static int duration_to_steps(float duration_seconds, float dt_seconds) {
+    int step_count = (int) (duration_seconds / dt_seconds);
+    return step_count < 1 ? 1 : step_count;
+}
 
-    for (int i = 0; i < env->num_traffic_elements; i++) {
-        TrafficControlElement *tc = &env->traffic_elements[i];
-        if (tc->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || tc->states == NULL || tc->state_size <= 0) {
-            continue;
-        }
+static TrafficLightCycle sample_traffic_light_cycle(Drive *env, int phase_count, int training_mode) {
+    float green_duration_seconds;
+    float yellow_duration_seconds;
+    float red_duration_seconds;
+    if (!training_mode) {
+        green_duration_seconds = TL_DEFAULT_GREEN_DURATION;
+        yellow_duration_seconds = TL_DEFAULT_YELLOW_DURATION;
+        red_duration_seconds = TL_DEFAULT_RED_DURATION;
+    } else {
+        green_duration_seconds
+            = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
+        yellow_duration_seconds
+            = sample_uniform(&env->rng_state, 0.5f * TL_DEFAULT_YELLOW_DURATION, 0.75f * TL_DEFAULT_YELLOW_DURATION);
+        red_duration_seconds
+            = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
+    }
 
-        int fill_steps = steps;
-        if (tc->state_size < fill_steps) {
-            fill_steps = tc->state_size;
-        }
+    TrafficLightCycle cycle;
+    cycle.green_step_count = duration_to_steps(green_duration_seconds, env->dt);
+    cycle.yellow_step_count = duration_to_steps(yellow_duration_seconds, env->dt);
+    cycle.red_step_count = duration_to_steps(red_duration_seconds, env->dt);
+    cycle.phase_count = phase_count;
+    int cycle_step_count = phase_count * (cycle.green_step_count + cycle.yellow_step_count + cycle.red_step_count);
+    cycle.offset = rng_below(&env->rng_state, cycle_step_count);
+    return cycle;
+}
 
-        if (disable_all) {
-            for (int t = 0; t < fill_steps; t++) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
-            }
-            continue;
-        }
-
-        if (training_mode) {
-            // Individual removal
-            if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
-                for (int t = 0; t < fill_steps; t++) {
-                    tc->states[t] = TRAFFIC_CONTROL_STATE_OFF;
-                }
-                continue;
-            }
-            // Always green
-            if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
-                for (int t = 0; t < fill_steps; t++) {
-                    tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
-                }
-                continue;
-            }
-        }
-
-        // Compute phase durations
-        float dur_green, dur_yellow, dur_red;
-        if (!training_mode) {
-            dur_green = TL_DEFAULT_GREEN_DURATION;
-            dur_yellow = TL_DEFAULT_YELLOW_DURATION;
-            dur_red = TL_DEFAULT_RED_DURATION;
+static void fill_traffic_light_cycle(
+    TrafficControlElement *traffic_element,
+    const TrafficLightCycle *cycle,
+    int phase_idx,
+    int fill_steps) {
+    int phase_step_count = cycle->green_step_count + cycle->yellow_step_count + cycle->red_step_count;
+    int cycle_step_count = cycle->phase_count * phase_step_count;
+    for (int timestep = 0; timestep < fill_steps; timestep++) {
+        int cycle_step = (timestep + cycle->offset) % cycle_step_count;
+        int phase_step = cycle_step % phase_step_count;
+        if (cycle_step / phase_step_count != phase_idx) {
+            traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_RED;
+        } else if (phase_step < cycle->green_step_count) {
+            traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_GREEN;
+        } else if (phase_step < cycle->green_step_count + cycle->yellow_step_count) {
+            traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_YELLOW;
         } else {
-            dur_green = sample_uniform(&env->rng_state, 0.1 * TL_DEFAULT_GREEN_DURATION, TL_DEFAULT_GREEN_DURATION);
-            dur_yellow = sample_uniform(
-                &env->rng_state,
-                0.5f * TL_DEFAULT_YELLOW_DURATION,
-                0.75f * TL_DEFAULT_YELLOW_DURATION);
-            dur_red = sample_uniform(&env->rng_state, 0.15f * TL_DEFAULT_RED_DURATION, 5.0f * TL_DEFAULT_RED_DURATION);
-        }
-
-        int steps_green = (int) (dur_green / dt);
-        if (steps_green < 1) {
-            steps_green = 1;
-        }
-        int steps_yellow = (int) (dur_yellow / dt);
-        if (steps_yellow < 1) {
-            steps_yellow = 1;
-        }
-        int steps_red = (int) (dur_red / dt);
-        if (steps_red < 1) {
-            steps_red = 1;
-        }
-        int cycle_length = steps_green + steps_yellow + steps_red;
-
-        // Random phase offset
-        int offset = rng_below(&env->rng_state, cycle_length);
-
-        // Fill states: GREEN -> YELLOW -> RED -> repeat
-        for (int t = 0; t < fill_steps; t++) {
-            int phase = (t + offset) % cycle_length;
-            if (phase < steps_green) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_GREEN;
-            } else if (phase < steps_green + steps_yellow) {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_YELLOW;
-            } else {
-                tc->states[t] = TRAFFIC_CONTROL_STATE_RED;
-            }
+            traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_RED;
         }
     }
+}
+
+static void fill_independent_traffic_light_states(
+    Drive *env,
+    TrafficControlElement *traffic_element,
+    int fill_steps,
+    int training_mode) {
+    if (training_mode) {
+        if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            for (int timestep = 0; timestep < fill_steps; timestep++) {
+                traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_OFF;
+            }
+            return;
+        }
+        if (sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_ALWAYS_GREEN_PROB) {
+            for (int timestep = 0; timestep < fill_steps; timestep++) {
+                traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_GREEN;
+            }
+            return;
+        }
+    }
+
+    TrafficLightCycle cycle = sample_traffic_light_cycle(env, 1, training_mode);
+    fill_traffic_light_cycle(traffic_element, &cycle, 0, fill_steps);
+}
+
+static void generate_independent_traffic_light_states(Drive *env) {
+    int training_mode = !env->eval_mode || env->eval_training_render;
+    int disable_all = training_mode && sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB;
+
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &env->traffic_elements[i];
+        if (traffic_element->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || traffic_element->states == NULL
+            || traffic_element->state_size <= 0) {
+            continue;
+        }
+        int fill_steps = env->scenario_length;
+        if (traffic_element->state_size < fill_steps) {
+            fill_steps = traffic_element->state_size;
+        }
+        if (disable_all) {
+            for (int timestep = 0; timestep < fill_steps; timestep++) {
+                traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_OFF;
+            }
+            continue;
+        }
+        fill_independent_traffic_light_states(env, traffic_element, fill_steps, training_mode);
+    }
+}
+
+static int traffic_light_cycle_leader(Drive *env, int traffic_element_idx) {
+    int junction_id = env->traffic_elements[traffic_element_idx].junction_id;
+    for (int i = 0; i < traffic_element_idx; i++) {
+        TrafficControlElement *traffic_element = &env->traffic_elements[i];
+        if (traffic_element->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT
+            && traffic_element->junction_id == junction_id) {
+            return i;
+        }
+    }
+    return traffic_element_idx;
+}
+
+static int traffic_light_phase_count(Drive *env, int junction_id) {
+    int max_phase_idx = 0;
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &env->traffic_elements[i];
+        if (traffic_element->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT
+            || traffic_element->junction_id != junction_id) {
+            continue;
+        }
+        if (traffic_element->phase_idx > max_phase_idx) {
+            max_phase_idx = traffic_element->phase_idx;
+        }
+    }
+    return max_phase_idx + 1;
+}
+
+static int has_grouped_traffic_lights(Drive *env) {
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &env->traffic_elements[i];
+        if (traffic_element->type == TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT && traffic_element->junction_id >= 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void generate_coordinated_traffic_light_states(Drive *env) {
+    int training_mode = !env->eval_mode || env->eval_training_render;
+    int disable_all = training_mode && sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_EPISODE_DISABLE_PROB;
+    TrafficLightCycle cycles[env->num_traffic_elements > 0 ? env->num_traffic_elements : 1];
+
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic_element = &env->traffic_elements[i];
+        if (traffic_element->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT || traffic_element->states == NULL
+            || traffic_element->state_size <= 0) {
+            continue;
+        }
+        int fill_steps = env->scenario_length;
+        if (traffic_element->state_size < fill_steps) {
+            fill_steps = traffic_element->state_size;
+        }
+        if (disable_all) {
+            for (int timestep = 0; timestep < fill_steps; timestep++) {
+                traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_OFF;
+            }
+            continue;
+        }
+        if (traffic_element->junction_id < 0) {
+            fill_independent_traffic_light_states(env, traffic_element, fill_steps, training_mode);
+            continue;
+        }
+
+        int leader_idx = traffic_light_cycle_leader(env, i);
+        if (leader_idx == i) {
+            int phase_count = traffic_light_phase_count(env, traffic_element->junction_id);
+            cycles[i] = sample_traffic_light_cycle(env, phase_count, training_mode);
+        }
+        if (training_mode && sample_uniform(&env->rng_state, 0.0f, 1.0f) < TL_INDIVIDUAL_REMOVE_PROB) {
+            for (int timestep = 0; timestep < fill_steps; timestep++) {
+                traffic_element->states[timestep] = TRAFFIC_CONTROL_STATE_OFF;
+            }
+            continue;
+        }
+        fill_traffic_light_cycle(traffic_element, &cycles[leader_idx], traffic_element->phase_idx, fill_steps);
+    }
+}
+
+static void generate_traffic_light_states(Drive *env) {
+    if (!env->traffic_light_junction_phases || !has_grouped_traffic_lights(env)) {
+        generate_independent_traffic_light_states(env);
+        return;
+    }
+    generate_coordinated_traffic_light_states(env);
 }
 
 static bool check_spawn_collision(Drive *env, int num_existing_agents, Agent *tmp_agent) {
