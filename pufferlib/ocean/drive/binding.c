@@ -2137,6 +2137,31 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         dict,
         "traffic_reward_components/target_collision_bonus",
         log->reward_target_collision_bonus * traffic_scale);
+    float target_collision_count = log->sdc_target_collision_count;
+    float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
+    float avoidable_collision_count = log->sdc_target_avoidable_collision_count;
+    float avoidable_collision_scale = avoidable_collision_count > 0.0f ? 1.0f / avoidable_collision_count : 0.0f;
+    assign_to_dict(dict, "sdc_target_collision_rate", target_collision_count * sdc_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_responsibility",
+        log->sdc_target_collision_responsibility_sum * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_unavoidable_rate",
+        log->sdc_target_collision_unavoidable_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_genuine_failure_rate",
+        log->sdc_target_collision_genuine_failure_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_adversary_forced_rate",
+        log->sdc_target_collision_adversary_forced_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_last_avoidable_braking_seconds",
+        log->sdc_target_avoidable_braking_seconds_sum * avoidable_collision_scale);
 
     if (env->compute_eval_metrics) {
         // Puffer score components

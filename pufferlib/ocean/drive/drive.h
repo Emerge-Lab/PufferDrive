@@ -161,6 +161,13 @@ struct Log {
     float sdc_reward_reverse;
     float sdc_reward_overspeed;
     float sdc_reward_ade;
+    float sdc_target_collision_count;
+    float sdc_target_collision_responsibility_sum;
+    float sdc_target_collision_unavoidable_count;
+    float sdc_target_collision_genuine_failure_count;
+    float sdc_target_collision_adversary_forced_count;
+    float sdc_target_avoidable_braking_seconds_sum;
+    float sdc_target_avoidable_collision_count;
 };
 
 struct GridMapEntity {
@@ -317,6 +324,13 @@ struct Drive {
     float adversarial_drive_reward_weight;
     float adversarial_traffic_light_reward_weight;
     float adversarial_target_collision_bonus;
+    int target_hit_this_step;
+    int target_hit_hitter_idx_this_step;
+    float target_hit_responsibility_this_step;
+    int target_collision_analyzed_episode;
+    float target_collision_responsibility_episode;
+    float target_last_avoidable_braking_seconds_before_collision;
+    int target_reaction_window_danger_episode;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -548,6 +562,7 @@ static void reset_agent_state(Agent *agent) {
     agent->partner_blindness_counter = 0;
     agent->is_blind_partner = 0;
     agent->is_phantom_braker = 0;
+    agent->trajectory_hist_count = 0;
 }
 
 static void invalidate_agent(Agent *agent) {
@@ -567,6 +582,30 @@ static void copy_pose_to_prev(Agent *agent) {
     agent->prev_y = agent->sim_y;
     agent->prev_cos_heading = agent->cos_heading;
     agent->prev_sin_heading = agent->sin_heading;
+}
+
+static void push_trajectory_history(Agent *agent) {
+    if (agent->removed || agent->sim_x == INVALID_POSITION) {
+        return;
+    }
+
+    for (int history_idx = 0; history_idx < TARGET_TRAJECTORY_HISTORY_LEN - 1; history_idx++) {
+        agent->trajectory_hist_x[history_idx] = agent->trajectory_hist_x[history_idx + 1];
+        agent->trajectory_hist_y[history_idx] = agent->trajectory_hist_y[history_idx + 1];
+        agent->trajectory_hist_z[history_idx] = agent->trajectory_hist_z[history_idx + 1];
+        agent->trajectory_hist_heading[history_idx] = agent->trajectory_hist_heading[history_idx + 1];
+        agent->trajectory_hist_speed_signed[history_idx] = agent->trajectory_hist_speed_signed[history_idx + 1];
+    }
+
+    int newest_history_idx = TARGET_TRAJECTORY_HISTORY_LEN - 1;
+    agent->trajectory_hist_x[newest_history_idx] = agent->sim_x;
+    agent->trajectory_hist_y[newest_history_idx] = agent->sim_y;
+    agent->trajectory_hist_z[newest_history_idx] = agent->sim_z;
+    agent->trajectory_hist_heading[newest_history_idx] = agent->sim_heading;
+    agent->trajectory_hist_speed_signed[newest_history_idx] = agent->sim_speed_signed;
+    if (agent->trajectory_hist_count < TARGET_TRAJECTORY_HISTORY_LEN) {
+        agent->trajectory_hist_count++;
+    }
 }
 
 static inline void update_agent_radius(Agent *agent) {
@@ -1764,7 +1803,11 @@ static bool check_red_light_violation(Drive *env, int agent_idx) {
     return false;
 }
 
-static bool check_obb_collision(Agent *car1, Agent *car2) {
+static bool check_obb_collision_with_normal(
+    Agent *car1,
+    Agent *car2,
+    float *collision_normal_x,
+    float *collision_normal_y) {
     // OBB collision via SAT (Separating Axis Theorem).
     // Projects both boxes onto 4 axes (2 per car) and checks for overlap on all axes.
     // No epsilon tolerance: exact boundary contact may flicker across steps.
@@ -1801,6 +1844,10 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
            {car2->cos_heading, car2->sin_heading},
            {-car2->sin_heading, car2->cos_heading}};
 
+    float minimum_overlap = INFINITY;
+    float minimum_axis_x = 0.0f;
+    float minimum_axis_y = 0.0f;
+
     for (int i = 0; i < 4; i++) {
         float min1 = INFINITY, max1 = -INFINITY;
         float min2 = INFINITY, max2 = -INFINITY;
@@ -1815,8 +1862,114 @@ static bool check_obb_collision(Agent *car1, Agent *car2) {
         if (max1 < min2 || min1 > max2) {
             return false;
         }
+        float overlap = fminf(max1, max2) - fmaxf(min1, min2);
+        if (overlap < minimum_overlap) {
+            minimum_overlap = overlap;
+            minimum_axis_x = axes[i][0];
+            minimum_axis_y = axes[i][1];
+        }
+    }
+
+    float center_delta_x = car2->sim_x - car1->sim_x;
+    float center_delta_y = car2->sim_y - car1->sim_y;
+    if (center_delta_x * minimum_axis_x + center_delta_y * minimum_axis_y < 0.0f) {
+        minimum_axis_x = -minimum_axis_x;
+        minimum_axis_y = -minimum_axis_y;
+    }
+    if (collision_normal_x != NULL) {
+        *collision_normal_x = minimum_axis_x;
+    }
+    if (collision_normal_y != NULL) {
+        *collision_normal_y = minimum_axis_y;
     }
     return true;
+}
+
+static bool check_obb_collision(Agent *car1, Agent *car2) {
+    return check_obb_collision_with_normal(car1, car2, NULL, NULL);
+}
+
+static Agent interpolate_collision_pose(const Agent *agent, float alpha) {
+    Agent interpolated = *agent;
+    float previous_heading = atan2f(agent->prev_sin_heading, agent->prev_cos_heading);
+    float heading_delta = normalize_heading(agent->sim_heading - previous_heading);
+    interpolated.sim_x = agent->prev_x + alpha * (agent->sim_x - agent->prev_x);
+    interpolated.sim_y = agent->prev_y + alpha * (agent->sim_y - agent->prev_y);
+    interpolated.sim_heading = normalize_heading(previous_heading + alpha * heading_delta);
+    interpolated.cos_heading = cosf(interpolated.sim_heading);
+    interpolated.sin_heading = sinf(interpolated.sim_heading);
+    return interpolated;
+}
+
+static void swept_collision_normal_fallback(
+    const Agent *agent_a,
+    const Agent *agent_b,
+    float *collision_normal_x,
+    float *collision_normal_y) {
+    float relative_displacement_x = (agent_a->sim_x - agent_a->prev_x) - (agent_b->sim_x - agent_b->prev_x);
+    float relative_displacement_y = (agent_a->sim_y - agent_a->prev_y) - (agent_b->sim_y - agent_b->prev_y);
+    float normal_length
+        = sqrtf(relative_displacement_x * relative_displacement_x + relative_displacement_y * relative_displacement_y);
+    if (normal_length > 1e-6f) {
+        *collision_normal_x = relative_displacement_x / normal_length;
+        *collision_normal_y = relative_displacement_y / normal_length;
+        return;
+    }
+
+    float center_delta_x = agent_b->sim_x - agent_a->sim_x;
+    float center_delta_y = agent_b->sim_y - agent_a->sim_y;
+    normal_length = sqrtf(center_delta_x * center_delta_x + center_delta_y * center_delta_y);
+    if (normal_length > 1e-6f) {
+        *collision_normal_x = center_delta_x / normal_length;
+        *collision_normal_y = center_delta_y / normal_length;
+        return;
+    }
+    *collision_normal_x = agent_a->cos_heading;
+    *collision_normal_y = agent_a->sin_heading;
+}
+
+static void compute_first_contact_collision_normal(
+    const Agent *agent_a,
+    const Agent *agent_b,
+    float *collision_normal_x,
+    float *collision_normal_y) {
+    Agent previous_a = interpolate_collision_pose(agent_a, 0.0f);
+    Agent previous_b = interpolate_collision_pose(agent_b, 0.0f);
+    if (check_obb_collision_with_normal(&previous_a, &previous_b, collision_normal_x, collision_normal_y)) {
+        return;
+    }
+
+    float overlap_alpha = -1.0f;
+    float previous_alpha = 0.0f;
+    for (int scan_idx = 1; scan_idx <= COLLISION_CONTACT_SCAN_STEPS; scan_idx++) {
+        float alpha = (float) scan_idx / COLLISION_CONTACT_SCAN_STEPS;
+        Agent sample_a = interpolate_collision_pose(agent_a, alpha);
+        Agent sample_b = interpolate_collision_pose(agent_b, alpha);
+        if (check_obb_collision(&sample_a, &sample_b)) {
+            overlap_alpha = alpha;
+            break;
+        }
+        previous_alpha = alpha;
+    }
+    if (overlap_alpha < 0.0f) {
+        swept_collision_normal_fallback(agent_a, agent_b, collision_normal_x, collision_normal_y);
+        return;
+    }
+
+    for (int search_idx = 0; search_idx < COLLISION_CONTACT_BINARY_SEARCH_STEPS; search_idx++) {
+        float midpoint_alpha = 0.5f * (previous_alpha + overlap_alpha);
+        Agent midpoint_a = interpolate_collision_pose(agent_a, midpoint_alpha);
+        Agent midpoint_b = interpolate_collision_pose(agent_b, midpoint_alpha);
+        if (check_obb_collision(&midpoint_a, &midpoint_b)) {
+            overlap_alpha = midpoint_alpha;
+        } else {
+            previous_alpha = midpoint_alpha;
+        }
+    }
+
+    Agent contact_a = interpolate_collision_pose(agent_a, overlap_alpha);
+    Agent contact_b = interpolate_collision_pose(agent_b, overlap_alpha);
+    check_obb_collision_with_normal(&contact_a, &contact_b, collision_normal_x, collision_normal_y);
 }
 
 static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b_disp) {
@@ -1891,7 +2044,7 @@ static bool check_moving_obb_collision(Agent *a, Agent *b, float a_disp, float b
     return false;
 }
 
-static int collision_check(Drive *env, int agent_idx) {
+static int collision_check(Drive *env, int agent_idx, float *collision_normal_x, float *collision_normal_y) {
     Agent *agent = &env->agents[agent_idx];
 
     if (agent->sim_x == INVALID_POSITION || agent->removed) {
@@ -1931,6 +2084,9 @@ static int collision_check(Drive *env, int agent_idx) {
         }
         if (check_moving_obb_collision(agent, other_agent, ego_disp, other_disp)) {
             car_collided_with_index = index;
+            if (collision_normal_x != NULL && collision_normal_y != NULL) {
+                compute_first_contact_collision_normal(agent, other_agent, collision_normal_x, collision_normal_y);
+            }
             break;
         }
     }
@@ -1947,10 +2103,7 @@ static int active_traffic_log_idx(Drive *env, int agent_idx) {
     return -1;
 }
 
-static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
-    Agent *agent = &env->agents[agent_idx];
-    Agent *other = &env->agents[other_idx];
-
+static bool is_agent_at_fault_collision(const Agent *agent, const Agent *other) {
     if (agent->sim_speed <= AGENT_STOPPED_SPEED_THRESHOLD) {
         return false;
     }
@@ -2019,6 +2172,404 @@ static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
 
     float edge_dist = fabsf(agent->metrics_array[LANE_DIST_IDX]) + 0.5f * agent->sim_width;
     return edge_dist > MULTI_LANE_THRESHOLD;
+}
+
+static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
+    return is_agent_at_fault_collision(&env->agents[agent_idx], &env->agents[other_idx]);
+}
+
+static bool is_adversarial_agent(Drive *env, int agent_idx) {
+    for (int active_idx = EGO_IDX + 1; active_idx < env->active_agent_count; active_idx++) {
+        if (env->active_agent_indices[active_idx] == agent_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static float collision_responsibility(
+    const Agent *agent_a,
+    const Agent *agent_b,
+    float collision_normal_x,
+    float collision_normal_y) {
+    float contribution_a = fmaxf(0.0f, agent_a->sim_vx * collision_normal_x + agent_a->sim_vy * collision_normal_y);
+    float contribution_b = fmaxf(0.0f, -(agent_b->sim_vx * collision_normal_x + agent_b->sim_vy * collision_normal_y));
+    return contribution_a / fmaxf(contribution_a + contribution_b, 1e-6f);
+}
+
+static void record_target_hit_responsibility(
+    Drive *env,
+    int agent_idx,
+    int other_agent_idx,
+    float collision_normal_x,
+    float collision_normal_y) {
+    int target_agent_idx = env->active_agent_indices[EGO_IDX];
+    if (agent_idx != target_agent_idx && other_agent_idx != target_agent_idx) {
+        return;
+    }
+
+    int hitter_agent_idx = agent_idx == target_agent_idx ? other_agent_idx : agent_idx;
+    if (!is_adversarial_agent(env, hitter_agent_idx)) {
+        return;
+    }
+
+    float target_responsibility;
+    if (agent_idx == target_agent_idx) {
+        target_responsibility = collision_responsibility(
+            &env->agents[target_agent_idx],
+            &env->agents[hitter_agent_idx],
+            collision_normal_x,
+            collision_normal_y);
+    } else {
+        float hitter_responsibility = collision_responsibility(
+            &env->agents[hitter_agent_idx],
+            &env->agents[target_agent_idx],
+            collision_normal_x,
+            collision_normal_y);
+        target_responsibility = 1.0f - hitter_responsibility;
+    }
+
+    target_responsibility = clip(target_responsibility, 0.0f, 1.0f);
+    if (env->target_hit_this_step && target_responsibility <= env->target_hit_responsibility_this_step) {
+        return;
+    }
+    env->target_hit_this_step = 1;
+    env->target_hit_hitter_idx_this_step = hitter_agent_idx;
+    env->target_hit_responsibility_this_step = target_responsibility;
+}
+
+static bool check_z_collision_possibility(const Agent *agent_a, const Agent *agent_b) {
+    float agent_a_top = agent_a->sim_z + agent_a->sim_height;
+    float agent_b_top = agent_b->sim_z + agent_b->sim_height;
+    return !(agent_a_top < agent_b->sim_z || agent_b_top < agent_a->sim_z);
+}
+
+typedef struct {
+    int num_steps;
+    float x[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+    float y[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+    float speed_signed[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
+} AdversaryBrakeTrajectory;
+
+static void build_adversary_brake_trajectory(const Agent *adversary, float dt, AdversaryBrakeTrajectory *trajectory) {
+    float initial_speed_signed = adversary->sim_speed_signed;
+    float stop_time_seconds = fabsf(initial_speed_signed) / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
+    trajectory->num_steps = 0;
+    for (int step_idx = 0; step_idx < TARGET_AVOIDABILITY_MAX_EXT_STEPS; step_idx++) {
+        float time_seconds = fminf(step_idx * dt, stop_time_seconds);
+        float distance_meters = initial_speed_signed * time_seconds
+            - copysignf(0.5f * TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * time_seconds * time_seconds,
+                        initial_speed_signed);
+        trajectory->x[step_idx] = adversary->sim_x + distance_meters * adversary->cos_heading;
+        trajectory->y[step_idx] = adversary->sim_y + distance_meters * adversary->sin_heading;
+        trajectory->speed_signed[step_idx] = copysignf(
+            fmaxf(0.0f, fabsf(initial_speed_signed) - TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * time_seconds),
+            initial_speed_signed);
+        trajectory->num_steps++;
+        if (step_idx * dt >= stop_time_seconds) {
+            break;
+        }
+    }
+}
+
+static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back) {
+    int history_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
+    Agent sample = *agent;
+    sample.sim_x = agent->trajectory_hist_x[history_idx];
+    sample.sim_y = agent->trajectory_hist_y[history_idx];
+    sample.sim_z = agent->trajectory_hist_z[history_idx];
+    sample.sim_heading = normalize_heading(agent->trajectory_hist_heading[history_idx]);
+    sample.cos_heading = cosf(sample.sim_heading);
+    sample.sin_heading = sinf(sample.sim_heading);
+    sample.sim_speed_signed = agent->trajectory_hist_speed_signed[history_idx];
+    sample.sim_speed = fabsf(sample.sim_speed_signed);
+    sample.sim_vx = sample.sim_speed_signed * sample.cos_heading;
+    sample.sim_vy = sample.sim_speed_signed * sample.sin_heading;
+    return sample;
+}
+
+static void target_brake_path_sample(
+    Agent *target,
+    int history_start_idx,
+    float distance_meters,
+    float *sample_x,
+    float *sample_y,
+    float *sample_z,
+    float *sample_heading) {
+    float path_x[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    float path_y[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    float path_z[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    int path_point_count = 0;
+    for (int history_idx = history_start_idx; history_idx < TARGET_TRAJECTORY_HISTORY_LEN; history_idx++) {
+        path_x[path_point_count] = target->trajectory_hist_x[history_idx];
+        path_y[path_point_count] = target->trajectory_hist_y[history_idx];
+        path_z[path_point_count] = target->trajectory_hist_z[history_idx];
+        path_point_count++;
+    }
+    path_x[path_point_count] = target->sim_x;
+    path_y[path_point_count] = target->sim_y;
+    path_z[path_point_count] = target->sim_z;
+    path_point_count++;
+
+    float traveled_meters = 0.0f;
+    for (int path_idx = 0; path_idx < path_point_count - 1; path_idx++) {
+        float delta_x = path_x[path_idx + 1] - path_x[path_idx];
+        float delta_y = path_y[path_idx + 1] - path_y[path_idx];
+        float delta_z = path_z[path_idx + 1] - path_z[path_idx];
+        float segment_length_meters = sqrtf(delta_x * delta_x + delta_y * delta_y);
+        if (traveled_meters + segment_length_meters < distance_meters) {
+            traveled_meters += segment_length_meters;
+            continue;
+        }
+        float segment_fraction = segment_length_meters > 1e-6f
+            ? clip((distance_meters - traveled_meters) / segment_length_meters, 0.0f, 1.0f)
+            : 0.0f;
+        *sample_x = path_x[path_idx] + segment_fraction * delta_x;
+        *sample_y = path_y[path_idx] + segment_fraction * delta_y;
+        *sample_z = path_z[path_idx] + segment_fraction * delta_z;
+        *sample_heading = segment_length_meters > 1e-6f ? atan2f(delta_y, delta_x) : target->sim_heading;
+        return;
+    }
+
+    int last_path_idx = path_point_count - 1;
+    float final_delta_x = path_x[last_path_idx] - path_x[last_path_idx - 1];
+    float final_delta_y = path_y[last_path_idx] - path_y[last_path_idx - 1];
+    float final_segment_length = sqrtf(final_delta_x * final_delta_x + final_delta_y * final_delta_y);
+    float final_heading = final_segment_length > 1e-6f ? atan2f(final_delta_y, final_delta_x) : target->sim_heading;
+    float overshoot_meters = distance_meters - traveled_meters;
+    *sample_x = path_x[last_path_idx] + overshoot_meters * cosf(final_heading);
+    *sample_y = path_y[last_path_idx] + overshoot_meters * sinf(final_heading);
+    *sample_z = path_z[last_path_idx];
+    *sample_heading = final_heading;
+}
+
+static bool target_braking_avoids_collision(
+    Drive *env,
+    int target_agent_idx,
+    int collision_adversary_idx,
+    const AdversaryBrakeTrajectory *collision_adversary_trajectory,
+    int steps_back) {
+    Agent *target = &env->agents[target_agent_idx];
+    int history_start_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
+    float initial_target_speed = fabsf(target->trajectory_hist_speed_signed[history_start_idx]);
+    float target_stop_time_seconds = initial_target_speed / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
+    int target_stop_step = (int) ceilf(target_stop_time_seconds / env->dt - 1e-6f);
+    int adversary_stop_rollout_step = steps_back + collision_adversary_trajectory->num_steps - 1;
+    int rollout_horizon_step
+        = target_stop_step > adversary_stop_rollout_step ? target_stop_step : adversary_stop_rollout_step;
+    if (rollout_horizon_step >= TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS) {
+        rollout_horizon_step = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS - 1;
+    }
+
+    Agent target_sample = *target;
+    for (int rollout_step = 0; rollout_step <= rollout_horizon_step; rollout_step++) {
+        float rollout_time_seconds = rollout_step * env->dt;
+        float braking_time_seconds = fminf(rollout_time_seconds, target_stop_time_seconds);
+        float braking_distance_meters = initial_target_speed * braking_time_seconds
+            - 0.5f * TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * braking_time_seconds * braking_time_seconds;
+        if (initial_target_speed > 0.0f) {
+            target_brake_path_sample(
+                target,
+                history_start_idx,
+                braking_distance_meters,
+                &target_sample.sim_x,
+                &target_sample.sim_y,
+                &target_sample.sim_z,
+                &target_sample.sim_heading);
+            target_sample.sim_heading = normalize_heading(target_sample.sim_heading);
+            target_sample.cos_heading = cosf(target_sample.sim_heading);
+            target_sample.sin_heading = sinf(target_sample.sim_heading);
+        } else {
+            target_sample = trajectory_history_agent_sample(target, steps_back);
+        }
+        target_sample.sim_speed
+            = fmaxf(0.0f, initial_target_speed - TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * braking_time_seconds);
+        target_sample.sim_speed_signed = target_sample.sim_speed;
+        target_sample.sim_vx = target_sample.sim_speed * target_sample.cos_heading;
+        target_sample.sim_vy = target_sample.sim_speed * target_sample.sin_heading;
+
+        for (int active_idx = EGO_IDX + 1; active_idx < env->active_agent_count; active_idx++) {
+            int adversary_idx = env->active_agent_indices[active_idx];
+            Agent *adversary = &env->agents[adversary_idx];
+            int adversary_steps_back = steps_back - rollout_step;
+            if (adversary_steps_back > adversary->trajectory_hist_count) {
+                continue;
+            }
+
+            Agent adversary_sample;
+            if (adversary_steps_back > 0) {
+                adversary_sample = trajectory_history_agent_sample(adversary, adversary_steps_back);
+            } else {
+                adversary_sample = *adversary;
+                float post_collision_seconds = -adversary_steps_back * env->dt;
+                if (adversary_idx == collision_adversary_idx) {
+                    int brake_step = -adversary_steps_back;
+                    if (brake_step >= collision_adversary_trajectory->num_steps) {
+                        brake_step = collision_adversary_trajectory->num_steps - 1;
+                    }
+                    adversary_sample.sim_x = collision_adversary_trajectory->x[brake_step];
+                    adversary_sample.sim_y = collision_adversary_trajectory->y[brake_step];
+                    adversary_sample.sim_speed_signed = collision_adversary_trajectory->speed_signed[brake_step];
+                    adversary_sample.sim_speed = fabsf(adversary_sample.sim_speed_signed);
+                    adversary_sample.sim_vx = adversary_sample.sim_speed_signed * adversary_sample.cos_heading;
+                    adversary_sample.sim_vy = adversary_sample.sim_speed_signed * adversary_sample.sin_heading;
+                } else {
+                    adversary_sample.sim_x += adversary_sample.sim_vx * post_collision_seconds;
+                    adversary_sample.sim_y += adversary_sample.sim_vy * post_collision_seconds;
+                }
+            }
+
+            if (!check_z_collision_possibility(&target_sample, &adversary_sample)
+                || !check_obb_collision(&target_sample, &adversary_sample)) {
+                continue;
+            }
+            if (adversary_idx == collision_adversary_idx
+                || is_agent_at_fault_collision(&target_sample, &adversary_sample)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static float last_avoidable_braking_seconds_before_collision(
+    Drive *env,
+    int target_agent_idx,
+    int collision_adversary_idx) {
+    AdversaryBrakeTrajectory collision_adversary_trajectory;
+    build_adversary_brake_trajectory(&env->agents[collision_adversary_idx], env->dt, &collision_adversary_trajectory);
+
+    Agent *target = &env->agents[target_agent_idx];
+    for (int steps_back = 1; steps_back <= target->trajectory_hist_count; steps_back++) {
+        if (target_braking_avoids_collision(
+                env,
+                target_agent_idx,
+                collision_adversary_idx,
+                &collision_adversary_trajectory,
+                steps_back)) {
+            return steps_back * env->dt;
+        }
+    }
+    return NO_AVOIDABLE_BRAKING_TIME_SECONDS;
+}
+
+static float pairwise_lateral_safety_buffer(const Agent *target, const Agent *adversary) {
+    float target_left_x = -target->sin_heading;
+    float target_left_y = target->cos_heading;
+    float relative_x = adversary->sim_x - target->sim_x;
+    float relative_y = adversary->sim_y - target->sim_y;
+    float signed_lateral_distance = relative_x * target_left_x + relative_y * target_left_y;
+    float lateral_distance = fabsf(signed_lateral_distance);
+    float relative_velocity_x = adversary->sim_vx - target->sim_vx;
+    float relative_velocity_y = adversary->sim_vy - target->sim_vy;
+    float relative_lateral_velocity = relative_velocity_x * target_left_x + relative_velocity_y * target_left_y;
+    float intrusion_speed = 0.0f;
+    if (lateral_distance > 1e-6f) {
+        float direction_toward_target = -signed_lateral_distance / lateral_distance;
+        intrusion_speed = fmaxf(0.0f, relative_lateral_velocity * direction_toward_target);
+    }
+
+    float lateral_buffer = DANGER_LAT_BUFFER_BASE_METERS + intrusion_speed * DANGER_LAT_BUFFER_RESPONSE_TIME_SECONDS
+        + intrusion_speed * intrusion_speed / (2.0f * DANGER_LAT_BUFFER_DECEL_MPS2);
+    return fminf(DANGER_LAT_BUFFER_MAX_METERS, lateral_buffer);
+}
+
+static float pairwise_obb_ttc_constant_velocity(
+    const Agent *target,
+    const Agent *adversary,
+    float dt,
+    float danger_threshold_seconds) {
+    Agent target_sample = *target;
+    Agent adversary_sample = *adversary;
+    target_sample.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
+
+    for (int future_step = 0; future_step < DANGER_TTC_MAX_PROJECTION_STEPS; future_step++) {
+        float future_time_seconds = future_step * dt;
+        if (future_time_seconds >= danger_threshold_seconds) {
+            return INFINITY;
+        }
+        target_sample.sim_x = target->sim_x + target->sim_vx * future_time_seconds;
+        target_sample.sim_y = target->sim_y + target->sim_vy * future_time_seconds;
+        adversary_sample.sim_x = adversary->sim_x + adversary->sim_vx * future_time_seconds;
+        adversary_sample.sim_y = adversary->sim_y + adversary->sim_vy * future_time_seconds;
+        if (check_z_collision_possibility(&target_sample, &adversary_sample)
+            && check_obb_collision(&target_sample, &adversary_sample)) {
+            return future_time_seconds;
+        }
+    }
+    return INFINITY;
+}
+
+static bool lateral_buffer_is_dangerous(const Agent *target, const Agent *adversary) {
+    Agent expanded_target = *target;
+    Agent adversary_sample = *adversary;
+    expanded_target.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
+    return check_z_collision_possibility(&expanded_target, &adversary_sample)
+        && check_obb_collision(&expanded_target, &adversary_sample);
+}
+
+static float pairwise_obb_ttc_route(
+    Drive *env,
+    const Agent *target,
+    const Agent *adversary,
+    float danger_threshold_seconds);
+
+static bool target_adversary_pair_is_dangerous(Drive *env, const Agent *target, const Agent *adversary) {
+    float danger_threshold_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS
+        + target->sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 + DANGER_TTC_MARGIN_SECONDS;
+    float straight_ttc = pairwise_obb_ttc_constant_velocity(target, adversary, env->dt, danger_threshold_seconds);
+    float route_ttc = pairwise_obb_ttc_route(env, target, adversary, danger_threshold_seconds);
+    return fminf(straight_ttc, route_ttc) < danger_threshold_seconds || lateral_buffer_is_dangerous(target, adversary);
+}
+
+static bool danger_exists_in_reaction_window(
+    Drive *env,
+    int target_agent_idx,
+    int collision_adversary_idx,
+    float braking_seconds_before_collision) {
+    if (braking_seconds_before_collision <= 0.0f) {
+        return false;
+    }
+
+    Agent *target = &env->agents[target_agent_idx];
+    Agent *adversary = &env->agents[collision_adversary_idx];
+    int history_count = target->trajectory_hist_count < adversary->trajectory_hist_count
+        ? target->trajectory_hist_count
+        : adversary->trajectory_hist_count;
+    float window_center_seconds = braking_seconds_before_collision + TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
+    float window_min_seconds = window_center_seconds - TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
+    float window_max_seconds = window_center_seconds + TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
+
+    for (int steps_back = 1; steps_back <= history_count; steps_back++) {
+        float seconds_before_collision = steps_back * env->dt;
+        if (seconds_before_collision < window_min_seconds - 1e-5f
+            || seconds_before_collision > window_max_seconds + 1e-5f) {
+            continue;
+        }
+        Agent target_sample = trajectory_history_agent_sample(target, steps_back);
+        Agent adversary_sample = trajectory_history_agent_sample(adversary, steps_back);
+        if (target_adversary_pair_is_dangerous(env, &target_sample, &adversary_sample)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void record_target_collision_analysis(Drive *env, int target_agent_idx, int collision_adversary_idx) {
+    if (env->target_collision_analyzed_episode || env->agents[target_agent_idx].trajectory_hist_count == 0
+        || !is_adversarial_agent(env, collision_adversary_idx)) {
+        return;
+    }
+
+    env->target_collision_analyzed_episode = 1;
+    env->target_collision_responsibility_episode = env->target_hit_responsibility_this_step;
+    env->target_last_avoidable_braking_seconds_before_collision
+        = last_avoidable_braking_seconds_before_collision(env, target_agent_idx, collision_adversary_idx);
+    env->target_reaction_window_danger_episode = danger_exists_in_reaction_window(
+        env,
+        target_agent_idx,
+        collision_adversary_idx,
+        env->target_last_avoidable_braking_seconds_before_collision);
 }
 
 static inline void compute_pairwise_ttc(Agent *ego, Agent *other) {
@@ -2327,6 +2878,22 @@ static void add_log(Drive *env) {
         episode_log.sdc_reward_overspeed += env->logs[i].reward_overspeed;
         episode_log.sdc_reward_ade += env->logs[i].reward_ade;
         episode_log.n += 1;
+    }
+    if (env->target_collision_analyzed_episode) {
+        episode_log.sdc_target_collision_count += 1.0f;
+        episode_log.sdc_target_collision_responsibility_sum += env->target_collision_responsibility_episode;
+        float braking_seconds = env->target_last_avoidable_braking_seconds_before_collision;
+        if (braking_seconds == NO_AVOIDABLE_BRAKING_TIME_SECONDS) {
+            episode_log.sdc_target_collision_unavoidable_count += 1.0f;
+        } else if (env->target_reaction_window_danger_episode) {
+            episode_log.sdc_target_collision_genuine_failure_count += 1.0f;
+        } else {
+            episode_log.sdc_target_collision_adversary_forced_count += 1.0f;
+        }
+        if (braking_seconds > 0.0f) {
+            episode_log.sdc_target_avoidable_braking_seconds_sum += braking_seconds;
+            episode_log.sdc_target_avoidable_collision_count += 1.0f;
+        }
     }
     // Log composition counts per agent so vec_log averaging recovers the per-env value
     episode_log.expert_static_car_count += env->expert_static_agent_count;
@@ -3393,7 +3960,7 @@ void remove_bad_trajectories(Drive *env) {
         // check collisions
         for (int i = 0; i < env->active_agent_count; i++) {
             int agent_idx = env->active_agent_indices[i];
-            int collided_with_index = collision_check(env, agent_idx);
+            int collided_with_index = collision_check(env, agent_idx, NULL, NULL);
             if ((collided_with_index >= 0) && collided_agents[i] == 0) {
                 collided_agents[i] = 1;
                 collided_with_indices[i] = collided_with_index;
@@ -3983,7 +4550,9 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
     }
 
     // Priority 2: Handle vehicle collision
-    int car_collided_with_index = collision_check(env, agent_idx);
+    float collision_normal_x = 0.0f;
+    float collision_normal_y = 0.0f;
+    int car_collided_with_index = collision_check(env, agent_idx, &collision_normal_x, &collision_normal_y);
     if (car_collided_with_index != -1) {
         int target_agent_idx = env->active_agent_indices[0];
         int collided_traffic_log_idx = active_traffic_log_idx(env, car_collided_with_index);
@@ -4007,6 +4576,17 @@ static void compute_metrics(Drive *env, int agent_idx, int log_idx) {
                 agent_log->at_fault_collision_rate = 1.0f;
                 agent->metrics_array[AT_FAULT_COLLISION_IDX] = 1.0f;
             }
+        }
+        int target_involved_collision = agent_idx == target_agent_idx || car_collided_with_index == target_agent_idx;
+        if (target_involved_collision) {
+            record_target_hit_responsibility(
+                env,
+                agent_idx,
+                car_collided_with_index,
+                collision_normal_x,
+                collision_normal_y);
+            int collision_adversary_idx = agent_idx == target_agent_idx ? car_collided_with_index : agent_idx;
+            record_target_collision_analysis(env, target_agent_idx, collision_adversary_idx);
         }
         apply_collision_behavior(env, agent_idx, car_collided_with_index);
         return;
@@ -4901,8 +5481,100 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 #include "idm.h"
 #include "pdm.h"
 
+static float pairwise_obb_ttc_route(
+    Drive *env,
+    const Agent *target,
+    const Agent *adversary,
+    float danger_threshold_seconds) {
+    float target_speed = fmaxf(0.0f, target->sim_speed);
+    if (target_speed <= 0.0f || target->route == NULL || target->route_length <= 0) {
+        return INFINITY;
+    }
+
+    Agent projection_agent = *target;
+    projection_agent.current_route_idx = target->route_length + 1;
+    IDMLaneProjection projection = idm_project_to_route_lanes(env, &projection_agent);
+    if (!projection.valid) {
+        return INFINITY;
+    }
+
+    Agent target_sample = *target;
+    Agent adversary_sample = *adversary;
+    target_sample.sim_width += 2.0f * pairwise_lateral_safety_buffer(target, adversary);
+    int future_step = 0;
+    float traveled_meters = 0.0f;
+
+    for (int route_idx = projection.route_idx; route_idx < target->route_length; route_idx++) {
+        int lane_idx = target->route[route_idx];
+        if (lane_idx < 0 || lane_idx >= env->num_road_elements) {
+            return INFINITY;
+        }
+        RoadMapElement *lane = &env->road_elements[lane_idx];
+        if (lane->segment_size < 2) {
+            return INFINITY;
+        }
+        int start_segment_idx = route_idx == projection.route_idx ? projection.segment_idx : 0;
+
+        for (int segment_idx = start_segment_idx; segment_idx < lane->segment_size - 1; segment_idx++) {
+            float delta_x = lane->x[segment_idx + 1] - lane->x[segment_idx];
+            float delta_y = lane->y[segment_idx + 1] - lane->y[segment_idx];
+            float delta_z = lane->z[segment_idx + 1] - lane->z[segment_idx];
+            float segment_length_meters = sqrtf(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z);
+            if (segment_length_meters <= 1e-6f) {
+                continue;
+            }
+            float segment_start_fraction
+                = route_idx == projection.route_idx && segment_idx == projection.segment_idx ? projection.t : 0.0f;
+            float usable_segment_length_meters = (1.0f - segment_start_fraction) * segment_length_meters;
+
+            while (future_step < DANGER_TTC_MAX_PROJECTION_STEPS) {
+                float future_time_seconds = future_step * env->dt;
+                if (future_time_seconds >= danger_threshold_seconds) {
+                    return INFINITY;
+                }
+                float target_distance_meters = target_speed * future_time_seconds;
+                if (target_distance_meters > traveled_meters + usable_segment_length_meters + 1e-5f) {
+                    break;
+                }
+
+                float local_distance_meters = fmaxf(0.0f, target_distance_meters - traveled_meters);
+                float segment_fraction = clip(
+                    segment_start_fraction + local_distance_meters / segment_length_meters,
+                    segment_start_fraction,
+                    1.0f);
+                target_sample.sim_x = lane->x[segment_idx] + segment_fraction * delta_x;
+                target_sample.sim_y = lane->y[segment_idx] + segment_fraction * delta_y;
+                target_sample.sim_z = lane->z[segment_idx] + segment_fraction * delta_z;
+                target_sample.sim_heading = atan2f(delta_y, delta_x);
+                target_sample.cos_heading = cosf(target_sample.sim_heading);
+                target_sample.sin_heading = sinf(target_sample.sim_heading);
+                adversary_sample.sim_x = adversary->sim_x + adversary->sim_vx * future_time_seconds;
+                adversary_sample.sim_y = adversary->sim_y + adversary->sim_vy * future_time_seconds;
+
+                if (check_z_collision_possibility(&target_sample, &adversary_sample)
+                    && check_obb_collision(&target_sample, &adversary_sample)) {
+                    return future_time_seconds;
+                }
+                future_step++;
+            }
+            traveled_meters += usable_segment_length_meters;
+        }
+    }
+    return INFINITY;
+}
+
 void c_reset(Drive *env) {
     env->adversary_out_of_range_step_count = 0;
+    env->target_hit_this_step = 0;
+    env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_responsibility_this_step = 0.0f;
+    env->target_collision_analyzed_episode = 0;
+    env->target_collision_responsibility_episode = 0.0f;
+    env->target_last_avoidable_braking_seconds_before_collision = AVOIDABLE_BRAKING_TIME_UNSET_SECONDS;
+    env->target_reaction_window_danger_episode = 0;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        env->agents[agent_idx].trajectory_hist_count = 0;
+    }
     if (env->timestep == 0) {
         for (int i = 0; i < env->num_total_agents; i++) {
             copy_pose_to_prev(&env->agents[i]);
@@ -5009,6 +5681,9 @@ void c_step(Drive *env) {
     memset(env->rewards, 0, env->active_agent_count * sizeof(float));
     memset(env->terminals, 0, env->active_agent_count * sizeof(unsigned char));
     memset(env->truncations, 0, env->active_agent_count * sizeof(unsigned char));
+    env->target_hit_this_step = 0;
+    env->target_hit_hitter_idx_this_step = -1;
+    env->target_hit_responsibility_this_step = 0.0f;
 
     // Update masks for stopped/removed agents
     for (int i = 0; i < env->active_agent_count; i++) {
@@ -5019,6 +5694,13 @@ void c_step(Drive *env) {
         } else {
             env->masks[i] = 1;
         }
+    }
+
+    for (int agent_list_idx = 0; agent_list_idx < env->num_agents; agent_list_idx++) {
+        int agent_idx = agent_list_idx < env->active_agent_count
+            ? env->active_agent_indices[agent_list_idx]
+            : env->static_agent_indices[agent_list_idx - env->active_agent_count];
+        push_trajectory_history(&env->agents[agent_idx]);
     }
 
     env->timestep++;

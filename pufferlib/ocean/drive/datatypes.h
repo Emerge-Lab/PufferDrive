@@ -142,6 +142,14 @@ struct Agent {
     int partner_blindness_counter;   // >0 means currently blind to partners
     unsigned char is_blind_partner;  // episode-level flag: agent sees no other agents
     unsigned char is_phantom_braker; // episode-level flag: agent may phantom-brake
+
+    // Rolling pre-step trajectory used by target collision counterfactuals
+    int trajectory_hist_count;
+    float trajectory_hist_x[TARGET_TRAJECTORY_HISTORY_LEN];
+    float trajectory_hist_y[TARGET_TRAJECTORY_HISTORY_LEN];
+    float trajectory_hist_z[TARGET_TRAJECTORY_HISTORY_LEN];
+    float trajectory_hist_heading[TARGET_TRAJECTORY_HISTORY_LEN];
+    float trajectory_hist_speed_signed[TARGET_TRAJECTORY_HISTORY_LEN];
 };
 
 struct RoadMapElement {
