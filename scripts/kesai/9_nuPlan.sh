@@ -13,7 +13,7 @@ set -u
 
 export PD=/home/bjaeger/PufferDrive
 export PY=$(conda info --base)/envs/carl_nuplan/bin/python
-RUN_DIR=/home/bjaeger/PufferDrive/experiments/k_scaled_0036_1000
+RUN_DIR=/home/bjaeger/PufferDrive/experiments/k_scaled_0037_1000
 # the planner finds config.yaml next to final_model.pt (or one level above a models/*.pt)
 export CKPT=$RUN_DIR/final_model.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT"; exit 1; }

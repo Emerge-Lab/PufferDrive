@@ -13,7 +13,7 @@
 echo "START TIME: $(date)"
 start=$(date +%s)
 
-export RUN_NAME=k_scaled_0036_1000
+export RUN_NAME=k_scaled_0037_1000
 echo ${RUN_NAME}
 
 export MODEL_PATH=/home/bjaeger/PufferDrive/experiments/${RUN_NAME}/final_model.pt
@@ -49,9 +49,9 @@ fi
     eval.min_goal_spacing=20 \
     eval.max_goal_spacing=200 \
     env.disable_red_light_infractions=1 \
-    env.traffic_light_junction_phases=1 \
+    env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
-    eval.output_name=${RUN_NAME}_redlight \
+    eval.output_name=${RUN_NAME}_random_tl \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
@@ -72,7 +72,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_redlight \
+    eval.output_name=${RUN_NAME}_random_tl \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
