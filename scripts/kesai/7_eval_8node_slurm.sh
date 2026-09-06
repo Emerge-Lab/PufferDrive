@@ -37,7 +37,7 @@ fi
 # parallel_eval places one shard per allocated node via srun, so each shard's 64
 # env workers get a full node's cores instead of sharing the batch host.
 .venv/bin/python scripts/parallel_eval.py carla \
-    --total-scenarios 5000 \
+    --total-scenarios 40000 \
     --num-nodes 8 \
     env.map_dir=/home/bjaeger/PufferDrive/pufferlib/resources/drive/binaries/carla \
     vec.num_envs=64 \
@@ -51,7 +51,7 @@ fi
     env.disable_red_light_infractions=1 \
     env.traffic_light_junction_phases=0 \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
-    eval.output_name=${RUN_NAME}_random_tl \
+    eval.output_name=${RUN_NAME}_random_tl2 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
@@ -72,7 +72,7 @@ python -m pufferlib.pufferl eval puffer_drive nuplan_multi \
     env.eval_standstill_jerk_deadband_mps3=1.5 \
     eval.render_filter=all_infractions \
     eval.capture_observations=true \
-    eval.output_name=${RUN_NAME}_random_tl \
+    eval.output_name=${RUN_NAME}_random_tl2 \
     load_model_path=${MODEL_PATH} \
     wandb=True
 
