@@ -172,6 +172,77 @@ struct Log {
     float sdc_target_avoidable_collision_count;
 };
 
+typedef struct {
+    int valid;
+    int index;
+    int type;
+    float x;
+    float y;
+    float z;
+    float heading;
+    float length;
+    float width;
+    float height;
+    float vx;
+    float vy;
+    int active;
+    int stopped;
+} AvoidabilityAgentSnapshot;
+
+typedef struct {
+    int steps_back;
+    int avoided;
+    int collision_with_original_adversary;
+    int at_fault_collision_with_other_adversary;
+    int blocking_agent_index;
+    int blocking_rollout_step;
+    AvoidabilityAgentSnapshot blocking_agent;
+    int ignored_overlap_agent_index;
+    int ignored_overlap_rollout_step;
+    AvoidabilityAgentSnapshot ignored_overlap_agent;
+} AvoidabilityCandidateDebug;
+
+typedef struct {
+    int steps_back;
+    int dangerous;
+    float danger_threshold_seconds;
+    float straight_ttc_seconds;
+    float route_ttc_seconds;
+    float lateral_buffer_meters;
+    int lateral_buffer_dangerous;
+} AvoidabilityDetectionDebug;
+
+typedef struct {
+    int valid;
+    int target_agent_index;
+    int collision_adversary_index;
+    int collision_timestep;
+    AvoidabilityAgentSnapshot target_at_collision;
+    AvoidabilityAgentSnapshot adversary_at_collision;
+    float dt;
+    float braking_deceleration;
+    float reaction_time_seconds;
+    float reaction_window_half_width_seconds;
+    int max_extension_steps;
+    int max_rollout_steps;
+    float ttc_margin_seconds;
+    int ttc_max_projection_steps;
+    float lateral_buffer_base_meters;
+    float lateral_buffer_response_time_seconds;
+    float lateral_buffer_deceleration_mps2;
+    float lateral_buffer_max_meters;
+    int target_route_length;
+    int target_route[MAX_ROUTE_LENGTH];
+    float last_avoidable_braking_seconds_before_collision;
+    int genuine_target_failure;
+    int adversary_forced;
+    int unavoidable;
+    int candidate_count;
+    AvoidabilityCandidateDebug candidates[AVOIDABILITY_DEBUG_MAX_CANDIDATES];
+    int detection_sample_count;
+    AvoidabilityDetectionDebug detection_samples[AVOIDABILITY_DEBUG_MAX_DETECTION_SAMPLES];
+} AvoidabilityDebug;
+
 struct GridMapEntity {
     int entity_idx;    // Index into the road_elements array
     int geometry_idx;  // Index into element's geometry array
@@ -337,6 +408,8 @@ struct Drive {
     float target_collision_responsibility_episode;
     float target_last_avoidable_braking_seconds_before_collision;
     int target_reaction_window_danger_episode;
+    int capture_avoidability_debug;
+    AvoidabilityDebug *avoidability_debug;
     int reward_conditioning;
     int reward_randomization;
     int reward_log_sampling;
@@ -628,6 +701,11 @@ static inline void apply_infraction_behavior(Agent *agent, int behavior) {
 
 static inline void apply_offroad_behavior(Drive *env, int agent_idx) {
     Agent *agent = &env->agents[agent_idx];
+    if (env->eval_mode) {
+        agent->stopped = 1;
+        clear_agent_motion(agent);
+        return;
+    }
     int target_agent_idx = env->active_agent_indices[0];
     if (agent_idx != target_agent_idx || env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_NORMAL) {
         apply_infraction_behavior(agent, env->offroad_behavior);
@@ -639,6 +717,13 @@ static inline void apply_offroad_behavior(Drive *env, int agent_idx) {
 }
 
 static inline void apply_collision_behavior(Drive *env, int agent_idx, int collided_agent_idx) {
+    if (env->eval_mode) {
+        env->agents[agent_idx].stopped = 1;
+        env->agents[collided_agent_idx].stopped = 1;
+        clear_agent_motion(&env->agents[agent_idx]);
+        clear_agent_motion(&env->agents[collided_agent_idx]);
+        return;
+    }
     int target_agent_idx = env->active_agent_indices[0];
     int target_involved = agent_idx == target_agent_idx || collided_agent_idx == target_agent_idx;
     if (!target_involved || env->target_infraction_behavior == TARGET_INFRACTION_BEHAVIOR_NORMAL) {
@@ -2257,6 +2342,26 @@ typedef struct {
     float speed_signed[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
 } AdversaryBrakeTrajectory;
 
+static AvoidabilityAgentSnapshot avoidability_agent_snapshot(const Agent *agent, int agent_idx) {
+    AvoidabilityAgentSnapshot snapshot = {
+        .valid = 1,
+        .index = agent_idx,
+        .type = agent->type,
+        .x = agent->sim_x,
+        .y = agent->sim_y,
+        .z = agent->sim_z,
+        .heading = agent->sim_heading,
+        .length = agent->sim_length,
+        .width = agent->sim_width,
+        .height = agent->sim_height,
+        .vx = agent->sim_vx,
+        .vy = agent->sim_vy,
+        .active = agent->active_agent,
+        .stopped = agent->stopped,
+    };
+    return snapshot;
+}
+
 static void build_adversary_brake_trajectory(const Agent *adversary, float dt, AdversaryBrakeTrajectory *trajectory) {
     float initial_speed_signed = adversary->sim_speed_signed;
     float stop_time_seconds = fabsf(initial_speed_signed) / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
@@ -2354,7 +2459,18 @@ static bool target_braking_avoids_collision(
     int target_agent_idx,
     int collision_adversary_idx,
     const AdversaryBrakeTrajectory *collision_adversary_trajectory,
-    int steps_back) {
+    int steps_back,
+    AvoidabilityCandidateDebug *diagnostic) {
+    if (diagnostic != NULL) {
+        *diagnostic = (AvoidabilityCandidateDebug) {
+            .steps_back = steps_back,
+            .avoided = 1,
+            .blocking_agent_index = -1,
+            .blocking_rollout_step = -1,
+            .ignored_overlap_agent_index = -1,
+            .ignored_overlap_rollout_step = -1,
+        };
+    }
     Agent *target = &env->agents[target_agent_idx];
     int history_start_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
     float initial_target_speed = fabsf(target->trajectory_hist_speed_signed[history_start_idx]);
@@ -2431,7 +2547,20 @@ static bool target_braking_avoids_collision(
             }
             if (adversary_idx == collision_adversary_idx
                 || is_agent_at_fault_collision(&target_sample, &adversary_sample)) {
+                if (diagnostic != NULL) {
+                    diagnostic->avoided = 0;
+                    diagnostic->collision_with_original_adversary = adversary_idx == collision_adversary_idx;
+                    diagnostic->at_fault_collision_with_other_adversary = adversary_idx != collision_adversary_idx;
+                    diagnostic->blocking_agent_index = adversary_idx;
+                    diagnostic->blocking_rollout_step = rollout_step;
+                    diagnostic->blocking_agent = avoidability_agent_snapshot(&adversary_sample, adversary_idx);
+                }
                 return false;
+            }
+            if (diagnostic != NULL && diagnostic->ignored_overlap_agent_index < 0) {
+                diagnostic->ignored_overlap_agent_index = adversary_idx;
+                diagnostic->ignored_overlap_rollout_step = rollout_step;
+                diagnostic->ignored_overlap_agent = avoidability_agent_snapshot(&adversary_sample, adversary_idx);
             }
         }
     }
@@ -2446,14 +2575,52 @@ static float last_avoidable_braking_seconds_before_collision(
     build_adversary_brake_trajectory(&env->agents[collision_adversary_idx], env->dt, &collision_adversary_trajectory);
 
     Agent *target = &env->agents[target_agent_idx];
+    AvoidabilityDebug *debug = env->avoidability_debug;
+    if (debug != NULL) {
+        memset(debug, 0, sizeof(*debug));
+        debug->valid = 1;
+        debug->target_agent_index = target_agent_idx;
+        debug->collision_adversary_index = collision_adversary_idx;
+        debug->collision_timestep = env->timestep;
+        debug->target_at_collision = avoidability_agent_snapshot(target, target_agent_idx);
+        debug->adversary_at_collision
+            = avoidability_agent_snapshot(&env->agents[collision_adversary_idx], collision_adversary_idx);
+        debug->dt = env->dt;
+        debug->braking_deceleration = TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
+        debug->reaction_time_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
+        debug->reaction_window_half_width_seconds = TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
+        debug->max_extension_steps = TARGET_AVOIDABILITY_MAX_EXT_STEPS;
+        debug->max_rollout_steps = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS;
+        debug->ttc_margin_seconds = DANGER_TTC_MARGIN_SECONDS;
+        debug->ttc_max_projection_steps = DANGER_TTC_MAX_PROJECTION_STEPS;
+        debug->lateral_buffer_base_meters = DANGER_LAT_BUFFER_BASE_METERS;
+        debug->lateral_buffer_response_time_seconds = DANGER_LAT_BUFFER_RESPONSE_TIME_SECONDS;
+        debug->lateral_buffer_deceleration_mps2 = DANGER_LAT_BUFFER_DECEL_MPS2;
+        debug->lateral_buffer_max_meters = DANGER_LAT_BUFFER_MAX_METERS;
+        debug->target_route_length = target->route_length < MAX_ROUTE_LENGTH ? target->route_length : MAX_ROUTE_LENGTH;
+        for (int route_idx = 0; route_idx < debug->target_route_length; route_idx++) {
+            debug->target_route[route_idx] = target->route[route_idx];
+        }
+        debug->last_avoidable_braking_seconds_before_collision = NO_AVOIDABLE_BRAKING_TIME_SECONDS;
+    }
     for (int steps_back = 1; steps_back <= target->trajectory_hist_count; steps_back++) {
-        if (target_braking_avoids_collision(
-                env,
-                target_agent_idx,
-                collision_adversary_idx,
-                &collision_adversary_trajectory,
-                steps_back)) {
-            return steps_back * env->dt;
+        AvoidabilityCandidateDebug candidate;
+        bool avoided = target_braking_avoids_collision(
+            env,
+            target_agent_idx,
+            collision_adversary_idx,
+            &collision_adversary_trajectory,
+            steps_back,
+            debug != NULL ? &candidate : NULL);
+        if (debug != NULL) {
+            debug->candidates[debug->candidate_count++] = candidate;
+        }
+        if (avoided) {
+            float braking_seconds = steps_back * env->dt;
+            if (debug != NULL) {
+                debug->last_avoidable_braking_seconds_before_collision = braking_seconds;
+            }
+            return braking_seconds;
         }
     }
     return NO_AVOIDABLE_BRAKING_TIME_SECONDS;
@@ -2520,12 +2687,28 @@ static float pairwise_obb_ttc_route(
     const Agent *adversary,
     float danger_threshold_seconds);
 
-static bool target_adversary_pair_is_dangerous(Drive *env, const Agent *target, const Agent *adversary) {
+static bool target_adversary_pair_is_dangerous(
+    Drive *env,
+    const Agent *target,
+    const Agent *adversary,
+    AvoidabilityDetectionDebug *diagnostic) {
     float danger_threshold_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS
         + target->sim_speed / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 + DANGER_TTC_MARGIN_SECONDS;
     float straight_ttc = pairwise_obb_ttc_constant_velocity(target, adversary, env->dt, danger_threshold_seconds);
     float route_ttc = pairwise_obb_ttc_route(env, target, adversary, danger_threshold_seconds);
-    return fminf(straight_ttc, route_ttc) < danger_threshold_seconds || lateral_buffer_is_dangerous(target, adversary);
+    int lateral_danger = lateral_buffer_is_dangerous(target, adversary);
+    bool dangerous = fminf(straight_ttc, route_ttc) < danger_threshold_seconds || lateral_danger;
+    if (diagnostic != NULL) {
+        *diagnostic = (AvoidabilityDetectionDebug) {
+            .dangerous = dangerous,
+            .danger_threshold_seconds = danger_threshold_seconds,
+            .straight_ttc_seconds = straight_ttc,
+            .route_ttc_seconds = route_ttc,
+            .lateral_buffer_meters = pairwise_lateral_safety_buffer(target, adversary),
+            .lateral_buffer_dangerous = lateral_danger,
+        };
+    }
+    return dangerous;
 }
 
 static bool danger_exists_in_reaction_window(
@@ -2545,6 +2728,8 @@ static bool danger_exists_in_reaction_window(
     float window_center_seconds = braking_seconds_before_collision + TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
     float window_min_seconds = window_center_seconds - TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
     float window_max_seconds = window_center_seconds + TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
+    bool danger_found = false;
+    AvoidabilityDebug *debug = env->avoidability_debug;
 
     for (int steps_back = 1; steps_back <= history_count; steps_back++) {
         float seconds_before_collision = steps_back * env->dt;
@@ -2554,11 +2739,24 @@ static bool danger_exists_in_reaction_window(
         }
         Agent target_sample = trajectory_history_agent_sample(target, steps_back);
         Agent adversary_sample = trajectory_history_agent_sample(adversary, steps_back);
-        if (target_adversary_pair_is_dangerous(env, &target_sample, &adversary_sample)) {
-            return true;
+        AvoidabilityDetectionDebug diagnostic;
+        bool dangerous = target_adversary_pair_is_dangerous(
+            env,
+            &target_sample,
+            &adversary_sample,
+            debug != NULL ? &diagnostic : NULL);
+        if (debug != NULL) {
+            diagnostic.steps_back = steps_back;
+            debug->detection_samples[debug->detection_sample_count++] = diagnostic;
+        }
+        if (dangerous) {
+            danger_found = true;
+            if (debug == NULL) {
+                return true;
+            }
         }
     }
-    return false;
+    return danger_found;
 }
 
 static void record_target_collision_analysis(Drive *env, int target_agent_idx, int collision_adversary_idx) {
@@ -2576,6 +2774,14 @@ static void record_target_collision_analysis(Drive *env, int target_agent_idx, i
         target_agent_idx,
         collision_adversary_idx,
         env->target_last_avoidable_braking_seconds_before_collision);
+    if (env->avoidability_debug != NULL) {
+        float braking_seconds = env->target_last_avoidable_braking_seconds_before_collision;
+        env->avoidability_debug->unavoidable = braking_seconds == NO_AVOIDABLE_BRAKING_TIME_SECONDS;
+        env->avoidability_debug->genuine_target_failure
+            = braking_seconds > 0.0f && env->target_reaction_window_danger_episode;
+        env->avoidability_debug->adversary_forced
+            = braking_seconds > 0.0f && !env->target_reaction_window_danger_episode;
+    }
 }
 
 static inline void compute_pairwise_ttc(Agent *ego, Agent *other) {
@@ -4091,6 +4297,9 @@ void init(Drive *env) {
     }
     set_start_position(env);
     env->logs = (Log *) calloc(env->active_agent_count, sizeof(Log));
+    if (env->capture_avoidability_debug) {
+        env->avoidability_debug = (AvoidabilityDebug *) calloc(1, sizeof(AvoidabilityDebug));
+    }
 
     for (int i = 0; i < env->active_agent_count; i++) {
         Agent *agent = &env->agents[env->active_agent_indices[i]];
@@ -4112,6 +4321,7 @@ void c_close(Drive *env) {
     free(env->traffic_elements);
     free(env->active_agent_indices);
     free(env->logs);
+    free(env->avoidability_debug);
     if (env->shared_map != NULL) {
         // Geometry is borrowed from the cache. Release our reference; free the
         // entry only on the last reference, and only in the process that built it.
@@ -5581,6 +5791,9 @@ void c_reset(Drive *env) {
     env->target_collision_responsibility_episode = 0.0f;
     env->target_last_avoidable_braking_seconds_before_collision = AVOIDABLE_BRAKING_TIME_UNSET_SECONDS;
     env->target_reaction_window_danger_episode = 0;
+    if (env->avoidability_debug != NULL) {
+        memset(env->avoidability_debug, 0, sizeof(*env->avoidability_debug));
+    }
     for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
         env->agents[agent_idx].trajectory_hist_count = 0;
     }
@@ -5719,6 +5932,9 @@ void c_step(Drive *env) {
     for (int i = 0; i < env->expert_static_agent_count; i++) {
         int background_idx = env->expert_static_agent_indices[i];
         Agent *agent = &env->agents[background_idx];
+        if (env->eval_mode && (agent->stopped || agent->removed)) {
+            continue;
+        }
         if (agent->controller == CONTROLLER_IDM) {
             move_idm(env, background_idx);
         } else if (agent->controller == CONTROLLER_CORRIDOR_IDM) {

@@ -815,7 +815,8 @@ def encode_interactive_replay(scenario, replay):
     road_points = []
     road_lengths = []
     road_types = []
-    for elem in scenario.get("road_elements", []) or []:
+    road_element_indices = []
+    for elem_idx, elem in enumerate(scenario.get("road_elements", []) or []):
         if not isinstance(elem, dict):
             continue
         elem_type = int(elem.get("type", 0))
@@ -834,6 +835,7 @@ def encode_interactive_replay(scenario, replay):
         count = min(len(xs), len(ys))
         road_lengths.append(count)
         road_types.append(draw_type)
+        road_element_indices.append(elem_idx)
         for i in range(count):
             road_points.append((float(xs[i]), float(ys[i])))
 
@@ -867,6 +869,7 @@ def encode_interactive_replay(scenario, replay):
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
         "road_types": np.asarray(road_types or [0], dtype=np.int16),
+        "road_element_indices": np.asarray(road_element_indices or [-1], dtype=np.int32),
         "traffic_stop_lines": np.asarray(traffic_stop_lines or [[0, 0, 0, 0, 0, 0]], dtype=np.float32),
         "traffic_types": np.asarray(traffic_types or [0], dtype=np.int16),
         "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
@@ -936,6 +939,7 @@ def encode_interactive_replay(scenario, replay):
         "obs_scale": observation_scale,
         "action_type": env_cfg.get("action_type", "continuous"),
         "dynamics_model": env_cfg.get("dynamics_model", "classic"),
+        "init_step": int(replay.get("initial_timestep", env_cfg.get("init_step", 0))),
         "num_goals": int(env_cfg["num_goals"]),
         "reward_conditioning": bool(env_cfg["reward_conditioning"]),
         "obs_slots_partners_n": int(env_cfg["obs_slots_partners_n"]),
@@ -952,6 +956,7 @@ def encode_interactive_replay(scenario, replay):
         "scales": scales,
         "road_polyline_count": len(road_lengths),
         "traffic_static_count": len(traffic_types),
+        "avoidability_debug": replay.get("avoidability_debug"),
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1048,6 +1053,24 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .obs-tool { padding:3px 8px; border:1px solid var(--border); border-radius:5px; background:transparent; color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.05em; cursor:pointer; }
         .obs-tool:hover { color:var(--accent); border-color:var(--accent); }
         #obs-canvas { width:100%; height:100%; background:#fff; }
+        #avoidability-panel { position:absolute; top:14px; left:260px; width:410px; max-height:calc(100vh - 90px); padding:12px 14px; overflow-y:auto; display:none; }
+        #avoidability-panel h3 { display:flex; align-items:center; justify-content:space-between; }
+        .avoid-mode, .avoid-phase { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-top:10px; padding:4px; border-radius:8px; background:var(--field); }
+        .avoid-mode button, .avoid-phase button { border:1px solid transparent; border-radius:6px; padding:5px 8px; background:transparent; color:var(--muted); font-size:11px; font-weight:600; cursor:pointer; }
+        .avoid-mode button.active, .avoid-phase button.active { border-color:var(--border); background:var(--surface-solid); color:var(--accent); }
+        .avoid-controls { display:grid; gap:9px; margin-top:10px; }
+        .avoid-controls[hidden] { display:none; }
+        .avoid-control-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:center; }
+        .avoid-control-row input[type=range] { width:100%; }
+        .avoid-readout { padding:8px 10px; border:1px solid var(--border); border-radius:7px; background:var(--field); color:var(--muted); font-size:11px; line-height:1.45; }
+        .avoid-readout strong { display:block; color:var(--text); }
+        .avoid-readout.danger strong { color:var(--danger); }
+        .avoid-toggles { display:flex; gap:6px; }
+        .avoid-toggles button { flex:1; }
+        .avoid-toggles button.inactive { color:var(--muted); opacity:.55; }
+        .avoid-legend { display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:9px; color:var(--muted); font-size:10px; }
+        .avoid-key { display:inline-flex; align-items:center; gap:5px; }
+        .avoid-swatch { width:14px; height:3px; border-radius:2px; }
     </style>
 </head>
 <body>
@@ -1089,6 +1112,51 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <button type="button" class="toggle-header" data-target="metrics-grid"><span>Metrics</span><span>&#9662;</span></button>
             <div id="metrics-grid" class="grid toggle-body"></div>
         </div>
+        <div id="avoidability-panel" class="panel">
+            <h3><span>Avoidability diagnostic</span><span id="avoid-outcome" class="highlight">-</span></h3>
+            <div class="avoid-mode">
+                <button id="avoid-observed" class="active" type="button">Observed replay</button>
+                <button id="avoid-diagnostic" type="button">Diagnostic</button>
+            </div>
+            <div id="avoid-diagnostic-controls" hidden>
+                <div class="avoid-phase">
+                    <button id="avoid-detection-phase" class="active" type="button">Detection window</button>
+                    <button id="avoid-braking-phase" type="button">Braking rollout</button>
+                </div>
+                <div id="avoid-detection-controls" class="avoid-controls">
+                    <div class="avoid-control-row">
+                        <button id="avoid-detection-play" class="btn" type="button">Play</button>
+                        <input id="avoid-detection-slider" type="range" min="0" max="0" value="0" step="1">
+                        <span id="avoid-detection-label" class="mono">n/a</span>
+                    </div>
+                    <div id="avoid-detection-result" class="avoid-readout"></div>
+                    <div class="avoid-toggles">
+                        <button id="avoid-buffer-toggle" class="btn" type="button">Safety buffer</button>
+                        <button id="avoid-ttc-toggle" class="btn" type="button">TTC projections</button>
+                    </div>
+                </div>
+                <div id="avoid-braking-controls" class="avoid-controls" hidden>
+                    <div class="avoid-control-row">
+                        <span>Brake</span>
+                        <input id="avoid-candidate-slider" type="range" min="0" max="0" value="0" step="1">
+                        <span id="avoid-candidate-label" class="mono">n/a</span>
+                    </div>
+                    <div id="avoid-candidate-result" class="avoid-readout"></div>
+                    <div class="avoid-control-row">
+                        <button id="avoid-rollout-play" class="btn" type="button">Play</button>
+                        <input id="avoid-rollout-slider" type="range" min="0" max="0" value="0" step="1">
+                        <span id="avoid-rollout-label" class="mono">t=0.0s</span>
+                    </div>
+                    <div id="avoid-rollout-result" class="avoid-readout"></div>
+                </div>
+                <div class="avoid-legend">
+                    <span class="avoid-key"><span class="avoid-swatch" style="background:#fb7185"></span>target/braking</span>
+                    <span class="avoid-key"><span class="avoid-swatch" style="background:#22d3ee"></span>hitter/TTC</span>
+                    <span class="avoid-key"><span class="avoid-swatch" style="background:#c084fc"></span>blocker</span>
+                    <span class="avoid-key"><span class="avoid-swatch" style="background:#f59e0b"></span>route/buffer</span>
+                </div>
+            </div>
+        </div>
         <div id="obs-container" class="panel"><div id="obs-title"><span>Ego-centric observation</span><button type="button" class="obs-tool" onclick="resetObsZoom(event)">1x</button><button type="button" id="obsModeBtn" class="obs-tool" onclick="toggleObsMode(event)">BOTH</button><button type="button" class="obs-tool" onclick="toggleObsSize(event)">Expand</button></div><canvas id="obs-canvas"></canvas></div>
         <div id="controls" class="panel">
             <button id="btnPlay" class="btn icon" onclick="toggle()"></button>
@@ -1118,12 +1186,25 @@ __PAYLOAD_CHUNKS__
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
+        const avoidabilityPanel = document.getElementById('avoidability-panel');
+        const avoidabilityControls = document.getElementById('avoid-diagnostic-controls');
+        const detectionControls = document.getElementById('avoid-detection-controls');
+        const brakingControls = document.getElementById('avoid-braking-controls');
+        const detectionSlider = document.getElementById('avoid-detection-slider');
+        const candidateSlider = document.getElementById('avoid-candidate-slider');
+        const rolloutSlider = document.getElementById('avoid-rollout-slider');
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
         let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
         let expertAgentIndices = new Set();
+        let avoidability = null, avoidanceCandidates = [], detectionSamples = [];
+        let replayMode = 'observed', avoidabilityPhase = 'detection', observedStep = 0;
+        let detectionSelection = 0, detectionPlaying = false, detectionLastTick = 0;
+        let candidateSelection = 0, rolloutStep = 0, rolloutPlaying = false, rolloutLastTick = 0;
+        let showSafetyBuffer = true, showTtcProjection = true;
+        let roadGeometryByElement = new Map();
         const OBS_MODES = ["ALL","POOL","BOTH"];
 
         function chunk(name) {
@@ -1222,6 +1303,9 @@ self.onmessage = async event => {
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
+            avoidability = H.avoidability_debug || null;
+            avoidanceCandidates = avoidability ? (avoidability.candidates || []) : [];
+            detectionSamples = avoidability ? [...(avoidability.detection_samples || [])].sort((a,b) => Number(b.steps_back) - Number(a.steps_back)) : [];
             F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
@@ -1233,6 +1317,7 @@ self.onmessage = async event => {
             else document.getElementById('overrides-header').style.display = 'none';
             document.getElementById('sld').max = frameMax();
             document.getElementById('stepTotal').textContent = frameMax();
+            initializeAvoidability();
             updateBtn();
             const first = getFrameAgents(0)[0]; if (first) { cam.x = first.x; cam.y = first.y; }
             document.getElementById('loading-overlay').style.display = 'none';
@@ -1243,12 +1328,19 @@ self.onmessage = async event => {
 
         function buildMapPaths() {
             paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
+            roadGeometryByElement = new Map();
             let p = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
                 const len = C.road_lengths[i], type = C.road_types[i], path = paths[type];
                 if (len <= 0) continue;
+                const points = [];
                 path.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
-                for (let j=1;j<len;j++) path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                points.push({x:C.road_points[p*2], y:C.road_points[p*2+1]});
+                for (let j=1;j<len;j++) {
+                    path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                    points.push({x:C.road_points[(p+j)*2], y:C.road_points[(p+j)*2+1]});
+                }
+                roadGeometryByElement.set(C.road_element_indices[i], points);
                 p += len;
             }
         }
@@ -1322,7 +1414,8 @@ self.onmessage = async event => {
             const isExpert = expertAgentIndices.has(idx);
             const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
             const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
+            const heading = C.agent_f32[fb+3], speedMps = C.agent_f32[fb+6];
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], active:isActive, stopped:C.agent_i32[ib+4] === 1, removed:C.agent_i32[ib+5] === 1, partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], z:C.agent_f32[fb+2], h:heading, l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:speedMps, vx:speedMps*Math.cos(heading), vy:speedMps*Math.sin(heading), st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1333,6 +1426,451 @@ self.onmessage = async event => {
             ctx.setLineDash([]);
         }
         function findAgent(frame, id) { for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a && a.id === id) return a; } return null; }
+        function avoidabilityOutcome() {
+            const classification = avoidability.classification || {};
+            if (classification.genuine_target_failure) return 'genuine failure';
+            if (classification.adversary_forced) return 'adversary-forced';
+            if (classification.unavoidable) return 'unavoidable';
+            return 'unclassified';
+        }
+        function initializeAvoidability() {
+            if (!avoidability || !avoidability.collision) return;
+            avoidabilityPanel.style.display = 'block';
+            document.getElementById('avoid-outcome').textContent = avoidabilityOutcome();
+            candidateSelection = Math.max(0, avoidanceCandidates.length - 1);
+            candidateSlider.max = Math.max(0, avoidanceCandidates.length - 1);
+            candidateSlider.value = candidateSelection;
+            detectionSlider.max = Math.max(0, detectionSamples.length - 1);
+            detectionSlider.value = 0;
+            document.getElementById('avoid-observed').onclick = () => setReplayMode('observed');
+            document.getElementById('avoid-diagnostic').onclick = () => setReplayMode('diagnostic');
+            document.getElementById('avoid-detection-phase').onclick = () => setAvoidabilityPhase('detection');
+            document.getElementById('avoid-braking-phase').onclick = () => setAvoidabilityPhase('braking');
+            document.getElementById('avoid-detection-play').onclick = toggleDetectionPlayback;
+            document.getElementById('avoid-rollout-play').onclick = toggleRolloutPlayback;
+            document.getElementById('avoid-buffer-toggle').onclick = () => {
+                showSafetyBuffer = !showSafetyBuffer;
+                document.getElementById('avoid-buffer-toggle').classList.toggle('inactive', !showSafetyBuffer);
+                draw(true);
+            };
+            document.getElementById('avoid-ttc-toggle').onclick = () => {
+                showTtcProjection = !showTtcProjection;
+                document.getElementById('avoid-ttc-toggle').classList.toggle('inactive', !showTtcProjection);
+                draw(true);
+            };
+            detectionSlider.oninput = () => {
+                stopDetectionPlayback();
+                detectionSelection = Number(detectionSlider.value);
+                updateDetectionReadout();
+                draw(true);
+            };
+            candidateSlider.oninput = () => {
+                stopRolloutPlayback();
+                candidateSelection = Number(candidateSlider.value);
+                rolloutStep = 0;
+                updateBrakingReadout();
+                draw(true);
+            };
+            rolloutSlider.oninput = () => {
+                stopRolloutPlayback();
+                rolloutStep = Number(rolloutSlider.value);
+                updateBrakingReadout();
+                draw(true);
+            };
+            updateDetectionReadout();
+            updateBrakingReadout();
+        }
+        function setReplayMode(mode) {
+            stopDetectionPlayback();
+            stopRolloutPlayback();
+            play = false;
+            updateBtn();
+            if (mode === 'diagnostic') observedStep = step;
+            replayMode = mode;
+            document.getElementById('avoid-observed').classList.toggle('active', mode === 'observed');
+            document.getElementById('avoid-diagnostic').classList.toggle('active', mode === 'diagnostic');
+            avoidabilityControls.hidden = mode !== 'diagnostic';
+            document.getElementById('controls').style.display = mode === 'diagnostic' ? 'none' : 'flex';
+            if (mode === 'observed') step = observedStep;
+            if (mode === 'diagnostic') {
+                followedId = Number(avoidability.collision.target_agent_index);
+                updateAvoidabilityReadout();
+            }
+            draw(true);
+        }
+        function setAvoidabilityPhase(phase) {
+            stopDetectionPlayback();
+            stopRolloutPlayback();
+            avoidabilityPhase = phase;
+            document.getElementById('avoid-detection-phase').classList.toggle('active', phase === 'detection');
+            document.getElementById('avoid-braking-phase').classList.toggle('active', phase === 'braking');
+            detectionControls.hidden = phase !== 'detection';
+            brakingControls.hidden = phase !== 'braking';
+            updateAvoidabilityReadout();
+            draw(true);
+        }
+        function stopDetectionPlayback() {
+            detectionPlaying = false;
+            detectionLastTick = 0;
+            document.getElementById('avoid-detection-play').textContent = 'Play';
+        }
+        function toggleDetectionPlayback() {
+            if (detectionSamples.length < 2) return;
+            stopRolloutPlayback();
+            detectionPlaying = !detectionPlaying;
+            detectionLastTick = performance.now();
+            document.getElementById('avoid-detection-play').textContent = detectionPlaying ? 'Pause' : 'Play';
+            if (detectionPlaying) requestAnimationFrame(detectionPlaybackLoop);
+        }
+        function detectionPlaybackLoop(timestamp) {
+            if (!detectionPlaying) return;
+            if (timestamp - detectionLastTick >= 450) {
+                detectionLastTick = timestamp;
+                detectionSelection = (detectionSelection + 1) % detectionSamples.length;
+                detectionSlider.value = detectionSelection;
+                updateDetectionReadout();
+                draw(true);
+            }
+            requestAnimationFrame(detectionPlaybackLoop);
+        }
+        function stopRolloutPlayback() {
+            rolloutPlaying = false;
+            rolloutLastTick = 0;
+            document.getElementById('avoid-rollout-play').textContent = 'Play';
+        }
+        function toggleRolloutPlayback() {
+            const rollout = selectedBrakingRollout();
+            if (!rollout || rollout.endStep < 1) return;
+            stopDetectionPlayback();
+            rolloutPlaying = !rolloutPlaying;
+            rolloutLastTick = performance.now();
+            document.getElementById('avoid-rollout-play').textContent = rolloutPlaying ? 'Pause' : 'Play';
+            if (rolloutPlaying) requestAnimationFrame(rolloutPlaybackLoop);
+        }
+        function rolloutPlaybackLoop(timestamp) {
+            if (!rolloutPlaying) return;
+            const rollout = selectedBrakingRollout();
+            if (!rollout) { stopRolloutPlayback(); return; }
+            const stepDurationMilliseconds = rollout.dt * 1000;
+            if (timestamp - rolloutLastTick >= stepDurationMilliseconds) {
+                rolloutLastTick = timestamp;
+                rolloutStep = (rolloutStep + 1) % (rollout.endStep + 1);
+                rolloutSlider.value = rolloutStep;
+                updateBrakingReadout();
+                draw(true);
+            }
+            requestAnimationFrame(rolloutPlaybackLoop);
+        }
+        function frameIndexForTimestep(timestep) {
+            return Math.max(0, Math.min(frameMax(), Math.round(Number(timestep) - Number(H.init_step || 0))));
+        }
+        function agentFromAvoidabilitySnapshot(snapshot, color) {
+            if (!snapshot || !snapshot.valid) return null;
+            const speedMps = Math.hypot(Number(snapshot.vx), Number(snapshot.vy));
+            return {idx:Number(snapshot.index), id:Number(snapshot.index), type:Number(snapshot.type), cl:-1, slot:-1, active:!!snapshot.active, stopped:!!snapshot.stopped, removed:false, partnerBlindnessActive:false, phantomBrakingActive:false, x:Number(snapshot.x), y:Number(snapshot.y), z:Number(snapshot.z), h:Number(snapshot.heading), l:Number(snapshot.length), w:Number(snapshot.width), s:speedMps, vx:Number(snapshot.vx), vy:Number(snapshot.vy), st:0, al:0, alat:0, jl:0, jlat:0, c:color, diagnostic:true};
+        }
+        function replaceDiagnosticAgent(agents, replacement) {
+            if (!replacement) return;
+            const arrayIndex = agents.findIndex(agent => agent.idx === replacement.idx);
+            if (arrayIndex >= 0) agents[arrayIndex] = replacement;
+            else agents.push(replacement);
+        }
+        function decorateDiagnosticAgents(agents) {
+            const collision = avoidability.collision;
+            return agents.map(agent => {
+                if (agent.idx === Number(collision.target_agent_index)) return {...agent, c:'#fb7185', diagnostic:true};
+                if (agent.idx === Number(collision.collision_adversary_index)) return {...agent, c:'#22d3ee', diagnostic:true};
+                return agent;
+            });
+        }
+        function collisionDiagnosticAgents() {
+            const collision = avoidability.collision;
+            const agents = decorateDiagnosticAgents(getFrameAgents(frameIndexForTimestep(collision.collision_timestep)));
+            replaceDiagnosticAgent(agents, agentFromAvoidabilitySnapshot(collision.target, '#fb7185'));
+            replaceDiagnosticAgent(agents, agentFromAvoidabilitySnapshot(collision.adversary, '#22d3ee'));
+            return agents;
+        }
+        function selectedDetectionView() {
+            if (!detectionSamples.length) return {agents:collisionDiagnosticAgents(), sample:null, frameIndex:frameIndexForTimestep(avoidability.collision.collision_timestep)};
+            const sample = detectionSamples[Math.max(0, Math.min(detectionSelection, detectionSamples.length - 1))];
+            const timestep = Number(avoidability.collision.collision_timestep) - Number(sample.steps_back);
+            const frameIndex=frameIndexForTimestep(timestep);
+            return {agents:decorateDiagnosticAgents(getFrameAgents(frameIndex)), sample, frameIndex};
+        }
+        function observedAgentRail(agentIdx, startTimestep, collisionTimestep, collisionSnapshot) {
+            const points = [];
+            for (let timestep = startTimestep; timestep < collisionTimestep; timestep++) {
+                const agent = agentAt(frameIndexForTimestep(timestep), agentIdx);
+                if (agent) points.push({x:agent.x, y:agent.y, h:agent.h});
+            }
+            if (collisionSnapshot && collisionSnapshot.valid) points.push({x:Number(collisionSnapshot.x), y:Number(collisionSnapshot.y), h:Number(collisionSnapshot.heading)});
+            return points;
+        }
+        function sampleAgentRail(points, distanceMeters) {
+            if (!points.length) return null;
+            let traveledMeters = 0;
+            for (let pointIdx=0; pointIdx<points.length-1; pointIdx++) {
+                const deltaX = points[pointIdx+1].x - points[pointIdx].x;
+                const deltaY = points[pointIdx+1].y - points[pointIdx].y;
+                const segmentMeters = Math.hypot(deltaX, deltaY);
+                if (traveledMeters + segmentMeters < distanceMeters) { traveledMeters += segmentMeters; continue; }
+                const fraction = segmentMeters > 1e-6 ? Math.max(0, Math.min(1, (distanceMeters-traveledMeters)/segmentMeters)) : 0;
+                return {x:points[pointIdx].x+fraction*deltaX, y:points[pointIdx].y+fraction*deltaY, h:segmentMeters>1e-6 ? Math.atan2(deltaY,deltaX) : points[pointIdx].h};
+            }
+            if (points.length === 1) return {x:points[0].x+distanceMeters*Math.cos(points[0].h), y:points[0].y+distanceMeters*Math.sin(points[0].h), h:points[0].h};
+            const lastIdx = points.length-1;
+            const deltaX = points[lastIdx].x-points[lastIdx-1].x;
+            const deltaY = points[lastIdx].y-points[lastIdx-1].y;
+            const heading = Math.hypot(deltaX,deltaY)>1e-6 ? Math.atan2(deltaY,deltaX) : points[lastIdx].h;
+            const overshootMeters = Math.max(0, distanceMeters-traveledMeters);
+            return {x:points[lastIdx].x+overshootMeters*Math.cos(heading), y:points[lastIdx].y+overshootMeters*Math.sin(heading), h:heading};
+        }
+        function counterfactualAgent(base, point, speedMps, color, braking) {
+            return {...base, x:point.x, y:point.y, h:point.h, s:Math.abs(speedMps), vx:speedMps*Math.cos(point.h), vy:speedMps*Math.sin(point.h), stopped:Math.abs(speedMps)<=1e-6, al:braking ? -Number(avoidability.constants.braking_deceleration) : 0, c:color, diagnostic:true, braking};
+        }
+        function selectedBrakingRollout() {
+            if (!avoidanceCandidates.length) return null;
+            const candidate = avoidanceCandidates[Math.max(0, Math.min(candidateSelection, avoidanceCandidates.length-1))];
+            const collision = avoidability.collision;
+            const constants = avoidability.constants || {};
+            const dt = Number(constants.dt || 0.1);
+            const deceleration = Number(constants.braking_deceleration || 5);
+            const stepsBack = Number(candidate.steps_back);
+            const collisionTimestep = Number(collision.collision_timestep);
+            const startTimestep = collisionTimestep-stepsBack;
+            const targetIdx = Number(collision.target_agent_index);
+            const adversaryIdx = Number(collision.collision_adversary_index);
+            const targetAtStart = agentAt(frameIndexForTimestep(startTimestep), targetIdx);
+            if (!targetAtStart) return null;
+            const targetRail = observedAgentRail(targetIdx, startTimestep, collisionTimestep, collision.target);
+            const targetInitialSpeed = targetAtStart.s;
+            const targetStopTime = targetInitialSpeed/deceleration;
+            const targetStopStep = Math.ceil(targetStopTime/dt-1e-6);
+            const adversaryBase = agentFromAvoidabilitySnapshot(collision.adversary, '#22d3ee');
+            const signedAdversarySpeed = adversaryBase.vx*Math.cos(adversaryBase.h)+adversaryBase.vy*Math.sin(adversaryBase.h);
+            const adversaryStopTime = Math.abs(signedAdversarySpeed)/deceleration;
+            const adversaryStopStep = Math.min(Number(constants.max_extension_steps || 81)-1, Math.ceil(adversaryStopTime/dt-1e-6));
+            const fullEndStep = Math.min(Number(constants.max_rollout_steps || 171)-1, Math.max(targetStopStep, stepsBack+adversaryStopStep));
+            const blockingStep = Number(candidate.blocking_rollout_step);
+            const endStep = blockingStep >= 0 ? Math.min(blockingStep, fullEndStep) : fullEndStep;
+            const targetSamples = [], adversarySamples = [];
+            for (let rolloutIdx=0; rolloutIdx<=endStep; rolloutIdx++) {
+                const rolloutSeconds = rolloutIdx*dt;
+                const brakingSeconds = Math.min(rolloutSeconds,targetStopTime);
+                const targetDistance = targetInitialSpeed*brakingSeconds-.5*deceleration*brakingSeconds*brakingSeconds;
+                const targetPoint = sampleAgentRail(targetRail,targetDistance);
+                const targetSpeed = Math.max(0,targetInitialSpeed-deceleration*brakingSeconds);
+                targetSamples.push(counterfactualAgent(targetAtStart,targetPoint,targetSpeed,'#fb7185',targetSpeed>1e-6));
+                if (rolloutIdx < stepsBack) {
+                    const recorded = agentAt(frameIndexForTimestep(startTimestep+rolloutIdx),adversaryIdx);
+                    adversarySamples.push(recorded ? {...recorded,c:'#22d3ee',diagnostic:true} : adversaryBase);
+                    continue;
+                }
+                const extensionSeconds = Math.min((rolloutIdx-stepsBack)*dt,adversaryStopTime);
+                const direction = signedAdversarySpeed < 0 ? -1 : 1;
+                const extensionDistance = signedAdversarySpeed*extensionSeconds-direction*.5*deceleration*extensionSeconds*extensionSeconds;
+                const extensionSpeed = direction*Math.max(0,Math.abs(signedAdversarySpeed)-deceleration*extensionSeconds);
+                const point = {x:adversaryBase.x+extensionDistance*Math.cos(adversaryBase.h),y:adversaryBase.y+extensionDistance*Math.sin(adversaryBase.h),h:adversaryBase.h};
+                adversarySamples.push(counterfactualAgent(adversaryBase,point,extensionSpeed,'#22d3ee',Math.abs(extensionSpeed)>1e-6));
+            }
+            return {candidate,dt,stepsBack,startTimestep,targetSamples,adversarySamples,targetStopStep,adversaryStopStep:stepsBack+adversaryStopStep,fullEndStep,endStep};
+        }
+        function brakingDiagnosticView() {
+            const rollout = selectedBrakingRollout();
+            if (!rollout) return {agents:collisionDiagnosticAgents(),rollout:null,frameIndex:frameIndexForTimestep(avoidability.collision.collision_timestep)};
+            const selectedStep = Math.max(0,Math.min(rolloutStep,rollout.endStep));
+            const baseTimestep = Math.min(Number(avoidability.collision.collision_timestep),rollout.startTimestep+selectedStep);
+            const frameIndex=frameIndexForTimestep(baseTimestep);
+            const agents = decorateDiagnosticAgents(getFrameAgents(frameIndex));
+            replaceDiagnosticAgent(agents,rollout.targetSamples[selectedStep]);
+            replaceDiagnosticAgent(agents,rollout.adversarySamples[selectedStep]);
+            if (selectedStep === rollout.endStep && rollout.candidate.blocking_agent && rollout.candidate.blocking_agent.valid) {
+                replaceDiagnosticAgent(agents,agentFromAvoidabilitySnapshot(rollout.candidate.blocking_agent,'#c084fc'));
+            }
+            return {agents,rollout,frameIndex};
+        }
+        function currentAvoidabilityView() {
+            if (replayMode !== 'diagnostic') return null;
+            if (avoidabilityPhase === 'detection') return {...selectedDetectionView(),phase:'detection'};
+            return {...brakingDiagnosticView(),phase:'braking'};
+        }
+        function formatDiagnosticTtc(value) { return Number(value) < 0 ? '∞' : Number(value).toFixed(2)+'s'; }
+        function updateDetectionReadout() {
+            const result = document.getElementById('avoid-detection-result');
+            const playButton = document.getElementById('avoid-detection-play');
+            if (!detectionSamples.length) {
+                detectionSlider.disabled = true;
+                playButton.disabled = true;
+                document.getElementById('avoid-detection-label').textContent = 'n/a';
+                result.className = 'avoid-readout';
+                result.innerHTML = '<strong>No detection samples</strong>The collision had no avoidable braking time, or no state fell inside the reaction window.';
+                return;
+            }
+            detectionSelection = Math.max(0,Math.min(detectionSelection,detectionSamples.length-1));
+            const sample = detectionSamples[detectionSelection];
+            const dt = Number(avoidability.constants.dt);
+            const tBrake = Number(avoidability.classification.t_brake);
+            const secondsBeforeCollision = Number(sample.steps_back)*dt;
+            detectionSlider.disabled = false;
+            playButton.disabled = detectionSamples.length < 2;
+            document.getElementById('avoid-detection-label').textContent = (secondsBeforeCollision-tBrake).toFixed(2)+'s pre-brake';
+            result.className = 'avoid-readout'+(sample.dangerous ? ' danger' : '');
+            result.innerHTML = '<strong>'+(sample.dangerous?'DANGER':'SAFE')+' · sample '+(detectionSelection+1)+'/'+detectionSamples.length+'</strong>'+secondsBeforeCollision.toFixed(2)+'s before collision · straight TTC '+formatDiagnosticTtc(sample.straight_ttc_seconds)+' · route TTC '+formatDiagnosticTtc(sample.route_ttc_seconds)+' · threshold '+Number(sample.danger_threshold_seconds).toFixed(2)+'s · lateral buffer '+Number(sample.lateral_buffer_meters).toFixed(2)+'m'+(sample.lateral_buffer_dangerous?' (overlap)':'');
+        }
+        function updateBrakingReadout() {
+            const candidateResult = document.getElementById('avoid-candidate-result');
+            const rolloutResult = document.getElementById('avoid-rollout-result');
+            const rollout = selectedBrakingRollout();
+            if (!rollout) {
+                candidateSlider.disabled = true;
+                rolloutSlider.disabled = true;
+                document.getElementById('avoid-rollout-play').disabled = true;
+                document.getElementById('avoid-candidate-label').textContent = 'n/a';
+                candidateResult.innerHTML = '<strong>No braking candidate</strong>';
+                rolloutResult.textContent = '';
+                return;
+            }
+            candidateSlider.disabled = false;
+            rolloutStep = Math.max(0,Math.min(rolloutStep,rollout.endStep));
+            rolloutSlider.max = rollout.endStep;
+            rolloutSlider.value = rolloutStep;
+            rolloutSlider.disabled = rollout.endStep < 1;
+            document.getElementById('avoid-rollout-play').disabled = rollout.endStep < 1;
+            const leadSeconds = rollout.stepsBack*rollout.dt;
+            document.getElementById('avoid-candidate-label').textContent = leadSeconds.toFixed(2)+'s';
+            const candidate = rollout.candidate;
+            let outcome = candidate.avoided ? 'AVOIDED' : 'REJECTED';
+            if (candidate.collision_with_original_adversary) outcome += ' · original hitter';
+            if (candidate.at_fault_collision_with_other_adversary) outcome += ' · secondary blocker';
+            candidateResult.className = 'avoid-readout'+(candidate.avoided?'':' danger');
+            candidateResult.innerHTML = '<strong>'+outcome+' · candidate '+(candidateSelection+1)+'/'+avoidanceCandidates.length+'</strong>Brake '+leadSeconds.toFixed(2)+'s before collision · C horizon '+rollout.fullEndStep+' steps'+(Number(candidate.blocking_rollout_step)>=0?' · blocked at step '+candidate.blocking_rollout_step:' · joint stop reached');
+            document.getElementById('avoid-rollout-label').textContent = 't='+(rolloutStep*rollout.dt).toFixed(1)+'s';
+            rolloutResult.innerHTML = '<strong>Counterfactual step '+rolloutStep+' / '+rollout.endStep+'</strong>Target stop step '+rollout.targetStopStep+' · hitter stop step '+rollout.adversaryStopStep+(candidate.ignored_overlap_agent_index>=0?' · ignored non-fault overlap with agent '+candidate.ignored_overlap_agent_index+' at step '+candidate.ignored_overlap_rollout_step:'');
+        }
+        function updateAvoidabilityReadout() {
+            if (avoidabilityPhase === 'detection') updateDetectionReadout();
+            else updateBrakingReadout();
+        }
+        function capturedRoutePolyline(target) {
+            const route = avoidability.target_route_lane_indices || [];
+            const allPoints = [];
+            for (const elementIdx of route) {
+                const lanePoints = roadGeometryByElement.get(Number(elementIdx)) || [];
+                for (const point of lanePoints) {
+                    const previous = allPoints[allPoints.length-1];
+                    if (!previous || Math.hypot(point.x-previous.x,point.y-previous.y)>1e-6) allPoints.push(point);
+                }
+            }
+            if (allPoints.length < 2) return [];
+            let best = null;
+            for (let pointIdx=0;pointIdx<allPoints.length-1;pointIdx++) {
+                const start = allPoints[pointIdx], end = allPoints[pointIdx+1];
+                const deltaX = end.x-start.x, deltaY = end.y-start.y;
+                const lengthSquared = deltaX*deltaX+deltaY*deltaY;
+                if (lengthSquared < 1e-9) continue;
+                const fraction = Math.max(0,Math.min(1,((target.x-start.x)*deltaX+(target.y-start.y)*deltaY)/lengthSquared));
+                const x = start.x+fraction*deltaX, y = start.y+fraction*deltaY;
+                const distanceSquared = (target.x-x)*(target.x-x)+(target.y-y)*(target.y-y);
+                if (!best || distanceSquared<best.distanceSquared) best = {pointIdx,x,y,distanceSquared};
+            }
+            return best ? [{x:best.x,y:best.y},...allPoints.slice(best.pointIdx+1)] : [];
+        }
+        function polylineToDistance(points,distanceMeters) {
+            if (!points.length) return [];
+            const result = [points[0]];
+            let traveledMeters = 0;
+            for (let pointIdx=0;pointIdx<points.length-1;pointIdx++) {
+                const start=points[pointIdx], end=points[pointIdx+1];
+                const segmentMeters=Math.hypot(end.x-start.x,end.y-start.y);
+                if (traveledMeters+segmentMeters<distanceMeters) {
+                    result.push(end);
+                    traveledMeters+=segmentMeters;
+                    continue;
+                }
+                const fraction=segmentMeters>1e-6 ? Math.max(0,Math.min(1,(distanceMeters-traveledMeters)/segmentMeters)) : 0;
+                result.push({x:start.x+fraction*(end.x-start.x),y:start.y+fraction*(end.y-start.y)});
+                return result;
+            }
+            return result;
+        }
+        function drawDiagnosticPolyline(points,color,dashPixels=[],widthPixels=2) {
+            if (!points || points.length<2) return;
+            ctx.save();
+            ctx.strokeStyle=color;
+            ctx.lineWidth=widthPixels/cam.z;
+            ctx.setLineDash(dashPixels.map(value=>value/cam.z));
+            ctx.beginPath();
+            ctx.moveTo(points[0].x,points[0].y);
+            for (let pointIdx=1;pointIdx<points.length;pointIdx++) ctx.lineTo(points[pointIdx].x,points[pointIdx].y);
+            ctx.stroke();
+            ctx.restore();
+        }
+        function drawDiagnosticBox(agent,color,fillColor=null,dashPixels=[]) {
+            if (!agent) return;
+            ctx.save();
+            ctx.translate(agent.x,agent.y);
+            ctx.rotate(agent.h);
+            ctx.strokeStyle=color;
+            ctx.lineWidth=2/cam.z;
+            ctx.setLineDash(dashPixels.map(value=>value/cam.z));
+            if (fillColor) { ctx.fillStyle=fillColor; ctx.fillRect(-agent.l/2,-agent.w/2,agent.l,agent.w); }
+            ctx.strokeRect(-agent.l/2,-agent.w/2,agent.l,agent.w);
+            ctx.restore();
+        }
+        function drawDetectionOverlay(view) {
+            const sample=view.sample;
+            if (!sample) return;
+            const collision=avoidability.collision;
+            const target=view.agents.find(agent=>agent.idx===Number(collision.target_agent_index));
+            const adversary=view.agents.find(agent=>agent.idx===Number(collision.collision_adversary_index));
+            if (!target || !adversary) return;
+            if (showSafetyBuffer) {
+                const expanded={...target,w:target.w+2*Number(sample.lateral_buffer_meters)};
+                drawDiagnosticBox(expanded,'#f59e0b','rgba(245,158,11,.12)',[6,4]);
+            }
+            if (!showTtcProjection) return;
+            const straightTtc=Number(sample.straight_ttc_seconds);
+            if (straightTtc>=0) {
+                const targetEnd={...target,x:target.x+target.vx*straightTtc,y:target.y+target.vy*straightTtc};
+                const adversaryEnd={...adversary,x:adversary.x+adversary.vx*straightTtc,y:adversary.y+adversary.vy*straightTtc};
+                drawDiagnosticPolyline([target,targetEnd],'#fb7185',[7,4],2.2);
+                drawDiagnosticPolyline([adversary,adversaryEnd],'#22d3ee',[7,4],2.2);
+                drawDiagnosticBox(targetEnd,'#fb7185',null,[5,3]);
+                drawDiagnosticBox(adversaryEnd,'#22d3ee',null,[5,3]);
+            }
+            const routeTtc=Number(sample.route_ttc_seconds);
+            if (routeTtc<0) return;
+            const routePath=polylineToDistance(capturedRoutePolyline(target),target.s*routeTtc);
+            drawDiagnosticPolyline(routePath,'#f59e0b',[5,3],2.5);
+            const routeEnd=routePath[routePath.length-1];
+            const adversaryEnd={...adversary,x:adversary.x+adversary.vx*routeTtc,y:adversary.y+adversary.vy*routeTtc};
+            if (routeEnd) drawDiagnosticBox({...target,x:routeEnd.x,y:routeEnd.y},'#f59e0b',null,[5,3]);
+            drawDiagnosticPolyline([adversary,adversaryEnd],'#22d3ee',[5,3],2.5);
+            drawDiagnosticBox(adversaryEnd,'#22d3ee',null,[5,3]);
+        }
+        function drawBrakingOverlay(view) {
+            const rollout=view.rollout;
+            if (!rollout) return;
+            drawDiagnosticPolyline(rollout.targetSamples,'rgba(251,113,133,.72)',[],2.4);
+            drawDiagnosticPolyline(rollout.adversarySamples,'rgba(34,211,238,.72)',[],2.4);
+            const targetStart=rollout.targetSamples[0];
+            if (targetStart) {
+                ctx.save(); ctx.fillStyle='#fb7185'; ctx.beginPath(); ctx.arc(targetStart.x,targetStart.y,4/cam.z,0,7); ctx.fill(); ctx.restore();
+            }
+            const candidate=rollout.candidate;
+            if (rolloutStep===Number(candidate.ignored_overlap_rollout_step)) {
+                const ignored=agentFromAvoidabilitySnapshot(candidate.ignored_overlap_agent,'#f59e0b');
+                if (ignored) drawDiagnosticBox(ignored,'#f59e0b',null,[3,3]);
+            }
+            if (rolloutStep!==rollout.endStep) return;
+            const blocker=agentFromAvoidabilitySnapshot(candidate.blocking_agent,'#c084fc');
+            if (blocker) drawDiagnosticBox(blocker,'#c084fc','rgba(192,132,252,.14)',[6,3]);
+        }
+        function drawAvoidabilityOverlay(view) {
+            if (!view) return;
+            if (view.phase==='detection') drawDetectionOverlay(view);
+            else drawBrakingOverlay(view);
+        }
         function trafficAt(frame, idx) {
             const db = (frame * H.traffic_cap + idx) * F.tf;
             if (!C.traffic_i16[db]) return null;
@@ -1356,9 +1894,38 @@ self.onmessage = async event => {
         function toggleObsMode(e){ if(e) e.stopPropagation(); obsMode=(obsMode+1)%OBS_MODES.length; document.getElementById('obsModeBtn').textContent=OBS_MODES[obsMode]; draw(true); }
         function toggleObsSize(e){ if(e) e.stopPropagation(); const p=document.getElementById('obs-container'), b=e ? e.currentTarget : null; obsExpanded=!obsExpanded; p.style.width=obsExpanded?'680px':'390px'; p.style.height=obsExpanded?'680px':'390px'; if(b) b.textContent=obsExpanded?'Collapse':'Expand'; resizeObsCanvas(); draw(true); }
         function searchAgent(){ const id=parseInt(document.getElementById('agentSearch').value); if(!isNaN(id)){ followedId=id; play=false; updateBtn(); draw(true); } }
-        document.addEventListener('keydown', e => { if(!H || e.target.tagName === 'INPUT') return; if(e.code === 'Space'){ toggle(); e.preventDefault(); } if(e.code === 'ArrowRight'){ play=false; updateBtn(); step=Math.min(step+1,frameMax()); draw(true); } if(e.code === 'ArrowLeft'){ play=false; updateBtn(); step=Math.max(step-1,0); draw(true); } if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); } if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); } });
+        document.addEventListener('keydown', e => {
+            if(!H || e.target.tagName === 'INPUT') return;
+            if(e.code === 'Space') {
+                if(replayMode === 'diagnostic') {
+                    if(avoidabilityPhase === 'detection') toggleDetectionPlayback();
+                    else toggleRolloutPlayback();
+                } else toggle();
+                e.preventDefault();
+            }
+            if(e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+                const direction=e.code === 'ArrowRight' ? 1 : -1;
+                if(replayMode === 'diagnostic' && avoidabilityPhase === 'detection' && detectionSamples.length) {
+                    stopDetectionPlayback();
+                    detectionSelection=Math.max(0,Math.min(detectionSamples.length-1,detectionSelection+direction));
+                    detectionSlider.value=detectionSelection;
+                    updateDetectionReadout();
+                } else if(replayMode === 'diagnostic' && avoidabilityPhase === 'braking') {
+                    stopRolloutPlayback();
+                    const rollout=selectedBrakingRollout();
+                    if(rollout) rolloutStep=Math.max(0,Math.min(rollout.endStep,rolloutStep+direction));
+                    rolloutSlider.value=rolloutStep;
+                    updateBrakingReadout();
+                } else {
+                    play=false; updateBtn(); step=Math.max(0,Math.min(frameMax(),step+direction));
+                }
+                draw(true);
+            }
+            if(e.code === 'Escape'){ followedId=null; isEgoCam=false; updateUI(); draw(true); }
+            if(e.code === 'KeyG'){ showGhost=!showGhost; draw(true); }
+        });
         c.onwheel = e => { e.preventDefault(); cam.z *= Math.exp(-e.deltaY * .001); draw(true); };
-        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; let hit=null, agents=getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
+        c.onmousedown = e => { if(!H) return; const r=c.getBoundingClientRect(), wx=(e.clientX-r.left-c.width/2)/cam.z+cam.x, wy=(e.clientY-r.top-c.height/2)/-cam.z+cam.y; const avoidabilityView=currentAvoidabilityView(); let hit=null, agents=avoidabilityView?avoidabilityView.agents:getFrameAgents(Math.floor(step)); if(!isEgoCam) for(const a of agents) if(Math.hypot(wx-a.x, wy-a.y) < Math.max(a.l,3)){ hit=a.id; break; } if(hit !== null){ followedId=hit; cam.drag=false; } else { followedId=null; isEgoCam=false; cam.drag=true; cam.lx=e.clientX; cam.ly=e.clientY; } draw(true); };
         window.onmouseup = () => cam.drag = false;
         c.onmousemove = e => { if(cam.drag && !isEgoCam){ cam.x -= (e.clientX-cam.lx)/cam.z; cam.y -= (e.clientY-cam.ly)/-cam.z; cam.lx=e.clientX; cam.ly=e.clientY; draw(true); } };
         obsC.addEventListener('wheel', e => { e.preventDefault(); obsZoom = Math.max(.45, Math.min(8, obsZoom * Math.exp(-e.deltaY * .001))); draw(true); }, {passive:false});
@@ -1532,16 +2099,20 @@ self.onmessage = async event => {
         function draw(force=false) {
             if(!H) return;
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
-            if(!force && f === lastDrawn) return;
-            const target = followedId !== null ? findAgent(f, followedId) : null;
+            if(!force && f === lastDrawn && replayMode === 'observed') return;
+            const avoidabilityView = currentAvoidabilityView();
+            const displayFrame = avoidabilityView ? avoidabilityView.frameIndex : f;
+            const displayedAgents = avoidabilityView ? avoidabilityView.agents : getFrameAgents(f);
+            const target = followedId !== null ? displayedAgents.find(agent=>agent.id===followedId) || null : null;
             if (target) { cam.x = target.x; cam.y = target.y; }
-            updateUI(target);
+            updateUI(avoidabilityView ? null : target);
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
-            drawGhosts(f);
-            for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
-            for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
-            if(target){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
+            if(!avoidabilityView) drawGhosts(f);
+            drawAvoidabilityOverlay(avoidabilityView);
+            for(const a of displayedAgents){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
+            for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(displayFrame,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
+            if(target && !avoidabilityView){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
         }
         function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }

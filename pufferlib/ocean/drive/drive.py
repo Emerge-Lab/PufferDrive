@@ -559,6 +559,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
+            "capture_avoidability_debug": self.capture_replay,
             "eval_training_render": self.eval_training_render,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "obs_norm_speed_mps": self.obs_norm_speed_mps,
@@ -649,9 +650,13 @@ class Drive(pufferlib.PufferEnv):
                 # Read this batch's finished episodes before the envs are resampled/closed.
                 if self.eval_mode:
                     for summary in binding.vec_per_episode_log(self.c_envs):
+                        avoidability_debug = summary.pop("avoidability_debug", None)
                         summary["summary_type"] = "evaluation_episode"
                         if self.capture_replay:
-                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
+                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(
+                                summary,
+                                avoidability_debug,
+                            )
                         info.append(summary)
                 self.current_num_eval_scenarios = self._next_eval_batch_size()
                 if self.current_num_eval_scenarios == 0:
@@ -852,6 +857,7 @@ class Drive(pufferlib.PufferEnv):
                 "map_name": os.path.basename(map_path).split(".")[0],
                 "map_path": map_path,
                 "scenario_id": scenario.get("scenario_id"),
+                "initial_timestep": int(scenario["timestep"]),
                 "goal_source": self.goal_source,
                 "goal_regen_mode": self.goal_regen_mode,
                 "num_goals": self.num_goals,
@@ -919,26 +925,34 @@ class Drive(pufferlib.PufferEnv):
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
             )
 
-    def _build_replay_environment_bundle(self, summary):
+    def _build_replay_environment_bundle(self, summary, avoidability_debug=None):
         env_slot = int(summary["env_slot"])
         if env_slot < 0 or env_slot >= len(self._replay_captures):
             raise RuntimeError(f"Replay summary has invalid env_slot={env_slot}")
         capture = self._replay_captures[env_slot]
-        episode_length = int(summary["episode_length"])
         captured_frame_count = len(capture["frames"]["agent_f32"])
-        if episode_length <= 0 or episode_length > captured_frame_count:
+        episode_frame_count = min(
+            captured_frame_count,
+            int(summary["episode_timestep"]) - capture["metadata"]["initial_timestep"] + 1,
+        )
+        if episode_frame_count <= 0:
             raise RuntimeError(
-                f"Replay episode_length={episode_length} is incompatible with "
-                f"captured_frame_count={captured_frame_count} for env_slot={env_slot}"
+                f"Replay episode_timestep={summary['episode_timestep']} precedes "
+                f"initial_timestep={capture['metadata']['initial_timestep']}"
             )
         metadata = dict(capture["metadata"])
-        metadata["episode_length"] = episode_length
+        metadata["episode_length"] = episode_frame_count
         replay_environment_bundle = {
             "schema": "interactive_replay_environment_v1",
             "metadata": metadata,
             "scenario": capture["scenario"],
-            "frames": {key: np.stack(frames[:episode_length], axis=0) for key, frames in capture["frames"].items()},
+            "frames": {
+                key: np.stack(frame_values[:episode_frame_count], axis=0)
+                for key, frame_values in capture["frames"].items()
+            },
         }
+        if avoidability_debug is not None:
+            replay_environment_bundle["avoidability_debug"] = avoidability_debug
         return zlib.compress(
             pickle.dumps(replay_environment_bundle, protocol=pickle.HIGHEST_PROTOCOL),
             level=3,

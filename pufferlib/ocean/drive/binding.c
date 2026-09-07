@@ -151,6 +151,16 @@ static PyObject *my_get(PyObject *dict, Env *env) {
     }
     Py_DECREF(v);
 
+    v = PyLong_FromLong(env->timestep);
+    if (!v) {
+        return NULL;
+    }
+    if (PyDict_SetItemString(dict, "timestep", v) < 0) {
+        Py_DECREF(v);
+        return NULL;
+    }
+    Py_DECREF(v);
+
     v = PyLong_FromLong(env->num_total_agents);
     if (!v) {
         return NULL;
@@ -2034,6 +2044,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->capture_avoidability_debug = (bool) unpack(kwargs, "capture_avoidability_debug");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
     env->eval_training_render = (int) unpack(kwargs, "eval_training_render");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
@@ -2064,6 +2075,193 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     // episode_seed replays identically regardless of which reset created it.
     env->timestep = -1;
     return 0;
+}
+
+static PyObject *avoidability_snapshot_to_dict(AvoidabilityAgentSnapshot *snapshot) {
+    return Py_BuildValue(
+        "{s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i}",
+        "valid",
+        snapshot->valid,
+        "index",
+        snapshot->index,
+        "type",
+        snapshot->type,
+        "x",
+        snapshot->x,
+        "y",
+        snapshot->y,
+        "z",
+        snapshot->z,
+        "heading",
+        snapshot->heading,
+        "length",
+        snapshot->length,
+        "width",
+        snapshot->width,
+        "height",
+        snapshot->height,
+        "vx",
+        snapshot->vx,
+        "vy",
+        snapshot->vy,
+        "active",
+        snapshot->active,
+        "stopped",
+        snapshot->stopped);
+}
+
+static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
+    PyObject *trace = PyDict_New();
+    PyObject *target_snapshot = avoidability_snapshot_to_dict(&debug->target_at_collision);
+    PyObject *adversary_snapshot = avoidability_snapshot_to_dict(&debug->adversary_at_collision);
+    PyObject *collision = Py_BuildValue(
+        "{s:i,s:i,s:i,s:O,s:O}",
+        "target_agent_index",
+        debug->target_agent_index,
+        "collision_adversary_index",
+        debug->collision_adversary_index,
+        "collision_timestep",
+        debug->collision_timestep,
+        "target",
+        target_snapshot,
+        "adversary",
+        adversary_snapshot);
+    Py_XDECREF(target_snapshot);
+    Py_XDECREF(adversary_snapshot);
+    PyObject *constants = Py_BuildValue(
+        "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f}",
+        "dt",
+        debug->dt,
+        "braking_deceleration",
+        debug->braking_deceleration,
+        "reaction_time_seconds",
+        debug->reaction_time_seconds,
+        "max_extension_steps",
+        debug->max_extension_steps,
+        "max_rollout_steps",
+        debug->max_rollout_steps,
+        "ttc_margin_seconds",
+        debug->ttc_margin_seconds,
+        "ttc_max_projection_steps",
+        debug->ttc_max_projection_steps,
+        "lateral_buffer_base_meters",
+        debug->lateral_buffer_base_meters,
+        "lateral_buffer_response_time_seconds",
+        debug->lateral_buffer_response_time_seconds,
+        "lateral_buffer_deceleration_mps2",
+        debug->lateral_buffer_deceleration_mps2,
+        "lateral_buffer_max_meters",
+        debug->lateral_buffer_max_meters);
+    if (constants != NULL
+        && assign_to_dict(constants, "reaction_window_half_width_seconds", debug->reaction_window_half_width_seconds)
+            != 0) {
+        Py_CLEAR(constants);
+    }
+    PyObject *classification = Py_BuildValue(
+        "{s:f,s:i,s:i,s:i}",
+        "t_brake",
+        debug->last_avoidable_braking_seconds_before_collision,
+        "genuine_target_failure",
+        debug->genuine_target_failure,
+        "adversary_forced",
+        debug->adversary_forced,
+        "unavoidable",
+        debug->unavoidable);
+    PyObject *target_route = PyList_New(debug->target_route_length);
+    for (int route_idx = 0; target_route != NULL && route_idx < debug->target_route_length; route_idx++) {
+        PyObject *lane_idx = PyLong_FromLong(debug->target_route[route_idx]);
+        if (lane_idx == NULL) {
+            Py_CLEAR(target_route);
+            break;
+        }
+        PyList_SetItem(target_route, route_idx, lane_idx);
+    }
+
+    PyObject *candidates = PyList_New(debug->candidate_count);
+    for (int candidate_idx = 0; candidates != NULL && candidate_idx < debug->candidate_count; candidate_idx++) {
+        AvoidabilityCandidateDebug *candidate = &debug->candidates[candidate_idx];
+        PyObject *blocking_agent = avoidability_snapshot_to_dict(&candidate->blocking_agent);
+        PyObject *ignored_agent = avoidability_snapshot_to_dict(&candidate->ignored_overlap_agent);
+        PyObject *candidate_dict = Py_BuildValue(
+            "{s:i,s:i,s:i,s:i,s:i,s:i,s:O,s:i,s:i,s:O}",
+            "steps_back",
+            candidate->steps_back,
+            "avoided",
+            candidate->avoided,
+            "collision_with_original_adversary",
+            candidate->collision_with_original_adversary,
+            "at_fault_collision_with_other_adversary",
+            candidate->at_fault_collision_with_other_adversary,
+            "blocking_agent_index",
+            candidate->blocking_agent_index,
+            "blocking_rollout_step",
+            candidate->blocking_rollout_step,
+            "blocking_agent",
+            blocking_agent,
+            "ignored_overlap_agent_index",
+            candidate->ignored_overlap_agent_index,
+            "ignored_overlap_rollout_step",
+            candidate->ignored_overlap_rollout_step,
+            "ignored_overlap_agent",
+            ignored_agent);
+        Py_XDECREF(blocking_agent);
+        Py_XDECREF(ignored_agent);
+        if (candidate_dict == NULL) {
+            Py_CLEAR(candidates);
+            break;
+        }
+        PyList_SetItem(candidates, candidate_idx, candidate_dict);
+    }
+
+    PyObject *detection_samples = PyList_New(debug->detection_sample_count);
+    for (int sample_idx = 0; detection_samples != NULL && sample_idx < debug->detection_sample_count; sample_idx++) {
+        AvoidabilityDetectionDebug *sample = &debug->detection_samples[sample_idx];
+        float straight_ttc_seconds = isfinite(sample->straight_ttc_seconds) ? sample->straight_ttc_seconds : -1.0f;
+        float route_ttc_seconds = isfinite(sample->route_ttc_seconds) ? sample->route_ttc_seconds : -1.0f;
+        PyObject *sample_dict = Py_BuildValue(
+            "{s:i,s:i,s:f,s:f,s:f,s:f,s:i}",
+            "steps_back",
+            sample->steps_back,
+            "dangerous",
+            sample->dangerous,
+            "danger_threshold_seconds",
+            sample->danger_threshold_seconds,
+            "straight_ttc_seconds",
+            straight_ttc_seconds,
+            "route_ttc_seconds",
+            route_ttc_seconds,
+            "lateral_buffer_meters",
+            sample->lateral_buffer_meters,
+            "lateral_buffer_dangerous",
+            sample->lateral_buffer_dangerous);
+        if (sample_dict == NULL) {
+            Py_CLEAR(detection_samples);
+            break;
+        }
+        PyList_SetItem(detection_samples, sample_idx, sample_dict);
+    }
+
+    int valid = trace != NULL && collision != NULL && constants != NULL && classification != NULL
+        && target_route != NULL && candidates != NULL && detection_samples != NULL;
+    if (valid) {
+        valid = PyDict_SetItemString(trace, "collision", collision) == 0
+            && PyDict_SetItemString(trace, "constants", constants) == 0
+            && PyDict_SetItemString(trace, "classification", classification) == 0
+            && PyDict_SetItemString(trace, "target_route_lane_indices", target_route) == 0
+            && PyDict_SetItemString(trace, "candidates", candidates) == 0
+            && PyDict_SetItemString(trace, "detection_samples", detection_samples) == 0;
+    }
+    Py_XDECREF(collision);
+    Py_XDECREF(constants);
+    Py_XDECREF(classification);
+    Py_XDECREF(target_route);
+    Py_XDECREF(candidates);
+    Py_XDECREF(detection_samples);
+    if (!valid) {
+        Py_XDECREF(trace);
+        return NULL;
+    }
+    return trace;
 }
 
 // Build one per-episode row from a frozen eval env: its log holds exactly the
@@ -2113,6 +2311,17 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
             return -1;
         }
         Py_DECREF(scenario_id);
+    }
+    if (env->avoidability_debug != NULL && env->avoidability_debug->valid) {
+        PyObject *debug = avoidability_debug_to_dict(env->avoidability_debug);
+        if (debug == NULL) {
+            return -1;
+        }
+        int result = PyDict_SetItemString(dict, "avoidability_debug", debug);
+        Py_DECREF(debug);
+        if (result != 0) {
+            return -1;
+        }
     }
     return 0;
 }

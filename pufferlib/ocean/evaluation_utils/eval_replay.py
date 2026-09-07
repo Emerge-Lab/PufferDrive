@@ -136,7 +136,12 @@ class EvalReplayCapture:
         ):
             raise RuntimeError("Replay environment metadata is incompatible with the policy history")
 
-        replay = {"env": self.env_config, **replay_environment["frames"]}
+        replay = {
+            "env": self.env_config,
+            "initial_timestep": metadata["initial_timestep"],
+            "avoidability_debug": replay_environment.get("avoidability_debug"),
+            **replay_environment["frames"],
+        }
         for replay_key, history_values in self.policy_history.items():
             replay[replay_key] = history_values[:episode_length, global_agent_start:global_agent_end]
         replay_stem = _eval_replay_stem(summary, self.episode_id_offset + episode_id)
