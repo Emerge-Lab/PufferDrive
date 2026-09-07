@@ -18,8 +18,10 @@ from pufferlib.ocean.regents.state import STATE_HEADING, STATE_X, STATE_Y, Driva
 
 
 DEFAULT_EGO_COLLISION_WEIGHT = 1.0
-DEFAULT_BACKGROUND_COLLISION_WEIGHT = 5.0
-DEFAULT_DRIVABLE_AREA_WEIGHT = 20.0
+# V-Max `origin/dev/Regents_is_back` labels these values "WAWA TUNING" in
+# `vmax/scripts/evaluate/regents/evaluate.py`: collision 20, deviation 10.
+DEFAULT_BACKGROUND_COLLISION_WEIGHT = 20.0
+DEFAULT_DRIVABLE_AREA_WEIGHT = 10.0
 DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS = 1.25
 SAFE_MASKED_BOX_SIZE_METERS = 1.0
 PAIRWISE_DISTANCE_CHUNK_SIZE = 4096
@@ -27,7 +29,7 @@ PAIRWISE_DISTANCE_CHUNK_SIZE = 4096
 
 @dataclass(frozen=True)
 class ReGentSCostConfig:
-    """Named paper-cost weights and KING smoothing/truncation parameters."""
+    """V-Max-tuned weights and released ReGentS Gaussian/truncation parameters."""
 
     ego_collision_weight: float = DEFAULT_EGO_COLLISION_WEIGHT
     background_collision_weight: float = DEFAULT_BACKGROUND_COLLISION_WEIGHT
@@ -91,6 +93,7 @@ def prepare_out_of_bounds_rasters(
             config.gaussian_truncate_sigma,
             device=device,
             dtype=dtype,
+            normalize_kernel=False,
         )
         for raster in drivable_area_rasters
     )
@@ -150,7 +153,7 @@ def ego_background_collision_cost(
     ego_mask,
     candidate_adversary_mask,
 ):
-    """Return per-scenario minimum candidate time-averaged signed box distance."""
+    """Return the reference minimum of candidate mean squared center distances."""
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
     _validate_agent_mask(ego_mask, states, "ego_mask")
     _validate_agent_mask(candidate_adversary_mask, states, "candidate_adversary_mask")
@@ -164,7 +167,7 @@ def ego_background_collision_cost(
     ego_indices = torch.argmax(ego_mask.to(torch.int64), dim=-1)
     ego_boxes = boxes[batch_indices, ego_indices]
     ego_valid = state_valid[batch_indices, ego_indices]
-    distances = signed_box_distance(boxes, ego_boxes[:, None])
+    distances = (boxes[..., :2] - ego_boxes[:, None, ..., :2]).square().sum(dim=-1)
     joint_valid = state_valid & ego_valid[:, None] & candidate_adversary_mask[..., None]
     valid_counts = joint_valid.sum(dim=-1)
     summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
@@ -184,7 +187,7 @@ def _background_collision_avoidance_cost_and_diagnostics(
     optimized_vehicle_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
 ):
-    """Return the paper hard-min cost and its deterministic winning pair."""
+    """Return reference squared-center cost and box clearance of its winning pair."""
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
     _validate_agent_mask(background_vehicle_mask, states, "background_vehicle_mask")
     _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
@@ -219,8 +222,11 @@ def _background_collision_avoidance_cost_and_diagnostics(
             device=states.device,
         )
         pair_indices = background_indices[local_pairs]
+        # Released ReGentS builds this term over the adversary trajectories alone, so a
+        # pair counts only when both endpoints are optimized. Admitting pairs with one
+        # untouched background vehicle would penalize distances the method never shapes.
         optimized_pair = optimized_vehicle_mask[scenario_idx, pair_indices[0]]
-        optimized_pair |= optimized_vehicle_mask[scenario_idx, pair_indices[1]]
+        optimized_pair &= optimized_vehicle_mask[scenario_idx, pair_indices[1]]
         pair_valid = state_valid[scenario_idx, pair_indices[0]] & state_valid[scenario_idx, pair_indices[1]]
         eligible_pair = optimized_pair & torch.any(pair_valid, dim=-1)
         pair_indices = pair_indices[:, eligible_pair]
@@ -242,13 +248,14 @@ def _background_collision_avoidance_cost_and_diagnostics(
         for chunk_start in range(0, pair_indices.shape[1], PAIRWISE_DISTANCE_CHUNK_SIZE):
             chunk_pairs = pair_indices[:, chunk_start : chunk_start + PAIRWISE_DISTANCE_CHUNK_SIZE]
             first_indices, second_indices = chunk_pairs
-            distances = signed_box_distance(
-                boxes[scenario_idx, first_indices],
-                boxes[scenario_idx, second_indices],
+            distances = (
+                (boxes[scenario_idx, first_indices, :, :2] - boxes[scenario_idx, second_indices, :, :2])
+                .square()
+                .sum(dim=-1)
             )
             chunk_valid = pair_valid[chunk_start : chunk_start + chunk_pairs.shape[1]]
             masked_distances = torch.where(chunk_valid, distances, torch.full_like(distances, torch.inf))
-            truncated_distances = torch.clamp_max(distances, float(truncation_meters))
+            truncated_distances = torch.clamp_max(distances, float(truncation_meters) ** 2)
             chunk_minima.append(
                 torch.where(chunk_valid, truncated_distances, torch.full_like(truncated_distances, torch.inf)).min()
             )
@@ -265,8 +272,13 @@ def _background_collision_avoidance_cost_and_diagnostics(
         first_agent_indices.append(chunk_first_agent_indices[winning_chunk_idx])
         second_agent_indices.append(chunk_second_agent_indices[winning_chunk_idx])
         timestep_indices.append(chunk_timestep_indices[winning_chunk_idx])
-        signed_distances_meters.append(winning_distance)
-        truncation_states.append(winning_distance >= float(truncation_meters))
+        signed_distances_meters.append(
+            signed_box_distance(
+                boxes[scenario_idx, first_agent_indices[-1], timestep_indices[-1]],
+                boxes[scenario_idx, second_agent_indices[-1], timestep_indices[-1]],
+            ).detach()
+        )
+        truncation_states.append(winning_distance >= float(truncation_meters) ** 2)
     return (
         torch.stack(scenario_costs),
         torch.stack(first_agent_indices),
@@ -286,7 +298,7 @@ def background_collision_avoidance_cost(
     optimized_vehicle_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
 ):
-    """Return the paper hard-min over pairs with an optimized endpoint."""
+    """Return negative minimum squared center distance capped at truncation squared."""
     return _background_collision_avoidance_cost_and_diagnostics(
         states,
         state_valid,
@@ -307,14 +319,10 @@ def drivable_area_deviation_cost(
     out_of_bounds_rasters,
     baseline_corner_potential=None,
 ):
-    """Sum each optimized vehicle's four-corner potential averaged over valid steps.
+    """Sum corner potential over valid vehicles and timesteps as in released ReGentS.
 
-    The reference reduces with `sum`, but its potential is an unnormalized Gaussian
-    density; ours is a normalized convolution, so the horizon-invariant mean is what
-    keeps this term comparable to the ego cost.
-
-    A detached baseline shifts the reported value without changing the absolute
-    ReGentS potential gradient. Improvements may therefore make this term negative.
+    Optional baseline subtraction is retained for callers comparing diagnostics;
+    the optimizer uses the absolute potential.
     """
     _validate_common_inputs(states, state_valid, length_meters, width_meters)
     _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
@@ -340,14 +348,12 @@ def drivable_area_deviation_cost(
         if baseline_corner_potential is not None:
             corner_potential = corner_potential - baseline_corner_potential[scenario_idx]
         valid = state_valid[scenario_idx] & optimized_vehicle_mask[scenario_idx, :, None]
-        valid_counts = valid.sum(dim=-1)
         potential_sum = torch.where(
             valid[..., None],
             corner_potential,
             torch.zeros_like(corner_potential),
         ).sum(dim=(-1, -2))
-        per_vehicle_cost = potential_sum / valid_counts.clamp_min(1)
-        scenario_costs.append(torch.where(valid_counts > 0, per_vehicle_cost, 0.0).sum())
+        scenario_costs.append(potential_sum.sum())
     return torch.stack(scenario_costs)
 
 
@@ -364,7 +370,7 @@ def combined_regents_cost(
     config=None,
     baseline_corner_potential=None,
 ):
-    """Evaluate and combine the three paper-equivalent costs per scenario."""
+    """Combine released-code collision costs and the grid-approximated road cost."""
     if config is None:
         config = ReGentSCostConfig()
     if not isinstance(config, ReGentSCostConfig):

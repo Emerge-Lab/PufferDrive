@@ -10,10 +10,8 @@ from pufferlib.ocean.regents.geometry import signed_box_distance
 from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_X, STATE_Y, ScenarioBatch
 
 
-DEFAULT_MINIMUM_VALID_TRANSITION_FRACTION = 0.5
-DEFAULT_MINIMUM_VALID_TRANSITION_COUNT = 1
+DEFAULT_MINIMUM_VALID_STATE_FRACTION = 0.5
 DEFAULT_STATIC_DISPLACEMENT_THRESHOLD_METERS = 0.2
-DEFAULT_STATIC_SPEED_THRESHOLD_MPS = 0.2
 DEFAULT_REAR_SECTOR_FRACTION = 0.8
 DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS = math.pi / 8.0
 DEFAULT_FRONT_DIVERGENCE_FRACTION = 0.5
@@ -25,7 +23,7 @@ class CandidateFilterReason(IntFlag):
     NONE = 0
     EGO = 1 << 0
     NON_VEHICLE = 1 << 1
-    INSUFFICIENT_VALID_TRANSITIONS = 1 << 2
+    INSUFFICIENT_VALID_STATES = 1 << 2
     STATIC = 1 << 3
     REAR_SECTOR = 1 << 4
     SCENE_UNSUITABLE = 1 << 5
@@ -42,23 +40,17 @@ class SceneFilterReason(IntFlag):
 
 @dataclass(frozen=True)
 class ReGentSFilterConfig:
-    minimum_valid_transition_fraction: float = DEFAULT_MINIMUM_VALID_TRANSITION_FRACTION
-    minimum_valid_transition_count: int = DEFAULT_MINIMUM_VALID_TRANSITION_COUNT
+    minimum_valid_state_fraction: float = DEFAULT_MINIMUM_VALID_STATE_FRACTION
     static_displacement_threshold_meters: float = DEFAULT_STATIC_DISPLACEMENT_THRESHOLD_METERS
-    static_speed_threshold_mps: float = DEFAULT_STATIC_SPEED_THRESHOLD_MPS
     rear_sector_fraction: float = DEFAULT_REAR_SECTOR_FRACTION
     rear_sector_half_angle_radians: float = DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS
 
     def __post_init__(self):
-        for name in ("minimum_valid_transition_fraction", "rear_sector_fraction"):
+        for name in ("minimum_valid_state_fraction", "rear_sector_fraction"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0 or value > 1.0:
                 raise ValueError(f"{name} must be finite and in [0, 1]")
-        if not isinstance(self.minimum_valid_transition_count, int):
-            raise TypeError("minimum_valid_transition_count must be an integer")
-        if self.minimum_valid_transition_count < 1:
-            raise ValueError("minimum_valid_transition_count must be positive")
-        for name in ("static_displacement_threshold_meters", "static_speed_threshold_mps"):
+        for name in ("static_displacement_threshold_meters",):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -79,6 +71,7 @@ class CandidateSelection:
     original_collision_timestep: torch.Tensor
     valid_transition_count: torch.Tensor
     valid_transition_fraction: torch.Tensor
+    valid_state_fraction: torch.Tensor
     displacement_meters: torch.Tensor
     maximum_absolute_speed_mps: torch.Tensor
     rear_sector_fraction: torch.Tensor
@@ -96,6 +89,7 @@ class CandidateSelection:
             "filter_reason_bits",
             "valid_transition_count",
             "valid_transition_fraction",
+            "valid_state_fraction",
             "displacement_meters",
             "maximum_absolute_speed_mps",
             "rear_sector_fraction",
@@ -153,28 +147,33 @@ def _validate_selection_inputs(scenario, config, horizon_transition_count, scene
     return horizon_transition_count, scene_suitable
 
 
-def _motion_statistics(scenario, horizon_transition_count):
-    state = scenario.logged_state[:, :, : horizon_transition_count + 1]
-    valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
-    time_count = state.shape[2]
+def _motion_statistics(scenario):
+    """Displacement between an agent's first and last valid states, and its peak logged speed.
+
+    Endpoints must be valid states: storage is zero filled outside an agent's logged
+    frames, so differencing raw endpoints measures distance to the map origin for every
+    agent that enters or leaves mid scene.
+    """
+    state = scenario.logged_state
+    valid = scenario.state_valid
     has_valid_state = valid.any(dim=-1)
-    first_idx = torch.argmax(valid.to(torch.int64), dim=-1)
-    last_idx = time_count - 1 - torch.argmax(valid.flip(dims=(-1,)).to(torch.int64), dim=-1)
+    time_count = state.shape[2]
     position = state[..., STATE_X : STATE_Y + 1]
-    gather_shape = (*first_idx.shape, 1, 2)
-    first_position = torch.gather(position, 2, first_idx[..., None, None].expand(gather_shape)).squeeze(2)
-    last_position = torch.gather(position, 2, last_idx[..., None, None].expand(gather_shape)).squeeze(2)
+    valid_steps = valid.to(torch.int8)
+    first_valid_idx = valid_steps.argmax(dim=-1)
+    last_valid_idx = time_count - 1 - valid_steps.flip(-1).argmax(dim=-1)
+    gather_shape = (*first_valid_idx.shape, 1, 2)
+    first_position = torch.gather(position, 2, first_valid_idx[..., None, None].expand(gather_shape)).squeeze(2)
+    last_position = torch.gather(position, 2, last_valid_idx[..., None, None].expand(gather_shape)).squeeze(2)
     displacement = torch.linalg.vector_norm(last_position - first_position, dim=-1)
-    displacement = torch.where(has_valid_state, displacement, torch.zeros_like(displacement))
     masked_speed = state[..., STATE_SPEED].abs().masked_fill(~valid, -torch.inf)
     maximum_speed = masked_speed.max(dim=-1).values
     maximum_speed = torch.where(has_valid_state, maximum_speed, torch.zeros_like(maximum_speed))
     return displacement, maximum_speed
 
 
-def _rear_sector_statistics(scenario, horizon_transition_count, half_angle_radians):
-    state = scenario.logged_state[:, :, : horizon_transition_count + 1]
-    valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
+def _rear_sector_statistics(scenario, logged_time_count, half_angle_radians):
+    state = scenario.logged_state
     output = torch.zeros(state.shape[:2], dtype=state.dtype, device=state.device)
     for batch_idx in range(scenario.batch_size):
         ego_idx = torch.where(scenario.ego_mask[batch_idx])[0]
@@ -189,15 +188,9 @@ def _rear_sector_statistics(scenario, horizon_transition_count, half_angle_radia
             position_angle,
             state[batch_idx, ego_idx, None, :, STATE_HEADING],
         )
-        jointly_valid = valid[batch_idx] & valid[batch_idx, ego_idx, None, :]
         rear = relative_bearing.abs() > math.pi - half_angle_radians
-        rear_count = (rear & jointly_valid).sum(dim=-1)
-        applicable_count = jointly_valid.sum(dim=-1)
-        output[batch_idx] = torch.where(
-            applicable_count > 0,
-            rear_count.to(state.dtype) / applicable_count.clamp_min(1).to(state.dtype),
-            torch.zeros_like(output[batch_idx]),
-        )
+        logged_time = torch.arange(state.shape[2], device=state.device) < logged_time_count[batch_idx]
+        output[batch_idx] = (rear & logged_time).sum(dim=-1).to(state.dtype) / logged_time_count[batch_idx]
     return output
 
 
@@ -258,10 +251,9 @@ def select_adversary_candidates(
 ):
     """Filter candidates using logged trajectories and record every reason.
 
-    A vehicle is static when either its first-to-last valid displacement or its
-    maximum absolute logged speed is below the corresponding threshold. Rear
-    occupancy uses jointly valid ego/agent states and strict angular/fraction
-    boundaries, matching the ReGentS reference behavior.
+    Reference filters use the complete exported log, independent of rollout horizon:
+    first-to-last valid-state displacement, valid-state fraction, and unmasked rear occupancy.
+    Only batch time padding is excluded. Logged overlaps remain diagnostics.
     """
     if config is None:
         config = ReGentSFilterConfig()
@@ -271,33 +263,34 @@ def select_adversary_candidates(
     transition_valid = scenario.transition_valid[:, :, :horizon_transition_count]
     valid_transition_count = transition_valid.sum(dim=-1)
     valid_transition_fraction = valid_transition_count.to(scenario.logged_state.dtype) / horizon_transition_count
-    displacement, maximum_speed = _motion_statistics(scenario, horizon_transition_count)
-    rear_fraction = _rear_sector_statistics(scenario, horizon_transition_count, config.rear_sector_half_angle_radians)
+    logged_time_count = scenario.trajectory_length.max(dim=-1).values
+    if torch.any(logged_time_count <= 0) or torch.any(logged_time_count > scenario.max_time_count):
+        raise ValueError("Candidate filtering requires a non-empty exported log within state storage")
+    logged_time = torch.arange(scenario.max_time_count, device=scenario.device)[None] < logged_time_count[:, None]
+    valid_state_fraction = (scenario.state_valid & logged_time[:, None]).sum(dim=-1).to(scenario.logged_state.dtype)
+    valid_state_fraction = valid_state_fraction / logged_time_count[:, None]
+    displacement, maximum_speed = _motion_statistics(scenario)
+    rear_fraction = _rear_sector_statistics(scenario, logged_time_count, config.rear_sector_half_angle_radians)
     original_collision, original_collision_timestep = _original_collision_labels(scenario, horizon_transition_count)
 
     agent_shape = scenario.ego_mask.shape
     reason_bits = torch.zeros(agent_shape, dtype=torch.int64, device=scenario.logged_state.device)
     reason_bits |= scenario.ego_mask.to(torch.int64) * int(CandidateFilterReason.EGO)
     reason_bits |= (~scenario.vehicle_mask).to(torch.int64) * int(CandidateFilterReason.NON_VEHICLE)
-    insufficient = valid_transition_count < config.minimum_valid_transition_count
-    insufficient |= valid_transition_fraction < config.minimum_valid_transition_fraction
-    reason_bits |= insufficient.to(torch.int64) * int(CandidateFilterReason.INSUFFICIENT_VALID_TRANSITIONS)
+    insufficient = valid_state_fraction < config.minimum_valid_state_fraction
+    reason_bits |= insufficient.to(torch.int64) * int(CandidateFilterReason.INSUFFICIENT_VALID_STATES)
     static = displacement < config.static_displacement_threshold_meters
-    static |= maximum_speed < config.static_speed_threshold_mps
     reason_bits |= static.to(torch.int64) * int(CandidateFilterReason.STATIC)
     rear = rear_fraction > config.rear_sector_fraction
     reason_bits |= rear.to(torch.int64) * int(CandidateFilterReason.REAR_SECTOR)
 
     ego_count = scenario.ego_mask.sum(dim=-1)
     ego_transition_count = (transition_valid & scenario.ego_mask[..., None]).sum(dim=(-2, -1))
-    invalid_ego = (ego_count != 1) | (ego_transition_count < config.minimum_valid_transition_count)
+    invalid_ego = (ego_count != 1) | (ego_transition_count < 1)
     scene_reason_bits = invalid_ego.to(torch.int64) * int(SceneFilterReason.INVALID_EGO)
     scene_reason_bits |= (~scene_suitable).to(torch.int64) * int(SceneFilterReason.CALLER_UNSUITABLE)
-    all_candidates_collide = (original_collision | ~scenario.candidate_adversary_mask).all(dim=-1)
-    scene_reason_bits |= all_candidates_collide.to(torch.int64) * int(SceneFilterReason.ORIGINAL_COLLISION)
     preliminarily_eligible = scene_reason_bits == 0
     reason_bits |= (~preliminarily_eligible[:, None]).to(torch.int64) * int(CandidateFilterReason.SCENE_UNSUITABLE)
-    reason_bits |= original_collision.to(torch.int64) * int(CandidateFilterReason.ORIGINAL_COLLISION)
 
     candidate_mask = scenario.candidate_adversary_mask & (reason_bits == 0)
     no_candidate = ~candidate_mask.any(dim=-1)
@@ -315,6 +308,7 @@ def select_adversary_candidates(
         original_collision_timestep=original_collision_timestep,
         valid_transition_count=valid_transition_count,
         valid_transition_fraction=valid_transition_fraction,
+        valid_state_fraction=valid_state_fraction,
         displacement_meters=displacement,
         maximum_absolute_speed_mps=maximum_speed,
         rear_sector_fraction=rear_fraction,

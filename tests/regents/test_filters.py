@@ -4,7 +4,6 @@ import torch
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.filters import (
-    CandidateFilterReason,
     ReGentSFilterConfig,
     SceneFilterReason,
     front_divergence_mask,
@@ -91,7 +90,7 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     agent_types[0, 4] = binding.AGENT_TYPE_PEDESTRIAN
     selection = select_adversary_candidates(
         make_scenario(states, valid, agent_types),
-        ReGentSFilterConfig(minimum_valid_transition_count=3),
+        ReGentSFilterConfig(),
     )
     assert selection.scene_eligible.tolist() == [True]
     assert selection.candidate_mask.tolist() == [[False, True, False, False, False, False]]
@@ -99,17 +98,16 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     assert "static" in selection.reasons_for(0, 2)
     assert "rear_sector" in selection.reasons_for(0, 3)
     assert "non_vehicle" in selection.reasons_for(0, 4)
-    assert "insufficient_valid_transitions" in selection.reasons_for(0, 5)
+    assert "insufficient_valid_states" in selection.reasons_for(0, 5)
 
-    # An agent already overlapping the ego is labeled and dropped; when it is the only
-    # candidate the whole scene is filtered.
+    # Logged overlap is reported but does not exclude a reference candidate.
     only_collider = select_adversary_candidates(
         make_scenario(torch.stack((_linear_track(0.0, 0.0, 2.0), _linear_track(3.0, 0.0, 2.0)))[None])
     )
     assert only_collider.original_collision.tolist() == [[False, True]]
     assert only_collider.original_collision_timestep.tolist() == [[-1, 0]]
-    assert only_collider.scene_reasons_for(0) == ("original_collision", "no_candidate")
-    assert int(only_collider.filter_reason_bits[0, 1]) & int(CandidateFilterReason.ORIGINAL_COLLISION)
+    assert only_collider.scene_reasons_for(0) == ()
+    assert only_collider.candidate_mask.tolist() == [[False, True]]
 
     with_survivor = select_adversary_candidates(
         make_scenario(
@@ -119,8 +117,8 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
         )
     )
     assert with_survivor.scene_eligible.tolist() == [True]
-    assert with_survivor.candidate_mask.tolist() == [[False, False, True]]
-    assert "original_collision" in with_survivor.reasons_for(0, 1)
+    assert with_survivor.candidate_mask.tolist() == [[False, True, True]]
+    assert "original_collision" not in with_survivor.reasons_for(0, 1)
     assert "original_collision" not in with_survivor.reasons_for(0, 2)
 
     # Two logged backgrounds overlapping each other is not something the C simulator
@@ -159,12 +157,74 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
         ),
         ReGentSFilterConfig(
             static_displacement_threshold_meters=0.0,
-            static_speed_threshold_mps=0.0,
             rear_sector_fraction=0.8,
         ),
     )
     assert "rear_sector" not in rear.reasons_for(0, 1)
     assert "rear_sector" in rear.reasons_for(0, 2)
+
+    # Reference validity counts states, even if none form usable transitions.
+    # Displacement spans valid endpoints while rear bearings include invalid samples;
+    # horizon does not change selection. Zero reported speed adds no static filter.
+    reference_states = torch.stack(
+        (
+            _linear_track(0.0, 0.0, 2.0),
+            _linear_track(10.0, 10.0, 2.0),
+            _linear_track(-10.0, 0.0, 2.0),
+            _linear_track(0.0, 20.0, 0.0),
+        )
+    )[None]
+    reference_states[0, 1, :, 3] = 0.0
+    reference_states[0, 2, -1, 0] = 10.0
+    reference_states[0, 3, -1, 0] = 0.2
+    reference_valid = torch.ones((1, 4, 6), dtype=torch.bool)
+    reference_valid[0, 1, 1::2] = False
+    reference_valid[0, 2, :3] = False
+    scenario = make_scenario(reference_states, reference_valid)
+    full = select_adversary_candidates(scenario)
+    short = select_adversary_candidates(scenario, horizon_transition_count=1)
+    assert full.candidate_mask.tolist() == [[False, True, False, True]]
+    assert torch.equal(full.candidate_mask, short.candidate_mask)
+    assert full.valid_state_fraction[0, 1] == 0.5
+    assert full.valid_transition_count[0, 1] == 0
+    assert not full.optimized_action_mask[0, 1].any()
+    assert math.isclose(float(full.displacement_meters[0, 1]), 0.8, abs_tol=1e-5)
+    assert full.rear_sector_fraction[0, 2] > 0.8
+
+    # Independent transcription of the released selection expression, with the one
+    # documented deviation: displacement spans valid endpoints, not raw storage.
+    position = reference_states[..., :2]
+    displacement = position - position[:, :1]
+    angle = torch.atan2(displacement[..., 1], displacement[..., 0]) - reference_states[:, :1, :, 2]
+    angle = (angle + math.pi) % (2 * math.pi) - math.pi
+    excluded = reference_valid.float().mean(dim=-1) < 0.5
+    first_valid = reference_valid.to(torch.int8).argmax(dim=-1)
+    last_valid = reference_valid.shape[-1] - 1 - reference_valid.to(torch.int8).flip(-1).argmax(dim=-1)
+    endpoints = torch.stack([position[0, agent, [first_valid[0, agent], last_valid[0, agent]]] for agent in range(4)])
+    excluded |= torch.linalg.vector_norm(endpoints[:, 1] - endpoints[:, 0], dim=-1)[None] < 0.2
+    excluded |= ((angle > 7 * math.pi / 8) | (angle < -7 * math.pi / 8)).float().mean(dim=-1) > 0.8
+    excluded |= scenario.ego_mask | ~scenario.vehicle_mask
+    assert torch.equal(full.candidate_mask, ~excluded)
+
+
+def test_static_filter_ignores_zero_filled_frames_before_an_agent_enters():
+    """A parked late entrant is static; storage padding must not read as displacement."""
+    states = torch.zeros((1, 3, 6, 5), dtype=torch.float32)
+    states[0, 0] = _linear_track(0.0, 0.0, 2.0)
+    states[0, 1, 2:, 0] = 30.0
+    states[0, 1, 2:, 1] = 5.0
+    states[0, 2, 2:, 0] = 20.0 + torch.arange(4) * 0.2
+    states[0, 2, 2:, 1] = -5.0
+    states[0, 2, 2:, 3] = 2.0
+    valid = torch.ones((1, 3, 6), dtype=torch.bool)
+    valid[0, 1:, :2] = False
+
+    selection = select_adversary_candidates(make_scenario(states, valid))
+    assert "static" in selection.reasons_for(0, 1)
+    assert "static" not in selection.reasons_for(0, 2)
+    assert selection.candidate_mask.tolist() == [[False, False, True]]
+    assert math.isclose(float(selection.displacement_meters[0, 1]), 0.0, abs_tol=1e-6)
+    assert math.isclose(float(selection.displacement_meters[0, 2]), 0.6, abs_tol=1e-5)
 
 
 def _front_states(position_angle, yaw, time_count=5):

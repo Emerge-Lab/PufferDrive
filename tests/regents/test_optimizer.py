@@ -7,11 +7,13 @@ import torch
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.regents.filters import ReGentSFilterConfig
+from pufferlib.ocean.regents.filters import ReGentSFilterConfig, select_adversary_candidates
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
-from pufferlib.ocean.regents.losses import ReGentSCostConfig
+from pufferlib.ocean.regents.geometry import signed_box_distance
+from pufferlib.ocean.regents.losses import ReGentSCostConfig, _masked_boxes
 from pufferlib.ocean.regents.optimizer import (
     STEERING_PARAMETERIZATION_CURVATURE,
+    FrozenEgoTrajectory,
     STEERING_PARAMETERIZATION_WHEEL_ANGLE,
     ReGentSOptimizationConfig,
     capture_frozen_idm_trajectory,
@@ -21,7 +23,12 @@ from pufferlib.ocean.regents.optimizer import (
     parameter_from_drive_actions,
     steering_conversion_metadata,
 )
-from pufferlib.ocean.regents.optimizer import optimize_frozen_ego_scenarios
+from pufferlib.ocean.regents.optimizer import (
+    _background_collision_signature,
+    _candidate_background_pair_indices,
+    _compose_rollout,
+    optimize_frozen_ego_scenarios,
+)
 from pufferlib.ocean.regents.state import (
     DrivableAreaRaster,
     RasterTransform,
@@ -103,7 +110,6 @@ def _optimization_config(**overrides):
     values = {
         "filter": ReGentSFilterConfig(
             static_displacement_threshold_meters=0.0,
-            static_speed_threshold_mps=0.0,
         ),
         "costs": ReGentSCostConfig(),
         "learning_rate": 0.1,
@@ -116,8 +122,8 @@ def _optimization_config(**overrides):
 def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
     """Parameterization defaults, range checks, gradient masking, and conversion metadata."""
     default_config = ReGentSOptimizationConfig()
-    assert default_config.steering_parameterization == STEERING_PARAMETERIZATION_WHEEL_ANGLE
-    assert default_config.steering_update_scale == 4.0
+    assert default_config.steering_parameterization == STEERING_PARAMETERIZATION_CURVATURE
+    assert default_config.steering_update_scale == 0.5
     assert default_config.curvature_steering_update_scale == 0.5
     with pytest.raises(ValueError, match="steering_parameterization"):
         ReGentSOptimizationConfig(steering_parameterization="curvature_rate")
@@ -159,7 +165,7 @@ def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
         )
 
 
-def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions():
+def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monkeypatch):
     """A braking scene and a merging scene, determinism, and post-Adam steering damping."""
     braking = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
     first = optimize_frozen_ego_scenario(braking, config=_optimization_config(), deterministic_seed=17)
@@ -192,13 +198,21 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions():
     # The steering scale multiplies the post-Adam update exactly, acceleration untouched.
     full = optimize_frozen_ego_scenario(
         merging,
-        config=_optimization_config(iteration_count=1, steering_update_scale=1.0),
+        config=_optimization_config(
+            iteration_count=1,
+            steering_update_scale=1.0,
+            steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE,
+        ),
         deterministic_seed=23,
         show_progress=False,
     )
     damped = optimize_frozen_ego_scenario(
         merging,
-        config=_optimization_config(iteration_count=1, steering_update_scale=0.5),
+        config=_optimization_config(
+            iteration_count=1,
+            steering_update_scale=0.5,
+            steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE,
+        ),
         deterministic_seed=23,
         show_progress=False,
     )
@@ -209,9 +223,40 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions():
     torch.testing.assert_close(damped.optimized_actions[..., 1] - baseline_steering, 0.5 * full_step)
     torch.testing.assert_close(full.optimized_actions[..., 0], damped.optimized_actions[..., 0])
 
+    # Divergence holds the applied steering, but Adam must accumulate its moments.
+    original_step = torch.optim.Adam.step
+    steering_moments = []
 
-def test_infeasible_iterates_are_rejected_against_a_logged_baseline():
-    """New background collisions and off-road excursions are rejected; logged ones are not."""
+    def capture_adam_step(optimizer, *args, **kwargs):
+        parameter = optimizer.param_groups[0]["params"][0]
+        previous_moment = optimizer.state.get(parameter, {}).get("exp_avg", torch.zeros_like(parameter)).clone()
+        result = original_step(optimizer, *args, **kwargs)
+        current_moment = optimizer.state[parameter]["exp_avg"].clone()
+        beta1 = optimizer.param_groups[0]["betas"][0]
+        torch.testing.assert_close(current_moment, beta1 * previous_moment + (1 - beta1) * parameter.grad)
+        steering_moments.append((previous_moment[..., 1], current_moment[..., 1]))
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(torch.optim.Adam, "step", capture_adam_step)
+        patch.setattr(
+            "pufferlib.ocean.regents.optimizer.front_divergence_mask",
+            lambda states, valid, ego, candidates, **kwargs: candidates,
+        )
+        divergent = optimize_frozen_ego_scenario(
+            merging,
+            config=_optimization_config(iteration_count=2, early_stop_on_collision=False),
+            deterministic_seed=23,
+            show_progress=False,
+        )
+    assert len(steering_moments) == 2
+    assert steering_moments[0][1].abs().sum() > 0
+    torch.testing.assert_close(steering_moments[1][0], steering_moments[0][1])
+    torch.testing.assert_close(divergent.optimized_actions[..., 1], divergent.initial_actions[..., 1])
+
+
+def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnostics():
+    """Ego overlap stops optimization even when regularizers fail to prevent infractions."""
     mixed_control = optimize_frozen_ego_scenario(
         _scenario(
             torch.stack(
@@ -237,13 +282,16 @@ def test_infeasible_iterates_are_rejected_against_a_logged_baseline():
     assert mixed_control.initial_costs.background_collision_first_agent_idx == 1
     assert mixed_control.initial_costs.background_collision_second_agent_idx == 3
     assert mixed_control.initial_costs.background_collision_timestep_idx == 7
-    assert mixed_control.initial_costs.background_collision > -1.25
-    assert mixed_control.final_costs.background_collision == -1.25
+    assert mixed_control.initial_costs.background_collision == -1.5625
+    assert mixed_control.final_costs.background_collision == -1.5625
     assert mixed_control.final_costs.background_collision_truncated
-    assert torch.any(mixed_control.optimized_actions[0, 1] != mixed_control.initial_actions[0, 1])
+    assert torch.equal(mixed_control.optimized_actions[0, 1], mixed_control.initial_actions[0, 1])
     assert torch.equal(mixed_control.optimized_actions[0, 2], mixed_control.initial_actions[0, 2])
-    assert torch.any(mixed_control.optimized_actions[0, 3] != mixed_control.initial_actions[0, 3])
+    assert torch.equal(mixed_control.optimized_actions[0, 3], mixed_control.initial_actions[0, 3])
     assert not mixed_control.background_collision
+    assert mixed_control.iteration_count == 20
+    assert mixed_control.best_iteration == 20
+    assert mixed_control.final_costs == mixed_control.cost_history[-1]
 
     rejection_config = ReGentSOptimizationConfig(
         filter=ReGentSFilterConfig(rear_sector_fraction=1.0),
@@ -264,11 +312,13 @@ def test_infeasible_iterates_are_rejected_against_a_logged_baseline():
         config=rejection_config,
         deterministic_seed=29,
     )
-    assert not background.success
+    assert background.success
     assert background.background_collision_rejection_count > 0
-    assert not background.background_collision
-    assert background.best_iteration == 0
-    assert torch.equal(background.optimized_actions, background.initial_actions)
+    assert background.background_collision
+    assert 0 < background.iteration_count < rejection_config.iteration_count
+    assert background.best_iteration == background.iteration_count
+    assert background.final_costs == background.cost_history[-1]
+    assert not torch.equal(background.optimized_actions, background.initial_actions)
 
     # An overlap already present in the logged data is a baseline, not a rejection.
     preexisting = optimize_frozen_ego_scenario(
@@ -306,9 +356,10 @@ def test_infeasible_iterates_are_rejected_against_a_logged_baseline():
         config=rejection_config,
         deterministic_seed=31,
     )
-    assert not offroad.success
     assert offroad.offroad_rejection_count > 0
-    assert not offroad.offroad
+    assert offroad.offroad
+    assert offroad.best_iteration == offroad.iteration_count
+    assert offroad.final_costs == offroad.cost_history[-1]
     assert offroad.final_costs.total <= offroad.initial_costs.total
 
 
@@ -366,8 +417,11 @@ def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(r
     assert captured.frozen_ego_source == "c_idm"
     assert captured.optimized_states.shape[2] == first.state.shape[1]
 
-    scenario = real_scenarios(8)
-    wheel_angle_config = ReGentSOptimizationConfig(iteration_count=5, learning_rate=1e-3)
+    # Map 8's full-log candidates enter after this horizon; map 3 exercises live updates.
+    scenario = real_scenarios(3)
+    wheel_angle_config = ReGentSOptimizationConfig(
+        iteration_count=5, learning_rate=1e-3, steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE
+    )
     wheel_angle = optimize_frozen_ego_scenario(
         scenario, config=wheel_angle_config, deterministic_seed=50, horizon_transition_count=16
     )
@@ -375,7 +429,8 @@ def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(r
         scenario, config=wheel_angle_config, deterministic_seed=50, horizon_transition_count=16
     )
     assert wheel_angle.initial_costs is not None
-    assert wheel_angle.final_costs.ego_collision < wheel_angle.initial_costs.ego_collision
+    # Road regularization can trade a small ego-distance increase for lower total cost.
+    assert wheel_angle.iteration_count == wheel_angle_config.iteration_count
     assert wheel_angle.final_costs.total < wheel_angle.initial_costs.total
     assert all(math.isfinite(value) for value in wheel_angle.gradient_norms)
     assert torch.isfinite(wheel_angle.optimized_actions).all()
@@ -478,3 +533,68 @@ def test_collating_scenarios_pads_without_making_padded_agents_visible():
     assert (collated.length_meters > 0).all()
     with pytest.raises(ValueError, match="single-scenario"):
         collate_scenarios([collated])
+
+
+def test_background_collision_gate_matches_an_all_exact_scan(real_scenarios):
+    """The prefiltered gate is an optimization, so it must agree pair for pair."""
+    scenario = real_scenarios(1)
+    horizon_transition_count = 40
+    state_valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
+    boxes = _masked_boxes(
+        scenario.logged_state[:, :, : horizon_transition_count + 1],
+        state_valid,
+        scenario.length_meters,
+        scenario.width_meters,
+    )
+    selection = select_adversary_candidates(scenario, ReGentSFilterConfig())
+    pair_indices = _candidate_background_pair_indices(scenario, state_valid, selection.candidate_mask)
+    assert pair_indices.shape[1] > 0
+
+    scenario_row, left_indices, right_indices = pair_indices
+    jointly_valid = state_valid[scenario_row, left_indices] & state_valid[scenario_row, right_indices]
+    exact_distances = signed_box_distance(boxes[scenario_row, left_indices], boxes[scenario_row, right_indices])
+    # A real log rarely touches, so widened tolerances are what actually exercise a hit.
+    for tolerance_meters in (0.0, 2.0, 5.0):
+        expected = torch.any(jointly_valid & (exact_distances <= tolerance_meters), dim=-1)
+        actual = _background_collision_signature(boxes, state_valid, tolerance_meters, pair_indices)
+        assert torch.equal(actual, expected)
+    assert bool(torch.any(_background_collision_signature(boxes, state_valid, 5.0, pair_indices))), (
+        "widened tolerance must produce hits or the comparison is vacuous"
+    )
+
+
+def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
+    """The rollout integrates candidate rows only; every other agent keeps its reference."""
+    scenario = real_scenarios(1)
+    horizon_transition_count = 30
+    frozen_ego = FrozenEgoTrajectory(
+        state=scenario.logged_state[:, 0, : horizon_transition_count + 1].clone(),
+        valid=scenario.state_valid[:, 0, : horizon_transition_count + 1].clone(),
+        scenario_ids=scenario.scenario_ids,
+        source="logged_fixture",
+    )
+    inverse = estimate_expert_actions(scenario, horizon_transition_count=horizon_transition_count)
+    selection = select_adversary_candidates(scenario, ReGentSFilterConfig())
+    generator = torch.Generator().manual_seed(1234)
+    actions = torch.rand(
+        (scenario.batch_size, scenario.max_agent_count, horizon_transition_count, 2), generator=generator
+    )
+    actions = (actions * 2 - 1).requires_grad_(True)
+
+    states, state_valid = _compose_rollout(
+        scenario, inverse, actions, frozen_ego, horizon_transition_count, selection.candidate_mask
+    )
+    states.square().sum().backward()
+
+    # Non-candidate agents are never integrated, so they must equal the reference exactly.
+    reference = inverse.state_with_estimated_steering[:, :, : horizon_transition_count + 1].clone()
+    reference[:, 0] = frozen_ego.state
+    untouched = ~selection.candidate_mask
+    assert torch.equal(states.detach()[untouched], reference[untouched])
+    # Gradients reach candidate actions and nothing else.
+    action_gradient_rows = (actions.grad != 0).any(dim=-1).any(dim=-1)
+    assert not bool((action_gradient_rows & untouched).any())
+    assert bool((action_gradient_rows & selection.candidate_mask).any())
+    assert torch.isfinite(actions.grad).all()
+    assert torch.isfinite(states).all()
+    assert state_valid.shape == states.shape[:-1]

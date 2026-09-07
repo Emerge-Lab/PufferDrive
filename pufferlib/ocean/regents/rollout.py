@@ -176,14 +176,17 @@ def _capture_c_rollout(
             html_frames[key].append(array[0].copy())
         if capture_observations:
             html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
+    state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
+    valid_scratch = np.empty(agent_count, dtype=np.bool_)
+    ego_action_scratch = np.empty(2, dtype=np.float32)
     for transition_idx in range(transition_count):
         drive.step(neutral_actions)
-        payload_scenario, state, valid, ego_action = _current_states(drive.get_state(), agent_count)
-        if payload_scenario.get("scenario_id") != expected_scenario_id:
-            raise RuntimeError("Drive changed scenario during C replay")
-        states.append(state)
-        validity.append(valid)
-        ego_actions.append(ego_action)
+        binding.regents_get_states(drive.c_envs, state_scratch, valid_scratch, ego_action_scratch)
+        if not np.isfinite(state_scratch[valid_scratch]).all():
+            raise RuntimeError("C replay emitted NaN or Inf")
+        states.append(state_scratch.copy())
+        validity.append(valid_scratch.copy())
+        ego_actions.append(ego_action_scratch.copy())
         if scratch is not None:
             drive.get_obs_html_frame(*(scratch[key] for key in scratch))
             for key, array in scratch.items():
@@ -195,6 +198,10 @@ def _capture_c_rollout(
         if pairs:
             collision_pairs.append((transition_idx + 1, pairs))
         offroad |= np.asarray(events["offroad"], dtype=np.bool_)
+    # The buffer getter carries no scenario identity, so the horizon is bracketed by a
+    # dict read at each end rather than one per step.
+    if _single_payload(drive.get_state()).get("scenario_id") != expected_scenario_id:
+        raise RuntimeError("Drive changed scenario during C replay")
     stacked_states = torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])).transpose(1, 2).contiguous()
     stacked_valid = torch.from_numpy(np.ascontiguousarray(np.stack(validity)[None, ...])).transpose(1, 2).contiguous()
     if ego_actions:
@@ -351,10 +358,6 @@ def replay_optimized_scenario_in_c(
         failure_reason = optimization.failure_reason or "torch_optimization_failed"
     elif not actionable_collision:
         failure_reason = "c_did_not_confirm_actionable_ego_collision"
-    elif background_collision:
-        failure_reason = "c_background_collision"
-    elif offroad:
-        failure_reason = "c_offroad"
     metrics = CReplayMetrics(
         maximum_trajectory_error=maximum_error,
         maximum_ego_reference_error=maximum_ego_reference_error,

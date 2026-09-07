@@ -4,6 +4,7 @@ import torch
 
 from pufferlib.ocean.regents.geometry import (
     SmoothedOutOfBoundsRaster,
+    box_separation_lower_bound,
     build_smoothed_out_of_bounds_raster,
     oriented_box_corners,
     sample_out_of_bounds_potential,
@@ -107,3 +108,25 @@ def test_out_of_bounds_raster_samples_pixel_centers_and_stays_smooth_and_bounded
     point = torch.tensor([[1.5, 0.0]], dtype=torch.float32, requires_grad=True)
     gradient = torch.autograd.grad(sample_out_of_bounds_potential(point, smoothed).sum(), point)[0]
     assert torch.isfinite(gradient).all() and gradient[0, 0] > 0
+
+
+def test_circumscribed_radius_bound_never_rules_out_a_true_contact():
+    """The broad phase must be conservative, or a collision gate would miss contacts."""
+    generator = torch.Generator().manual_seed(60915)
+    boxes_a = torch.empty((4096, 5), dtype=torch.float64)
+    boxes_b = torch.empty((4096, 5), dtype=torch.float64)
+    for random_boxes in (boxes_a, boxes_b):
+        random_boxes[:, :2].uniform_(-8.0, 8.0, generator=generator)
+        random_boxes[:, 2:4].uniform_(1.0, 5.0, generator=generator)
+        random_boxes[:, 4].uniform_(-math.pi, math.pi, generator=generator)
+
+    bound = box_separation_lower_bound(boxes_a, boxes_b)
+    exact = signed_box_distance(boxes_a, boxes_b)
+    assert torch.all(bound <= exact + 1e-9)
+
+    # A pair the bound rejects must be separated at that tolerance, at every tolerance
+    # the gate is ever configured with.
+    for tolerance_meters in (0.0, 0.5, 2.0, 5.0):
+        rejected = bound > tolerance_meters
+        assert not torch.any(exact[rejected] <= tolerance_meters)
+        assert torch.any(~rejected)

@@ -98,6 +98,20 @@ def signed_box_distance(boxes_a, boxes_b):
     return distances.reshape(output_shape)
 
 
+def box_separation_lower_bound(boxes_a, boxes_b):
+    """Return a conservative lower bound on the signed distance between oriented boxes.
+
+    No box reaches past its own circumscribed circle, so the gap between those circles
+    never exceeds the true signed distance. A bound above a contact tolerance therefore
+    proves separation, and only pairs that fail the bound need the exact Minkowski
+    distance, which costs roughly forty times as much.
+    """
+    center_gap = torch.linalg.norm(boxes_a[..., :2] - boxes_b[..., :2], dim=-1)
+    circumscribed_radius_a = 0.5 * torch.hypot(boxes_a[..., 2], boxes_a[..., 3])
+    circumscribed_radius_b = 0.5 * torch.hypot(boxes_b[..., 2], boxes_b[..., 3])
+    return center_gap - circumscribed_radius_a - circumscribed_radius_b
+
+
 def _gaussian_kernel_2d(sigma_pixels, truncate_sigma, dtype, device):
     kernel_radius = max(1, math.ceil(sigma_pixels * truncate_sigma))
     coordinates = torch.arange(-kernel_radius, kernel_radius + 1, dtype=dtype, device=device)
@@ -113,16 +127,19 @@ def build_smoothed_out_of_bounds_raster(
     *,
     device=None,
     dtype=torch.float32,
+    normalize_kernel=True,
 ):
     """Build the map-static Gaussian out-of-bounds potential once per map.
 
     A one-pixel out-of-bounds frame makes sampling beyond map coverage return
-    one with ``padding_mode='border'`` instead of incorrectly becoming drivable.
+    the kernel mass (one when normalized) instead of incorrectly becoming drivable.
     """
     if not isinstance(drivable_area, DrivableAreaRaster):
         raise TypeError("drivable_area must be a DrivableAreaRaster")
     if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
         raise TypeError("dtype must be a floating Torch dtype")
+    if not isinstance(normalize_kernel, bool):
+        raise TypeError("normalize_kernel must be a bool")
     for name, value in (
         ("gaussian_sigma_meters", gaussian_sigma_meters),
         ("gaussian_truncate_sigma", gaussian_truncate_sigma),
@@ -140,9 +157,16 @@ def build_smoothed_out_of_bounds_raster(
         out_of_bounds.device,
     )
     kernel_radius = kernel.shape[-1] // 2
+    if not normalize_kernel:
+        # Released ReGentS uses a 1D Gaussian prefactor on a 2D radial density,
+        # with neither discrete mass normalization nor a pixel-area factor.
+        coordinates = torch.arange(-kernel_radius, kernel_radius + 1, dtype=dtype, device=kernel.device)
+        radius_squared = coordinates[:, None].square() + coordinates[None, :].square()
+        kernel = torch.exp(-0.5 * radius_squared / sigma_pixels**2)
+        kernel = kernel / (float(gaussian_sigma_meters) * math.sqrt(2.0 * math.pi))
     padded = torch_functional.pad(out_of_bounds, (kernel_radius,) * 4, value=1.0)
     smoothed = torch_functional.conv2d(padded, kernel[None, None])[0, 0]
-    potential = torch_functional.pad(smoothed, (1, 1, 1, 1), value=1.0)
+    potential = torch_functional.pad(smoothed, (1, 1, 1, 1), value=float(kernel.sum()))
     transform = RasterTransform(
         origin_x_m=drivable_area.transform.origin_x_m - resolution,
         origin_y_m=drivable_area.transform.origin_y_m - resolution,

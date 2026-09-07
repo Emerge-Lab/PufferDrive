@@ -11,6 +11,7 @@
 static PyObject *classic_step_diagnostic_py(PyObject *self, PyObject *args);
 static PyObject *regents_set_action_plan_py(PyObject *self, PyObject *args);
 static PyObject *regents_get_events_py(PyObject *self, PyObject *args);
+static PyObject *regents_get_states_py(PyObject *self, PyObject *args);
 
 enum {
     DIAGNOSTIC_STATE_X = 0,
@@ -20,6 +21,17 @@ enum {
     DIAGNOSTIC_STATE_STEERING = 4,
     DIAGNOSTIC_STATE_FEATURE_COUNT = 5,
 };
+
+// Mirrors pufferlib.ocean.regents.state STATE_* ordering.
+enum {
+    REGENTS_STATE_X = 0,
+    REGENTS_STATE_Y = 1,
+    REGENTS_STATE_HEADING = 2,
+    REGENTS_STATE_SPEED = 3,
+    REGENTS_STATE_STEERING = 4,
+    REGENTS_STATE_FEATURE_COUNT = 5,
+};
+#define REGENTS_EGO_ACTION_FEATURE_COUNT 2
 
 // Total slot count of g_map_cache (live entries plus NULL holes from freed entries).
 static PyObject *map_cache_size_py(PyObject *self __attribute__((unused)), PyObject *args __attribute__((unused))) {
@@ -45,7 +57,8 @@ static PyObject *map_cache_live_count_py(
     {"map_cache_live_count", map_cache_live_count_py, METH_NOARGS, "Map cache live count."}, \
     {"classic_step_diagnostic", classic_step_diagnostic_py, METH_VARARGS, "Run isolated classic dynamics."}, \
     {"regents_set_action_plan", regents_set_action_plan_py, METH_VARARGS, "Install one stable-index action plan."}, \
-    {"regents_get_events", regents_get_events_py, METH_VARARGS, "Read authoritative replay events."}
+    {"regents_get_events", regents_get_events_py, METH_VARARGS, "Read authoritative replay events."}, \
+    {"regents_get_states", regents_get_states_py, METH_VARARGS, "Write current agent states into buffers."}
 // clang-format on
 
 #include "../env_binding.h"
@@ -138,6 +151,76 @@ static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused
     env->regents_actions = new_actions;
     env->regents_action_mask = new_mask;
     env->regents_transition_count = transition_count;
+    Py_RETURN_NONE;
+}
+
+// Bulk replacement for reading current poses out of the my_get dict, which re-serializes
+// every agent's whole logged trajectory on each step just to expose five live scalars.
+static PyObject *regents_get_states_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    if (PyTuple_Size(args) != 4) {
+        PyErr_SetString(PyExc_TypeError, "regents_get_states requires a VecEnv, states, valid, and ego_action");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (vec == NULL) {
+        return NULL;
+    }
+    if (vec->num_envs != 1) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS state capture requires exactly one C environment");
+        return NULL;
+    }
+    Drive *env = vec->envs[0];
+    PyObject *states_object = PyTuple_GetItem(args, 1);
+    PyObject *valid_object = PyTuple_GetItem(args, 2);
+    PyObject *ego_action_object = PyTuple_GetItem(args, 3);
+    if (!PyArray_Check(states_object) || !PyArray_Check(valid_object) || !PyArray_Check(ego_action_object)) {
+        PyErr_SetString(PyExc_TypeError, "ReGentS state outputs must be NumPy arrays");
+        return NULL;
+    }
+    PyArrayObject *states_array = (PyArrayObject *) states_object;
+    PyArrayObject *valid_array = (PyArrayObject *) valid_object;
+    PyArrayObject *ego_action_array = (PyArrayObject *) ego_action_object;
+    if (PyArray_TYPE(states_array) != NPY_FLOAT32 || PyArray_TYPE(valid_array) != NPY_BOOL
+        || PyArray_TYPE(ego_action_array) != NPY_FLOAT32) {
+        PyErr_SetString(PyExc_TypeError, "ReGentS states and ego action must be float32 with a bool valid mask");
+        return NULL;
+    }
+    if (!PyArray_IS_C_CONTIGUOUS(states_array) || !PyArray_IS_C_CONTIGUOUS(valid_array)
+        || !PyArray_IS_C_CONTIGUOUS(ego_action_array)) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS state outputs must be C-contiguous");
+        return NULL;
+    }
+    if (PyArray_NDIM(states_array) != 2 || PyArray_DIM(states_array, 0) != env->num_total_agents
+        || PyArray_DIM(states_array, 1) != REGENTS_STATE_FEATURE_COUNT || PyArray_NDIM(valid_array) != 1
+        || PyArray_DIM(valid_array, 0) != env->num_total_agents || PyArray_NDIM(ego_action_array) != 1
+        || PyArray_DIM(ego_action_array, 0) != REGENTS_EGO_ACTION_FEATURE_COUNT) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "ReGentS states must be [stable_agent, 5] with a [stable_agent] mask and a [2] ego action");
+        return NULL;
+    }
+
+    float *states = (float *) PyArray_DATA(states_array);
+    npy_bool *valid = (npy_bool *) PyArray_DATA(valid_array);
+    float *ego_action = (float *) PyArray_DATA(ego_action_array);
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        Agent *agent = &env->agents[agent_idx];
+        // Wrapping in double then narrowing matches the math.atan2 round trip the
+        // dict path performed in Python, so the two getters agree bit for bit.
+        double raw_heading = (double) agent->sim_heading;
+        float heading = (float) atan2(sin(raw_heading), cos(raw_heading));
+        float heading_projection = agent->sim_vx * cosf(heading) + agent->sim_vy * sinf(heading);
+        float *row = &states[(size_t) agent_idx * REGENTS_STATE_FEATURE_COUNT];
+        row[REGENTS_STATE_X] = agent->sim_x;
+        row[REGENTS_STATE_Y] = agent->sim_y;
+        row[REGENTS_STATE_HEADING] = heading;
+        row[REGENTS_STATE_SPEED] = copysignf(hypotf(agent->sim_vx, agent->sim_vy), heading_projection);
+        row[REGENTS_STATE_STEERING] = agent->steering_angle;
+        valid[agent_idx] = agent->sim_valid ? NPY_TRUE : NPY_FALSE;
+    }
+    Agent *ego = &env->agents[EGO_IDX];
+    ego_action[0] = ego->accel_long / ACCELERATION_VALUES[6];
+    ego_action[1] = ego->steering_angle / STEERING_VALUES[8];
     Py_RETURN_NONE;
 }
 

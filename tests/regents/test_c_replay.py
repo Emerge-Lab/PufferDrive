@@ -23,17 +23,23 @@ from pufferlib.ocean.regents.generation import (
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
 from pufferlib.ocean.regents.rollout import (
     C_REPLAY_TOLERANCE,
+    _current_states,
+    _single_payload,
     replay_optimized_scenario_in_c,
     run_reactive_idm_generation,
 )
-from pufferlib.ocean.regents.state import STATE_HEADING, STATE_X
+from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_X
 from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATION_CONFIG = REPO_ROOT / "pufferlib/config/evaluation/regents.yaml"
 HORIZON_TRANSITION_COUNT = 16
-REPLAY_FIXTURES = ((8, 50),)
+# Full-log filtering keeps candidates that a short window never activates, so the C
+# oracle needs a fixture that actually injects. Map 7 also logs an overlapping pair
+# inside this window, which the adversary must not be blamed for.
+OPEN_LOOP_HORIZON_TRANSITION_COUNT = 50
+REPLAY_FIXTURES = ((7, 50),)
 
 
 def _drive(map_idx, seed, sdc_controller):
@@ -79,7 +85,7 @@ def _open_loop_replay(map_idx, seed, iteration_count=5, learning_rate=1e-3):
             scenario,
             config=ReGentSOptimizationConfig(iteration_count=iteration_count, learning_rate=learning_rate),
             deterministic_seed=seed,
-            horizon_transition_count=HORIZON_TRANSITION_COUNT,
+            horizon_transition_count=OPEN_LOOP_HORIZON_TRANSITION_COUNT,
         )
         replay = replay_optimized_scenario_in_c(drive, scenario, optimization, seed=seed)
     finally:
@@ -102,7 +108,7 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     assert replay.metrics.compared_state_count > 0
     assert replay.states.shape == optimization.optimized_states.shape
     assert replay.baseline_states.shape == replay.states.shape
-    assert replay.ego_actions.shape == (1, HORIZON_TRANSITION_COUNT, 2)
+    assert replay.ego_actions.shape == (1, OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2)
     assert torch.isfinite(replay.states[replay.state_valid]).all()
     assert scenario.scenario_ids == (REGENTS_AUDIT_SCENARIO_IDS[map_idx],)
 
@@ -113,14 +119,14 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
 
     # Actors without an injected plan must still follow their logged trajectory.
     injected = optimization.optimized_action_mask.any(dim=2)
+    assert int(injected.sum()) > 0
     logged = scenario.logged_state[:, :, : replay.states.shape[2]]
     logged_difference = torch.abs(replay.states[..., pose] - logged[..., pose])
     assert float(logged_difference[joint_valid & ~injected[..., None]].max()) <= C_REPLAY_TOLERANCE
 
-    # Map 8 logs overlapping actors, so C must not blame the adversary for them.
+    # Map 7 logs overlapping actors, so C must not blame the adversary for them.
     assert replay.metrics.baseline_collision_pair_count > 0
     assert not replay.metrics.background_collision
-    assert replay.failure_reason != "c_background_collision"
 
     # Frames are opt-in so the default path stays cheap.
     assert replay.adversarial_frames is None
@@ -151,8 +157,8 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
                 capture_observations=True,
             )
         agent_count = len(injection_drive.get_state()[0]["agents"])
-        actions = np.zeros((agent_count, HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
-        mask = np.zeros((agent_count, HORIZON_TRANSITION_COUNT), dtype=np.bool_)
+        actions = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
+        mask = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT), dtype=np.bool_)
         mask[0] = True
         with pytest.raises(ValueError, match="replay-controlled non-ego vehicles"):
             binding.regents_set_action_plan(injection_drive.c_envs, actions, mask)
@@ -167,8 +173,8 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
         injection_drive.close()
 
 
-def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifact(tmp_path):
-    """The reactive loop, its C-confirmed outcome, artifact persistence, and rendering."""
+def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_trips_its_artifact(tmp_path):
+    """Full-log candidates outside a short horizon remain reportable and replayable."""
     drive = _drive(8, 50, "idm")
     try:
         result = run_reactive_idm_generation(
@@ -182,14 +188,17 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     finally:
         drive.close()
 
-    assert result.replay.success
-    assert result.replay.failure_reason is None
-    assert result.replay.metrics.actionable_collision
-    assert result.replay.metrics.ego_collision
+    assert not result.replay.success
+    assert result.replay.failure_reason == "no_candidate_in_optimization_horizon"
+    assert not result.replay.metrics.actionable_collision
+    assert not result.replay.metrics.ego_collision
     assert not result.replay.metrics.background_collision
     assert not result.replay.metrics.offroad
-    assert result.replay.metrics.first_collision_pair == (0, result.optimization.selected_adversary_idx)
-    assert result.optimization.ego_collision_loss_adversary_idx >= 0
+    assert result.replay.metrics.first_collision_pair is None
+    assert result.optimization.ego_collision_loss_adversary_idx == -1
+    assert result.optimization.ego_collision_loss_adversary_id == -1
+    assert result.optimization.selection.candidate_mask.sum() == 3
+    assert torch.equal(result.optimization.initial_actions, result.optimization.optimized_actions)
     assert result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
     assert 1 <= result.outer_iteration_count <= 3
     assert result.optimization.frozen_ego_source == "c_idm"
@@ -204,16 +213,14 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert metadata["deterministic_seed"] == 50
     assert len(metadata["source_configuration_hash"]) == 64
     assert metadata["optimization"]["background_collision_loss_scope"] == "candidate_pairs"
+    assert metadata["optimization"]["result_selection_policy"] == "current_iterate"
+    assert metadata["optimization"]["infractions_are_acceptance_gates"] is False
     assert (
         metadata["optimization"]["ego_collision_loss_adversary_id"]
         == result.optimization.ego_collision_loss_adversary_id
     )
     initial_costs = metadata["optimization"]["initial_costs"]
-    assert "background_collision_first_agent_id" in initial_costs
-    assert "background_collision_second_agent_id" in initial_costs
-    assert "background_collision_timestep_idx" in initial_costs
-    assert "background_collision_signed_distance_meters" in initial_costs
-    assert "background_collision_truncated" in initial_costs
+    assert initial_costs is None
     assert metadata["optimization"]["baseline_background_collision_pair_count"] >= 0
     assert metadata["optimization"]["background_collision_rejection_count"] >= 0
     assert np.array_equal(arrays["optimized_actions"], result.optimization.optimized_actions.detach().numpy())
@@ -228,10 +235,10 @@ def test_reactive_idm_generation_confirms_a_collision_and_round_trips_its_artifa
     assert result.replay.baseline_frames["agent_f32"].shape == frames["agent_f32"].shape
     assert result.replay.scenario_payload["scenario_id"] == result.scenario.scenario_ids[0]
 
+    # No candidate ever entered the window, so there is no cost history to write.
+    assert result.optimization.cost_history == ()
     save_loss_history_csv(tmp_path, 8, result)
-    loss_header = (tmp_path / "losses/scenario_00008.losses.csv").read_text(encoding="utf-8").splitlines()[0]
-    assert "background_collision_first_agent_id" in loss_header
-    assert "background_collision_signed_distance_meters" in loss_header
+    assert not (tmp_path / "losses").exists()
 
     observation_drive = _drive(8, 50, "idm")
     try:
@@ -355,6 +362,9 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
         f"scenario_{i:05d}.npz" for i in range(expected_count)
     ]
     assert (tmp_path / "generation_metrics.csv").is_file()
+    loss_header = (tmp_path / "losses/scenario_00000.losses.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "background_collision_first_agent_id" in loss_header
+    assert "background_collision_signed_distance_meters" in loss_header
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0
     assert report.total_optimization_seconds > 0.0
@@ -370,3 +380,45 @@ def test_pufferl_regents_prints_success(tmp_path, capsys):
     pufferl.regents("regents_nuplan_smoke", config_path=GENERATION_CONFIG, output_dir=tmp_path)
     captured = capsys.readouterr()
     assert "[REGENTS] success" in captured.out
+
+
+def test_buffer_state_getter_reproduces_the_dict_getter_exactly():
+    """The replay path reads states from buffers, so both getters must agree bit for bit."""
+    drive = _drive(1, 43, "replay")
+    try:
+        drive.reset(seed=43)
+        agent_count = int(_single_payload(drive.get_state())["num_total_agents"])
+        states = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
+        valid = np.empty(agent_count, dtype=np.bool_)
+        ego_action = np.empty(2, dtype=np.float32)
+        neutral_actions = np.zeros_like(drive.actions)
+        for _ in range(30):
+            drive.step(neutral_actions)
+            _, dict_states, dict_valid, dict_ego_action = _current_states(drive.get_state(), agent_count)
+            binding.regents_get_states(drive.c_envs, states, valid, ego_action)
+            assert np.array_equal(states, dict_states)
+            assert np.array_equal(valid, dict_valid)
+            assert np.array_equal(ego_action, dict_ego_action)
+    finally:
+        drive.close()
+
+
+def test_buffer_state_getter_rejects_malformed_output_buffers():
+    """Buffers cross the trust boundary from Python, so shape and dtype are checked."""
+    drive = _drive(1, 43, "replay")
+    try:
+        drive.reset(seed=43)
+        agent_count = int(_single_payload(drive.get_state())["num_total_agents"])
+        states = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
+        valid = np.empty(agent_count, dtype=np.bool_)
+        ego_action = np.empty(2, dtype=np.float32)
+        with pytest.raises(ValueError):
+            binding.regents_get_states(drive.c_envs, states[:-1], valid, ego_action)
+        with pytest.raises(ValueError):
+            binding.regents_get_states(drive.c_envs, states, valid, ego_action[:1])
+        with pytest.raises(TypeError):
+            binding.regents_get_states(drive.c_envs, states.astype(np.float64), valid, ego_action)
+        with pytest.raises(TypeError):
+            binding.regents_get_states(drive.c_envs, states, valid.astype(np.int32), ego_action)
+    finally:
+        drive.close()
