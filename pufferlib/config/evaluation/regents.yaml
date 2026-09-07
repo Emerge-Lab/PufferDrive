@@ -33,7 +33,7 @@ generations:
   # The Stage 3 audit scenarios: the first 16 local NuPlan maps with seeds 42..57.
   - name: regents_nuplan
     seed: 42
-    scenario_count: 50
+    scenario_count: 100
     num_workers: 24
     # Scenarios in a batch share one Adam loop. Worth raising only when workers are
     # well below core count: batching cuts a single worker's time (8 scenarios at 100
@@ -50,7 +50,7 @@ generations:
       learning_rate: 0.001
       iteration_count: 500
     env:
-      num_maps: 50
+      num_maps: 100
       scenario_length: 101
       resample_frequency: 101
       sdc_controller: replay

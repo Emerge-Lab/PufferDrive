@@ -1434,6 +1434,9 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "AGENT_TYPE_CYCLIST", CYCLIST);
     PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_FREEWAY", LANE_FREEWAY);
     PyModule_AddIntConstant(m, "ROAD_TYPE_LANE_SURFACE_STREET", LANE_SURFACE_STREET);
+    PyModule_AddIntConstant(m, "ROAD_TYPE_ROAD_EDGE_UNKNOWN", ROAD_EDGE_UNKNOWN);
+    PyModule_AddIntConstant(m, "ROAD_TYPE_ROAD_EDGE_BOUNDARY", ROAD_EDGE_BOUNDARY);
+    PyModule_AddIntConstant(m, "ROAD_TYPE_ROAD_EDGE_MEDIAN", ROAD_EDGE_MEDIAN);
     PyModule_AddIntConstant(m, "CONTROL_MODE_VEHICLES", CONTROL_MODE_VEHICLES);
     PyModule_AddIntConstant(m, "CONTROL_MODE_AGENTS", CONTROL_MODE_AGENTS);
     PyModule_AddIntConstant(m, "CONTROL_MODE_WOSAC", CONTROL_MODE_WOSAC);

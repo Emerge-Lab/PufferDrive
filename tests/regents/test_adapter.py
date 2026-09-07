@@ -168,27 +168,50 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
     assert padded.agent_id[1, -1] == -1
     assert not padded.state_valid[1, -1].any()
 
-    raster = _rasterize_drivable_area(
-        {
-            "map_corners": [-2.0, -2.0, 2.0, 2.0],
-            "num_road_elements": 1,
-            "road_elements": [
-                {
-                    "id": 0,
-                    "type": binding.ROAD_TYPE_LANE_SURFACE_STREET,
-                    "segment_size": 2,
-                    "x": [-2.0, 2.0],
-                    "y": [0.0, 0.0],
-                }
-            ],
-        },
-        resolution_meters=1.0,
-    )
+    # One lane between two road edges. The edges are wound in opposite directions, as
+    # exported maps are, so the drivable side is found by orienting them on the lane.
+    lane_between_edges = {
+        "map_corners": [-2.0, -2.0, 2.0, 2.0],
+        "num_road_elements": 3,
+        "road_elements": [
+            {
+                "id": 0,
+                "type": binding.ROAD_TYPE_LANE_SURFACE_STREET,
+                "segment_size": 2,
+                "x": [-2.0, 2.0],
+                "y": [0.0, 0.0],
+            },
+            {
+                "id": 1,
+                "type": binding.ROAD_TYPE_ROAD_EDGE_BOUNDARY,
+                "segment_size": 2,
+                "x": [-2.0, 2.0],
+                "y": [1.0, 1.0],
+            },
+            {
+                "id": 2,
+                "type": binding.ROAD_TYPE_ROAD_EDGE_BOUNDARY,
+                "segment_size": 2,
+                "x": [-2.0, 2.0],
+                "y": [-1.0, -1.0],
+            },
+        ],
+    }
+    raster = _rasterize_drivable_area(lane_between_edges, resolution_meters=1.0)
     assert raster.mask.shape == (5, 5)
     assert raster.mask[2, 2] and raster.mask[1, 2] and not raster.mask[0, 2]
+    assert raster.mask[1:4, 2].all() and not raster.mask[4, 2]
     xy = torch.tensor([[-2.0, -2.0], [2.0, 2.0]])
     assert torch.equal(raster.transform.world_to_grid(xy), torch.tensor([[0.0, 0.0], [4.0, 4.0]]))
     assert torch.equal(raster.transform.world_to_normalized_grid(xy), torch.tensor([[-1.0, -1.0], [1.0, 1.0]]))
+
+    # The lane corridor still covers what the edge sign test mislabels, and a map
+    # without road edges cannot be bounded at all.
+    edgeless = copy.deepcopy(lane_between_edges)
+    edgeless["road_elements"] = edgeless["road_elements"][:1]
+    edgeless["num_road_elements"] = 1
+    with pytest.raises(ValueError, match="no road-edge polylines"):
+        _rasterize_drivable_area(edgeless, resolution_meters=1.0)
 
     mismatched = copy.deepcopy(payload)
     mismatched["log_dt"] = 0.2

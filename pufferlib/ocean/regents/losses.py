@@ -77,7 +77,14 @@ def prepare_out_of_bounds_rasters(
     device=None,
     dtype=torch.float32,
 ):
-    """Precompute all map-static Gaussian potentials before optimization."""
+    """Precompute all map-static Gaussian potentials before optimization.
+
+    The kernel carries unit mass, so a fully out-of-bounds corner costs exactly one
+    whatever the raster resolution. The released amplitude has neither discrete mass
+    normalization nor a pixel-area factor, which makes its potential scale with the
+    inverse square of the resolution; that scale is not reproducible here because the
+    released deviation term never evaluates at the sampled position.
+    """
     if config is None:
         config = ReGentSCostConfig()
     if not isinstance(config, ReGentSCostConfig):
@@ -93,7 +100,7 @@ def prepare_out_of_bounds_rasters(
             config.gaussian_truncate_sigma,
             device=device,
             dtype=dtype,
-            normalize_kernel=False,
+            normalize_kernel=True,
         )
         for raster in drivable_area_rasters
     )

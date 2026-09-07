@@ -27,6 +27,19 @@ MAX_TRAJECTORY_TIMESTEP_COUNT = 9_999
 MAX_BATCH_STATE_COUNT = 25_000_000
 MAX_RASTER_PIXEL_COUNT = 25_000_000
 MAX_ROAD_POINT_COUNT = 99_999
+RASTER_QUERY_CHUNK_PIXEL_COUNT = 32_768
+LANE_CENTERLINE_TYPES = frozenset((binding.ROAD_TYPE_LANE_FREEWAY, binding.ROAD_TYPE_LANE_SURFACE_STREET))
+ROAD_EDGE_TYPES = frozenset(
+    (
+        binding.ROAD_TYPE_ROAD_EDGE_UNKNOWN,
+        binding.ROAD_TYPE_ROAD_EDGE_BOUNDARY,
+        binding.ROAD_TYPE_ROAD_EDGE_MEDIAN,
+    )
+)
+
+
+def _cross_product_2d(first_xy, second_xy):
+    return first_xy[..., 0] * second_xy[..., 1] - first_xy[..., 1] * second_xy[..., 0]
 
 
 def _as_scenario_list(payload):
@@ -84,7 +97,187 @@ def _valid_array(values, expected_length):
     return np.ascontiguousarray(raw.astype(np.bool_, copy=False))
 
 
+def _lane_centerline_points(scenario):
+    """Return every drivable lane centerline point, which is on-road by construction."""
+    point_blocks = []
+    for road_idx, road in enumerate(scenario["road_elements"]):
+        point_count = int(road["segment_size"])
+        if int(road["type"]) not in LANE_CENTERLINE_TYPES or point_count < 1:
+            continue
+        x_meters = _float_array(road.get("x"), point_count, f"road_elements[{road_idx}].x")
+        y_meters = _float_array(road.get("y"), point_count, f"road_elements[{road_idx}].y")
+        if not np.isfinite(x_meters).all() or not np.isfinite(y_meters).all():
+            raise ValueError(f"Road element {road_idx} contains non-finite geometry")
+        point_blocks.append(np.stack((x_meters, y_meters), axis=-1).astype(np.float32))
+    if not point_blocks:
+        raise ValueError("Scenario contains no lane centerlines to orient its road edges")
+    return _torch_from_contiguous(np.ascontiguousarray(np.concatenate(point_blocks)))
+
+
+def _orient_road_edges(edge_points, edge_directions, edge_polyline_ids, lane_points):
+    """Flip whole polylines so the drivable side is consistently the negative one.
+
+    The reference relies on its dataset winding road edges so that a positive cross
+    product means off-road. This export preserves no such convention: polylines run
+    both ways within one map. Each polyline is therefore oriented by majority vote of
+    its points against the nearest lane centerline, which is drivable by construction,
+    before the reference sign test is applied unchanged.
+    """
+    nearest_lane_idx = torch.cdist(edge_points, lane_points).argmin(dim=-1)
+    lane_side = _cross_product_2d(lane_points[nearest_lane_idx] - edge_points, edge_directions)
+    compact_polyline_idx = torch.unique(edge_polyline_ids, return_inverse=True)[1]
+    polyline_vote = torch.zeros(int(compact_polyline_idx.max()) + 1, dtype=edge_points.dtype)
+    polyline_vote.scatter_add_(0, compact_polyline_idx, torch.sign(lane_side))
+    flipped = (polyline_vote > 0)[compact_polyline_idx]
+    return torch.where(flipped[:, None], -edge_directions, edge_directions)
+
+
+def _road_edge_polylines(scenario):
+    """Return road-edge points, their oriented per-point directions, and polyline ids.
+
+    Directions are forward differences inside each polyline, matching the per-point
+    ``dir_xy`` the reference signed-distance test consumes. The final point of a
+    polyline reuses its predecessor's direction, which has no successor to difference.
+    """
+    road_elements = scenario.get("road_elements")
+    if not isinstance(road_elements, list) or len(road_elements) != int(scenario["num_road_elements"]):
+        raise ValueError("road_elements must match num_road_elements")
+    point_blocks = []
+    direction_blocks = []
+    polyline_id_blocks = []
+    for road_idx, road in enumerate(road_elements):
+        if int(road.get("id", INVALID_AGENT_ID)) != road_idx:
+            raise ValueError(f"Road element id must equal its stable array index {road_idx}")
+        point_count = int(road["segment_size"])
+        if point_count < 0 or point_count > MAX_ROAD_POINT_COUNT:
+            raise ValueError(f"Road element {road_idx} has invalid segment_size={point_count}")
+        if int(road["type"]) not in ROAD_EDGE_TYPES or point_count < 2:
+            continue
+        x_meters = _float_array(road.get("x"), point_count, f"road_elements[{road_idx}].x")
+        y_meters = _float_array(road.get("y"), point_count, f"road_elements[{road_idx}].y")
+        if not np.isfinite(x_meters).all() or not np.isfinite(y_meters).all():
+            raise ValueError(f"Road element {road_idx} contains non-finite geometry")
+        points = np.stack((x_meters, y_meters), axis=-1).astype(np.float32)
+        directions = np.empty_like(points)
+        directions[:-1] = points[1:] - points[:-1]
+        directions[-1] = directions[-2]
+        lengths = np.linalg.norm(directions, axis=-1, keepdims=True)
+        directions = np.divide(directions, lengths, out=np.zeros_like(directions), where=lengths > 0.0)
+        point_blocks.append(points)
+        direction_blocks.append(directions)
+        polyline_id_blocks.append(np.full(point_count, road_idx, dtype=np.int64))
+    if not point_blocks:
+        raise ValueError("Scenario contains no road-edge polylines to bound the drivable area")
+    edge_points = _torch_from_contiguous(np.ascontiguousarray(np.concatenate(point_blocks)))
+    edge_directions = _torch_from_contiguous(np.ascontiguousarray(np.concatenate(direction_blocks)))
+    edge_polyline_ids = _torch_from_contiguous(np.ascontiguousarray(np.concatenate(polyline_id_blocks)))
+    edge_directions = _orient_road_edges(
+        edge_points,
+        edge_directions,
+        edge_polyline_ids,
+        _lane_centerline_points(scenario),
+    )
+    return edge_points, edge_directions, edge_polyline_ids
+
+
+def _road_edge_interior_mask(scenario, transform):
+    """Mark pixels inside the road edges with the reference signed-distance test.
+
+    A pixel is off-road when its offset from the nearest road-edge point crosses that
+    point's oriented direction positively. On a corner the prior point of the same
+    polyline can report a smaller cross product, and the reference keeps that one, so
+    the pixel is judged against the edge that actually faces it.
+    """
+    edge_points, edge_directions, edge_polyline_ids = _road_edge_polylines(scenario)
+    resolution = transform.resolution_meters_per_pixel
+    pixel_x = torch.arange(transform.width, dtype=torch.float32) * resolution + transform.origin_x_m
+    pixel_y = torch.arange(transform.height, dtype=torch.float32) * resolution + transform.origin_y_m
+    interior = torch.empty((transform.height, transform.width), dtype=torch.bool)
+    rows_per_chunk = max(1, RASTER_QUERY_CHUNK_PIXEL_COUNT // transform.width)
+    for row_start in range(0, transform.height, rows_per_chunk):
+        row_end = min(row_start + rows_per_chunk, transform.height)
+        chunk_x = pixel_x[None, :].expand(row_end - row_start, transform.width)
+        chunk_y = pixel_y[row_start:row_end, None].expand(row_end - row_start, transform.width)
+        query_xy = torch.stack((chunk_x, chunk_y), dim=-1).reshape(-1, 2)
+        nearest_idx = torch.cdist(query_xy, edge_points).argmin(dim=-1)
+        prior_idx = torch.clamp(nearest_idx - 1, min=0)
+        point_to_edge = query_xy - edge_points[nearest_idx]
+        nearest_cross = _cross_product_2d(point_to_edge, edge_directions[nearest_idx])
+        prior_cross = _cross_product_2d(point_to_edge, edge_directions[prior_idx])
+        same_polyline = edge_polyline_ids[nearest_idx] == edge_polyline_ids[prior_idx]
+        facing_cross = torch.where(same_polyline & (prior_cross < nearest_cross), prior_cross, nearest_cross)
+        interior[row_start:row_end] = (facing_cross <= 0.0).reshape(row_end - row_start, transform.width)
+    return interior
+
+
+def _lane_corridor_mask(scenario, transform):
+    """Mark every pixel within half a lane width of a drivable lane centerline."""
+    resolution = transform.resolution_meters_per_pixel
+    corridor = torch.zeros((transform.height, transform.width), dtype=torch.bool)
+    half_lane_width_meters = 0.5 * float(binding.LANE_WIDTH_METERS)
+    pixel_x = torch.arange(transform.width, dtype=torch.float32) * resolution + transform.origin_x_m
+    pixel_y = torch.arange(transform.height, dtype=torch.float32) * resolution + transform.origin_y_m
+    for road_idx, road in enumerate(scenario["road_elements"]):
+        point_count = int(road["segment_size"])
+        if int(road["type"]) not in LANE_CENTERLINE_TYPES or point_count < 2:
+            continue
+        x_meters = _float_array(road.get("x"), point_count, f"road_elements[{road_idx}].x")
+        y_meters = _float_array(road.get("y"), point_count, f"road_elements[{road_idx}].y")
+        for segment_idx in range(point_count - 1):
+            start_x = float(x_meters[segment_idx])
+            start_y = float(y_meters[segment_idx])
+            delta_x = float(x_meters[segment_idx + 1]) - start_x
+            delta_y = float(y_meters[segment_idx + 1]) - start_y
+            min_column = max(
+                0,
+                math.floor(
+                    (min(start_x, start_x + delta_x) - half_lane_width_meters - transform.origin_x_m) / resolution
+                ),
+            )
+            max_column = min(
+                transform.width - 1,
+                math.ceil(
+                    (max(start_x, start_x + delta_x) + half_lane_width_meters - transform.origin_x_m) / resolution
+                ),
+            )
+            min_row = max(
+                0,
+                math.floor(
+                    (min(start_y, start_y + delta_y) - half_lane_width_meters - transform.origin_y_m) / resolution
+                ),
+            )
+            max_row = min(
+                transform.height - 1,
+                math.ceil(
+                    (max(start_y, start_y + delta_y) + half_lane_width_meters - transform.origin_y_m) / resolution
+                ),
+            )
+            if min_column > max_column or min_row > max_row:
+                continue
+            offset_x = pixel_x[min_column : max_column + 1][None, :] - start_x
+            offset_y = pixel_y[min_row : max_row + 1][:, None] - start_y
+            segment_length_squared = delta_x * delta_x + delta_y * delta_y
+            if segment_length_squared == 0.0:
+                distance_squared = offset_x.square() + offset_y.square()
+            else:
+                projection = ((offset_x * delta_x + offset_y * delta_y) / segment_length_squared).clamp(0.0, 1.0)
+                distance_squared = (offset_x - projection * delta_x).square()
+                distance_squared += (offset_y - projection * delta_y).square()
+            corridor[min_row : max_row + 1, min_column : max_column + 1] |= (
+                distance_squared <= half_lane_width_meters * half_lane_width_meters
+            )
+    return corridor
+
+
 def _rasterize_drivable_area(scenario, resolution_meters):
+    """Mark the drivable surface as the road-edge interior joined with the lane corridor.
+
+    Road edges bound the true surface, so parking areas, shoulders and intersection
+    interiors stop reading as off-road. The reference stops there, but its nearest-point
+    sign test mislabels wedges where two polylines meet, which put real driving agents
+    off-road here; a mapped lane centerline is drivable by construction, so the corridor
+    repairs exactly those wedges without extending drivability anywhere unmapped.
+    """
     if not math.isfinite(resolution_meters) or resolution_meters <= 0:
         raise ValueError("Raster resolution must be finite and positive")
     map_corners = np.ascontiguousarray(scenario.get("map_corners"), dtype=np.float32)
@@ -99,63 +292,10 @@ def _rasterize_drivable_area(scenario, resolution_meters):
     if width * height > MAX_RASTER_PIXEL_COUNT:
         raise ValueError(f"Raster dimensions {height}x{width} exceed the {MAX_RASTER_PIXEL_COUNT} pixel limit")
     transform = RasterTransform(min_x_meters, min_y_meters, resolution_meters, height, width)
-    drivable = np.zeros((height, width), dtype=np.bool_)
-    half_lane_width_meters = 0.5 * float(binding.LANE_WIDTH_METERS)
-    drivable_types = {binding.ROAD_TYPE_LANE_FREEWAY, binding.ROAD_TYPE_LANE_SURFACE_STREET}
-
-    road_elements = scenario.get("road_elements")
-    if not isinstance(road_elements, list) or len(road_elements) != int(scenario["num_road_elements"]):
-        raise ValueError("road_elements must match num_road_elements")
-    for road_idx, road in enumerate(road_elements):
-        if int(road.get("id", INVALID_AGENT_ID)) != road_idx:
-            raise ValueError(f"Road element id must equal its stable array index {road_idx}")
-        if int(road["type"]) not in drivable_types:
-            continue
-        point_count = int(road["segment_size"])
-        if point_count < 0 or point_count > MAX_ROAD_POINT_COUNT:
-            raise ValueError(f"Road element {road_idx} has invalid segment_size={point_count}")
-        if point_count < 2:
-            continue
-        x_meters = _float_array(road.get("x"), point_count, f"road_elements[{road_idx}].x")
-        y_meters = _float_array(road.get("y"), point_count, f"road_elements[{road_idx}].y")
-        if not np.isfinite(x_meters).all() or not np.isfinite(y_meters).all():
-            raise ValueError(f"Road element {road_idx} contains non-finite geometry")
-
-        for segment_idx in range(point_count - 1):
-            start_x = float(x_meters[segment_idx])
-            start_y = float(y_meters[segment_idx])
-            delta_x = float(x_meters[segment_idx + 1]) - start_x
-            delta_y = float(y_meters[segment_idx + 1]) - start_y
-            segment_length_squared = delta_x * delta_x + delta_y * delta_y
-            segment_min_x = min(start_x, start_x + delta_x) - half_lane_width_meters
-            segment_max_x = max(start_x, start_x + delta_x) + half_lane_width_meters
-            segment_min_y = min(start_y, start_y + delta_y) - half_lane_width_meters
-            segment_max_y = max(start_y, start_y + delta_y) + half_lane_width_meters
-            min_column = max(0, math.floor((segment_min_x - min_x_meters) / resolution_meters))
-            max_column = min(width - 1, math.ceil((segment_max_x - min_x_meters) / resolution_meters))
-            min_row = max(0, math.floor((segment_min_y - min_y_meters) / resolution_meters))
-            max_row = min(height - 1, math.ceil((segment_max_y - min_y_meters) / resolution_meters))
-            if min_column > max_column or min_row > max_row:
-                continue
-
-            columns = np.arange(min_column, max_column + 1, dtype=np.float32)
-            rows = np.arange(min_row, max_row + 1, dtype=np.float32)
-            pixel_x = min_x_meters + columns[None, :] * resolution_meters
-            pixel_y = min_y_meters + rows[:, None] * resolution_meters
-            if segment_length_squared == 0.0:
-                distance_squared = (pixel_x - start_x) ** 2 + (pixel_y - start_y) ** 2
-            else:
-                projection = (pixel_x - start_x) * delta_x + (pixel_y - start_y) * delta_y
-                projection = np.clip(projection / segment_length_squared, 0.0, 1.0)
-                distance_squared = (pixel_x - (start_x + projection * delta_x)) ** 2
-                distance_squared += (pixel_y - (start_y + projection * delta_y)) ** 2
-            drivable[min_row : max_row + 1, min_column : max_column + 1] |= (
-                distance_squared <= half_lane_width_meters * half_lane_width_meters
-            )
-
+    drivable = _road_edge_interior_mask(scenario, transform) | _lane_corridor_mask(scenario, transform)
     if not drivable.any():
-        raise ValueError("Scenario contains no rasterizable drivable freeway or surface-street lanes")
-    return DrivableAreaRaster(_torch_from_contiguous(np.ascontiguousarray(drivable)), transform)
+        raise ValueError("Scenario road edges and lane centerlines enclose no drivable pixels")
+    return DrivableAreaRaster(drivable.contiguous(), transform)
 
 
 def export_drive_scenarios(drive, payload=None, raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS):

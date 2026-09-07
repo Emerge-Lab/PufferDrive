@@ -287,8 +287,8 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     assert absolute_gradient.abs().sum() > 0
     torch.testing.assert_close(shifted_gradient, absolute_gradient)
 
-    # At interior grid nodes, convolution must match the released radial density
-    # exactly, with no discrete normalization or pixel-area multiplier.
+    # At interior grid nodes, convolution must match the radial density carrying unit
+    # mass, so a fully out-of-bounds sample costs one at any raster resolution.
     mask = torch.ones((15, 15), dtype=torch.bool)
     mask[7, 7] = False
     density_raster = prepare_out_of_bounds_rasters(
@@ -296,8 +296,10 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
         dtype=torch.float64,
     )[0]
     locations = torch.tensor([[0.0, 0.0], [0.5, 0.0]], dtype=torch.float64)
-    expected_density = torch.exp(-0.5 * locations.square().sum(dim=-1) / 0.5**2)
-    expected_density /= 0.5 * math.sqrt(2.0 * math.pi)
+    kernel_1d = torch.exp(-0.5 * torch.arange(-3, 4, dtype=torch.float64).square())
+    kernel_1d = kernel_1d / kernel_1d.sum()
+    assert math.isclose(float(kernel_1d.sum()), 1.0)
+    expected_density = kernel_1d[3] * torch.stack((kernel_1d[3], kernel_1d[2]))
     torch.testing.assert_close(sample_out_of_bounds_potential(locations, density_raster), expected_density)
     between_nodes = torch.tensor([[0.2, 0.0]], dtype=torch.float64, requires_grad=True)
     density_gradient = torch.autograd.grad(
