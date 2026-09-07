@@ -12,6 +12,7 @@ from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_X, S
 
 DEFAULT_MINIMUM_VALID_STATE_FRACTION = 0.5
 DEFAULT_STATIC_DISPLACEMENT_THRESHOLD_METERS = 0.2
+DEFAULT_STATIC_SPEED_THRESHOLD_MPS = 0.2
 DEFAULT_REAR_SECTOR_FRACTION = 0.8
 DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS = math.pi / 8.0
 DEFAULT_FRONT_DIVERGENCE_FRACTION = 0.5
@@ -42,6 +43,7 @@ class SceneFilterReason(IntFlag):
 class ReGentSFilterConfig:
     minimum_valid_state_fraction: float = DEFAULT_MINIMUM_VALID_STATE_FRACTION
     static_displacement_threshold_meters: float = DEFAULT_STATIC_DISPLACEMENT_THRESHOLD_METERS
+    static_speed_threshold_mps: float = DEFAULT_STATIC_SPEED_THRESHOLD_MPS
     rear_sector_fraction: float = DEFAULT_REAR_SECTOR_FRACTION
     rear_sector_half_angle_radians: float = DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS
 
@@ -50,7 +52,7 @@ class ReGentSFilterConfig:
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0 or value > 1.0:
                 raise ValueError(f"{name} must be finite and in [0, 1]")
-        for name in ("static_displacement_threshold_meters",):
+        for name in ("static_displacement_threshold_meters", "static_speed_threshold_mps"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -251,9 +253,9 @@ def select_adversary_candidates(
 ):
     """Filter candidates using logged trajectories and record every reason.
 
-    Reference filters use the complete exported log, independent of rollout horizon:
-    first-to-last valid-state displacement, valid-state fraction, and unmasked rear occupancy.
-    Only batch time padding is excluded. Logged overlaps remain diagnostics.
+    Full-log filters are independent of rollout horizon. In addition to the released
+    displacement test, peak logged speed rejects parked tracks whose position jitter
+    exceeds the displacement threshold. Only batch time padding is excluded.
     """
     if config is None:
         config = ReGentSFilterConfig()
@@ -280,6 +282,7 @@ def select_adversary_candidates(
     insufficient = valid_state_fraction < config.minimum_valid_state_fraction
     reason_bits |= insufficient.to(torch.int64) * int(CandidateFilterReason.INSUFFICIENT_VALID_STATES)
     static = displacement < config.static_displacement_threshold_meters
+    static |= maximum_speed < config.static_speed_threshold_mps
     reason_bits |= static.to(torch.int64) * int(CandidateFilterReason.STATIC)
     rear = rear_fraction > config.rear_sector_fraction
     reason_bits |= rear.to(torch.int64) * int(CandidateFilterReason.REAR_SECTOR)

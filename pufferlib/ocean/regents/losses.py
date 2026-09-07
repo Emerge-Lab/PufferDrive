@@ -159,17 +159,22 @@ def ego_background_collision_cost(
     width_meters,
     ego_mask,
     candidate_adversary_mask,
+    boxes=None,
 ):
-    """Return the reference minimum of candidate mean squared center distances."""
-    _validate_common_inputs(states, state_valid, length_meters, width_meters)
-    _validate_agent_mask(ego_mask, states, "ego_mask")
-    _validate_agent_mask(candidate_adversary_mask, states, "candidate_adversary_mask")
-    if not torch.all(ego_mask.sum(dim=-1) == 1):
-        raise ValueError("Each scenario must contain exactly one ego agent")
-    if torch.any(ego_mask & candidate_adversary_mask):
-        raise ValueError("The ego agent cannot be a candidate adversary")
+    """Return the reference minimum of candidate mean squared center distances.
 
-    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+    ``boxes`` lets `combined_regents_cost` share one already-validated box tensor
+    across the three terms instead of rebuilding and revalidating it per term.
+    """
+    if boxes is None:
+        _validate_common_inputs(states, state_valid, length_meters, width_meters)
+        _validate_agent_mask(ego_mask, states, "ego_mask")
+        _validate_agent_mask(candidate_adversary_mask, states, "candidate_adversary_mask")
+        if not torch.all(ego_mask.sum(dim=-1) == 1):
+            raise ValueError("Each scenario must contain exactly one ego agent")
+        if torch.any(ego_mask & candidate_adversary_mask):
+            raise ValueError("The ego agent cannot be a candidate adversary")
+        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     batch_indices = torch.arange(states.shape[0], device=states.device)
     ego_indices = torch.argmax(ego_mask.to(torch.int64), dim=-1)
     ego_boxes = boxes[batch_indices, ego_indices]
@@ -193,19 +198,20 @@ def _background_collision_avoidance_cost_and_diagnostics(
     background_vehicle_mask,
     optimized_vehicle_mask,
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
+    boxes=None,
 ):
     """Return reference squared-center cost and box clearance of its winning pair."""
-    _validate_common_inputs(states, state_valid, length_meters, width_meters)
-    _validate_agent_mask(background_vehicle_mask, states, "background_vehicle_mask")
-    _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
-    if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
-        raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
     if not isinstance(truncation_meters, (float, int)) or not math.isfinite(truncation_meters):
         raise ValueError("truncation_meters must be a finite positive scalar")
     if truncation_meters <= 0:
         raise ValueError("truncation_meters must be a finite positive scalar")
-
-    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
+    if boxes is None:
+        _validate_common_inputs(states, state_valid, length_meters, width_meters)
+        _validate_agent_mask(background_vehicle_mask, states, "background_vehicle_mask")
+        _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
+        if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
+            raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
+        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     scenario_costs = []
     first_agent_indices = []
     second_agent_indices = []
@@ -325,14 +331,17 @@ def drivable_area_deviation_cost(
     optimized_vehicle_mask,
     out_of_bounds_rasters,
     baseline_corner_potential=None,
+    boxes=None,
 ):
     """Sum corner potential over valid vehicles and timesteps as in released ReGentS.
 
     Optional baseline subtraction is retained for callers comparing diagnostics;
     the optimizer uses the absolute potential.
     """
-    _validate_common_inputs(states, state_valid, length_meters, width_meters)
-    _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
+    if boxes is None:
+        _validate_common_inputs(states, state_valid, length_meters, width_meters)
+        _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
+        boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     if len(out_of_bounds_rasters) != states.shape[0]:
         raise ValueError("out_of_bounds_rasters must contain one raster per scenario")
     if baseline_corner_potential is not None:
@@ -341,7 +350,6 @@ def drivable_area_deviation_cost(
             raise ValueError("baseline_corner_potential must have shape [batch, agent, time, 4]")
         if baseline_corner_potential.device != states.device or baseline_corner_potential.dtype != states.dtype:
             raise ValueError("baseline_corner_potential must match the states device and dtype")
-    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     corners = oriented_box_corners(boxes)
 
     scenario_costs = []
@@ -403,6 +411,12 @@ def combined_regents_cost(
         raise ValueError("The ego agent cannot be included in background_vehicle_mask")
     if torch.any(optimized_vehicle_mask & ~background_vehicle_mask):
         raise ValueError("optimized_vehicle_mask must be a subset of background_vehicle_mask")
+    if not torch.all(ego_mask.sum(dim=-1) == 1):
+        raise ValueError("Each scenario must contain exactly one ego agent")
+    if torch.any(ego_mask & candidate_adversary_mask):
+        raise ValueError("The ego agent cannot be a candidate adversary")
+    # One box tensor serves all three terms; each would otherwise rebuild and revalidate it.
+    boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     ego_collision = ego_background_collision_cost(
         states,
         state_valid,
@@ -410,6 +424,7 @@ def combined_regents_cost(
         width_meters,
         ego_mask,
         candidate_adversary_mask,
+        boxes,
     )
     (
         background_collision,
@@ -426,6 +441,7 @@ def combined_regents_cost(
         background_vehicle_mask,
         optimized_vehicle_mask,
         config.background_distance_truncation_meters,
+        boxes,
     )
     drivable_area = drivable_area_deviation_cost(
         states,
@@ -435,6 +451,7 @@ def combined_regents_cost(
         optimized_vehicle_mask,
         out_of_bounds_rasters,
         baseline_corner_potential,
+        boxes,
     )
     total = (
         config.ego_collision_weight * ego_collision

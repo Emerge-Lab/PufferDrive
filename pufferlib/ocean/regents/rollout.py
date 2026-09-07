@@ -1,6 +1,5 @@
 """Authoritative C replay and reactive-controller iteration for ReGentS."""
 
-import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -16,9 +15,7 @@ from pufferlib.ocean.regents.optimizer import (
     ReGentSOptimizationResult,
     capture_frozen_idm_trajectory,
     optimize_frozen_ego_scenario,
-    optimize_frozen_ego_scenarios,
 )
-from pufferlib.ocean.regents.filters import CandidateSelection
 from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
     STATE_HEADING,
@@ -27,7 +24,6 @@ from pufferlib.ocean.regents.state import (
     STATE_X,
     STATE_Y,
     ScenarioBatch,
-    collate_scenarios,
     signed_speed_from_c_velocity,
 )
 
@@ -458,151 +454,4 @@ def run_reactive_idm_generation(
         replay=replay,
         outer_iteration_count=outer_iteration_idx + 1,
         deterministic_seed=deterministic_seed,
-    )
-
-
-def _trim_to_agent_count(result, agent_count):
-    """Drop collation padding so the C replay sees the scenario's own agent count.
-
-    Padding is appended after the real agents, so every recorded agent index stays
-    valid; only the trailing lanes go away.
-    """
-    trimmed_selection = CandidateSelection(
-        **{
-            name: value[:, :agent_count] if isinstance(value, torch.Tensor) and value.ndim >= 2 else value
-            for name, value in vars(result.selection).items()
-        }
-    )
-    return dataclasses.replace(
-        result,
-        initial_actions=result.initial_actions[:, :agent_count],
-        optimized_actions=result.optimized_actions[:, :agent_count],
-        optimized_action_mask=result.optimized_action_mask[:, :agent_count],
-        optimized_states=result.optimized_states[:, :agent_count],
-        state_valid=result.state_valid[:, :agent_count],
-        selection=trimmed_selection,
-    )
-
-
-def _collate_frozen_egos(frozen_egos, scenario_ids):
-    return FrozenEgoTrajectory(
-        state=torch.cat([frozen.state for frozen in frozen_egos]),
-        valid=torch.cat([frozen.valid for frozen in frozen_egos]),
-        scenario_ids=scenario_ids,
-        source=frozen_egos[0].source,
-    )
-
-
-def run_reactive_idm_generation_batch(
-    drives,
-    optimization_config=None,
-    *,
-    deterministic_seeds,
-    horizon_transition_count,
-    maximum_outer_iterations=3,
-    tolerance=C_REPLAY_TOLERANCE,
-    capture_html_frames=False,
-    capture_observations=False,
-    show_progress=True,
-    raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
-):
-    """Optimize several scenarios in one Adam loop, then verify each one in its own C env.
-
-    Only the torch optimization is shared. Capture and replay stay per-Drive, so the
-    C-side contract is untouched. Outer iterations re-collate just the scenarios that
-    still need one, rather than dragging finished scenarios through another pass.
-    """
-    if len(drives) != len(deterministic_seeds):
-        raise ValueError("run_reactive_idm_generation_batch needs one seed per drive")
-    if optimization_config is None:
-        optimization_config = ReGentSOptimizationConfig()
-    for drive in drives:
-        if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
-            raise ValueError("Reactive IDM generation requires sdc_controller='idm' or 'replay'")
-    if any(drive.sdc_controller == binding.CONTROLLER_REPLAY for drive in drives):
-        maximum_outer_iterations = 1
-    if not isinstance(maximum_outer_iterations, int) or maximum_outer_iterations < 1:
-        raise ValueError("maximum_outer_iterations must be a positive integer")
-
-    scenarios = []
-    frozen_egos = []
-    for drive, seed in zip(drives, deterministic_seeds):
-        scenario, frozen_ego = capture_frozen_idm_trajectory(
-            drive,
-            horizon_transition_count,
-            seed=seed,
-            raster_resolution_meters=raster_resolution_meters,
-        )
-        scenarios.append(scenario)
-        frozen_egos.append(frozen_ego)
-
-    live_indices = list(range(len(drives)))
-    optimizations = [None] * len(drives)
-    replays = [None] * len(drives)
-    outer_iteration_counts = [0] * len(drives)
-    previous_actions = [None] * len(drives)
-
-    for outer_iteration_idx in range(maximum_outer_iterations):
-        if not live_indices:
-            break
-        live_scenarios = [scenarios[idx] for idx in live_indices]
-        batch_scenario = collate_scenarios(live_scenarios)
-        batch_frozen = _collate_frozen_egos([frozen_egos[idx] for idx in live_indices], batch_scenario.scenario_ids)
-        inverse_dynamics = estimate_expert_actions(
-            batch_scenario,
-            horizon_transition_count=horizon_transition_count,
-        )
-        batch_results = optimize_frozen_ego_scenarios(
-            batch_scenario,
-            batch_frozen,
-            optimization_config,
-            deterministic_seed=deterministic_seeds[live_indices[0]],
-            horizon_transition_count=horizon_transition_count,
-            show_progress=show_progress,
-            inverse_dynamics=inverse_dynamics,
-        )
-        still_live = []
-        for batch_position, scenario_idx in enumerate(live_indices):
-            optimization = _trim_to_agent_count(batch_results[batch_position], scenarios[scenario_idx].max_agent_count)
-            replay = replay_optimized_scenario_in_c(
-                drives[scenario_idx],
-                scenarios[scenario_idx],
-                optimization,
-                seed=deterministic_seeds[scenario_idx],
-                tolerance=tolerance,
-                capture_html_frames=capture_html_frames,
-                capture_observations=capture_observations,
-            )
-            optimizations[scenario_idx] = optimization
-            replays[scenario_idx] = replay
-            outer_iteration_counts[scenario_idx] = outer_iteration_idx + 1
-            if replay.success:
-                continue
-            if torch.equal(optimization.initial_actions, optimization.optimized_actions):
-                continue
-            if previous_actions[scenario_idx] is not None and torch.equal(
-                previous_actions[scenario_idx], optimization.optimized_actions
-            ):
-                continue
-            previous_actions[scenario_idx] = optimization.optimized_actions.detach().clone()
-            ego_idx = int(torch.where(scenarios[scenario_idx].ego_mask[0])[0].item())
-            source = "c_idm" if drives[scenario_idx].sdc_controller == binding.CONTROLLER_IDM else "c_replay"
-            frozen_egos[scenario_idx] = FrozenEgoTrajectory(
-                state=replay.states[:, ego_idx].detach().clone(),
-                valid=replay.state_valid[:, ego_idx].detach().clone(),
-                scenario_ids=scenarios[scenario_idx].scenario_ids,
-                source=source,
-            )
-            still_live.append(scenario_idx)
-        live_indices = still_live
-
-    return tuple(
-        ReactiveGenerationResult(
-            scenario=scenarios[scenario_idx],
-            optimization=optimizations[scenario_idx],
-            replay=replays[scenario_idx],
-            outer_iteration_count=outer_iteration_counts[scenario_idx],
-            deterministic_seed=deterministic_seeds[scenario_idx],
-        )
-        for scenario_idx in range(len(drives))
     )

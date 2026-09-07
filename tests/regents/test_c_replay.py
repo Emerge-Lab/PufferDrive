@@ -20,6 +20,7 @@ from pufferlib.ocean.regents.generation import (
     render_scenario_replays,
     save_loss_history_csv,
 )
+from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
 from pufferlib.ocean.regents.rollout import (
     C_REPLAY_TOLERANCE,
@@ -83,7 +84,14 @@ def _open_loop_replay(map_idx, seed, iteration_count=5, learning_rate=1e-3):
         scenario = export_drive_scenarios(drive, raster_resolution_meters=5.0)
         optimization = optimize_frozen_ego_scenario(
             scenario,
-            config=ReGentSOptimizationConfig(iteration_count=iteration_count, learning_rate=learning_rate),
+            # This fixture specifically exercises baseline-relative collision accounting.
+            # Its logged overlapping actor is stationary, so opt out of the production
+            # speed gate without weakening that gate for normal generation.
+            config=ReGentSOptimizationConfig(
+                filter=ReGentSFilterConfig(static_speed_threshold_mps=0.0),
+                iteration_count=iteration_count,
+                learning_rate=learning_rate,
+            ),
             deterministic_seed=seed,
             horizon_transition_count=OPEN_LOOP_HORIZON_TRANSITION_COUNT,
         )
@@ -197,7 +205,9 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert result.replay.metrics.first_collision_pair is None
     assert result.optimization.ego_collision_loss_adversary_idx == -1
     assert result.optimization.ego_collision_loss_adversary_id == -1
-    assert result.optimization.selection.candidate_mask.sum() == 3
+    assert result.optimization.selection.candidate_mask.sum() == 1
+    assert result.optimization.selection.reasons_for(0, 20) == ("static",)
+    assert result.optimization.selection.reasons_for(0, 22) == ("static",)
     assert torch.equal(result.optimization.initial_actions, result.optimization.optimized_actions)
     assert result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
     assert 1 <= result.outer_iteration_count <= 3

@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 
 from pufferlib.ocean.drive import binding
@@ -74,6 +75,10 @@ def _linear_track(x_start, y, speed, time_count=6, heading=0.0, dt=0.1):
 
 def test_candidate_selection_records_every_reason_and_its_boundaries():
     """Per-agent reason bits, ego-only original collisions, and the strict rear sector."""
+    assert ReGentSFilterConfig().static_speed_threshold_mps == 0.2
+    with pytest.raises(ValueError, match="static_speed_threshold_mps"):
+        ReGentSFilterConfig(static_speed_threshold_mps=-0.1)
+
     states = torch.stack(
         (
             _linear_track(0.0, 0.0, 2.0),
@@ -165,7 +170,8 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
 
     # Reference validity counts states, even if none form usable transitions.
     # Displacement spans valid endpoints while rear bearings include invalid samples;
-    # horizon does not change selection. Zero reported speed adds no static filter.
+    # horizon does not change selection. Zero reported speed marks a jittering track
+    # static, while the exact speed and displacement thresholds remain inclusive.
     reference_states = torch.stack(
         (
             _linear_track(0.0, 0.0, 2.0),
@@ -177,13 +183,14 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     reference_states[0, 1, :, 3] = 0.0
     reference_states[0, 2, -1, 0] = 10.0
     reference_states[0, 3, -1, 0] = 0.2
+    reference_states[0, 3, :, 3] = 0.2
     reference_valid = torch.ones((1, 4, 6), dtype=torch.bool)
     reference_valid[0, 1, 1::2] = False
     reference_valid[0, 2, :3] = False
     scenario = make_scenario(reference_states, reference_valid)
     full = select_adversary_candidates(scenario)
     short = select_adversary_candidates(scenario, horizon_transition_count=1)
-    assert full.candidate_mask.tolist() == [[False, True, False, True]]
+    assert full.candidate_mask.tolist() == [[False, False, False, True]]
     assert torch.equal(full.candidate_mask, short.candidate_mask)
     assert full.valid_state_fraction[0, 1] == 0.5
     assert full.valid_transition_count[0, 1] == 0
@@ -202,6 +209,8 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     last_valid = reference_valid.shape[-1] - 1 - reference_valid.to(torch.int8).flip(-1).argmax(dim=-1)
     endpoints = torch.stack([position[0, agent, [first_valid[0, agent], last_valid[0, agent]]] for agent in range(4)])
     excluded |= torch.linalg.vector_norm(endpoints[:, 1] - endpoints[:, 0], dim=-1)[None] < 0.2
+    maximum_speed = reference_states[..., 3].abs().masked_fill(~reference_valid, -torch.inf).max(dim=-1).values
+    excluded |= maximum_speed < 0.2
     excluded |= ((angle > 7 * math.pi / 8) | (angle < -7 * math.pi / 8)).float().mean(dim=-1) > 0.8
     excluded |= scenario.ego_mask | ~scenario.vehicle_mask
     assert torch.equal(full.candidate_mask, ~excluded)

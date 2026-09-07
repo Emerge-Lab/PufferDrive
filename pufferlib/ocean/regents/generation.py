@@ -20,7 +20,7 @@ from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig
-from pufferlib.ocean.regents.rollout import run_reactive_idm_generation_batch
+from pufferlib.ocean.regents.rollout import run_reactive_idm_generation
 
 
 METRICS_FILE_NAME = "generation_metrics.csv"
@@ -119,14 +119,12 @@ def load_generation_config(config_path, generation_name):
     capture_observations = selected.get("capture_observations", False)
     if not isinstance(capture_observations, bool):
         raise TypeError("capture_observations must be a boolean")
-    batch_size = _require_positive_int(selected.get("batch_size", 1), "batch_size")
 
     resolved = {
         "name": generation_name,
         "seed": _require_positive_int(selected.get("seed"), "seed"),
         "scenario_count": _require_positive_int(selected.get("scenario_count"), "scenario_count"),
         "num_workers": num_workers,
-        "batch_size": batch_size,
         "horizon_transition_count": _require_positive_int(
             selected.get("horizon_transition_count"), "horizon_transition_count"
         ),
@@ -151,8 +149,9 @@ def load_generation_config(config_path, generation_name):
                 f"Generation {generation_name}: horizon_transition_count={horizon} must be below "
                 f"env.{name}={int(limit)}. Set env.{name} to at least {horizon + 1} for this generation."
             )
-    if resolved["scenario_count"] > int(environment.get("num_maps", 0)):
-        raise ValueError("scenario_count exceeds the configured num_maps")
+    # Generation indexes one map per scenario, so the map budget is the scenario count.
+    # Deriving it here keeps the two from drifting apart in the config.
+    environment["num_maps"] = resolved["scenario_count"]
     return resolved
 
 
@@ -319,21 +318,17 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
     }
 
 
-def _generate_scenario_batch(task):
-    """Generate, C-verify, and persist one batch of scenarios. Runs in-process or spawned.
-
-    The batch shares a single Adam loop; each scenario keeps its own Drive, so the C
-    capture and replay contracts are per-scenario as before.
-    """
+def _generate_scenario(task):
+    """Generate, C-verify, and persist one scenario. Runs in-process or spawned."""
     import traceback
     import torch
 
     (
-        scenario_indices,
+        scenario_idx,
         generation,
         optimization_config,
         destination,
-        map_paths,
+        map_path,
         env_config,
         render_replays,
         show_progress,
@@ -341,17 +336,15 @@ def _generate_scenario_batch(task):
     ) = task
     if worker_torch_thread_count is not None:
         torch.set_num_threads(worker_torch_thread_count)
-    seeds = [generation["seed"] + scenario_idx for scenario_idx in scenario_indices]
+    seed = generation["seed"] + scenario_idx
     try:
-        drives = [
-            _build_drive(generation["env"], scenario_idx, seed) for scenario_idx, seed in zip(scenario_indices, seeds)
-        ]
+        drive = _build_drive(generation["env"], scenario_idx, seed)
         started_at = time.perf_counter()
         try:
-            results = run_reactive_idm_generation_batch(
-                drives,
+            result = run_reactive_idm_generation(
+                drive,
                 optimization_config,
-                deterministic_seeds=seeds,
+                deterministic_seed=seed,
                 horizon_transition_count=generation["horizon_transition_count"],
                 maximum_outer_iterations=generation["maximum_outer_iterations"],
                 capture_html_frames=render_replays,
@@ -360,58 +353,23 @@ def _generate_scenario_batch(task):
                 raster_resolution_meters=generation["raster_resolution_meters"],
             )
         finally:
-            for drive in drives:
-                drive.close()
-        # One shared loop, so per-scenario wall clock is only meaningful as a batch share.
-        elapsed_seconds = (time.perf_counter() - started_at) / len(scenario_indices)
+            drive.close()
+        elapsed_seconds = time.perf_counter() - started_at
         npz_dir = Path(destination) / "npz"
         npz_dir.mkdir(parents=True, exist_ok=True)
-        rows = []
-        rendered_files = {}
-        for scenario_idx, seed, map_path, result in zip(scenario_indices, seeds, map_paths, results):
-            artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
-            save_generation_artifact(artifact_path, result, generation, str(map_path))
-            save_loss_history_csv(destination, scenario_idx, result)
-            rows.append(_metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path))
-            if render_replays:
-                rendered_files.update(render_scenario_replays(destination, scenario_idx, result, env_config))
-        return scenario_indices, rows, rendered_files
+        artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
+        save_generation_artifact(artifact_path, result, generation, str(map_path))
+        save_loss_history_csv(destination, scenario_idx, result)
+        row = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
+        rendered_files = (
+            render_scenario_replays(destination, scenario_idx, result, env_config) if render_replays else {}
+        )
+        return scenario_idx, row, rendered_files
     except Exception:
         # A spawned worker only ships the exception repr back, so log the real traceback here.
-        print(f"\n[ERROR] Generation failed for scenarios {list(scenario_indices)}:")
+        print(f"\n[ERROR] Generation failed for scenario {scenario_idx}:")
         traceback.print_exc()
         raise
-
-
-def _scenario_agent_count(environment, scenario_idx, seed):
-    """Probe one map's agent count. Building a Drive and reading its state costs ~11 ms."""
-    drive = _build_drive(environment, scenario_idx, seed)
-    try:
-        payload = drive.get_state()
-        scenario = payload[0] if isinstance(payload, list) else payload
-        return int(scenario["num_total_agents"])
-    finally:
-        drive.close()
-
-
-def _agent_count_ordered_batches(generation, batch_size):
-    """Group scenarios of similar size together.
-
-    Collation pads every scenario in a batch up to the batch's agent count, so mixing a
-    3-agent scene with a 326-agent one makes the small one 100x more expensive than it
-    needs to be. Ordering by agent count first keeps padding waste near the floor;
-    ties break on index so the grouping stays deterministic.
-    """
-    scenario_count = generation["scenario_count"]
-    if batch_size == 1:
-        return [(scenario_idx,) for scenario_idx in range(scenario_count)]
-    counts = [
-        (_scenario_agent_count(generation["env"], scenario_idx, generation["seed"] + scenario_idx), scenario_idx)
-        for scenario_idx in range(scenario_count)
-    ]
-    counts.sort()
-    ordered = [scenario_idx for _, scenario_idx in counts]
-    return [tuple(ordered[start : start + batch_size]) for start in range(0, scenario_count, batch_size)]
 
 
 def generate_regents_scenarios(config_path, generation_name, output_dir=None):
@@ -434,50 +392,40 @@ def generate_regents_scenarios(config_path, generation_name, output_dir=None):
     num_workers = generation["num_workers"]
     if num_workers == "auto":
         num_workers = os.cpu_count() or 1
-    # Batching only pays once every worker still has a batch: a batch too large leaves
-    # cores idle, which costs far more than the per-iteration overhead it saves.
-    batch_size = max(1, min(generation["batch_size"], generation["scenario_count"] // num_workers))
-    if batch_size != generation["batch_size"]:
-        print(
-            f"Clamping batch_size {generation['batch_size']} to {batch_size} so all "
-            f"{num_workers} workers keep a batch across {generation['scenario_count']} scenarios"
-        )
-    scenario_batches = _agent_count_ordered_batches(generation, batch_size)
-    num_workers = min(num_workers, len(scenario_batches))
+    num_workers = min(num_workers, generation["scenario_count"])
     tasks = [
         (
-            scenario_indices,
+            scenario_idx,
             generation,
             optimization_config,
             destination,
-            [map_paths[scenario_idx] for scenario_idx in scenario_indices],
+            map_paths[scenario_idx],
             env_config,
             render_replays,
             num_workers <= 1,
             1 if num_workers > 1 else None,
         )
-        for scenario_indices in scenario_batches
+        for scenario_idx in range(generation["scenario_count"])
     ]
 
     if num_workers <= 1:
         pool = None
-        completions = map(_generate_scenario_batch, tasks)
+        completions = map(_generate_scenario, tasks)
         description = "Generating scenarios"
     else:
         pool = multiprocessing.get_context("spawn").Pool(processes=num_workers)
-        completions = pool.imap_unordered(_generate_scenario_batch, tasks)
+        completions = pool.imap_unordered(_generate_scenario, tasks)
         description = "Generating scenarios (parallel)"
 
     success_count = 0
     completed_count = 0
     try:
         pbar = tqdm(completions, total=len(tasks), desc=description)
-        for scenario_indices, batch_rows, scenario_rendered in pbar:
+        for scenario_idx, row, scenario_rendered in pbar:
             rendered_files.update(scenario_rendered)
-            for scenario_idx, row in zip(scenario_indices, batch_rows):
-                rows[scenario_idx] = row
-                completed_count += 1
-                success_count += int(row["generation_success"])
+            rows[scenario_idx] = row
+            completed_count += 1
+            success_count += int(row["generation_success"])
             pbar.set_postfix(success=f"{success_count / completed_count:.1%}")
     finally:
         if pool is not None:

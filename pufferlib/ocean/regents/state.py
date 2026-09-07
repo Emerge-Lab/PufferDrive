@@ -88,96 +88,12 @@ class DrivableAreaRaster:
         return moved_to_device(self, device)
 
 
-_GEOMETRY_FIELDS = frozenset(
-    (
-        "logged_length_meters",
-        "logged_width_meters",
-        "length_meters",
-        "width_meters",
-        "wheelbase_meters",
-        "maximum_speed_mps",
-    )
-)
-# The only fields carrying a time axis; the rest are [batch, agent] or [batch, agent, feature].
-_TIME_FIELDS = frozenset(
-    (
-        "logged_state",
-        "state_valid",
-        "state_feature_valid",
-        "transition_valid",
-        "logged_length_meters",
-        "logged_width_meters",
-    )
-)
-# Padded agent ids must not collide with a real id.
-INVALID_PAD_VALUES = {"agent_id": -1}
-AGENT_DIMENSION = 1
-TIME_DIMENSION = 2
-# A padded agent is never valid, so its geometry is inert; ones keep the divisions
-# and box math finite rather than producing inf or NaN in masked-out lanes.
-PAD_GEOMETRY_METERS = 1.0
-
-
-def _pad_trailing(tensor, dimension, target, value):
-    if tensor.shape[dimension] == target:
-        return tensor
-    padding = [0] * (2 * tensor.ndim)
-    # torch.nn.functional.pad reads dimensions back to front, two entries each.
-    padding[2 * (tensor.ndim - 1 - dimension) + 1] = target - tensor.shape[dimension]
-    return torch.nn.functional.pad(tensor, padding, value=value)
-
-
-def collate_scenarios(scenarios):
-    """Pad and stack single-scenario batches into one batch for a shared optimization.
-
-    Agent and time counts differ per scenario, so both are padded to the batch
-    maximum; padded lanes carry invalid masks and are therefore ignored by every
-    consumer. Scalar timing fields must already agree, since one batch runs under a
-    single dt and horizon.
-    """
-    if not isinstance(scenarios, (tuple, list)) or not scenarios:
-        raise ValueError("collate_scenarios needs a non-empty sequence of ScenarioBatch")
-    if any(item.batch_size != 1 for item in scenarios):
-        raise ValueError("collate_scenarios takes single-scenario batches")
-    first = scenarios[0]
-    for item in scenarios[1:]:
-        if item.dt_seconds != first.dt_seconds or item.init_step != first.init_step:
-            raise ValueError("Collated scenarios must share dt_seconds and init_step")
-        if item.scenario_length != first.scenario_length:
-            raise ValueError("Collated scenarios must share scenario_length")
-        if item.device != first.device:
-            raise ValueError("Collated scenarios must share a device")
-    agent_count = max(item.max_agent_count for item in scenarios)
-    time_count = max(item.max_time_count for item in scenarios)
-
-    padded_fields = {}
-    for name, value in vars(first).items():
-        if not isinstance(value, torch.Tensor):
-            continue
-        if name == "log_dt_seconds":
-            padded_fields[name] = torch.cat([item.log_dt_seconds for item in scenarios])
-            continue
-        pad_value = PAD_GEOMETRY_METERS if name in _GEOMETRY_FIELDS else INVALID_PAD_VALUES.get(name, 0)
-        rows = []
-        for item in scenarios:
-            tensor = _pad_trailing(getattr(item, name), AGENT_DIMENSION, agent_count, pad_value)
-            if name in _TIME_FIELDS:
-                target = time_count - 1 if name == "transition_valid" else time_count
-                tensor = _pad_trailing(tensor, TIME_DIMENSION, target, pad_value)
-            rows.append(tensor)
-        padded_fields[name] = torch.cat(rows, dim=0)
-    return replace(
-        first,
-        **padded_fields,
-        scenario_ids=tuple(item.scenario_ids[0] for item in scenarios),
-        dataset_names=tuple(item.dataset_names[0] for item in scenarios),
-        drivable_area_rasters=tuple(item.drivable_area_rasters[0] for item in scenarios),
-    )
-
-
 @dataclass(frozen=True)
 class ScenarioBatch:
-    """Validated, padded batch exported from one vectorized Drive instance.
+    """Validated single scenario exported from one vectorized Drive instance.
+
+    Every tensor keeps a leading batch dimension of one so the cost and filter
+    functions stay batch-shaped.
 
     ``logged_state`` has five features. The logged files do not contain
     steering, so that channel is zero and ``state_feature_valid[..., 4]`` is

@@ -35,11 +35,6 @@ generations:
     seed: 42
     scenario_count: 100
     num_workers: 24
-    # Scenarios in a batch share one Adam loop. Worth raising only when workers are
-    # well below core count: batching cuts a single worker's time (8 scenarios at 100
-    # iterations: 99s -> 73s) but costs 27% more CPU per scenario once 24 workers
-    # contend, so 24-worker runs are fastest at 1.
-    batch_size: 1
     horizon_transition_count: 100
     maximum_outer_iterations: 1
     raster_resolution_meters: 0.5
@@ -49,8 +44,10 @@ generations:
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
+      filter:
+        # NuPlan parked tracks can have >0.2 m of position jitter at exactly zero speed.
+        static_speed_threshold_mps: 0.2
     env:
-      num_maps: 100
       scenario_length: 101
       resample_frequency: 101
       sdc_controller: replay
@@ -61,7 +58,6 @@ generations:
     seed: 42
     scenario_count: 16
     num_workers: 16
-    batch_size: 1
     horizon_transition_count: 200
     maximum_outer_iterations: 3
     raster_resolution_meters: 0.5
@@ -71,15 +67,15 @@ generations:
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
+      filter:
+        static_speed_threshold_mps: 0.2
     env:
-      num_maps: 16
       scenario_length: 201
       resample_frequency: 201
 
   - name: regents_nuplan_smoke
     seed: 42
     scenario_count: 2
-    batch_size: 2
     num_workers: 1
     horizon_transition_count: 50
     maximum_outer_iterations: 2
@@ -90,5 +86,5 @@ generations:
     optimizer:
       learning_rate: 0.001
       iteration_count: 20
-    env:
-      num_maps: 2
+      filter:
+        static_speed_threshold_mps: 0.2

@@ -27,7 +27,9 @@ MAX_TRAJECTORY_TIMESTEP_COUNT = 9_999
 MAX_BATCH_STATE_COUNT = 25_000_000
 MAX_RASTER_PIXEL_COUNT = 25_000_000
 MAX_ROAD_POINT_COUNT = 99_999
-RASTER_QUERY_CHUNK_PIXEL_COUNT = 32_768
+# Coarse cell edge, in pixels, for the nearest-road-edge search. Larger cells make the
+# coarse pass cheaper but widen each cell's candidate set; 16 keeps both small.
+NEAREST_EDGE_CELL_PIXEL_COUNT = 16
 LANE_CENTERLINE_TYPES = frozenset((binding.ROAD_TYPE_LANE_FREEWAY, binding.ROAD_TYPE_LANE_SURFACE_STREET))
 ROAD_EDGE_TYPES = frozenset(
     (
@@ -180,6 +182,44 @@ def _road_edge_polylines(scenario):
     return edge_points, edge_directions, edge_polyline_ids
 
 
+def _nearest_edge_candidate_cells(transform, edge_points):
+    """Per coarse cell, the edge points that can be nearest to any pixel inside it.
+
+    For a pixel offset from its cell centre by at most half the cell diagonal, the
+    nearest edge point is no further than the centre's nearest distance plus one cell
+    diagonal, so that radius bounds the whole cell's candidate set. Searching only those
+    turns the per-pixel scan from every edge point into a few dozen without changing the
+    answer. Candidates stay in ascending edge-point order so an argmin over them breaks
+    ties on the lowest index, exactly as a scan over all points would.
+    """
+    resolution = transform.resolution_meters_per_pixel
+    cell_meters = NEAREST_EDGE_CELL_PIXEL_COUNT * resolution
+    cell_column_count = math.ceil(transform.width / NEAREST_EDGE_CELL_PIXEL_COUNT)
+    cell_row_count = math.ceil(transform.height / NEAREST_EDGE_CELL_PIXEL_COUNT)
+    centre_offset_meters = 0.5 * (NEAREST_EDGE_CELL_PIXEL_COUNT - 1) * resolution
+    centre_x = torch.arange(cell_column_count, dtype=torch.float32) * cell_meters
+    centre_x += transform.origin_x_m + centre_offset_meters
+    centre_y = torch.arange(cell_row_count, dtype=torch.float32) * cell_meters
+    centre_y += transform.origin_y_m + centre_offset_meters
+    centres = torch.stack(
+        (
+            centre_x[None, :].expand(cell_row_count, cell_column_count),
+            centre_y[:, None].expand(cell_row_count, cell_column_count),
+        ),
+        dim=-1,
+    ).reshape(-1, 2)
+
+    centre_distance = torch.cdist(centres, edge_points)
+    cell_diagonal_meters = math.sqrt(2.0) * cell_meters
+    within_bound = centre_distance <= (centre_distance.min(dim=-1).values + cell_diagonal_meters)[:, None]
+    candidate_count = int(within_bound.sum(dim=-1).max().item())
+    ordering = torch.argsort((~within_bound).to(torch.uint8), dim=-1, stable=True)[:, :candidate_count]
+    candidate_valid = torch.gather(within_bound, 1, ordering)
+    # Padding columns repeat the cell's first candidate; the validity mask discards them.
+    candidate_idx = torch.where(candidate_valid, ordering, ordering[:, :1])
+    return candidate_idx, candidate_valid, cell_row_count, cell_column_count
+
+
 def _road_edge_interior_mask(scenario, transform):
     """Mark pixels inside the road edges with the reference signed-distance test.
 
@@ -189,24 +229,42 @@ def _road_edge_interior_mask(scenario, transform):
     the pixel is judged against the edge that actually faces it.
     """
     edge_points, edge_directions, edge_polyline_ids = _road_edge_polylines(scenario)
+    candidate_idx, candidate_valid, cell_row_count, cell_column_count = _nearest_edge_candidate_cells(
+        transform, edge_points
+    )
     resolution = transform.resolution_meters_per_pixel
     pixel_x = torch.arange(transform.width, dtype=torch.float32) * resolution + transform.origin_x_m
     pixel_y = torch.arange(transform.height, dtype=torch.float32) * resolution + transform.origin_y_m
+    cell_of_column = torch.arange(transform.width) // NEAREST_EDGE_CELL_PIXEL_COUNT
     interior = torch.empty((transform.height, transform.width), dtype=torch.bool)
-    rows_per_chunk = max(1, RASTER_QUERY_CHUNK_PIXEL_COUNT // transform.width)
-    for row_start in range(0, transform.height, rows_per_chunk):
-        row_end = min(row_start + rows_per_chunk, transform.height)
-        chunk_x = pixel_x[None, :].expand(row_end - row_start, transform.width)
-        chunk_y = pixel_y[row_start:row_end, None].expand(row_end - row_start, transform.width)
-        query_xy = torch.stack((chunk_x, chunk_y), dim=-1).reshape(-1, 2)
-        nearest_idx = torch.cdist(query_xy, edge_points).argmin(dim=-1)
+    for cell_row in range(cell_row_count):
+        row_start = cell_row * NEAREST_EDGE_CELL_PIXEL_COUNT
+        row_end = min(row_start + NEAREST_EDGE_CELL_PIXEL_COUNT, transform.height)
+        row_count = row_end - row_start
+        query_xy = torch.stack(
+            (
+                pixel_x[None, :].expand(row_count, transform.width),
+                pixel_y[row_start:row_end, None].expand(row_count, transform.width),
+            ),
+            dim=-1,
+        )
+        column_cell_idx = cell_row * cell_column_count + cell_of_column
+        column_candidates = candidate_idx[column_cell_idx]
+        column_valid = candidate_valid[column_cell_idx]
+        offset_to_candidates = query_xy[:, :, None, :] - edge_points[column_candidates][None]
+        squared_distance = offset_to_candidates.square().sum(dim=-1).masked_fill(~column_valid[None], math.inf)
+        nearest_idx = torch.gather(
+            column_candidates[None].expand(row_count, -1, -1),
+            2,
+            squared_distance.argmin(dim=-1, keepdim=True),
+        ).squeeze(-1)
         prior_idx = torch.clamp(nearest_idx - 1, min=0)
         point_to_edge = query_xy - edge_points[nearest_idx]
         nearest_cross = _cross_product_2d(point_to_edge, edge_directions[nearest_idx])
         prior_cross = _cross_product_2d(point_to_edge, edge_directions[prior_idx])
         same_polyline = edge_polyline_ids[nearest_idx] == edge_polyline_ids[prior_idx]
         facing_cross = torch.where(same_polyline & (prior_cross < nearest_cross), prior_cross, nearest_cross)
-        interior[row_start:row_end] = (facing_cross <= 0.0).reshape(row_end - row_start, transform.width)
+        interior[row_start:row_end] = facing_cross <= 0.0
     return interior
 
 
