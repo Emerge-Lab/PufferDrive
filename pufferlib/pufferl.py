@@ -1449,7 +1449,9 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
             "obs_dropout_lane",
             "obs_slots_partners_n",
             "obs_slots_traffic_controls_n",
-            "traffic_control_scope",
+            "traffic_lights_enabled",
+            "stop_signs_enabled",
+            "yield_signs_enabled",
         }
         if os.path.exists(config_yaml_path):
             print(f"Found config.yaml at {config_yaml_path}. Merging with defaults...")

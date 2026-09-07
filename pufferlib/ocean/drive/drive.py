@@ -44,6 +44,7 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
+        stop_sign_behavior="ignore",
         use_map_cache=False,
         preload_map_cache=False,
         use_neighbor_cache=True,
@@ -98,7 +99,9 @@ class Drive(pufferlib.PufferEnv):
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
-        traffic_control_scope=0,
+        traffic_lights_enabled=True,
+        stop_signs_enabled=False,
+        yield_signs_enabled=False,
         starting_map=0,
         obs_norm_speed_mps=60.0,
         obs_norm_goal_offset_m=100.0,
@@ -171,6 +174,7 @@ class Drive(pufferlib.PufferEnv):
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
+        self.stop_sign_behavior = infraction_behavior_values[stop_sign_behavior]
         self.use_map_cache = bool(use_map_cache)
         self.preload_map_cache = bool(preload_map_cache)
         if self.preload_map_cache and not self.use_map_cache:
@@ -215,7 +219,9 @@ class Drive(pufferlib.PufferEnv):
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
-        self.traffic_control_scope = traffic_control_scope
+        self.traffic_lights_enabled = traffic_lights_enabled
+        self.stop_signs_enabled = stop_signs_enabled
+        self.yield_signs_enabled = yield_signs_enabled
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
         self.obs_norm_goal_offset_m = float(obs_norm_goal_offset_m)
@@ -448,6 +454,7 @@ class Drive(pufferlib.PufferEnv):
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "stop_sign_behavior": self.stop_sign_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
@@ -463,7 +470,9 @@ class Drive(pufferlib.PufferEnv):
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
-            "traffic_control_scope": self.traffic_control_scope,
+            "traffic_lights_enabled": self.traffic_lights_enabled,
+            "stop_signs_enabled": self.stop_signs_enabled,
+            "yield_signs_enabled": self.yield_signs_enabled,
             "dt": self.dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,

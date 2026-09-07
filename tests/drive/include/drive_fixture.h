@@ -71,6 +71,7 @@ static inline Drive drive_test_env_config(
     env.collision_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.offroad_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.traffic_light_behavior = INFRACTION_BEHAVIOR_IGNORE;
+    env.stop_sign_behavior = INFRACTION_BEHAVIOR_IGNORE;
     env.use_map_cache = use_map_cache;
     env.goal_radius = 2.0f;
     env.goal_speed = 3.0f;
@@ -86,7 +87,9 @@ static inline Drive drive_test_env_config(
     env.obs_slots_boundary_kept = 32;
     env.obs_slots_partners_n = 16;
     env.obs_slots_traffic_controls_n = 4;
-    env.traffic_control_scope = TRAFFIC_CONTROL_SCOPE_TRAFFIC_LIGHTS;
+    env.traffic_lights_enabled = 1;
+    env.stop_signs_enabled = 0;
+    env.yield_signs_enabled = 0;
     env.dt = 0.1f;
     env.base_max_speed_mps = 20.0f;
     env.spawn_initial_speed = 0.0f;

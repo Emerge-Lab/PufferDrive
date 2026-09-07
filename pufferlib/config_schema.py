@@ -238,6 +238,10 @@ class DriveEnvConfig:
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING
+    stop_sign_behavior: InfractionBehavior = MISSING
+    traffic_lights_enabled: bool = MISSING
+    stop_signs_enabled: bool = MISSING
+    yield_signs_enabled: bool = MISSING
     use_map_cache: bool = MISSING
     preload_map_cache: bool = MISSING
     use_neighbor_cache: bool = MISSING
