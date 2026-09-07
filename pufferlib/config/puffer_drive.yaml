@@ -339,6 +339,8 @@ eval:
   # Render scenarios where any configured metric is positive.
   # Use all_infractions for every infraction type; null disables it.
   render_filter: null
+  # Options: first | target_collision_stratified
+  render_selection: first
   # Maximum failures rendered per benchmark; null renders every failure.
   max_rendered_failures: null
   # Existing episode metrics CSV to replay without running the benchmark first.

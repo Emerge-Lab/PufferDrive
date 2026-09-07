@@ -256,6 +256,11 @@ class ActionSelection(Enum):
     mean = 2
 
 
+class RenderSelection(Enum):
+    first = 0
+    target_collision_stratified = 1
+
+
 @dataclass
 class VectorConfig:
     backend: VectorBackend = MISSING
@@ -485,6 +490,7 @@ class EvaluationConfig:
     output_dir_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     render_scenarios: bool = MISSING
     render_filter: Any = MISSING
+    render_selection: RenderSelection = MISSING
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     failure_replay_csv: str | None = MISSING
     capture_observations: bool = MISSING

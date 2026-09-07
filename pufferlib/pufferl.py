@@ -2509,9 +2509,12 @@ def _render_eval_failures(
     evaluation_policy_cache=None,
 ):
     configured_render_filter = run_args["eval"]["render_filter"]
-    selected_rows = drive_benchmark.select_render_rows(metrics_path, configured_render_filter)
-    if max_rendered_failures is not None:
-        selected_rows = selected_rows.head(max_rendered_failures).copy()
+    selected_rows = drive_benchmark.select_render_rows(
+        metrics_path,
+        configured_render_filter,
+        run_args["eval"]["render_selection"],
+        max_rendered_failures,
+    )
     failures_dir = os.path.join(benchmark_output_dir, "failures")
     os.makedirs(failures_dir, exist_ok=True)
     selected_path = os.path.join(failures_dir, "selected_failures.csv")

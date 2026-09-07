@@ -25,6 +25,13 @@ FAILURE_RENDER_FILTER_COLUMNS = (
     "offroad_rate",
     "red_light_violation_rate",
 )
+TARGET_COLLISION_STRATA = (
+    ("genuine_failure", "sdc_target_collision_genuine_failure_rate"),
+    ("adversary_forced", "sdc_target_collision_adversary_forced_rate"),
+    ("unavoidable", "sdc_target_collision_unavoidable_rate"),
+)
+UNCLASSIFIED_TARGET_COLLISION_STRATUM = "unclassified"
+TARGET_COLLISION_SELECTION_SEED = 42
 
 
 def _require_mapping(value, label):
@@ -386,7 +393,7 @@ def parse_render_filter_columns(configured_render_filter):
     return tuple(dict.fromkeys(resolved_render_filter_columns))
 
 
-def select_render_rows(metrics_path, configured_render_filter):
+def select_render_rows(metrics_path, configured_render_filter, render_selection="first", max_rows=None):
     """Select rows where any configured render metric is greater than zero."""
     if not os.path.isfile(metrics_path):
         raise pufferlib.APIUsageError(f"Benchmark metrics CSV not found: {metrics_path}")
@@ -400,4 +407,37 @@ def select_render_rows(metrics_path, configured_render_filter):
     selected = pd.Series(False, index=rows.index)
     for column in render_filter_columns:
         selected |= rows[column] > 0
-    return rows[selected].copy()
+    selected_rows = rows[selected].copy()
+    if render_selection == "first":
+        return selected_rows if max_rows is None else selected_rows.head(max_rows).copy()
+
+    classifier_columns = [column for _, column in TARGET_COLLISION_STRATA]
+    missing_columns = [column for column in classifier_columns if column not in selected_rows.columns]
+    if missing_columns:
+        raise pufferlib.APIUsageError(
+            f"Benchmark metrics CSV is missing target-collision classifier columns: {', '.join(missing_columns)}"
+        )
+
+    selected_rows["collision_stratum"] = UNCLASSIFIED_TARGET_COLLISION_STRATUM
+    for stratum, column in TARGET_COLLISION_STRATA:
+        selected_rows.loc[selected_rows[column] > 0, "collision_stratum"] = stratum
+    if max_rows is None or len(selected_rows) <= max_rows:
+        return selected_rows
+
+    rng = np.random.default_rng(TARGET_COLLISION_SELECTION_SEED)
+    strata = [stratum for stratum, _ in TARGET_COLLISION_STRATA]
+    strata.append(UNCLASSIFIED_TARGET_COLLISION_STRATUM)
+    quota, remainder = divmod(max_rows, len(strata))
+    selected_indices = []
+    for stratum_idx, stratum in enumerate(strata):
+        stratum_indices = selected_rows.index[selected_rows["collision_stratum"] == stratum].to_numpy(copy=True)
+        rng.shuffle(stratum_indices)
+        stratum_quota = quota + (1 if stratum_idx < remainder else 0)
+        selected_indices.extend(stratum_indices[:stratum_quota].tolist())
+
+    missing_count = max_rows - len(selected_indices)
+    if missing_count:
+        remaining_indices = selected_rows.index[~selected_rows.index.isin(selected_indices)].to_numpy(copy=True)
+        rng.shuffle(remaining_indices)
+        selected_indices.extend(remaining_indices[:missing_count].tolist())
+    return selected_rows.loc[selected_indices].copy()
