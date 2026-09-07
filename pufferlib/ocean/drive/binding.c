@@ -1602,6 +1602,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int starting_map_counter = unpack(kwargs, "starting_map_counter");
     int eval_mode = unpack(kwargs, "eval_mode");
     int eval_training_render = unpack(kwargs, "eval_training_render");
+    int eval_agent_count_mode = unpack(kwargs, "eval_agent_count_mode");
+    PyObject *eval_agent_counts = PyDict_GetItemString(kwargs, "eval_agent_counts");
+    int use_eval_agent_counts = eval_agent_counts != NULL && eval_agent_counts != Py_None;
     int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
@@ -1652,6 +1655,18 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "eval_training_render requires num_agents >= max_agents_per_env");
         return NULL;
     }
+    if (eval_agent_count_mode < EVAL_AGENT_COUNT_MODE_FIXED || eval_agent_count_mode > EVAL_AGENT_COUNT_MODE_RANDOM) {
+        PyErr_SetString(PyExc_ValueError, "invalid eval_agent_count_mode");
+        return NULL;
+    }
+    if (use_eval_agent_counts && !PyList_Check(eval_agent_counts)) {
+        PyErr_SetString(PyExc_TypeError, "eval_agent_counts must be a list of integers");
+        return NULL;
+    }
+    if (use_eval_agent_counts && PyList_Size(eval_agent_counts) < eval_target_count) {
+        PyErr_SetString(PyExc_ValueError, "eval_agent_counts must cover every requested evaluation scenario");
+        return NULL;
+    }
 
     Rng shared_rng;
     rng_seed(&shared_rng, seed);
@@ -1659,23 +1674,54 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         if (eval_mode && !eval_training_render) {
-            // Eval mode: fixed agent count, sequential map cycling
-            int agents_per_env = max_agents_per_env;
-            int env_count = num_agents / agents_per_env;
-            env_count = env_count > eval_target_count ? eval_target_count : env_count;
-
-            PyObject *agent_offsets = PyList_New(env_count + 1);
-            PyObject *map_ids_list = PyList_New(env_count);
-
+            PyObject *agent_offsets = PyList_New(eval_target_count + 1);
+            PyObject *map_ids_list = PyList_New(eval_target_count);
             int offset = 0;
-            for (int i = 0; i < env_count; i++) {
-                int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
-                                                  : (s_map_counter + i) % num_maps;
-                PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-                PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
+            int env_count = 0;
+            while (env_count < eval_target_count) {
+                int agents_per_env = max_agents_per_env;
+                if (use_eval_agent_counts) {
+                    PyObject *agent_count = PyList_GetItem(eval_agent_counts, env_count);
+                    if (!PyLong_Check(agent_count)) {
+                        PyErr_Format(PyExc_TypeError, "eval_agent_counts[%d] must be an integer", env_count);
+                        Py_DECREF(agent_offsets);
+                        Py_DECREF(map_ids_list);
+                        return NULL;
+                    }
+                    agents_per_env = (int) PyLong_AsLong(agent_count);
+                    if (agents_per_env < min_agents_per_env || agents_per_env > max_agents_per_env) {
+                        PyErr_Format(
+                            PyExc_ValueError,
+                            "eval_agent_counts[%d]=%d out of range [%d, %d]",
+                            env_count,
+                            agents_per_env,
+                            min_agents_per_env,
+                            max_agents_per_env);
+                        Py_DECREF(agent_offsets);
+                        Py_DECREF(map_ids_list);
+                        return NULL;
+                    }
+                } else if (eval_agent_count_mode == EVAL_AGENT_COUNT_MODE_RANDOM) {
+                    int range = max_agents_per_env - min_agents_per_env + 1;
+                    agents_per_env = min_agents_per_env + rng_below(&shared_rng, range);
+                }
+                if (offset + agents_per_env > num_agents) {
+                    break;
+                }
+                int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count))
+                                                  : (s_map_counter + env_count) % num_maps;
+                PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
+                PyList_SetItem(map_ids_list, env_count, PyLong_FromLong(map_id));
                 offset += agents_per_env;
+                env_count++;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
+            if (PyList_SetSlice(agent_offsets, env_count + 1, eval_target_count + 1, NULL) != 0
+                || PyList_SetSlice(map_ids_list, env_count, eval_target_count, NULL) != 0) {
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids_list);
+                return NULL;
+            }
 
             PyObject *tuple = PyTuple_New(3);
             PyTuple_SetItem(tuple, 0, agent_offsets);

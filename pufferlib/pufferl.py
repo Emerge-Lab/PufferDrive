@@ -2525,14 +2525,15 @@ def _render_eval_failures(
         selected_rows["map_name"].tolist(),
     )
     seeds = pd.to_numeric(selected_rows["seed"], errors="raise").astype(np.int64).tolist()
-    pairs = list(zip(map_indices, seeds))
+    agent_counts = pd.to_numeric(selected_rows["active_agent_count"], errors="raise").astype(int).tolist()
+    scenarios = list(zip(map_indices, seeds, agent_counts))
     failure_args = copy.deepcopy(run_args)
     configured_worker_count = failure_args["vec"]["num_envs"]
-    replay_wave_size = len(pairs)
+    replay_wave_size = len(scenarios)
     if capture_observations:
         observation_replay_wave_size = run_args["eval"]["observation_replay_wave_size"]
         replay_wave_size = min(
-            len(pairs),
+            len(scenarios),
             configured_worker_count,
             observation_replay_wave_size,
         )
@@ -2545,14 +2546,14 @@ def _render_eval_failures(
         raise pufferlib.APIUsageError("Benchmark failure rows must contain exactly one agents_per_batch value")
     recorded_agents_per_batch = int(agents_per_batch_values[0])
     summaries = []
-    replay_wave_count = (len(pairs) + replay_wave_size - 1) // replay_wave_size
-    for replay_wave_idx, replay_pair_start in enumerate(range(0, len(pairs), replay_wave_size)):
-        replay_pairs = pairs[replay_pair_start : replay_pair_start + replay_wave_size]
-        num_workers = min(configured_worker_count, len(replay_pairs))
+    replay_wave_count = (len(scenarios) + replay_wave_size - 1) // replay_wave_size
+    for replay_wave_idx, replay_pair_start in enumerate(range(0, len(scenarios), replay_wave_size)):
+        replay_scenarios = scenarios[replay_pair_start : replay_pair_start + replay_wave_size]
+        num_workers = min(configured_worker_count, len(replay_scenarios))
         failure_args["vec"]["num_envs"] = num_workers
         worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
             failure_args,
-            replay_pairs,
+            replay_scenarios,
             num_workers,
             failure_args["env"]["scenario_length"],
         )
@@ -2565,7 +2566,7 @@ def _render_eval_failures(
             worker_env_kwargs,
             total_steps,
             replay_desc,
-            len(replay_pairs),
+            len(replay_scenarios),
             policy=policy,
             recorded_agents_per_batch=recorded_agents_per_batch,
             replay_output_dir=replay_output_dir,
@@ -2574,7 +2575,7 @@ def _render_eval_failures(
             evaluation_policy_cache=evaluation_policy_cache,
         )
         summaries.extend(wave_summaries)
-    summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
+    summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(scenarios))
     drive_eval_replay._render_eval_replays(summaries, failures_dir)
     return {
         "episodes": summaries,

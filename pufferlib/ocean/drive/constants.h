@@ -130,6 +130,10 @@
 #define SPAWN_SPEED_BIN_COUNT 20
 #define SPAWN_COLLISION_FORECAST_SECONDS 1.0f
 
+// How agent counts are selected during Gigaflow evaluation
+#define EVAL_AGENT_COUNT_MODE_FIXED 0
+#define EVAL_AGENT_COUNT_MODE_RANDOM 1
+
 // Gymnasium done signal emitted to all agents when target failure resets the episode
 #define TARGET_FAILURE_EPISODE_END_TERMINATED 0
 #define TARGET_FAILURE_EPISODE_END_TRUNCATED 1

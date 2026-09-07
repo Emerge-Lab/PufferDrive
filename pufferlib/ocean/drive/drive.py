@@ -96,6 +96,8 @@ class Drive(pufferlib.PufferEnv):
         eval_map_indices=None,
         eval_scenario_seeds=None,
         eval_training_render=False,
+        eval_agent_count_mode="fixed",
+        eval_agent_counts=None,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -237,10 +239,17 @@ class Drive(pufferlib.PufferEnv):
         self.max_scenarios_per_batch = max_scenarios_per_batch
         self.eval_map_indices = eval_map_indices
         self.eval_scenario_seeds = eval_scenario_seeds
+        self.eval_agent_counts = eval_agent_counts
         if self.eval_map_indices is not None:
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
+            if self.eval_agent_counts is not None and len(self.eval_agent_counts) != len(self.eval_map_indices):
+                raise ValueError("eval_agent_counts must have one count per eval_map_indices entry")
         self.eval_training_render = eval_training_render
+        self.eval_agent_count_mode = {
+            "fixed": binding.EVAL_AGENT_COUNT_MODE_FIXED,
+            "random": binding.EVAL_AGENT_COUNT_MODE_RANDOM,
+        }[eval_agent_count_mode]
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
@@ -408,6 +417,8 @@ class Drive(pufferlib.PufferEnv):
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
             eval_training_render=self.eval_training_render,
+            eval_agent_count_mode=self.eval_agent_count_mode,
+            eval_agent_counts=self.eval_agent_counts,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
@@ -653,12 +664,17 @@ class Drive(pufferlib.PufferEnv):
                 remaining_map_indices = (
                     self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
                 )
+                remaining_agent_counts = (
+                    self.eval_agent_counts[pair_start:] if self.eval_agent_counts is not None else None
+                )
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
                     eval_mode=self.eval_mode,
                     eval_training_render=self.eval_training_render,
+                    eval_agent_count_mode=self.eval_agent_count_mode,
+                    eval_agent_counts=remaining_agent_counts,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     sdc_controller=self.sdc_controller,

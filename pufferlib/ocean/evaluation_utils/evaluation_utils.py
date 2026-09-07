@@ -285,23 +285,23 @@ def _plan_benchmark_eval_workers(args, num_scenarios, num_workers, scenario_leng
     return worker_env_kwargs, max_scenarios_per_worker * scenario_length
 
 
-def _plan_failure_replay_workers(args, map_seed_pairs, num_workers, scenario_length):
-    """Split the (map, seed) pairs across workers; each worker cycles through its
-    pairs in fit-aware batches (num_agents from config bounds a batch)."""
-    pairs_per_worker, remainder = divmod(len(map_seed_pairs), num_workers)
+def _plan_failure_replay_workers(args, map_seed_agent_counts, num_workers, scenario_length):
+    """Split exact evaluation scenarios across replay workers."""
+    pairs_per_worker, remainder = divmod(len(map_seed_agent_counts), num_workers)
     worker_env_kwargs = []
     pair_start = 0
     for worker_idx in range(num_workers):
         worker_pair_count = pairs_per_worker + (1 if worker_idx < remainder else 0)
-        worker_pairs = map_seed_pairs[pair_start : pair_start + worker_pair_count]
+        worker_scenarios = map_seed_agent_counts[pair_start : pair_start + worker_pair_count]
         pair_start += worker_pair_count
         env_kwargs = copy.deepcopy(args["env"])
         env_kwargs["eval_mode"] = 1
         env_kwargs["resample_frequency"] = scenario_length
         env_kwargs["starting_map"] = 0
         env_kwargs["num_eval_scenarios"] = worker_pair_count
-        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _ in worker_pairs]
-        env_kwargs["eval_scenario_seeds"] = [seed for _, seed in worker_pairs]
+        env_kwargs["eval_map_indices"] = [map_idx for map_idx, _, _ in worker_scenarios]
+        env_kwargs["eval_scenario_seeds"] = [seed for _, seed, _ in worker_scenarios]
+        env_kwargs["eval_agent_counts"] = [agent_count for _, _, agent_count in worker_scenarios]
         env_kwargs["capture_replay"] = True
         env_kwargs["replay_worker_idx"] = worker_idx
         worker_env_kwargs.append(env_kwargs)

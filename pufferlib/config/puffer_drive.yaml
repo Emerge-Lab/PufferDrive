@@ -124,6 +124,9 @@ env:
   compute_eval_metrics: false
   # Evaluate and render scenarios using the training distribution.
   eval_training_render: false
+  # Agent count during Gigaflow evaluation: fixed uses max_agents_per_env;
+  # random samples uniformly from min_agents_per_env through max_agents_per_env.
+  eval_agent_count_mode: fixed
   # --- Goal / Target ---
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"

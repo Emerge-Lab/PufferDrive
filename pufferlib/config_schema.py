@@ -152,6 +152,11 @@ class SpawnSpeedMode(Enum):
     random = 1
 
 
+class EvalAgentCountMode(Enum):
+    fixed = 0
+    random = 1
+
+
 class TargetFailureEpisodeEnd(Enum):
     terminated = 0
     truncated = 1
@@ -308,6 +313,7 @@ class DriveEnvConfig:
     init_mode: InitMode = MISSING
     compute_eval_metrics: bool = MISSING
     eval_training_render: bool = MISSING
+    eval_agent_count_mode: EvalAgentCountMode = MISSING
     goal_regen_mode: GoalRegen = MISSING
     goal_source: GoalSource = MISSING
     obs_goal_lane_distance: bool = MISSING
