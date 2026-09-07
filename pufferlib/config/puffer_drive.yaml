@@ -144,7 +144,7 @@ env:
   min_goal_spacing: 20.0
   max_goal_spacing: 200.0
   # --- Rewards ---
-  reward_conditioning: true
+  reward_conditioning: false
   reward_randomization: false
   reward_log_sampling: false
   reward_goal: 1.0

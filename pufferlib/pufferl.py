@@ -1629,12 +1629,17 @@ def _prepare_target_policy_args(args, target_policy_path):
     target_args["load_id"] = None
     target_args["load_model_path"] = target_policy_path
 
-    config_path = os.path.join(drive_benchmark.resolve_run_dir(target_policy_path), "config.yaml")
-    if not os.path.isfile(config_path):
-        print(f"No target config.yaml at {config_path}; using the current policy configuration.")
+    target_policy_stem, _ = os.path.splitext(target_policy_path)
+    config_candidates = (
+        f"{target_policy_stem}_config.yaml",
+        os.path.join(drive_benchmark.resolve_run_dir(target_policy_path), "config.yaml"),
+    )
+    config_path = next((path for path in config_candidates if os.path.isfile(path)), None)
+    if config_path is None:
+        print(f"No target policy config found; using the current policy configuration.")
         return target_args
 
-    print(f"Found target config.yaml at {config_path}. Loading target policy configuration...")
+    print(f"Found target policy config at {config_path}. Loading target policy configuration...")
     with open(config_path, "r") as config_file:
         target_config = yaml.safe_load(config_file)
 
