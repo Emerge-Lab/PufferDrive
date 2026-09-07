@@ -145,7 +145,7 @@ env:
   max_goal_spacing: 200.0
   # --- Rewards ---
   reward_conditioning: true
-  reward_randomization: true
+  reward_randomization: false
   reward_log_sampling: false
   reward_goal: 1.0
   reward_collision: 1.5
@@ -204,9 +204,9 @@ env:
   # --- Robustness features---
   # Erratic agents are selected once per episode; masked out of the PPO rollout buffer.
   # Per-episode probability that an agent is blind to other agents for the whole episode
-  partner_blindness_prob: 0.02
+  partner_blindness_prob: 0.0
   # Per-step probability that a flagged blind-partner agent zeros out its partner observations
-  partner_blindness_trigger_prob: 0.03
+  partner_blindness_trigger_prob: 0.0
   # Duration in seconds of partner blindness once triggered
   partner_blindness_duration_seconds: 3.0
   # Per-episode probability that an agent is flagged as a phantom braker for the whole episode
