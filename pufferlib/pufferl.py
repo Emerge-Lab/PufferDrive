@@ -2,6 +2,7 @@
 # This is the same as python -m pufferlib.pufferl [train | eval | sweep] [env_name] [optional args]
 # Distributed example: torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_nmmo3
 
+import argparse
 import contextlib
 import copy
 import warnings
@@ -2493,11 +2494,25 @@ def load_config(env_name, config_dir=None):
     return args
 
 
-def regents(generation_name, config_path=None, output_dir=None):
+def regents(
+    generation_name,
+    config_path=None,
+    output_dir=None,
+    *,
+    experiment_name=None,
+    drivable_area_weight=None,
+):
     """Generate ReGentS adversarial scenarios offline, without any training machinery."""
     config_path = config_path or REGENTS_GENERATION_CONFIG_PATH
-    report = regents_generation.generate_regents_scenarios(config_path, generation_name, output_dir=output_dir)
-    print(f"[REGENTS] {generation_name}: {report.scenario_count} scenarios -> {report.output_dir}")
+    report = regents_generation.generate_regents_scenarios(
+        config_path,
+        generation_name,
+        output_dir=output_dir,
+        experiment_name=experiment_name,
+        drivable_area_weight=drivable_area_weight,
+    )
+    run_name = generation_name if experiment_name is None else f"{generation_name}/{experiment_name}"
+    print(f"[REGENTS] {run_name}: {report.scenario_count} scenarios -> {report.output_dir}")
     print(
         f"[REGENTS] success {report.generation_success_rate:.3f} | ego {report.ego_collision_rate:.3f}"
         f" | actionable {report.actionable_collision_rate:.3f}"
@@ -2514,6 +2529,19 @@ def regents(generation_name, config_path=None, output_dir=None):
     if report.replay_index is not None:
         print(f"[REGENTS] replay gallery {report.replay_index}")
     return report
+
+
+def _parse_regents_cli_args(arguments):
+    parser = argparse.ArgumentParser(prog="puffer regents puffer_drive")
+    parser.add_argument("generation_name")
+    parser.add_argument("--experiment-name", "--exp-name", dest="experiment_name")
+    parser.add_argument(
+        "--road-weight",
+        "--drivable-area-weight",
+        dest="drivable_area_weight",
+        type=float,
+    )
+    return parser.parse_args(arguments)
 
 
 def main():
@@ -2533,7 +2561,12 @@ def main():
     elif mode == "regents":
         if len(sys.argv) < 2:
             raise pufferlib.APIUsageError("Usage: puffer regents [env_name] [generation_name] [optional args]")
-        regents(generation_name=sys.argv.pop(1))
+        regents_args = _parse_regents_cli_args(sys.argv[1:])
+        regents(
+            generation_name=regents_args.generation_name,
+            experiment_name=regents_args.experiment_name,
+            drivable_area_weight=regents_args.drivable_area_weight,
+        )
     elif mode == "sweep":
         sweep(env_name=env_name)
     elif mode == "controlled_exp":

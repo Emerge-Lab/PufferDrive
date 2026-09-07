@@ -9,7 +9,7 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents import classic_rollout, estimate_expert_actions
 from pufferlib.ocean.regents.geometry import signed_box_distance
 from pufferlib.ocean.regents.losses import combined_regents_cost
-from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
+from pufferlib.ocean.regents.optimizer import optimize_frozen_ego_scenario
 from tests.regents.test_losses import _constant_raster, _dimensions, _states
 from tests.regents.test_optimizer import _optimization_config, _scenario, _straight_track
 
@@ -110,30 +110,21 @@ def test_every_differentiable_stage_agrees_between_cpu_and_gpu(synthetic_scenari
     ):
         assert (getattr(result_gpu, name).cpu() == getattr(result_cpu, name)).all()
 
-    for steering_parameterization in ("wheel_angle", "curvature"):
-        scenario_cpu = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
-        config = ReGentSOptimizationConfig(
-            **{
-                **{
-                    field: getattr(_optimization_config(), field)
-                    for field in ("filter", "costs", "learning_rate", "iteration_count")
-                },
-                "steering_parameterization": steering_parameterization,
-            }
-        )
-        result_cpu = optimize_frozen_ego_scenario(scenario_cpu, config=config, deterministic_seed=17)
-        result_gpu = optimize_frozen_ego_scenario(scenario_cpu.to("cuda"), config=config, deterministic_seed=17)
+    scenario_cpu = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
+    config = _optimization_config()
+    result_cpu = optimize_frozen_ego_scenario(scenario_cpu, config=config, deterministic_seed=17)
+    result_gpu = optimize_frozen_ego_scenario(scenario_cpu.to("cuda"), config=config, deterministic_seed=17)
 
-        torch.testing.assert_close(
-            result_gpu.optimized_actions.cpu(), result_cpu.optimized_actions, atol=OPTIMIZER_ATOL, rtol=OPTIMIZER_ATOL
-        )
-        torch.testing.assert_close(
-            result_gpu.optimized_states.cpu(), result_cpu.optimized_states, atol=OPTIMIZER_ATOL, rtol=OPTIMIZER_ATOL
-        )
-        torch.testing.assert_close(result_gpu.state_valid.cpu(), result_cpu.state_valid)
-        assert (result_gpu.optimized_action_mask.cpu() == result_cpu.optimized_action_mask).all()
-        if result_cpu.initial_costs is not None:
-            assert math.isclose(result_gpu.initial_costs.total, result_cpu.initial_costs.total, abs_tol=OPTIMIZER_ATOL)
-        if result_cpu.final_costs is not None:
-            assert math.isclose(result_gpu.final_costs.total, result_cpu.final_costs.total, abs_tol=OPTIMIZER_ATOL)
-        assert result_gpu.success == result_cpu.success
+    torch.testing.assert_close(
+        result_gpu.optimized_actions.cpu(), result_cpu.optimized_actions, atol=OPTIMIZER_ATOL, rtol=OPTIMIZER_ATOL
+    )
+    torch.testing.assert_close(
+        result_gpu.optimized_states.cpu(), result_cpu.optimized_states, atol=OPTIMIZER_ATOL, rtol=OPTIMIZER_ATOL
+    )
+    torch.testing.assert_close(result_gpu.state_valid.cpu(), result_cpu.state_valid)
+    assert (result_gpu.optimized_action_mask.cpu() == result_cpu.optimized_action_mask).all()
+    if result_cpu.initial_costs is not None:
+        assert math.isclose(result_gpu.initial_costs.total, result_cpu.initial_costs.total, abs_tol=OPTIMIZER_ATOL)
+    if result_cpu.final_costs is not None:
+        assert math.isclose(result_gpu.final_costs.total, result_cpu.final_costs.total, abs_tol=OPTIMIZER_ATOL)
+    assert result_gpu.success == result_cpu.success

@@ -5,6 +5,7 @@ import inspect
 import math
 import multiprocessing
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,39 @@ def _require_positive_int(value, label):
     return value
 
 
+def _validate_experiment_name(experiment_name):
+    if experiment_name is None:
+        return None
+    if not isinstance(experiment_name, str):
+        raise TypeError("ReGentS experiment name must be a string")
+    experiment_name = experiment_name.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", experiment_name):
+        raise ValueError(
+            "ReGentS experiment name must start with an alphanumeric character and contain only "
+            "letters, digits, '.', '_', or '-'"
+        )
+    return experiment_name
+
+
+def _apply_generation_overrides(generation, experiment_name, drivable_area_weight):
+    """Apply validated CLI overrides to the configuration persisted in artifacts."""
+    resolved = dict(generation)
+    resolved["experiment_name"] = _validate_experiment_name(experiment_name)
+    if drivable_area_weight is None:
+        return resolved
+    if isinstance(drivable_area_weight, bool) or not isinstance(drivable_area_weight, (int, float)):
+        raise TypeError("ReGentS drivable-area weight must be a number")
+    drivable_area_weight = float(drivable_area_weight)
+    if not math.isfinite(drivable_area_weight) or drivable_area_weight < 0.0:
+        raise ValueError("ReGentS drivable-area weight must be finite and non-negative")
+    optimizer = dict(resolved["optimizer"])
+    costs = dict(_require_mapping(optimizer.get("costs", {}), "optimizer costs"))
+    costs["drivable_area_weight"] = drivable_area_weight
+    optimizer["costs"] = costs
+    resolved["optimizer"] = optimizer
+    return resolved
+
+
 def load_generation_config(config_path, generation_name):
     """Validate the untrusted generation config and resolve one named entry."""
     with Path(config_path).open("r", encoding="utf-8") as config_file:
@@ -116,9 +150,6 @@ def load_generation_config(config_path, generation_name):
     num_workers = selected.get("num_workers", 1)
     if num_workers != "auto":
         _require_positive_int(num_workers, "num_workers")
-    capture_observations = selected.get("capture_observations", False)
-    if not isinstance(capture_observations, bool):
-        raise TypeError("capture_observations must be a boolean")
 
     resolved = {
         "name": generation_name,
@@ -134,7 +165,6 @@ def load_generation_config(config_path, generation_name):
         "raster_resolution_meters": float(selected.get("raster_resolution_meters", DEFAULT_RASTER_RESOLUTION_METERS)),
         "output_dir": str(selected.get("output_dir", "experiments/regents")),
         "render_replays": bool(selected.get("render_replays", False)),
-        "capture_observations": capture_observations,
         "optimizer": optimizer,
         "env": environment,
     }
@@ -348,7 +378,6 @@ def _generate_scenario(task):
                 horizon_transition_count=generation["horizon_transition_count"],
                 maximum_outer_iterations=generation["maximum_outer_iterations"],
                 capture_html_frames=render_replays,
-                capture_observations=generation["capture_observations"],
                 show_progress=show_progress,
                 raster_resolution_meters=generation["raster_resolution_meters"],
             )
@@ -372,11 +401,21 @@ def _generate_scenario(task):
         raise
 
 
-def generate_regents_scenarios(config_path, generation_name, output_dir=None):
+def generate_regents_scenarios(
+    config_path,
+    generation_name,
+    output_dir=None,
+    *,
+    experiment_name=None,
+    drivable_area_weight=None,
+):
     """Generate, C-verify, and save one artifact per scenario in the configured range."""
     overall_start = time.perf_counter()
     generation = load_generation_config(config_path, generation_name)
+    generation = _apply_generation_overrides(generation, experiment_name, drivable_area_weight)
     destination = Path(output_dir) if output_dir is not None else Path(generation["output_dir"]) / generation_name
+    if generation["experiment_name"] is not None:
+        destination /= generation["experiment_name"]
     destination.mkdir(parents=True, exist_ok=True)
     optimization_config = _optimization_config(generation["optimizer"])
     map_directory = Path(generation["env"]["map_dir"])

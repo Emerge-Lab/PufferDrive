@@ -12,13 +12,10 @@ from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.geometry import signed_box_distance
 from pufferlib.ocean.regents.losses import ReGentSCostConfig, _masked_boxes
 from pufferlib.ocean.regents.optimizer import (
-    STEERING_PARAMETERIZATION_CURVATURE,
     FrozenEgoTrajectory,
-    STEERING_PARAMETERIZATION_WHEEL_ANGLE,
     ReGentSOptimizationConfig,
     capture_frozen_idm_trajectory,
     drive_actions_from_parameter,
-    mask_front_divergence_gradients,
     optimize_frozen_ego_scenario,
     parameter_from_drive_actions,
     steering_conversion_metadata,
@@ -120,24 +117,9 @@ def _optimization_config(**overrides):
 def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
     """Parameterization defaults, range checks, gradient masking, and conversion metadata."""
     default_config = ReGentSOptimizationConfig()
-    assert default_config.steering_parameterization == STEERING_PARAMETERIZATION_CURVATURE
     assert default_config.steering_update_scale == 0.5
-    assert default_config.curvature_steering_update_scale == 0.5
-    with pytest.raises(ValueError, match="steering_parameterization"):
-        ReGentSOptimizationConfig(steering_parameterization="curvature_rate")
-    with pytest.raises(ValueError, match="curvature_steering_update_scale"):
-        ReGentSOptimizationConfig(curvature_steering_update_scale=-1.0)
-
-    # Front divergence cancels steering only, and frozen entries lose both channels.
-    masked = mask_front_divergence_gradients(
-        torch.tensor([[[[2.0, 3.0], [4.0, 5.0]], [[6.0, 7.0], [8.0, 9.0]]]]),
-        torch.tensor([[[True, True], [True, False]]]),
-        torch.tensor([[True, False]]),
-    )
-    torch.testing.assert_close(masked[0, 0, :, 0], torch.tensor([2.0, 4.0]))
-    torch.testing.assert_close(masked[0, 0, :, 1], torch.zeros(2))
-    torch.testing.assert_close(masked[0, 1, :, 0], torch.tensor([6.0, 0.0]))
-    torch.testing.assert_close(masked[0, 1, :, 1], torch.tensor([7.0, 0.0]))
+    with pytest.raises(ValueError, match="steering_update_scale"):
+        ReGentSOptimizationConfig(steering_update_scale=-1.0)
 
     # Curvature conversion round trips a real action array inside the per-agent box.
     scenario = real_scenarios(8)
@@ -147,10 +129,10 @@ def test_optimizer_configuration_and_gradient_masking_contracts(real_scenarios):
     wheelbase_over_time, achievable_curvature = steering_conversion_metadata(
         scenario, optimized_action_mask, drive_actions.device
     )
-    parameter = parameter_from_drive_actions(drive_actions, STEERING_PARAMETERIZATION_CURVATURE, wheelbase_over_time)
+    parameter = parameter_from_drive_actions(drive_actions, wheelbase_over_time)
     assert torch.all(parameter[..., 1].abs() <= achievable_curvature + 1e-6)
     torch.testing.assert_close(
-        drive_actions_from_parameter(parameter, STEERING_PARAMETERIZATION_CURVATURE, wheelbase_over_time),
+        drive_actions_from_parameter(parameter, wheelbase_over_time),
         drive_actions,
         rtol=0.0,
         atol=1e-5,
@@ -176,7 +158,6 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
     assert first.final_costs.ego_collision < first.initial_costs.ego_collision
     assert first.failure_reason is None
     assert torch.equal(first.optimized_actions, repeated.optimized_actions)
-    assert first.gradient_norms == repeated.gradient_norms
     frozen = ~first.optimized_action_mask[..., None].expand_as(first.optimized_actions)
     assert torch.equal(first.optimized_actions[frozen], first.initial_actions[frozen])
     assert torch.isfinite(first.optimized_actions).all()
@@ -188,7 +169,6 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
         merging, config=_optimization_config(iteration_count=180), deterministic_seed=23
     )
     assert merged.success
-    assert max(merged.steering_gradient_norms) > 0.0
     assert torch.any(merged.optimized_actions[..., 1] != merged.initial_actions[..., 1])
     assert not merged.background_collision
     assert not merged.offroad
@@ -199,7 +179,6 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
         config=_optimization_config(
             iteration_count=1,
             steering_update_scale=1.0,
-            steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE,
         ),
         deterministic_seed=23,
         show_progress=False,
@@ -209,16 +188,23 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
         config=_optimization_config(
             iteration_count=1,
             steering_update_scale=0.5,
-            steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE,
         ),
         deterministic_seed=23,
         show_progress=False,
     )
     assert full.best_iteration == 1 and damped.best_iteration == 1
-    baseline_steering = full.initial_actions[..., 1]
-    full_step = full.optimized_actions[..., 1] - baseline_steering
+    # The scale multiplies the post-Adam update in curvature space; the wheel-angle
+    # conversion is non-linear, so the exact ratio only holds on the parameter itself.
+    wheelbase_over_time, _ = steering_conversion_metadata(
+        merging, full.optimized_action_mask, full.optimized_actions.device
+    )
+    baseline_curvature = parameter_from_drive_actions(full.initial_actions, wheelbase_over_time)[..., 1]
+    full_step = parameter_from_drive_actions(full.optimized_actions, wheelbase_over_time)[..., 1] - baseline_curvature
+    damped_step = (
+        parameter_from_drive_actions(damped.optimized_actions, wheelbase_over_time)[..., 1] - baseline_curvature
+    )
     assert full_step.abs().sum() > 0
-    torch.testing.assert_close(damped.optimized_actions[..., 1] - baseline_steering, 0.5 * full_step)
+    torch.testing.assert_close(damped_step, 0.5 * full_step)
     torch.testing.assert_close(full.optimized_actions[..., 0], damped.optimized_actions[..., 0])
 
     # Divergence holds the applied steering, but Adam must accumulate its moments.
@@ -361,7 +347,7 @@ def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnosti
     assert offroad.final_costs.total <= offroad.initial_costs.total
 
 
-def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(real_scenarios):
+def test_real_scenario_optimization_is_deterministic_in_curvature_space(real_scenarios):
     """Native frozen-ego capture, cost reduction, and curvature parity on real NuPlan data."""
     kwargs = {
         "map_dir": str(FIXTURE_MAP),
@@ -417,46 +403,25 @@ def test_real_scenario_optimization_is_deterministic_in_both_parameterizations(r
 
     # Map 8's full-log candidates enter after this horizon; map 3 exercises live updates.
     scenario = real_scenarios(3)
-    wheel_angle_config = ReGentSOptimizationConfig(
-        iteration_count=5, learning_rate=1e-3, steering_parameterization=STEERING_PARAMETERIZATION_WHEEL_ANGLE
-    )
-    wheel_angle = optimize_frozen_ego_scenario(
-        scenario, config=wheel_angle_config, deterministic_seed=50, horizon_transition_count=16
-    )
-    repeated = optimize_frozen_ego_scenario(
-        scenario, config=wheel_angle_config, deterministic_seed=50, horizon_transition_count=16
-    )
-    assert wheel_angle.initial_costs is not None
-    # Road regularization can trade a small ego-distance increase for lower total cost.
-    assert wheel_angle.iteration_count == wheel_angle_config.iteration_count
-    assert wheel_angle.final_costs.total < wheel_angle.initial_costs.total
-    assert all(math.isfinite(value) for value in wheel_angle.gradient_norms)
-    assert torch.isfinite(wheel_angle.optimized_actions).all()
-    assert torch.isfinite(wheel_angle.optimized_states).all()
-    assert torch.equal(wheel_angle.optimized_actions, repeated.optimized_actions)
-    assert wheel_angle.final_costs == repeated.final_costs
-
-    curvature_config = ReGentSOptimizationConfig(
-        iteration_count=5, learning_rate=1e-3, steering_parameterization=STEERING_PARAMETERIZATION_CURVATURE
-    )
+    curvature_config = ReGentSOptimizationConfig(iteration_count=5, learning_rate=1e-3)
     curvature = optimize_frozen_ego_scenario(
         scenario, config=curvature_config, deterministic_seed=50, horizon_transition_count=16
     )
-    curvature_repeated = optimize_frozen_ego_scenario(
+    repeated = optimize_frozen_ego_scenario(
         scenario, config=curvature_config, deterministic_seed=50, horizon_transition_count=16
     )
-    assert curvature.steering_parameterization == STEERING_PARAMETERIZATION_CURVATURE
+    assert curvature.initial_costs is not None
+    # Road regularization can trade a small ego-distance increase for lower total cost.
+    assert curvature.iteration_count == curvature_config.iteration_count
+    assert curvature.final_costs.total < curvature.initial_costs.total
     assert torch.isfinite(curvature.optimized_actions).all()
+    assert torch.isfinite(curvature.optimized_states).all()
     # The optimizer works in curvature but must still emit in-contract simulator actions.
     assert torch.all(curvature.optimized_actions.abs() <= 1.0)
-    assert curvature.final_costs.total <= curvature.initial_costs.total
-    assert torch.equal(curvature.optimized_actions, curvature_repeated.optimized_actions)
-    assert curvature.final_costs == curvature_repeated.final_costs
+    assert torch.equal(curvature.optimized_actions, repeated.optimized_actions)
+    assert curvature.final_costs == repeated.final_costs
     curvature_frozen = ~curvature.optimized_action_mask[..., None].expand_as(curvature.optimized_actions)
     assert torch.equal(curvature.optimized_actions[curvature_frozen], curvature.initial_actions[curvature_frozen])
-    # Same scenario and seed, different steering variable, so the iterates must differ.
-    assert torch.equal(wheel_angle.initial_actions, curvature.initial_actions)
-    assert not torch.equal(wheel_angle.optimized_actions, curvature.optimized_actions)
 
 
 def test_background_collision_gate_matches_an_all_exact_scan(real_scenarios):

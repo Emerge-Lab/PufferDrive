@@ -40,7 +40,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    capture_observations: false
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
@@ -63,7 +62,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    capture_observations: false
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
@@ -82,7 +80,6 @@ generations:
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
-    capture_observations: false
     optimizer:
       learning_rate: 0.001
       iteration_count: 20

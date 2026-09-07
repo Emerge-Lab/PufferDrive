@@ -1,6 +1,7 @@
 import json
 import math
 import struct
+import sys
 import zlib
 from pathlib import Path
 
@@ -156,14 +157,6 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
     injection_drive = _drive(map_idx, seed, "replay")
     try:
         injection_drive.reset(seed=seed)
-        with pytest.raises(ValueError, match="capture_observations requires capture_html_frames"):
-            replay_optimized_scenario_in_c(
-                injection_drive,
-                scenario,
-                optimization,
-                seed=seed,
-                capture_observations=True,
-            )
         agent_count = len(injection_drive.get_state()[0]["agents"])
         actions = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT, 2), dtype=np.float32)
         mask = np.zeros((agent_count, OPEN_LOOP_HORIZON_TRANSITION_COUNT), dtype=np.bool_)
@@ -258,11 +251,10 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
             result.optimization,
             seed=50,
             capture_html_frames=True,
-            capture_observations=True,
         )
     finally:
         observation_drive.close()
-    assert observation_replay.adversarial_frames["obs"].shape[:2] == (HORIZON_TRANSITION_COUNT + 1, 1)
+    assert observation_replay.adversarial_frames["agent_f32"].shape[0] == HORIZON_TRANSITION_COUNT + 1
 
     rendered = render_scenario_replays(
         tmp_path, 8, result, _full_env_config({"map_dir": str(NUPLAN_MAP_DIR), "dt": 0.1})
@@ -306,6 +298,20 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     """Every config guard, the raster default, and one end-to-end smoke generation."""
     with pytest.raises(ValueError, match="Unknown ReGentS generation"):
         load_generation_config(GENERATION_CONFIG, "missing_generation")
+    with pytest.raises(ValueError, match="experiment name"):
+        generate_regents_scenarios(
+            GENERATION_CONFIG,
+            "regents_nuplan_smoke",
+            output_dir=tmp_path,
+            experiment_name="../escape",
+        )
+    with pytest.raises(ValueError, match="drivable-area weight"):
+        generate_regents_scenarios(
+            GENERATION_CONFIG,
+            "regents_nuplan_smoke",
+            output_dir=tmp_path,
+            drivable_area_weight=math.nan,
+        )
 
     config = tmp_path / "regents.yaml"
     config.write_text(
@@ -352,19 +358,8 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     )
     defaulted = load_generation_config(config, "defaulted")
     assert defaulted["raster_resolution_meters"] == 0.5
-    assert not defaulted["capture_observations"]
-
-    config.write_text(
-        "env:\n  num_maps: 1\ngenerations:\n  - name: broken\n    seed: 1\n"
-        "    scenario_count: 1\n    horizon_transition_count: 1\n"
-        "    maximum_outer_iterations: 1\n    capture_observations: 1\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(TypeError, match="capture_observations must be a boolean"):
-        load_generation_config(config, "broken")
 
     smoke = load_generation_config(GENERATION_CONFIG, "regents_nuplan_smoke")
-    assert not smoke["capture_observations"]
     expected_count = smoke["scenario_count"]
     report = generate_regents_scenarios(GENERATION_CONFIG, "regents_nuplan_smoke", output_dir=tmp_path)
     assert report.scenario_count == expected_count
@@ -384,12 +379,48 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     )
 
 
-def test_pufferl_regents_prints_success(tmp_path, capsys):
+def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
     from pufferlib import pufferl
 
-    pufferl.regents("regents_nuplan_smoke", config_path=GENERATION_CONFIG, output_dir=tmp_path)
+    report = pufferl.regents(
+        "regents_nuplan_smoke",
+        config_path=GENERATION_CONFIG,
+        output_dir=tmp_path,
+        experiment_name="roadless",
+        drivable_area_weight=0.0,
+    )
     captured = capsys.readouterr()
     assert "[REGENTS] success" in captured.out
+    assert report.output_dir == tmp_path / "roadless"
+    metadata, _ = load_generation_artifact(report.output_dir / "npz/scenario_00000.npz")
+    source_configuration = metadata["source_configuration"]
+    assert source_configuration["experiment_name"] == "roadless"
+    assert source_configuration["optimizer"]["costs"]["drivable_area_weight"] == 0.0
+
+    calls = []
+    monkeypatch.setattr(pufferl, "regents", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "puffer",
+            "regents",
+            "puffer_drive",
+            "regents_nuplan",
+            "--exp-name",
+            "road_weight_zero",
+            "--road-weight",
+            "0",
+        ],
+    )
+    pufferl.main()
+    assert calls == [
+        {
+            "generation_name": "regents_nuplan",
+            "experiment_name": "road_weight_zero",
+            "drivable_area_weight": 0.0,
+        }
+    ]
 
 
 def test_buffer_state_getter_reproduces_the_dict_getter_exactly():

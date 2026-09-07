@@ -145,7 +145,6 @@ def _capture_c_rollout(
     agent_count,
     seed,
     capture_html_frames=False,
-    capture_observations=False,
 ):
     """Reset and step one installed action plan, recording states and C events."""
     drive.reset(seed=seed)
@@ -165,13 +164,9 @@ def _capture_c_rollout(
         traffic_count = max(len(payload_scenario.get("traffic_elements") or []), 1)
         scratch = _html_frame_arrays(agent_count, traffic_count)
         html_frames = {key: [] for key in scratch}
-        if capture_observations:
-            html_frames["obs"] = []
         drive.get_obs_html_frame(*(scratch[key] for key in scratch))
         for key, array in scratch.items():
             html_frames[key].append(array[0].copy())
-        if capture_observations:
-            html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
     state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
     ego_action_scratch = np.empty(2, dtype=np.float32)
@@ -187,8 +182,6 @@ def _capture_c_rollout(
             drive.get_obs_html_frame(*(scratch[key] for key in scratch))
             for key, array in scratch.items():
                 html_frames[key].append(array[0].copy())
-            if capture_observations:
-                html_frames["obs"].append(np.asarray(drive.observations, dtype=np.float32).copy())
         events = binding.regents_get_events(drive.c_envs)
         pairs = tuple(sorted(tuple(sorted(int(index) for index in pair)) for pair in events["collision_pairs"]))
         if pairs:
@@ -247,14 +240,11 @@ def replay_optimized_scenario_in_c(
     seed=None,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
-    capture_observations=False,
 ):
     """Replay optimized background controls in C and use C as the success oracle."""
     _validate_replay_inputs(drive, scenario, optimization, tolerance)
-    if not isinstance(capture_html_frames, bool) or not isinstance(capture_observations, bool):
-        raise TypeError("capture_html_frames and capture_observations must be booleans")
-    if capture_observations and not capture_html_frames:
-        raise ValueError("capture_observations requires capture_html_frames")
+    if not isinstance(capture_html_frames, bool):
+        raise TypeError("capture_html_frames must be a boolean")
     transition_count = optimization.optimized_actions.shape[2]
     if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
         raise ValueError("C replay horizon must end before Drive resamples")
@@ -276,7 +266,6 @@ def replay_optimized_scenario_in_c(
             agent_count,
             seed,
             capture_html_frames,
-            capture_observations,
         )
         binding.regents_set_action_plan(drive.c_envs, optimized_plan, action_mask)
         adversarial = _capture_c_rollout(
@@ -286,7 +275,6 @@ def replay_optimized_scenario_in_c(
             agent_count,
             seed,
             capture_html_frames,
-            capture_observations,
         )
     finally:
         binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
@@ -389,7 +377,6 @@ def run_reactive_idm_generation(
     maximum_outer_iterations=3,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
-    capture_observations=False,
     show_progress=True,
     raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
 ):
@@ -431,7 +418,6 @@ def run_reactive_idm_generation(
             seed=deterministic_seed,
             tolerance=tolerance,
             capture_html_frames=capture_html_frames,
-            capture_observations=capture_observations,
         )
         if replay.success:
             break

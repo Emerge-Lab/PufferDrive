@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from pufferlib.ocean.regents.optimizer import STEERING_PARAMETERIZATION_CURVATURE
 from pufferlib.ocean.regents.rollout import ReactiveGenerationResult
 
 
@@ -67,7 +68,7 @@ def save_generation_artifact(path, result, source_configuration, map_path):
             "road_loss_reduction": "sum_valid_corners_and_timesteps",
             "road_loss_kernel": "reference_amplitude_truncated_grid_convolution",
             "road_loss_baseline_subtracted": False,
-            "steering_parameterization": optimization.steering_parameterization,
+            "steering_parameterization": STEERING_PARAMETERIZATION_CURVATURE,
             "divergence_update_policy": "post_adam_cancel_preserve_moments",
             "infractions_are_acceptance_gates": False,
             "background_collision_loss_scope": BACKGROUND_COLLISION_LOSS_SCOPE,
