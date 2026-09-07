@@ -1766,7 +1766,9 @@ def eval(
             capture_replay=render_scenarios,
         )
         print(f"Evaluation {benchmark['name']}: {num_scenarios} scenarios across {num_workers} workers")
-        replay_output_dir = os.path.join(benchmark_output_dir, "replays") if render_scenarios else None
+        replay_output_dir = (
+            os.path.join(benchmark_output_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME) if render_scenarios else None
+        )
         summaries = _run_eval_rollout(
             run_args,
             env_name,
@@ -1786,7 +1788,7 @@ def eval(
         }
 
         if render_scenarios:
-            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir)
+            drive_eval_replay._render_eval_replays(summaries, benchmark_output_dir, eval_config["keep_zlib_replays"])
         elif render_filter is not None:
             _render_eval_failures(
                 env_name,
@@ -2271,7 +2273,7 @@ def _render_eval_failures(
         )
         replay_agent_capacity = failure_args["env"]["max_agents_per_env"]
         failure_args["env"]["num_agents"] = replay_agent_capacity
-    replay_output_dir = os.path.join(failures_dir, "replays")
+    replay_output_dir = os.path.join(failures_dir, drive_eval_replay.ZLIB_REPLAY_DIR_NAME)
     os.makedirs(replay_output_dir, exist_ok=True)
     agents_per_batch_values = selected_rows["agents_per_batch"].unique()
     if len(agents_per_batch_values) != 1:
@@ -2308,7 +2310,7 @@ def _render_eval_failures(
         )
         summaries.extend(wave_summaries)
     summary = drive_benchmark._write_eval_reports(summaries, failures_dir, len(pairs))
-    drive_eval_replay._render_eval_replays(summaries, failures_dir)
+    drive_eval_replay._render_eval_replays(summaries, failures_dir, run_args["eval"]["keep_zlib_replays"])
     return {
         "episodes": summaries,
         "summary": summary,

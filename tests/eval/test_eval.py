@@ -411,7 +411,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         return original_vector_make(*make_args, **make_kwargs)
 
     monkeypatch.setattr(pufferlib.vector, "make", record_vector_make)
-    replay_output_dir = tmp_path / "replays"
+    replay_output_dir = tmp_path / drive_eval_replay.ZLIB_REPLAY_DIR_NAME
     summaries = pufferl._run_eval_rollout(
         args,
         "puffer_drive",
@@ -447,11 +447,17 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         assert header["obs_dim"] > 0
         assert required_chunks <= set(header["chunks"])
 
-    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path)))
+    render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
     assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+    assert all(replay_path.is_file() for replay_path in replay_paths)
+
+    drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)
+    assert not replay_output_dir.exists()
+    assert (render_dir / "index.html").is_file()
+    assert len(sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")) == 2
 
 
 def _write_training_benchmark(tmp_path):

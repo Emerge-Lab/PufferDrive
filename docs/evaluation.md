@@ -105,8 +105,10 @@ puffer eval puffer_drive carla_fast \
 
 `eval.render_scenarios=true` records each of the benchmark's configured
 `num_scenarios` during the metrics rollout. It writes the completed
-`.replay.zlib` files incrementally, then renders one interactive HTML page per
-scenario and builds a navigable `index.html`.
+`.replay.zlib` files incrementally in `replays_zlib/`, then renders one
+interactive HTML page per scenario and builds a navigable `index.html`. The
+compressed files are removed after rendering by default; use
+`eval.keep_zlib_replays=true` to keep them.
 
 `eval.capture_observations=true` also stores policy observations.
 
@@ -168,7 +170,7 @@ eval/<benchmark>[_<output_name>]/<timestamp>/
 ├── resolved_benchmark.yaml
 ├── episode_metrics.csv
 ├── evaluation_summary.json
-├── replays/                        # only when render_scenarios=true
+├── replays_zlib/                   # only when render_scenarios=true and keep_zlib_replays=true
 │   └── *.replay.zlib
 ├── rendered_replays/               # only when render_scenarios=true
 │   ├── *.html
@@ -177,7 +179,7 @@ eval/<benchmark>[_<output_name>]/<timestamp>/
     ├── selected_failures.csv
     ├── episode_metrics.csv
     ├── evaluation_summary.json
-    ├── replays/
+    ├── replays_zlib/                # only when keep_zlib_replays=true
     │   └── *.replay.zlib
     └── rendered_replays/
         ├── *.html

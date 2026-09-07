@@ -145,7 +145,8 @@ puffer eval puffer_drive carla \
 ```
 
 Scenario renders are captured during the benchmark pass and written as
-interactive HTML with retained `.replay.zlib` files. To render only episodes
+self-contained interactive HTML; the intermediate `.replay.zlib` bundles are
+deleted afterwards unless `eval.keep_zlib_replays=true`. To render only episodes
 where `offroad_rate > 0` instead:
 
 ```bash

@@ -303,6 +303,8 @@ eval:
   output_dir_name: eval
   # Capture and render every scenario during the standard benchmark pass.
   render_scenarios: false
+  # Keep the intermediate .replay.zlib bundles after rendering HTML.
+  keep_zlib_replays: false
   # Render scenarios where any configured metric is positive.
   # Use all_infractions for every infraction type; null disables it.
   render_filter: null

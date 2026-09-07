@@ -418,6 +418,7 @@ class EvaluationConfig:
     output_name: str | None = MISSING
     output_dir_name: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     render_scenarios: bool = MISSING
+    keep_zlib_replays: bool = MISSING
     render_filter: Any = MISSING
     max_rendered_failures: int | None = _constrained_field(POSITIVE_INT_CONSTRAINT)
     failure_replay_csv: str | None = MISSING
