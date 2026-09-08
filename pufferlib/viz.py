@@ -815,7 +815,8 @@ def encode_interactive_replay(scenario, replay):
     road_points = []
     road_lengths = []
     road_types = []
-    for elem in scenario.get("road_elements", []) or []:
+    road_ids = []
+    for road_idx, elem in enumerate(scenario.get("road_elements", []) or []):
         if not isinstance(elem, dict):
             continue
         elem_type = int(elem.get("type", 0))
@@ -834,6 +835,7 @@ def encode_interactive_replay(scenario, replay):
         count = min(len(xs), len(ys))
         road_lengths.append(count)
         road_types.append(draw_type)
+        road_ids.append(int(elem.get("id", road_idx)))
         for i in range(count):
             road_points.append((float(xs[i]), float(ys[i])))
 
@@ -867,6 +869,7 @@ def encode_interactive_replay(scenario, replay):
         "road_points": np.asarray(road_points or [(0.0, 0.0)], dtype=np.float32),
         "road_lengths": np.asarray(road_lengths or [0], dtype=np.int32),
         "road_types": np.asarray(road_types or [0], dtype=np.int16),
+        "road_ids": np.asarray(road_ids or [0], dtype=np.int32),
         "traffic_stop_lines": np.asarray(traffic_stop_lines or [[0, 0, 0, 0, 0, 0]], dtype=np.float32),
         "traffic_types": np.asarray(traffic_types or [0], dtype=np.int16),
         "agent_f32": replay["agent_f32"].astype(np.float32, copy=False),
@@ -883,6 +886,8 @@ def encode_interactive_replay(scenario, replay):
         chunks["goals_f32"] = replay["goals_f32"].astype(np.float32, copy=False)
     if replay.get("rewards_f32") is not None:
         chunks["rewards_f32"] = replay["rewards_f32"].astype(np.float32, copy=False)
+    if replay.get("coefs_f32") is not None:
+        chunks["coefs_f32"] = replay["coefs_f32"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
     if replay.get("policy_probs") is not None:
@@ -1090,6 +1095,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
             <button type="button" id="reward-header" class="toggle-header" data-target="reward-grid"><span>Reward</span><span>&#9662;</span></button>
             <div id="reward-grid" class="grid toggle-body"></div>
+            <button type="button" id="coef-header" class="toggle-header is-collapsed" data-target="coef-grid"><span>Reward coefs</span><span>&#9662;</span></button>
+            <div id="coef-grid" class="grid toggle-body is-collapsed"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1113,6 +1120,8 @@ __PAYLOAD_CHUNKS__
         const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
+        // Order must match the REWARD_COEF_* indices in constants.h.
+        const COEF_LABELS = ["goal radius","goal speed","collision","offroad","comfort","lane align","vel align","lane center","center bias","velocity","reverse","stop line","timestep","overspeed","throttle","steer","acc","speed"];
         const REWARD_LABELS = ["collision","offroad","red light","stop sign","goal","lane align","lane center","comfort","velocity","timestep","reverse","overspeed","ADE"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
@@ -1125,7 +1134,7 @@ __PAYLOAD_CHUNKS__
         const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
-        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
+        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, roadPathsById = new Map(), lastDrawn = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
@@ -1232,7 +1241,7 @@ self.onmessage = async event => {
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0};
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0, rf:H.chunks.rewards_f32 ? H.chunks.rewards_f32.shape[2] : 0, cf:H.chunks.coefs_f32 ? H.chunks.coefs_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -1253,12 +1262,19 @@ self.onmessage = async event => {
 
         function buildMapPaths() {
             paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
+            roadPathsById = new Map();
             let p = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
-                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type];
+                const len = C.road_lengths[i], type = C.road_types[i], path = paths[type], roadId = C.road_ids[i];
                 if (len <= 0) continue;
+                const roadPath = new Path2D();
                 path.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
-                for (let j=1;j<len;j++) path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                roadPath.moveTo(C.road_points[p*2], C.road_points[p*2+1]);
+                for (let j=1;j<len;j++) {
+                    path.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                    roadPath.lineTo(C.road_points[(p+j)*2], C.road_points[(p+j)*2+1]);
+                }
+                roadPathsById.set(roadId, roadPath);
                 p += len;
             }
         }
@@ -1410,6 +1426,21 @@ self.onmessage = async event => {
             }
             return out;
         }
+        function strokeLanePath(laneId, color, width) {
+            const path = roadPathsById.get(laneId);
+            if (!path) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.stroke(path);
+        }
+        function drawCurrentLane(agent, colors) {
+            if (!agent || agent.cl < 0) return;
+            ctx.save();
+            ctx.lineCap = 'round';
+            strokeLanePath(agent.cl, 'rgba(255,255,255,.35)', Math.max(.5, 5.0/cam.z));
+            strokeLanePath(agent.cl, colors.accent, Math.max(.35, 4.0/cam.z));
+            ctx.restore();
+        }
         function decodeObs(frame, slot) {
             if (!C.obs || slot < 0 || slot >= H.active_count) return null;
             const base = (frame * H.active_count + slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale, LF = H.lane_features, BF = H.boundary_features, TF = H.traffic_features;
@@ -1467,6 +1498,10 @@ self.onmessage = async event => {
             const rewardLabels = ["return (cum)","total (step)"].concat(REWARD_LABELS.slice(0, Math.max(0, F.rf - 1)));
             rg.innerHTML = C.rewards_f32 ? rewardLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
             document.getElementById('reward-header').style.display = C.rewards_f32 ? '' : 'none';
+            const cg = document.getElementById('coef-grid');
+            const coefLabels = COEF_LABELS.slice(0, F.cf);
+            cg.innerHTML = C.coefs_f32 ? coefLabels.map(l=>`<div class="item"><span class="name">${l}</span><span class="num">-</span></div>`).join('') : '';
+            document.getElementById('coef-header').style.display = C.coefs_f32 ? '' : 'none';
             const pol = document.getElementById('policy-grid');
             let html = '<div class="item"><span class="name">value</span><span class="num" data-pol="v">-</span></div><div class="item"><span class="name">entropy</span><span class="num" data-pol="e">-</span></div>';
             let labels = [];
@@ -1487,6 +1522,7 @@ self.onmessage = async event => {
                 metric: [...mg.querySelectorAll('.num')],
                 puffer: [...pg.querySelectorAll('.num')],
                 rewardCells: [...rg.querySelectorAll('.num')],
+                coefCells: [...cg.querySelectorAll('.num')],
                 polV: pol.querySelector('[data-pol=v]'), polE: pol.querySelector('[data-pol=e]'),
                 heat: [...pol.querySelectorAll('.heat-cell')],
                 acts: [...pol.querySelectorAll('.pol-act')], means: [...pol.querySelectorAll('.pol-mean')], stds: [...pol.querySelectorAll('.pol-std')],
@@ -1523,6 +1559,10 @@ self.onmessage = async event => {
             }
             if (C.policy_mean) { for (let i=0;i<refs.means.length;i++){ refs.means[i].textContent = C.policy_mean[ab+i].toFixed(3); refs.stds[i].textContent = C.policy_std[ab+i].toFixed(3); } refs.polLp.textContent = C.policy_log_prob[s].toFixed(3); }
         }
+        function formatCoef(value) {
+            if (value === 0) return "0";
+            return Math.abs(value) >= 1e-3 ? value.toFixed(4) : value.toExponential(1);
+        }
         function updateUI(agent=null) {
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
             document.getElementById('stepNow').textContent = f;
@@ -1545,6 +1585,10 @@ self.onmessage = async event => {
                 refs.rewardCells[1].textContent = formatReward(stepReward(0));
                 for (let i=2;i<refs.rewardCells.length;i++) refs.rewardCells[i].textContent = formatReward(stepReward(i-1));
             }
+            if (refs.coefCells.length) {
+                const cb = (f * H.agent_cap + agent.idx) * F.cf;
+                for (let i=0;i<refs.coefCells.length;i++) refs.coefCells[i].textContent = formatCoef(C.coefs_f32[cb+i]);
+            }
             updatePolicy(f, agent);
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
@@ -1560,6 +1604,7 @@ self.onmessage = async event => {
             updateUI(target);
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
             ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
+            drawCurrentLane(target, colors);
             drawGhosts(f);
             for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }

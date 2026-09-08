@@ -801,8 +801,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 8) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 8 arguments");
+    if (PyTuple_Size(args) != 9) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 9 arguments");
         return NULL;
     }
 
@@ -818,10 +818,11 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
     PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
     PyArrayObject *rewards_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 7);
+    PyArrayObject *coefs_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 8);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
         || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array)
-        || !PyArray_Check(rewards_f32_array)) {
+        || !PyArray_Check(rewards_f32_array) || !PyArray_Check(coefs_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -833,6 +834,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
     memset(PyArray_DATA(goals_f32_array), 0, PyArray_NBYTES(goals_f32_array));
     memset(PyArray_DATA(rewards_f32_array), 0, PyArray_NBYTES(rewards_f32_array));
+    memset(PyArray_DATA(coefs_f32_array), 0, PyArray_NBYTES(coefs_f32_array));
 
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
@@ -841,6 +843,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
     float *goals_f32 = (float *) PyArray_DATA(goals_f32_array);
     float *rewards_f32 = (float *) PyArray_DATA(rewards_f32_array);
+    float *coefs_f32 = (float *) PyArray_DATA(coefs_f32_array);
 
     int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
     int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
@@ -854,6 +857,12 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int goal_fields = (int) PyArray_DIM(goals_f32_array, 2);
     int goal_slots = goal_fields / GOAL_XY_FIELDS;
     int reward_fields = (int) PyArray_DIM(rewards_f32_array, 2);
+    int coef_fields = (int) PyArray_DIM(coefs_f32_array, 2);
+
+    if (coef_fields != NUM_REWARD_COEFS) {
+        PyErr_SetString(PyExc_ValueError, "coefs_f32 must have NUM_REWARD_COEFS fields");
+        return NULL;
+    }
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
@@ -892,6 +901,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_i32[i32_base + 9] = a->phantom_braking_counter > 0;
 
             memcpy(&metrics_f32[metrics_base], a->metrics_array, sizeof(float) * NUM_METRICS);
+            memcpy(&coefs_f32[(e * agent_cap + i) * coef_fields], a->reward_coefs, sizeof(float) * NUM_REWARD_COEFS);
         }
 
         if (drive->active_agent_indices) {

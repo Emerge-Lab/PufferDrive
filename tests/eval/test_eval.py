@@ -15,6 +15,7 @@ import yaml
 import pufferlib
 from pufferlib import pufferl
 from pufferlib.config_schema import validate_puffer_drive_config
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -455,6 +456,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         "traffic_i16",
         "goals_f32",
         "rewards_f32",
+        "coefs_f32",
         "raw_action",
         "policy_probs",
     }
@@ -474,6 +476,12 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
         assert np.any(rewards[..., 0] != 0.0)
         np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
+
+        coefs = _read_replay_float32_chunk(replay_path, "coefs_f32")
+        assert header["chunks"]["coefs_f32"]["shape"][2] == binding.NUM_REWARD_COEFS
+        goal_radius_coefs = coefs[..., 0]
+        agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
+        np.testing.assert_allclose(goal_radius_coefs, agent_goal_radii, atol=1e-6)
 
     render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
