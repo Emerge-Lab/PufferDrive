@@ -21,14 +21,21 @@ from pufferlib.ocean.regents.generation import (
     render_scenario_replays,
     save_loss_history_csv,
 )
+from pufferlib.ocean.regents.evaluation import (
+    EVALUATION_EGO_CONTROLLERS,
+    evaluate_artifact_set,
+    format_summary_table,
+    summarize_evaluations,
+)
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
+from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig, optimize_frozen_ego_scenario
 from pufferlib.ocean.regents.rollout import (
     C_REPLAY_TOLERANCE,
     _current_states,
     _single_payload,
     replay_optimized_scenario_in_c,
-    run_reactive_idm_generation,
+    run_reactive_generation,
 )
 from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_X
 from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
@@ -44,11 +51,12 @@ OPEN_LOOP_HORIZON_TRANSITION_COUNT = 50
 REPLAY_FIXTURES = ((7, 50),)
 
 
-def _drive(map_idx, seed, sdc_controller):
+def _drive_kwargs(map_idx, sdc_controller, dynamics_model="classic", zero_erratic=False):
+    """The Drive keywords a pinned fixture uses, minus its per-scenario map and seed."""
     if map_idx < 0 or map_idx >= len(REGENTS_AUDIT_SCENARIO_IDS):
         raise ValueError(f"Pinned ReGentS fixture index must be in [0, {len(REGENTS_AUDIT_SCENARIO_IDS)})")
-    map_paths, map_indices, _ = resolve_nuplan_scenarios()
-    return Drive(
+    map_paths, _, _ = resolve_nuplan_scenarios()
+    return dict(
         map_dir=str(NUPLAN_MAP_DIR),
         num_maps=len(map_paths),
         num_agents=1,
@@ -56,8 +64,6 @@ def _drive(map_idx, seed, sdc_controller):
         max_agents_per_env=1,
         num_eval_scenarios=1,
         max_scenarios_per_batch=1,
-        eval_map_indices=[map_indices[map_idx]],
-        eval_scenario_seeds=[seed],
         seed=42,
         simulation_mode="replay",
         eval_mode=True,
@@ -66,8 +72,20 @@ def _drive(map_idx, seed, sdc_controller):
         non_sdc_controller="replay",
         non_vehicle_controller="replay",
         action_type="continuous",
-        dynamics_model="classic",
+        dynamics_model=dynamics_model,
         dt=0.1,
+        **(
+            {
+                "obs_dropout_lane": 0.0,
+                "obs_dropout_boundary": 0.0,
+                "partner_blindness_prob": 0.0,
+                "partner_blindness_trigger_prob": 0.0,
+                "phantom_braking_prob": 0.0,
+                "phantom_braking_trigger_prob": 0.0,
+            }
+            if zero_erratic
+            else {}
+        ),
         scenario_length=200,
         resample_frequency=200,
         init_step=0,
@@ -75,6 +93,15 @@ def _drive(map_idx, seed, sdc_controller):
         reward_conditioning=False,
         reward_randomization=False,
         use_neighbor_cache=0,
+    )
+
+
+def _drive(map_idx, seed, sdc_controller, dynamics_model="classic", zero_erratic=False):
+    _, map_indices, _ = resolve_nuplan_scenarios()
+    return Drive(
+        **_drive_kwargs(map_idx, sdc_controller, dynamics_model, zero_erratic),
+        eval_map_indices=[map_indices[map_idx]],
+        eval_scenario_seeds=[seed],
     )
 
 
@@ -136,6 +163,7 @@ def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay)
 
     # Map 7 logs overlapping actors, so C must not blame the adversary for them.
     assert replay.metrics.baseline_collision_pair_count > 0
+    assert not replay.metrics.baseline_ego_collision
     assert not replay.metrics.background_collision
 
     # Frames are opt-in so the default path stays cheap.
@@ -179,12 +207,11 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     """Full-log candidates outside a short horizon remain reportable and replayable."""
     drive = _drive(8, 50, "idm")
     try:
-        result = run_reactive_idm_generation(
+        result = run_reactive_generation(
             drive,
             ReGentSOptimizationConfig(iteration_count=30, learning_rate=1e-2),
             deterministic_seed=50,
             horizon_transition_count=HORIZON_TRANSITION_COUNT,
-            maximum_outer_iterations=3,
             capture_html_frames=True,
         )
     finally:
@@ -204,8 +231,23 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     assert result.optimization.selection.reasons_for(0, 22) == ("static",)
     assert torch.equal(result.optimization.initial_actions, result.optimization.optimized_actions)
     assert result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
-    assert 1 <= result.outer_iteration_count <= 3
+    assert result.ego_refresh_count == 0
     assert result.optimization.frozen_ego_source == "c_idm"
+
+    # A jerk env governs the ego alone: injected adversaries still integrate the classic
+    # bicycle model, so C/Torch parity is unchanged and the plan is accepted.
+    jerk_drive = _drive(8, 50, "idm", dynamics_model="jerk")
+    try:
+        jerk_result = run_reactive_generation(
+            jerk_drive,
+            ReGentSOptimizationConfig(iteration_count=30, learning_rate=1e-2),
+            deterministic_seed=50,
+            horizon_transition_count=HORIZON_TRANSITION_COUNT,
+        )
+    finally:
+        jerk_drive.close()
+    assert jerk_result.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
+    assert torch.equal(jerk_result.optimization.optimized_actions, result.optimization.optimized_actions)
 
     _, _, fixture_paths = resolve_nuplan_scenarios()
     map_path = fixture_paths[8]
@@ -214,6 +256,7 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
     metadata, arrays = load_generation_artifact(artifact_path)
     assert metadata == saved
     assert metadata["scenario_id"] == result.scenario.scenario_ids[0]
+    assert metadata["c_replay"]["baseline_ego_collision"] == result.replay.metrics.baseline_ego_collision
     assert metadata["deterministic_seed"] == 50
     assert len(metadata["source_configuration_hash"]) == 64
     assert metadata["optimization"]["background_collision_loss_scope"] == "candidate_pairs"
@@ -284,11 +327,24 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
         assert header["ego_collision_loss_adversary_idx"] == result.optimization.ego_collision_loss_adversary_idx
         assert header["ego_collision_loss_adversary_id"] == result.optimization.ego_collision_loss_adversary_id
 
-    # A non-IDM ego is rejected before any optimization work happens.
+    import pufferlib.viz
+
+    pufferlib.viz.build_gallery_index(str(tmp_path / RENDER_DIR_NAME), file_metrics=rendered)
+    gallery = (tmp_path / RENDER_DIR_NAME / "index.html").read_text(encoding="utf-8")
+    assert "No candidate" in gallery
+    assert 'data-nocandidate="false"' in gallery
+    assert "Iteration limit" in gallery
+    assert 'data-iterationlimit="false"' in gallery
+    assert 'data-failure-reason="no_candidate_in_optimization_horizon"' in gallery
+    assert "IDM reconstruction collisions" in gallery
+    assert "IDM reconstruction collision" in gallery
+    assert 'data-idmcollision="false"' in gallery
+
+    # A policy ego is supported, but only with an action provider to drive it.
     policy_drive = _drive(8, 50, "policy")
     try:
-        with pytest.raises(ValueError, match="sdc_controller"):
-            run_reactive_idm_generation(
+        with pytest.raises(ValueError, match="ego action provider"):
+            run_reactive_generation(
                 policy_drive, deterministic_seed=50, horizon_transition_count=HORIZON_TRANSITION_COUNT
             )
     finally:
@@ -323,14 +379,15 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert wod_motion["env"]["map_dir"] == "pufferlib/resources/drive/binaries/wod-motion_val"
     assert wod_motion["env"]["scenario_length"] == 91
     assert wod_motion["env"]["resample_frequency"] == 91
-    assert wod_motion["env"]["sdc_controller"] == "replay"
+    assert wod_motion["env"]["sdc_controller"] == "idm"
+    assert wod_motion["optimizer"]["ego_refresh_interval"] == 1
     assert wod_motion["env"]["base_max_speed_mps"] == 40.0
 
     config = tmp_path / "regents.yaml"
     config.write_text(
         "env:\n  not_a_drive_argument: 1\ngenerations:\n"
         "  - name: broken\n    seed: 1\n    scenario_count: 1\n"
-        "    horizon_transition_count: 1\n    maximum_outer_iterations: 1\n",
+        "    horizon_transition_count: 1\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="unsupported env keys"):
@@ -339,7 +396,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     config.write_text(
         "env:\n  scenario_length: 200\n  resample_frequency: 200\n"
         "generations:\n  - name: too_long\n    seed: 1\n    scenario_count: 1\n"
-        "    horizon_transition_count: 200\n    maximum_outer_iterations: 1\n",
+        "    horizon_transition_count: 200\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="must be below env.resample_frequency=200"):
@@ -348,7 +405,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     config.write_text(
         "env:\n  scenario_length: 200\n  resample_frequency: 201\n"
         "generations:\n  - name: too_long\n    seed: 1\n    scenario_count: 1\n"
-        "    horizon_transition_count: 200\n    maximum_outer_iterations: 1\n",
+        "    horizon_transition_count: 200\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="must be below env.scenario_length=200"):
@@ -357,7 +414,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     config.write_text(
         "env:\n  num_maps: 1\ngenerations:\n  - name: broken\n    seed: 1\n"
         "    scenario_count: 1\n    horizon_transition_count: 1\n"
-        "    maximum_outer_iterations: 1\n    raster_resolution_meters: .nan\n",
+        "    raster_resolution_meters: .nan\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="finite and positive"):
@@ -365,8 +422,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
 
     config.write_text(
         "env:\n  num_maps: 1\ngenerations:\n  - name: defaulted\n    seed: 1\n"
-        "    scenario_count: 1\n    horizon_transition_count: 1\n"
-        "    maximum_outer_iterations: 1\n",
+        "    scenario_count: 1\n    horizon_transition_count: 1\n",
         encoding="utf-8",
     )
     defaulted = load_generation_config(config, "defaulted")
@@ -384,6 +440,7 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
     assert "candidate_count" in metrics_header
     assert "torch_collision" in metrics_header
     assert "torch_collision_timestep" in metrics_header
+    assert "baseline_ego_collision" in metrics_header
     loss_header = (tmp_path / "losses/scenario_00000.losses.csv").read_text(encoding="utf-8").splitlines()[0]
     assert "background_collision_first_agent_id" in loss_header
     assert "background_collision_signed_distance_meters" in loss_header
@@ -422,6 +479,8 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
     source_configuration = metadata["source_configuration"]
     assert source_configuration["experiment_name"] == "roadless"
     assert source_configuration["optimizer"]["costs"]["drivable_area_weight"] == 0.0
+    assert metadata["optimization"]["road_loss_reduction"] == "mean_timesteps_sum_valid_agents_and_corners"
+    assert metadata["optimization"]["road_loss_kernel"] == "unit_mass_truncated_grid_convolution"
 
     calls = []
     monkeypatch.setattr(pufferl, "regents", lambda **kwargs: calls.append(kwargs))
@@ -489,3 +548,88 @@ def test_buffer_state_getter_rejects_malformed_output_buffers():
             binding.regents_get_states(drive.c_envs, states, valid.astype(np.int32), ego_action)
     finally:
         drive.close()
+
+
+POLICY_CHECKPOINT = REPO_ROOT / "experiments/3_0_no_conditionning_target.pt"
+POLICY_CHECKPOINT_CONFIG = REPO_ROOT / "experiments/3_0_no_conditionning_target_config.yaml"
+
+
+@pytest.mark.skipif(
+    not (POLICY_CHECKPOINT.is_file() and POLICY_CHECKPOINT_CONFIG.is_file()),
+    reason="The policy-ego checkpoint is a local artifact, not a repository fixture",
+)
+def test_policy_ego_generation_is_deterministic_and_its_artifact_set_replays_under_every_controller(tmp_path):
+    """A learned ego drives generation, and the saved set replays under any ego."""
+    policy_config = ReGentSPolicyEgoConfig(
+        checkpoint_path=str(POLICY_CHECKPOINT),
+        config_path=str(POLICY_CHECKPOINT_CONFIG),
+    )
+    # The head is 4 jerk-long x 3 jerk-lat classes, so the env must be jerk for the
+    # checkpoint to load at all; injection stays classic.
+    optimization_config = ReGentSOptimizationConfig(iteration_count=20, learning_rate=1e-2, ego_refresh_interval=5)
+    results = []
+    for _ in range(2):
+        drive = _drive(1, 43, "policy", dynamics_model="jerk", zero_erratic=True)
+        try:
+            results.append(
+                run_reactive_generation(
+                    drive,
+                    optimization_config,
+                    deterministic_seed=43,
+                    horizon_transition_count=OPEN_LOOP_HORIZON_TRANSITION_COUNT,
+                    show_progress=False,
+                    ego_action_fn=PolicyEgoActor(policy_config, drive),
+                )
+            )
+        finally:
+            drive.close()
+    first, second = results
+    assert first.ego_source == "c_policy"
+    assert first.optimization.frozen_ego_source == "c_policy"
+    assert first.ego_refresh_count > 0
+    assert first.replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
+    # Inference must not depend on RNG or worker state, or an ego refresh is not reproducible.
+    assert torch.equal(first.optimization.optimized_actions, second.optimization.optimized_actions)
+    assert torch.equal(first.replay.states, second.replay.states)
+
+    # A policy ego without an action provider, and an action provider without a policy
+    # ego, are both rejected before any work happens.
+    idm_drive = _drive(1, 43, "idm")
+    try:
+        with pytest.raises(ValueError, match="ego action provider"):
+            run_reactive_generation(
+                idm_drive,
+                optimization_config,
+                deterministic_seed=43,
+                horizon_transition_count=OPEN_LOOP_HORIZON_TRANSITION_COUNT,
+                ego_action_fn=lambda observations: None,
+            )
+    finally:
+        idm_drive.close()
+
+    # The evaluator rebuilds Drive from the artifact's recorded env and indexes the map
+    # by the artifact's file number, exactly as generation names it.
+    _, map_indices, fixture_paths = resolve_nuplan_scenarios()
+    artifact_dir = tmp_path / "npz"
+    artifact_dir.mkdir(parents=True)
+    generation = {"env": _drive_kwargs(1, "policy", dynamics_model="jerk", zero_erratic=True)}
+    map_index = map_indices[1]
+    save_generation_artifact(artifact_dir / f"scenario_{map_index:05d}.npz", first, generation, str(fixture_paths[1]))
+
+    reports = [
+        evaluate_artifact_set(
+            tmp_path,
+            ego_controller,
+            ego_policy=policy_config if ego_controller == "policy" else None,
+        )
+        for ego_controller in EVALUATION_EGO_CONTROLLERS
+    ]
+    by_controller = {report.ego_controller: report.rows[0] for report in reports}
+    assert set(by_controller) == set(EVALUATION_EGO_CONTROLLERS)
+    assert all(row["generated_against"] == "c_policy" for row in by_controller.values())
+    # Stage 8 gate: the controller the set was generated against reproduces C exactly.
+    assert by_controller["policy"]["collision_timestep"] == first.replay.metrics.first_collision_timestep
+    assert by_controller["policy"]["reproduces_recorded_collision"] == 1
+    summary = summarize_evaluations(reports)
+    assert len(summary) == len(EVALUATION_EGO_CONTROLLERS)
+    assert "ego col" in format_summary_table(summary)

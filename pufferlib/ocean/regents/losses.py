@@ -311,7 +311,7 @@ def drivable_area_deviation_cost(
     out_of_bounds_rasters,
     boxes=None,
 ):
-    """Sum corner potential over valid vehicles and timesteps as in released ReGentS."""
+    """Mean over time of summed valid-vehicle corner potential, as in the paper."""
     if boxes is None:
         _validate_common_inputs(states, state_valid, length_meters, width_meters)
         _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
@@ -319,6 +319,7 @@ def drivable_area_deviation_cost(
     if len(out_of_bounds_rasters) != states.shape[0]:
         raise ValueError("out_of_bounds_rasters must contain one raster per scenario")
     corners = oriented_box_corners(boxes)
+    timestep_count = states.shape[2]
 
     scenario_costs = []
     for scenario_idx, raster in enumerate(out_of_bounds_rasters):
@@ -334,7 +335,7 @@ def drivable_area_deviation_cost(
             corner_potential,
             torch.zeros_like(corner_potential),
         ).sum(dim=(-1, -2))
-        scenario_costs.append(potential_sum.sum())
+        scenario_costs.append(potential_sum.sum() / timestep_count)
     return torch.stack(scenario_costs)
 
 

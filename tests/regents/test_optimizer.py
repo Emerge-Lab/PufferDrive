@@ -562,3 +562,84 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
 
     gap_wheelbase, _ = steering_conversion_metadata(gap_scenario, gap_action_mask, gap_actions.device)
     torch.testing.assert_close(gap_wheelbase[0, 1], torch.tensor([2.4, 2.4, 2.4, 3.6]))
+
+
+def _frozen_ego_from_log(scenario, horizon_transition_count):
+    return FrozenEgoTrajectory(
+        state=scenario.logged_state[:, 0, : horizon_transition_count + 1].clone(),
+        valid=scenario.state_valid[:, 0, : horizon_transition_count + 1].clone(),
+        scenario_ids=scenario.scenario_ids,
+        source="logged_fixture",
+    )
+
+
+def test_ego_refresh_interleaves_reactive_rollouts_with_gradient_steps():
+    """A periodic ego re-roll runs on schedule, keeps Adam state, and gates collisions."""
+    braking = _scenario(torch.stack((_straight_track(0.0, 0.0, 5.0, 13), _straight_track(12.0, 0.0, 3.0, 13))))
+    horizon = 12
+    frozen_ego = _frozen_ego_from_log(braking, horizon)
+
+    with pytest.raises(ValueError, match="ego_refresh_interval requires an ego_rollout_fn"):
+        optimize_frozen_ego_scenario(
+            braking, frozen_ego, _optimization_config(ego_refresh_interval=5), deterministic_seed=17
+        )
+    with pytest.raises(ValueError, match="ego_refresh_interval must be non-negative"):
+        ReGentSOptimizationConfig(ego_refresh_interval=-1)
+
+    # An identity refresh must leave the optimization bit-identical to a frozen run,
+    # which is what proves Adam's moments survive the swap.
+    frozen_config = _optimization_config(iteration_count=20, early_stop_on_collision=False)
+    refreshed_config = dataclasses.replace(frozen_config, ego_refresh_interval=5)
+    frozen_result = optimize_frozen_ego_scenario(braking, frozen_ego, frozen_config, deterministic_seed=17)
+
+    refresh_calls = []
+
+    def identity_rollout(drive_actions, action_mask):
+        refresh_calls.append((drive_actions.detach().clone(), action_mask.clone()))
+        return _frozen_ego_from_log(braking, horizon)
+
+    refreshed_result = optimize_frozen_ego_scenario(
+        braking, frozen_ego, refreshed_config, deterministic_seed=17, ego_rollout_fn=identity_rollout
+    )
+    assert frozen_result.ego_refresh_count == 0
+    assert refreshed_result.ego_refresh_count == 4
+    assert len(refresh_calls) == 4
+    assert refresh_calls[0][1].shape == (1, 2, horizon)
+    assert torch.equal(refreshed_result.optimized_actions, frozen_result.optimized_actions)
+    assert refreshed_result.iteration_count == frozen_result.iteration_count
+
+    # An ego that leaves the scene cannot be hit, so no iterate may be reported as a
+    # success even though the frozen-ego run collides.
+    def dodging_rollout(drive_actions, action_mask):
+        dodged = braking.logged_state[:, 0, : horizon + 1].clone()
+        dodged[..., 1] += 500.0
+        return FrozenEgoTrajectory(
+            state=dodged,
+            valid=braking.state_valid[:, 0, : horizon + 1].clone(),
+            scenario_ids=braking.scenario_ids,
+            source="logged_fixture",
+        )
+
+    collided = optimize_frozen_ego_scenario(braking, frozen_ego, _optimization_config(), deterministic_seed=17)
+    dodged_result = optimize_frozen_ego_scenario(
+        braking,
+        frozen_ego,
+        _optimization_config(ego_refresh_interval=5),
+        deterministic_seed=17,
+        ego_rollout_fn=dodging_rollout,
+    )
+    assert collided.success
+    assert not dodged_result.success
+    assert dodged_result.failure_reason == "iteration_limit"
+
+    def wrong_shape_rollout(drive_actions, action_mask):
+        return _frozen_ego_from_log(braking, horizon - 1)
+
+    with pytest.raises(ValueError, match="wrong shape"):
+        optimize_frozen_ego_scenario(
+            braking,
+            frozen_ego,
+            _optimization_config(ego_refresh_interval=1),
+            deterministic_seed=17,
+            ego_rollout_fn=wrong_shape_rollout,
+        )

@@ -58,6 +58,9 @@ DEFAULT_ADAM_BETA1 = 0.9
 DEFAULT_ADAM_BETA2 = 0.999
 DEFAULT_ADAM_EPSILON = 1e-8
 DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS = 0.0
+# Zero keeps the caller's captured ego for the whole run; a positive value re-rolls the ego
+# against the current adversary plan after that many Adam updates.
+DEFAULT_EGO_REFRESH_INTERVAL = 0
 MAXIMUM_STEERING_UPDATE_SCALE = 10.0
 BACKGROUND_COLLISION_PAIR_CHUNK_SIZE = 4096
 # Drive pins the ego to stable agent row zero, and `regents_get_states` preserves that order.
@@ -75,9 +78,28 @@ DEFAULT_STEERING_UPDATE_SCALE = 0.5
 CURVATURE_PARAMETER_LIMIT_MARGIN = 1.0 - 1e-6
 
 
+# Every ego controller ReGentS can freeze. C owns the ego whatever the controller is;
+# 'logged_fixture' is the pinned-trajectory test source.
+EGO_TRAJECTORY_SOURCES = ("c_idm", "c_replay", "c_policy", "logged_fixture")
+
+# The ego controllers ReGentS can freeze and refresh. Backgrounds must stay replay.
+SUPPORTED_SDC_CONTROLLERS = (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY, binding.CONTROLLER_POLICY)
+
+
+def ego_trajectory_source(sdc_controller):
+    """Name the C ego controller a captured trajectory came from."""
+    if sdc_controller == binding.CONTROLLER_IDM:
+        return "c_idm"
+    if sdc_controller == binding.CONTROLLER_REPLAY:
+        return "c_replay"
+    if sdc_controller == binding.CONTROLLER_POLICY:
+        return "c_policy"
+    raise ValueError("ReGentS requires sdc_controller='idm', 'replay', or 'policy'")
+
+
 @dataclass(frozen=True)
 class FrozenEgoTrajectory:
-    """Detached ego states captured from C IDM or a logged test fixture."""
+    """Detached ego states captured from a C ego controller or a logged test fixture."""
 
     state: torch.Tensor
     valid: torch.Tensor
@@ -97,8 +119,8 @@ class FrozenEgoTrajectory:
             raise ValueError("Frozen ego scenario_ids must be one string per batch row")
         if not all(isinstance(item, str) and item for item in self.scenario_ids):
             raise ValueError("Frozen ego scenario_ids must be non-empty strings")
-        if self.source not in ("c_idm", "logged_fixture", "c_replay"):
-            raise ValueError("Frozen ego source must be 'c_idm', 'logged_fixture', or 'c_replay'")
+        if self.source not in EGO_TRAJECTORY_SOURCES:
+            raise ValueError(f"Frozen ego source must be one of {EGO_TRAJECTORY_SOURCES}")
         if not torch.isfinite(self.state[self.valid]).all():
             raise ValueError("Frozen valid ego states contain NaN or Inf")
 
@@ -118,6 +140,7 @@ class ReGentSOptimizationConfig:
     steering_update_scale: float = DEFAULT_STEERING_UPDATE_SCALE
     collision_distance_tolerance_meters: float = DEFAULT_COLLISION_DISTANCE_TOLERANCE_METERS
     early_stop_on_collision: bool = True
+    ego_refresh_interval: int = DEFAULT_EGO_REFRESH_INTERVAL
 
     def __post_init__(self):
         if not isinstance(self.filter, ReGentSFilterConfig):
@@ -152,6 +175,10 @@ class ReGentSOptimizationConfig:
             raise ValueError("collision_distance_tolerance_meters must be non-negative")
         if not isinstance(self.early_stop_on_collision, bool):
             raise TypeError("early_stop_on_collision must be a boolean")
+        if not isinstance(self.ego_refresh_interval, int) or isinstance(self.ego_refresh_interval, bool):
+            raise TypeError("ego_refresh_interval must be an integer")
+        if self.ego_refresh_interval < 0:
+            raise ValueError("ego_refresh_interval must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -173,7 +200,9 @@ class ReGentSOptimizationResult:
 
     Legacy field names are retained for artifact compatibility: `best_iteration`
     identifies the returned iterate; rejection counts count infraction-bearing
-    evaluations, which no longer prevent returning an iterate.
+    evaluations, which no longer prevent returning an iterate. `iteration_count` counts
+    Adam updates only, while `cost_history` also carries the extra evaluation passes a
+    stale-ego collision recheck adds.
     """
 
     initial_actions: torch.Tensor
@@ -200,6 +229,7 @@ class ReGentSOptimizationResult:
     offroad_rejection_count: int
     failure_reason: str | None
     frozen_ego_source: str
+    ego_refresh_count: int = 0
     cost_history: tuple[CostSnapshot, ...] = ()
 
 
@@ -247,16 +277,19 @@ def capture_frozen_idm_trajectory(
     *,
     seed=None,
     raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
+    ego_action_fn=None,
 ):
-    """Reset one Drive scenario and capture its native C IDM or replay ego rollout.
+    """Reset one Drive scenario and capture its C ego rollout under any ego controller.
 
     Backgrounds remain under the Drive configuration's replay controller. The
     caller owns the Drive instance and remains responsible for closing it.
     """
     if not isinstance(transition_count, int) or transition_count < 1:
         raise ValueError("transition_count must be a positive integer")
-    if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
-        raise ValueError("Frozen ego capture requires sdc_controller='idm' or 'replay'")
+    if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
+        raise ValueError("Frozen ego capture requires sdc_controller='idm', 'replay', or 'policy'")
+    if (drive.sdc_controller == binding.CONTROLLER_POLICY) != (ego_action_fn is not None):
+        raise ValueError("A policy ego requires an ego action provider, and no other controller accepts one")
     if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:
         raise ValueError("Frozen ego capture requires non_sdc_controller='replay'")
     if drive.simulation_mode != binding.SIMULATION_MODE_REPLAY:
@@ -266,7 +299,7 @@ def capture_frozen_idm_trajectory(
     if drive.resample_frequency > 0 and transition_count >= drive.resample_frequency:
         raise ValueError("transition_count must end before Drive resamples the scenario")
 
-    drive.reset(seed=seed)
+    observations, _ = drive.reset(seed=seed)
     initial_payload = drive.get_state()
     scenario = export_drive_scenarios(
         drive,
@@ -288,7 +321,8 @@ def capture_frozen_idm_trajectory(
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
     ego_action_scratch = np.empty(REGENTS_EGO_ACTION_FEATURE_COUNT, dtype=np.float32)
     for _ in range(transition_count):
-        drive.step(neutral_actions)
+        step_actions = neutral_actions if ego_action_fn is None else ego_action_fn(observations)
+        observations = drive.step(step_actions)[0]
         binding.regents_get_states(drive.c_envs, state_scratch, valid_scratch, ego_action_scratch)
         if not np.isfinite(state_scratch[STABLE_EGO_AGENT_IDX]).all():
             raise ValueError("C SDC emitted a non-finite ego state")
@@ -299,7 +333,7 @@ def capture_frozen_idm_trajectory(
     scenario_ids.append(_ego_state_from_payload(drive.get_state(), drive.sdc_controller)[0])
     if any(item != scenario.scenario_ids[0] for item in scenario_ids):
         raise RuntimeError("Drive changed scenario during frozen IDM capture")
-    source = "c_idm" if drive.sdc_controller == binding.CONTROLLER_IDM else "c_replay"
+    source = ego_trajectory_source(drive.sdc_controller)
     frozen_ego = FrozenEgoTrajectory(
         state=torch.from_numpy(np.ascontiguousarray(np.stack(states)[None, ...])),
         valid=torch.from_numpy(np.ascontiguousarray(np.asarray(validity, dtype=np.bool_)[None, ...])),
@@ -627,6 +661,24 @@ def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
     return int(candidate_indices[int(torch.argmin(mean_distances).item())].item())
 
 
+def _refreshed_frozen_ego(ego_rollout_fn, drive_actions, optimized_action_mask, previous_frozen_ego):
+    """Re-roll the reactive ego against the current adversary plan.
+
+    The callback owns the simulator; this holds it to the contract the optimization
+    horizon needs, because a wrong-shaped or foreign ego would silently mis-align the loss.
+    """
+    refreshed = ego_rollout_fn(drive_actions.detach(), optimized_action_mask)
+    if not isinstance(refreshed, FrozenEgoTrajectory):
+        raise TypeError("ego_rollout_fn must return a FrozenEgoTrajectory")
+    if refreshed.state.shape != previous_frozen_ego.state.shape:
+        raise ValueError("ego_rollout_fn returned a trajectory of the wrong shape")
+    if refreshed.scenario_ids != previous_frozen_ego.scenario_ids:
+        raise ValueError("ego_rollout_fn returned a different scenario")
+    if refreshed.state.device != previous_frozen_ego.state.device:
+        raise ValueError("ego_rollout_fn returned a trajectory on a different device")
+    return refreshed
+
+
 def optimize_frozen_ego_scenario(
     scenario,
     frozen_ego=None,
@@ -636,18 +688,24 @@ def optimize_frozen_ego_scenario(
     horizon_transition_count=None,
     show_progress=True,
     inverse_dynamics=None,
+    ego_rollout_fn=None,
 ):
     """Optimize Stage 3 background actions against a detached ego rollout.
 
-    Adam moves the candidate adversaries' actions only; the ego replays a frozen
-    trajectory, so the loss depends on nothing the optimizer cannot change. The loop
-    stops on the first generated ego collision, on a non-finite loss or gradient, or at
-    the iteration limit, and returns the iterate it stopped on.
+    Adam moves the candidate adversaries' actions only; the ego replays a detached
+    trajectory, so the loss depends on nothing the optimizer cannot change. With
+    `config.ego_refresh_interval` set, `ego_rollout_fn` re-rolls that trajectory against
+    the current adversary plan every that many updates, which is what makes the ego
+    reactive without ever placing it in the gradient path. The loop stops on the first
+    generated ego collision confirmed against a fresh ego, on a non-finite loss or
+    gradient, or at the iteration limit, and returns the iterate it stopped on.
     """
     if scenario.batch_size != 1:
         raise ValueError("optimize_frozen_ego_scenario takes a single-scenario batch")
     if config is None:
         config = ReGentSOptimizationConfig()
+    if config.ego_refresh_interval > 0 and ego_rollout_fn is None:
+        raise ValueError("ego_refresh_interval requires an ego_rollout_fn")
     horizon_transition_count = _validate_optimization_inputs(
         scenario, frozen_ego, config, deterministic_seed, horizon_transition_count
     )
@@ -738,16 +796,22 @@ def optimize_frozen_ego_scenario(
     last_iteration = 0
     background_collision_rejection_count = 0
     offroad_rejection_count = 0
+    ego_refresh_count = 0
+    updates_since_ego_refresh = 0
+    ego_refresh_due = False
+    # Without a refresh the caller's ego is the only ego there is, so it never goes stale.
+    ego_is_fresh = True
 
     pbar = None
-    iterator = ()
-    if failure_reason is None:
-        iterator = range(config.iteration_count + 1)
-        if show_progress:
-            pbar = tqdm(iterator, desc="Optimizing", leave=False)
-            iterator = pbar
+    if failure_reason is None and show_progress:
+        pbar = tqdm(total=config.iteration_count, desc="Optimizing", leave=False)
+    # A collision recheck costs one extra evaluation, so the pass budget is twice the
+    # update budget plus the final evaluation.
+    maximum_evaluation_count = 0 if failure_reason is not None else 2 * config.iteration_count + 1
+    evaluation_idx = 0
 
-    for iteration in iterator:
+    while evaluation_idx < maximum_evaluation_count:
+        evaluation_idx += 1
         # Frozen entries take the baseline verbatim so a curvature round trip cannot
         # perturb an action the optimizer is not allowed to change.
         drive_actions = torch.where(
@@ -755,6 +819,14 @@ def optimize_frozen_ego_scenario(
             drive_actions_from_parameter(action_parameter, wheelbase_over_time),
             baseline_actions,
         )
+        if ego_refresh_due:
+            frozen_ego = _refreshed_frozen_ego(
+                ego_rollout_fn, drive_actions, selection.optimized_action_mask, frozen_ego
+            )
+            ego_refresh_count += 1
+            updates_since_ego_refresh = 0
+            ego_refresh_due = False
+            ego_is_fresh = True
         states, state_valid = _compose_rollout(
             scenario,
             inverse,
@@ -796,22 +868,31 @@ def optimize_frozen_ego_scenario(
         cost_history.append(snapshot)
         if initial_costs is None:
             initial_costs = snapshot
-        if pbar is not None and iteration % 10 == 0:
+        if pbar is not None and completed_update_count % 10 == 0:
             pbar.set_postfix(loss=f"{snapshot.total:.4f}")
 
         collision_timestep, collision_agent_idx = _first_ego_collision(
             detached_boxes, state_valid, ego_idx, candidate_mask, config.collision_distance_tolerance_meters
         )
+        # A stale ego has not answered the updates that produced this contact, so a
+        # contact that would end the run is unproven: re-roll the ego and re-evaluate
+        # this same iterate. Non-terminal contacts stay diagnostics and cost no rollout.
+        terminal_collision = collision_timestep is not None and (
+            config.early_stop_on_collision or completed_update_count == config.iteration_count
+        )
+        if terminal_collision and not ego_is_fresh:
+            ego_refresh_due = True
+            continue
         # Retain the current iterate regardless of regularization violations,
         # matching the released ReGentS return policy. Events remain diagnostics.
         current_actions = drive_actions.detach().clone()
         current_states = states.detach().clone()
         current_costs = snapshot
-        last_iteration = iteration
+        last_iteration = completed_update_count
         success = collision_timestep is not None
         if success and config.early_stop_on_collision:
             break
-        if iteration == config.iteration_count:
+        if completed_update_count == config.iteration_count:
             break
 
         optimizer.zero_grad(set_to_none=True)
@@ -850,6 +931,13 @@ def optimize_frozen_ego_scenario(
             )
             # A scale above one extrapolates past the Adam step and can leave the box.
             _project_parameter(action_parameter, steering_parameter_limit)
+
+        updates_since_ego_refresh += 1
+        if config.ego_refresh_interval > 0:
+            ego_is_fresh = False
+            ego_refresh_due = updates_since_ego_refresh >= config.ego_refresh_interval
+        if pbar is not None:
+            pbar.update(1)
 
     if pbar is not None:
         pbar.close()
@@ -903,5 +991,6 @@ def optimize_frozen_ego_scenario(
         offroad_rejection_count=offroad_rejection_count,
         failure_reason=failure_reason,
         frozen_ego_source=frozen_ego.source,
+        ego_refresh_count=ego_refresh_count,
         cost_history=tuple(cost_history),
     )

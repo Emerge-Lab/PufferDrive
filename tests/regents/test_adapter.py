@@ -231,7 +231,7 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
     unsupported_modes = (
         ("simulation_mode", binding.SIMULATION_MODE_GIGAFLOW, "simulation_mode='replay'"),
         ("_action_type_flag", binding.ACTION_TYPE_DISCRETE, "action_type='continuous'"),
-        ("dynamics_model_flag", binding.DYNAMICS_MODEL_JERK, "dynamics_model='classic'"),
+        ("dynamics_model_flag", -1, "dynamics_model='classic' or 'jerk'"),
         ("init_step_spread", True, "fixed init_step"),
         ("reward_conditioning", True, "conditioning and randomization"),
     )
@@ -243,6 +243,18 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
                 export_drive_scenarios(drive, payload=payload, raster_resolution_meters=2.0)
         finally:
             setattr(drive, attribute, original)
+
+    # A jerk env is admissible: it governs the ego controller only, while injected
+    # adversaries always integrate the classic bicycle model.
+    original_dynamics = drive.dynamics_model_flag
+    drive.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
+    jerk_payload = copy.deepcopy(payload)
+    jerk_payload["dynamics_model"] = binding.DYNAMICS_MODEL_JERK
+    try:
+        jerk_scenario = export_drive_scenarios(drive, payload=jerk_payload, raster_resolution_meters=2.0)
+        assert jerk_scenario.batch_size == 1
+    finally:
+        drive.dynamics_model_flag = original_dynamics
 
         # Two real scenarios exported together keep both slots and both rasters.
         drive_kwargs = _drive_kwargs()

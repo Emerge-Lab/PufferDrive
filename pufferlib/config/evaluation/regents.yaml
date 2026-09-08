@@ -36,13 +36,15 @@ generations:
     scenario_count: 100
     num_workers: 24
     horizon_transition_count: 100
-    maximum_outer_iterations: 1
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
+      # The ego is log replay here, so it cannot answer the adversary; a refresh would
+      # only re-derive the trajectory already captured.
+      ego_refresh_interval: 10
       filter:
         # NuPlan parked tracks can have >0.2 m of position jitter at exactly zero speed.
         static_speed_threshold_mps: 0.2
@@ -55,16 +57,18 @@ generations:
   # horizon. Keep the default cohort bounded to the first 250 sorted binaries.
   - name: regents_wod_motion_val
     seed: 42
-    scenario_count: 250
+    scenario_count: 100
     num_workers: 24
     horizon_transition_count: 90
-    maximum_outer_iterations: 1
     raster_resolution_meters: 1.0
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.005
       iteration_count: 500
+      # A reactive IDM ego answers each iterate before a contact is allowed to end the
+      # run, so stopping on the first contact means stopping on an IDM-confirmed one.
+      ego_refresh_interval: 1
       filter:
         static_speed_threshold_mps: 0.2
         # Reject the upper reconstruction tail: 93.3% of WOD candidates stay
@@ -74,11 +78,54 @@ generations:
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
       scenario_length: 91
       resample_frequency: 91
-      sdc_controller: replay
+      sdc_controller: idm
       # WOD candidate tracks reach 25 m/s at p99 and the cohort holds a few
       # implausible >40 m/s tracks; clamping a logged speed corrupts its
       # reconstruction, so keep the cap above real traffic.
       base_max_speed_mps: 40.0
+
+  # WOD Motion validation against the learned ego. Horizon, raster, learning rate,
+  # filters, and speed cap follow regents_wod_motion_val; only the ego differs.
+  - name: regents_wod_motion_val_policy
+    seed: 42
+    scenario_count: 100
+    num_workers: 24
+    horizon_transition_count: 90
+    raster_resolution_meters: 1.0
+    output_dir: experiments/regents
+    render_replays: true
+    # Record the ego observation alongside each HTML frame, so a replay shows what the
+    # policy actually saw. Off by default: it is the policy profiles that need it.
+    capture_observations: true
+    ego_policy:
+      checkpoint_path: experiments/3_0_no_conditionning_target.pt
+      config_path: experiments/3_0_no_conditionning_target_config.yaml
+      action_selection: mean
+      device: cpu
+    optimizer:
+      learning_rate: 0.005
+      iteration_count: 500
+      # A policy refresh is 90 C steps plus 90 forward passes, so the IDM profile's
+      # interval of 1 would cost 45k inferences per scenario. A run-ending contact is
+      # still rechecked against a fresh ego, so 10 trades reactivity, not correctness.
+      ego_refresh_interval: 10
+      filter:
+        static_speed_threshold_mps: 0.2
+        maximum_reconstruction_drift_meters: 1.0
+    env:
+      map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+      scenario_length: 91
+      resample_frequency: 91
+      sdc_controller: policy
+      # The checkpoint's 12-class head is jerk; injected adversaries stay classic.
+      dynamics_model: jerk
+      base_max_speed_mps: 40.0
+      obs_dropout_lane: 0.0
+      obs_dropout_boundary: 0.0
+      partner_blindness_prob: 0.0
+      partner_blindness_trigger_prob: 0.0
+      phantom_braking_prob: 0.0
+      phantom_braking_trigger_prob: 0.0
 
   # Full 20 s NuPlan window: 200 transitions at dt=0.1. scenario_length and
   # resample_frequency sit one step above the horizon so neither guard trips.
@@ -87,30 +134,71 @@ generations:
     scenario_count: 16
     num_workers: 16
     horizon_transition_count: 200
-    maximum_outer_iterations: 3
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.001
       iteration_count: 500
+      # IDM ego: re-roll it in C every 50 updates so the adversary is optimized against
+      # an ego that answers it, 10 trajectories over the run.
+      ego_refresh_interval: 1
       filter:
         static_speed_threshold_mps: 0.2
     env:
       scenario_length: 201
       resample_frequency: 201
 
+  # Adversaries targeted at a learned ego. The env dynamics model is jerk because that is
+  # what the checkpoint's 12-class action head was trained on; injected adversaries still
+  # integrate the classic bicycle model, so C/Torch parity is unchanged. The erratic-driver
+  # and observation-dropout knobs are zeroed here only: they default non-zero for training,
+  # and an ego that reads observations must be deterministic and on-distribution.
+  - name: regents_nuplan_policy
+    seed: 42
+    scenario_count: 100
+    num_workers: 24
+    horizon_transition_count: 100
+    raster_resolution_meters: 0.5
+    output_dir: experiments/regents
+    render_replays: true
+    ego_policy:
+      checkpoint_path: experiments/3_0_no_conditionning_target.pt
+      config_path: experiments/3_0_no_conditionning_target_config.yaml
+      action_selection: mean
+      device: cpu
+    optimizer:
+      learning_rate: 0.001
+      iteration_count: 500
+      # A policy refresh costs a full C rollout plus one forward pass per step, so this is
+      # the dominant per-scenario cost. 10 keeps it to 50 ego trajectories over the run.
+      ego_refresh_interval: 10
+      filter:
+        static_speed_threshold_mps: 0.2
+    env:
+      scenario_length: 101
+      resample_frequency: 101
+      sdc_controller: policy
+      dynamics_model: jerk
+      obs_dropout_lane: 0.0
+      obs_dropout_boundary: 0.0
+      partner_blindness_prob: 0.0
+      partner_blindness_trigger_prob: 0.0
+      phantom_braking_prob: 0.0
+      phantom_braking_trigger_prob: 0.0
+
   - name: regents_nuplan_smoke
     seed: 42
     scenario_count: 2
     num_workers: 1
     horizon_transition_count: 50
-    maximum_outer_iterations: 2
     raster_resolution_meters: 0.5
     output_dir: experiments/regents
     render_replays: true
     optimizer:
       learning_rate: 0.001
-      iteration_count: 20
+      iteration_count: 500
+      # One ego rollout per 10 updates: 500 updates is up to 50 ego trajectories.
+      ego_refresh_interval: 10
       filter:
         static_speed_threshold_mps: 0.2

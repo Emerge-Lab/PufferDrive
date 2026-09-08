@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection, PatchCollection, PolyCollection
 from matplotlib.patches import Circle
+import html
 import os
 import json
 import zlib
@@ -959,6 +960,9 @@ def encode_interactive_replay(scenario, replay):
         "selected_adversary_id": int(replay.get("selected_adversary_id", -1)),
         "ego_collision_loss_adversary_idx": int(replay.get("ego_collision_loss_adversary_idx", -1)),
         "ego_collision_loss_adversary_id": int(replay.get("ego_collision_loss_adversary_id", -1)),
+        "optimization_update_count": int(replay.get("optimization_update_count", -1)),
+        "optimization_ego_collision": bool(replay.get("optimization_ego_collision", False)),
+        "ego_refresh_count": int(replay.get("ego_refresh_count", -1)),
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1068,6 +1072,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Scenario ID</div><div class="value mono" id="meta-id" style="font-size:11px">-</div>
             <div class="label">Agents (active / total)</div><div class="value mono" id="meta-agents">-</div>
             <div class="label" id="meta-loss-adversary-label">Ego collision loss adversary</div><div class="value mono" id="meta-loss-adversary">-</div>
+            <div class="label" id="meta-optim-steps-label">Optim steps to ego collision</div><div class="value mono" id="meta-optim-steps">-</div>
             <div id="regents-adversary-legend" style="display:none">
                 <div class="label">ReGentS adversaries</div>
                 <div class="perturbation-key"><span class="perturbation-line adversary"></span><span>Candidate ADV</span></div>
@@ -1253,6 +1258,16 @@ self.onmessage = async event => {
             document.getElementById('meta-loss-adversary').textContent = egoCollisionLossAdversaryId === -1 ? '-' : egoCollisionLossAdversaryId;
             document.getElementById('meta-loss-adversary-label').style.display = egoCollisionLossAdversaryId === -1 ? 'none' : '';
             document.getElementById('meta-loss-adversary').style.display = egoCollisionLossAdversaryId === -1 ? 'none' : '';
+            const optimSteps = H.optimization_update_count ?? -1;
+            // A run that never reached a contact spent every step it took without one, so
+            // the count is reported under a label that says so rather than hidden.
+            const optimStepsLabel = H.optimization_ego_collision ? 'Optim steps to ego collision' : 'Optim steps (no ego collision)';
+            const refreshCount = H.ego_refresh_count ?? -1;
+            const optimStepsText = refreshCount === -1 ? String(optimSteps) : optimSteps + ' (' + refreshCount + ' ego rollouts)';
+            document.getElementById('meta-optim-steps-label').textContent = optimStepsLabel;
+            document.getElementById('meta-optim-steps').textContent = optimSteps === -1 ? '-' : optimStepsText;
+            document.getElementById('meta-optim-steps-label').style.display = optimSteps === -1 ? 'none' : '';
+            document.getElementById('meta-optim-steps').style.display = optimSteps === -1 ? 'none' : '';
             showGhost = (H.active_count === 1) && !!(H.chunks && H.chunks.ghost_f32);
             const ov = H.eval_overrides || {}, ovKeys = Object.keys(ov);
             if (ovKeys.length) document.getElementById('overrides-body').innerHTML = ovKeys.map(k=>`<div class="item"><span class="name">${k}</span><span class="num">${ov[k]}</span></div>`).join('');
@@ -1689,8 +1704,11 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         present_metrics.update(metrics.keys())
 
     FAILURE_FILTERS = (
+        ("nocandidate", ("no_candidate",), "No candidate"),
+        ("iterationlimit", ("iteration_limit",), "Iteration limit"),
         ("offroad", ("offroad_rate", "offroad"), "Off-road"),
         ("collision", ("collision_rate", "collision"), "Collisions"),
+        ("idmcollision", ("idm_reconstruction_collision",), "IDM reconstruction collisions"),
         ("atfault", ("at_fault_collision_rate", "at_fault"), "At-fault collisions"),
         ("redlight", ("red_light_violation_rate", "red_light"), "Red-light violations"),
         ("gensuccess", ("generation_success",), "Success"),
@@ -1703,8 +1721,10 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             available_failure_filters.append((filter_key, metric_keys, filter_label))
 
     failure_flags = {}
+    failure_reasons = {}
     for filename in files:
         metrics = metrics_map.get(filename, {})
+        failure_reasons[filename] = str(metrics.get("failure_reason") or "")
         flags = {}
         for filter_key, metric_keys, _ in FAILURE_FILTERS:
             if isinstance(metric_keys, str):
@@ -1719,6 +1739,7 @@ def build_gallery_index(folder_path=".", file_metrics=None):
                 f'data-{filter_key}="{str(failure_flags[filename][filter_key]).lower()}"'
                 for filter_key, _, _ in FAILURE_FILTERS
             )
+            + f' data-failure-reason="{html.escape(failure_reasons[filename], quote=True)}"'
             + ">"
             f"{filename.removesuffix('.html')}</option>"
         )
@@ -1772,8 +1793,12 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             --text: #1f2933;
             --muted: #667085;
             --accent: #2563eb;
+            --nocandidate: #475467;
+            --iterationlimit: #6941c6;
+            --failure: #344054;
             --offroad: #b45309;
             --collision: #b42318;
+            --idmcollision: #c2410c;
             --atfault: #7e22ce;
             --redlight: #d92d20;
             --gensuccess: #027a48;
@@ -1871,8 +1896,11 @@ def build_gallery_index(folder_path=".", file_metrics=None):
         }
 
         .all-dot { background: var(--accent); }
+        .nocandidate-dot { background: var(--nocandidate); }
+        .iterationlimit-dot { background: var(--iterationlimit); }
         .offroad-dot { background: var(--offroad); }
         .collision-dot { background: var(--collision); }
+        .idmcollision-dot { background: var(--idmcollision); }
         .atfault-dot { background: var(--atfault); }
         .redlight-dot { background: var(--redlight); }
         .gensuccess-dot { background: var(--gensuccess); }
@@ -2091,9 +2119,29 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             color: var(--offroad);
         }
 
+        .scenario-badge.nocandidate {
+            border-left: 3px solid var(--nocandidate);
+            color: var(--nocandidate);
+        }
+
+        .scenario-badge.iterationlimit {
+            border-left: 3px solid var(--iterationlimit);
+            color: var(--iterationlimit);
+        }
+
+        .scenario-badge.failure {
+            border-left: 3px solid var(--failure);
+            color: var(--failure);
+        }
+
         .scenario-badge.collision {
             border-left: 3px solid var(--collision);
             color: var(--collision);
+        }
+
+        .scenario-badge.idmcollision {
+            border-left: 3px solid var(--idmcollision);
+            color: var(--idmcollision);
         }
 
         .scenario-badge.atfault {
@@ -2232,6 +2280,23 @@ def build_gallery_index(folder_path=".", file_metrics=None):
             currentFailures.appendChild(badge);
         }
 
+        function formatFailureReason(reason) {
+            const labels = {
+                'iteration_limit': 'Iteration limit',
+                'scene_filtered:no_candidate': 'No candidate',
+                'no_candidate_in_optimization_horizon': 'No candidate in optimization horizon',
+                'ego_collision_present_in_baseline': 'Ego already collides in baseline',
+                'ego_collision_with_other_agent': 'Ego collision, but not with the selected adversary',
+                'no_ego_collision_in_replay': 'No ego collision in C replay',
+                'c_torch_trajectory_mismatch': 'C/Torch trajectory mismatch',
+                'torch_optimization_failed': 'Torch optimization failed',
+                'initial_state_infeasible': 'Initial state infeasible',
+                'nonfinite_loss': 'Non-finite loss',
+                'nonfinite_gradient': 'Non-finite gradient',
+            };
+            return labels[reason] || reason.replaceAll('_', ' ');
+        }
+
         function updateScenarioSummary() {
             const selectedOption = select.options[select.selectedIndex];
             currentFailures.replaceChildren();
@@ -2243,11 +2308,25 @@ def build_gallery_index(folder_path=".", file_metrics=None):
 
             const filename = selectedOption.dataset.name;
             currentReplayName.textContent = filename.replace(/\\.html$/, '');
+            if (selectedOption.dataset.nocandidate === 'true') addFailureBadge('No candidate', 'nocandidate');
+            if (selectedOption.dataset.iterationlimit === 'true') {
+                addFailureBadge('Failed: Iteration limit', 'iterationlimit');
+            }
             if (selectedOption.dataset.offroad === 'true') addFailureBadge('Off-road', 'offroad');
             if (selectedOption.dataset.collision === 'true') addFailureBadge('Collision', 'collision');
+            if (selectedOption.dataset.idmcollision === 'true') {
+                addFailureBadge('IDM reconstruction collision', 'idmcollision');
+            }
             if (selectedOption.dataset.atfault === 'true') addFailureBadge('At-fault collision', 'atfault');
             if (selectedOption.dataset.redlight === 'true') addFailureBadge('Red-light violation', 'redlight');
             if (selectedOption.dataset.gensuccess === 'true') addFailureBadge('Success', 'gensuccess');
+            const failureReason = selectedOption.dataset.failureReason;
+            const failureCoveredByCategory =
+                (failureReason === 'iteration_limit' && selectedOption.dataset.iterationlimit === 'true') ||
+                (failureReason === 'scene_filtered:no_candidate' && selectedOption.dataset.nocandidate === 'true');
+            if (failureReason && !failureCoveredByCategory) {
+                addFailureBadge('Failed: ' + formatFailureReason(failureReason), 'failure');
+            }
             if (!currentFailures.childElementCount) {
                 const badge = document.createElement('span');
                 badge.className = 'scenario-badge';

@@ -4207,7 +4207,9 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx, bool use_re
         agent->phantom_braking_counter = env->phantom_braking_duration;
     }
 
-    if (env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
+    // A ReGentS plan entry is always a normalized classic acceleration / target steering pair,
+    // so injection integrates the bicycle model whatever dynamics model the env's ego uses.
+    if (use_regents_action || env->dynamics_model == DYNAMICS_MODEL_CLASSIC) {
         // Classic dynamics model
         float acceleration = 0.0f;
         float steering = 0.0f;
@@ -4297,7 +4299,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx, bool use_re
         agent->accel_long = new_a_long;
         agent->accel_lat = new_a_lat;
     } else if (env->dynamics_model == DYNAMICS_MODEL_JERK) {
-        assert(!use_regents_action);
         // Extract jerk action components
         float j_long, j_lat;
         if (env->action_type == ACTION_TYPE_DISCRETE) {

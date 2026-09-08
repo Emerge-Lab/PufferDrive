@@ -65,8 +65,10 @@ def _validate_drive_contract(drive):
         raise ValueError("ReGentS Stage 1 requires simulation_mode='replay'")
     if drive._action_type_flag != binding.ACTION_TYPE_CONTINUOUS:
         raise ValueError("ReGentS Stage 1 requires action_type='continuous'")
-    if drive.dynamics_model_flag != binding.DYNAMICS_MODEL_CLASSIC:
-        raise ValueError("ReGentS Stage 1 requires dynamics_model='classic'")
+    # Adversary injection always integrates the classic bicycle model; the env dynamics
+    # model governs the ego controller alone, so a jerk-trained policy ego is admissible.
+    if drive.dynamics_model_flag not in (binding.DYNAMICS_MODEL_CLASSIC, binding.DYNAMICS_MODEL_JERK):
+        raise ValueError("ReGentS requires dynamics_model='classic' or 'jerk'")
     if drive.init_step_spread:
         raise ValueError("ReGentS Stage 1 requires a fixed init_step (init_step_spread=False)")
     if drive.reward_conditioning or drive.reward_randomization:
@@ -423,8 +425,11 @@ def export_drive_scenarios(drive, payload=None, raster_resolution_meters=DEFAULT
             raise ValueError(f"Scenario {scenario_idx} log_dt must be finite and positive")
         if not math.isclose(log_dt, drive.dt, rel_tol=0.0, abs_tol=TIMESTEP_TOLERANCE_SECONDS):
             raise ValueError(f"Scenario {scenario_idx} log_dt={log_dt} does not match simulation dt={drive.dt}")
-        if int(scenario.get("dynamics_model", -1)) != binding.DYNAMICS_MODEL_CLASSIC:
-            raise ValueError(f"Scenario {scenario_idx} was not exported with classic dynamics")
+        if int(scenario.get("dynamics_model", -1)) not in (
+            binding.DYNAMICS_MODEL_CLASSIC,
+            binding.DYNAMICS_MODEL_JERK,
+        ):
+            raise ValueError(f"Scenario {scenario_idx} was exported with an unsupported dynamics model")
         scenario_id = scenario.get("scenario_id")
         dataset_name = scenario.get("dataset_name")
         if not isinstance(scenario_id, str) or not scenario_id:

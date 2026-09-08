@@ -57,7 +57,7 @@ def _drivable_raster():
 
 
 def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
-    """Reference squared-center reductions, pair masking, and road sum over time."""
+    """Reference squared-center reductions, pair masking, and road time mean."""
     default_config = ReGentSCostConfig()
     assert default_config.ego_collision_weight == 1.0
     assert default_config.background_collision_weight == 5.0
@@ -252,7 +252,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             torch.tensor([[False, True, True]]),
             (_constant_raster(0.25),),
         ),
-        torch.tensor([5.0], dtype=torch.float64),
+        torch.tensor([5.0 / 3.0], dtype=torch.float64),
     )
 
     # The road cost is differentiable at an out-of-bounds pose.

@@ -7,7 +7,7 @@ import multiprocessing
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +21,8 @@ from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
 from pufferlib.ocean.regents.optimizer import ReGentSOptimizationConfig
-from pufferlib.ocean.regents.rollout import run_reactive_idm_generation
+from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoConfig, checkpoint_digest
+from pufferlib.ocean.regents.rollout import run_reactive_generation
 
 
 METRICS_FILE_NAME = "generation_metrics.csv"
@@ -30,6 +31,7 @@ REGENTS_ACTIVE_AGENT_COUNT = 1
 METRIC_FIELD_NAMES = (
     "scenario_index",
     "scenario_id",
+    "ego_controller",
     "map_index",
     "seed",
     "candidate_count",
@@ -38,6 +40,7 @@ METRIC_FIELD_NAMES = (
     "ego_collision",
     "actionable_collision",
     "background_collision",
+    "baseline_ego_collision",
     "baseline_background_collision_pair_count",
     "background_collision_rejection_count",
     "offroad",
@@ -47,7 +50,7 @@ METRIC_FIELD_NAMES = (
     "collision_timestep",
     "selected_adversary_idx",
     "selected_adversary_id",
-    "outer_iteration_count",
+    "ego_refresh_count",
     "optimization_seconds",
     "failure_reason",
     "artifact_path",
@@ -124,6 +127,26 @@ def _apply_generation_overrides(generation, experiment_name, drivable_area_weigh
     return resolved
 
 
+def _resolve_ego_policy(ego_policy, environment, generation_name):
+    """Validate the ego policy block against the generation's configured ego controller."""
+    requires_policy = environment.get("sdc_controller") == "policy"
+    if ego_policy is None:
+        if requires_policy:
+            raise ValueError(f"Generation {generation_name} uses sdc_controller='policy' but declares no ego_policy")
+        return None
+    if not requires_policy:
+        raise ValueError(f"Generation {generation_name} declares an ego_policy without sdc_controller='policy'")
+    settings = _require_mapping(ego_policy, f"Generation {generation_name} ego_policy")
+    unknown_keys = set(settings) - set(inspect.signature(ReGentSPolicyEgoConfig).parameters)
+    if unknown_keys:
+        raise ValueError(f"ReGentS ego_policy has unsupported keys: {', '.join(sorted(unknown_keys))}")
+    # Resolved as a plain JSON-safe mapping: it is hashed into the artifact source
+    # configuration, and a checkpoint path is not an identity - its bytes are.
+    resolved = asdict(ReGentSPolicyEgoConfig(**settings))
+    resolved["checkpoint_sha256"] = checkpoint_digest(resolved["checkpoint_path"])
+    return resolved
+
+
 def load_generation_config(config_path, generation_name):
     """Validate the untrusted generation config and resolve one named entry."""
     with Path(config_path).open("r", encoding="utf-8") as config_file:
@@ -159,6 +182,7 @@ def load_generation_config(config_path, generation_name):
         raise ValueError(f"ReGentS generation config has unsupported env keys: {', '.join(sorted(unknown_keys))}")
 
     optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
+    ego_policy = _resolve_ego_policy(selected.get("ego_policy"), environment, generation_name)
     num_workers = selected.get("num_workers", 1)
     if num_workers != "auto":
         _require_positive_int(num_workers, "num_workers")
@@ -171,15 +195,18 @@ def load_generation_config(config_path, generation_name):
         "horizon_transition_count": _require_positive_int(
             selected.get("horizon_transition_count"), "horizon_transition_count"
         ),
-        "maximum_outer_iterations": _require_positive_int(
-            selected.get("maximum_outer_iterations"), "maximum_outer_iterations"
-        ),
         "raster_resolution_meters": float(selected.get("raster_resolution_meters", DEFAULT_RASTER_RESOLUTION_METERS)),
         "output_dir": str(selected.get("output_dir", "experiments/regents")),
         "render_replays": bool(selected.get("render_replays", False)),
+        "capture_observations": bool(selected.get("capture_observations", False)),
         "optimizer": optimizer,
+        "ego_policy": ego_policy,
         "env": environment,
     }
+    # Observations ride along with the HTML frames, so there is nowhere to put them
+    # when replays are not being rendered.
+    if resolved["capture_observations"] and not resolved["render_replays"]:
+        raise ValueError(f"Generation {generation_name} sets capture_observations without render_replays")
     raster_resolution_meters = resolved["raster_resolution_meters"]
     if not math.isfinite(raster_resolution_meters) or raster_resolution_meters <= 0.0:
         raise ValueError("raster_resolution_meters must be finite and positive")
@@ -281,6 +308,20 @@ def save_loss_history_csv(destination, scenario_idx, result):
             )
 
 
+def _truncated_at_ego_collision(frames, ego_actions, first_ego_collision_timestep):
+    """Cut a captured rollout at the state where the ego is first struck.
+
+    Everything after the contact is the simulator carrying on past the event the
+    scenario exists to show, so the replay ends on the collision frame.
+    """
+    if first_ego_collision_timestep is None:
+        return frames, ego_actions
+    frame_count = first_ego_collision_timestep + 1
+    if frame_count >= next(iter(frames.values())).shape[0]:
+        return frames, ego_actions
+    return {key: array[:frame_count] for key, array in frames.items()}, ego_actions[:, : frame_count - 1]
+
+
 def render_scenario_replays(destination, scenario_idx, result, env_config):
     """Write logged and adversarial replays as interactive HTML with the shared viewer."""
     import pufferlib.viz
@@ -297,21 +338,35 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     candidate_adversary_ids = result.scenario.agent_id[0][result.optimization.selection.candidate_mask[0]].tolist()
     for label, frames in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
-        bundle = _replay_bundle(env_config, frames, replay.ego_actions)
+        # Both replays are cut to the same length so the logged and adversarial pages
+        # stay frame-aligned for comparison.
+        cut_frames, cut_ego_actions = _truncated_at_ego_collision(
+            frames, replay.ego_actions, replay.metrics.first_ego_collision_timestep
+        )
+        bundle = _replay_bundle(env_config, cut_frames, cut_ego_actions)
         bundle["candidate_adversary_ids"] = candidate_adversary_ids
         bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
         bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
         bundle["ego_collision_loss_adversary_idx"] = result.optimization.ego_collision_loss_adversary_idx
         bundle["ego_collision_loss_adversary_id"] = result.optimization.ego_collision_loss_adversary_id
+        bundle["optimization_update_count"] = result.optimization.iteration_count
+        bundle["optimization_ego_collision"] = result.optimization.success
+        bundle["ego_refresh_count"] = result.optimization.ego_refresh_count
         binary_path = replays_dir / f"{stem}.replay.zlib"
         html_path = render_dir / f"{stem}.html"
         pufferlib.viz.save_interactive_replay_zlib(replay.scenario_payload, bundle, str(binary_path))
         pufferlib.viz.render_interactive_replay_zlib(str(binary_path), str(html_path))
         rendered[html_path.name] = {
             "scenario_index": scenario_idx,
+            "no_candidate": float(not candidate_adversary_ids),
+            "iteration_limit": float(replay.failure_reason == "iteration_limit"),
+            "failure_reason": replay.failure_reason or "",
             "collision": float(replay.metrics.ego_collision and label == "adversarial"),
             "offroad": float(replay.metrics.offroad and label == "adversarial"),
             "generation_success": float(replay.success),
+            "idm_reconstruction_collision": float(
+                result.optimization.frozen_ego_source == "c_idm" and replay.metrics.baseline_ego_collision
+            ),
         }
     return rendered
 
@@ -330,15 +385,24 @@ def _optimization_config(optimizer_config):
     )
 
 
+def _ego_policy_config(resolved_ego_policy):
+    """Rebuild the policy ego config from its persisted mapping, dropping the digest."""
+    if resolved_ego_policy is None:
+        return None
+    settings = {key: value for key, value in resolved_ego_policy.items() if key != "checkpoint_sha256"}
+    return ReGentSPolicyEgoConfig(**settings)
+
+
 def _build_drive(environment, map_idx, seed):
     return Drive(**environment, eval_map_indices=[map_idx], eval_scenario_seeds=[seed], seed=seed)
 
 
-def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_path):
+def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_path, ego_controller):
     metrics = result.replay.metrics
     return {
         "scenario_index": scenario_idx,
         "scenario_id": result.scenario.scenario_ids[0],
+        "ego_controller": ego_controller,
         "map_index": map_idx,
         "seed": seed,
         "candidate_count": int(result.optimization.selection.candidate_mask[0].sum().item()),
@@ -347,6 +411,7 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "ego_collision": int(metrics.ego_collision),
         "actionable_collision": int(metrics.actionable_collision),
         "background_collision": int(metrics.background_collision),
+        "baseline_ego_collision": int(metrics.baseline_ego_collision),
         "baseline_background_collision_pair_count": result.optimization.baseline_background_collision_pair_count,
         "background_collision_rejection_count": result.optimization.background_collision_rejection_count,
         "offroad": int(metrics.offroad),
@@ -356,7 +421,7 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "collision_timestep": metrics.first_collision_timestep,
         "selected_adversary_idx": result.optimization.selected_adversary_idx,
         "selected_adversary_id": result.optimization.selected_adversary_id,
-        "outer_iteration_count": result.outer_iteration_count,
+        "ego_refresh_count": result.ego_refresh_count,
         "optimization_seconds": elapsed_seconds,
         "failure_reason": result.replay.failure_reason,
         "artifact_path": str(artifact_path),
@@ -386,15 +451,17 @@ def _generate_scenario(task):
         drive = _build_drive(generation["env"], scenario_idx, seed)
         started_at = time.perf_counter()
         try:
-            result = run_reactive_idm_generation(
+            ego_policy = _ego_policy_config(generation["ego_policy"])
+            result = run_reactive_generation(
                 drive,
                 optimization_config,
                 deterministic_seed=seed,
                 horizon_transition_count=generation["horizon_transition_count"],
-                maximum_outer_iterations=generation["maximum_outer_iterations"],
                 capture_html_frames=render_replays,
+                capture_observations=generation["capture_observations"],
                 show_progress=show_progress,
                 raster_resolution_meters=generation["raster_resolution_meters"],
+                ego_action_fn=None if ego_policy is None else PolicyEgoActor(ego_policy, drive),
             )
         finally:
             drive.close()
@@ -404,7 +471,15 @@ def _generate_scenario(task):
         artifact_path = npz_dir / f"scenario_{scenario_idx:05d}.npz"
         save_generation_artifact(artifact_path, result, generation, str(map_path))
         save_loss_history_csv(destination, scenario_idx, result)
-        row = _metric_row(scenario_idx, scenario_idx, seed, result, elapsed_seconds, artifact_path)
+        row = _metric_row(
+            scenario_idx,
+            scenario_idx,
+            seed,
+            result,
+            elapsed_seconds,
+            artifact_path,
+            generation["env"]["sdc_controller"],
+        )
         rendered_files = (
             render_scenario_replays(destination, scenario_idx, result, env_config) if render_replays else {}
         )

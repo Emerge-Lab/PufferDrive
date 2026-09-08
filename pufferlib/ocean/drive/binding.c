@@ -105,9 +105,10 @@ static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused
         PyErr_SetString(PyExc_ValueError, "ReGentS transition count is outside the configured scenario horizon");
         return NULL;
     }
-    if (env->simulation_mode != SIMULATION_MODE_REPLAY || env->action_type != ACTION_TYPE_CONTINUOUS
-        || env->dynamics_model != DYNAMICS_MODEL_CLASSIC) {
-        PyErr_SetString(PyExc_ValueError, "ReGentS injection requires replay mode with continuous classic dynamics");
+    // Injected entries are integrated with the classic bicycle model regardless of
+    // env->dynamics_model, which governs the ego alone. See move_dynamics.
+    if (env->simulation_mode != SIMULATION_MODE_REPLAY || env->action_type != ACTION_TYPE_CONTINUOUS) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS injection requires replay mode with continuous actions");
         return NULL;
     }
 

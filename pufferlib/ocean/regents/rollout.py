@@ -1,7 +1,7 @@
 """Authoritative C replay and reactive-controller iteration for ReGentS."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
@@ -10,10 +10,12 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.optimizer import (
+    SUPPORTED_SDC_CONTROLLERS,
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
     ReGentSOptimizationResult,
     capture_frozen_idm_trajectory,
+    ego_trajectory_source,
     optimize_frozen_ego_scenario,
 )
 from pufferlib.ocean.regents.state import (
@@ -41,10 +43,12 @@ class CReplayMetrics:
     maximum_ego_reference_error: float
     first_collision_timestep: int | None
     first_collision_pair: tuple[int, int] | None
+    first_ego_collision_timestep: int | None
     ego_collision: bool
     actionable_collision: bool
     background_collision: bool
     offroad: bool
+    baseline_ego_collision: bool
     baseline_collision_pair_count: int
     compared_state_count: int
 
@@ -68,8 +72,9 @@ class ReactiveGenerationResult:
     scenario: ScenarioBatch
     optimization: ReGentSOptimizationResult
     replay: CReplayResult
-    outer_iteration_count: int
+    ego_refresh_count: int
     deterministic_seed: int
+    ego_source: str
 
 
 @dataclass(frozen=True)
@@ -148,9 +153,18 @@ def _capture_c_rollout(
     agent_count,
     seed,
     capture_html_frames=False,
+    ego_action_fn=None,
+    capture_observations=False,
 ):
-    """Reset and step one installed action plan, recording states and C events."""
-    drive.reset(seed=seed)
+    """Reset and step one installed action plan, recording states and C events.
+
+    `ego_action_fn` supplies the ego action for a policy SDC. A native controller
+    ignores the action buffer, so leaving it None steps neutral actions as before.
+    Observations ride alongside the HTML frames, one per captured frame.
+    """
+    if capture_observations and not capture_html_frames:
+        raise ValueError("capture_observations requires capture_html_frames")
+    observations, _ = drive.reset(seed=seed)
     payload_scenario, initial_state, initial_valid, _ = _current_states(drive.get_state(), agent_count)
     if payload_scenario.get("scenario_id") != expected_scenario_id:
         raise RuntimeError("C replay reset to a different scenario")
@@ -170,11 +184,14 @@ def _capture_c_rollout(
         drive.get_obs_html_frame(*(scratch[key] for key in scratch))
         for key, array in scratch.items():
             html_frames[key].append(array[0].copy())
+        if capture_observations:
+            html_frames["obs"] = [np.asarray(observations, dtype=np.float32).copy()]
     state_scratch = np.empty((agent_count, STATE_FEATURE_COUNT), dtype=np.float32)
     valid_scratch = np.empty(agent_count, dtype=np.bool_)
     ego_action_scratch = np.empty(2, dtype=np.float32)
     for transition_idx in range(transition_count):
-        drive.step(neutral_actions)
+        step_actions = neutral_actions if ego_action_fn is None else ego_action_fn(observations)
+        observations = drive.step(step_actions)[0]
         binding.regents_get_states(drive.c_envs, state_scratch, valid_scratch, ego_action_scratch)
         if not np.isfinite(state_scratch[valid_scratch]).all():
             raise RuntimeError("C replay emitted NaN or Inf")
@@ -185,6 +202,8 @@ def _capture_c_rollout(
             drive.get_obs_html_frame(*(scratch[key] for key in scratch))
             for key, array in scratch.items():
                 html_frames[key].append(array[0].copy())
+            if capture_observations:
+                html_frames["obs"].append(np.asarray(observations, dtype=np.float32).copy())
         events = binding.regents_get_events(drive.c_envs)
         pairs = tuple(sorted(tuple(sorted(int(index) for index in pair)) for pair in events["collision_pairs"]))
         if pairs:
@@ -213,6 +232,68 @@ def _capture_c_rollout(
     )
 
 
+def _unconfirmed_collision_reason(ego_collision, baseline_ego_collision):
+    """Name why C attributed no ego/selected-adversary collision to the optimization.
+
+    Torch found a collision and parity held, so the three outcomes below are the only
+    ways the authoritative replay can still decline to credit the adversary. They are
+    reported separately because they call for different work: a pre-existing baseline
+    contact is an ego-quality problem, an ego collision with another agent is an
+    adversary-selection problem, and neither is the optimization failing to converge.
+    """
+    if ego_collision:
+        return "ego_collision_with_other_agent"
+    if baseline_ego_collision:
+        return "ego_collision_present_in_baseline"
+    return "no_ego_collision_in_replay"
+
+
+def baseline_relative_events(baseline, adversarial, selected_adversary_idx, injected_agent_mask):
+    """Attribute C events to the optimization by subtracting the baseline rollout's.
+
+    This is the single definition of ego / actionable / background collision and
+    introduced off-road; generation replay and artifact-set evaluation share it so the
+    two can never disagree about what an event means.
+    """
+    baseline_pairs = {pair for _, pairs in baseline.collision_pairs for pair in pairs}
+    baseline_ego_collision = any(0 in pair for pair in baseline_pairs)
+    ego_collision = False
+    actionable_collision = False
+    background_collision = False
+    first_collision_timestep = None
+    first_collision_pair = None
+    first_ego_collision_timestep = None
+    for state_timestep, pairs in adversarial.collision_pairs:
+        introduced = [pair for pair in pairs if pair not in baseline_pairs]
+        if not introduced:
+            continue
+        if first_collision_timestep is None:
+            first_collision_timestep = state_timestep
+            first_collision_pair = min(introduced)
+        for left_idx, right_idx in introduced:
+            if left_idx != 0 and right_idx != 0:
+                background_collision = True
+                continue
+            ego_collision = True
+            if first_ego_collision_timestep is None:
+                first_ego_collision_timestep = state_timestep
+            other_idx = right_idx if left_idx == 0 else left_idx
+            actionable_collision |= other_idx == selected_adversary_idx
+    introduced_offroad = adversarial.offroad & ~baseline.offroad
+    offroad = bool(introduced_offroad[injected_agent_mask].any())
+    return (
+        ego_collision,
+        actionable_collision,
+        background_collision,
+        offroad,
+        first_collision_timestep,
+        first_collision_pair,
+        first_ego_collision_timestep,
+        baseline_ego_collision,
+        baseline_pairs,
+    )
+
+
 def _validate_replay_inputs(drive, scenario, optimization, tolerance):
     if not isinstance(scenario, ScenarioBatch) or scenario.batch_size != 1:
         raise ValueError("Stage 6 C replay supports one ScenarioBatch item")
@@ -222,8 +303,9 @@ def _validate_replay_inputs(drive, scenario, optimization, tolerance):
         raise ValueError("Stage 6 requires one Drive environment in replay mode")
     if drive._action_type_flag != binding.ACTION_TYPE_CONTINUOUS:
         raise ValueError("Stage 6 requires continuous actions")
-    if drive.dynamics_model_flag != binding.DYNAMICS_MODEL_CLASSIC:
-        raise ValueError("Stage 6 requires classic dynamics")
+    # Injected adversaries integrate classic dynamics whatever the ego's model is.
+    if drive.dynamics_model_flag not in (binding.DYNAMICS_MODEL_CLASSIC, binding.DYNAMICS_MODEL_JERK):
+        raise ValueError("Stage 6 requires dynamics_model='classic' or 'jerk'")
     if not math.isfinite(tolerance) or tolerance <= 0.0:
         raise ValueError("tolerance must be finite and positive")
     expected_action_shape = (1, scenario.max_agent_count, optimization.optimized_states.shape[2] - 1, 2)
@@ -243,6 +325,8 @@ def replay_optimized_scenario_in_c(
     seed=None,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
+    ego_action_fn=None,
+    capture_observations=False,
 ):
     """Replay optimized background controls in C and use C as the success oracle."""
     _validate_replay_inputs(drive, scenario, optimization, tolerance)
@@ -269,6 +353,8 @@ def replay_optimized_scenario_in_c(
             agent_count,
             seed,
             capture_html_frames,
+            ego_action_fn,
+            capture_observations,
         )
         binding.regents_set_action_plan(drive.c_envs, optimized_plan, action_mask)
         adversarial = _capture_c_rollout(
@@ -278,6 +364,8 @@ def replay_optimized_scenario_in_c(
             agent_count,
             seed,
             capture_html_frames,
+            ego_action_fn,
+            capture_observations,
         )
     finally:
         binding.regents_set_action_plan(drive.c_envs, baseline_plan, np.zeros_like(action_mask))
@@ -314,29 +402,23 @@ def replay_optimized_scenario_in_c(
     maximum_error = float(differences[feature_mask].max().item()) if feature_mask.any() else 0.0
     compared_state_count = int(feature_mask.sum().item())
 
-    baseline_pairs = {pair for _, pairs in baseline.collision_pairs for pair in pairs}
-    selected_adversary_idx = optimization.selected_adversary_idx
-    ego_collision = False
-    actionable_collision = False
-    background_collision = False
-    first_collision_timestep = None
-    first_collision_pair = None
-    for state_timestep, pairs in adversarial.collision_pairs:
-        introduced = [pair for pair in pairs if pair not in baseline_pairs]
-        if not introduced:
-            continue
-        if first_collision_timestep is None:
-            first_collision_timestep = state_timestep
-            first_collision_pair = min(introduced)
-        for left_idx, right_idx in introduced:
-            if left_idx != 0 and right_idx != 0:
-                background_collision = True
-                continue
-            ego_collision = True
-            other_idx = right_idx if left_idx == 0 else left_idx
-            actionable_collision |= other_idx == selected_adversary_idx
-    introduced_offroad = adversarial.offroad & ~baseline.offroad
-    offroad = bool(introduced_offroad[injected_agent_mask[0].numpy()].any())
+    events = baseline_relative_events(
+        baseline,
+        adversarial,
+        optimization.selected_adversary_idx,
+        injected_agent_mask[0].numpy(),
+    )
+    (
+        ego_collision,
+        actionable_collision,
+        background_collision,
+        offroad,
+        first_collision_timestep,
+        first_collision_pair,
+        first_ego_collision_timestep,
+        baseline_ego_collision,
+        baseline_pairs,
+    ) = events
 
     failure_reason = None
     if maximum_error > tolerance:
@@ -344,16 +426,18 @@ def replay_optimized_scenario_in_c(
     elif not optimization.success:
         failure_reason = optimization.failure_reason or "torch_optimization_failed"
     elif not actionable_collision:
-        failure_reason = "c_did_not_confirm_actionable_ego_collision"
+        failure_reason = _unconfirmed_collision_reason(ego_collision, baseline_ego_collision)
     metrics = CReplayMetrics(
         maximum_trajectory_error=maximum_error,
         maximum_ego_reference_error=maximum_ego_reference_error,
         first_collision_timestep=first_collision_timestep,
         first_collision_pair=first_collision_pair,
+        first_ego_collision_timestep=first_ego_collision_timestep,
         ego_collision=ego_collision,
         actionable_collision=actionable_collision,
         background_collision=background_collision,
         offroad=offroad,
+        baseline_ego_collision=baseline_ego_collision,
         baseline_collision_pair_count=len(baseline_pairs),
         compared_state_count=compared_state_count,
     )
@@ -371,25 +455,64 @@ def replay_optimized_scenario_in_c(
     )
 
 
-def run_reactive_idm_generation(
+def make_c_ego_rollout(drive, scenario, horizon_transition_count, seed, ego_action_fn=None):
+    """Build the callback that re-rolls the C ego against a candidate action plan.
+
+    Drive is the authority on how the ego answers an adversary, so a refresh is a real C
+    rollout with the plan installed. The plan is cleared afterwards so the verification
+    replay starts from the same clean env the optimizer's caller handed over.
+    """
+    scenario_id = scenario.scenario_ids[0]
+    agent_count = scenario.max_agent_count
+    ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
+    source = ego_trajectory_source(drive.sdc_controller)
+
+    def ego_rollout(drive_actions, action_mask):
+        plan = np.ascontiguousarray(drive_actions[0].detach().cpu().numpy(), dtype=np.float32)
+        mask = np.ascontiguousarray(action_mask[0].detach().cpu().numpy(), dtype=np.bool_)
+        try:
+            binding.regents_set_action_plan(drive.c_envs, plan, mask)
+            rollout = _capture_c_rollout(
+                drive,
+                horizon_transition_count,
+                scenario_id,
+                agent_count,
+                seed,
+                ego_action_fn=ego_action_fn,
+            )
+        finally:
+            binding.regents_set_action_plan(drive.c_envs, plan, np.zeros_like(mask))
+        return FrozenEgoTrajectory(
+            state=rollout.states[:, ego_idx].detach().clone(),
+            valid=rollout.state_valid[:, ego_idx].detach().clone(),
+            scenario_ids=scenario.scenario_ids,
+            source=source,
+        )
+
+    return ego_rollout
+
+
+def run_reactive_generation(
     drive,
     optimization_config=None,
     *,
     deterministic_seed,
     horizon_transition_count,
-    maximum_outer_iterations=3,
     tolerance=C_REPLAY_TOLERANCE,
     capture_html_frames=False,
     show_progress=True,
     raster_resolution_meters=DEFAULT_RASTER_RESOLUTION_METERS,
+    ego_action_fn=None,
+    capture_observations=False,
 ):
-    """Alternate detached native-IDM C rollouts and Torch adversary blocks."""
-    if drive.sdc_controller not in (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY):
-        raise ValueError("Reactive IDM generation requires sdc_controller='idm' or 'replay'")
-    if drive.sdc_controller == binding.CONTROLLER_REPLAY:
-        maximum_outer_iterations = 1
-    if not isinstance(maximum_outer_iterations, int) or maximum_outer_iterations < 1:
-        raise ValueError("maximum_outer_iterations must be a positive integer")
+    """Optimize one scenario against a periodically re-rolled C ego, then verify in C.
+
+    The ego reacts inside the optimization loop, on `ego_refresh_interval`; C stays the
+    success oracle through a single verification replay at the end. `ego_action_fn`
+    supplies actions for a policy ego and must be absent for a native C controller.
+    """
+    if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
+        raise ValueError("Reactive generation requires sdc_controller='idm', 'replay', or 'policy'")
     if optimization_config is None:
         optimization_config = ReGentSOptimizationConfig()
 
@@ -398,49 +521,47 @@ def run_reactive_idm_generation(
         horizon_transition_count,
         seed=deterministic_seed,
         raster_resolution_meters=raster_resolution_meters,
+        ego_action_fn=ego_action_fn,
     )
     inverse_dynamics = estimate_expert_actions(
         scenario,
         horizon_transition_count=horizon_transition_count,
     )
-    previous_actions = None
-    for outer_iteration_idx in range(maximum_outer_iterations):
-        optimization = optimize_frozen_ego_scenario(
-            scenario,
-            frozen_ego,
-            optimization_config,
-            deterministic_seed=deterministic_seed,
-            horizon_transition_count=horizon_transition_count,
-            show_progress=show_progress,
-            inverse_dynamics=inverse_dynamics,
+    # A log-replayed ego ignores the adversary, so a refresh would spend C steps
+    # reproducing the trajectory already captured.
+    ego_rollout_fn = None
+    if drive.sdc_controller != binding.CONTROLLER_REPLAY and optimization_config.ego_refresh_interval > 0:
+        ego_rollout_fn = make_c_ego_rollout(
+            drive, scenario, horizon_transition_count, deterministic_seed, ego_action_fn
         )
-        replay = replay_optimized_scenario_in_c(
-            drive,
-            scenario,
-            optimization,
-            seed=deterministic_seed,
-            tolerance=tolerance,
-            capture_html_frames=capture_html_frames,
-        )
-        if replay.success:
-            break
-        if torch.equal(optimization.initial_actions, optimization.optimized_actions):
-            break
-        if previous_actions is not None and torch.equal(previous_actions, optimization.optimized_actions):
-            break
-        previous_actions = optimization.optimized_actions.detach().clone()
-        ego_idx = int(torch.where(scenario.ego_mask[0])[0].item())
-        source = "c_idm" if drive.sdc_controller == binding.CONTROLLER_IDM else "c_replay"
-        frozen_ego = FrozenEgoTrajectory(
-            state=replay.states[:, ego_idx].detach().clone(),
-            valid=replay.state_valid[:, ego_idx].detach().clone(),
-            scenario_ids=scenario.scenario_ids,
-            source=source,
-        )
+    else:
+        optimization_config = replace(optimization_config, ego_refresh_interval=0)
+
+    optimization = optimize_frozen_ego_scenario(
+        scenario,
+        frozen_ego,
+        optimization_config,
+        deterministic_seed=deterministic_seed,
+        horizon_transition_count=horizon_transition_count,
+        show_progress=show_progress,
+        inverse_dynamics=inverse_dynamics,
+        ego_rollout_fn=ego_rollout_fn,
+    )
+    replay = replay_optimized_scenario_in_c(
+        drive,
+        scenario,
+        optimization,
+        seed=deterministic_seed,
+        tolerance=tolerance,
+        capture_html_frames=capture_html_frames,
+        ego_action_fn=ego_action_fn,
+        capture_observations=capture_observations,
+    )
     return ReactiveGenerationResult(
         scenario=scenario,
         optimization=optimization,
         replay=replay,
-        outer_iteration_count=outer_iteration_idx + 1,
+        ego_refresh_count=optimization.ego_refresh_count,
         deterministic_seed=deterministic_seed,
+        ego_source=frozen_ego.source,
     )
