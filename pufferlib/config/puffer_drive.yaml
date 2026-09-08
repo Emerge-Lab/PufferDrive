@@ -74,7 +74,7 @@ env:
   # Offroad behavior - options: "ignore", "stop", "remove"
   offroad_behavior: stop
   # Traffic light behavior - options: "ignore", "stop", "remove"
-  traffic_light_behavior: stop
+  traffic_light_behavior: ignore
   # Coordinate traffic lights by junction phase when map metadata is available
   traffic_light_junction_phases: false
   # Target collision/offroad behavior: normal, ignore, or remove only the target.
@@ -258,7 +258,7 @@ train:
   # Null disables evaluation during training.
   evaluation_interval_epochs: null
   # Select multiple benchmarks with a comma-separated value. eg: carla_fast,womd_single
-  evaluation_benchmarks: carla_fast
+  evaluation_benchmarks: adversarial_carla
   torch_deterministic: false
   cpu_offload: false
   device: cuda

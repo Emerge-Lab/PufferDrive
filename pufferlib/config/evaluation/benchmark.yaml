@@ -58,6 +58,23 @@ benchmarks:
       control_mode: control_vehicles
       map_dir: pufferlib/resources/drive/binaries/carla
 
+  - name: adversarial_carla
+    seed: 42
+    num_scenarios: 250
+    env:
+      simulation_mode: gigaflow
+      num_maps: 8
+      min_agents_per_env: 2
+      max_agents_per_env: 8
+      eval_agent_count_mode: random
+      adversarial_termination_mode: target_inactive
+      target_collision_continuation_seconds: 0.0
+      traffic_light_behavior: ignore
+      max_scenarios_per_batch: null
+      scenario_length: 2560
+      control_mode: control_vehicles
+      map_dir: pufferlib/resources/drive/binaries/carla
+
   - name: womd_multi
     seed: 42
     num_scenarios: 1000
