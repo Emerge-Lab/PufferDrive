@@ -18,10 +18,10 @@ from pufferlib.ocean.regents.state import STATE_HEADING, STATE_X, STATE_Y, Driva
 
 
 DEFAULT_EGO_COLLISION_WEIGHT = 1.0
-# V-Max `origin/dev/Regents_is_back` labels these values "WAWA TUNING" in
-# `vmax/scripts/evaluate/regents/evaluate.py`: collision 20, deviation 10.
-DEFAULT_BACKGROUND_COLLISION_WEIGHT = 20.0
-DEFAULT_DRIVABLE_AREA_WEIGHT = 10.0
+# Released ReGentS `conf/config_scenario_opt.yaml`: adversary collision 5 and
+# adversary deviation 20; the ego-collision term has an implicit coefficient 1.
+DEFAULT_BACKGROUND_COLLISION_WEIGHT = 5.0
+DEFAULT_DRIVABLE_AREA_WEIGHT = 20.0
 DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS = 1.25
 SAFE_MASKED_BOX_SIZE_METERS = 1.0
 PAIRWISE_DISTANCE_CHUNK_SIZE = 4096
@@ -29,7 +29,7 @@ PAIRWISE_DISTANCE_CHUNK_SIZE = 4096
 
 @dataclass(frozen=True)
 class ReGentSCostConfig:
-    """V-Max-tuned weights and released ReGentS Gaussian/truncation parameters."""
+    """Released ReGentS weights and Gaussian/truncation parameters."""
 
     ego_collision_weight: float = DEFAULT_EGO_COLLISION_WEIGHT
     background_collision_weight: float = DEFAULT_BACKGROUND_COLLISION_WEIGHT
@@ -302,27 +302,6 @@ def _background_collision_avoidance_cost_and_diagnostics(
     )
 
 
-def background_collision_avoidance_cost(
-    states,
-    state_valid,
-    length_meters,
-    width_meters,
-    background_vehicle_mask,
-    optimized_vehicle_mask,
-    truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
-):
-    """Return negative minimum squared center distance capped at truncation squared."""
-    return _background_collision_avoidance_cost_and_diagnostics(
-        states,
-        state_valid,
-        length_meters,
-        width_meters,
-        background_vehicle_mask,
-        optimized_vehicle_mask,
-        truncation_meters,
-    )[0]
-
-
 def drivable_area_deviation_cost(
     states,
     state_valid,
@@ -330,26 +309,15 @@ def drivable_area_deviation_cost(
     width_meters,
     optimized_vehicle_mask,
     out_of_bounds_rasters,
-    baseline_corner_potential=None,
     boxes=None,
 ):
-    """Sum corner potential over valid vehicles and timesteps as in released ReGentS.
-
-    Optional baseline subtraction is retained for callers comparing diagnostics;
-    the optimizer uses the absolute potential.
-    """
+    """Sum corner potential over valid vehicles and timesteps as in released ReGentS."""
     if boxes is None:
         _validate_common_inputs(states, state_valid, length_meters, width_meters)
         _validate_agent_mask(optimized_vehicle_mask, states, "optimized_vehicle_mask")
         boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
     if len(out_of_bounds_rasters) != states.shape[0]:
         raise ValueError("out_of_bounds_rasters must contain one raster per scenario")
-    if baseline_corner_potential is not None:
-        expected_shape = (*states.shape[:-1], 4)
-        if tuple(baseline_corner_potential.shape) != expected_shape:
-            raise ValueError("baseline_corner_potential must have shape [batch, agent, time, 4]")
-        if baseline_corner_potential.device != states.device or baseline_corner_potential.dtype != states.dtype:
-            raise ValueError("baseline_corner_potential must match the states device and dtype")
     corners = oriented_box_corners(boxes)
 
     scenario_costs = []
@@ -360,8 +328,6 @@ def drivable_area_deviation_cost(
         if potential.device != states.device or potential.dtype != states.dtype:
             raise ValueError("Out-of-bounds rasters and states must share device and dtype")
         corner_potential = sample_out_of_bounds_potential(corners[scenario_idx], raster)
-        if baseline_corner_potential is not None:
-            corner_potential = corner_potential - baseline_corner_potential[scenario_idx]
         valid = state_valid[scenario_idx] & optimized_vehicle_mask[scenario_idx, :, None]
         potential_sum = torch.where(
             valid[..., None],
@@ -383,7 +349,6 @@ def combined_regents_cost(
     optimized_vehicle_mask,
     out_of_bounds_rasters,
     config=None,
-    baseline_corner_potential=None,
 ):
     """Combine released-code collision costs and the grid-approximated road cost."""
     if config is None:
@@ -450,7 +415,6 @@ def combined_regents_cost(
         width_meters,
         optimized_vehicle_mask,
         out_of_bounds_rasters,
-        baseline_corner_potential,
         boxes,
     )
     total = (

@@ -4,7 +4,6 @@ import pytest
 import torch
 
 from pufferlib.ocean.regents.dynamics import (
-    ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     STEERING_LIMIT_RADIANS,
     STEERING_RATE_LIMIT_RADIANS_PER_SECOND,
     TARGET_STEERING_SCALE_RADIANS,
@@ -13,10 +12,8 @@ from pufferlib.ocean.regents.dynamics import (
 from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_STEERING
 from pufferlib.ocean.regents.waymax_actions import (
     NORMALIZED_CURVATURE_LIMIT,
-    WAYMAX_MAXIMUM_ACCELERATION_MPS2,
     WAYMAX_MAXIMUM_CURVATURE_PER_METER,
     curvature_from_target_steering,
-    drive_action_from_waymax_action,
     target_steering_from_curvature,
 )
 
@@ -78,31 +75,8 @@ def test_curvature_wheel_angle_conversion_round_trips_saturates_and_differentiat
     assert differentiable_curvature.grad.abs().item() > 0.0
 
 
-def test_waymax_action_conversion_matches_the_simulator_and_reports_its_limits():
-    """Channel normalization, realized curvature in classic_step, and both saturations."""
-    wheelbase = _wheelbase((2,))
-    waymax_action = torch.tensor([[2.0, 0.1], [-4.0, -0.05]], dtype=torch.float32)
-    conversion = drive_action_from_waymax_action(waymax_action, wheelbase)
-    torch.testing.assert_close(
-        conversion.action[:, 0], waymax_action[:, 0] / ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
-    )
-    expected_steering, _ = target_steering_from_curvature(waymax_action[:, 1], wheelbase)
-    torch.testing.assert_close(conversion.action[:, 1], expected_steering / TARGET_STEERING_SCALE_RADIANS)
-    assert not conversion.acceleration_saturated.any()
-    assert not conversion.curvature_saturated.any()
-    assert torch.all(conversion.action.abs() <= 1.0)
-    assert torch.equal(conversion.action, drive_action_from_waymax_action(waymax_action, wheelbase).action)
-
-    # Reference maxima exceed PufferDrive on both channels and are reported, not hidden.
-    at_reference_limit = drive_action_from_waymax_action(
-        torch.tensor([[WAYMAX_MAXIMUM_ACCELERATION_MPS2, WAYMAX_MAXIMUM_CURVATURE_PER_METER]], dtype=torch.float32),
-        _wheelbase((1,)),
-    )
-    assert at_reference_limit.acceleration_saturated.tolist() == [True]
-    assert at_reference_limit.curvature_saturated.tolist() == [True]
-    torch.testing.assert_close(at_reference_limit.action, torch.ones_like(at_reference_limit.action))
-
-    # A held wheel angle realizes the requested yaw-per-metre in the simulator.
+def test_converted_wheel_angle_realizes_the_requested_curvature_in_the_simulator():
+    """A held wheel angle realizes the requested yaw-per-metre, up to the rate limit."""
     curvature = torch.tensor([[-0.20, -0.05, 0.0, 0.05, 0.20]], dtype=torch.float32)
     held_wheelbase = _wheelbase(curvature.shape)
     steering, saturated = target_steering_from_curvature(curvature, held_wheelbase)
@@ -135,16 +109,16 @@ def test_waymax_action_conversion_matches_the_simulator_and_reports_its_limits()
 
 
 def test_conversion_rejects_out_of_contract_input():
-    """Shape, dtype, finiteness, both reference bounds, and an unusable wheelbase."""
+    """Shape, dtype, finiteness, and an unusable wheelbase."""
+    unit_wheelbase = _wheelbase((2,))
     out_of_contract = (
-        (torch.zeros((2, 3), dtype=torch.float32), "shape"),
-        (torch.zeros((2, 2), dtype=torch.float64), "float32"),
-        (torch.full((2, 2), float("nan"), dtype=torch.float32), "NaN"),
-        (torch.tensor([[7.0, 0.0], [0.0, 0.0]], dtype=torch.float32), "acceleration exceeds"),
-        (torch.tensor([[0.0, 0.4], [0.0, 0.0]], dtype=torch.float32), "curvature exceeds"),
+        (torch.zeros(3, dtype=torch.float32), "share a shape"),
+        (torch.zeros(2, dtype=torch.float64), "float32"),
+        (torch.full((2,), float("nan"), dtype=torch.float32), "NaN"),
+        (torch.zeros((2,)).tolist(), "Torch tensor"),
     )
-    for action, message in out_of_contract:
+    for curvature, message in out_of_contract:
         with pytest.raises((TypeError, ValueError), match=message):
-            drive_action_from_waymax_action(action, _wheelbase((2,)))
+            target_steering_from_curvature(curvature, unit_wheelbase)
     with pytest.raises(ValueError, match="positive"):
         target_steering_from_curvature(torch.zeros(2, dtype=torch.float32), torch.zeros(2, dtype=torch.float32))

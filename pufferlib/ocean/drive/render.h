@@ -1170,6 +1170,11 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
         Vector3 size = {agent->sim_length, agent->sim_width, agent->sim_height};
 
         bool is_expert = (!is_active_agent) && (agent->mark_as_expert == 1);
+        // Infraction flags are computed for background ReGentS actors too, so the
+        // red highlight must not be gated on is_active_agent.
+        bool has_infraction
+            = (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
+               || agent->metrics_array[RED_LIGHT_IDX] > 0);
 
         // Save current transform
         if (mode == 1) {
@@ -1213,9 +1218,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (is_active_agent) {
                 car_color = GREEN; // policy-controlled SDC
             }
-            if (is_active_agent
-                && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
-                    || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
+            if (has_infraction) {
                 car_color = RED;
             }
             if (is_active_agent && car_color.r == GREEN.r && car_color.g == GREEN.g) {
@@ -1247,9 +1250,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
             if (is_active_agent) {
                 car_model = client->cars[client->car_assignments[i % 64]];
             }
-            if (is_active_agent
-                && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
-                    || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
+            if (has_infraction) {
                 car_model = client->cars[0]; // Collided agent
             }
             // Draw obs for human selected agent
@@ -1292,9 +1293,7 @@ void draw_scene(Drive *env, Client *client, int mode, int obs_only, int lasers, 
                 if (is_active_agent) {
                     wire_color = GREEN; // policy-controlled SDC
                 }
-                if (is_active_agent
-                    && (agent->metrics_array[COLLISION_IDX] > 0 || agent->metrics_array[OFFROAD_IDX] > 0
-                        || agent->metrics_array[RED_LIGHT_IDX] > 0)) {
+                if (has_infraction) {
                     wire_color = RED;
                 }
                 if (is_active_agent && wire_color.r == GREEN.r && wire_color.g == GREEN.g) {

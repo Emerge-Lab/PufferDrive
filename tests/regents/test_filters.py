@@ -7,7 +7,6 @@ import torch
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.filters import (
     ReGentSFilterConfig,
-    SceneFilterReason,
     front_divergence_mask,
     select_adversary_candidates,
 )
@@ -144,14 +143,6 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     assert background_overlap.scene_eligible.tolist() == [True]
     assert background_overlap.scene_reasons_for(0) == ()
     assert background_overlap.candidate_mask.tolist() == [[False, True, True]]
-
-    caller_filtered = select_adversary_candidates(
-        make_scenario(torch.stack((_linear_track(0.0, 0.0, 2.0), _linear_track(8.0, 4.0, 2.0)))[None]),
-        scene_suitable=torch.tensor([False]),
-    )
-    assert not caller_filtered.scene_eligible[0]
-    assert int(caller_filtered.scene_reason_bits[0]) & int(SceneFilterReason.CALLER_UNSUITABLE)
-    assert "scene_unsuitable" in caller_filtered.reasons_for(0, 1)
 
     # The rear sector boundary is strict: exactly pi/8 from directly behind survives.
     exact_angle = 7.0 * math.pi / 8.0

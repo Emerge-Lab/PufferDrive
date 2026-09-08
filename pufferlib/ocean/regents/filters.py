@@ -38,7 +38,6 @@ class CandidateFilterReason(IntFlag):
 class SceneFilterReason(IntFlag):
     NONE = 0
     INVALID_EGO = 1 << 0
-    CALLER_UNSUITABLE = 1 << 1
     ORIGINAL_COLLISION = 1 << 2
     NO_CANDIDATE = 1 << 3
 
@@ -142,7 +141,7 @@ def wrapped_angle_difference(first, second):
 
 
 def _validate_selection_inputs(
-    scenario, config, horizon_transition_count, scene_suitable, inverse_dynamics, reconstruction_drift_meters
+    scenario, config, horizon_transition_count, inverse_dynamics, reconstruction_drift_meters
 ):
     if not isinstance(scenario, ScenarioBatch):
         raise TypeError("scenario must be a ScenarioBatch")
@@ -155,12 +154,6 @@ def _validate_selection_inputs(
         raise TypeError("horizon_transition_count must be an integer")
     if horizon_transition_count < 1 or horizon_transition_count > maximum_transition_count:
         raise ValueError(f"horizon_transition_count must be in [1, {maximum_transition_count}]")
-    if scene_suitable is None:
-        scene_suitable = torch.ones(scenario.batch_size, dtype=torch.bool, device=scenario.logged_state.device)
-    if not isinstance(scene_suitable, torch.Tensor) or scene_suitable.dtype != torch.bool:
-        raise TypeError("scene_suitable must be a bool Torch tensor")
-    if scene_suitable.shape != (scenario.batch_size,) or scene_suitable.device != scenario.logged_state.device:
-        raise ValueError("scene_suitable must have shape [batch] on the scenario device")
     if inverse_dynamics is not None:
         expected_prefix = (scenario.batch_size, scenario.max_agent_count)
         if inverse_dynamics.action_valid.shape[:2] != expected_prefix:
@@ -178,7 +171,7 @@ def _validate_selection_inputs(
             raise ValueError("reconstruction_drift_meters contains NaN or Inf")
     elif math.isfinite(config.maximum_reconstruction_drift_meters):
         raise ValueError("reconstruction_drift_meters is required when the drift gate is enabled")
-    return horizon_transition_count, scene_suitable
+    return horizon_transition_count
 
 
 def _reconstruction_statistics(scenario, inverse_dynamics, horizon_transition_count):
@@ -304,7 +297,6 @@ def select_adversary_candidates(
     config=None,
     *,
     horizon_transition_count=None,
-    scene_suitable=None,
     inverse_dynamics=None,
     reconstruction_drift_meters=None,
 ):
@@ -318,8 +310,8 @@ def select_adversary_candidates(
     """
     if config is None:
         config = ReGentSFilterConfig()
-    horizon_transition_count, scene_suitable = _validate_selection_inputs(
-        scenario, config, horizon_transition_count, scene_suitable, inverse_dynamics, reconstruction_drift_meters
+    horizon_transition_count = _validate_selection_inputs(
+        scenario, config, horizon_transition_count, inverse_dynamics, reconstruction_drift_meters
     )
     transition_valid = scenario.transition_valid[:, :, :horizon_transition_count]
     valid_transition_count = transition_valid.sum(dim=-1)
@@ -357,7 +349,6 @@ def select_adversary_candidates(
     ego_transition_count = (transition_valid & scenario.ego_mask[..., None]).sum(dim=(-2, -1))
     invalid_ego = (ego_count != 1) | (ego_transition_count < 1)
     scene_reason_bits = invalid_ego.to(torch.int64) * int(SceneFilterReason.INVALID_EGO)
-    scene_reason_bits |= (~scene_suitable).to(torch.int64) * int(SceneFilterReason.CALLER_UNSUITABLE)
     preliminarily_eligible = scene_reason_bits == 0
     reason_bits |= (~preliminarily_eligible[:, None]).to(torch.int64) * int(CandidateFilterReason.SCENE_UNSUITABLE)
 

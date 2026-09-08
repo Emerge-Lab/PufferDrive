@@ -1283,9 +1283,13 @@ self.onmessage = async event => {
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
         }
         function colorForAgent(id, isActive, isExpert, hasInfraction) {
+            // Infraction wins over adversary tinting: adversaries stay identifiable
+            // through their dashed perturbation outline, so a colliding adversary
+            // must still read as red.
+            if (hasInfraction) return INFRACTION_AGENT_COLOR;
             if (id === egoCollisionLossAdversaryId) return LOSS_ADVERSARY_COLOR;
             if (adversaryIds.has(id)) return ADVERSARY_COLOR;
-            return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
+            return colorFor(id, isActive, isExpert);
         }
         function agentHasInfraction(frame, idx) {
             const metricsBase = (frame * H.agent_cap + idx) * F.mf;

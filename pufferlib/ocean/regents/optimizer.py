@@ -634,7 +634,6 @@ def optimize_frozen_ego_scenario(
     *,
     deterministic_seed=0,
     horizon_transition_count=None,
-    scene_suitable=None,
     show_progress=True,
     inverse_dynamics=None,
 ):
@@ -676,7 +675,6 @@ def optimize_frozen_ego_scenario(
         scenario,
         config.filter,
         horizon_transition_count=horizon_transition_count,
-        scene_suitable=scene_suitable,
         inverse_dynamics=inverse,
         reconstruction_drift_meters=reconstruction_drift,
     )
