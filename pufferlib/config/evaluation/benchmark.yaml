@@ -70,6 +70,7 @@ benchmarks:
       adversarial_termination_mode: target_inactive
       target_collision_continuation_seconds: 0.0
       traffic_light_behavior: ignore
+      traffic_light_junction_phases: true
       max_scenarios_per_batch: null
       scenario_length: 2560
       control_mode: control_vehicles

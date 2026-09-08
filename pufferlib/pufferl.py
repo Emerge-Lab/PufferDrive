@@ -242,6 +242,55 @@ def _route_actor_actions(observation, target_mask, policy_actor, policy_state, t
     )
 
 
+def _target_mask_from_agent_offsets(info, agents_per_batch, agents_per_worker, device):
+    target_mask = torch.zeros(agents_per_batch, dtype=torch.bool, device=device)
+    worker_idx = 0
+    for information in info:
+        agent_offsets = information.get("agent_offsets")
+        if agent_offsets is None:
+            continue
+        agent_offsets = torch.as_tensor(agent_offsets, dtype=torch.int64, device=device)
+        target_mask[agent_offsets[:-1] + worker_idx * agents_per_worker] = True
+        worker_idx += 1
+    return target_mask
+
+
+def _forward_policy_subset(policy_forward_eval, observation, indices, recurrent_state):
+    subset_state = None
+    if recurrent_state is not None:
+        subset_state = {
+            "lstm_h": recurrent_state["lstm_h"].index_select(0, indices),
+            "lstm_c": recurrent_state["lstm_c"].index_select(0, indices),
+        }
+    logits, value = policy_forward_eval(observation.index_select(0, indices), subset_state)
+    if recurrent_state is not None:
+        recurrent_state["lstm_h"].index_copy_(0, indices, subset_state["lstm_h"])
+        recurrent_state["lstm_c"].index_copy_(0, indices, subset_state["lstm_c"])
+    return logits, value
+
+
+def _replace_policy_output_batch(logits, value, replacement_logits, replacement_value, indices):
+    if isinstance(logits, torch.distributions.Normal):
+        location = logits.loc.clone()
+        scale = logits.scale.clone()
+        location.index_copy_(0, indices, replacement_logits.loc)
+        scale.index_copy_(0, indices, replacement_logits.scale)
+        logits = torch.distributions.Normal(location, scale)
+    elif torch.is_tensor(logits):
+        logits = logits.clone()
+        logits.index_copy_(0, indices, replacement_logits)
+    else:
+        replaced_logits = []
+        for policy_logits, target_logits in zip(logits, replacement_logits):
+            policy_logits = policy_logits.clone()
+            policy_logits.index_copy_(0, indices, target_logits)
+            replaced_logits.append(policy_logits)
+        logits = tuple(replaced_logits) if isinstance(logits, tuple) else replaced_logits
+    value = value.clone()
+    value.index_copy_(0, indices, replacement_value)
+    return logits, value
+
+
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None, target_policy=None):
         # Backend perf optimization
@@ -455,22 +504,16 @@ class PuffeRL:
         self.print_dashboard(clear=True)
 
     def _build_target_mask(self, info, device):
-        target_mask = torch.zeros(self.vecenv.agents_per_batch, dtype=torch.bool, device=device)
         sdc_controller = self.vecenv.driver_env.sdc_controller_str
         if self.target_actor is None and sdc_controller == "policy":
-            return target_mask
-
+            return torch.zeros(self.vecenv.agents_per_batch, dtype=torch.bool, device=device)
         agents_per_worker = self.vecenv.driver_env.num_agents
-        worker_idx = 0
-        for information in info:
-            agent_offsets = information.get("agent_offsets")
-            if agent_offsets is None:
-                continue
-            agent_offsets = torch.as_tensor(agent_offsets, dtype=torch.int64, device=device)
-            target_mask[agent_offsets[:-1] + worker_idx * agents_per_worker] = True
-            worker_idx += 1
-
-        return target_mask
+        return _target_mask_from_agent_offsets(
+            info,
+            self.vecenv.agents_per_batch,
+            agents_per_worker,
+            device,
+        )
 
     def load_training_state(self, path):
         device = torch_device(self.config["device"])
@@ -2332,6 +2375,25 @@ def _run_eval_rollout(
                 evaluation_policy_cache["sample_logits"] = eval_sample_logits
             policy_forward_eval = evaluation_policy_cache["policy_forward_eval"]
             eval_sample_logits = evaluation_policy_cache["sample_logits"]
+        target_policy = None
+        target_policy_forward_eval = None
+        target_policy_path = args["train"].get("target_policy")
+        if uses_policy and args["env"]["sdc_controller"] == "policy" and target_policy_path is not None:
+            if "target_policy" not in evaluation_policy_cache:
+                target_args = _prepare_target_policy_args(args, target_policy_path)
+                target_policy = load_policy(target_args, vecenv, env_name)
+                target_policy.eval()
+                target_policy_forward_eval = target_policy.forward_eval
+                if args["train"]["compile"]:
+                    target_policy_forward_eval = torch.compile(
+                        target_policy_forward_eval,
+                        mode=args["train"]["compile_mode"],
+                        fullgraph=args["train"]["compile_fullgraph"],
+                    )
+                evaluation_policy_cache["target_policy"] = target_policy
+                evaluation_policy_cache["target_policy_forward_eval"] = target_policy_forward_eval
+            target_policy = evaluation_policy_cache["target_policy"]
+            target_policy_forward_eval = evaluation_policy_cache["target_policy_forward_eval"]
         # A discrete policy on a continuous env emits a discrete class that the
         # policy's own table maps back to the continuous action the env expects.
         env_continuous = isinstance(vecenv.single_action_space, pufferlib.spaces.Box)
@@ -2344,7 +2406,7 @@ def _run_eval_rollout(
             if use_bfloat16 and not torch.cuda.is_bf16_supported():
                 raise pufferlib.APIUsageError("bfloat16 evaluation requires CUDA BF16 support")
             eval_amp_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16)
-        obs, _ = vecenv.reset(rollout_seed)
+        obs, reset_info = vecenv.reset(rollout_seed)
         _require_finite_eval_batch(obs, "observations after eval reset", num_workers, worker_env_kwargs)
         padding_agent_count = inference_agents_per_batch - agents_per_batch
         policy_obs_tensor = None
@@ -2360,6 +2422,21 @@ def _run_eval_rollout(
                 "lstm_h": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
                 "lstm_c": torch.zeros(inference_agents_per_batch, policy.hidden_size, device=device),
             }
+        target_recurrent_state = None
+        if target_policy is not None and hasattr(base_policy(target_policy), "lstm"):
+            target_recurrent_state = {
+                "lstm_h": torch.zeros(inference_agents_per_batch, target_policy.hidden_size, device=device),
+                "lstm_c": torch.zeros(inference_agents_per_batch, target_policy.hidden_size, device=device),
+            }
+        target_mask = None
+        if target_policy is not None:
+            agents_per_worker = agents_per_batch // num_workers
+            target_mask = _target_mask_from_agent_offsets(
+                reset_info,
+                inference_agents_per_batch,
+                agents_per_worker,
+                device,
+            )
 
         capture_batch_steps = worker_env_kwargs[0]["resample_frequency"]
         replay_capture = None
@@ -2391,6 +2468,21 @@ def _run_eval_rollout(
                         logits, value = policy_forward_eval(policy_obs_tensor)
                     else:
                         logits, value = policy_forward_eval(policy_obs_tensor, recurrent_state)
+                    if target_policy is not None:
+                        target_indices = torch.nonzero(target_mask, as_tuple=False).flatten()
+                        target_logits, target_value = _forward_policy_subset(
+                            target_policy_forward_eval,
+                            policy_obs_tensor,
+                            target_indices,
+                            target_recurrent_state,
+                        )
+                        logits, value = _replace_policy_output_batch(
+                            logits,
+                            value,
+                            target_logits,
+                            target_value,
+                            target_indices,
+                        )
                     action, logprob, entropy, cont_action = eval_sample_logits(
                         logits,
                         action_selection=action_selection,
@@ -2425,14 +2517,25 @@ def _run_eval_rollout(
                 )
 
             obs, _, terminals, truncations, infos = vecenv.step(action)
-            if recurrent_state is not None:
+            if recurrent_state is not None or target_recurrent_state is not None:
                 finished_agent_mask = torch.as_tensor(
                     np.logical_or(terminals, truncations),
                     dtype=torch.bool,
                     device=device,
                 ).reshape(agents_per_batch, 1)
+            if recurrent_state is not None:
                 recurrent_state["lstm_h"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
                 recurrent_state["lstm_c"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+            if target_recurrent_state is not None:
+                target_recurrent_state["lstm_h"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+                target_recurrent_state["lstm_c"][:agents_per_batch].masked_fill_(finished_agent_mask, 0)
+            if target_policy is not None:
+                target_mask = _target_mask_from_agent_offsets(
+                    infos,
+                    inference_agents_per_batch,
+                    agents_per_worker,
+                    device,
+                )
             for worker_info in infos:
                 worker_items = worker_info if isinstance(worker_info, list) else [worker_info]
                 for item in worker_items:

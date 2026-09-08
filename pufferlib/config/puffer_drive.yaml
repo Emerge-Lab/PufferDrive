@@ -76,7 +76,7 @@ env:
   # Traffic light behavior - options: "ignore", "stop", "remove"
   traffic_light_behavior: ignore
   # Coordinate traffic lights by junction phase when map metadata is available
-  traffic_light_junction_phases: false
+  traffic_light_junction_phases: true
   # Target collision/offroad behavior: normal, ignore, or remove only the target.
   target_infraction_behavior: remove
   # Share static map geometry (roads/grid/lane-graph) across envs using the same map
