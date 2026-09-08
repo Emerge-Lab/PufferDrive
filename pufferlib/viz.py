@@ -934,6 +934,8 @@ def encode_interactive_replay(scenario, replay):
         "eval_overrides": replay.get("eval_overrides") or {},
         "frames": int(replay["agent_f32"].shape[0]),
         "agent_cap": int(replay["agent_f32"].shape[1]),
+        "agent_goal_radius_field": int(binding.AGENT_F32_GOAL_RADIUS_IDX),
+        "default_goal_radius_meters": float(env_cfg["goal_radius"]),
         "traffic_cap": int(replay["traffic_i16"].shape[1]),
         "active_count": int(replay["raw_action"].shape[1]),
         "obs_dim": int(replay["obs"].shape[2]) if replay.get("obs") is not None else 0,
@@ -1120,6 +1122,7 @@ __PAYLOAD_CHUNKS__
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
         const INFRACTION_METRIC_COUNT = 4;
+        const DEFAULT_GOAL_RADIUS_METERS = 2;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
@@ -1329,7 +1332,10 @@ self.onmessage = async event => {
             const isExpert = expertAgentIndices.has(idx);
             const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
             const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
-            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
+            const goalRadiusField = H.agent_goal_radius_field;
+            const defaultGoalRadius = H.default_goal_radius_meters || DEFAULT_GOAL_RADIUS_METERS;
+            const goalRadius = Number.isInteger(goalRadiusField) && goalRadiusField < F.af ? C.agent_f32[fb+goalRadiusField] : defaultGoalRadius;
+            return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], h:C.agent_f32[fb+3], l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:C.agent_f32[fb+6], st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], goalRadius:goalRadius, c:agentColor};
         }
         function getFrameAgents(frame) { const out = []; for (let i=0;i<H.agent_cap;i++) { const a = agentAt(frame, i); if (a) out.push(a); } return out; }
         function drawGhosts(f) {
@@ -1400,7 +1406,7 @@ self.onmessage = async event => {
             for (let i=0;i<H.num_goals;i++) {
                 const o = base + i * stride;
                 if (goals[o] === 0 && goals[o+1] === 0) continue;
-                out.push({x:goals[o], y:goals[o+1]});
+                out.push({x:goals[o], y:goals[o+1], radius:agent.goalRadius});
             }
             return out;
         }
@@ -1557,7 +1563,7 @@ self.onmessage = async event => {
             drawGhosts(f);
             for(const a of getFrameAgents(f)){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
             for(let i=0;i<H.traffic_static_count;i++){ const t=trafficAt(f,i); if(!t) continue; const sl=t.stop_line; ctx.lineCap='butt'; if(t.type === 1){ ctx.strokeStyle=trafficColor(t); ctx.lineWidth=Math.min(1.5,3/cam.z); } else { ctx.strokeStyle=t.type === 2 ? '#ff0000' : '#ffd700'; ctx.lineWidth=Math.min(1.2,2.5/cam.z); ctx.setLineDash([6/cam.z,4/cam.z]); } ctx.beginPath(); ctx.moveTo(sl[0],sl[1]); ctx.lineTo(sl[3],sl[4]); ctx.stroke(); ctx.setLineDash([]); }
-            if(target){ for(const g of selectedGoals(f,target)){ const r=Math.max(1.8,8/cam.z); ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,r,0,7); ctx.fill(); ctx.stroke(); } }
+            if(target){ for(const g of selectedGoals(f,target)){ ctx.strokeStyle='#38bdf8'; ctx.fillStyle='rgba(56,189,248,.22)'; ctx.lineWidth=Math.max(.25,2.5/cam.z); ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,7); ctx.fill(); ctx.stroke(); } }
             ctx.restore(); lastDrawn = f;
         }
         function toggle(){ play=!play; lastTick=performance.now(); updateBtn(); if(play) requestAnimationFrame(loop); }

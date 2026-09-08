@@ -466,7 +466,11 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
         assert header["active_count"] == 1
         assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
+        assert header["agent_goal_radius_field"] == 12
+        assert header["chunks"]["agent_f32"]["shape"][2] == 13
         assert header["chunks"]["rewards_f32"]["shape"][2] == 14
+        agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
+        assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
         rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
         assert np.any(rewards[..., 0] != 0.0)
         np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
@@ -478,6 +482,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch,
     rendered_html = [page.read_text() for page in rendered_pages]
     assert all('class="payload-chunk"' in html for html in rendered_html)
     assert all('id="reward-grid"' in html and '"return (cum)"' in html for html in rendered_html)
+    assert all("ctx.arc(g.x,g.y,g.radius" in html for html in rendered_html)
     assert all(replay_path.is_file() for replay_path in replay_paths)
 
     drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)

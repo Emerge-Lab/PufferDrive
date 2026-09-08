@@ -878,6 +878,7 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
             agent_f32[f32_base + 9] = a->accel_lat;
             agent_f32[f32_base + 10] = a->jerk_long;
             agent_f32[f32_base + 11] = a->jerk_lat;
+            agent_f32[f32_base + AGENT_F32_GOAL_RADIUS_IDX] = a->reward_coefs[REWARD_COEF_GOAL_RADIUS];
 
             agent_i32[i32_base + 0] = i;
             agent_i32[i32_base + 1] = a->type;
@@ -1427,6 +1428,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "GOAL_FEATURES", GOAL_FEATURES);
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
+    PyModule_AddIntConstant(m, "AGENT_F32_GOAL_RADIUS_IDX", AGENT_F32_GOAL_RADIUS_IDX);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
     PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);

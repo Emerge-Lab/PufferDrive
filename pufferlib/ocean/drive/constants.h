@@ -309,8 +309,9 @@ static const int ROAD_OFFSETS[25][2]
 // =====================================================================================
 
 // obs_html_frame array field counts
+#define AGENT_F32_GOAL_RADIUS_IDX 12
 #define AGENT_F32_FIELDS                                                                                               \
-    12 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat
+    13 // sim_x/y/z, heading, length, width, speed, steering, accel_long, accel_lat, jerk_long, jerk_lat, goal_radius
 #define AGENT_I32_FIELDS                                                                                               \
     10 // id, type, sim_valid, active_agent, stopped, removed, lane_idx, active_idx, blindness_active, braking_active
 #define GOAL_XY_FIELDS 2               // goal x, y per goal slot; reached slots stay zeroed
