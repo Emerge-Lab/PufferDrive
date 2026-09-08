@@ -55,6 +55,12 @@ VEHICLE_COLORS = [
     "#9EDAE5",
 ]
 
+ROAD_DRAW_LANE = 0
+ROAD_DRAW_LINE = 1
+ROAD_DRAW_EDGE = 2
+ROAD_DRAW_YELLOW_LINE = 3
+YELLOW_ROAD_LINE_TYPE = 14
+
 METRIC_LABELS = [
     "collision",
     "offroad",
@@ -825,11 +831,13 @@ def encode_interactive_replay(scenario, replay):
         if not xs or not ys:
             continue
         if 1 <= elem_type <= 3:
-            draw_type = 0
+            draw_type = ROAD_DRAW_LANE
+        elif elem_type == YELLOW_ROAD_LINE_TYPE:
+            draw_type = ROAD_DRAW_YELLOW_LINE
         elif 11 <= elem_type <= 18:
-            draw_type = 1
+            draw_type = ROAD_DRAW_LINE
         elif 21 <= elem_type <= 23:
-            draw_type = 2
+            draw_type = ROAD_DRAW_EDGE
         else:
             continue
         count = min(len(xs), len(ys))
@@ -966,7 +974,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
 
     html_template = """
 <!DOCTYPE html>
-<html data-theme="light">
+<html data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <title>PufferDrive Replay</title>
@@ -975,15 +983,15 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             --bg:#e9ebee; --surface:rgba(255,255,255,.92); --surface-solid:#ffffff; --border:#dcdfe5;
             --text:#181b20; --muted:#6c7484; --field:rgba(108,116,132,.07);
             --accent:#0a66d0; --danger:#d6202c;
-            --road:#c6cad1; --line:#959ca8; --edge:#2a2e35;
+            --road:#c6cad1; --line:#959ca8; --yellow-line:#ffc61e; --edge:#2a2e35;
             --shadow:0 1px 2px rgba(22,26,34,.05),0 10px 30px rgba(22,26,34,.10);
             --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
         }
         [data-theme="dark"] {
-            --bg:#0d0f12; --surface:rgba(23,26,31,.92); --surface-solid:#171a1f; --border:#2a2f37;
+            --bg:#445773; --surface:rgba(23,26,31,.92); --surface-solid:#171a1f; --border:#2a2f37;
             --text:#e9ebef; --muted:#8c94a4; --field:rgba(140,148,164,.08);
             --accent:#4d9fff; --danger:#ff5560;
-            --road:#363b43; --line:#5d6573; --edge:#06070a;
+            --road:#363b43; --line:#5d6573; --yellow-line:#ffc61e; --edge:#1e2024;
             --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 34px rgba(0,0,0,.55);
         }
         * { box-sizing:border-box; }
@@ -1170,20 +1178,19 @@ def _render_interactive_replay_payload(compressed_payload, filename):
 __PAYLOAD_CHUNKS__
     <script>
         const METRIC_LABELS = __METRIC_LABELS__;
-        const VEHICLE_COLORS = __VEHICLE_COLORS__;
         // Order must match the Log fields written in env_binding.h vec_get_obs_html_frame (15 values).
         const PUFFER_LABELS = ["score","no at fault","no offroad","no red light","progress > .2","direction","ttc","progress ratio","speed limit","comfort","multi lane","wrong way dist","speed violation","multiplier","weighted avg"];
         const ACCEL = [-4,-2.667,-1.333,0,1.333,2.667,4], STEER = [-0.667,-0.5,-0.333,-0.167,0,0.167,0.333,0.5,0.667];
         const JLONG = [-15,-4,0,4], JLAT = [-4,0,4];
+        const TARGET_AGENT_COLOR = "#ff1f5b";
+        const ADVERSARIAL_AGENT_COLOR = "#009ade";
         const DYNAMIC_EXPERT_COLOR = "#c4c8cf";
         const STATIC_AGENT_COLOR = "#4a505a";
-        const INFRACTION_AGENT_COLOR = "#d92d20";
         const PARTNER_BLINDNESS_OUTLINE_COLOR = "#6d28d9";
         const PHANTOM_BRAKING_OUTLINE_COLOR = "#b45309";
-        const INFRACTION_METRIC_COUNT = 4;
         const SVG_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>';
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
-        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
+        let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D(),3:new Path2D()}, lastDrawn = -1;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const avoidabilityPanel = document.getElementById('avoidability-panel');
@@ -1196,7 +1203,7 @@ __PAYLOAD_CHUNKS__
         const dpr = window.devicePixelRatio || 1;
         let step = 0, play = false, speed = 4, lastTick = 0;
         let cam = {x:0,y:0,z:5,drag:false,lx:0,ly:0};
-        let followedId = null, isEgoCam = false, darkMode = false, showGhost = false;
+        let followedId = null, isEgoCam = false, darkMode = true, showGhost = false;
         let obsZoom = 2.2, obsExpanded = false, obsMode = 2;
         let expertAgentIndices = new Set();
         let avoidability = null, avoidanceCandidates = [], detectionSamples = [];
@@ -1327,7 +1334,7 @@ self.onmessage = async event => {
         initReplay().catch(err => { console.error(err); document.getElementById('load-text').textContent = 'Replay load failed. See console.'; });
 
         function buildMapPaths() {
-            paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()};
+            paths = {0:new Path2D(),1:new Path2D(),2:new Path2D(),3:new Path2D()};
             roadGeometryByElement = new Map();
             let p = 0;
             for (let i=0;i<H.road_polyline_count;i++) {
@@ -1345,18 +1352,8 @@ self.onmessage = async event => {
             }
         }
         function colorFor(id, isActive, isExpert) {
-            if (isActive) return VEHICLE_COLORS[Math.abs(id) % VEHICLE_COLORS.length];
+            if (isActive) return id === 0 ? TARGET_AGENT_COLOR : ADVERSARIAL_AGENT_COLOR;
             return isExpert ? DYNAMIC_EXPERT_COLOR : STATIC_AGENT_COLOR;
-        }
-        function colorForAgent(id, isActive, isExpert, hasInfraction) {
-            return hasInfraction ? INFRACTION_AGENT_COLOR : colorFor(id, isActive, isExpert);
-        }
-        function agentHasInfraction(frame, idx) {
-            const metricsBase = (frame * H.agent_cap + idx) * F.mf;
-            for (let metricIdx=0;metricIdx<INFRACTION_METRIC_COUNT;metricIdx++) {
-                if (C.metrics_f32[metricsBase+metricIdx] > 0) return true;
-            }
-            return false;
         }
         function rr(x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
         function drawAgentBody(a, outline) {
@@ -1412,8 +1409,7 @@ self.onmessage = async event => {
             const fb = (frame * H.agent_cap + idx) * F.af;
             const agentType = C.agent_i32[ib+1], isActive = C.agent_i32[ib+3] === 1;
             const isExpert = expertAgentIndices.has(idx);
-            const hasInfraction = agentType === 1 && agentHasInfraction(frame, idx);
-            const agentColor = colorForAgent(C.agent_i32[ib], isActive, isExpert, hasInfraction);
+            const agentColor = colorFor(C.agent_i32[ib], isActive, isExpert);
             const heading = C.agent_f32[fb+3], speedMps = C.agent_f32[fb+6];
             return {idx:idx, id:C.agent_i32[ib], type:agentType, cl:C.agent_i32[ib+6], slot:C.agent_i32[ib+7], active:isActive, stopped:C.agent_i32[ib+4] === 1, removed:C.agent_i32[ib+5] === 1, partnerBlindnessActive:C.agent_i32[ib+8] === 1, phantomBrakingActive:C.agent_i32[ib+9] === 1, x:C.agent_f32[fb], y:C.agent_f32[fb+1], z:C.agent_f32[fb+2], h:heading, l:C.agent_f32[fb+4], w:C.agent_f32[fb+5], s:speedMps, vx:speedMps*Math.cos(heading), vy:speedMps*Math.sin(heading), st:C.agent_f32[fb+7], al:C.agent_f32[fb+8], alat:C.agent_f32[fb+9], jl:C.agent_f32[fb+10], jlat:C.agent_f32[fb+11], c:agentColor};
         }
@@ -1878,7 +1874,7 @@ self.onmessage = async event => {
             return {type, state, stop_line:Array.from(C.traffic_stop_lines.subarray(sb, sb + 6))};
         }
         function trafficColor(t) { return t.state === 1 ? "#ff0000" : t.state === 2 ? "#ffff00" : t.state === 3 ? "#00ff00" : "#888888"; }
-        function getColors() { const s = getComputedStyle(document.documentElement); return {bg:s.getPropertyValue('--bg'), road:s.getPropertyValue('--road'), line:s.getPropertyValue('--line'), edge:s.getPropertyValue('--edge'), text:s.getPropertyValue('--text'), accent:s.getPropertyValue('--accent')}; }
+        function getColors() { const s = getComputedStyle(document.documentElement); return {bg:s.getPropertyValue('--bg'), road:s.getPropertyValue('--road'), line:s.getPropertyValue('--line'), yellowLine:s.getPropertyValue('--yellow-line'), edge:s.getPropertyValue('--edge'), text:s.getPropertyValue('--text'), accent:s.getPropertyValue('--accent')}; }
         function resizeObsCanvas() {
             const r = obsC.getBoundingClientRect();
             if (r.width <= 0 || r.height <= 0) return;
@@ -2107,7 +2103,7 @@ self.onmessage = async event => {
             if (target) { cam.x = target.x; cam.y = target.y; }
             updateUI(avoidabilityView ? null : target);
             const colors = getColors(); ctx.fillStyle = colors.bg; ctx.fillRect(0,0,c.width,c.height); ctx.save(); ctx.translate(c.width/2,c.height/2); ctx.scale(cam.z,-cam.z); if(isEgoCam && target) ctx.rotate(Math.PI/2 - target.h); ctx.translate(-cam.x,-cam.y);
-            ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
+            ctx.lineCap='round'; ctx.strokeStyle=colors.road; ctx.lineWidth=.5; ctx.stroke(paths[0]); ctx.strokeStyle=colors.line; ctx.setLineDash([1,1]); ctx.stroke(paths[1]); ctx.strokeStyle=colors.yellowLine; ctx.stroke(paths[3]); ctx.setLineDash([]); ctx.strokeStyle=colors.edge; ctx.lineWidth=.8; ctx.stroke(paths[2]);
             if(!avoidabilityView) drawGhosts(f);
             drawAvoidabilityOverlay(avoidabilityView);
             for(const a of displayedAgents){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.h); drawAgentBody(a, darkMode?'#fff':'#111'); drawPerturbationOutlines(a); ctx.restore(); ctx.save(); ctx.translate(a.x,a.y); if(isEgoCam && target) ctx.rotate(-Math.PI/2 + target.h); else ctx.scale(1,-1); ctx.fillStyle=colors.text; ctx.font='600 '+(14/cam.z)+'px system-ui'; ctx.textAlign='center'; ctx.fillText(a.id,0,(isEgoCam && target)?a.w/2+.5:-a.w/2-.5); ctx.restore(); if(a.id === followedId){ ctx.save(); ctx.translate(a.x,a.y); ctx.strokeStyle=colors.accent; ctx.lineWidth=3/cam.z; ctx.beginPath(); ctx.arc(0,0,Math.max(a.l,a.w)*1.2,0,7); ctx.stroke(); ctx.restore(); } }
@@ -2141,10 +2137,8 @@ self.onmessage = async event => {
         f"{payload[chunk_start : chunk_start + PAYLOAD_CHUNK_SIZE]}</script>"
         for chunk_start in range(0, len(payload), PAYLOAD_CHUNK_SIZE)
     )
-    final_html = (
-        html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks)
-        .replace("__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":")))
-        .replace("__VEHICLE_COLORS__", json.dumps(VEHICLE_COLORS, separators=(",", ":")))
+    final_html = html_template.replace("__PAYLOAD_CHUNKS__", payload_chunks).replace(
+        "__METRIC_LABELS__", json.dumps(METRIC_LABELS, separators=(",", ":"))
     )
     with open(filename, "w") as f:
         f.write(final_html)
