@@ -20,7 +20,9 @@ from pufferlib.ocean.regents.state import (
 
 
 DEFAULT_RASTER_RESOLUTION_METERS = 0.5
-TIMESTEP_TOLERANCE_SECONDS = 1e-6
+# WOD Motion binaries report their nominal 0.1 s sampling interval as 0.099 s.
+# Keep the tolerance narrow enough to reject a genuinely different simulator step.
+TIMESTEP_TOLERANCE_SECONDS = 1.01e-3
 INVALID_AGENT_ID = -1
 MAX_SCENARIO_AGENT_COUNT = 10_000
 MAX_TRAJECTORY_TIMESTEP_COUNT = 9_999

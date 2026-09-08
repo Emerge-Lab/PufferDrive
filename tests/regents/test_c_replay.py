@@ -111,6 +111,7 @@ def cached_replay(request):
 
 def test_open_loop_c_replay_reproduces_torch_and_is_deterministic(cached_replay):
     """C is authoritative: parity, shared initial pose, untouched actors, and repeatability."""
+    assert C_REPLAY_TOLERANCE == 5e-4
     map_idx, seed, scenario, optimization, replay = cached_replay
 
     assert replay.metrics.maximum_trajectory_error <= C_REPLAY_TOLERANCE
@@ -313,6 +314,18 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
             drivable_area_weight=math.nan,
         )
 
+    wod_motion = load_generation_config(GENERATION_CONFIG, "regents_wod_motion_val")
+    assert wod_motion["scenario_count"] == 250
+    assert wod_motion["horizon_transition_count"] == 90
+    assert wod_motion["raster_resolution_meters"] == 1.0
+    assert wod_motion["optimizer"]["learning_rate"] == 0.005
+    assert wod_motion["optimizer"]["filter"]["maximum_reconstruction_drift_meters"] == 1.0
+    assert wod_motion["env"]["map_dir"] == "pufferlib/resources/drive/binaries/wod-motion_val"
+    assert wod_motion["env"]["scenario_length"] == 91
+    assert wod_motion["env"]["resample_frequency"] == 91
+    assert wod_motion["env"]["sdc_controller"] == "replay"
+    assert wod_motion["env"]["base_max_speed_mps"] == 40.0
+
     config = tmp_path / "regents.yaml"
     config.write_text(
         "env:\n  not_a_drive_argument: 1\ngenerations:\n"
@@ -367,11 +380,22 @@ def test_generation_config_is_validated_and_the_offline_entry_point_writes_artif
         f"scenario_{i:05d}.npz" for i in range(expected_count)
     ]
     assert (tmp_path / "generation_metrics.csv").is_file()
+    metrics_header = (tmp_path / "generation_metrics.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "candidate_count" in metrics_header
+    assert "torch_collision" in metrics_header
+    assert "torch_collision_timestep" in metrics_header
     loss_header = (tmp_path / "losses/scenario_00000.losses.csv").read_text(encoding="utf-8").splitlines()[0]
     assert "background_collision_first_agent_id" in loss_header
     assert "background_collision_signed_distance_meters" in loss_header
     assert report.maximum_c_torch_trajectory_error <= C_REPLAY_TOLERANCE
     assert 0.0 <= report.generation_success_rate <= 1.0
+    assert 0.0 <= report.candidate_success_rate <= 1.0
+    assert 0.0 <= report.torch_collision_rate <= 1.0
+    assert 0.0 <= report.c_collision_confirmation_rate <= 1.0
+    assert report.candidate_scenario_count + report.filtered_no_candidate_count == report.scenario_count
+    assert report.c_confirmed_actionable_collision_count + report.c_unconfirmed_actionable_collision_count == (
+        report.torch_collision_count
+    )
     assert report.total_optimization_seconds > 0.0
     assert report.wall_clock_seconds > 0.0
     assert sum(report.rejection_reasons.values()) == report.scenario_count - int(
@@ -390,7 +414,9 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
         drivable_area_weight=0.0,
     )
     captured = capsys.readouterr()
-    assert "[REGENTS] success" in captured.out
+    assert "[REGENTS] eligible" in captured.out
+    assert "[REGENTS] C-verified success" in captured.out
+    assert "[REGENTS] collision funnel" in captured.out
     assert report.output_dir == tmp_path / "roadless"
     metadata, _ = load_generation_artifact(report.output_dir / "npz/scenario_00000.npz")
     source_configuration = metadata["source_configuration"]

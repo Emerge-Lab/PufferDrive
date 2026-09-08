@@ -2513,19 +2513,45 @@ def regents(
     )
     run_name = generation_name if experiment_name is None else f"{generation_name}/{experiment_name}"
     print(f"[REGENTS] {run_name}: {report.scenario_count} scenarios -> {report.output_dir}")
+    eligible_rate = report.candidate_scenario_count / report.scenario_count
+    filtered_rate = report.filtered_no_candidate_count / report.scenario_count
     print(
-        f"[REGENTS] success {report.generation_success_rate:.3f} | ego {report.ego_collision_rate:.3f}"
-        f" | actionable {report.actionable_collision_rate:.3f}"
-        f" | background {report.background_collision_rate:.3f} | offroad {report.offroad_rate:.3f}"
+        f"[REGENTS] eligible {report.candidate_scenario_count}/{report.scenario_count} ({eligible_rate:.1%})"
+        f" | filtered no candidate {report.filtered_no_candidate_count}/{report.scenario_count} ({filtered_rate:.1%})"
+    )
+    print(
+        f"[REGENTS] C-verified success {report.generation_success_count}/{report.candidate_scenario_count} eligible"
+        f" ({report.candidate_success_rate:.1%}) | {report.generation_success_count}/{report.scenario_count} total"
+        f" ({report.generation_success_rate:.1%})"
+    )
+    c_unconfirmed_rate = (
+        report.c_unconfirmed_actionable_collision_count / report.torch_collision_count
+        if report.torch_collision_count
+        else 0.0
+    )
+    print(
+        f"[REGENTS] collision funnel: Torch {report.torch_collision_count}/{report.candidate_scenario_count}"
+        f" ({report.torch_collision_rate:.1%}) | C actionable"
+        f" {report.c_confirmed_actionable_collision_count}/{report.torch_collision_count}"
+        f" ({report.c_collision_confirmation_rate:.1%}) | Torch collision not confirmed by C"
+        f" {report.c_unconfirmed_actionable_collision_count}/{report.torch_collision_count}"
+        f" ({c_unconfirmed_rate:.1%})"
+    )
+    print(
+        f"[REGENTS] diagnostics over all scenarios: C ego {report.ego_collision_rate:.1%}"
+        f" | actionable {report.actionable_collision_rate:.1%}"
+        f" | background {report.background_collision_rate:.1%} | offroad {report.offroad_rate:.1%}"
     )
     print(
         f"[REGENTS] max C/Torch error {report.maximum_c_torch_trajectory_error:.3e}"
         f" | optimization cumulative {report.total_optimization_seconds:.1f}s (wall {report.wall_clock_seconds:.1f}s)"
     )
-    success_count = report.scenario_count - sum(report.rejection_reasons.values())
-    print(f"[REGENTS] success {success_count}x")
     for reason, count in sorted(report.rejection_reasons.items()):
-        print(f"[REGENTS] rejected {count}x {reason}")
+        is_no_candidate = reason.startswith("scene_filtered:") and "no_candidate" in reason
+        denominator = report.scenario_count if is_no_candidate else report.candidate_scenario_count
+        rate = count / denominator if denominator else 0.0
+        outcome = "filtered" if is_no_candidate else "rejected"
+        print(f"[REGENTS] {outcome} {count}/{denominator} ({rate:.1%}) {reason}")
     if report.replay_index is not None:
         print(f"[REGENTS] replay gallery {report.replay_index}")
     return report

@@ -7,6 +7,7 @@ import torch
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
+from pufferlib.ocean.regents import classic_step
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig, select_adversary_candidates
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.geometry import signed_box_distance
@@ -162,6 +163,27 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
     assert torch.equal(first.optimized_actions[frozen], first.initial_actions[frozen])
     assert torch.isfinite(first.optimized_actions).all()
     assert torch.isfinite(first.optimized_states).all()
+
+    # The gate reads drift the optimizer measures itself, so an exclusive 0 m threshold
+    # rejects the one agent whose reconstruction leaves its log at all.
+    drift_filtered = optimize_frozen_ego_scenario(
+        braking,
+        config=_optimization_config(
+            filter=ReGentSFilterConfig(
+                static_displacement_threshold_meters=0.0,
+                maximum_reconstruction_drift_meters=0.0,
+            )
+        ),
+        deterministic_seed=17,
+        show_progress=False,
+    )
+    assert not drift_filtered.selection.candidate_mask.any()
+    assert "reconstruction_fidelity" in drift_filtered.selection.reasons_for(0, 1)
+    assert drift_filtered.failure_reason == "scene_filtered:no_candidate"
+    assert drift_filtered.selection.reconstruction_drift_meters[0, 1] > 0.0
+    # The default threshold is infinite, so the same scene keeps its candidate.
+    assert "reconstruction_fidelity" not in first.selection.reasons_for(0, 1)
+    assert first.selection.candidate_mask[0, 1]
 
     merging_states = torch.stack((_straight_track(0.0, 0.0, 4.0, 16), _straight_track(8.0, 4.0, 3.0, 16)))
     merging = _scenario(merging_states)
@@ -453,7 +475,7 @@ def test_background_collision_gate_matches_an_all_exact_scan(real_scenarios):
 
 
 def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
-    """The rollout integrates candidate rows only; every other agent keeps its reference."""
+    """Compaction preserves frozen rows and refreshes wheelbase after validity gaps."""
     scenario = real_scenarios(1)
     horizon_transition_count = 30
     frozen_ego = FrozenEgoTrajectory(
@@ -487,3 +509,56 @@ def test_compacted_rollout_matches_a_full_width_reference(real_scenarios):
     assert torch.isfinite(actions.grad).all()
     assert torch.isfinite(states).all()
     assert state_valid.shape == states.shape[:-1]
+
+    gap_scenario = _scenario(torch.stack((_straight_track(0.0, 0.0, 2.0, 5), _straight_track(5.0, 2.0, 3.0, 5))))
+    gap_valid = gap_scenario.state_valid.clone()
+    gap_valid[0, 1, 2] = False
+    logged_length_meters = gap_scenario.logged_length_meters.clone()
+    logged_length_meters[0, 1, 3] = 6.0
+    gap_scenario = dataclasses.replace(
+        gap_scenario,
+        state_valid=gap_valid,
+        state_feature_valid=gap_valid[..., None].expand_as(gap_scenario.logged_state).clone(),
+        transition_valid=gap_valid[..., :-1] & gap_valid[..., 1:],
+        logged_length_meters=logged_length_meters,
+    )
+    gap_inverse = estimate_expert_actions(gap_scenario)
+    gap_candidate_mask = torch.tensor([[False, True]])
+    gap_action_mask = gap_inverse.action_valid & gap_candidate_mask[..., None]
+    gap_actions = torch.zeros((1, 2, 4, 2), dtype=torch.float32)
+    gap_actions[0, 1, :, 1] = 0.5
+    gap_frozen_ego = FrozenEgoTrajectory(
+        state=gap_scenario.logged_state[:, 0].clone(),
+        valid=gap_scenario.state_valid[:, 0].clone(),
+        scenario_ids=gap_scenario.scenario_ids,
+        source="logged_fixture",
+    )
+    gap_states, _ = _compose_rollout(
+        gap_scenario,
+        gap_inverse,
+        gap_actions,
+        gap_frozen_ego,
+        4,
+        gap_candidate_mask,
+    )
+    reference = gap_inverse.state_with_estimated_steering
+    expected_initial_run = classic_step(
+        reference[0, 1, 0:1],
+        gap_actions[0, 1, 0:1],
+        torch.tensor([2.4]),
+        torch.tensor([20.0]),
+        gap_scenario.dt_seconds,
+    )[0]
+    expected_resumed_run = classic_step(
+        reference[0, 1, 3:4],
+        gap_actions[0, 1, 3:4],
+        torch.tensor([3.6]),
+        torch.tensor([20.0]),
+        gap_scenario.dt_seconds,
+    )[0]
+    torch.testing.assert_close(gap_states[0, 1, 1], expected_initial_run)
+    torch.testing.assert_close(gap_states[0, 1, 3], reference[0, 1, 3])
+    torch.testing.assert_close(gap_states[0, 1, 4], expected_resumed_run)
+
+    gap_wheelbase, _ = steering_conversion_metadata(gap_scenario, gap_action_mask, gap_actions.device)
+    torch.testing.assert_close(gap_wheelbase[0, 1], torch.tensor([2.4, 2.4, 2.4, 3.6]))

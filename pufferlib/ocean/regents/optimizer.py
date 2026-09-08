@@ -14,6 +14,7 @@ from pufferlib.ocean.regents.dynamics import (
     ACTION_TARGET_STEERING,
     TARGET_STEERING_SCALE_RADIANS,
     _classic_step,
+    injection_wheelbase_by_transition,
 )
 from pufferlib.ocean.regents.filters import (
     DEFAULT_FRONT_DIVERGENCE_FRACTION,
@@ -39,6 +40,8 @@ from pufferlib.ocean.regents.losses import (
 )
 from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
+    STATE_X,
+    STATE_Y,
     ScenarioBatch,
     signed_speed_from_c_velocity,
 )
@@ -315,9 +318,12 @@ def steering_conversion_metadata(scenario, optimized_action_mask, device):
         raise ValueError("an optimized agent has a non-positive or non-finite wheelbase")
     # Frozen agents never reach the converter; the placeholder only keeps the math finite.
     safe_wheelbase = torch.where(optimized_agent, wheelbase_meters, torch.ones_like(wheelbase_meters))
-    transition_count = optimized_action_mask.shape[-1]
-    wheelbase_over_time = safe_wheelbase[..., None].expand(*safe_wheelbase.shape, transition_count).contiguous()
-    return wheelbase_over_time, NORMALIZED_CURVATURE_LIMIT / safe_wheelbase[..., None]
+    wheelbase_over_time = injection_wheelbase_by_transition(
+        scenario.logged_length_meters[..., : optimized_action_mask.shape[-1]].to(device),
+        safe_wheelbase,
+        optimized_action_mask.to(device),
+    )
+    return wheelbase_over_time, NORMALIZED_CURVATURE_LIMIT / wheelbase_over_time
 
 
 def parameter_from_drive_actions(drive_actions, wheelbase_over_time):
@@ -425,7 +431,11 @@ def _compose_rollout(
     candidate_active = optimized_transition_valid[candidate_rows]
     candidate_reference = reference_state[candidate_rows]
     candidate_actions = actions[candidate_rows]
-    candidate_wheelbase = scenario.wheelbase_meters.to(actions.device)[candidate_rows]
+    candidate_wheelbase = injection_wheelbase_by_transition(
+        scenario.logged_length_meters[:, :, :horizon_transition_count].to(actions.device)[candidate_rows],
+        scenario.wheelbase_meters.to(actions.device)[candidate_rows],
+        candidate_active,
+    )
     candidate_maximum_speed = scenario.maximum_speed_mps.to(actions.device)[candidate_rows]
     # A run start re-seeds integration from the reference; timestep zero already starts there.
     run_start = torch.zeros_like(candidate_active)
@@ -444,7 +454,7 @@ def _compose_rollout(
         proposed_state = _classic_step(
             step_state,
             candidate_actions[:, timestep],
-            candidate_wheelbase,
+            candidate_wheelbase[:, timestep],
             candidate_maximum_speed,
             scenario.dt_seconds,
         )
@@ -453,6 +463,28 @@ def _compose_rollout(
     states = reference_state.clone()
     states[candidate_rows] = torch.stack(rollout, dim=1)
     return states, state_valid
+
+
+def _reconstruction_drift_meters(scenario, inverse, baseline_actions, frozen_ego, horizon_transition_count):
+    """Peak distance between an agent's baseline reconstruction and its own log.
+
+    Every potential adversary is integrated, not just the survivors of the other
+    filters, so the measurement does not depend on the selection it feeds.
+    """
+    reconstruction, _ = _compose_rollout(
+        scenario,
+        inverse,
+        baseline_actions,
+        frozen_ego,
+        horizon_transition_count,
+        scenario.candidate_adversary_mask.to(baseline_actions.device),
+    )
+    logged_position = scenario.logged_state[:, :, : horizon_transition_count + 1, STATE_X : STATE_Y + 1]
+    valid = scenario.state_valid[:, :, : horizon_transition_count + 1]
+    offset = reconstruction[..., STATE_X : STATE_Y + 1] - logged_position.to(reconstruction.device)
+    return (
+        torch.linalg.vector_norm(offset, dim=-1).masked_fill(~valid.to(reconstruction.device), 0.0).max(dim=-1).values
+    )
 
 
 def _ego_indices(ego_mask):
@@ -637,11 +669,16 @@ def optimize_frozen_ego_scenario(
         frozen_ego = _frozen_ego_fixture(scenario, inverse, horizon_transition_count)
 
     baseline_actions = inverse.actions[:, :, :horizon_transition_count].detach().clone()
+    reconstruction_drift = _reconstruction_drift_meters(
+        scenario, inverse, baseline_actions, frozen_ego, horizon_transition_count
+    )
     selection = select_adversary_candidates(
         scenario,
         config.filter,
         horizon_transition_count=horizon_transition_count,
         scene_suitable=scene_suitable,
+        inverse_dynamics=inverse,
+        reconstruction_drift_meters=reconstruction_drift,
     )
     candidate_mask = selection.candidate_mask
     reference_states, state_valid = _compose_rollout(

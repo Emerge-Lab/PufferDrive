@@ -63,7 +63,7 @@ def save_generation_artifact(path, result, source_configuration, map_path):
         "outer_iteration_count": result.outer_iteration_count,
         "optimization": {
             "result_selection_policy": "current_iterate",
-            "candidate_filter_policy": "full_log_state_validity_displacement_speed_rear_sector",
+            "candidate_filter_policy": "state_validity_displacement_speed_rear_sector_reconstruction_fidelity",
             "collision_loss_metric": "squared_center_distance",
             "road_loss_reduction": "sum_valid_corners_and_timesteps",
             "road_loss_kernel": "reference_amplitude_truncated_grid_convolution",

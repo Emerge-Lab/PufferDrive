@@ -32,6 +32,8 @@ METRIC_FIELD_NAMES = (
     "scenario_id",
     "map_index",
     "seed",
+    "candidate_count",
+    "torch_collision",
     "generation_success",
     "ego_collision",
     "actionable_collision",
@@ -41,6 +43,7 @@ METRIC_FIELD_NAMES = (
     "offroad",
     "c_torch_trajectory_error",
     "ego_reference_error",
+    "torch_collision_timestep",
     "collision_timestep",
     "selected_adversary_idx",
     "selected_adversary_id",
@@ -56,7 +59,16 @@ class GenerationReport:
     output_dir: Path
     replay_index: Path | None
     scenario_count: int
+    candidate_scenario_count: int
+    filtered_no_candidate_count: int
+    generation_success_count: int
+    torch_collision_count: int
+    c_confirmed_actionable_collision_count: int
+    c_unconfirmed_actionable_collision_count: int
     generation_success_rate: float
+    candidate_success_rate: float
+    torch_collision_rate: float
+    c_collision_confirmation_rate: float
     ego_collision_rate: float
     actionable_collision_rate: float
     background_collision_rate: float
@@ -329,6 +341,8 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "scenario_id": result.scenario.scenario_ids[0],
         "map_index": map_idx,
         "seed": seed,
+        "candidate_count": int(result.optimization.selection.candidate_mask[0].sum().item()),
+        "torch_collision": int(result.optimization.success),
         "generation_success": int(result.replay.success),
         "ego_collision": int(metrics.ego_collision),
         "actionable_collision": int(metrics.actionable_collision),
@@ -338,6 +352,7 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "offroad": int(metrics.offroad),
         "c_torch_trajectory_error": metrics.maximum_trajectory_error,
         "ego_reference_error": metrics.maximum_ego_reference_error,
+        "torch_collision_timestep": result.optimization.collision_timestep,
         "collision_timestep": metrics.first_collision_timestep,
         "selected_adversary_idx": result.optimization.selected_adversary_idx,
         "selected_adversary_id": result.optimization.selected_adversary_id,
@@ -457,6 +472,7 @@ def generate_regents_scenarios(
         description = "Generating scenarios (parallel)"
 
     success_count = 0
+    candidate_scenario_count = 0
     completed_count = 0
     try:
         pbar = tqdm(completions, total=len(tasks), desc=description)
@@ -465,7 +481,12 @@ def generate_regents_scenarios(
             rows[scenario_idx] = row
             completed_count += 1
             success_count += int(row["generation_success"])
-            pbar.set_postfix(success=f"{success_count / completed_count:.1%}")
+            candidate_scenario_count += int(row["candidate_count"] > 0)
+            candidate_success_rate = success_count / candidate_scenario_count if candidate_scenario_count else 0.0
+            pbar.set_postfix(
+                eligible=f"{candidate_scenario_count}/{completed_count}",
+                success=f"{candidate_success_rate:.1%}",
+            )
     finally:
         if pool is not None:
             pool.terminate()
@@ -488,12 +509,31 @@ def generate_regents_scenarios(
             continue
         rejection_reasons[row["failure_reason"]] = rejection_reasons.get(row["failure_reason"], 0) + 1
     scenario_count = len(rows)
+    candidate_scenario_count = sum(row["candidate_count"] > 0 for row in rows)
+    filtered_no_candidate_count = scenario_count - candidate_scenario_count
+    generation_success_count = sum(row["generation_success"] for row in rows)
+    torch_collision_count = sum(row["torch_collision"] for row in rows)
+    c_confirmed_actionable_collision_count = sum(row["torch_collision"] and row["actionable_collision"] for row in rows)
+    c_unconfirmed_actionable_collision_count = torch_collision_count - c_confirmed_actionable_collision_count
     wall_clock_seconds = time.perf_counter() - overall_start
     return GenerationReport(
         output_dir=destination,
         replay_index=(destination / RENDER_DIR_NAME / "index.html") if rendered_files else None,
         scenario_count=scenario_count,
-        generation_success_rate=sum(row["generation_success"] for row in rows) / scenario_count,
+        candidate_scenario_count=candidate_scenario_count,
+        filtered_no_candidate_count=filtered_no_candidate_count,
+        generation_success_count=generation_success_count,
+        torch_collision_count=torch_collision_count,
+        c_confirmed_actionable_collision_count=c_confirmed_actionable_collision_count,
+        c_unconfirmed_actionable_collision_count=c_unconfirmed_actionable_collision_count,
+        generation_success_rate=generation_success_count / scenario_count,
+        candidate_success_rate=(
+            generation_success_count / candidate_scenario_count if candidate_scenario_count else 0.0
+        ),
+        torch_collision_rate=(torch_collision_count / candidate_scenario_count if candidate_scenario_count else 0.0),
+        c_collision_confirmation_rate=(
+            c_confirmed_actionable_collision_count / torch_collision_count if torch_collision_count else 0.0
+        ),
         ego_collision_rate=sum(row["ego_collision"] for row in rows) / scenario_count,
         actionable_collision_rate=sum(row["actionable_collision"] for row in rows) / scenario_count,
         background_collision_rate=sum(row["background_collision"] for row in rows) / scenario_count,

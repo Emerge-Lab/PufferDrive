@@ -1,10 +1,11 @@
-"""Bounded inverse dynamics for logged PufferDrive vehicle trajectories.
+"""Bounded sequential expert-action estimation for PufferDrive trajectories.
 
-ReGentS initializes background controls with Waymax's expert actor, which uses
-local speed/yaw derivatives, consecutive-valid masking, bounded actions, and a
-0.6 m/s steering noise guard. This module preserves those semantics while
-inverting PufferDrive's different forward model: signed speed, updated-speed
-Euler integration, slip angle, wheelbase, and rate-limited target wheel angle.
+ReGentS initializes background controls with Waymax's expert actor. At each
+timestep that actor solves from the current simulated state toward the next
+logged state, advances the simulator, and uses the result for the next solve.
+This module preserves that feedback construction while inverting PufferDrive's
+different forward model: signed speed, updated-speed Euler integration, slip
+angle, wheelbase, and rate-limited target wheel angle.
 """
 
 import math
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 
 import torch
 
+from pufferlib.ocean.regents.adapter import TIMESTEP_TOLERANCE_SECONDS
 from pufferlib.ocean.regents.dynamics import (
     ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED,
     MAX_BACKWARD_SPEED_MPS,
@@ -20,6 +22,7 @@ from pufferlib.ocean.regents.dynamics import (
     STEERING_RATE_LIMIT_RADIANS_PER_SECOND,
     TARGET_STEERING_SCALE_RADIANS,
     classic_step,
+    injection_wheelbase_by_transition,
 )
 from pufferlib.ocean.regents.state import (
     STATE_FEATURE_COUNT,
@@ -102,7 +105,12 @@ def _validate_scenario(scenario, low_speed_threshold_mps):
     if not torch.isfinite(scenario.log_dt_seconds).all():
         raise ValueError("scenario log_dt_seconds contains NaN or Inf")
     expected_log_dt = torch.full_like(scenario.log_dt_seconds, scenario.dt_seconds)
-    if not torch.allclose(scenario.log_dt_seconds, expected_log_dt, rtol=0.0, atol=1e-6):
+    if not torch.allclose(
+        scenario.log_dt_seconds,
+        expected_log_dt,
+        rtol=0.0,
+        atol=TIMESTEP_TOLERANCE_SECONDS,
+    ):
         raise ValueError("scenario log_dt_seconds must match dt_seconds")
 
     valid_state = scenario.state_valid[..., None].expand_as(scenario.logged_state)
@@ -304,12 +312,14 @@ def estimate_expert_actions(
     *,
     horizon_transition_count=None,
 ):
-    """Estimate bounded continuous actions for valid logged vehicle transitions.
+    """Estimate bounded actions by sequentially tracking the next logged state.
 
     Acceleration first selects the closest reachable logged speed. Steering is
     then selected by a deterministic bounded search minimizing squared position
     error plus wheelbase-scaled squared heading error. Heading is omitted from
-    that objective when the updated signed speed is near zero.
+    that objective when the updated signed speed is near zero. Each subsequent
+    solve starts from the preceding predicted state, as Waymax's expert actor
+    does; only a new contiguous validity run is seeded from the log.
     """
     _validate_scenario(scenario, low_speed_threshold_mps)
     maximum_transition_count = scenario.max_time_count - 1
@@ -333,7 +343,12 @@ def estimate_expert_actions(
         STATE_FEATURE_COUNT,
     )
     flat_action_valid = action_valid.reshape(track_count, transition_count)
-    flat_wheelbase = scenario.wheelbase_meters.reshape(track_count)
+    wheelbase_by_transition = injection_wheelbase_by_transition(
+        scenario.logged_length_meters[:, :, :transition_count],
+        scenario.wheelbase_meters,
+        action_valid,
+    )
+    flat_wheelbase = wheelbase_by_transition.reshape(track_count, transition_count)
     flat_maximum_speed = scenario.maximum_speed_mps.reshape(track_count)
 
     actions = torch.zeros((track_count, transition_count, 2), dtype=torch.float32, device=logged_state.device)
@@ -349,7 +364,9 @@ def estimate_expert_actions(
     low_speed_mask = torch.zeros_like(flat_action_valid)
     heading_residual_valid = torch.zeros_like(flat_action_valid)
     model_consistent = torch.zeros_like(flat_action_valid)
-    carried_steering = torch.zeros(track_count, dtype=torch.float32, device=logged_state.device)
+    reconstructed_state = torch.zeros(
+        (track_count, STATE_FEATURE_COUNT), dtype=torch.float32, device=logged_state.device
+    )
 
     for timestep in range(transition_count):
         active_track_idx = torch.where(flat_action_valid[:, timestep])[0]
@@ -359,18 +376,20 @@ def estimate_expert_actions(
             run_start = torch.ones_like(active_track_idx, dtype=torch.bool)
         else:
             run_start = ~flat_action_valid[active_track_idx, timestep - 1]
+        logged_current_state = flat_logged_state[active_track_idx, timestep].clone()
         current_steering_observed = flat_feature_valid[active_track_idx, timestep, STATE_STEERING]
-        current_steering = torch.where(
+        logged_current_state[:, STATE_STEERING] = torch.where(
             current_steering_observed,
-            flat_logged_state[active_track_idx, timestep, STATE_STEERING],
-            carried_steering[active_track_idx],
+            logged_current_state[:, STATE_STEERING],
+            torch.zeros_like(logged_current_state[:, STATE_STEERING]),
         )
-        current_steering = torch.where(run_start & ~current_steering_observed, 0.0, current_steering)
-
-        current_state = flat_logged_state[active_track_idx, timestep].clone()
-        current_state[:, STATE_STEERING] = current_steering
+        current_state = torch.where(
+            run_start[:, None],
+            logged_current_state,
+            reconstructed_state[active_track_idx],
+        )
         target_state = flat_logged_state[active_track_idx, timestep + 1]
-        wheelbase = flat_wheelbase[active_track_idx]
+        wheelbase = flat_wheelbase[active_track_idx, timestep]
         maximum_speed = flat_maximum_speed[active_track_idx]
         acceleration_action = _closest_reachable_acceleration_action(
             current_state[:, STATE_SPEED],
@@ -440,11 +459,11 @@ def estimate_expert_actions(
         low_speed_mask[active_track_idx, timestep] = transition_low_speed
         heading_residual_valid[active_track_idx, timestep] = transition_heading_valid
         model_consistent[active_track_idx, timestep] = transition_consistent
-        estimated_state[active_track_idx, timestep, STATE_STEERING] = current_steering
+        estimated_state[active_track_idx, timestep, STATE_STEERING] = current_state[:, STATE_STEERING]
         estimated_state[active_track_idx, timestep + 1, STATE_STEERING] = predicted_state[:, STATE_STEERING]
         estimated_feature_valid[active_track_idx, timestep, STATE_STEERING] = True
         estimated_feature_valid[active_track_idx, timestep + 1, STATE_STEERING] = True
-        carried_steering[active_track_idx] = predicted_state[:, STATE_STEERING]
+        reconstructed_state[active_track_idx] = predicted_state
 
     output_prefix = (batch_count, agent_count)
     return InverseDynamicsResult(

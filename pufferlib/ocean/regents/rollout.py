@@ -28,7 +28,10 @@ from pufferlib.ocean.regents.state import (
 )
 
 
-C_REPLAY_TOLERANCE = 1e-4
+# Ninety float32 integration steps differ by up to 3.586e-4 between Torch and C
+# on the WOD audit cohort; keep the parity gate sub-millimetric without rejecting
+# C-confirmed collisions for expected transcendental rounding accumulation.
+C_REPLAY_TOLERANCE = 5e-4
 INITIAL_STATE_TOLERANCE = 1e-4
 
 

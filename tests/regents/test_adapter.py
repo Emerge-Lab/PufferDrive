@@ -7,7 +7,11 @@ import torch
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.regents.adapter import _rasterize_drivable_area, export_drive_scenarios
+from pufferlib.ocean.regents.adapter import (
+    TIMESTEP_TOLERANCE_SECONDS,
+    _rasterize_drivable_area,
+    export_drive_scenarios,
+)
 from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_STEERING, STATE_X, STATE_Y
 
 
@@ -217,6 +221,12 @@ def test_export_pads_batches_rasterizes_lanes_and_rejects_unsupported_modes(driv
     mismatched["log_dt"] = 0.2
     with pytest.raises(ValueError, match="does not match simulation dt"):
         export_drive_scenarios(drive, payload=mismatched, raster_resolution_meters=2.0)
+
+    wod_rounded_timestep = copy.deepcopy(payload)
+    wod_rounded_timestep["log_dt"] = 0.099
+    rounded = export_drive_scenarios(drive, payload=wod_rounded_timestep, raster_resolution_meters=2.0)
+    assert rounded.log_dt_seconds.item() == pytest.approx(0.099)
+    assert TIMESTEP_TOLERANCE_SECONDS == pytest.approx(1.01e-3)
 
     unsupported_modes = (
         ("simulation_mode", binding.SIMULATION_MODE_GIGAFLOW, "simulation_mode='replay'"),

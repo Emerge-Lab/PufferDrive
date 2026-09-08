@@ -51,6 +51,35 @@ generations:
       resample_frequency: 101
       sdc_controller: replay
 
+  # WOD Motion validation logs contain 91 states, hence a full 90-transition
+  # horizon. Keep the default cohort bounded to the first 250 sorted binaries.
+  - name: regents_wod_motion_val
+    seed: 42
+    scenario_count: 250
+    num_workers: 24
+    horizon_transition_count: 90
+    maximum_outer_iterations: 1
+    raster_resolution_meters: 1.0
+    output_dir: experiments/regents
+    render_replays: true
+    optimizer:
+      learning_rate: 0.005
+      iteration_count: 500
+      filter:
+        static_speed_threshold_mps: 0.2
+        # Reject the upper reconstruction tail: 93.3% of WOD candidates stay
+        # within 1 m, retaining 244/246 pre-gate candidate-bearing scenes.
+        maximum_reconstruction_drift_meters: 1.0
+    env:
+      map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+      scenario_length: 91
+      resample_frequency: 91
+      sdc_controller: replay
+      # WOD candidate tracks reach 25 m/s at p99 and the cohort holds a few
+      # implausible >40 m/s tracks; clamping a logged speed corrupts its
+      # reconstruction, so keep the cap above real traffic.
+      base_max_speed_mps: 40.0
+
   # Full 20 s NuPlan window: 200 transitions at dt=0.1. scenario_length and
   # resample_frequency sit one step above the horizon so neither guard trips.
   - name: regents_nuplan_20s

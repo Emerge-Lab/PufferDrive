@@ -25,6 +25,22 @@ STEERING_LIMIT_RADIANS = float(binding.STEERING_LIMIT_RADIANS)
 STEERING_RATE_LIMIT_RADIANS_PER_SECOND = float(binding.STEERING_RATE_LIMIT_RADIANS_PER_SECOND)
 MAX_BACKWARD_SPEED_MPS = float(binding.MAX_BACKWARD_SPEED_MPS)
 REAR_AXLE_RATIO = float(binding.REAR_AXLE_RATIO)
+WHEELBASE_LENGTH_RATIO = float(binding.WHEELBASE_LENGTH_RATIO)
+
+
+def injection_wheelbase_by_transition(logged_length_meters, fallback_wheelbase_meters, transition_active):
+    """Match C's wheelbase refresh at the start of each injected validity run."""
+    transition_count = transition_active.shape[-1]
+    current_wheelbase = fallback_wheelbase_meters
+    previous_active = torch.zeros_like(transition_active[..., 0])
+    wheelbase_by_transition = []
+    for timestep in range(transition_count):
+        run_start = transition_active[..., timestep] & ~previous_active
+        logged_wheelbase = WHEELBASE_LENGTH_RATIO * logged_length_meters[..., timestep]
+        current_wheelbase = torch.where(run_start, logged_wheelbase, current_wheelbase)
+        wheelbase_by_transition.append(current_wheelbase)
+        previous_active = transition_active[..., timestep]
+    return torch.stack(wheelbase_by_transition, dim=-1)
 
 
 def _validate_step_inputs(state, action, wheelbase_meters, maximum_speed_mps, dt_seconds):

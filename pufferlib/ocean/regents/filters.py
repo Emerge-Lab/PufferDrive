@@ -15,6 +15,9 @@ DEFAULT_STATIC_DISPLACEMENT_THRESHOLD_METERS = 0.2
 DEFAULT_STATIC_SPEED_THRESHOLD_MPS = 0.2
 DEFAULT_REAR_SECTOR_FRACTION = 0.8
 DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS = math.pi / 8.0
+# Disabled by default: a finite threshold obliges the caller to measure the drift
+# of the same baseline reconstruction the optimizer will start from.
+DEFAULT_MAXIMUM_RECONSTRUCTION_DRIFT_METERS = math.inf
 DEFAULT_FRONT_DIVERGENCE_FRACTION = 0.5
 PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS = math.pi / 8.0
 REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS = math.pi / 2.0
@@ -29,6 +32,7 @@ class CandidateFilterReason(IntFlag):
     REAR_SECTOR = 1 << 4
     SCENE_UNSUITABLE = 1 << 5
     ORIGINAL_COLLISION = 1 << 6
+    RECONSTRUCTION_FIDELITY = 1 << 7
 
 
 class SceneFilterReason(IntFlag):
@@ -46,12 +50,15 @@ class ReGentSFilterConfig:
     static_speed_threshold_mps: float = DEFAULT_STATIC_SPEED_THRESHOLD_MPS
     rear_sector_fraction: float = DEFAULT_REAR_SECTOR_FRACTION
     rear_sector_half_angle_radians: float = DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS
+    maximum_reconstruction_drift_meters: float = DEFAULT_MAXIMUM_RECONSTRUCTION_DRIFT_METERS
 
     def __post_init__(self):
         for name in ("minimum_valid_state_fraction", "rear_sector_fraction"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0 or value > 1.0:
                 raise ValueError(f"{name} must be finite and in [0, 1]")
+        if math.isnan(self.maximum_reconstruction_drift_meters) or self.maximum_reconstruction_drift_meters < 0.0:
+            raise ValueError("maximum_reconstruction_drift_meters must be non-negative")
         for name in ("static_displacement_threshold_meters", "static_speed_threshold_mps"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
@@ -77,6 +84,9 @@ class CandidateSelection:
     displacement_meters: torch.Tensor
     maximum_absolute_speed_mps: torch.Tensor
     rear_sector_fraction: torch.Tensor
+    maximum_reconstruction_residual_meters: torch.Tensor
+    model_consistent_transition_fraction: torch.Tensor
+    reconstruction_drift_meters: torch.Tensor
     horizon_transition_count: int
 
     def __post_init__(self):
@@ -95,6 +105,9 @@ class CandidateSelection:
             "displacement_meters",
             "maximum_absolute_speed_mps",
             "rear_sector_fraction",
+            "maximum_reconstruction_residual_meters",
+            "model_consistent_transition_fraction",
+            "reconstruction_drift_meters",
         ):
             if getattr(self, name).shape != self.candidate_mask.shape:
                 raise ValueError(f"{name} must have shape [batch, agent]")
@@ -128,7 +141,9 @@ def wrapped_angle_difference(first, second):
     return torch.atan2(torch.sin(difference), torch.cos(difference))
 
 
-def _validate_selection_inputs(scenario, config, horizon_transition_count, scene_suitable):
+def _validate_selection_inputs(
+    scenario, config, horizon_transition_count, scene_suitable, inverse_dynamics, reconstruction_drift_meters
+):
     if not isinstance(scenario, ScenarioBatch):
         raise TypeError("scenario must be a ScenarioBatch")
     if not isinstance(config, ReGentSFilterConfig):
@@ -146,7 +161,47 @@ def _validate_selection_inputs(scenario, config, horizon_transition_count, scene
         raise TypeError("scene_suitable must be a bool Torch tensor")
     if scene_suitable.shape != (scenario.batch_size,) or scene_suitable.device != scenario.logged_state.device:
         raise ValueError("scene_suitable must have shape [batch] on the scenario device")
+    if inverse_dynamics is not None:
+        expected_prefix = (scenario.batch_size, scenario.max_agent_count)
+        if inverse_dynamics.action_valid.shape[:2] != expected_prefix:
+            raise ValueError("inverse_dynamics does not match the scenario batch and agent dimensions")
+        if inverse_dynamics.action_valid.shape[-1] < horizon_transition_count:
+            raise ValueError("inverse_dynamics does not cover the candidate-selection horizon")
+        if inverse_dynamics.actions.device != scenario.logged_state.device:
+            raise ValueError("inverse_dynamics and scenario tensors must share a device")
+    if reconstruction_drift_meters is not None:
+        if reconstruction_drift_meters.shape != scenario.ego_mask.shape:
+            raise ValueError("reconstruction_drift_meters must have shape [batch, agent]")
+        if reconstruction_drift_meters.device != scenario.logged_state.device:
+            raise ValueError("reconstruction_drift_meters and scenario tensors must share a device")
+        if not torch.isfinite(reconstruction_drift_meters).all():
+            raise ValueError("reconstruction_drift_meters contains NaN or Inf")
+    elif math.isfinite(config.maximum_reconstruction_drift_meters):
+        raise ValueError("reconstruction_drift_meters is required when the drift gate is enabled")
     return horizon_transition_count, scene_suitable
+
+
+def _reconstruction_statistics(scenario, inverse_dynamics, horizon_transition_count):
+    """Per-agent sequential reconstruction diagnostics; reported, never gated.
+
+    The strict composite residual and consistency flag are useful for diagnosis,
+    while the separately measured maximum position drift controls selection.
+    """
+    if inverse_dynamics is None:
+        zeros = torch.zeros(
+            scenario.ego_mask.shape, dtype=scenario.logged_state.dtype, device=scenario.logged_state.device
+        )
+        return zeros, zeros
+
+    action_valid = inverse_dynamics.action_valid[..., :horizon_transition_count]
+    consistent = inverse_dynamics.model_consistent[..., :horizon_transition_count] & action_valid
+    valid_transition_count = action_valid.sum(dim=-1)
+    consistent_fraction = consistent.sum(dim=-1).to(scenario.logged_state.dtype)
+    consistent_fraction /= valid_transition_count.clamp_min(1)
+    residual = inverse_dynamics.residual_meters[..., :horizon_transition_count]
+    maximum_residual = residual.masked_fill(~action_valid, -torch.inf).max(dim=-1).values
+    maximum_residual = torch.where(valid_transition_count > 0, maximum_residual, torch.zeros_like(maximum_residual))
+    return maximum_residual, consistent_fraction
 
 
 def _motion_statistics(scenario):
@@ -250,17 +305,21 @@ def select_adversary_candidates(
     *,
     horizon_transition_count=None,
     scene_suitable=None,
+    inverse_dynamics=None,
+    reconstruction_drift_meters=None,
 ):
     """Filter candidates using logged trajectories and record every reason.
 
-    Full-log filters are independent of rollout horizon. In addition to the released
-    displacement test, peak logged speed rejects parked tracks whose position jitter
-    exceeds the displacement threshold. Only batch time padding is excluded.
+    Full-log trajectory filters are independent of rollout horizon. In addition to the
+    released displacement test, peak logged speed rejects parked tracks whose position
+    jitter exceeds the displacement threshold. The optional drift gate rejects an
+    adversary whose baseline reconstruction leaves its own log, because a scene the
+    optimizer cannot reproduce is not the scene the collision would be introduced into.
     """
     if config is None:
         config = ReGentSFilterConfig()
     horizon_transition_count, scene_suitable = _validate_selection_inputs(
-        scenario, config, horizon_transition_count, scene_suitable
+        scenario, config, horizon_transition_count, scene_suitable, inverse_dynamics, reconstruction_drift_meters
     )
     transition_valid = scenario.transition_valid[:, :, :horizon_transition_count]
     valid_transition_count = transition_valid.sum(dim=-1)
@@ -273,6 +332,11 @@ def select_adversary_candidates(
     valid_state_fraction = valid_state_fraction / logged_time_count[:, None]
     displacement, maximum_speed = _motion_statistics(scenario)
     rear_fraction = _rear_sector_statistics(scenario, logged_time_count, config.rear_sector_half_angle_radians)
+    maximum_reconstruction_residual, model_consistent_fraction = _reconstruction_statistics(
+        scenario, inverse_dynamics, horizon_transition_count
+    )
+    if reconstruction_drift_meters is None:
+        reconstruction_drift_meters = torch.zeros_like(maximum_reconstruction_residual)
     original_collision, original_collision_timestep = _original_collision_labels(scenario, horizon_transition_count)
 
     agent_shape = scenario.ego_mask.shape
@@ -286,6 +350,8 @@ def select_adversary_candidates(
     reason_bits |= static.to(torch.int64) * int(CandidateFilterReason.STATIC)
     rear = rear_fraction > config.rear_sector_fraction
     reason_bits |= rear.to(torch.int64) * int(CandidateFilterReason.REAR_SECTOR)
+    drifted = reconstruction_drift_meters > config.maximum_reconstruction_drift_meters
+    reason_bits |= drifted.to(torch.int64) * int(CandidateFilterReason.RECONSTRUCTION_FIDELITY)
 
     ego_count = scenario.ego_mask.sum(dim=-1)
     ego_transition_count = (transition_valid & scenario.ego_mask[..., None]).sum(dim=(-2, -1))
@@ -315,6 +381,9 @@ def select_adversary_candidates(
         displacement_meters=displacement,
         maximum_absolute_speed_mps=maximum_speed,
         rear_sector_fraction=rear_fraction,
+        maximum_reconstruction_residual_meters=maximum_reconstruction_residual,
+        model_consistent_transition_fraction=model_consistent_fraction,
+        reconstruction_drift_meters=reconstruction_drift_meters,
         horizon_transition_count=horizon_transition_count,
     )
 

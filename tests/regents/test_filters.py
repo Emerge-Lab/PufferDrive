@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import pytest
 import torch
@@ -10,6 +11,7 @@ from pufferlib.ocean.regents.filters import (
     front_divergence_mask,
     select_adversary_candidates,
 )
+from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.state import DrivableAreaRaster, RasterTransform, ScenarioBatch
 
 
@@ -76,8 +78,11 @@ def _linear_track(x_start, y, speed, time_count=6, heading=0.0, dt=0.1):
 def test_candidate_selection_records_every_reason_and_its_boundaries():
     """Per-agent reason bits, ego-only original collisions, and the strict rear sector."""
     assert ReGentSFilterConfig().static_speed_threshold_mps == 0.2
+    assert ReGentSFilterConfig().maximum_reconstruction_drift_meters == math.inf
     with pytest.raises(ValueError, match="static_speed_threshold_mps"):
         ReGentSFilterConfig(static_speed_threshold_mps=-0.1)
+    with pytest.raises(ValueError, match="maximum_reconstruction_drift_meters"):
+        ReGentSFilterConfig(maximum_reconstruction_drift_meters=-1.0)
 
     states = torch.stack(
         (
@@ -214,6 +219,45 @@ def test_candidate_selection_records_every_reason_and_its_boundaries():
     excluded |= ((angle > 7 * math.pi / 8) | (angle < -7 * math.pi / 8)).float().mean(dim=-1) > 0.8
     excluded |= scenario.ego_mask | ~scenario.vehicle_mask
     assert torch.equal(full.candidate_mask, ~excluded)
+
+    reconstruction_scenario = make_scenario(
+        torch.stack((_linear_track(0.0, 0.0, 2.0), _linear_track(8.0, 4.0, 2.0)))[None]
+    )
+    reconstruction_inverse = estimate_expert_actions(reconstruction_scenario)
+    inconsistent_mask = reconstruction_inverse.model_consistent.clone()
+    inconsistent_mask[0, 1, 2] = False
+    reconstruction_residual = reconstruction_inverse.residual_meters.clone()
+    reconstruction_residual[0, 1, 2] = 0.25
+    reconstruction_inverse = replace(
+        reconstruction_inverse,
+        model_consistent=inconsistent_mask,
+        residual_meters=reconstruction_residual,
+    )
+    drift_config = ReGentSFilterConfig(maximum_reconstruction_drift_meters=1.5)
+    with pytest.raises(ValueError, match="reconstruction_drift_meters is required"):
+        select_adversary_candidates(reconstruction_scenario, drift_config)
+    measured_drift = torch.tensor([[0.5, 1.75]])
+    drift_filtered = select_adversary_candidates(
+        reconstruction_scenario,
+        drift_config,
+        inverse_dynamics=reconstruction_inverse,
+        reconstruction_drift_meters=measured_drift,
+    )
+    # The threshold is exclusive: 1.5 m of drift is retained, 1.75 m is not.
+    assert drift_filtered.candidate_mask.tolist() == [[False, False]]
+    assert "reconstruction_fidelity" in drift_filtered.reasons_for(0, 1)
+    assert "reconstruction_fidelity" not in drift_filtered.reasons_for(0, 0)
+    assert torch.equal(drift_filtered.reconstruction_drift_meters, measured_drift)
+    retained = select_adversary_candidates(
+        reconstruction_scenario,
+        ReGentSFilterConfig(maximum_reconstruction_drift_meters=1.75),
+        inverse_dynamics=reconstruction_inverse,
+        reconstruction_drift_meters=measured_drift,
+    )
+    assert "reconstruction_fidelity" not in retained.reasons_for(0, 1)
+    # Strict composite statistics stay reported even though the gate ignores them.
+    assert drift_filtered.maximum_reconstruction_residual_meters[0, 1] == 0.25
+    assert drift_filtered.model_consistent_transition_fraction[0, 1] == 0.8
 
 
 def test_static_filter_ignores_zero_filled_frames_before_an_agent_enters():

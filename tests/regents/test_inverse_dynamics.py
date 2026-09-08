@@ -1,10 +1,12 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import torch
 
 from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
-from pufferlib.ocean.regents import classic_rollout, estimate_expert_actions, export_drive_scenarios
+from pufferlib.ocean.regents import classic_rollout, classic_step, estimate_expert_actions, export_drive_scenarios
 from pufferlib.ocean.regents.inverse_dynamics import DEFAULT_LOW_SPEED_THRESHOLD_MPS
 from pufferlib.ocean.regents.state import STATE_FEATURE_COUNT, STATE_HEADING, STATE_STEERING
 from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_IDS, resolve_nuplan_scenarios
@@ -12,12 +14,12 @@ from tests.regents.real_fixtures import NUPLAN_MAP_DIR, REGENTS_AUDIT_SCENARIO_I
 
 EXACT_RECONSTRUCTION_ATOL = 1e-4
 AUDIT_SCENARIO_COUNT = len(REGENTS_AUDIT_SCENARIO_IDS)
-NORMAL_SPEED_POSITION_P95_LIMIT_METERS = 0.25
-LOW_SPEED_POSITION_P95_LIMIT_METERS = 0.08
-NORMAL_SPEED_HEADING_P95_LIMIT_RADIANS = 0.012
+NORMAL_SPEED_POSITION_P95_LIMIT_METERS = 1.3
+LOW_SPEED_POSITION_P95_LIMIT_METERS = 0.95
+NORMAL_SPEED_HEADING_P95_LIMIT_RADIANS = 0.035
 SPEED_P95_LIMIT_MPS = 1e-5
-TIMESTEP_MEAN_POSITION_LIMIT_METERS = 0.06
-TIMESTEP_MEAN_HEADING_LIMIT_RADIANS = 0.007
+TIMESTEP_MEAN_POSITION_LIMIT_METERS = 0.57
+TIMESTEP_MEAN_HEADING_LIMIT_RADIANS = 0.028
 TIMESTEP_MEAN_SPEED_LIMIT_MPS = 0.04
 
 
@@ -127,6 +129,16 @@ def test_inverse_exactly_reconstructs_torch_c_limit_and_reverse_trajectories(syn
 
 def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_batch):
     """Validity gaps are never bridged, low speed keeps steering, and residuals are reported."""
+    resumed_state = torch.tensor([[1.0, 1.0, 0.0, 2.0, 0.0]], dtype=torch.float32)
+    resumed_action = torch.tensor([[0.0, 0.05]], dtype=torch.float32)
+    resumed_wheelbase = torch.tensor([3.6], dtype=torch.float32)
+    resumed_next_state = classic_step(
+        resumed_state,
+        resumed_action,
+        resumed_wheelbase,
+        torch.tensor([20.0], dtype=torch.float32),
+        0.1,
+    )[0]
     gapped_states = torch.tensor(
         [
             [
@@ -134,22 +146,25 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
                     [0.0, 0.0, 0.0, 2.0, 0.4],
                     [0.2, 0.0, 0.0, 2.0, 0.4],
                     [8.0, 8.0, 1.0, 3.0, 0.4],
-                    [1.0, 1.0, 0.0, 2.0, 0.4],
-                    [1.2, 1.0, 0.0, 2.0, 0.4],
+                    resumed_state[0].tolist(),
+                    resumed_next_state.tolist(),
                 ]
             ]
         ],
         dtype=torch.float32,
     )
-    gapped = estimate_expert_actions(
-        synthetic_scenario_batch(
-            gapped_states, torch.tensor([[[True, True, False, True, True]]]), steering_observed=False
-        )
+    gapped_scenario = synthetic_scenario_batch(
+        gapped_states, torch.tensor([[[True, True, False, True, True]]]), steering_observed=False
     )
+    logged_length_meters = gapped_scenario.logged_length_meters.clone()
+    logged_length_meters[0, 0, 3] = resumed_wheelbase.item() / float(binding.WHEELBASE_LENGTH_RATIO)
+    gapped_scenario = replace(gapped_scenario, logged_length_meters=logged_length_meters)
+    gapped = estimate_expert_actions(gapped_scenario)
     assert torch.equal(gapped.action_valid, torch.tensor([[[True, False, False, True]]]))
     assert torch.equal(gapped.actions[~gapped.action_valid], torch.zeros((2, 2)))
     assert gapped.state_with_estimated_steering[0, 0, 0, STATE_STEERING] == 0
     assert gapped.state_with_estimated_steering[0, 0, 3, STATE_STEERING] == 0
+    torch.testing.assert_close(gapped.actions[0, 0, 3], resumed_action[0], rtol=0.0, atol=2e-5)
 
     stationary = estimate_expert_actions(
         synthetic_scenario_batch(
@@ -165,6 +180,12 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
     assert stationary.model_consistent.item()
     assert DEFAULT_LOW_SPEED_THRESHOLD_MPS == pytest.approx(0.6)
 
+    rounded_log_timestep = replace(
+        synthetic_scenario_batch(gapped_states, steering_observed=False),
+        log_dt_seconds=torch.tensor([0.099], dtype=torch.float32),
+    )
+    assert torch.isfinite(estimate_expert_actions(rounded_log_timestep).actions).all()
+
     unreachable = estimate_expert_actions(
         synthetic_scenario_batch(
             torch.tensor([[[[0.0, 0.0, 0.0, 5.0, 0.0], [0.0, 1.0, 0.8, 9.0, 0.0]]]], dtype=torch.float32),
@@ -176,6 +197,42 @@ def test_inverse_handles_gaps_low_speed_and_inconsistency(synthetic_scenario_bat
     assert unreachable.position_error_meters.item() > 0
     assert torch.all(unreachable.actions.abs() <= 1.0)
     assert torch.isfinite(unreachable.predicted_next_state).all()
+
+
+def test_inverse_uses_reconstructed_state_for_the_next_action(synthetic_scenario_batch):
+    """An unreachable speed target remains visible to the following expert solve."""
+    logged_states = torch.tensor(
+        [[[[0.0, 0.0, 0.0, 5.0, 0.0], [0.9, 0.0, 0.0, 9.0, 0.0], [1.8, 0.0, 0.0, 9.0, 0.0]]]],
+        dtype=torch.float32,
+    )
+    scenario = synthetic_scenario_batch(logged_states, steering_observed=False)
+
+    result = estimate_expert_actions(scenario)
+
+    # Solving logged[1] -> logged[2] independently would request zero acceleration.
+    # Sequential feedback instead sees the first step's reachable 5.4 m/s state.
+    torch.testing.assert_close(result.actions[0, 0, :, 0], torch.ones(2))
+    sequential_second_state = classic_step(
+        result.predicted_next_state[0, 0, 0:1],
+        result.actions[0, 0, 1:2],
+        torch.tensor([2.7]),
+        torch.tensor([20.0]),
+        scenario.dt_seconds,
+    )[0]
+    torch.testing.assert_close(result.predicted_next_state[0, 0, 1], sequential_second_state)
+    reconstructed = classic_rollout(
+        result.state_with_estimated_steering[..., 0, :],
+        result.actions,
+        result.action_valid,
+        torch.tensor([[2.7]]),
+        torch.tensor([[20.0]]),
+        scenario.dt_seconds,
+    )
+    torch.testing.assert_close(result.predicted_next_state, reconstructed[..., 1:, :])
+    expected_position_error = torch.linalg.vector_norm(reconstructed[..., 1:, :2] - logged_states[..., 1:, :2], dim=-1)
+    torch.testing.assert_close(result.position_error_meters, expected_position_error)
+    assert result.speed_error_mps[0, 0, 0] == pytest.approx(3.6)
+    assert result.speed_error_mps[0, 0, 1] == pytest.approx(3.2)
 
 
 def test_real_replay_reconstruction_metrics_are_finite_and_meet_the_p95_gates():
