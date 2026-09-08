@@ -801,8 +801,8 @@ static PyObject *vec_get(PyObject *self, PyObject *args) {
 }
 
 static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
-    if (PyTuple_Size(args) != 6) {
-        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 6 arguments");
+    if (PyTuple_Size(args) != 7) {
+        PyErr_SetString(PyExc_TypeError, "vec_get_obs_html_frame requires 7 arguments");
         return NULL;
     }
 
@@ -816,9 +816,10 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     PyArrayObject *metrics_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 3);
     PyArrayObject *puffer_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 4);
     PyArrayObject *traffic_i16_array = (PyArrayObject *) PyTuple_GetItem(args, 5);
+    PyArrayObject *goals_f32_array = (PyArrayObject *) PyTuple_GetItem(args, 6);
 
     if (!PyArray_Check(agent_f32_array) || !PyArray_Check(agent_i32_array) || !PyArray_Check(metrics_f32_array)
-        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array)) {
+        || !PyArray_Check(puffer_f32_array) || !PyArray_Check(traffic_i16_array) || !PyArray_Check(goals_f32_array)) {
         PyErr_SetString(PyExc_TypeError, "All output arrays must be NumPy arrays");
         return NULL;
     }
@@ -828,12 +829,14 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     memset(PyArray_DATA(metrics_f32_array), 0, PyArray_NBYTES(metrics_f32_array));
     memset(PyArray_DATA(puffer_f32_array), 0, PyArray_NBYTES(puffer_f32_array));
     memset(PyArray_DATA(traffic_i16_array), 0, PyArray_NBYTES(traffic_i16_array));
+    memset(PyArray_DATA(goals_f32_array), 0, PyArray_NBYTES(goals_f32_array));
 
     float *agent_f32 = (float *) PyArray_DATA(agent_f32_array);
     int *agent_i32 = (int *) PyArray_DATA(agent_i32_array);
     float *metrics_f32 = (float *) PyArray_DATA(metrics_f32_array);
     float *puffer_f32 = (float *) PyArray_DATA(puffer_f32_array);
     short *traffic_i16 = (short *) PyArray_DATA(traffic_i16_array);
+    float *goals_f32 = (float *) PyArray_DATA(goals_f32_array);
 
     int env_cap = (int) PyArray_DIM(agent_f32_array, 0);
     int env_count = vec->num_envs < env_cap ? vec->num_envs : env_cap;
@@ -844,6 +847,8 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
     int puffer_fields = (int) PyArray_DIM(puffer_f32_array, 2);
     int traffic_cap = (int) PyArray_DIM(traffic_i16_array, 1);
     int traffic_fields = (int) PyArray_DIM(traffic_i16_array, 2);
+    int goal_fields = (int) PyArray_DIM(goals_f32_array, 2);
+    int goal_slots = goal_fields / GOAL_XY_FIELDS;
 
     for (int e = 0; e < env_count; e++) {
         Drive *drive = (Drive *) vec->envs[e];
@@ -892,6 +897,14 @@ static PyObject *vec_get_obs_html_frame(PyObject *self, PyObject *args) {
                 int i32_base = (e * agent_cap + agent_idx) * agent_i32_fields;
                 int puffer_base = (e * agent_cap + agent_idx) * puffer_fields;
                 agent_i32[i32_base + 7] = j;
+
+                Agent *active = &drive->agents[agent_idx];
+                int goal_count = active->goal_count < goal_slots ? active->goal_count : goal_slots;
+                int goal_base = (e * agent_cap + agent_idx) * goal_fields;
+                for (int goal_idx = active->current_goal_idx; goal_idx < goal_count; goal_idx++) {
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS] = active->list_goal_x[goal_idx];
+                    goals_f32[goal_base + goal_idx * GOAL_XY_FIELDS + 1] = active->list_goal_y[goal_idx];
+                }
 
                 if (!drive->compute_eval_metrics || !drive->logs || j >= drive->logs_capacity) {
                     continue;
@@ -1394,6 +1407,7 @@ PyMODINIT_FUNC PyInit_binding(void) {
     PyModule_AddIntConstant(m, "MAX_GOALS", MAX_GOALS);
     PyModule_AddIntConstant(m, "AGENT_F32_FIELDS", AGENT_F32_FIELDS);
     PyModule_AddIntConstant(m, "AGENT_I32_FIELDS", AGENT_I32_FIELDS);
+    PyModule_AddIntConstant(m, "GOAL_XY_FIELDS", GOAL_XY_FIELDS);
     PyModule_AddIntConstant(m, "METRICS_F32_FIELDS", METRICS_F32_FIELDS);
     PyModule_AddIntConstant(m, "SCORE_F32_FIELDS", SCORE_F32_FIELDS);
     PyModule_AddIntConstant(m, "TRAFFIC_I16_FIELDS", TRAFFIC_I16_FIELDS);

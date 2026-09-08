@@ -436,6 +436,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         "agent_i32",
         "metrics_f32",
         "traffic_i16",
+        "goals_f32",
         "obs",
         "raw_action",
         "policy_probs",

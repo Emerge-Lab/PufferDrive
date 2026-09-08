@@ -879,6 +879,8 @@ def encode_interactive_replay(scenario, replay):
         "value": replay["value"].astype(np.float32, copy=False),
         "entropy": replay["entropy"].astype(np.float32, copy=False),
     }
+    if replay.get("goals_f32") is not None:
+        chunks["goals_f32"] = replay["goals_f32"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
     if replay.get("policy_probs") is not None:
@@ -1222,7 +1224,7 @@ self.onmessage = async event => {
             H = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)));
             H.buffer = buf; H.dataStart = 4 + headerLen + ((-(4 + headerLen)) & 3);
             for (const name of Object.keys(H.chunks)) C[name] = chunk(name);
-            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2]};
+            F = {af:H.chunks.agent_f32.shape[2], ai:H.chunks.agent_i32.shape[2], mf:H.chunks.metrics_f32.shape[2], pf:H.chunks.puffer_f32.shape[2], tf:H.chunks.traffic_i16.shape[2], gf:H.chunks.goals_f32 ? H.chunks.goals_f32.shape[2] : 0};
             expertAgentIndices = new Set(H.expert_indices);
             document.getElementById('meta-map').textContent = String(H.map_name).split('/').pop();
             document.getElementById('meta-id').textContent = H.scenario_id || "-";
@@ -1387,19 +1389,13 @@ self.onmessage = async event => {
         function poolColor(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); const f = t * (POOL_STOPS.length - 1), i = Math.floor(f), k = f - i, a = POOL_STOPS[i], b = POOL_STOPS[Math.min(i + 1, POOL_STOPS.length - 1)]; return `rgb(${Math.round(a[0]+(b[0]-a[0])*k)},${Math.round(a[1]+(b[1]-a[1])*k)},${Math.round(a[2]+(b[2]-a[2])*k)})`; }
         function drawPoolLegend(maxN) { const w = 116*dpr, h = 9*dpr, x = obsC.width - w - 12*dpr, y = obsC.height - 20*dpr, grad = obsCtx.createLinearGradient(x, 0, x+w, 0); for (let i=0;i<=10;i++) grad.addColorStop(i/10, poolColor(i/10)); obsCtx.fillStyle = grad; obsCtx.fillRect(x, y, w, h); obsCtx.strokeStyle = "rgba(0,0,0,.45)"; obsCtx.lineWidth = dpr; obsCtx.strokeRect(x, y, w, h); obsCtx.fillStyle = "#111"; obsCtx.font = `bold ${9.5*dpr}px system-ui`; obsCtx.textAlign = "left"; obsCtx.fillText("pool wins  1", x, y - 4*dpr); obsCtx.textAlign = "right"; obsCtx.fillText(maxN, x+w, y - 4*dpr); }
         function selectedGoals(frame, agent) {
-            if (!C.obs || !agent || agent.slot < 0) return [];
-            const base = (frame * H.active_count + agent.slot) * H.obs_dim, obs = C.obs, Q = H.obs_scale === undefined ? 1 : H.obs_scale;
-            let p = base + H.ego_dim;
-            if (H.reward_conditioning) p += H.reward_coef_count;
-            const scale = H.scales.obs_norm_goal_offset_m * Q;
-            const out = [];
+            // World-frame goals from the replay log, so goals render without captured observations.
+            if (!C.goals_f32 || !agent || agent.slot < 0) return [];
+            const base = (frame * H.agent_cap + agent.idx) * F.gf, stride = F.gf / H.num_goals, goals = C.goals_f32, out = [];
             for (let i=0;i<H.num_goals;i++) {
-                const o = p + i * H.goal_features;
-                let empty = true;
-                for (let j=0;j<H.goal_features;j++) if (obs[o+j] !== 0) empty = false;
-                if (empty) continue;
-                const rx = obs[o] * scale, ry = obs[o+1] * scale, ch = Math.cos(agent.h), sh = Math.sin(agent.h);
-                out.push({x:agent.x + rx * ch - ry * sh, y:agent.y + rx * sh + ry * ch});
+                const o = base + i * stride;
+                if (goals[o] === 0 && goals[o+1] === 0) continue;
+                out.push({x:goals[o], y:goals[o+1]});
             }
             return out;
         }
