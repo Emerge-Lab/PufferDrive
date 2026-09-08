@@ -317,5 +317,20 @@ static const int ROAD_OFFSETS[25][2]
 #define METRICS_F32_FIELDS NUM_METRICS // must equal NUM_METRICS
 #define SCORE_F32_FIELDS 15            // Log struct fields: puffer_score .. weighted_average
 #define TRAFFIC_I16_FIELDS 3           // is_valid, type, state
+#define REWARD_F32_EPISODE_RETURN_IDX 0
+#define REWARD_F32_COLLISION_IDX 1
+#define REWARD_F32_OFFROAD_IDX 2
+#define REWARD_F32_RED_LIGHT_IDX 3
+#define REWARD_F32_STOP_SIGN_IDX 4
+#define REWARD_F32_GOAL_IDX 5
+#define REWARD_F32_LANE_ALIGN_IDX 6
+#define REWARD_F32_LANE_CENTER_IDX 7
+#define REWARD_F32_COMFORT_IDX 8
+#define REWARD_F32_VELOCITY_IDX 9
+#define REWARD_F32_TIMESTEP_IDX 10
+#define REWARD_F32_REVERSE_IDX 11
+#define REWARD_F32_OVERSPEED_IDX 12
+#define REWARD_F32_ADE_IDX 13
+#define REWARD_F32_FIELDS 14
 
 #endif

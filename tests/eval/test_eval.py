@@ -394,7 +394,24 @@ def _read_replay_header(replay_path):
     return json.loads(payload[4 : 4 + header_length])
 
 
-def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch):
+def _read_replay_float32_chunk(replay_path, chunk_name):
+    payload = zlib.decompress(replay_path.read_bytes())
+    header_length = struct.unpack_from("<I", payload)[0]
+    header = json.loads(payload[4 : 4 + header_length])
+    chunk = header["chunks"][chunk_name]
+    assert chunk["dtype"] == "float32"
+    data_start = 4 + header_length + (-(4 + header_length) % 4)
+    values = np.frombuffer(
+        payload,
+        dtype=np.float32,
+        count=chunk["nbytes"] // np.dtype(np.float32).itemsize,
+        offset=data_start + chunk["offset"],
+    )
+    return values.reshape(chunk["shape"])
+
+
+@pytest.mark.parametrize("capture_observations", [False, True], ids=["without_observations", "with_observations"])
+def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch, capture_observations):
     args = _replay_render_args()
     map_seed_pairs = [(0, 1234), (0, 5678)]
     worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
@@ -421,7 +438,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         expected_episodes=2,
         policy=ZeroPolicy(action_count=12),
         replay_output_dir=replay_output_dir,
-        capture_observations=True,
+        capture_observations=capture_observations,
     )
 
     assert len(multiprocessing_calls) == 1
@@ -437,22 +454,30 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         "metrics_f32",
         "traffic_i16",
         "goals_f32",
-        "obs",
+        "rewards_f32",
         "raw_action",
         "policy_probs",
     }
+    if capture_observations:
+        required_chunks.add("obs")
     for replay_path in replay_paths:
         header = _read_replay_header(replay_path)
         assert header["frames"] == 64
         assert header["active_count"] == 1
-        assert header["obs_dim"] > 0
+        assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
+        assert header["chunks"]["rewards_f32"]["shape"][2] == 14
+        rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
+        assert np.any(rewards[..., 0] != 0.0)
+        np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
 
     render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
-    assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+    rendered_html = [page.read_text() for page in rendered_pages]
+    assert all('class="payload-chunk"' in html for html in rendered_html)
+    assert all('id="reward-grid"' in html and '"return (cum)"' in html for html in rendered_html)
     assert all(replay_path.is_file() for replay_path in replay_paths)
 
     drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)
