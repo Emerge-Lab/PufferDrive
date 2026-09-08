@@ -40,7 +40,7 @@ env:
   # Options: "gigaflow", "replay"
   simulation_mode: replay
   # Total number of agents in the environments
-  num_agents: 120
+  num_agents: 1024
   # GIGAFLOW-specific: minimum/maximum number of agents per environment
   min_agents_per_env: 1
   max_agents_per_env: 120
@@ -111,7 +111,7 @@ env:
   # Meters around goal to be considered "reached"
   goal_radius: 2.0
   # Maximum speed at final waypoint to count goal reward
-  goal_speed: 15.0
+  goal_speed: 30.0
   # Fallback target speed (m/s) for reward_overspeed when a lane has no mapped speed_limit
   default_speed_limit: 30.0
   # Number of target waypoints in the observation (including goal)
