@@ -2381,6 +2381,7 @@ def _run_eval_rollout(
         if uses_policy and args["env"]["sdc_controller"] == "policy" and target_policy_path is not None:
             if "target_policy" not in evaluation_policy_cache:
                 target_args = _prepare_target_policy_args(args, target_policy_path)
+                target_args["policy_name"] = "TargetDrive"
                 target_policy = load_policy(target_args, vecenv, env_name)
                 target_policy.eval()
                 target_policy_forward_eval = target_policy.forward_eval

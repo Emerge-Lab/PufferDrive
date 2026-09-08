@@ -2008,8 +2008,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->adversarial_termination_mode = (int) unpack(kwargs, "adversarial_termination_mode");
     env->target_failure_episode_end = (int) unpack(kwargs, "target_failure_episode_end");
     env->target_collision_continuation_seconds = (float) unpack(kwargs, "target_collision_continuation_seconds");
-    if (env->target_collision_continuation_seconds <= 0.0f) {
-        PyErr_SetString(PyExc_ValueError, "target_collision_continuation_seconds must be positive");
+    if (env->target_collision_continuation_seconds < 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "target_collision_continuation_seconds must be non-negative");
         return -1;
     }
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
