@@ -117,8 +117,7 @@ To evaluate and render the environment distribution used during training, run:
 ```bash
 puffer eval puffer_drive carla_fast \
   load_model_path=path/to/model.pt \
-  env.eval_training_render=true \
-  env.map_dir=pufferlib/resources/drive/binaries/carla
+  env.eval_training_render=true
 ```
 
 ## Filtered replay and rendering

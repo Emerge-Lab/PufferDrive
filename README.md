@@ -159,6 +159,8 @@ puffer eval puffer_drive carla \
 
 Set `env.eval_training_render=true` to evaluate and render the Gigaflow
 environment distribution saved in the checkpoint's adjacent `config.yaml`.
+The selected benchmark's `map_dir` and `num_maps` override the checkpoint values,
+so checkpoints remain portable across machines with different dataset paths.
 
 Use `eval.num_agents`, not `env.num_agents`, to configure evaluation capacity.
 Evaluation outputs are written under
