@@ -351,7 +351,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -373,7 +373,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
 };
 
 // ========================================
@@ -4065,11 +4065,12 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
         segment_dest[feature_base + 1] = rel_y / env->obs_norm_xy_offset_m;
         segment_dest[feature_base + 2] = rel_z / env->obs_norm_z_m;
         segment_dest[feature_base + 3] = seg_half_len / env->obs_norm_road_seg_length_m;
-        segment_dest[feature_base + 4] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
-        segment_dest[feature_base + 5] = rel_seg_dir_x;
-        segment_dest[feature_base + 6] = rel_seg_dir_y;
+        segment_dest[feature_base + 4] = rel_seg_dir_x;
+        segment_dest[feature_base + 5] = rel_seg_dir_y;
         // Goal-distance features: absolute and relative to ego's lane->goal distance.
         if (is_lane) {
+            // Constant until the map format carries per-lane width
+            segment_dest[feature_base + 6] = LANE_WIDTH / env->obs_norm_road_seg_width_m;
             float goal_dist_abs = 0.0f, goal_dist_rel = 0.0f; // 0 when flag off / unresolved
             if (env->obs_goal_lane_distance && goal_graph_idx >= 0 && entity_idx < env->num_road_elements) {
                 int lane_graph_idx = env->lane_graph.lane_to_graph_idx[entity_idx];
@@ -4084,10 +4085,6 @@ static int write_road_obs(Drive *env, Agent *ego, float *obs, int obs_idx, int *
             }
             segment_dest[feature_base + 7] = goal_dist_abs;
             segment_dest[feature_base + 8] = goal_dist_rel;
-        } else {
-            // NOTE: Remove this with next model
-            segment_dest[feature_base + 7] = 0.0f;
-            segment_dest[feature_base + 8] = 0.0f;
         }
     }
 

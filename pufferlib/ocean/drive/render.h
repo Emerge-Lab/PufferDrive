@@ -925,8 +925,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
         float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
         float z_middle = agent_obs[entity_idx + 2] * Z_BUFFER;
-        float rel_angle_x = (agent_obs[entity_idx + 5]);
-        float rel_angle_y = (agent_obs[entity_idx + 6]);
+        float rel_angle_x = (agent_obs[entity_idx + 4]);
+        float rel_angle_y = (agent_obs[entity_idx + 5]);
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
         float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         // Calculate endpoint using the relative angle directly
@@ -979,8 +979,8 @@ void draw_agent_obs(Drive *env, int agent_index, int mode, int obs_only, int las
         float x_middle = agent_obs[entity_idx] * env->obs_norm_xy_offset_m;
         float y_middle = agent_obs[entity_idx + 1] * env->obs_norm_xy_offset_m;
         float z_middle = agent_obs[entity_idx + 2] * Z_BUFFER;
-        float rel_angle_x = agent_obs[entity_idx + 5];
-        float rel_angle_y = agent_obs[entity_idx + 6];
+        float rel_angle_x = agent_obs[entity_idx + 4];
+        float rel_angle_y = agent_obs[entity_idx + 5];
         float rel_angle = atan2f(rel_angle_y, rel_angle_x);
         float segment_size = agent_obs[entity_idx + 3] * env->obs_norm_road_seg_length_m;
         float x_start = x_middle - segment_size * cosf(rel_angle);
