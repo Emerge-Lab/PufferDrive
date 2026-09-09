@@ -4280,7 +4280,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         if (agent->phantom_braking_counter > 0) {
             acceleration = ACCELERATION_VALUES[0]; // max braking
-            steering = 0.0f;
         }
 
         // Limit the steering rate similar to the jerk model
@@ -4364,7 +4363,6 @@ static void move_dynamics(Drive *env, int action_idx, int agent_idx) {
 
         if (agent->phantom_braking_counter > 0) {
             j_long = JERK_LONG[0]; // max braking jerk
-            j_lat = 0.0f;
         }
 
         // Get dynamic conditioning coefficients
