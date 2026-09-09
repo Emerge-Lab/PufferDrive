@@ -68,6 +68,31 @@ benchmarks:
       max_agents_per_env: 8
       eval_agent_count_mode: random
       adversarial_termination_mode: target_inactive
+      target_collision_continuation_seconds: 10.0
+      max_goal_spacing: 80.0
+      traffic_light_behavior: ignore
+      traffic_light_junction_phases: true
+      max_scenarios_per_batch: null
+      scenario_length: 2560
+      control_mode: control_vehicles
+      map_dir: pufferlib/resources/drive/binaries/carla
+
+  - name: adversarial_large
+    seed: 42
+    num_scenarios: 250
+    env:
+      simulation_mode: gigaflow
+      num_maps: 8
+      min_agents_per_env: 5
+      max_agents_per_env: 50
+      eval_agent_count_mode: random
+      gigaflow_spawn_mode: uniform
+      spawn_speed_mode: random
+      goal_source: route
+      min_goal_spacing: 30.0
+      max_goal_spacing: 30.0
+      target_infraction_behavior: remove
+      adversarial_termination_mode: target_inactive
       target_collision_continuation_seconds: 0.0
       traffic_light_behavior: ignore
       traffic_light_junction_phases: true
@@ -86,6 +111,26 @@ benchmarks:
       max_scenarios_per_batch: null
       scenario_length: 91
       control_mode: control_vehicles
+      map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+
+  - name: adversarial_womd
+    seed: 42
+    num_scenarios: 1000  # Overriden by num_maps = -1
+    env:
+      simulation_mode: replay
+      num_maps: -1
+      max_agents_per_env: 128
+      max_scenarios_per_batch: null
+      scenario_length: 91
+      control_mode: control_vehicles
+      init_mode: create_all_valid
+      goal_source: route
+      min_goal_spacing: 30.0
+      max_goal_spacing: 30.0
+      target_infraction_behavior: remove
+      adversarial_termination_mode: target_inactive
+      target_collision_continuation_seconds: 0.0
+      traffic_light_behavior: ignore
       map_dir: pufferlib/resources/drive/binaries/wod-motion_val
 
   - name: womd_single

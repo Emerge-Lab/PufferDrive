@@ -30,7 +30,7 @@ rnn_name: null
 max_suggestion_cost: 3600
 vec:
   backend: Multiprocessing
-  num_envs: 20
+  num_envs: 24
   num_workers: auto
   batch_size: auto
   zero_copy: true
@@ -96,7 +96,7 @@ env:
   adversarial_termination_mode: target_inactive_or_no_nearby_adversary
   # Done signal sent to all agents when target failure resets the episode.
   target_failure_episode_end: terminated
-  target_collision_continuation_seconds: 2.0
+  target_collision_continuation_seconds: 10.0
   # End the episode as soon as the agent reaches its final goal. Only active in
   # control_sdc_only replay mode (single active agent).
   terminate_on_goal: false
@@ -131,7 +131,7 @@ env:
   # Goal regeneration policy - options: "finite" (regen full set when all reached), "rolling" (sliding window)
   goal_regen_mode: "finite"
   # How the goal set is seeded - options: "route" (agent forward route), "map" (uniform free-roam)
-  goal_source: map
+  goal_source: route
   # Append normalized lane-graph distance to the current goal lane on each lane obs row
   obs_goal_lane_distance: True
   # Meters around goal to be considered "reached"
@@ -142,7 +142,7 @@ env:
   num_goals: 3
   # Waypoint spacing range in meters when building path
   min_goal_spacing: 20.0
-  max_goal_spacing: 200.0
+  max_goal_spacing: 80.0
   # --- Rewards ---
   reward_conditioning: false
   reward_randomization: false

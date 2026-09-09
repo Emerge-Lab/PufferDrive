@@ -217,6 +217,34 @@ def _build_benchmark_args(base_args, benchmark, environment_config):
     return args
 
 
+def _resolve_all_replay_maps(args, validation_context):
+    if args["env"]["num_maps"] != -1:
+        return
+    if args["env"]["simulation_mode"] != "replay":
+        raise pufferlib.APIUsageError(
+            f"Invalid PufferDrive configuration at env.num_maps during {validation_context}: "
+            "-1 is only supported in replay mode"
+        )
+
+    map_dir = args["env"]["map_dir"]
+    if os.path.isfile(map_dir) and map_dir.endswith(".bin"):
+        map_count = 1
+    elif os.path.isdir(map_dir):
+        map_count = sum(filename.endswith(".bin") for filename in os.listdir(map_dir))
+    else:
+        raise pufferlib.APIUsageError(
+            f"Invalid PufferDrive configuration at env.map_dir during {validation_context}: "
+            f"path does not exist: {map_dir}"
+        )
+    if map_count == 0:
+        raise pufferlib.APIUsageError(
+            f"Invalid PufferDrive configuration at env.map_dir during {validation_context}: contains no .bin maps"
+        )
+
+    args["env"]["num_maps"] = map_count
+    args["num_scenarios"] = map_count
+
+
 def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validation_context):
     cli_override_config = OmegaConf.from_dotlist(list(cli_overrides))
     args = OmegaConf.to_container(
@@ -226,6 +254,7 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
     args["env"]["eval_training_render"] = eval_training_render
     args["env"]["eval_mode"] = 1
     args["env"]["num_agents"] = args["eval"]["num_agents"]
+    _resolve_all_replay_maps(args, validation_context)
     if eval_training_render:
         args["env"]["compute_eval_metrics"] = True
         args["env"]["resample_frequency"] = args["env"]["scenario_length"]
