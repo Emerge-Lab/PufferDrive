@@ -1095,7 +1095,7 @@ def _render_interactive_replay_payload(compressed_payload, filename):
             <div class="label">Policy</div><div id="policy-grid" class="grid"></div>
             <button type="button" id="reward-header" class="toggle-header" data-target="reward-grid"><span>Reward</span><span>&#9662;</span></button>
             <div id="reward-grid" class="grid toggle-body"></div>
-            <button type="button" id="coef-header" class="toggle-header is-collapsed" data-target="coef-grid"><span>Reward coefs</span><span>&#9662;</span></button>
+            <button type="button" id="coef-header" class="toggle-header is-collapsed" data-target="coef-grid"><span>Conditioning</span><span>&#9662;</span></button>
             <div id="coef-grid" class="grid toggle-body is-collapsed"></div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
