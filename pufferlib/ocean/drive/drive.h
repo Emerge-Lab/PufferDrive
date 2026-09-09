@@ -351,7 +351,7 @@ static const RewardBound REWARD_BOUNDS[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
 };
 
 // Meaning of the values: [min_range, max_range, use_log_scale]
@@ -373,7 +373,7 @@ static const RewardBound REWARD_BOUNDS_LOG[NUM_REWARD_COEFS] = {
     {0.8f, 1.25f, 0},      // REWARD_COEF_THROTTLE        C_throttle
     {0.8f, 1.25f, 0},      // REWARD_COEF_STEER           C_steer
     {0.666f, 1.5f, 0},     // REWARD_COEF_ACC             C_acc
-    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED           C_vel
+    {0.666f, 1.5f, 0},     // REWARD_COEF_SPEED C_vel
 };
 
 // ========================================
@@ -3853,10 +3853,10 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
             &rel_goal_x,
             &rel_goal_y);
         // Goals beyond obs_norm_goal_offset_m collapse to a unit direction vector (keeps obs in [-1, 1])
-        float goal_distance = sqrtf(rel_goal_x * rel_goal_x + rel_goal_y * rel_goal_y);
-        float goal_norm = fmaxf(env->obs_norm_goal_offset_m, goal_distance);
-        obs[obs_idx++] = rel_goal_x / goal_norm;
-        obs[obs_idx++] = rel_goal_y / goal_norm;
+        float goal_distance_m = sqrtf(rel_goal_x * rel_goal_x + rel_goal_y * rel_goal_y);
+        float goal_normalization_m = fmaxf(env->obs_norm_goal_offset_m, goal_distance_m);
+        obs[obs_idx++] = rel_goal_x / goal_normalization_m;
+        obs[obs_idx++] = rel_goal_y / goal_normalization_m;
         obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / env->obs_norm_z_m;
     }
 
