@@ -625,7 +625,7 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
-    if not context.startswith("evaluation"):
+    if not context.startswith("evaluation") and context != "simulation profiling":
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
                 _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")
