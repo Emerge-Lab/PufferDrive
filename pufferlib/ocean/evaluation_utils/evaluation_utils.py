@@ -201,6 +201,8 @@ def _build_benchmark_args(base_args, benchmark, environment_config):
     args["vec"]["seed"] = seed
     if eval_training_render:
         args["eval"]["action_selection"] = pufferlib.pytorch.ACTION_SELECT_SAMPLE
+        args["env"]["map_dir"] = benchmark_environment_config["map_dir"]
+        args["env"]["num_maps"] = benchmark_environment_config["num_maps"]
     else:
         args["env"].update(copy.deepcopy(environment_config))
         args["env"].update(copy.deepcopy(benchmark_environment_config))
@@ -239,6 +241,9 @@ def _finalize_benchmark_args(args, cli_overrides, eval_training_render, validati
 
 def build_benchmark_args(base_args, benchmark, environment_config, cli_overrides=()):
     """Compose and validate final arguments for one benchmark evaluation."""
+    if benchmark["env"].get("eval_training_render"):
+        base_args = copy.deepcopy(base_args)
+        base_args["env"]["eval_training_render"] = True
     eval_training_render = base_args["env"]["eval_training_render"]
     validation_context = f"evaluation.{benchmark['name']}"
     if eval_training_render:
