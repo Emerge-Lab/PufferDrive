@@ -20,10 +20,8 @@ import random
 import shutil
 import subprocess
 import importlib
-import json
 import platform
 import shlex
-import sysconfig
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -90,13 +88,10 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
-PROFILE_WORKER_ENV = "PUFFER_PROFILE_WORKER"
+
+PROFILE_SUBPROCESS_ENV = "PUFFER_PROFILE_SUBPROCESS"
 PROFILE_OUTPUT_ENV = "PUFFER_PROFILE_OUTPUT_DIR"
-PROFILE_MAX_MINIBATCH_SIZE = 1024
-PROFILE_SIM_STEPS_PER_CYCLE = 256
-PROFILE_MODE_SIM = "sim"
-PROFILE_MODE_TRAINING = "training"
-PROFILE_MODE_ALL = "all"
+PROFILE_SIM_STEPS_PER_CYCLE = 16_384
 
 
 def torch_device(device):
@@ -1920,8 +1915,76 @@ def controlled_exp(env_name, args=None):
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
-def _profile_workload(args, env_name, output_dir):
-    args = copy.deepcopy(args)
+def profile(env_name):
+    args = load_config(env_name)
+    if os.environ.get(PROFILE_SUBPROCESS_ENV) != "1":
+        if platform.system() != "Linux":
+            raise pufferlib.APIUsageError("Profiling requires Linux perf")
+        perf = shutil.which("perf")
+        if perf is None:
+            raise pufferlib.APIUsageError("Profiling requires the Linux perf executable")
+
+        output_root = os.path.abspath(args["profile"]["output_dir"])
+        output_dir = os.path.join(output_root, datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+        os.makedirs(output_dir)
+        perf_data_path = os.path.join(output_dir, "perf.data")
+        perf_text_path = os.path.join(output_dir, "profile.linux-perf.txt")
+        subprocess_env = os.environ.copy()
+        subprocess_env[PROFILE_SUBPROCESS_ENV] = "1"
+        subprocess_env[PROFILE_OUTPUT_ENV] = output_dir
+        subprocess.run(
+            [
+                perf,
+                "record",
+                "--all-user",
+                "--call-graph",
+                "fp",
+                "-F",
+                str(args["profile"]["perf_frequency_hz"]),
+                "-m",
+                "64M",
+                "--delay=200",
+                "-o",
+                perf_data_path,
+                "--",
+                sys.executable,
+                "-m",
+                "pufferlib.pufferl",
+                "profile",
+                env_name,
+                *sys.argv[1:],
+            ],
+            check=True,
+            env=subprocess_env,
+        )
+        perf_script = subprocess.run(
+            [perf, "script", "-i", perf_data_path], check=True, capture_output=True, text=True
+        ).stdout
+        native_profile_blocks = []
+        for block in perf_script.split("\n\n"):
+            lines = block.splitlines()
+            native_line_indices = [
+                line_idx for line_idx, line in enumerate(lines) if "/pufferlib/ocean/drive/binding." in line
+            ]
+            if native_line_indices:
+                native_profile_blocks.append("\n".join(lines[: native_line_indices[-1] + 1]))
+        with open(perf_text_path, "w") as perf_text_file:
+            perf_text_file.write("\n\n".join(native_profile_blocks) + "\n")
+
+        quoted_perf_data = shlex.quote(perf_data_path)
+        quoted_perf_text = shlex.quote(perf_text_path)
+        print(f"Profile artifacts: {output_dir}")
+        print(f"Speedscope C profile: {quoted_perf_text}")
+        print(f"perf report: perf report -i {quoted_perf_data}")
+        print(f"perf annotate: perf annotate -i {quoted_perf_data} --symbol c_step")
+        if args["profile"]["mode"] != "sim":
+            quoted_trace = shlex.quote(os.path.join(output_dir, "torch_trace.json"))
+            print(f"Perfetto PyTorch trace: {quoted_trace}")
+        print("Source-line timings are samples; cold or optimized-away lines may have no samples.")
+
+        return
+
+    output_dir = os.environ[PROFILE_OUTPUT_ENV]
     profile_config = args["profile"]
     profile_mode = profile_config["mode"]
     args["wandb"] = False
@@ -1931,80 +1994,37 @@ def _profile_workload(args, env_name, output_dir):
     args["render"] = False
     args["env"]["compute_eval_metrics"] = False
     args["env"]["eval_training_render"] = False
-    if profile_mode == PROFILE_MODE_SIM:
-        validate_puffer_drive_config(args, "profiling")
     args["vec"]["backend"] = "Serial"
     args["vec"]["num_envs"] = 1
     args["vec"]["num_workers"] = 1
     args["vec"]["batch_size"] = 1
-    if profile_mode != PROFILE_MODE_SIM:
-        args["train"]["evaluation_interval_epochs"] = None
-        args["train"]["render"] = False
-        args["train"]["max_minibatch_size"] = min(args["train"]["max_minibatch_size"], PROFILE_MAX_MINIBATCH_SIZE)
-        args["train"]["checkpoint_interval"] = (
-            profile_config["warmup_cycles"] + profile_config["benchmark_cycles"] + profile_config["trace_cycles"] + 1
-        )
-        validate_puffer_drive_config(args, "profiling")
+    args["train"]["render"] = False
+    args["train"]["minibatch_size"] = 4096
+    args["train"]["render"] = False
+    args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
+    validate_puffer_drive_config(args, "profiling")
     validate_puffer_drive_resources(args, "profiling")
 
-    initialization_start = time.perf_counter()
     train_seed = args["train"]["seed"]
     if train_seed is None:
         train_seed = time.time_ns() & 0xFFFFFFFF
     torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, 1, 0)
 
-    if profile_mode == PROFILE_MODE_SIM:
+    if profile_mode == "sim":
         vecenv = load_env(env_name, args, seed=env_seed)
         vecenv.async_reset(env_seed)
         vecenv.recv()
         actions = np.zeros(vecenv.action_space.shape, dtype=vecenv.action_space.dtype)
-        initialization_seconds = time.perf_counter() - initialization_start
 
-        warmup_start = time.perf_counter()
         for _ in range(profile_config["warmup_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
             vecenv.send(actions)
             vecenv.recv()
-        warmup_seconds = time.perf_counter() - warmup_start
 
-        benchmark_steps = profile_config["benchmark_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE
-        benchmark_start = time.perf_counter()
-        for _ in range(benchmark_steps):
+        for _ in range(profile_config["trace_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
             vecenv.send(actions)
             vecenv.recv()
-        benchmark_seconds = time.perf_counter() - benchmark_start
 
-        trace_steps = profile_config["trace_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE
-        trace_start = time.perf_counter()
-        for _ in range(trace_steps):
-            vecenv.send(actions)
-            vecenv.recv()
-        trace_seconds = time.perf_counter() - trace_start
-        total_wall_seconds = time.perf_counter() - initialization_start
         vecenv.close()
-
-        measured_agent_steps = (benchmark_steps + trace_steps) * vecenv.num_agents
-        measured_seconds = benchmark_seconds + trace_seconds
-        summary = {
-            "configuration": args,
-            "python": platform.python_version(),
-            "mode": profile_mode,
-            "phase_seconds": {
-                "initialization": initialization_seconds,
-                "warmup": warmup_seconds,
-                "benchmark": benchmark_seconds,
-                "trace": trace_seconds,
-                "total_wall": total_wall_seconds,
-            },
-            "agent_steps": measured_agent_steps,
-            "simulation_sps": measured_agent_steps / measured_seconds,
-        }
-        with open(os.path.join(output_dir, "summary.json"), "w") as summary_file:
-            json.dump(summary, summary_file, indent=2, sort_keys=True)
-            summary_file.write("\n")
-
-        print(f"Initialization: {initialization_seconds:.3f}s")
-        print(f"Simulation: {measured_seconds:.3f}s ({summary['simulation_sps']:,.0f} SPS)")
-        print(f"Total wall time: {total_wall_seconds:.3f}s")
         return
 
     from torch.profiler import ProfilerActivity, profile as torch_profile, record_function
@@ -2015,209 +2035,55 @@ def _profile_workload(args, env_name, output_dir):
     train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
     pufferl = PuffeRL(train_config, vecenv, policy)
     use_cuda = is_cuda_device(train_config["device"])
-    if profile_mode == PROFILE_MODE_TRAINING:
-        pufferl.evaluate()
-    if use_cuda:
-        torch.cuda.synchronize()
-    initialization_seconds = time.perf_counter() - initialization_start
-
-    warmup_start_steps = pufferl.global_step
-    warmup_start = time.perf_counter()
-    for _ in range(profile_config["warmup_cycles"]):
-        if use_cuda and profile_mode == PROFILE_MODE_ALL:
-            torch.compiler.cudagraph_mark_step_begin()
-        if profile_mode == PROFILE_MODE_ALL:
-            pufferl.evaluate()
-        if use_cuda:
-            torch.compiler.cudagraph_mark_step_begin()
-        pufferl.train()
-    if use_cuda:
-        torch.cuda.synchronize()
-    warmup_seconds = time.perf_counter() - warmup_start
-    warmup_agent_steps = pufferl.global_step - warmup_start_steps
-
-    benchmark_rollout_seconds = []
-    benchmark_ppo_seconds = []
-    benchmark_total_seconds = []
-    benchmark_start_steps = pufferl.global_step
-    for _ in range(profile_config["benchmark_cycles"]):
-        if use_cuda and profile_mode == PROFILE_MODE_ALL:
-            torch.cuda.synchronize()
-            torch.compiler.cudagraph_mark_step_begin()
-        cycle_start = time.perf_counter()
-        rollout_start = cycle_start
-        if profile_mode == PROFILE_MODE_ALL:
-            pufferl.evaluate()
-        if use_cuda:
-            torch.cuda.synchronize()
-        if profile_mode == PROFILE_MODE_ALL:
-            benchmark_rollout_seconds.append(time.perf_counter() - rollout_start)
-
-        if use_cuda:
-            torch.compiler.cudagraph_mark_step_begin()
-        ppo_start = time.perf_counter()
-        pufferl.train()
-        if use_cuda:
-            torch.cuda.synchronize()
-        cycle_end = time.perf_counter()
-        benchmark_ppo_seconds.append(cycle_end - ppo_start)
-        benchmark_total_seconds.append(cycle_end - cycle_start)
-    benchmark_agent_steps = pufferl.global_step - benchmark_start_steps
-
     activities = [ProfilerActivity.CPU]
     if use_cuda:
         activities.append(ProfilerActivity.CUDA)
-    trace_start_steps = pufferl.global_step
-    trace_start = time.perf_counter()
-    with torch_profile(activities=activities) as prof:
-        for _ in range(profile_config["trace_cycles"]):
-            if use_cuda and profile_mode == PROFILE_MODE_ALL:
-                torch.compiler.cudagraph_mark_step_begin()
-            if profile_mode == PROFILE_MODE_ALL:
-                with record_function("rollout"):
-                    pufferl.evaluate()
+
+    if profile_mode == "training":
+        pufferl.evaluate()
+        for _ in range(profile_config["warmup_cycles"]):
             if use_cuda:
                 torch.compiler.cudagraph_mark_step_begin()
-            with record_function("ppo_update"):
-                pufferl.train()
+            pufferl.train()
+
+        with torch_profile(activities=activities) as prof:
+            for _ in range(profile_config["trace_cycles"]):
+                if use_cuda:
+                    torch.compiler.cudagraph_mark_step_begin()
+                with record_function("ppo_update"):
+                    pufferl.train()
+
+    else:
+        for _ in range(profile_config["warmup_cycles"]):
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
+            pufferl.evaluate()
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
+            pufferl.train()
+
+        with torch_profile(activities=activities) as prof:
+            for _ in range(profile_config["trace_cycles"]):
+                if use_cuda:
+                    torch.compiler.cudagraph_mark_step_begin()
+                with record_function("rollout"):
+                    pufferl.evaluate()
+                if use_cuda:
+                    torch.compiler.cudagraph_mark_step_begin()
+                with record_function("ppo_update"):
+                    pufferl.train()
+
     if use_cuda:
         torch.cuda.synchronize()
-    trace_seconds = time.perf_counter() - trace_start
-    total_wall_seconds = time.perf_counter() - initialization_start
-    trace_agent_steps = pufferl.global_step - trace_start_steps
-
     pufferl.vecenv.close()
     pufferl.utilization.stop()
 
     torch_ops_path = os.path.join(output_dir, "torch_ops.txt")
-    torch_trace_path = os.path.join(output_dir, "torch_trace.json")
-    sort_by = "self_cuda_time_total" if use_cuda else "self_cpu_time_total"
     with open(torch_ops_path, "w") as torch_ops_file:
+        sort_by = "self_cuda_time_total" if use_cuda else "self_cpu_time_total"
         torch_ops_file.write(prof.key_averages().table(sort_by=sort_by, row_limit=-1))
         torch_ops_file.write("\n")
-    prof.export_chrome_trace(torch_trace_path)
-
-    benchmark_rollout_total = sum(benchmark_rollout_seconds)
-    benchmark_ppo_total = sum(benchmark_ppo_seconds)
-    benchmark_total = sum(benchmark_total_seconds)
-    summary = {
-        "configuration": args,
-        "python": platform.python_version(),
-        "mode": profile_mode,
-        "cuda_profiled": use_cuda,
-        "phase_seconds": {
-            "initialization": initialization_seconds,
-            "warmup": warmup_seconds,
-            "benchmark_rollout": benchmark_rollout_seconds,
-            "benchmark_ppo_update": benchmark_ppo_seconds,
-            "benchmark_total": benchmark_total_seconds,
-            "trace": trace_seconds,
-            "total_wall": total_wall_seconds,
-        },
-    }
-    if profile_mode == PROFILE_MODE_ALL:
-        summary["agent_steps"] = {
-            "warmup": int(warmup_agent_steps),
-            "benchmark": int(benchmark_agent_steps),
-            "trace": int(trace_agent_steps),
-            "total": int(pufferl.global_step),
-        }
-        summary["rollout_sps"] = benchmark_agent_steps / benchmark_rollout_total
-        summary["end_to_end_sps"] = benchmark_agent_steps / benchmark_total
-    else:
-        benchmark_transitions = train_config["batch_size"] * profile_config["benchmark_cycles"]
-        summary["benchmark_transitions"] = benchmark_transitions
-        summary["training_sps"] = benchmark_transitions / benchmark_ppo_total
-    with open(os.path.join(output_dir, "summary.json"), "w") as summary_file:
-        json.dump(summary, summary_file, indent=2, sort_keys=True)
-        summary_file.write("\n")
-
-    print(f"Initialization: {initialization_seconds:.3f}s")
-    if profile_mode == PROFILE_MODE_ALL:
-        print(f"Rollout: {benchmark_rollout_total:.3f}s ({summary['rollout_sps']:,.0f} SPS)")
-        print(f"Benchmark total: {benchmark_total:.3f}s ({summary['end_to_end_sps']:,.0f} SPS)")
-    print(f"PPO update: {benchmark_ppo_total:.3f}s")
-    if profile_mode == PROFILE_MODE_TRAINING:
-        print(f"Training: {summary['training_sps']:,.0f} transitions/s")
-    print(f"Total wall time: {total_wall_seconds:.3f}s")
-
-
-def profile(env_name):
-    args = load_config(env_name)
-    if os.environ.get(PROFILE_WORKER_ENV) == "1":
-        return _profile_workload(args, env_name, os.environ[PROFILE_OUTPUT_ENV])
-
-    profile_mode = args["profile"]["mode"]
-    output_root = os.path.abspath(args["profile"]["output_dir"])
-    output_dir = os.path.join(output_root, datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
-    os.makedirs(output_dir)
-    if profile_mode == PROFILE_MODE_TRAINING:
-        _profile_workload(args, env_name, output_dir)
-        quoted_trace = shlex.quote(os.path.join(output_dir, "torch_trace.json"))
-        print(f"Profile artifacts: {output_dir}")
-        print(f"Perfetto PyTorch trace: {quoted_trace}")
-        return
-
-    if platform.system() != "Linux":
-        raise pufferlib.APIUsageError("Profiling requires Linux perf")
-    if sys.implementation.name != "cpython" or sys.version_info < (3, 13):
-        raise pufferlib.APIUsageError("Profiling requires CPython 3.13 or newer")
-    if not (sysconfig.get_config_var("PY_HAVE_PERF_TRAMPOLINE") or sysconfig.get_config_var("HAVE_PERF_TRAMPOLINE")):
-        raise pufferlib.APIUsageError("CPython was built without perf trampoline support")
-    perf = shutil.which("perf")
-    if perf is None:
-        raise pufferlib.APIUsageError("Profiling requires the Linux perf executable")
-
-    perf_data_path = os.path.join(output_dir, "perf.data")
-    perf_jit_data_path = os.path.join(output_dir, "perf.jit.data")
-    perf_text_path = os.path.join(output_dir, "perf.txt")
-    worker_env = os.environ.copy()
-    worker_env[PROFILE_WORKER_ENV] = "1"
-    worker_env[PROFILE_OUTPUT_ENV] = output_dir
-    worker_command = [
-        perf,
-        "record",
-        "--all-user",
-        "--sample-cpu",
-        "-F",
-        str(args["profile"]["perf_frequency_hz"]),
-        "-g",
-        "-k",
-        "1",
-        "--call-graph",
-        "dwarf",
-        "-o",
-        perf_data_path,
-        "--",
-        sys.executable,
-        "-X",
-        "perf_jit",
-        "-m",
-        "pufferlib.pufferl",
-        "profile",
-        env_name,
-        *sys.argv[1:],
-    ]
-    subprocess.run(worker_command, check=True, env=worker_env)
-    subprocess.run(
-        [perf, "inject", "-i", perf_data_path, "--jit", "--output", perf_jit_data_path],
-        check=True,
-        cwd=output_dir,
-    )
-    with open(perf_text_path, "w") as perf_text_file:
-        subprocess.run([perf, "script", "-i", perf_jit_data_path], check=True, stdout=perf_text_file)
-    os.remove(perf_data_path)
-
-    quoted_perf_jit_data = shlex.quote(perf_jit_data_path)
-    quoted_perf_text = shlex.quote(perf_text_path)
-    print(f"Profile artifacts: {output_dir}")
-    print(f"Perfetto C profile: {quoted_perf_text} (select a time range, then open Flamegraph)")
-    print(f"perf report: perf report -i {quoted_perf_jit_data}")
-    print(f"perf annotate: perf annotate -i {quoted_perf_jit_data} --symbol c_step")
-    if profile_mode == PROFILE_MODE_ALL:
-        quoted_trace = shlex.quote(os.path.join(output_dir, "torch_trace.json"))
-        print(f"Perfetto PyTorch trace: {quoted_trace}")
-    print("Source-line timings are samples; cold or optimized-away lines may have no samples.")
+    prof.export_chrome_trace(os.path.join(output_dir, "torch_trace.json"))
 
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):

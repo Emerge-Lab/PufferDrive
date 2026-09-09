@@ -33,7 +33,6 @@ profile:
   mode: all
   output_dir: profiles
   warmup_cycles: 1
-  benchmark_cycles: 1
   trace_cycles: 1
   perf_frequency_hz: 99
 vec:

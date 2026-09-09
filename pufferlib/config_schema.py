@@ -234,7 +234,6 @@ class ProfileConfig:
     mode: ProfileMode = MISSING
     output_dir: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
     warmup_cycles: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
-    benchmark_cycles: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     trace_cycles: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
     perf_frequency_hz: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
 
