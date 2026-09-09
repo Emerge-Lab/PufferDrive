@@ -3852,8 +3852,11 @@ static int write_reward_target_obs(Drive *env, Agent *ego, float *obs, int obs_i
             ego->list_goal_y[goal_idx],
             &rel_goal_x,
             &rel_goal_y);
-        obs[obs_idx++] = rel_goal_x / env->obs_norm_goal_offset_m;
-        obs[obs_idx++] = rel_goal_y / env->obs_norm_goal_offset_m;
+        // Goals beyond obs_norm_goal_offset_m collapse to a unit direction vector (keeps obs in [-1, 1])
+        float goal_distance = sqrtf(rel_goal_x * rel_goal_x + rel_goal_y * rel_goal_y);
+        float goal_norm = fmaxf(env->obs_norm_goal_offset_m, goal_distance);
+        obs[obs_idx++] = rel_goal_x / goal_norm;
+        obs[obs_idx++] = rel_goal_y / goal_norm;
         obs[obs_idx++] = (ego->list_goal_z[goal_idx] - ego->sim_z) / env->obs_norm_z_m;
     }
 
