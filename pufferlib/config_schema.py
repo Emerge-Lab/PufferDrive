@@ -789,10 +789,19 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
         simulation_mode = benchmark_environment.get("simulation_mode")
         if simulation_mode not in ("gigaflow", "replay"):
             _raise_config_error(context, f"{benchmark_path}.env.simulation_mode", "must be 'gigaflow' or 'replay'")
+        eval_training_render = benchmark_environment.get("eval_training_render", False)
+        if not isinstance(eval_training_render, bool):
+            _raise_config_error(
+                context,
+                f"{benchmark_path}.env.eval_training_render",
+                "must be a boolean",
+            )
         control_mode = benchmark_environment.get("control_mode")
-        if not isinstance(control_mode, str) or not control_mode:
+        if control_mode is not None and (not isinstance(control_mode, str) or not control_mode):
             _raise_config_error(context, f"{benchmark_path}.env.control_mode", "must be a non-empty string")
-        if benchmark_environment.get("eval_training_render") and simulation_mode != "gigaflow":
+        if control_mode is None and not eval_training_render:
+            _raise_config_error(context, f"{benchmark_path}.env.control_mode", "must be a non-empty string")
+        if eval_training_render and simulation_mode != "gigaflow":
             _raise_config_error(
                 context,
                 f"{benchmark_path}.env.eval_training_render",
@@ -821,7 +830,7 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
 
         max_agents_per_env = benchmark_environment.get("max_agents_per_env")
         single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"
-        if max_agents_per_env is None and not single_agent_replay:
+        if max_agents_per_env is None and not single_agent_replay and not eval_training_render:
             _raise_config_error(context, f"{benchmark_path}.env.max_agents_per_env", "must be a positive integer")
         if max_agents_per_env is not None:
             _validate_value_constraint(
