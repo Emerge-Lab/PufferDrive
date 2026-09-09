@@ -1,3 +1,4 @@
+import math
 import pickle
 import zlib
 import numpy as np
@@ -71,6 +72,8 @@ class Drive(pufferlib.PufferEnv):
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
+        pdm_horizon=4.0,
+        pdm_planning_dt=0.5,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
         goal_speed=3.0,
@@ -147,6 +150,12 @@ class Drive(pufferlib.PufferEnv):
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
         self.goal_speed = float(goal_speed)
+        self.pdm_horizon = float(pdm_horizon)
+        self.pdm_planning_dt = float(pdm_planning_dt)
+        if not math.isfinite(self.pdm_horizon) or self.pdm_horizon <= 0.0:
+            raise ValueError(f"pdm_horizon must be a positive finite number of seconds. Got: {pdm_horizon}")
+        if not math.isfinite(self.pdm_planning_dt) or self.pdm_planning_dt <= 0.0:
+            raise ValueError(f"pdm_planning_dt must be a positive finite number of seconds. Got: {pdm_planning_dt}")
         if reward_randomization and not reward_conditioning:
             raise ValueError("reward_randomization requires reward_conditioning")
         self.reward_conditioning = reward_conditioning
@@ -388,8 +397,10 @@ class Drive(pufferlib.PufferEnv):
             "policy": binding.CONTROLLER_POLICY,
             "replay": binding.CONTROLLER_REPLAY,
             "idm": binding.CONTROLLER_IDM,
+            "corridor_idm": binding.CONTROLLER_CORRIDOR_IDM,
+            "pdm": binding.CONTROLLER_PDM,
         }
-        controller_options = "'static', 'policy', 'replay', or 'idm'"
+        controller_options = "'static', 'policy', 'replay', 'idm', 'corridor_idm', or 'pdm'"
         if self.sdc_controller_str not in controller_values:
             raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
         if self.non_sdc_controller_str not in controller_values:
@@ -397,7 +408,7 @@ class Drive(pufferlib.PufferEnv):
                 f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
             )
         if self.non_vehicle_controller_str == "auto":
-            if self.non_sdc_controller_str == "idm":
+            if self.non_sdc_controller_str in ("idm", "corridor_idm", "pdm"):
                 self.non_vehicle_controller_str = "replay"
             else:
                 self.non_vehicle_controller_str = self.non_sdc_controller_str
@@ -555,6 +566,8 @@ class Drive(pufferlib.PufferEnv):
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
+            "pdm_horizon": self.pdm_horizon,
+            "pdm_planning_dt": self.pdm_planning_dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
             "goal_speed": self.goal_speed,

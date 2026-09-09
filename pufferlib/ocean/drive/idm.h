@@ -98,6 +98,161 @@ static int idm_traffic_light_controls_lane(TrafficControlElement *traffic, int l
     return 0;
 }
 
+static inline int idm_is_stop_light_obstacle_state(int state) {
+    return state == TRAFFIC_CONTROL_STATE_RED || state == TRAFFIC_CONTROL_STATE_YELLOW;
+}
+
+static inline void idm_point_to_ego_frame(const Agent *ego, float x, float y, float *out_x, float *out_y) {
+    float dx = x - ego->sim_x;
+    float dy = y - ego->sim_y;
+    *out_x = dx * ego->cos_heading + dy * ego->sin_heading;
+    *out_y = -dx * ego->sin_heading + dy * ego->cos_heading;
+}
+
+static void idm_consider_agent_leader(
+    Drive *env,
+    int ego_idx,
+    int other_idx,
+    float corridor_start_meters,
+    float corridor_end_meters,
+    float corridor_half_width_meters,
+    IDMLeader *best) {
+    if (other_idx == ego_idx) {
+        return;
+    }
+
+    Agent *ego = &env->agents[ego_idx];
+    Agent *other = &env->agents[other_idx];
+    if (other->removed || other->sim_x == INVALID_POSITION || other->sim_valid == 0) {
+        return;
+    }
+    if (!idm_check_z_overlap(ego, other)) {
+        return;
+    }
+
+    float half_length_meters = 0.5f * other->sim_length + IDM_BBOX_MARGIN_METERS;
+    float half_width_meters = 0.5f * other->sim_width + IDM_BBOX_MARGIN_METERS;
+    float min_x_meters = INFINITY;
+    float max_x_meters = -INFINITY;
+    float min_y_meters = INFINITY;
+    float max_y_meters = -INFINITY;
+    static const float corner_signs[4][2] = {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}};
+
+    for (int i = 0; i < 4; i++) {
+        float corner_x = other->sim_x + corner_signs[i][0] * half_length_meters * other->cos_heading
+            - corner_signs[i][1] * half_width_meters * other->sin_heading;
+        float corner_y = other->sim_y + corner_signs[i][0] * half_length_meters * other->sin_heading
+            + corner_signs[i][1] * half_width_meters * other->cos_heading;
+        float relative_x_meters;
+        float relative_y_meters;
+        idm_point_to_ego_frame(ego, corner_x, corner_y, &relative_x_meters, &relative_y_meters);
+        min_x_meters = fminf(min_x_meters, relative_x_meters);
+        max_x_meters = fmaxf(max_x_meters, relative_x_meters);
+        min_y_meters = fminf(min_y_meters, relative_y_meters);
+        max_y_meters = fmaxf(max_y_meters, relative_y_meters);
+    }
+
+    if (max_x_meters < corridor_start_meters || min_x_meters > corridor_end_meters) {
+        return;
+    }
+    if (max_y_meters < -corridor_half_width_meters || min_y_meters > corridor_half_width_meters) {
+        return;
+    }
+
+    float gap_meters = min_x_meters - corridor_start_meters;
+    float leader_speed_mps = other->sim_vx * ego->cos_heading + other->sim_vy * ego->sin_heading;
+    idm_update_best_leader(best, other_idx, 0, gap_meters, leader_speed_mps);
+}
+
+static void idm_consider_red_light_leader(
+    Drive *env,
+    int ego_idx,
+    float corridor_start_meters,
+    float corridor_end_meters,
+    float corridor_half_width_meters,
+    IDMLeader *best) {
+    Agent *ego = &env->agents[ego_idx];
+    if (ego->current_lane_idx == -1) {
+        return;
+    }
+
+    for (int i = 0; i < env->num_traffic_elements; i++) {
+        TrafficControlElement *traffic = &env->traffic_elements[i];
+        if (traffic->type != TRAFFIC_CONTROL_TYPE_TRAFFIC_LIGHT) {
+            continue;
+        }
+        if (!idm_traffic_light_controls_lane(traffic, ego->current_lane_idx)) {
+            continue;
+        }
+        if (env->timestep < 0 || env->timestep >= traffic->state_size || traffic->states == NULL) {
+            continue;
+        }
+        if (!idm_is_stop_light_obstacle_state(traffic->states[env->timestep])) {
+            continue;
+        }
+
+        float first_x_meters;
+        float first_y_meters;
+        float second_x_meters;
+        float second_y_meters;
+        idm_point_to_ego_frame(ego, traffic->stop_line[0], traffic->stop_line[1], &first_x_meters, &first_y_meters);
+        idm_point_to_ego_frame(ego, traffic->stop_line[3], traffic->stop_line[4], &second_x_meters, &second_y_meters);
+
+        float min_x_meters = fminf(first_x_meters, second_x_meters);
+        float max_x_meters = fmaxf(first_x_meters, second_x_meters);
+        float min_y_meters = fminf(first_y_meters, second_y_meters);
+        float max_y_meters = fmaxf(first_y_meters, second_y_meters);
+        if (max_x_meters < corridor_start_meters || min_x_meters > corridor_end_meters) {
+            continue;
+        }
+        if (max_y_meters < -corridor_half_width_meters || min_y_meters > corridor_half_width_meters) {
+            continue;
+        }
+
+        float stop_x_meters = 0.5f * (first_x_meters + second_x_meters);
+        float gap_meters = stop_x_meters - corridor_start_meters;
+        idm_update_best_leader(best, -1, 1, gap_meters, 0.0f);
+    }
+}
+
+static IDMLeader idm_find_leader_by_corridor(Drive *env, int ego_idx) {
+    Agent *ego = &env->agents[ego_idx];
+    IDMLeader best = idm_no_leader();
+
+    float speed_mps = fmaxf(0.0f, ego->sim_speed_signed);
+    float lookahead_meters
+        = clip(speed_mps * IDM_LOOKAHEAD_TIME_SECONDS, IDM_MIN_LOOKAHEAD_METERS, IDM_MAX_LOOKAHEAD_METERS);
+    float corridor_start_meters = 0.5f * ego->sim_length + IDM_BBOX_MARGIN_METERS;
+    float corridor_end_meters = corridor_start_meters + lookahead_meters;
+    float corridor_half_width_meters = 0.5f * ego->sim_width + IDM_BBOX_MARGIN_METERS;
+
+    for (int i = 0; i < env->num_agents; i++) {
+        int other_idx;
+        if (i < env->active_agent_count) {
+            other_idx = env->active_agent_indices[i];
+        } else {
+            other_idx = env->static_agent_indices[i - env->active_agent_count];
+        }
+        idm_consider_agent_leader(
+            env,
+            ego_idx,
+            other_idx,
+            corridor_start_meters,
+            corridor_end_meters,
+            corridor_half_width_meters,
+            &best);
+    }
+
+    idm_consider_red_light_leader(
+        env,
+        ego_idx,
+        corridor_start_meters,
+        corridor_end_meters,
+        corridor_half_width_meters,
+        &best);
+    return best;
+}
+
 static IDMLaneProjection idm_project_to_route_lanes(Drive *env, Agent *agent);
 static float idm_lane_segment_size(RoadMapElement *lane, int seg_idx);
 
@@ -860,6 +1015,11 @@ static void idm_move_with_leader(Drive *env, int agent_idx, IDMLeader leader) {
 
 static void move_idm(Drive *env, int agent_idx) {
     IDMLeader leader = idm_find_leader_by_route_boxes(env, agent_idx);
+    idm_move_with_leader(env, agent_idx, leader);
+}
+
+static void move_corridor_idm(Drive *env, int agent_idx) {
+    IDMLeader leader = idm_find_leader_by_corridor(env, agent_idx);
     idm_move_with_leader(env, agent_idx, leader);
 }
 

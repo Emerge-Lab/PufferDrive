@@ -55,16 +55,20 @@ class Controller(Enum):
     policy = 1
     replay = 2
     idm = 3
+    corridor_idm = 4
+    pdm = 5
 
 
 class NonVehicleController(Enum):
     # "auto" is config-side only: drive.py resolves it to a Controller
-    # (replay when non_sdc_controller is idm, else non_sdc_controller).
+    # (replay when non_sdc_controller is a rule-based driver, else non_sdc_controller).
     auto = -1
     static = 0
     policy = 1
     replay = 2
     idm = 3
+    corridor_idm = 4
+    pdm = 5
 
 
 class InitMode(Enum):
@@ -95,6 +99,8 @@ class DriveEnvConfig:
     dt: float = MISSING
     base_max_speed_mps: float = MISSING
     spawn_initial_speed: float = MISSING
+    pdm_horizon: float = MISSING
+    pdm_planning_dt: float = MISSING
     collision_behavior: InfractionBehavior = MISSING
     offroad_behavior: InfractionBehavior = MISSING
     traffic_light_behavior: InfractionBehavior = MISSING

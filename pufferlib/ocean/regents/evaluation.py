@@ -18,7 +18,7 @@ from pufferlib.ocean.regents.policy_ego import PolicyEgoActor, ReGentSPolicyEgoC
 from pufferlib.ocean.regents.rollout import _capture_c_rollout, baseline_relative_events
 
 EVALUATION_FILE_NAME = "evaluation_metrics.csv"
-EVALUATION_EGO_CONTROLLERS = ("replay", "idm", "policy")
+EVALUATION_EGO_CONTROLLERS = ("replay", "idm", "corridor_idm", "pdm", "policy")
 EVALUATION_FIELD_NAMES = (
     "scenario_index",
     "scenario_id",

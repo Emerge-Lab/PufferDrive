@@ -520,6 +520,8 @@ def export_drive_scenarios(drive, payload=None, raster_resolution_meters=DEFAULT
                 binding.CONTROLLER_POLICY,
                 binding.CONTROLLER_REPLAY,
                 binding.CONTROLLER_IDM,
+                binding.CONTROLLER_CORRIDOR_IDM,
+                binding.CONTROLLER_PDM,
             ):
                 raise ValueError(f"Scenario {scenario_idx} agent {stable_agent_idx} has invalid controller")
             agent_type[scenario_idx, stable_agent_idx] = serialized_agent_type

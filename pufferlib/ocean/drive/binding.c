@@ -2392,6 +2392,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->sdc_controller = (int) unpack(kwargs, "sdc_controller");
     env->non_sdc_controller = (int) unpack(kwargs, "non_sdc_controller");
     env->non_vehicle_controller = (int) unpack(kwargs, "non_vehicle_controller");
+    env->pdm_horizon_seconds = (float) unpack(kwargs, "pdm_horizon");
+    env->pdm_planning_dt_seconds = (float) unpack(kwargs, "pdm_planning_dt");
     env->simulation_mode = (int) unpack(kwargs, "simulation_mode");
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");

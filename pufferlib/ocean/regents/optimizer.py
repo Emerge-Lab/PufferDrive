@@ -80,21 +80,35 @@ CURVATURE_PARAMETER_LIMIT_MARGIN = 1.0 - 1e-6
 
 # Every ego controller ReGentS can freeze. C owns the ego whatever the controller is;
 # 'logged_fixture' is the pinned-trajectory test source.
-EGO_TRAJECTORY_SOURCES = ("c_idm", "c_replay", "c_policy", "logged_fixture")
+EGO_TRAJECTORY_SOURCES = ("c_idm", "c_corridor_idm", "c_pdm", "c_replay", "c_policy", "logged_fixture")
 
 # The ego controllers ReGentS can freeze and refresh. Backgrounds must stay replay.
-SUPPORTED_SDC_CONTROLLERS = (binding.CONTROLLER_IDM, binding.CONTROLLER_REPLAY, binding.CONTROLLER_POLICY)
+SUPPORTED_SDC_CONTROLLERS = (
+    binding.CONTROLLER_IDM,
+    binding.CONTROLLER_CORRIDOR_IDM,
+    binding.CONTROLLER_PDM,
+    binding.CONTROLLER_REPLAY,
+    binding.CONTROLLER_POLICY,
+)
+
+# Maps a C controller constant onto the EGO_TRAJECTORY_SOURCES name recorded on an artifact.
+EGO_TRAJECTORY_SOURCE_BY_CONTROLLER = {
+    binding.CONTROLLER_IDM: "c_idm",
+    binding.CONTROLLER_CORRIDOR_IDM: "c_corridor_idm",
+    binding.CONTROLLER_PDM: "c_pdm",
+    binding.CONTROLLER_REPLAY: "c_replay",
+    binding.CONTROLLER_POLICY: "c_policy",
+}
+
+SUPPORTED_SDC_CONTROLLER_NAMES = "'idm', 'corridor_idm', 'pdm', 'replay', or 'policy'"
 
 
 def ego_trajectory_source(sdc_controller):
     """Name the C ego controller a captured trajectory came from."""
-    if sdc_controller == binding.CONTROLLER_IDM:
-        return "c_idm"
-    if sdc_controller == binding.CONTROLLER_REPLAY:
-        return "c_replay"
-    if sdc_controller == binding.CONTROLLER_POLICY:
-        return "c_policy"
-    raise ValueError("ReGentS requires sdc_controller='idm', 'replay', or 'policy'")
+    source = EGO_TRAJECTORY_SOURCE_BY_CONTROLLER.get(sdc_controller)
+    if source is None:
+        raise ValueError(f"ReGentS requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
+    return source
 
 
 @dataclass(frozen=True)
@@ -287,7 +301,7 @@ def capture_frozen_idm_trajectory(
     if not isinstance(transition_count, int) or transition_count < 1:
         raise ValueError("transition_count must be a positive integer")
     if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
-        raise ValueError("Frozen ego capture requires sdc_controller='idm', 'replay', or 'policy'")
+        raise ValueError(f"Frozen ego capture requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
     if (drive.sdc_controller == binding.CONTROLLER_POLICY) != (ego_action_fn is not None):
         raise ValueError("A policy ego requires an ego action provider, and no other controller accepts one")
     if drive.non_sdc_controller != binding.CONTROLLER_REPLAY:

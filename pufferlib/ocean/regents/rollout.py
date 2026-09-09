@@ -10,6 +10,7 @@ from pufferlib.ocean.drive import binding
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
 from pufferlib.ocean.regents.inverse_dynamics import estimate_expert_actions
 from pufferlib.ocean.regents.optimizer import (
+    SUPPORTED_SDC_CONTROLLER_NAMES,
     SUPPORTED_SDC_CONTROLLERS,
     FrozenEgoTrajectory,
     ReGentSOptimizationConfig,
@@ -512,7 +513,7 @@ def run_reactive_generation(
     supplies actions for a policy ego and must be absent for a native C controller.
     """
     if drive.sdc_controller not in SUPPORTED_SDC_CONTROLLERS:
-        raise ValueError("Reactive generation requires sdc_controller='idm', 'replay', or 'policy'")
+        raise ValueError(f"Reactive generation requires sdc_controller={SUPPORTED_SDC_CONTROLLER_NAMES}")
     if optimization_config is None:
         optimization_config = ReGentSOptimizationConfig()
 
