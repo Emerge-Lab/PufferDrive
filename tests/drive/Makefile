@@ -3,7 +3,7 @@ ROOT := ../..
 LDLIBS_DRIVE := -lm
 
 BUILD_DIR := build
-CFLAGS := -O0 -g -std=c99 -I$(ROOT) \
+CFLAGS := -O0 -g -std=c99 -D_GNU_SOURCE -I$(ROOT) \
 	-Wall -Wextra -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter -Wno-implicit-function-declaration
 
 UNIT_SRCS := \
