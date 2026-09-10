@@ -1718,13 +1718,20 @@ self.onmessage = async event => {
         function updateBrakingReadout() {
             const candidateResult = document.getElementById('avoid-candidate-result');
             const rolloutResult = document.getElementById('avoid-rollout-result');
+            const classification = avoidability.classification || {};
+            const cutoffSeconds = Number(classification.envelope_cutoff_seconds_before_collision);
+            const cutoffSpeed = Number(classification.envelope_cutoff_target_speed_mps);
+            const cutoffDuration = Number(classification.envelope_cutoff_duration_seconds);
+            const envelopeText = cutoffSeconds >= 0
+                ? 'Search cutoff at '+cutoffSeconds.toFixed(2)+'s · envelope '+cutoffDuration.toFixed(2)+'s at '+cutoffSpeed.toFixed(2)+'m/s'
+                : classification.envelope_history_limited ? 'History ended before envelope boundary' : '';
             const rollout = selectedBrakingRollout();
             if (!rollout) {
                 candidateSlider.disabled = true;
                 rolloutSlider.disabled = true;
                 document.getElementById('avoid-rollout-play').disabled = true;
                 document.getElementById('avoid-candidate-label').textContent = 'n/a';
-                candidateResult.innerHTML = '<strong>No braking candidate</strong>';
+                candidateResult.innerHTML = '<strong>No braking candidate</strong>'+envelopeText;
                 rolloutResult.textContent = '';
                 return;
             }
@@ -1743,7 +1750,7 @@ self.onmessage = async event => {
             const futureCollisionSeconds = Number(candidate.future_straight_collision_seconds);
             const futureCollisionText = futureCollisionSeconds >= 0 ? ' · straight collision after '+futureCollisionSeconds.toFixed(2)+'s' : '';
             candidateResult.className = 'avoid-readout'+(candidate.avoided?'':' danger');
-            candidateResult.innerHTML = '<strong>'+outcome+' · candidate '+(candidateSelection+1)+'/'+avoidanceCandidates.length+'</strong>Brake '+leadSeconds.toFixed(2)+'s before collision · C horizon '+rollout.fullEndStep+' steps'+(Number(candidate.blocking_rollout_step)>=0?' · blocked at step '+candidate.blocking_rollout_step:' · target stopped and straight path clear')+futureCollisionText;
+            candidateResult.innerHTML = '<strong>'+outcome+' · candidate '+(candidateSelection+1)+'/'+avoidanceCandidates.length+'</strong>Brake '+leadSeconds.toFixed(2)+'s before collision · C horizon '+rollout.fullEndStep+' steps'+(Number(candidate.blocking_rollout_step)>=0?' · blocked at step '+candidate.blocking_rollout_step:' · target stopped and straight path clear')+futureCollisionText+(envelopeText?' · '+envelopeText:'');
             document.getElementById('avoid-rollout-label').textContent = 't='+(rolloutStep*rollout.dt).toFixed(1)+'s';
             rolloutResult.innerHTML = '<strong>Counterfactual step '+rolloutStep+' / '+rollout.endStep+'</strong>Target stop step '+rollout.targetStopStep+' · hitter continues straight at constant velocity'+(candidate.ignored_overlap_agent_index>=0?' · ignored non-fault overlap with agent '+candidate.ignored_overlap_agent_index+' at step '+candidate.ignored_overlap_rollout_step:'');
         }

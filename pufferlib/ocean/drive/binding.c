@@ -2158,9 +2158,17 @@ static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
         Py_CLEAR(constants);
     }
     PyObject *classification = Py_BuildValue(
-        "{s:f,s:i,s:i,s:i}",
+        "{s:f,s:f,s:f,s:f,s:i,s:i,s:i,s:i}",
         "t_brake",
         debug->last_avoidable_braking_seconds_before_collision,
+        "envelope_cutoff_seconds_before_collision",
+        debug->envelope_cutoff_seconds_before_collision,
+        "envelope_cutoff_target_speed_mps",
+        debug->envelope_cutoff_target_speed_mps,
+        "envelope_cutoff_duration_seconds",
+        debug->envelope_cutoff_duration_seconds,
+        "envelope_history_limited",
+        debug->envelope_history_limited,
         "genuine_target_failure",
         debug->genuine_target_failure,
         "adversary_forced",

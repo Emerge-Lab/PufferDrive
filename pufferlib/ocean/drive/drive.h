@@ -234,6 +234,10 @@ typedef struct {
     int target_route_length;
     int target_route[MAX_ROUTE_LENGTH];
     float last_avoidable_braking_seconds_before_collision;
+    float envelope_cutoff_seconds_before_collision;
+    float envelope_cutoff_target_speed_mps;
+    float envelope_cutoff_duration_seconds;
+    int envelope_history_limited;
     int genuine_target_failure;
     int adversary_forced;
     int unavoidable;
@@ -2644,8 +2648,26 @@ static float last_avoidable_braking_seconds_before_collision(
             debug->target_route[route_idx] = target->route[route_idx];
         }
         debug->last_avoidable_braking_seconds_before_collision = NO_AVOIDABLE_BRAKING_TIME_SECONDS;
+        debug->envelope_cutoff_seconds_before_collision = -1.0f;
+        debug->envelope_cutoff_duration_seconds = -1.0f;
     }
+    bool envelope_cutoff_reached = false;
     for (int steps_back = 1; steps_back <= target->trajectory_hist_count; steps_back++) {
+        float seconds_before_collision = steps_back * env->dt;
+        int history_idx = TARGET_TRAJECTORY_HISTORY_LEN - steps_back;
+        float target_speed_mps = fabsf(target->trajectory_hist_speed_signed[history_idx]);
+        float envelope_duration_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS
+            + target_speed_mps / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 + DANGER_TTC_MARGIN_SECONDS;
+        if (seconds_before_collision > envelope_duration_seconds) {
+            envelope_cutoff_reached = true;
+            if (debug != NULL) {
+                debug->envelope_cutoff_seconds_before_collision = seconds_before_collision;
+                debug->envelope_cutoff_target_speed_mps = target_speed_mps;
+                debug->envelope_cutoff_duration_seconds = envelope_duration_seconds;
+            }
+            break;
+        }
+
         AvoidabilityCandidateDebug candidate;
         bool avoided = target_braking_avoids_collision(
             env,
@@ -2657,12 +2679,14 @@ static float last_avoidable_braking_seconds_before_collision(
             debug->candidates[debug->candidate_count++] = candidate;
         }
         if (avoided) {
-            float braking_seconds = steps_back * env->dt;
             if (debug != NULL) {
-                debug->last_avoidable_braking_seconds_before_collision = braking_seconds;
+                debug->last_avoidable_braking_seconds_before_collision = seconds_before_collision;
             }
-            return braking_seconds;
+            return seconds_before_collision;
         }
+    }
+    if (debug != NULL && !envelope_cutoff_reached) {
+        debug->envelope_history_limited = 1;
     }
     return NO_AVOIDABLE_BRAKING_TIME_SECONDS;
 }
