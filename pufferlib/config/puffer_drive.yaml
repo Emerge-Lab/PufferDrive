@@ -60,7 +60,8 @@ env:
   spawn_speed_mode: random
   # Gigaflow spawning: uniform or targeted
   gigaflow_spawn_mode: targeted
-  adversary_spawn_radius_meters: 25.0
+  adversary_near_spawn_radius_meters: 25.0
+  adversary_spawn_radius_meters: 50.0
   spawn_clearance_meters: 1.0
   adversary_retention_radius_meters: 35.0
   adversary_retention_grace_seconds: 1.0

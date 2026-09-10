@@ -1972,6 +1972,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
     env->spawn_speed_mode = (int) unpack(kwargs, "spawn_speed_mode");
     env->gigaflow_spawn_mode = (int) unpack(kwargs, "gigaflow_spawn_mode");
+    env->adversary_near_spawn_radius_meters = (float) unpack(kwargs, "adversary_near_spawn_radius_meters");
     env->adversary_spawn_radius_meters = (float) unpack(kwargs, "adversary_spawn_radius_meters");
     env->spawn_clearance_meters = (float) unpack(kwargs, "spawn_clearance_meters");
     env->adversary_retention_radius_meters = (float) unpack(kwargs, "adversary_retention_radius_meters");
@@ -1987,9 +1988,10 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "invalid spawn_speed_mode");
         return -1;
     }
-    if (env->adversary_spawn_radius_meters <= 0.0f
-        || env->adversary_retention_radius_meters < env->adversary_spawn_radius_meters
-        || env->spawn_clearance_meters < 0.0f || env->adversary_retention_grace_seconds <= 0.0f) {
+    if (env->adversary_near_spawn_radius_meters <= 0.0f
+        || env->adversary_spawn_radius_meters < env->adversary_near_spawn_radius_meters
+        || env->adversary_retention_radius_meters <= 0.0f || env->spawn_clearance_meters < 0.0f
+        || env->adversary_retention_grace_seconds <= 0.0f) {
         PyErr_SetString(PyExc_ValueError, "invalid adversarial spawn distance or duration");
         return -1;
     }

@@ -60,7 +60,8 @@ class Drive(pufferlib.PufferEnv):
         spawn_initial_speed=0.0,
         spawn_speed_mode="random",
         gigaflow_spawn_mode="targeted",
-        adversary_spawn_radius_meters=25.0,
+        adversary_near_spawn_radius_meters=25.0,
+        adversary_spawn_radius_meters=50.0,
         spawn_clearance_meters=1.0,
         adversary_retention_radius_meters=35.0,
         adversary_retention_grace_seconds=1.0,
@@ -156,6 +157,7 @@ class Drive(pufferlib.PufferEnv):
             "uniform": binding.GIGAFLOW_SPAWN_MODE_UNIFORM,
             "targeted": binding.GIGAFLOW_SPAWN_MODE_TARGETED,
         }[gigaflow_spawn_mode]
+        self.adversary_near_spawn_radius_meters = float(adversary_near_spawn_radius_meters)
         self.adversary_spawn_radius_meters = float(adversary_spawn_radius_meters)
         self.spawn_clearance_meters = float(spawn_clearance_meters)
         self.adversary_retention_radius_meters = float(adversary_retention_radius_meters)
@@ -528,6 +530,7 @@ class Drive(pufferlib.PufferEnv):
             "spawn_initial_speed": self.spawn_initial_speed,
             "spawn_speed_mode": self.spawn_speed_mode,
             "gigaflow_spawn_mode": self.gigaflow_spawn_mode,
+            "adversary_near_spawn_radius_meters": self.adversary_near_spawn_radius_meters,
             "adversary_spawn_radius_meters": self.adversary_spawn_radius_meters,
             "spawn_clearance_meters": self.spawn_clearance_meters,
             "adversary_retention_radius_meters": self.adversary_retention_radius_meters,

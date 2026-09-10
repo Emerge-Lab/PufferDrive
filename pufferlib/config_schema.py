@@ -285,6 +285,7 @@ class DriveEnvConfig:
     spawn_initial_speed: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     spawn_speed_mode: SpawnSpeedMode = MISSING
     gigaflow_spawn_mode: GigaflowSpawnMode = MISSING
+    adversary_near_spawn_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     adversary_spawn_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
     spawn_clearance_meters: float = _constrained_field(NONNEGATIVE_NUMBER_CONSTRAINT)
     adversary_retention_radius_meters: float = _constrained_field(POSITIVE_NUMBER_CONSTRAINT)
@@ -618,11 +619,11 @@ def _validate_cross_field_constraints(config, context):
         _raise_config_error(context, "env.init_step", "must be smaller than env.scenario_length")
     if env["spawn_initial_speed"] > env["base_max_speed_mps"]:
         _raise_config_error(context, "env.spawn_initial_speed", "must not exceed env.base_max_speed_mps")
-    if env["adversary_spawn_radius_meters"] > env["adversary_retention_radius_meters"]:
+    if env["adversary_near_spawn_radius_meters"] > env["adversary_spawn_radius_meters"]:
         _raise_config_error(
             context,
-            "env.adversary_spawn_radius_meters",
-            "must not exceed env.adversary_retention_radius_meters",
+            "env.adversary_near_spawn_radius_meters",
+            "must not exceed env.adversary_spawn_radius_meters",
         )
     if env["route_relevance_horizon_meters"] > 1000.0:
         _raise_config_error(context, "env.route_relevance_horizon_meters", "must not exceed 1000 meters")
@@ -911,8 +912,9 @@ def normalize_puffer_drive_benchmarks(environment_config, benchmarks, context, v
         )
         num_maps = benchmark_environment.get("num_maps")
         if num_maps is None:
-            _raise_config_error(context, f"{benchmark_path}.env.num_maps", "must be a positive integer")
-        _validate_value_constraint(num_maps, POSITIVE_INT_CONSTRAINT, context, f"{benchmark_path}.env.num_maps")
+            _raise_config_error(context, f"{benchmark_path}.env.num_maps", "must be a positive integer or -1")
+        if num_maps != -1:
+            _validate_value_constraint(num_maps, POSITIVE_INT_CONSTRAINT, context, f"{benchmark_path}.env.num_maps")
 
         max_agents_per_env = benchmark_environment.get("max_agents_per_env")
         single_agent_replay = simulation_mode == "replay" and control_mode == "control_sdc_only"

@@ -349,6 +349,7 @@ struct Drive {
     float spawn_initial_speed;
     int spawn_speed_mode;
     int gigaflow_spawn_mode;
+    float adversary_near_spawn_radius_meters;
     float adversary_spawn_radius_meters;
     float spawn_clearance_meters;
     float adversary_retention_radius_meters;
@@ -3452,9 +3453,8 @@ static bool sample_global_spawn_lane(Drive *env, int *lane_idx, int *geometry_id
     return true;
 }
 
-static bool sample_targeted_spawn_lane(Drive *env, int *lane_idx, int *geometry_idx) {
+static bool sample_targeted_spawn_lane(Drive *env, float radius_meters, int *lane_idx, int *geometry_idx) {
     Agent *target = &env->agents[EGO_IDX];
-    float radius_meters = env->adversary_spawn_radius_meters;
     float radius_squared_meters = radius_meters * radius_meters;
     int min_grid_x = (int) floorf((target->sim_x - radius_meters - env->grid_map->top_left_x) / GRID_CELL_SIZE);
     int max_grid_x = (int) floorf((target->sim_x + radius_meters - env->grid_map->top_left_x) / GRID_CELL_SIZE);
@@ -3618,22 +3618,29 @@ static bool forward_routes_are_relevant(Drive *env, Agent *target, Agent *advers
     return false;
 }
 
-static bool gigaflow_scene_has_route_relevance(Drive *env, int *agent_indices, int agent_count) {
+static bool gigaflow_scene_has_near_relevant_adversary(Drive *env, int *agent_indices, int agent_count) {
+    if (agent_count < 2) {
+        return false;
+    }
+
     Agent *target = &env->agents[agent_indices[EGO_IDX]];
     if (target->removed || target->route == NULL) {
         return false;
     }
 
-    for (int active_idx = 1; active_idx < agent_count; active_idx++) {
-        Agent *adversary = &env->agents[agent_indices[active_idx]];
-        if (adversary->removed || adversary->route == NULL) {
-            continue;
-        }
-        if (forward_routes_are_relevant(env, target, adversary)) {
-            return true;
-        }
+    Agent *adversary = &env->agents[agent_indices[1]];
+    if (adversary->removed || adversary->route == NULL) {
+        return false;
     }
-    return false;
+
+    float delta_x_meters = adversary->sim_x - target->sim_x;
+    float delta_y_meters = adversary->sim_y - target->sim_y;
+    float near_radius_squared_meters
+        = env->adversary_near_spawn_radius_meters * env->adversary_near_spawn_radius_meters;
+    if (delta_x_meters * delta_x_meters + delta_y_meters * delta_y_meters > near_radius_squared_meters) {
+        return false;
+    }
+    return forward_routes_are_relevant(env, target, adversary);
 }
 
 static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
@@ -3675,7 +3682,7 @@ static bool check_spawn_offroad(Drive *env, Agent *tmp_agent) {
     return false;
 }
 
-static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
+static bool spawn_agent(Drive *env, int agent_idx, int active_idx) {
     Agent *agent = &env->agents[agent_idx];
 
     // Free existing route on reset
@@ -3685,7 +3692,7 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
         agent->route_length = 0;
     }
 
-    agent->id = num_agents;
+    agent->id = active_idx;
 
     // Initialize identity fields
     agent->type = VEHICLE;
@@ -3720,9 +3727,12 @@ static bool spawn_agent(Drive *env, int agent_idx, int num_agents) {
     // Sampling rejection loop
     for (int attempt = 0; attempt < GIGAFLOW_MAX_SPAWN_ATTEMPTS; attempt++) {
         int geometry_idx;
-        bool use_targeted_spawn = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGETED && agent_idx != EGO_IDX;
-        bool sampled_lane = use_targeted_spawn ? sample_targeted_spawn_lane(env, &start_lane_idx, &geometry_idx)
-                                               : sample_global_spawn_lane(env, &start_lane_idx, &geometry_idx);
+        bool use_targeted_spawn = env->gigaflow_spawn_mode == GIGAFLOW_SPAWN_MODE_TARGETED && active_idx != EGO_IDX;
+        float spawn_radius_meters
+            = active_idx == 1 ? env->adversary_near_spawn_radius_meters : env->adversary_spawn_radius_meters;
+        bool sampled_lane = use_targeted_spawn
+            ? sample_targeted_spawn_lane(env, spawn_radius_meters, &start_lane_idx, &geometry_idx)
+            : sample_global_spawn_lane(env, &start_lane_idx, &geometry_idx);
         if (!sampled_lane) {
             continue;
         }
@@ -3825,7 +3835,7 @@ static int spawn_gigaflow_scene(Drive *env, int *agent_indices, int agent_count)
             env->agents[agent_idx].removed = 1;
         }
 
-        if (!use_targeted_spawn || gigaflow_scene_has_route_relevance(env, agent_indices, agent_count)) {
+        if (!use_targeted_spawn || gigaflow_scene_has_near_relevant_adversary(env, agent_indices, agent_count)) {
             return successfully_created;
         }
     }

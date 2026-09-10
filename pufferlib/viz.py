@@ -1813,6 +1813,12 @@ self.onmessage = async event => {
             ctx.strokeRect(-agent.l/2,-agent.w/2,agent.l,agent.w);
             ctx.restore();
         }
+        function diagnosticVelocityAt(frameIndex,agent) {
+            const neighboringFrameIndex=frameIndex<frameMax()?frameIndex+1:frameIndex-1;
+            const neighboringAgent=agentAt(neighboringFrameIndex,agent.idx);
+            const elapsedSeconds=(neighboringFrameIndex-frameIndex)*Number(avoidability.constants.dt);
+            return {vx:(neighboringAgent.x-agent.x)/elapsedSeconds,vy:(neighboringAgent.y-agent.y)/elapsedSeconds};
+        }
         function drawDetectionOverlay(view) {
             const sample=view.sample;
             if (!sample) return;
@@ -1820,6 +1826,8 @@ self.onmessage = async event => {
             const target=view.agents.find(agent=>agent.idx===Number(collision.target_agent_index));
             const adversary=view.agents.find(agent=>agent.idx===Number(collision.collision_adversary_index));
             if (!target || !adversary) return;
+            const targetVelocity=diagnosticVelocityAt(view.frameIndex,target);
+            const adversaryVelocity=diagnosticVelocityAt(view.frameIndex,adversary);
             if (showSafetyBuffer) {
                 const expanded={...target,w:target.w+2*Number(sample.lateral_buffer_meters)};
                 drawDiagnosticBox(expanded,'#f59e0b','rgba(245,158,11,.12)',[6,4]);
@@ -1827,8 +1835,8 @@ self.onmessage = async event => {
             if (!showTtcProjection) return;
             const straightTtc=Number(sample.straight_ttc_seconds);
             if (straightTtc>=0) {
-                const targetEnd={...target,x:target.x+target.vx*straightTtc,y:target.y+target.vy*straightTtc};
-                const adversaryEnd={...adversary,x:adversary.x+adversary.vx*straightTtc,y:adversary.y+adversary.vy*straightTtc};
+                const targetEnd={...target,x:target.x+targetVelocity.vx*straightTtc,y:target.y+targetVelocity.vy*straightTtc};
+                const adversaryEnd={...adversary,x:adversary.x+adversaryVelocity.vx*straightTtc,y:adversary.y+adversaryVelocity.vy*straightTtc};
                 drawDiagnosticPolyline([target,targetEnd],'#fb7185',[7,4],2.2);
                 drawDiagnosticPolyline([adversary,adversaryEnd],'#22d3ee',[7,4],2.2);
                 drawDiagnosticBox(targetEnd,'#fb7185',null,[5,3]);
@@ -1839,7 +1847,7 @@ self.onmessage = async event => {
             const routePath=polylineToDistance(capturedRoutePolyline(target),target.s*routeTtc);
             drawDiagnosticPolyline(routePath,'#f59e0b',[5,3],2.5);
             const routeEnd=routePath[routePath.length-1];
-            const adversaryEnd={...adversary,x:adversary.x+adversary.vx*routeTtc,y:adversary.y+adversary.vy*routeTtc};
+            const adversaryEnd={...adversary,x:adversary.x+adversaryVelocity.vx*routeTtc,y:adversary.y+adversaryVelocity.vy*routeTtc};
             if (routeEnd) drawDiagnosticBox({...target,x:routeEnd.x,y:routeEnd.y},'#f59e0b',null,[5,3]);
             drawDiagnosticPolyline([adversary,adversaryEnd],'#22d3ee',[5,3],2.5);
             drawDiagnosticBox(adversaryEnd,'#22d3ee',null,[5,3]);
