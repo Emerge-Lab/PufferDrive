@@ -2468,11 +2468,46 @@ static void target_brake_path_sample(
     *sample_heading = final_heading;
 }
 
+typedef struct {
+    int indices[MAX_AVOIDABILITY_ADVERSARIES];
+    int count;
+} AvoidabilityAdversarySet;
+
+// Collected once per analysis: the inner rollout walks this set steps_back x rollout_step
+// times, and is_adversarial_agent costs O(regents_transition_count) per ReGentS agent.
+static void build_avoidability_adversary_set(
+    Drive *env,
+    int target_agent_idx,
+    int collision_adversary_idx,
+    AvoidabilityAdversarySet *adversaries) {
+    adversaries->count = 0;
+    for (int agent_idx = 0; agent_idx < env->num_total_agents; agent_idx++) {
+        if (agent_idx == target_agent_idx || !is_adversarial_agent(env, agent_idx)) {
+            continue;
+        }
+        if (adversaries->count == MAX_AVOIDABILITY_ADVERSARIES) {
+            break;
+        }
+        adversaries->indices[adversaries->count++] = agent_idx;
+    }
+    for (int list_idx = 0; list_idx < adversaries->count; list_idx++) {
+        if (adversaries->indices[list_idx] == collision_adversary_idx) {
+            return;
+        }
+    }
+    // The colliding adversary is what the counterfactual exists to test, so it is never
+    // dropped: overwrite the last slot rather than let a full set exclude it.
+    int collision_slot
+        = adversaries->count < MAX_AVOIDABILITY_ADVERSARIES ? adversaries->count++ : MAX_AVOIDABILITY_ADVERSARIES - 1;
+    adversaries->indices[collision_slot] = collision_adversary_idx;
+}
+
 static bool target_braking_avoids_collision(
     Drive *env,
     int target_agent_idx,
     int collision_adversary_idx,
     const AdversaryBrakeTrajectory *collision_adversary_trajectory,
+    const AvoidabilityAdversarySet *adversaries,
     int steps_back,
     AvoidabilityCandidateDebug *diagnostic) {
     if (diagnostic != NULL) {
@@ -2524,8 +2559,8 @@ static bool target_braking_avoids_collision(
         target_sample.sim_vx = target_sample.sim_speed * target_sample.cos_heading;
         target_sample.sim_vy = target_sample.sim_speed * target_sample.sin_heading;
 
-        for (int active_idx = EGO_IDX + 1; active_idx < env->active_agent_count; active_idx++) {
-            int adversary_idx = env->active_agent_indices[active_idx];
+        for (int list_idx = 0; list_idx < adversaries->count; list_idx++) {
+            int adversary_idx = adversaries->indices[list_idx];
             Agent *adversary = &env->agents[adversary_idx];
             int adversary_steps_back = steps_back - rollout_step;
             if (adversary_steps_back > adversary->trajectory_hist_count) {
@@ -2587,6 +2622,8 @@ static float last_avoidable_braking_seconds_before_collision(
     int collision_adversary_idx) {
     AdversaryBrakeTrajectory collision_adversary_trajectory;
     build_adversary_brake_trajectory(&env->agents[collision_adversary_idx], env->dt, &collision_adversary_trajectory);
+    AvoidabilityAdversarySet adversaries;
+    build_avoidability_adversary_set(env, target_agent_idx, collision_adversary_idx, &adversaries);
 
     Agent *target = &env->agents[target_agent_idx];
     AvoidabilityDebug *debug = env->avoidability_debug;
@@ -2624,6 +2661,7 @@ static float last_avoidable_braking_seconds_before_collision(
             target_agent_idx,
             collision_adversary_idx,
             &collision_adversary_trajectory,
+            &adversaries,
             steps_back,
             debug != NULL ? &candidate : NULL);
         if (debug != NULL) {

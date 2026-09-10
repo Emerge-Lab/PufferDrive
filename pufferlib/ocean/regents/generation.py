@@ -16,6 +16,7 @@ import yaml
 from tqdm import tqdm
 
 from pufferlib.ocean.drive.drive import Drive
+from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
 from pufferlib.ocean.regents.dynamics import ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
 from pufferlib.ocean.regents.artifacts import save_generation_artifact
@@ -617,6 +618,20 @@ def generate_regents_scenarios(
         )
         writer.writeheader()
         writer.writerows(rows)
+
+    # Same aggregate `puffer eval` writes: episode_metrics.csv plus evaluation_summary.json
+    # of metric means, built from the per-scenario episode logs by the same reducer.
+    episode_summaries = [
+        {
+            name[len(EVAL_METRIC_FIELD_PREFIX) :]: value
+            for name, value in row.items()
+            if name.startswith(EVAL_METRIC_FIELD_PREFIX)
+        }
+        for row in rows
+    ]
+    episode_summaries = [summary for summary in episode_summaries if summary]
+    if episode_summaries:
+        drive_benchmark._write_eval_reports(episode_summaries, str(destination), len(rows))
 
     rejection_reasons = {}
     for row in rows:
