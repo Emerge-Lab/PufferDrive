@@ -194,6 +194,7 @@ typedef struct {
     int avoided;
     int collision_with_original_adversary;
     int at_fault_collision_with_other_adversary;
+    float future_straight_collision_seconds;
     int blocking_agent_index;
     int blocking_rollout_step;
     AvoidabilityAgentSnapshot blocking_agent;
@@ -223,7 +224,6 @@ typedef struct {
     float braking_deceleration;
     float reaction_time_seconds;
     float reaction_window_half_width_seconds;
-    int max_extension_steps;
     int max_rollout_steps;
     float ttc_margin_seconds;
     int ttc_max_projection_steps;
@@ -2336,13 +2336,6 @@ static bool check_z_collision_possibility(const Agent *agent_a, const Agent *age
     return !(agent_a_top < agent_b->sim_z || agent_b_top < agent_a->sim_z);
 }
 
-typedef struct {
-    int num_steps;
-    float x[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
-    float y[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
-    float speed_signed[TARGET_AVOIDABILITY_MAX_EXT_STEPS];
-} AdversaryBrakeTrajectory;
-
 static AvoidabilityAgentSnapshot avoidability_agent_snapshot(const Agent *agent, int agent_idx) {
     AvoidabilityAgentSnapshot snapshot = {
         .valid = 1,
@@ -2361,27 +2354,6 @@ static AvoidabilityAgentSnapshot avoidability_agent_snapshot(const Agent *agent,
         .stopped = agent->stopped,
     };
     return snapshot;
-}
-
-static void build_adversary_brake_trajectory(const Agent *adversary, float dt, AdversaryBrakeTrajectory *trajectory) {
-    float initial_speed_signed = adversary->sim_speed_signed;
-    float stop_time_seconds = fabsf(initial_speed_signed) / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
-    trajectory->num_steps = 0;
-    for (int step_idx = 0; step_idx < TARGET_AVOIDABILITY_MAX_EXT_STEPS; step_idx++) {
-        float time_seconds = fminf(step_idx * dt, stop_time_seconds);
-        float distance_meters = initial_speed_signed * time_seconds
-            - copysignf(0.5f * TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * time_seconds * time_seconds,
-                        initial_speed_signed);
-        trajectory->x[step_idx] = adversary->sim_x + distance_meters * adversary->cos_heading;
-        trajectory->y[step_idx] = adversary->sim_y + distance_meters * adversary->sin_heading;
-        trajectory->speed_signed[step_idx] = copysignf(
-            fmaxf(0.0f, fabsf(initial_speed_signed) - TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2 * time_seconds),
-            initial_speed_signed);
-        trajectory->num_steps++;
-        if (step_idx * dt >= stop_time_seconds) {
-            break;
-        }
-    }
 }
 
 static Agent trajectory_history_agent_sample(const Agent *agent, int steps_back) {
@@ -2465,17 +2437,72 @@ static void target_brake_path_sample(
     *sample_heading = segment_start_heading;
 }
 
+static bool straight_trajectory_collides_with_stopped_target(
+    const Agent *target,
+    const Agent *adversary,
+    float *collision_time_seconds) {
+    if (!check_z_collision_possibility(target, adversary)) {
+        return false;
+    }
+
+    float axes[4][2]
+        = {{target->cos_heading, target->sin_heading},
+           {-target->sin_heading, target->cos_heading},
+           {adversary->cos_heading, adversary->sin_heading},
+           {-adversary->sin_heading, adversary->cos_heading}};
+    float relative_x = adversary->sim_x - target->sim_x;
+    float relative_y = adversary->sim_y - target->sim_y;
+    float overlap_start_seconds = 0.0f;
+    float overlap_end_seconds = INFINITY;
+
+    for (int axis_idx = 0; axis_idx < 4; axis_idx++) {
+        float axis_x = axes[axis_idx][0];
+        float axis_y = axes[axis_idx][1];
+        float target_radius
+            = 0.5f * target->sim_length * fabsf(target->cos_heading * axis_x + target->sin_heading * axis_y)
+            + 0.5f * target->sim_width * fabsf(-target->sin_heading * axis_x + target->cos_heading * axis_y);
+        float adversary_radius
+            = 0.5f * adversary->sim_length * fabsf(adversary->cos_heading * axis_x + adversary->sin_heading * axis_y)
+            + 0.5f * adversary->sim_width * fabsf(-adversary->sin_heading * axis_x + adversary->cos_heading * axis_y);
+        float combined_radius = target_radius + adversary_radius;
+        float relative_projection = relative_x * axis_x + relative_y * axis_y;
+        float velocity_projection = adversary->sim_vx * axis_x + adversary->sim_vy * axis_y;
+        if (velocity_projection == 0.0f) {
+            if (fabsf(relative_projection) > combined_radius) {
+                return false;
+            }
+            continue;
+        }
+
+        float axis_start_seconds = (-combined_radius - relative_projection) / velocity_projection;
+        float axis_end_seconds = (combined_radius - relative_projection) / velocity_projection;
+        if (axis_start_seconds > axis_end_seconds) {
+            float swap_seconds = axis_start_seconds;
+            axis_start_seconds = axis_end_seconds;
+            axis_end_seconds = swap_seconds;
+        }
+        overlap_start_seconds = fmaxf(overlap_start_seconds, axis_start_seconds);
+        overlap_end_seconds = fminf(overlap_end_seconds, axis_end_seconds);
+        if (overlap_start_seconds > overlap_end_seconds) {
+            return false;
+        }
+    }
+
+    *collision_time_seconds = overlap_start_seconds;
+    return true;
+}
+
 static bool target_braking_avoids_collision(
     Drive *env,
     int target_agent_idx,
     int collision_adversary_idx,
-    const AdversaryBrakeTrajectory *collision_adversary_trajectory,
     int steps_back,
     AvoidabilityCandidateDebug *diagnostic) {
     if (diagnostic != NULL) {
         *diagnostic = (AvoidabilityCandidateDebug) {
             .steps_back = steps_back,
             .avoided = 1,
+            .future_straight_collision_seconds = -1.0f,
             .blocking_agent_index = -1,
             .blocking_rollout_step = -1,
             .ignored_overlap_agent_index = -1,
@@ -2487,9 +2514,7 @@ static bool target_braking_avoids_collision(
     float initial_target_speed = fabsf(target->trajectory_hist_speed_signed[history_start_idx]);
     float target_stop_time_seconds = initial_target_speed / TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
     int target_stop_step = (int) ceilf(target_stop_time_seconds / env->dt - 1e-6f);
-    int adversary_stop_rollout_step = steps_back + collision_adversary_trajectory->num_steps - 1;
-    int rollout_horizon_step
-        = target_stop_step > adversary_stop_rollout_step ? target_stop_step : adversary_stop_rollout_step;
+    int rollout_horizon_step = target_stop_step > steps_back ? target_stop_step : steps_back;
     if (rollout_horizon_step >= TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS) {
         rollout_horizon_step = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS - 1;
     }
@@ -2535,21 +2560,8 @@ static bool target_braking_avoids_collision(
             } else {
                 adversary_sample = *adversary;
                 float post_collision_seconds = -adversary_steps_back * env->dt;
-                if (adversary_idx == collision_adversary_idx) {
-                    int brake_step = -adversary_steps_back;
-                    if (brake_step >= collision_adversary_trajectory->num_steps) {
-                        brake_step = collision_adversary_trajectory->num_steps - 1;
-                    }
-                    adversary_sample.sim_x = collision_adversary_trajectory->x[brake_step];
-                    adversary_sample.sim_y = collision_adversary_trajectory->y[brake_step];
-                    adversary_sample.sim_speed_signed = collision_adversary_trajectory->speed_signed[brake_step];
-                    adversary_sample.sim_speed = fabsf(adversary_sample.sim_speed_signed);
-                    adversary_sample.sim_vx = adversary_sample.sim_speed_signed * adversary_sample.cos_heading;
-                    adversary_sample.sim_vy = adversary_sample.sim_speed_signed * adversary_sample.sin_heading;
-                } else {
-                    adversary_sample.sim_x += adversary_sample.sim_vx * post_collision_seconds;
-                    adversary_sample.sim_y += adversary_sample.sim_vy * post_collision_seconds;
-                }
+                adversary_sample.sim_x += adversary_sample.sim_vx * post_collision_seconds;
+                adversary_sample.sim_y += adversary_sample.sim_vy * post_collision_seconds;
             }
 
             if (!check_z_collision_possibility(&target_sample, &adversary_sample)
@@ -2575,6 +2587,29 @@ static bool target_braking_avoids_collision(
             }
         }
     }
+
+    Agent collision_adversary_sample = env->agents[collision_adversary_idx];
+    float post_collision_seconds = (rollout_horizon_step - steps_back) * env->dt;
+    collision_adversary_sample.sim_x += collision_adversary_sample.sim_vx * post_collision_seconds;
+    collision_adversary_sample.sim_y += collision_adversary_sample.sim_vy * post_collision_seconds;
+    float future_collision_seconds;
+    if (straight_trajectory_collides_with_stopped_target(
+            &target_sample,
+            &collision_adversary_sample,
+            &future_collision_seconds)) {
+        if (diagnostic != NULL) {
+            collision_adversary_sample.sim_x += collision_adversary_sample.sim_vx * future_collision_seconds;
+            collision_adversary_sample.sim_y += collision_adversary_sample.sim_vy * future_collision_seconds;
+            diagnostic->avoided = 0;
+            diagnostic->collision_with_original_adversary = 1;
+            diagnostic->future_straight_collision_seconds = future_collision_seconds;
+            diagnostic->blocking_agent_index = collision_adversary_idx;
+            diagnostic->blocking_rollout_step = rollout_horizon_step;
+            diagnostic->blocking_agent
+                = avoidability_agent_snapshot(&collision_adversary_sample, collision_adversary_idx);
+        }
+        return false;
+    }
     return true;
 }
 
@@ -2582,9 +2617,6 @@ static float last_avoidable_braking_seconds_before_collision(
     Drive *env,
     int target_agent_idx,
     int collision_adversary_idx) {
-    AdversaryBrakeTrajectory collision_adversary_trajectory;
-    build_adversary_brake_trajectory(&env->agents[collision_adversary_idx], env->dt, &collision_adversary_trajectory);
-
     Agent *target = &env->agents[target_agent_idx];
     AvoidabilityDebug *debug = env->avoidability_debug;
     if (debug != NULL) {
@@ -2600,7 +2632,6 @@ static float last_avoidable_braking_seconds_before_collision(
         debug->braking_deceleration = TARGET_AVOIDABILITY_BRAKE_DECEL_MPS2;
         debug->reaction_time_seconds = TARGET_AVOIDABILITY_REACTION_TIME_SECONDS;
         debug->reaction_window_half_width_seconds = TARGET_REACTION_WINDOW_HALF_WIDTH_SECONDS;
-        debug->max_extension_steps = TARGET_AVOIDABILITY_MAX_EXT_STEPS;
         debug->max_rollout_steps = TARGET_AVOIDABILITY_MAX_ROLLOUT_STEPS;
         debug->ttc_margin_seconds = DANGER_TTC_MARGIN_SECONDS;
         debug->ttc_max_projection_steps = DANGER_TTC_MAX_PROJECTION_STEPS;
@@ -2620,7 +2651,6 @@ static float last_avoidable_braking_seconds_before_collision(
             env,
             target_agent_idx,
             collision_adversary_idx,
-            &collision_adversary_trajectory,
             steps_back,
             debug != NULL ? &candidate : NULL);
         if (debug != NULL) {
