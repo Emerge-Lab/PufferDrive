@@ -57,6 +57,10 @@ METRIC_FIELD_NAMES = (
     "artifact_path",
 )
 
+# `puffer eval` reports one Log row per episode; the ReGentS horizon closes the same row and
+# carries it here under a prefix, so these never collide with the columns above.
+EVAL_METRIC_FIELD_PREFIX = "eval_"
+
 
 @dataclass(frozen=True)
 class GenerationReport:
@@ -455,6 +459,7 @@ def _metric_row(scenario_idx, map_idx, seed, result, elapsed_seconds, artifact_p
         "optimization_seconds": elapsed_seconds,
         "failure_reason": result.replay.failure_reason,
         "artifact_path": str(artifact_path),
+        **{f"{EVAL_METRIC_FIELD_PREFIX}{name}": value for name, value in (result.replay.episode_log or {}).items()},
     }
 
 
@@ -604,7 +609,12 @@ def generate_regents_scenarios(
 
     metrics_path = destination / METRICS_FILE_NAME
     with metrics_path.open("w", encoding="utf-8", newline="") as metrics_file:
-        writer = csv.DictWriter(metrics_file, fieldnames=METRIC_FIELD_NAMES)
+        eval_field_names = sorted({name for row in rows for name in row if name.startswith(EVAL_METRIC_FIELD_PREFIX)})
+        writer = csv.DictWriter(
+            metrics_file,
+            fieldnames=[*METRIC_FIELD_NAMES, *eval_field_names],
+            restval="",
+        )
         writer.writeheader()
         writer.writerows(rows)
 

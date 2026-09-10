@@ -12,6 +12,7 @@ static PyObject *classic_step_diagnostic_py(PyObject *self, PyObject *args);
 static PyObject *regents_set_action_plan_py(PyObject *self, PyObject *args);
 static PyObject *regents_get_events_py(PyObject *self, PyObject *args);
 static PyObject *regents_get_states_py(PyObject *self, PyObject *args);
+static PyObject *regents_episode_log_py(PyObject *self, PyObject *args);
 
 enum {
     DIAGNOSTIC_STATE_X = 0,
@@ -58,10 +59,45 @@ static PyObject *map_cache_live_count_py(
     {"classic_step_diagnostic", classic_step_diagnostic_py, METH_VARARGS, "Run isolated classic dynamics."}, \
     {"regents_set_action_plan", regents_set_action_plan_py, METH_VARARGS, "Install one stable-index action plan."}, \
     {"regents_get_events", regents_get_events_py, METH_VARARGS, "Read authoritative replay events."}, \
-    {"regents_get_states", regents_get_states_py, METH_VARARGS, "Write current agent states into buffers."}
+    {"regents_get_states", regents_get_states_py, METH_VARARGS, "Write current agent states into buffers."}, \
+    {"regents_episode_log", regents_episode_log_py, METH_VARARGS, "Close the horizon into one eval episode row."}
 // clang-format on
 
 #include "../env_binding.h"
+
+// A ReGentS horizon stops short of scenario_length, so c_step never folds the episode into
+// env->log and vec_per_episode_log stays empty. Close it explicitly and emit the same row
+// `puffer eval` reports. env->log is cleared first: c_reset does not, so the baseline and
+// adversarial rollouts of one scenario would otherwise accumulate into each other.
+static PyObject *regents_episode_log_py(PyObject *self __attribute__((unused)), PyObject *args) {
+    if (PyTuple_Size(args) != 1) {
+        PyErr_SetString(PyExc_TypeError, "regents_episode_log requires one VecEnv");
+        return NULL;
+    }
+    VecEnv *vec = unpack_vecenv(args);
+    if (vec == NULL) {
+        return NULL;
+    }
+    if (vec->num_envs != 1) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS episode logging requires exactly one C environment");
+        return NULL;
+    }
+    Drive *env = vec->envs[0];
+    memset(&env->log, 0, sizeof(Log));
+    add_log(env);
+    if (env->log.n <= 0.0f) {
+        Py_RETURN_NONE;
+    }
+    PyObject *dict = PyDict_New();
+    if (dict == NULL) {
+        return NULL;
+    }
+    if (my_episode_to_dict(dict, env) != 0) {
+        Py_DECREF(dict);
+        return NULL;
+    }
+    return dict;
+}
 
 static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused)), PyObject *args) {
     if (PyTuple_Size(args) != 3) {

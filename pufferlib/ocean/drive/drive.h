@@ -2276,7 +2276,14 @@ static bool is_at_fault_collision(Drive *env, int agent_idx, int other_idx) {
     return is_agent_at_fault_collision(&env->agents[agent_idx], &env->agents[other_idx]);
 }
 
+static bool has_any_regents_action(Drive *env, int agent_idx);
+
 static bool is_adversarial_agent(Drive *env, int agent_idx) {
+    // An injected ReGentS plan makes its agent an adversary even though injection drives it
+    // as a replay background agent, which never enters active_agent_indices.
+    if (has_any_regents_action(env, agent_idx)) {
+        return true;
+    }
     for (int active_idx = EGO_IDX + 1; active_idx < env->active_agent_count; active_idx++) {
         if (env->active_agent_indices[active_idx] == agent_idx) {
             return true;
