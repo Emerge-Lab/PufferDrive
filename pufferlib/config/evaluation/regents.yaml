@@ -40,6 +40,8 @@ env:
   map_dir: pufferlib/resources/drive/binaries/nuplan
   use_neighbor_cache: 0
   use_map_cache: 0
+  # Records the braking counterfactual so the replay HTML can show the avoidability panel.
+  capture_avoidability_debug: true
 
 # Shared optimizer settings for every generation; a generation's own optimizer block
 # overrides these key by key. Adam displaces a parameter by about the learning rate per

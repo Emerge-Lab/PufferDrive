@@ -69,6 +69,8 @@ class CReplayResult:
     adversarial_frames: dict | None = None
     episode_log: dict | None = None
     baseline_episode_log: dict | None = None
+    avoidability_debug: dict | None = None
+    baseline_avoidability_debug: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ class _CRollout:
     scenario_payload: dict | None
     html_frames: dict | None
     episode_log: dict | None
+    avoidability_debug: dict | None
 
 
 def _current_states(payload, expected_agent_count):
@@ -211,8 +214,8 @@ def _capture_c_rollout(
     if single_scenario_payload(drive.get_state()).get("scenario_id") != expected_scenario_id:
         raise RuntimeError("Drive changed scenario during C replay")
     episode_log = binding.regents_episode_log(drive.c_envs)
-    if episode_log is not None:
-        episode_log.pop("avoidability_debug", None)
+    # Split out of the log so the metrics CSV stays numeric; the replay HTML wants the trace.
+    avoidability_debug = None if episode_log is None else episode_log.pop("avoidability_debug", None)
     stacked_states = torch.from_numpy(np.ascontiguousarray(np.stack(states))).transpose(0, 1).contiguous()
     stacked_valid = torch.from_numpy(np.ascontiguousarray(np.stack(validity))).transpose(0, 1).contiguous()
     if ego_actions:
@@ -230,6 +233,7 @@ def _capture_c_rollout(
         if html_frames is None
         else {key: np.stack(frames, axis=0) for key, frames in html_frames.items()},
         episode_log=episode_log,
+        avoidability_debug=avoidability_debug,
     )
 
 
@@ -445,6 +449,8 @@ def replay_optimized_scenario_in_c(
         adversarial_frames=adversarial.html_frames,
         episode_log=adversarial.episode_log,
         baseline_episode_log=baseline.episode_log,
+        avoidability_debug=adversarial.avoidability_debug,
+        baseline_avoidability_debug=baseline.avoidability_debug,
     )
 
 

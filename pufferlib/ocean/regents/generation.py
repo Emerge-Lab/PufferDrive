@@ -358,10 +358,13 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     replays_dir = Path(destination) / "replays"
     replays_dir.mkdir(parents=True, exist_ok=True)
     rendered = {}
-    sources = (("logged", replay.baseline_frames), ("adversarial", replay.adversarial_frames))
+    sources = (
+        ("logged", replay.baseline_frames, replay.baseline_avoidability_debug),
+        ("adversarial", replay.adversarial_frames, replay.avoidability_debug),
+    )
     candidate_rows = result.optimization.selection.candidate_mask
     candidate_adversary_ids = result.scenario.agent_id[candidate_rows].tolist()
-    for label, frames in sources:
+    for label, frames, avoidability_debug in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
         # Both replays are cut to the same length so the logged and adversarial pages
         # stay frame-aligned for comparison.
@@ -369,6 +372,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
             frames, replay.ego_actions, replay.metrics.first_ego_collision_timestep
         )
         bundle = _replay_bundle(env_config, cut_frames, cut_ego_actions)
+        # Each page carries the counterfactual recorded for its own rollout.
+        bundle["avoidability_debug"] = avoidability_debug
         bundle["candidate_adversary_ids"] = candidate_adversary_ids
         # The optimizer's plan for every candidate, so the viewer can show the acceleration
         # the log started from next to the one Adam ended on, frame-aligned with the replay.

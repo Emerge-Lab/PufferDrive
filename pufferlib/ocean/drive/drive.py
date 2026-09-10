@@ -54,6 +54,7 @@ class Drive(pufferlib.PufferEnv):
         use_map_cache=False,
         use_neighbor_cache=True,
         capture_replay=False,
+        capture_avoidability_debug=False,
         replay_worker_idx=0,
         dt=0.1,
         base_max_speed_mps=20.0,
@@ -224,6 +225,9 @@ class Drive(pufferlib.PufferEnv):
         }[target_infraction_behavior]
         self.use_map_cache = use_map_cache
         self.capture_replay = bool(capture_replay)
+        # Eval reaches the avoidability panel through capture_replay; ReGentS renders its own
+        # frames, so it needs the counterfactual trace without the eval replay machinery.
+        self.capture_avoidability_debug = bool(capture_avoidability_debug) or self.capture_replay
         self.replay_worker_idx = replay_worker_idx
         self._replay_captures = []
         self.human_agent_idx = human_agent_idx
@@ -562,7 +566,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
-            "capture_avoidability_debug": self.capture_replay,
+            "capture_avoidability_debug": self.capture_avoidability_debug,
             "eval_training_render": self.eval_training_render,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "obs_norm_speed_mps": self.obs_norm_speed_mps,
