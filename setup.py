@@ -6,10 +6,7 @@
 from setuptools import find_namespace_packages, setup, Extension
 import numpy
 import os
-import urllib.request
-import tarfile
 import platform
-import sys
 
 from setuptools.command.build_ext import build_ext
 from torch.utils import cpp_extension
@@ -24,33 +21,6 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 PROFILE = os.getenv("PROFILE", "0") == "1"
 NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
-
-EXTERNAL_LIB_DIR = "extern"
-os.makedirs(EXTERNAL_LIB_DIR, exist_ok=True)
-
-INIH_URL = "https://github.com/benhoyt/inih/archive/refs/tags/{tag}.{ext}"
-
-
-def download_inih():
-    dest = os.path.join(EXTERNAL_LIB_DIR, "inih-r62")
-    if os.path.exists(dest):
-        return
-    print("Downloading inih")
-    url = INIH_URL.format(tag="r62", ext="tar.gz")
-    archive = "inih-r62.tar.gz"
-    urllib.request.urlretrieve(url, archive)
-    with tarfile.open(archive, "r") as tf:
-        members = [m for m in tf.getmembers() if os.path.basename(m.name) in ["ini.c", "ini.h"]]
-        tf.extractall(EXTERNAL_LIB_DIR, members=members, filter="data") if sys.version_info >= (
-            3,
-            12,
-        ) else tf.extractall(EXTERNAL_LIB_DIR, members=members)
-    os.remove(archive)
-
-
-if not NO_OCEAN:
-    download_inih()
-
 
 # Shared compile args for all platforms
 extra_compile_args = [
@@ -180,8 +150,6 @@ class TorchBuildExt(cpp_extension.BuildExtension):
         super().run()
 
 
-INIH_DIR = os.path.join(EXTERNAL_LIB_DIR, "inih-r62")
-
 c_extensions = []
 c_extension_paths = []
 if not NO_OCEAN:
@@ -189,13 +157,9 @@ if not NO_OCEAN:
     c_extensions = [
         Extension(
             "pufferlib.ocean.drive.binding",
-            sources=["pufferlib/ocean/drive/binding.c", os.path.join(INIH_DIR, "ini.c")],
+            sources=["pufferlib/ocean/drive/binding.c"],
             include_dirs=[numpy.get_include()],
-            extra_compile_args=extra_compile_args
-            + [
-                '-DINI_START_COMMENT_PREFIXES="#"',
-                '-DINI_INLINE_COMMENT_PREFIXES="#"',
-            ],
+            extra_compile_args=extra_compile_args,
             extra_link_args=extra_link_args,
         )
     ]

@@ -175,7 +175,6 @@ struct Drive {
     float world_mean_x;
     float world_mean_y;
     // Scenario data
-    char *ini_file;
     char scenario_id[128];
     char dataset_name[32];
     int scenario_length;
@@ -3109,7 +3108,6 @@ void c_close(Drive *env) {
     free(env->obs_neighbor_scratch);
     free(env->static_agent_indices);
     free(env->expert_static_agent_indices);
-    free(env->ini_file);
     free_loaded_map_data(env);
 }
 
