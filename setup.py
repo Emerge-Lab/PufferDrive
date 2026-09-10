@@ -7,7 +7,6 @@ from setuptools import find_namespace_packages, setup, Extension
 import numpy
 import os
 import urllib.request
-import zipfile
 import tarfile
 import platform
 import sys
@@ -29,29 +28,7 @@ NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
 EXTERNAL_LIB_DIR = "extern"
 os.makedirs(EXTERNAL_LIB_DIR, exist_ok=True)
 
-RAYLIB_URL = "https://github.com/raysan5/raylib/releases/download/5.5/"
-RAYLIB_NAME = "raylib-5.5_macos" if platform.system() == "Darwin" else "raylib-5.5_linux_amd64"
-RLIGHTS_URL = "https://raw.githubusercontent.com/raysan5/raylib/refs/heads/master/examples/shaders/rlights.h"
 INIH_URL = "https://github.com/benhoyt/inih/archive/refs/tags/{tag}.{ext}"
-
-
-def download_raylib(name, ext):
-    dest = os.path.join(EXTERNAL_LIB_DIR, name)
-    if os.path.exists(dest):
-        return
-    print(f"Downloading Raylib {name}")
-    archive = name + ext
-    urllib.request.urlretrieve(RAYLIB_URL + archive, archive)
-    if ext == ".zip":
-        with zipfile.ZipFile(archive, "r") as zf:
-            zf.extractall(EXTERNAL_LIB_DIR)
-    else:
-        with tarfile.open(archive, "r") as tf:
-            tf.extractall(EXTERNAL_LIB_DIR, filter="data") if sys.version_info >= (3, 12) else tf.extractall(
-                EXTERNAL_LIB_DIR
-            )
-    os.remove(archive)
-    urllib.request.urlretrieve(RLIGHTS_URL, os.path.join(dest, "include", "rlights.h"))
 
 
 def download_inih():
@@ -78,7 +55,6 @@ if not NO_OCEAN:
 # Shared compile args for all platforms
 extra_compile_args = [
     "-DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION",
-    "-DPLATFORM_DESKTOP",
 ]
 extra_link_args = ["-fwrapv"]
 cxx_args = [
@@ -164,37 +140,16 @@ if system == "Linux":
         # golden to be bit-reproducible across machines (baseline ISA only;
         # we never pass -march=native).
         "-ffp-contract=off",
-        # _GNU_SOURCE must be defined before any system header is included so
-        # glibc exposes GNU extensions like F_SETPIPE_SZ, writev, etc. that
-        # the headless render pipeline in drive.h depends on.
-        "-D_GNU_SOURCE",
     ]
     extra_link_args += [
         "-Bsymbolic-functions",
     ]
-    # Link EGL/GL only if headers are available (libegl1-mesa-dev). Without
-    # them, the EGL headless GPU path in drive.h is compiled out via
-    # __has_include and the Xvfb/Mesa fallback is used.
-    if os.path.exists("/usr/include/EGL/egl.h"):
-        extra_link_args.extend(["-lEGL", "-lGL", "-ldl"])
-    if not NO_OCEAN:
-        download_raylib(RAYLIB_NAME, ".tar.gz")
 elif system == "Darwin":
     extra_compile_args += [
         "-Wno-error=int-conversion",
         "-Wno-error=incompatible-function-pointer-types",
         "-Wno-error=implicit-function-declaration",
     ]
-    extra_link_args += [
-        "-framework",
-        "Cocoa",
-        "-framework",
-        "OpenGL",
-        "-framework",
-        "IOKit",
-    ]
-    if not NO_OCEAN:
-        download_raylib(RAYLIB_NAME, ".tar.gz")
 else:
     raise ValueError(f"Unsupported system: {system}")
 
@@ -225,8 +180,6 @@ class TorchBuildExt(cpp_extension.BuildExtension):
         super().run()
 
 
-RAYLIB_DIR = os.path.join(EXTERNAL_LIB_DIR, RAYLIB_NAME)
-RAYLIB_A = os.path.join(RAYLIB_DIR, "lib", "libraylib.a")
 INIH_DIR = os.path.join(EXTERNAL_LIB_DIR, "inih-r62")
 
 c_extensions = []
@@ -237,14 +190,13 @@ if not NO_OCEAN:
         Extension(
             "pufferlib.ocean.drive.binding",
             sources=["pufferlib/ocean/drive/binding.c", os.path.join(INIH_DIR, "ini.c")],
-            include_dirs=[numpy.get_include(), os.path.join(RAYLIB_DIR, "include")],
+            include_dirs=[numpy.get_include()],
             extra_compile_args=extra_compile_args
             + [
                 '-DINI_START_COMMENT_PREFIXES="#"',
                 '-DINI_INLINE_COMMENT_PREFIXES="#"',
             ],
             extra_link_args=extra_link_args,
-            extra_objects=[RAYLIB_A],
         )
     ]
 
@@ -331,5 +283,5 @@ setup(
         "build_torch": TorchBuildExt,
         "build_c": CBuildExt,
     },
-    include_dirs=[numpy.get_include(), os.path.join(RAYLIB_DIR, "include")],
+    include_dirs=[numpy.get_include()],
 )

@@ -64,8 +64,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIsInstance(args["env"]["collision_behavior"], str)
         self.assertIn(args["env"]["collision_behavior"], ("ignore", "stop", "remove"))
         self.assertIsInstance(args["env"]["control_mode"], str)
-        self.assertIsInstance(args["render"], bool)
-        self.assertIsInstance(args["save_frames"], bool)
         for field_name in (
             "use_map_cache",
             "preload_map_cache",
@@ -75,18 +73,15 @@ class TestConfigSchema(unittest.TestCase):
         ):
             self.assertIsInstance(args["env"][field_name], bool)
 
-    @patch("sys.argv", ["pufferl.py", "render=true", "env.use_map_cache=false"])
+    @patch("sys.argv", ["pufferl.py", "env.use_map_cache=false"])
     def test_boolean_cli_overrides_load(self):
         args = load_config("puffer_drive")
 
-        self.assertIs(args["render"], True)
         self.assertIs(args["env"]["use_map_cache"], False)
 
     @patch("sys.argv", ["pufferl.py"])
     def test_legacy_zero_or_one_values_normalize_to_booleans(self):
         args = load_config("puffer_drive")
-        args["render"] = 1
-        args["save_frames"] = 0
         args["env"].update(
             {
                 "use_map_cache": 1,
@@ -99,8 +94,6 @@ class TestConfigSchema(unittest.TestCase):
 
         normalized = normalize_puffer_drive_config(args, "test")
 
-        self.assertIs(normalized["render"], True)
-        self.assertIs(normalized["save_frames"], False)
         self.assertIs(normalized["env"]["use_map_cache"], True)
         self.assertIs(normalized["env"]["preload_map_cache"], False)
         self.assertIs(normalized["env"]["use_neighbor_cache"], False)
