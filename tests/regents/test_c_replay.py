@@ -313,8 +313,8 @@ def test_reactive_idm_generation_reports_absent_horizon_candidates_and_round_tri
         assert "<title>PufferDrive Replay</title>" in page
         assert 'const ADVERSARY_COLOR = "#a16207";' in page
         assert 'const LOSS_ADVERSARY_COLOR = "#c026d3";' in page
-        assert "isLossAdversary ? LOSS_ADVERSARY_COLOR" in page
-        assert 'a.id + " [LOSS ADV]"' in page
+        assert "isLossAdversary?LOSS_ADVERSARY_COLOR" in page
+        assert "a.id+' [LOSS ADV]'" in page
         assert "Ego collision loss adversary" in page
         assert "http://" not in page and "https://" not in page
         replay_path = tmp_path / "replays" / name.replace(".html", ".replay.zlib")

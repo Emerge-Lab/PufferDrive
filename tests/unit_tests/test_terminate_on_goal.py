@@ -1,7 +1,7 @@
 """Tests for the `terminate_on_goal` knob (early episode reset when the SDC
 reaches its final goal).
 
-Feature under test (drive.h, c_step): when terminate_on_goal=1 AND the env is in
+Feature under test (drive.h, c_step): when terminate_on_goal is enabled AND the env is in
 replay + control_sdc_only mode, the episode truncates as soon as the single
 active agent reaches its last goal (current_goal_idx ==
 num_goals with REACHED_GOAL_IDX set), instead of running to
@@ -13,7 +13,7 @@ Uses the single checked-in replay .bin under
 pufferlib/resources/drive/binaries/sdc_replay_test/, whose logged SDC trajectory
 reaches its final goal well before scenario_length ("all goals in position").
 
-The env is built with termination_mode=0 so the ONLY source of early reset is
+The env is built with termination_mode disabled so the ONLY source of early reset is
 terminate_on_goal — that isolates the feature from the inactive-agent path.
 """
 
@@ -47,7 +47,7 @@ def _make_sdc_replay_env(terminate_on_goal: bool):
         non_sdc_controller="replay",
         scenario_length=SCENARIO_LENGTH,
         resample_frequency=1_000_000,  # don't resample mid-episode
-        termination_mode=0,  # isolate terminate_on_goal as the only early-reset source
+        termination_mode=False,  # isolate terminate_on_goal as the only early-reset source
         goal_source="gt",  # use the logged goal set from the replay
         terminate_on_goal=terminate_on_goal,
         report_interval=1,
@@ -71,7 +71,7 @@ def _first_truncation_step(env):
 
 
 def test_terminate_on_goal_ends_episode_early():
-    """With terminate_on_goal=1, the episode truncates strictly before the
+    """With terminate_on_goal enabled, the episode truncates strictly before the
     scenario_length cap (the SDC reaches its final goal mid-log)."""
     env = _make_sdc_replay_env(terminate_on_goal=True)
     try:
@@ -79,15 +79,15 @@ def test_terminate_on_goal_ends_episode_early():
     finally:
         env.close()
 
-    assert step is not None, "Episode never truncated with terminate_on_goal=1."
+    assert step is not None, "Episode never truncated with terminate_on_goal enabled."
     assert step < SCENARIO_LENGTH, (
-        f"terminate_on_goal=1 should end the episode before scenario_length="
+        f"terminate_on_goal enabled should end the episode before scenario_length="
         f"{SCENARIO_LENGTH}, but first truncation was at step {step}."
     )
 
 
 def test_no_terminate_on_goal_runs_to_scenario_length():
-    """With terminate_on_goal=0, the same map runs the full scenario_length —
+    """With terminate_on_goal disabled, the same map runs the full scenario_length —
     reaching the goal must NOT end the episode early."""
     env = _make_sdc_replay_env(terminate_on_goal=False)
     try:
@@ -96,7 +96,7 @@ def test_no_terminate_on_goal_runs_to_scenario_length():
         env.close()
 
     assert step == SCENARIO_LENGTH, (
-        f"terminate_on_goal=0 should only truncate at scenario_length="
+        f"terminate_on_goal disabled should only truncate at scenario_length="
         f"{SCENARIO_LENGTH}, but first truncation was at step {step}."
     )
 
@@ -119,8 +119,8 @@ def test_terminate_on_goal_is_earlier_than_length_cap():
 
     assert step_on is not None and step_off is not None
     assert step_on < step_off, (
-        f"terminate_on_goal=1 (truncated at {step_on}) should end earlier than "
-        f"terminate_on_goal=0 (truncated at {step_off})."
+        f"terminate_on_goal enabled (truncated at {step_on}) should end earlier than "
+        f"terminate_on_goal disabled (truncated at {step_off})."
     )
 
 

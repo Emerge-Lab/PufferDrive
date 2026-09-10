@@ -129,7 +129,7 @@ static int test_collision_check_filters(void) {
     env.active_agent_indices = active_agent_indices;
     env.static_agent_indices = static_agent_indices;
 
-    EXPECT_EQ_INT(collision_check(&env, 0), 4);
+    EXPECT_EQ_INT(collision_check(&env, 0, NULL, NULL), 4);
     return 0;
 }
 

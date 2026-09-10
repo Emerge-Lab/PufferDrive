@@ -83,6 +83,10 @@ static PyObject *regents_set_action_plan_py(PyObject *self __attribute__((unused
         PyErr_SetString(PyExc_TypeError, "ReGentS actions and mask must be NumPy arrays");
         return NULL;
     }
+    if (env->num_total_agents < 1) {
+        PyErr_SetString(PyExc_ValueError, "ReGentS injection requires an environment with at least one agent");
+        return NULL;
+    }
     PyArrayObject *actions_array = (PyArrayObject *) actions_object;
     PyArrayObject *mask_array = (PyArrayObject *) mask_object;
     if (PyArray_TYPE(actions_array) != NPY_FLOAT32 || PyArray_TYPE(mask_array) != NPY_BOOL) {
@@ -263,7 +267,7 @@ static PyObject *regents_get_events_py(PyObject *self __attribute__((unused)), P
         if (agent_idx != EGO_IDX && !has_any_regents_action(env, agent_idx)) {
             continue;
         }
-        int other_idx = collision_check(env, agent_idx);
+        int other_idx = collision_check(env, agent_idx, NULL, NULL);
         if (other_idx < 0) {
             continue;
         }
@@ -532,6 +536,16 @@ static PyObject *my_get(PyObject *dict, Env *env) {
         return NULL;
     }
     if (PyDict_SetItemString(dict, "active_agent_count", v) < 0) {
+        Py_DECREF(v);
+        return NULL;
+    }
+    Py_DECREF(v);
+
+    v = PyLong_FromLong(env->timestep);
+    if (!v) {
+        return NULL;
+    }
+    if (PyDict_SetItemString(dict, "timestep", v) < 0) {
         Py_DECREF(v);
         return NULL;
     }
@@ -2060,6 +2074,9 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     int starting_map_counter = unpack(kwargs, "starting_map_counter");
     int eval_mode = unpack(kwargs, "eval_mode");
     int eval_training_render = unpack(kwargs, "eval_training_render");
+    int eval_agent_count_mode = unpack(kwargs, "eval_agent_count_mode");
+    PyObject *eval_agent_counts = PyDict_GetItemString(kwargs, "eval_agent_counts");
+    int use_eval_agent_counts = eval_agent_counts != NULL && eval_agent_counts != Py_None;
     int s_map_counter = starting_map_counter;
     int init_mode = unpack(kwargs, "init_mode");
     int control_mode = unpack(kwargs, "control_mode");
@@ -2110,6 +2127,18 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "eval_training_render requires num_agents >= max_agents_per_env");
         return NULL;
     }
+    if (eval_agent_count_mode < EVAL_AGENT_COUNT_MODE_FIXED || eval_agent_count_mode > EVAL_AGENT_COUNT_MODE_RANDOM) {
+        PyErr_SetString(PyExc_ValueError, "invalid eval_agent_count_mode");
+        return NULL;
+    }
+    if (use_eval_agent_counts && !PyList_Check(eval_agent_counts)) {
+        PyErr_SetString(PyExc_TypeError, "eval_agent_counts must be a list of integers");
+        return NULL;
+    }
+    if (use_eval_agent_counts && PyList_Size(eval_agent_counts) < eval_target_count) {
+        PyErr_SetString(PyExc_ValueError, "eval_agent_counts must cover every requested evaluation scenario");
+        return NULL;
+    }
 
     Rng shared_rng;
     rng_seed(&shared_rng, seed);
@@ -2117,23 +2146,54 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
     // GIGAFLOW mode: use random sampling for agent counts per env
     if (simulation_mode == SIMULATION_MODE_GIGAFLOW) {
         if (eval_mode && !eval_training_render) {
-            // Eval mode: fixed agent count, sequential map cycling
-            int agents_per_env = max_agents_per_env;
-            int env_count = num_agents / agents_per_env;
-            env_count = env_count > eval_target_count ? eval_target_count : env_count;
-
-            PyObject *agent_offsets = PyList_New(env_count + 1);
-            PyObject *map_ids_list = PyList_New(env_count);
-
+            PyObject *agent_offsets = PyList_New(eval_target_count + 1);
+            PyObject *map_ids_list = PyList_New(eval_target_count);
             int offset = 0;
-            for (int i = 0; i < env_count; i++) {
-                int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
-                                                  : (s_map_counter + i) % num_maps;
-                PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-                PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
+            int env_count = 0;
+            while (env_count < eval_target_count) {
+                int agents_per_env = max_agents_per_env;
+                if (use_eval_agent_counts) {
+                    PyObject *agent_count = PyList_GetItem(eval_agent_counts, env_count);
+                    if (!PyLong_Check(agent_count)) {
+                        PyErr_Format(PyExc_TypeError, "eval_agent_counts[%d] must be an integer", env_count);
+                        Py_DECREF(agent_offsets);
+                        Py_DECREF(map_ids_list);
+                        return NULL;
+                    }
+                    agents_per_env = (int) PyLong_AsLong(agent_count);
+                    if (agents_per_env < min_agents_per_env || agents_per_env > max_agents_per_env) {
+                        PyErr_Format(
+                            PyExc_ValueError,
+                            "eval_agent_counts[%d]=%d out of range [%d, %d]",
+                            env_count,
+                            agents_per_env,
+                            min_agents_per_env,
+                            max_agents_per_env);
+                        Py_DECREF(agent_offsets);
+                        Py_DECREF(map_ids_list);
+                        return NULL;
+                    }
+                } else if (eval_agent_count_mode == EVAL_AGENT_COUNT_MODE_RANDOM) {
+                    int range = max_agents_per_env - min_agents_per_env + 1;
+                    agents_per_env = min_agents_per_env + rng_below(&shared_rng, range);
+                }
+                if (offset + agents_per_env > num_agents) {
+                    break;
+                }
+                int map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, env_count))
+                                                  : (s_map_counter + env_count) % num_maps;
+                PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
+                PyList_SetItem(map_ids_list, env_count, PyLong_FromLong(map_id));
                 offset += agents_per_env;
+                env_count++;
             }
             PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
+            if (PyList_SetSlice(agent_offsets, env_count + 1, eval_target_count + 1, NULL) != 0
+                || PyList_SetSlice(map_ids_list, env_count, eval_target_count, NULL) != 0) {
+                Py_DECREF(agent_offsets);
+                Py_DECREF(map_ids_list);
+                return NULL;
+            }
 
             PyObject *tuple = PyTuple_New(3);
             PyTuple_SetItem(tuple, 0, agent_offsets);
@@ -2339,6 +2399,8 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->collision_behavior = (int) unpack(kwargs, "collision_behavior");
     env->offroad_behavior = (int) unpack(kwargs, "offroad_behavior");
     env->traffic_light_behavior = (int) unpack(kwargs, "traffic_light_behavior");
+    env->traffic_light_junction_phases = (int) unpack(kwargs, "traffic_light_junction_phases");
+    env->target_infraction_behavior = (int) unpack(kwargs, "target_infraction_behavior");
     env->use_map_cache = (int) unpack(kwargs, "use_map_cache");
     env->use_neighbor_cache = (int) unpack(kwargs, "use_neighbor_cache");
     env->eval_episode_done = 0;
@@ -2362,6 +2424,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
+    env->target_obs_slots_partners_n = (int) unpack(kwargs, "target_obs_slots_partners_n");
     env->obs_slots_traffic_controls_n = (int) unpack(kwargs, "obs_slots_traffic_controls_n");
     env->traffic_control_scope = (int) unpack(kwargs, "traffic_control_scope");
     env->obs_lane_stride = (int) unpack(kwargs, "obs_lane_stride");
@@ -2369,10 +2432,50 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->dt = (float) unpack(kwargs, "dt");
     env->base_max_speed_mps = (float) unpack(kwargs, "base_max_speed_mps");
     env->spawn_initial_speed = (float) unpack(kwargs, "spawn_initial_speed");
+    env->spawn_speed_mode = (int) unpack(kwargs, "spawn_speed_mode");
+    env->gigaflow_spawn_mode = (int) unpack(kwargs, "gigaflow_spawn_mode");
+    env->adversary_near_spawn_radius_meters = (float) unpack(kwargs, "adversary_near_spawn_radius_meters");
+    env->adversary_spawn_radius_meters = (float) unpack(kwargs, "adversary_spawn_radius_meters");
+    env->spawn_clearance_meters = (float) unpack(kwargs, "spawn_clearance_meters");
+    env->adversary_retention_radius_meters = (float) unpack(kwargs, "adversary_retention_radius_meters");
+    env->adversary_retention_grace_seconds = (float) unpack(kwargs, "adversary_retention_grace_seconds");
+    env->route_relevance_horizon_meters = (float) unpack(kwargs, "route_relevance_horizon_meters");
+    env->route_relevance_scene_attempts = (int) unpack(kwargs, "route_relevance_scene_attempts");
+    if (env->gigaflow_spawn_mode < GIGAFLOW_SPAWN_MODE_UNIFORM
+        || env->gigaflow_spawn_mode > GIGAFLOW_SPAWN_MODE_TARGETED) {
+        PyErr_SetString(PyExc_ValueError, "invalid gigaflow_spawn_mode");
+        return -1;
+    }
+    if (env->spawn_speed_mode < SPAWN_SPEED_MODE_FIXED || env->spawn_speed_mode > SPAWN_SPEED_MODE_RANDOM) {
+        PyErr_SetString(PyExc_ValueError, "invalid spawn_speed_mode");
+        return -1;
+    }
+    if (env->adversary_near_spawn_radius_meters <= 0.0f
+        || env->adversary_spawn_radius_meters < env->adversary_near_spawn_radius_meters
+        || env->adversary_retention_radius_meters <= 0.0f || env->spawn_clearance_meters < 0.0f
+        || env->adversary_retention_grace_seconds <= 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "invalid adversarial spawn distance or duration");
+        return -1;
+    }
+    if (env->route_relevance_horizon_meters <= 0.0f
+        || env->route_relevance_horizon_meters > ROUTE_RELEVANCE_MAX_HORIZON_METERS
+        || env->route_relevance_scene_attempts <= 0) {
+        PyErr_SetString(PyExc_ValueError, "invalid route relevance horizon or attempt count");
+        return -1;
+    }
+    env->pdm_horizon_seconds = (float) unpack(kwargs, "pdm_horizon");
+    env->pdm_planning_dt_seconds = (float) unpack(kwargs, "pdm_planning_dt");
     env->goal_speed = (float) unpack(kwargs, "goal_speed");
     env->scenario_length = (int) unpack(kwargs, "scenario_length");
     env->termination_mode = (int) unpack(kwargs, "termination_mode");
     env->inactive_agent_threshold = (float) unpack(kwargs, "inactive_agent_threshold");
+    env->adversarial_termination_mode = (int) unpack(kwargs, "adversarial_termination_mode");
+    env->target_failure_episode_end = (int) unpack(kwargs, "target_failure_episode_end");
+    env->target_collision_continuation_seconds = (float) unpack(kwargs, "target_collision_continuation_seconds");
+    if (env->target_collision_continuation_seconds < 0.0f) {
+        PyErr_SetString(PyExc_ValueError, "target_collision_continuation_seconds must be non-negative");
+        return -1;
+    }
     env->terminate_on_goal = (int) unpack(kwargs, "terminate_on_goal");
     char *map_file = unpack_str(kwargs, "map_file");
     env->map_name = map_file;
@@ -2398,8 +2501,16 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->reward_conditioning = (bool) unpack(kwargs, "reward_conditioning");
     env->reward_randomization = (bool) unpack(kwargs, "reward_randomization");
     env->reward_log_sampling = (bool) unpack(kwargs, "reward_log_sampling");
+    env->adversarial_drive_reward_weight = (float) unpack(kwargs, "adversarial_drive_reward_weight");
+    env->adversarial_traffic_light_reward_weight = (float) unpack(kwargs, "adversarial_traffic_light_reward_weight");
+    env->adversarial_target_genuine_failure_reward
+        = (float) unpack(kwargs, "adversarial_target_genuine_failure_reward");
+    env->adversarial_target_adversary_forced_reward
+        = (float) unpack(kwargs, "adversarial_target_adversary_forced_reward");
+    env->adversarial_target_unavoidable_reward = (float) unpack(kwargs, "adversarial_target_unavoidable_reward");
     env->compute_eval_metrics = (bool) unpack(kwargs, "compute_eval_metrics");
     env->eval_mode = (int) unpack(kwargs, "eval_mode");
+    env->capture_avoidability_debug = (bool) unpack(kwargs, "capture_avoidability_debug");
     env->obs_norm_speed_mps = (float) unpack(kwargs, "obs_norm_speed_mps");
     env->eval_training_render = (int) unpack(kwargs, "eval_training_render");
     env->obs_norm_goal_offset_m = (float) unpack(kwargs, "obs_norm_goal_offset_m");
@@ -2412,6 +2523,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     env->eval_perceived_size_margin_m = (float) unpack(kwargs, "eval_perceived_size_margin_m");
     env->obs_range_traffic_control_m = (float) unpack(kwargs, "obs_range_traffic_control_m");
     env->obs_range_partner_m = (float) unpack(kwargs, "obs_range_partner_m");
+    env->target_obs_range_partner_m = (float) unpack(kwargs, "target_obs_range_partner_m");
     env->obs_range_road_front_m = (float) unpack(kwargs, "obs_range_road_front_m");
     env->obs_range_road_behind_m = (float) unpack(kwargs, "obs_range_road_behind_m");
     env->obs_range_road_side_m = (float) unpack(kwargs, "obs_range_road_side_m");
@@ -2429,6 +2541,193 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
     // episode_seed replays identically regardless of which reset created it.
     env->timestep = -1;
     return 0;
+}
+
+static PyObject *avoidability_snapshot_to_dict(AvoidabilityAgentSnapshot *snapshot) {
+    return Py_BuildValue(
+        "{s:i,s:i,s:i,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:f,s:i,s:i}",
+        "valid",
+        snapshot->valid,
+        "index",
+        snapshot->index,
+        "type",
+        snapshot->type,
+        "x",
+        snapshot->x,
+        "y",
+        snapshot->y,
+        "z",
+        snapshot->z,
+        "heading",
+        snapshot->heading,
+        "length",
+        snapshot->length,
+        "width",
+        snapshot->width,
+        "height",
+        snapshot->height,
+        "vx",
+        snapshot->vx,
+        "vy",
+        snapshot->vy,
+        "active",
+        snapshot->active,
+        "stopped",
+        snapshot->stopped);
+}
+
+static PyObject *avoidability_debug_to_dict(AvoidabilityDebug *debug) {
+    PyObject *trace = PyDict_New();
+    PyObject *target_snapshot = avoidability_snapshot_to_dict(&debug->target_at_collision);
+    PyObject *adversary_snapshot = avoidability_snapshot_to_dict(&debug->adversary_at_collision);
+    PyObject *collision = Py_BuildValue(
+        "{s:i,s:i,s:i,s:O,s:O}",
+        "target_agent_index",
+        debug->target_agent_index,
+        "collision_adversary_index",
+        debug->collision_adversary_index,
+        "collision_timestep",
+        debug->collision_timestep,
+        "target",
+        target_snapshot,
+        "adversary",
+        adversary_snapshot);
+    Py_XDECREF(target_snapshot);
+    Py_XDECREF(adversary_snapshot);
+    PyObject *constants = Py_BuildValue(
+        "{s:f,s:f,s:f,s:i,s:i,s:f,s:i,s:f,s:f,s:f,s:f}",
+        "dt",
+        debug->dt,
+        "braking_deceleration",
+        debug->braking_deceleration,
+        "reaction_time_seconds",
+        debug->reaction_time_seconds,
+        "max_extension_steps",
+        debug->max_extension_steps,
+        "max_rollout_steps",
+        debug->max_rollout_steps,
+        "ttc_margin_seconds",
+        debug->ttc_margin_seconds,
+        "ttc_max_projection_steps",
+        debug->ttc_max_projection_steps,
+        "lateral_buffer_base_meters",
+        debug->lateral_buffer_base_meters,
+        "lateral_buffer_response_time_seconds",
+        debug->lateral_buffer_response_time_seconds,
+        "lateral_buffer_deceleration_mps2",
+        debug->lateral_buffer_deceleration_mps2,
+        "lateral_buffer_max_meters",
+        debug->lateral_buffer_max_meters);
+    if (constants != NULL
+        && assign_to_dict(constants, "reaction_window_half_width_seconds", debug->reaction_window_half_width_seconds)
+            != 0) {
+        Py_CLEAR(constants);
+    }
+    PyObject *classification = Py_BuildValue(
+        "{s:f,s:i,s:i,s:i}",
+        "t_brake",
+        debug->last_avoidable_braking_seconds_before_collision,
+        "genuine_target_failure",
+        debug->genuine_target_failure,
+        "adversary_forced",
+        debug->adversary_forced,
+        "unavoidable",
+        debug->unavoidable);
+    PyObject *target_route = PyList_New(debug->target_route_length);
+    for (int route_idx = 0; target_route != NULL && route_idx < debug->target_route_length; route_idx++) {
+        PyObject *lane_idx = PyLong_FromLong(debug->target_route[route_idx]);
+        if (lane_idx == NULL) {
+            Py_CLEAR(target_route);
+            break;
+        }
+        PyList_SetItem(target_route, route_idx, lane_idx);
+    }
+
+    PyObject *candidates = PyList_New(debug->candidate_count);
+    for (int candidate_idx = 0; candidates != NULL && candidate_idx < debug->candidate_count; candidate_idx++) {
+        AvoidabilityCandidateDebug *candidate = &debug->candidates[candidate_idx];
+        PyObject *blocking_agent = avoidability_snapshot_to_dict(&candidate->blocking_agent);
+        PyObject *ignored_agent = avoidability_snapshot_to_dict(&candidate->ignored_overlap_agent);
+        PyObject *candidate_dict = Py_BuildValue(
+            "{s:i,s:i,s:i,s:i,s:i,s:i,s:O,s:i,s:i,s:O}",
+            "steps_back",
+            candidate->steps_back,
+            "avoided",
+            candidate->avoided,
+            "collision_with_original_adversary",
+            candidate->collision_with_original_adversary,
+            "at_fault_collision_with_other_adversary",
+            candidate->at_fault_collision_with_other_adversary,
+            "blocking_agent_index",
+            candidate->blocking_agent_index,
+            "blocking_rollout_step",
+            candidate->blocking_rollout_step,
+            "blocking_agent",
+            blocking_agent,
+            "ignored_overlap_agent_index",
+            candidate->ignored_overlap_agent_index,
+            "ignored_overlap_rollout_step",
+            candidate->ignored_overlap_rollout_step,
+            "ignored_overlap_agent",
+            ignored_agent);
+        Py_XDECREF(blocking_agent);
+        Py_XDECREF(ignored_agent);
+        if (candidate_dict == NULL) {
+            Py_CLEAR(candidates);
+            break;
+        }
+        PyList_SetItem(candidates, candidate_idx, candidate_dict);
+    }
+
+    PyObject *detection_samples = PyList_New(debug->detection_sample_count);
+    for (int sample_idx = 0; detection_samples != NULL && sample_idx < debug->detection_sample_count; sample_idx++) {
+        AvoidabilityDetectionDebug *sample = &debug->detection_samples[sample_idx];
+        float straight_ttc_seconds = isfinite(sample->straight_ttc_seconds) ? sample->straight_ttc_seconds : -1.0f;
+        float route_ttc_seconds = isfinite(sample->route_ttc_seconds) ? sample->route_ttc_seconds : -1.0f;
+        PyObject *sample_dict = Py_BuildValue(
+            "{s:i,s:i,s:f,s:f,s:f,s:f,s:i}",
+            "steps_back",
+            sample->steps_back,
+            "dangerous",
+            sample->dangerous,
+            "danger_threshold_seconds",
+            sample->danger_threshold_seconds,
+            "straight_ttc_seconds",
+            straight_ttc_seconds,
+            "route_ttc_seconds",
+            route_ttc_seconds,
+            "lateral_buffer_meters",
+            sample->lateral_buffer_meters,
+            "lateral_buffer_dangerous",
+            sample->lateral_buffer_dangerous);
+        if (sample_dict == NULL) {
+            Py_CLEAR(detection_samples);
+            break;
+        }
+        PyList_SetItem(detection_samples, sample_idx, sample_dict);
+    }
+
+    int valid = trace != NULL && collision != NULL && constants != NULL && classification != NULL
+        && target_route != NULL && candidates != NULL && detection_samples != NULL;
+    if (valid) {
+        valid = PyDict_SetItemString(trace, "collision", collision) == 0
+            && PyDict_SetItemString(trace, "constants", constants) == 0
+            && PyDict_SetItemString(trace, "classification", classification) == 0
+            && PyDict_SetItemString(trace, "target_route_lane_indices", target_route) == 0
+            && PyDict_SetItemString(trace, "candidates", candidates) == 0
+            && PyDict_SetItemString(trace, "detection_samples", detection_samples) == 0;
+    }
+    Py_XDECREF(collision);
+    Py_XDECREF(constants);
+    Py_XDECREF(classification);
+    Py_XDECREF(target_route);
+    Py_XDECREF(candidates);
+    Py_XDECREF(detection_samples);
+    if (!valid) {
+        Py_XDECREF(trace);
+        return NULL;
+    }
+    return trace;
 }
 
 // Build one per-episode row from a frozen eval env: its log holds exactly the
@@ -2479,6 +2778,17 @@ static int my_episode_to_dict(PyObject *dict, Env *env) {
         }
         Py_DECREF(scenario_id);
     }
+    if (env->avoidability_debug != NULL && env->avoidability_debug->valid) {
+        PyObject *debug = avoidability_debug_to_dict(env->avoidability_debug);
+        if (debug == NULL) {
+            return -1;
+        }
+        int result = PyDict_SetItemString(dict, "avoidability_debug", debug);
+        Py_DECREF(debug);
+        if (result != 0) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -2486,6 +2796,12 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     float total_distance_travelled = log->total_distance_travelled * n;
     float total_infractions = log->total_infractions * n;
     float avg_distance_per_infraction = total_distance_travelled / fmaxf(1.0f, total_infractions);
+    float sdc_scale = log->sdc_n > 0.0f ? 1.0f / log->sdc_n : 0.0f;
+    float traffic_scale = log->traffic_n > 0.0f ? 1.0f / log->traffic_n : 0.0f;
+
+#define ASSIGN_SPLIT_METRIC(key, aggregate_field, sdc_field)                                                           \
+    assign_to_dict(dict, "sdc_" key, log->sdc_field *sdc_scale);                                                       \
+    assign_to_dict(dict, "traffic_" key, (log->aggregate_field - log->sdc_field) * traffic_scale)
 
     assign_to_dict(dict, "n", log->n);
     assign_to_dict(dict, "offroad_rate", log->offroad_rate);
@@ -2517,6 +2833,74 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
     assign_to_dict(dict, "reward_components/overspeed", log->reward_overspeed);
     assign_to_dict(dict, "reward_components/ade", log->reward_ade);
 
+    assign_to_dict(dict, "sdc_n", log->sdc_n * n);
+    assign_to_dict(dict, "traffic_n", log->traffic_n * n);
+    ASSIGN_SPLIT_METRIC("episode_return", episode_return, sdc_episode_return);
+    ASSIGN_SPLIT_METRIC("episode_length", episode_length, sdc_episode_length);
+    ASSIGN_SPLIT_METRIC("offroad_rate", offroad_rate, sdc_offroad_rate);
+    assign_to_dict(dict, "sdc_collision_rate", log->sdc_collision_rate * sdc_scale);
+    assign_to_dict(dict, "traffic_collision_rate", log->traffic_collision_rate * traffic_scale);
+    assign_to_dict(dict, "traffic_sdc_collision_rate", log->traffic_sdc_collision_rate * traffic_scale);
+    assign_to_dict(dict, "traffic_traffic_collision_rate", log->traffic_traffic_collision_rate * traffic_scale);
+    ASSIGN_SPLIT_METRIC("red_light_violation_rate", red_light_violation_rate, sdc_red_light_violation_rate);
+    ASSIGN_SPLIT_METRIC("dnf_rate", dnf_rate, sdc_dnf_rate);
+    ASSIGN_SPLIT_METRIC("score", score, sdc_score);
+    ASSIGN_SPLIT_METRIC("num_goals_reached", num_goals_reached, sdc_num_goals_reached);
+    ASSIGN_SPLIT_METRIC("avg_speed", avg_speed_per_agent, sdc_avg_speed);
+    ASSIGN_SPLIT_METRIC("velocity_progress", velocity_progress_sum, sdc_velocity_progress);
+    ASSIGN_SPLIT_METRIC("lane_center_rate", lane_center_rate, sdc_lane_center_rate);
+    ASSIGN_SPLIT_METRIC("lane_heading_aligned_rate", lane_heading_aligned_rate, sdc_lane_heading_aligned_rate);
+    ASSIGN_SPLIT_METRIC("comfort_violation_rate", comfort_violation_count, sdc_comfort_violation_rate);
+    ASSIGN_SPLIT_METRIC("reward_components/collision", reward_collision, sdc_reward_collision);
+    ASSIGN_SPLIT_METRIC("reward_components/offroad", reward_offroad, sdc_reward_offroad);
+    ASSIGN_SPLIT_METRIC("reward_components/red_light", reward_red_light, sdc_reward_red_light);
+    ASSIGN_SPLIT_METRIC("reward_components/goal", reward_goal, sdc_reward_goal);
+    ASSIGN_SPLIT_METRIC("reward_components/lane_align", reward_lane_align, sdc_reward_lane_align);
+    ASSIGN_SPLIT_METRIC("reward_components/lane_center", reward_lane_center, sdc_reward_lane_center);
+    ASSIGN_SPLIT_METRIC("reward_components/comfort", reward_comfort, sdc_reward_comfort);
+    ASSIGN_SPLIT_METRIC("reward_components/velocity", reward_velocity, sdc_reward_velocity);
+    ASSIGN_SPLIT_METRIC("reward_components/timestep", reward_timestep, sdc_reward_timestep);
+    ASSIGN_SPLIT_METRIC("reward_components/reverse", reward_reverse, sdc_reward_reverse);
+    ASSIGN_SPLIT_METRIC("reward_components/overspeed", reward_overspeed, sdc_reward_overspeed);
+    ASSIGN_SPLIT_METRIC("reward_components/ade", reward_ade, sdc_reward_ade);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_genuine_failure",
+        log->reward_target_genuine_failure * traffic_scale);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_adversary_forced",
+        log->reward_target_adversary_forced * traffic_scale);
+    assign_to_dict(
+        dict,
+        "traffic_reward_components/target_unavoidable",
+        log->reward_target_unavoidable * traffic_scale);
+    float target_collision_count = log->sdc_target_collision_count;
+    float target_collision_scale = target_collision_count > 0.0f ? 1.0f / target_collision_count : 0.0f;
+    float avoidable_collision_count = log->sdc_target_avoidable_collision_count;
+    float avoidable_collision_scale = avoidable_collision_count > 0.0f ? 1.0f / avoidable_collision_count : 0.0f;
+    assign_to_dict(dict, "sdc_target_collision_rate", target_collision_count * sdc_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_responsibility",
+        log->sdc_target_collision_responsibility_sum * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_unavoidable_rate",
+        log->sdc_target_collision_unavoidable_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_genuine_failure_rate",
+        log->sdc_target_collision_genuine_failure_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_adversary_forced_rate",
+        log->sdc_target_collision_adversary_forced_count * target_collision_scale);
+    assign_to_dict(
+        dict,
+        "sdc_target_collision_last_avoidable_braking_seconds",
+        log->sdc_target_avoidable_braking_seconds_sum * avoidable_collision_scale);
+
     if (env->compute_eval_metrics) {
         // Puffer score components
         assign_to_dict(dict, "at_fault_collision_rate", log->at_fault_collision_rate);
@@ -2528,7 +2912,19 @@ static int my_log(PyObject *dict, Env *env, Log *log, float n) {
         assign_to_dict(dict, "comfort_score", log->comfort_score);
         assign_to_dict(dict, "multi_lane_time", log->multi_lane_time);
         assign_to_dict(dict, "multi_lane_score", log->multi_lane_score);
+        ASSIGN_SPLIT_METRIC("at_fault_collision_rate", at_fault_collision_rate, sdc_at_fault_collision_rate);
+        ASSIGN_SPLIT_METRIC("ttc_within_bound_rate", ttc_within_bound_rate, sdc_ttc_within_bound_rate);
+        ASSIGN_SPLIT_METRIC("driving_direction_score", driving_direction_score, sdc_driving_direction_score);
+        ASSIGN_SPLIT_METRIC("speed_limit_compliance", speed_limit_compliance, sdc_speed_limit_compliance);
+        ASSIGN_SPLIT_METRIC("making_progress_rate", making_progress_rate, sdc_making_progress_rate);
+        ASSIGN_SPLIT_METRIC("progress_ratio", progress_ratio, sdc_progress_ratio);
+        ASSIGN_SPLIT_METRIC("comfort_score", comfort_score, sdc_comfort_score);
+        ASSIGN_SPLIT_METRIC("multi_lane_time", multi_lane_time, sdc_multi_lane_time);
+        ASSIGN_SPLIT_METRIC("multi_lane_score", multi_lane_score, sdc_multi_lane_score);
+        ASSIGN_SPLIT_METRIC("puffer_score", puffer_score, sdc_puffer_score);
     }
+
+#undef ASSIGN_SPLIT_METRIC
 
     return 0;
 }

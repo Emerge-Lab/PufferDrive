@@ -1,4 +1,3 @@
-import math
 import pickle
 import zlib
 import numpy as np
@@ -7,28 +6,6 @@ import os
 from importlib.resources import files as package_files
 import pufferlib
 from pufferlib.ocean.drive import binding
-
-
-def map_dir_missing_message(map_dir):
-    """Error text for a nonexistent map_dir. When its basename is a dataset
-    registered in data_utils/datasets.yaml, the message names the exact fetch
-    command instead of leaving the user with a bare missing-path error."""
-    message = f"map_dir '{map_dir}' does not exist."
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    manifest_path = os.path.join(repo_root, "data_utils", "datasets.yaml")
-    dataset_name = os.path.basename(os.path.normpath(str(map_dir)))
-    if not os.path.isfile(manifest_path):
-        return message
-    with open(manifest_path) as f:
-        is_registered_dataset = any(line.startswith(f"{dataset_name}:") for line in f)
-    if is_registered_dataset:
-        message += (
-            f" It is a fetchable dataset:\n"
-            f"    python data_utils/fetch_data.py {dataset_name}\n"
-            f"Run from the repo root, or point map_dir at wherever you fetched it"
-            f" — see docs/data_storage.md."
-        )
-    return message
 
 
 def compute_effective_road_obs_count(max_count, dropout):
@@ -60,6 +37,11 @@ class Drive(pufferlib.PufferEnv):
         reward_timestep=0.000025,
         reward_overspeed=0.05,
         reward_ade=0.0,
+        adversarial_drive_reward_weight=0.5,
+        adversarial_traffic_light_reward_weight=3.0,
+        adversarial_target_genuine_failure_reward=10.0,
+        adversarial_target_adversary_forced_reward=1.0,
+        adversarial_target_unavoidable_reward=-0.1,
         min_goal_spacing=20.0,
         max_goal_spacing=60.0,
         num_goals=3,
@@ -67,28 +49,42 @@ class Drive(pufferlib.PufferEnv):
         collision_behavior="ignore",
         offroad_behavior="ignore",
         traffic_light_behavior="ignore",
-        use_map_cache=0,
-        use_neighbor_cache=1,
+        traffic_light_junction_phases=False,
+        target_infraction_behavior="remove",
+        use_map_cache=False,
+        use_neighbor_cache=True,
         capture_replay=False,
         replay_worker_idx=0,
         dt=0.1,
-        pdm_horizon=4.0,
-        pdm_planning_dt=0.5,
         base_max_speed_mps=20.0,
         spawn_initial_speed=0.0,
+        spawn_speed_mode="random",
+        gigaflow_spawn_mode="targeted",
+        adversary_near_spawn_radius_meters=25.0,
+        adversary_spawn_radius_meters=50.0,
+        spawn_clearance_meters=1.0,
+        adversary_retention_radius_meters=35.0,
+        adversary_retention_grace_seconds=1.0,
+        route_relevance_horizon_meters=35.0,
+        route_relevance_scene_attempts=10,
+        pdm_horizon=4.0,
+        pdm_planning_dt=0.5,
         goal_speed=3.0,
         scenario_length=None,
         resample_frequency=91,
         num_maps=100,
         num_agents=512,
-        min_agents_per_env=32,
-        max_agents_per_env=64,
+        min_agents_per_env=2,
+        max_agents_per_env=8,
         action_type="discrete",
         dynamics_model="classic",
         reset_accel_on_stop=False,
         simulation_mode="gigaflow",
-        termination_mode=0,
+        termination_mode=False,
         inactive_agent_threshold=0.4,
+        adversarial_termination_mode="target_inactive_or_no_nearby_adversary",
+        target_failure_episode_end="terminated",
+        target_collision_continuation_seconds=2.0,
         terminate_on_goal=False,
         buf=None,
         seed=1,
@@ -101,6 +97,8 @@ class Drive(pufferlib.PufferEnv):
         eval_map_indices=None,
         eval_scenario_seeds=None,
         eval_training_render=False,
+        eval_agent_count_mode="fixed",
+        eval_agent_counts=None,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         sdc_controller="policy",
@@ -120,6 +118,7 @@ class Drive(pufferlib.PufferEnv):
         obs_lane_stride=1,
         obs_boundary_stride=1,
         obs_slots_partners_n=16,
+        target_obs_slots_partners_n=16,
         obs_slots_traffic_controls_n=4,
         traffic_control_scope=0,
         starting_map=0,
@@ -134,6 +133,7 @@ class Drive(pufferlib.PufferEnv):
         eval_perceived_size_margin_m=0.1,
         obs_range_traffic_control_m=100.0,
         obs_range_partner_m=100.0,
+        target_obs_range_partner_m=100.0,
         obs_range_road_front_m=120.0,
         obs_range_road_behind_m=20.0,
         obs_range_road_side_m=30.0,
@@ -149,15 +149,24 @@ class Drive(pufferlib.PufferEnv):
         self.dt = dt
         self.base_max_speed_mps = float(base_max_speed_mps)
         self.spawn_initial_speed = float(spawn_initial_speed)
-        self.goal_speed = float(goal_speed)
+        self.spawn_speed_mode = {
+            "fixed": binding.SPAWN_SPEED_MODE_FIXED,
+            "random": binding.SPAWN_SPEED_MODE_RANDOM,
+        }[spawn_speed_mode]
+        self.gigaflow_spawn_mode = {
+            "uniform": binding.GIGAFLOW_SPAWN_MODE_UNIFORM,
+            "targeted": binding.GIGAFLOW_SPAWN_MODE_TARGETED,
+        }[gigaflow_spawn_mode]
+        self.adversary_near_spawn_radius_meters = float(adversary_near_spawn_radius_meters)
+        self.adversary_spawn_radius_meters = float(adversary_spawn_radius_meters)
+        self.spawn_clearance_meters = float(spawn_clearance_meters)
+        self.adversary_retention_radius_meters = float(adversary_retention_radius_meters)
+        self.adversary_retention_grace_seconds = float(adversary_retention_grace_seconds)
+        self.route_relevance_horizon_meters = float(route_relevance_horizon_meters)
+        self.route_relevance_scene_attempts = int(route_relevance_scene_attempts)
         self.pdm_horizon = float(pdm_horizon)
         self.pdm_planning_dt = float(pdm_planning_dt)
-        if not math.isfinite(self.pdm_horizon) or self.pdm_horizon <= 0.0:
-            raise ValueError(f"pdm_horizon must be a positive finite number of seconds. Got: {pdm_horizon}")
-        if not math.isfinite(self.pdm_planning_dt) or self.pdm_planning_dt <= 0.0:
-            raise ValueError(f"pdm_planning_dt must be a positive finite number of seconds. Got: {pdm_planning_dt}")
-        if reward_randomization and not reward_conditioning:
-            raise ValueError("reward_randomization requires reward_conditioning")
+        self.goal_speed = float(goal_speed)
         self.reward_conditioning = reward_conditioning
         self.reward_randomization = reward_randomization
         self.reward_log_sampling = reward_log_sampling
@@ -180,44 +189,39 @@ class Drive(pufferlib.PufferEnv):
         self.reward_timestep = reward_timestep
         self.reward_overspeed = reward_overspeed
         self.reward_ade = reward_ade
+        self.adversarial_drive_reward_weight = adversarial_drive_reward_weight
+        self.adversarial_traffic_light_reward_weight = adversarial_traffic_light_reward_weight
+        self.adversarial_target_genuine_failure_reward = adversarial_target_genuine_failure_reward
+        self.adversarial_target_adversary_forced_reward = adversarial_target_adversary_forced_reward
+        self.adversarial_target_unavoidable_reward = adversarial_target_unavoidable_reward
         self.goal_radius = goal_radius
         self.min_goal_spacing = min_goal_spacing
         self.max_goal_spacing = max_goal_spacing
-        if not 1 <= num_goals <= binding.MAX_GOALS:
-            raise ValueError(f"num_goals must be in [1, {binding.MAX_GOALS}]. Got: {num_goals}")
         self.num_goals = num_goals
-        if goal_regen_mode == "finite":
-            self.goal_regen_mode = binding.GOAL_REGEN_FINITE
-        elif goal_regen_mode == "rolling":
-            self.goal_regen_mode = binding.GOAL_REGEN_ROLLING
-        else:
-            raise ValueError(f"goal_regen_mode must be 'finite' or 'rolling'. Got: {goal_regen_mode}")
-        if goal_source == "route":
-            self.goal_source = binding.GOAL_SOURCE_ROUTE
-        elif goal_source == "map":
-            self.goal_source = binding.GOAL_SOURCE_MAP
-        elif goal_source == "gt":
-            self.goal_source = binding.GOAL_SOURCE_GT
-        else:
-            raise ValueError(f"goal_source must be 'route', 'map', or 'gt'. Got: {goal_source}")
+        self.goal_regen_mode = {
+            "finite": binding.GOAL_REGEN_FINITE,
+            "rolling": binding.GOAL_REGEN_ROLLING,
+        }[goal_regen_mode]
+        self.goal_source = {
+            "route": binding.GOAL_SOURCE_ROUTE,
+            "map": binding.GOAL_SOURCE_MAP,
+            "gt": binding.GOAL_SOURCE_GT,
+        }[goal_source]
         self.obs_goal_lane_distance = int(bool(obs_goal_lane_distance))
         infraction_behavior_values = {
             "ignore": binding.INFRACTION_BEHAVIOR_IGNORE,
             "stop": binding.INFRACTION_BEHAVIOR_STOP,
             "remove": binding.INFRACTION_BEHAVIOR_REMOVE,
         }
-        for behavior_name, behavior in (
-            ("collision_behavior", collision_behavior),
-            ("offroad_behavior", offroad_behavior),
-            ("traffic_light_behavior", traffic_light_behavior),
-        ):
-            if behavior not in infraction_behavior_values:
-                raise ValueError(f"{behavior_name} must be one of 'ignore', 'stop', or 'remove'. Got: {behavior}")
         self.collision_behavior = infraction_behavior_values[collision_behavior]
         self.offroad_behavior = infraction_behavior_values[offroad_behavior]
         self.traffic_light_behavior = infraction_behavior_values[traffic_light_behavior]
-        if use_map_cache not in (0, 1):
-            raise ValueError(f"use_map_cache must be 0 (off) or 1 (on). Got: {use_map_cache}")
+        self.traffic_light_junction_phases = traffic_light_junction_phases
+        self.target_infraction_behavior = {
+            "normal": binding.TARGET_INFRACTION_BEHAVIOR_NORMAL,
+            "ignore": binding.TARGET_INFRACTION_BEHAVIOR_IGNORE,
+            "remove": binding.TARGET_INFRACTION_BEHAVIOR_REMOVE,
+        }[target_infraction_behavior]
         self.use_map_cache = use_map_cache
         self.capture_replay = bool(capture_replay)
         self.replay_worker_idx = replay_worker_idx
@@ -225,39 +229,47 @@ class Drive(pufferlib.PufferEnv):
         self.human_agent_idx = human_agent_idx
         self.scenario_length = scenario_length
         self.resample_frequency = resample_frequency
-        if use_neighbor_cache not in (0, 1):
-            raise ValueError(f"use_neighbor_cache must be 0 (off) or 1 (on). Got: {use_neighbor_cache}")
         self.use_neighbor_cache = use_neighbor_cache
         self.dynamics_model = dynamics_model
-        if dynamics_model == "classic":
-            self.dynamics_model_flag = binding.DYNAMICS_MODEL_CLASSIC
-        elif dynamics_model == "jerk":
-            self.dynamics_model_flag = binding.DYNAMICS_MODEL_JERK
-        else:
-            raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
+        self.dynamics_model_flag = {
+            "classic": binding.DYNAMICS_MODEL_CLASSIC,
+            "jerk": binding.DYNAMICS_MODEL_JERK,
+        }[dynamics_model]
         self.reset_accel_on_stop = reset_accel_on_stop
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
-        if max_scenarios_per_batch is not None and max_scenarios_per_batch < 1:
-            raise ValueError(f"max_scenarios_per_batch must be >= 1 or None. Got: {max_scenarios_per_batch}")
         self.max_scenarios_per_batch = max_scenarios_per_batch
         self.eval_map_indices = eval_map_indices
         self.eval_scenario_seeds = eval_scenario_seeds
+        self.eval_agent_counts = eval_agent_counts
         if self.eval_map_indices is not None:
             if self.eval_scenario_seeds is None or len(self.eval_scenario_seeds) != len(self.eval_map_indices):
                 raise ValueError("eval_scenario_seeds must have one seed per eval_map_indices entry")
-        if not isinstance(eval_training_render, bool):
-            raise TypeError("eval_training_render must be a boolean")
-        if eval_training_render and not eval_mode:
-            raise ValueError("eval_training_render requires eval_mode")
-        if eval_training_render and simulation_mode != "gigaflow":
-            raise ValueError("eval_training_render only supports gigaflow simulation_mode")
-        if eval_training_render and num_agents < max_agents_per_env:
-            raise ValueError("eval_training_render requires num_agents >= max_agents_per_env")
+            if self.eval_agent_counts is not None and len(self.eval_agent_counts) != len(self.eval_map_indices):
+                raise ValueError("eval_agent_counts must have one count per eval_map_indices entry")
         self.eval_training_render = eval_training_render
+        self.eval_agent_count_mode = {
+            "fixed": binding.EVAL_AGENT_COUNT_MODE_FIXED,
+            "random": binding.EVAL_AGENT_COUNT_MODE_RANDOM,
+        }[eval_agent_count_mode]
         self.use_exact_episode_seed = bool(eval_mode) and self.eval_scenario_seeds is not None
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
+        self.adversarial_termination_mode = {
+            "disabled": binding.ADVERSARIAL_TERMINATION_MODE_DISABLED,
+            "all_adversaries_inactive": binding.ADVERSARIAL_TERMINATION_MODE_ALL_ADVERSARIES_INACTIVE,
+            "target_inactive": binding.ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE,
+            "either": binding.ADVERSARIAL_TERMINATION_MODE_EITHER,
+            "no_nearby_adversary": binding.ADVERSARIAL_TERMINATION_MODE_NO_NEARBY_ADVERSARY,
+            "target_inactive_or_no_nearby_adversary": (
+                binding.ADVERSARIAL_TERMINATION_MODE_TARGET_INACTIVE_OR_NO_NEARBY_ADVERSARY
+            ),
+        }[adversarial_termination_mode]
+        self.target_failure_episode_end = {
+            "terminated": binding.TARGET_FAILURE_EPISODE_END_TERMINATED,
+            "truncated": binding.TARGET_FAILURE_EPISODE_END_TRUNCATED,
+        }[target_failure_episode_end]
+        self.target_collision_continuation_seconds = float(target_collision_continuation_seconds)
         self.terminate_on_goal = terminate_on_goal
         self.rng = np.random.default_rng(seed)
         self.min_agents_per_env = min_agents_per_env
@@ -266,17 +278,12 @@ class Drive(pufferlib.PufferEnv):
         self.ego_features = binding.EGO_FEATURES
 
         # Extract observation shapes from constants
-        obs_lane_stride = int(obs_lane_stride)
-        obs_boundary_stride = int(obs_boundary_stride)
-        if obs_lane_stride < 1:
-            raise ValueError(f"obs_lane_stride must be >= 1. Got: {obs_lane_stride}")
-        if obs_boundary_stride < 1:
-            raise ValueError(f"obs_boundary_stride must be >= 1. Got: {obs_boundary_stride}")
         self.obs_slots_lane_n = obs_slots_lane_n
         self.obs_slots_boundary_n = obs_slots_boundary_n
         self.obs_lane_stride = obs_lane_stride
         self.obs_boundary_stride = obs_boundary_stride
         self.obs_slots_partners_n = obs_slots_partners_n
+        self.target_obs_slots_partners_n = target_obs_slots_partners_n
         self.traffic_control_scope = traffic_control_scope
         self.obs_slots_traffic_controls_n = obs_slots_traffic_controls_n
         self.obs_norm_speed_mps = float(obs_norm_speed_mps)
@@ -290,6 +297,7 @@ class Drive(pufferlib.PufferEnv):
         self.eval_perceived_size_margin_m = float(eval_perceived_size_margin_m)
         self.obs_range_traffic_control_m = float(obs_range_traffic_control_m)
         self.obs_range_partner_m = float(obs_range_partner_m)
+        self.target_obs_range_partner_m = float(target_obs_range_partner_m)
         self.obs_range_road_front_m = float(obs_range_road_front_m)
         self.obs_range_road_behind_m = float(obs_range_road_behind_m)
         self.obs_range_road_side_m = float(obs_range_road_side_m)
@@ -352,45 +360,18 @@ class Drive(pufferlib.PufferEnv):
         if isinstance(map_dir, str) and os.path.isfile(map_dir) and map_dir.endswith(".bin"):
             self.map_files = [map_dir]
         else:
-            if not os.path.isdir(map_dir):
-                raise FileNotFoundError(map_dir_missing_message(map_dir))
             self.map_files = sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir) if f.endswith(".bin"))
 
-        if self.simulation_mode_str == "gigaflow":
-            self.simulation_mode = binding.SIMULATION_MODE_GIGAFLOW
-        elif self.simulation_mode_str == "replay":
-            self.simulation_mode = binding.SIMULATION_MODE_REPLAY
-        else:
-            raise ValueError(f"simulation_mode must be one of 'gigaflow' or 'replay'. Got: {self.simulation_mode_str}")
-
-        if self.goal_source == binding.GOAL_SOURCE_GT and self.simulation_mode != 1:
-            raise ValueError(
-                "goal_source 'gt' is only supported in replay simulation_mode (it reads the logged ground-truth trajectory)."
-            )
-
-        if self.init_step_spread:
-            if self.simulation_mode != binding.SIMULATION_MODE_REPLAY:
-                raise ValueError(
-                    "init_step_spread is only supported in replay simulation_mode (it seeds each environment at a different expert timestep)."
-                )
-            if self.scenario_length - self.init_step_min_horizon <= 0:
-                raise ValueError(
-                    f"init_step_min_horizon ({self.init_step_min_horizon}) leaves no room to sample a start in a scenario of length {self.scenario_length}; it must be < scenario_length."
-                )
-
-        if self.control_mode_str == "control_vehicles":
-            self.control_mode = binding.CONTROL_MODE_VEHICLES
-        elif self.control_mode_str == "control_agents":
-            self.control_mode = binding.CONTROL_MODE_AGENTS
-        elif self.control_mode_str == "control_wosac":
-            self.control_mode = binding.CONTROL_MODE_WOSAC
-        elif self.control_mode_str == "control_sdc_only":
-            self.control_mode = binding.CONTROL_MODE_SDC_ONLY
-        else:
-            raise ValueError(
-                "control_mode must be one of 'control_vehicles', 'control_agents', 'control_wosac', or "
-                f"'control_sdc_only'. Got: {self.control_mode_str}"
-            )
+        self.simulation_mode = {
+            "gigaflow": binding.SIMULATION_MODE_GIGAFLOW,
+            "replay": binding.SIMULATION_MODE_REPLAY,
+        }[self.simulation_mode_str]
+        self.control_mode = {
+            "control_vehicles": binding.CONTROL_MODE_VEHICLES,
+            "control_agents": binding.CONTROL_MODE_AGENTS,
+            "control_wosac": binding.CONTROL_MODE_WOSAC,
+            "control_sdc_only": binding.CONTROL_MODE_SDC_ONLY,
+        }[self.control_mode_str]
 
         controller_values = {
             "static": binding.CONTROLLER_STATIC,
@@ -400,35 +381,19 @@ class Drive(pufferlib.PufferEnv):
             "corridor_idm": binding.CONTROLLER_CORRIDOR_IDM,
             "pdm": binding.CONTROLLER_PDM,
         }
-        controller_options = "'static', 'policy', 'replay', 'idm', 'corridor_idm', or 'pdm'"
-        if self.sdc_controller_str not in controller_values:
-            raise ValueError(f"sdc_controller must be one of {controller_options}. Got: {self.sdc_controller_str}")
-        if self.non_sdc_controller_str not in controller_values:
-            raise ValueError(
-                f"non_sdc_controller must be one of {controller_options}. Got: {self.non_sdc_controller_str}"
-            )
         if self.non_vehicle_controller_str == "auto":
             if self.non_sdc_controller_str in ("idm", "corridor_idm", "pdm"):
                 self.non_vehicle_controller_str = "replay"
             else:
                 self.non_vehicle_controller_str = self.non_sdc_controller_str
-        elif self.non_vehicle_controller_str not in controller_values:
-            raise ValueError(
-                f"non_vehicle_controller must be 'auto' or one of {controller_options}. "
-                f"Got: {self.non_vehicle_controller_str}"
-            )
         self.sdc_controller = controller_values[self.sdc_controller_str]
         self.non_sdc_controller = controller_values[self.non_sdc_controller_str]
         self.non_vehicle_controller = controller_values[self.non_vehicle_controller_str]
 
-        if self.init_mode_str == "create_all_valid":
-            self.init_mode = binding.INIT_MODE_CREATE_ALL_VALID
-        elif self.init_mode_str == "create_only_controlled":
-            self.init_mode = binding.INIT_MODE_CREATE_ONLY_CONTROLLED
-        else:
-            raise ValueError(
-                f"init_mode must be one of 'create_all_valid' or 'create_only_controlled'. Got: {self.init_mode_str}"
-            )
+        self.init_mode = {
+            "create_all_valid": binding.INIT_MODE_CREATE_ALL_VALID,
+            "create_only_controlled": binding.INIT_MODE_CREATE_ONLY_CONTROLLED,
+        }[self.init_mode_str]
 
         if action_type == "discrete":
             self._action_type_flag = binding.ACTION_TYPE_DISCRETE
@@ -436,26 +401,11 @@ class Drive(pufferlib.PufferEnv):
                 self.single_action_space = gymnasium.spaces.Discrete(
                     len(binding.ACCELERATION_VALUES) * len(binding.STEERING_VALUES)
                 )
-            elif dynamics_model == "jerk":
-                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
             else:
-                raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
-        elif action_type == "continuous":
+                self.single_action_space = gymnasium.spaces.Discrete(len(binding.JERK_LONG) * len(binding.JERK_LAT))
+        else:
             self._action_type_flag = binding.ACTION_TYPE_CONTINUOUS
             self.single_action_space = gymnasium.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
-        else:
-            raise ValueError(f"action_space must be 'discrete' or 'continuous'. Got: {action_type}")
-
-        # Check if resources directory exists
-        if not self.map_files:
-            raise FileNotFoundError(
-                f"No .bin files found in {map_dir}. Please ensure the Drive maps are downloaded and installed correctly per docs."
-            )
-
-        # Check maps availability
-        available_maps = len(self.map_files)
-        if num_maps > available_maps:
-            raise ValueError(f"num_maps ({num_maps}) exceeds available maps in {map_dir} ({available_maps}).")
         self.starting_map_counter = starting_map
         self.starting_map_counter_init = starting_map
 
@@ -469,6 +419,8 @@ class Drive(pufferlib.PufferEnv):
             starting_map_counter=self.starting_map_counter,
             eval_mode=self.eval_mode,
             eval_training_render=self.eval_training_render,
+            eval_agent_count_mode=self.eval_agent_count_mode,
+            eval_agent_counts=self.eval_agent_counts,
             init_mode=self.init_mode,
             control_mode=self.control_mode,
             sdc_controller=self.sdc_controller,
@@ -546,9 +498,16 @@ class Drive(pufferlib.PufferEnv):
             "reward_timestep": self.reward_timestep,
             "reward_overspeed": self.reward_overspeed,
             "reward_ade": self.reward_ade,
+            "adversarial_drive_reward_weight": self.adversarial_drive_reward_weight,
+            "adversarial_traffic_light_reward_weight": self.adversarial_traffic_light_reward_weight,
+            "adversarial_target_genuine_failure_reward": self.adversarial_target_genuine_failure_reward,
+            "adversarial_target_adversary_forced_reward": self.adversarial_target_adversary_forced_reward,
+            "adversarial_target_unavoidable_reward": self.adversarial_target_unavoidable_reward,
             "collision_behavior": self.collision_behavior,
             "offroad_behavior": self.offroad_behavior,
             "traffic_light_behavior": self.traffic_light_behavior,
+            "traffic_light_junction_phases": self.traffic_light_junction_phases,
+            "target_infraction_behavior": self.target_infraction_behavior,
             "use_map_cache": self.use_map_cache,
             "use_neighbor_cache": self.use_neighbor_cache,
             "goal_radius": self.goal_radius,
@@ -563,17 +522,30 @@ class Drive(pufferlib.PufferEnv):
             "obs_lane_stride": self.obs_lane_stride,
             "obs_boundary_stride": self.obs_boundary_stride,
             "obs_slots_partners_n": self.obs_slots_partners_n,
+            "target_obs_slots_partners_n": self.target_obs_slots_partners_n,
             "obs_slots_traffic_controls_n": self.obs_slots_traffic_controls_n,
             "traffic_control_scope": self.traffic_control_scope,
             "dt": self.dt,
-            "pdm_horizon": self.pdm_horizon,
-            "pdm_planning_dt": self.pdm_planning_dt,
             "base_max_speed_mps": self.base_max_speed_mps,
             "spawn_initial_speed": self.spawn_initial_speed,
+            "spawn_speed_mode": self.spawn_speed_mode,
+            "gigaflow_spawn_mode": self.gigaflow_spawn_mode,
+            "adversary_near_spawn_radius_meters": self.adversary_near_spawn_radius_meters,
+            "adversary_spawn_radius_meters": self.adversary_spawn_radius_meters,
+            "spawn_clearance_meters": self.spawn_clearance_meters,
+            "adversary_retention_radius_meters": self.adversary_retention_radius_meters,
+            "adversary_retention_grace_seconds": self.adversary_retention_grace_seconds,
+            "route_relevance_horizon_meters": self.route_relevance_horizon_meters,
+            "route_relevance_scene_attempts": self.route_relevance_scene_attempts,
+            "pdm_horizon": self.pdm_horizon,
+            "pdm_planning_dt": self.pdm_planning_dt,
             "goal_speed": self.goal_speed,
             "scenario_length": int(self.scenario_length) if self.scenario_length is not None else None,
             "termination_mode": int(self.termination_mode),
             "inactive_agent_threshold": float(self.inactive_agent_threshold),
+            "adversarial_termination_mode": self.adversarial_termination_mode,
+            "target_failure_episode_end": self.target_failure_episode_end,
+            "target_collision_continuation_seconds": self.target_collision_continuation_seconds,
             "terminate_on_goal": int(self.terminate_on_goal),
             "map_file": map_file,
             "max_agents": max_agents,
@@ -590,6 +562,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_log_sampling": self.reward_log_sampling,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
+            "capture_avoidability_debug": self.capture_replay,
             "eval_training_render": self.eval_training_render,
             "use_exact_episode_seed": int(self.use_exact_episode_seed),
             "obs_norm_speed_mps": self.obs_norm_speed_mps,
@@ -603,6 +576,7 @@ class Drive(pufferlib.PufferEnv):
             "eval_perceived_size_margin_m": self.eval_perceived_size_margin_m,
             "obs_range_traffic_control_m": self.obs_range_traffic_control_m,
             "obs_range_partner_m": self.obs_range_partner_m,
+            "target_obs_range_partner_m": self.target_obs_range_partner_m,
             "obs_range_road_front_m": self.obs_range_road_front_m,
             "obs_range_road_behind_m": self.obs_range_road_behind_m,
             "obs_range_road_side_m": self.obs_range_road_side_m,
@@ -651,7 +625,7 @@ class Drive(pufferlib.PufferEnv):
         self.truncations[:] = 0
         if self.capture_replay:
             self._initialize_replay_captures()
-        return self.observations, []
+        return self.observations, [{"agent_offsets": self.agent_offsets}]
 
     def step(self, actions):
         if self._eval_exhausted:
@@ -679,9 +653,13 @@ class Drive(pufferlib.PufferEnv):
                 # Read this batch's finished episodes before the envs are resampled/closed.
                 if self.eval_mode:
                     for summary in binding.vec_per_episode_log(self.c_envs):
+                        avoidability_debug = summary.pop("avoidability_debug", None)
                         summary["summary_type"] = "evaluation_episode"
                         if self.capture_replay:
-                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(summary)
+                            summary["replay_environment_bundle"] = self._build_replay_environment_bundle(
+                                summary,
+                                avoidability_debug,
+                            )
                         info.append(summary)
                 self.current_num_eval_scenarios = self._next_eval_batch_size()
                 if self.current_num_eval_scenarios == 0:
@@ -694,12 +672,17 @@ class Drive(pufferlib.PufferEnv):
                 remaining_map_indices = (
                     self.eval_map_indices[pair_start:] if self.eval_map_indices is not None else None
                 )
+                remaining_agent_counts = (
+                    self.eval_agent_counts[pair_start:] if self.eval_agent_counts is not None else None
+                )
                 agent_offsets, map_ids, num_envs = binding.shared(
                     num_agents=self.num_agents,
                     num_maps=self.num_maps,
                     starting_map_counter=self.starting_map_counter,
                     eval_mode=self.eval_mode,
                     eval_training_render=self.eval_training_render,
+                    eval_agent_count_mode=self.eval_agent_count_mode,
+                    eval_agent_counts=remaining_agent_counts,
                     init_mode=self.init_mode,
                     control_mode=self.control_mode,
                     sdc_controller=self.sdc_controller,
@@ -747,6 +730,7 @@ class Drive(pufferlib.PufferEnv):
                     self._initialize_replay_captures()
                 # Map resampling is an external reset boundary (dataset/map switch). Treat as truncation.
                 self.truncations[:] = 1
+        info.append({"agent_offsets": self.agent_offsets})
         return (self.observations, self.rewards, self.terminals, self.truncations, info)
 
     def get_global_agent_state(self):
@@ -876,6 +860,7 @@ class Drive(pufferlib.PufferEnv):
                 "map_name": os.path.basename(map_path).split(".")[0],
                 "map_path": map_path,
                 "scenario_id": scenario.get("scenario_id"),
+                "initial_timestep": int(scenario["timestep"]),
                 "goal_source": self.goal_source,
                 "goal_regen_mode": self.goal_regen_mode,
                 "num_goals": self.num_goals,
@@ -943,26 +928,34 @@ class Drive(pufferlib.PufferEnv):
                 self._replay_frame_arrays["traffic_i16"][env_idx, :traffic_capacity].copy()
             )
 
-    def _build_replay_environment_bundle(self, summary):
+    def _build_replay_environment_bundle(self, summary, avoidability_debug=None):
         env_slot = int(summary["env_slot"])
         if env_slot < 0 or env_slot >= len(self._replay_captures):
             raise RuntimeError(f"Replay summary has invalid env_slot={env_slot}")
         capture = self._replay_captures[env_slot]
-        episode_length = int(summary["episode_length"])
         captured_frame_count = len(capture["frames"]["agent_f32"])
-        if episode_length <= 0 or episode_length > captured_frame_count:
+        episode_frame_count = min(
+            captured_frame_count,
+            int(summary["episode_timestep"]) - capture["metadata"]["initial_timestep"] + 1,
+        )
+        if episode_frame_count <= 0:
             raise RuntimeError(
-                f"Replay episode_length={episode_length} is incompatible with "
-                f"captured_frame_count={captured_frame_count} for env_slot={env_slot}"
+                f"Replay episode_timestep={summary['episode_timestep']} precedes "
+                f"initial_timestep={capture['metadata']['initial_timestep']}"
             )
         metadata = dict(capture["metadata"])
-        metadata["episode_length"] = episode_length
+        metadata["episode_length"] = episode_frame_count
         replay_environment_bundle = {
             "schema": "interactive_replay_environment_v1",
             "metadata": metadata,
             "scenario": capture["scenario"],
-            "frames": {key: np.stack(frames[:episode_length], axis=0) for key, frames in capture["frames"].items()},
+            "frames": {
+                key: np.stack(frame_values[:episode_frame_count], axis=0)
+                for key, frame_values in capture["frames"].items()
+            },
         }
+        if avoidability_debug is not None:
+            replay_environment_bundle["avoidability_debug"] = avoidability_debug
         return zlib.compress(
             pickle.dumps(replay_environment_bundle, protocol=pickle.HIGHEST_PROTOCOL),
             level=3,

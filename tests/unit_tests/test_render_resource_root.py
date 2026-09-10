@@ -35,7 +35,7 @@ def _make_replay_env():
         non_sdc_controller="replay",
         scenario_length=400,
         resample_frequency=1_000_000,
-        termination_mode=0,
+        termination_mode=False,
         report_interval=1,
     )
 

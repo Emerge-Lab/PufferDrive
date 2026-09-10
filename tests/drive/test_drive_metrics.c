@@ -10,7 +10,7 @@ static int test_metric_offroad_outside_grid(void) {
     agent->sim_y = env.grid_map->top_left_y + 1000.0f;
     copy_pose_to_prev(agent);
 
-    compute_metrics(&env, agent_idx, 0);
+    compute_metrics(&env, agent_idx, &env.logs[0]);
 
     EXPECT_NEAR(agent->metrics_array[OFFROAD_IDX], 1.0f, 1e-5f);
     EXPECT_NEAR(agent->metrics_array[COLLISION_IDX], 0.0f, 1e-5f);
@@ -30,7 +30,7 @@ static int test_metric_invalid_position_resets(void) {
     agent.metrics_array[COLLISION_IDX] = 1.0f;
     agent.metrics_array[OFFROAD_IDX] = 1.0f;
 
-    compute_metrics(&env, 0, 0);
+    compute_metrics(&env, 0, &env.logs[0]);
 
     EXPECT_NEAR(agent.metrics_array[COLLISION_IDX], 0.0f, 1e-6f);
     EXPECT_NEAR(agent.metrics_array[OFFROAD_IDX], 0.0f, 1e-6f);
@@ -44,7 +44,7 @@ static int test_metric_on_road_lane_alignment(void) {
     int agent_idx = env.active_agent_indices[0];
     Agent *agent = &env.agents[agent_idx];
 
-    compute_metrics(&env, agent_idx, 0);
+    compute_metrics(&env, agent_idx, &env.logs[0]);
 
     EXPECT_TRUE(agent->current_lane_idx != -1);
     EXPECT_TRUE(agent->metrics_array[LANE_ANGLE_IDX] >= -1.0f && agent->metrics_array[LANE_ANGLE_IDX] <= 1.0f);

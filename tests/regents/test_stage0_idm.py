@@ -179,13 +179,13 @@ def _write_idm_benchmark(config_path):
                         "name": "regents_idm_test",
                         "seed": 42,
                         "num_scenarios": 1,
-                        "render_scenarios": True,
                         "env": {
                             "simulation_mode": "replay",
                             "num_maps": 1,
                             "scenario_length": 8,
                             "max_scenarios_per_batch": 1,
                             "control_mode": "control_sdc_only",
+                            "min_agents_per_env": 1,
                             "sdc_controller": "idm",
                             "non_sdc_controller": "replay",
                             "non_vehicle_controller": "replay",
@@ -221,7 +221,7 @@ def _checkpoint_free_eval_args(tmp_path, benchmark_config_path):
             "benchmarks": "regents_idm_test",
             "num_agents": 1,
             "max_sdc_replay_workers": 1,
-            "render_scenarios": False,
+            "render_scenarios": True,
             "render_filter": None,
             "failure_replay_csv": None,
             "capture_observations": True,
@@ -299,7 +299,7 @@ def test_puffer_eval_runs_idm_without_a_checkpoint_but_still_demands_one_for_pol
     policy_args = _checkpoint_free_eval_args(tmp_path, benchmark_config_path)
     policy_args["eval"]["render_scenarios"] = False
     policy_args["eval"]["capture_observations"] = False
-    with pytest.raises(pufferlib.APIUsageError, match="valid load_model_path checkpoint"):
+    with pytest.raises(pufferlib.APIUsageError, match="Evaluation with policy controllers requires load_model_path"):
         pufferl.eval(
             env_name="puffer_drive",
             args=policy_args,
