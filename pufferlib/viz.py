@@ -62,7 +62,8 @@ METRIC_LABELS = [
     "stop_sign",
     "reached_goal",
     "lane_dist",
-    "lane_angle",
+    "lane_heading_error_radians",
+    "lane_heading_cosine",
     "comfort_violation",
     "velocity_progress",
     "speed_limit",
@@ -602,7 +603,18 @@ def plot_observation(
     )
     target_position_scale = scales["goal_to_position"]
 
-    ego_speed, ego_width, ego_length, steering_angle, accel_long, accel_lat, lcenter, lalign, speed_limit, _ = ego_state
+    (
+        ego_speed,
+        ego_width,
+        ego_length,
+        steering_angle,
+        accel_long,
+        accel_lat,
+        lcenter,
+        lane_heading_error,
+        speed_limit,
+        _,
+    ) = ego_state
 
     ego_width *= scales["veh_width_to_position"]
     ego_length *= scales["veh_len_to_position"]
@@ -646,7 +658,7 @@ def plot_observation(
         ax.scatter(wp_x, wp_y, color=color, marker=marker, s=s, zorder=15)
 
     # Add dynamics info text for DYNAMICS_MODEL_JERK model
-    ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Align: {lalign:.2f}\nSpeed Limit: {speed_limit:.2f}"
+    ego_info = f"Speed: {ego_speed:.2f}\nLane Centering: {lcenter:.2f}\nLane Heading Error: {lane_heading_error:.2f}\nSpeed Limit: {speed_limit:.2f}"
 
     ego_info += f"\nSteering: {steering_angle:.3f}\naccel_long: {accel_long:.2f}\naccel_lat: {accel_lat:.2f}"
 
