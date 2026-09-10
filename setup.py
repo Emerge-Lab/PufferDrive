@@ -133,10 +133,14 @@ if PROFILE:
         "-g",
         "-fno-omit-frame-pointer",
         "-mno-omit-leaf-frame-pointer",
+        "-fno-inline",
+        "-fno-builtin",
     ]
     extra_link_args += [
         "-g",
         "-flto=auto",
+        "-fno-inline",
+        "-fno-builtin",
     ]
     cxx_args += [
         "-g",
