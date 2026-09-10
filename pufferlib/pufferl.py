@@ -95,6 +95,7 @@ PROFILE_OUTPUT_ENV = "PUFFER_PROFILE_OUTPUT_DIR"
 # FIFO paths: child sends enable/disable; perf acknowledges completion.
 PROFILE_CONTROL_ENV = "PUFFER_PROFILE_CONTROL"
 PROFILE_ACK_ENV = "PUFFER_PROFILE_ACK"
+PROFILE_ACK = b"ack\n\0"
 # Sim-only profiles define a cycle as a fixed number of environment steps.
 PROFILE_SIM_STEPS_PER_CYCLE = 16_384
 
@@ -1953,8 +1954,6 @@ def profile(env_name):
                 "fp",
                 "-F",
                 str(args["profile"]["perf_frequency_hz"]),
-                "-m",
-                "64M",
                 "--delay=-1",
                 f"--control=fifo:{perf_control_path},{perf_ack_path}",
                 "-o",
@@ -2010,13 +2009,13 @@ def profile(env_name):
     args["render"] = False
     args["env"]["compute_eval_metrics"] = False
     args["env"]["eval_training_render"] = False
+    args["env"]["num_agents"] = 256
     args["vec"]["backend"] = "Serial"
     args["vec"]["num_envs"] = 1
     args["vec"]["num_workers"] = 1
     args["vec"]["batch_size"] = 1
     args["train"]["render"] = False
-    if profile_mode != "sim":
-        args["train"]["minibatch_size"] = 4096
+    args["train"]["minibatch_size"] = args["env"]["num_agents"] * args["train"]["bptt_horizon"] // 16
     args["train"]["render"] = False
     args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
     validation_context = "simulation profiling" if profile_mode == "sim" else "profiling"
@@ -2025,7 +2024,7 @@ def profile(env_name):
 
     # Acknowledged FIFO commands make the trace boundaries exact.
     perf_control = open(os.environ[PROFILE_CONTROL_ENV], "w")
-    perf_ack = open(os.environ[PROFILE_ACK_ENV])
+    perf_ack = open(os.environ[PROFILE_ACK_ENV], "rb")
 
     train_seed = args["train"]["seed"]
     if train_seed is None:
@@ -2045,14 +2044,14 @@ def profile(env_name):
         # Record only simulation steps selected by trace_cycles.
         perf_control.write("enable\n")
         perf_control.flush()
-        if perf_ack.readline() != "ack\n":
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
             raise RuntimeError("perf failed to enable profiling")
         for _ in range(profile_config["trace_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
             vecenv.send(actions)
             vecenv.recv()
         perf_control.write("disable\n")
         perf_control.flush()
-        if perf_ack.readline() != "ack\n":
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
             raise RuntimeError("perf failed to disable profiling")
 
         perf_control.close()
@@ -2083,7 +2082,7 @@ def profile(env_name):
         with torch_profile(activities=activities) as prof:
             perf_control.write("enable\n")
             perf_control.flush()
-            if perf_ack.readline() != "ack\n":
+            if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
                 raise RuntimeError("perf failed to enable profiling")
             for _ in range(profile_config["trace_cycles"]):
                 if use_cuda:
@@ -2094,7 +2093,7 @@ def profile(env_name):
                 torch.cuda.synchronize()
             perf_control.write("disable\n")
             perf_control.flush()
-            if perf_ack.readline() != "ack\n":
+            if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
                 raise RuntimeError("perf failed to disable profiling")
 
     else:
@@ -2110,7 +2109,7 @@ def profile(env_name):
         with torch_profile(activities=activities) as prof:
             perf_control.write("enable\n")
             perf_control.flush()
-            if perf_ack.readline() != "ack\n":
+            if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
                 raise RuntimeError("perf failed to enable profiling")
             for _ in range(profile_config["trace_cycles"]):
                 if use_cuda:
@@ -2125,7 +2124,7 @@ def profile(env_name):
                 torch.cuda.synchronize()
             perf_control.write("disable\n")
             perf_control.flush()
-            if perf_ack.readline() != "ack\n":
+            if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
                 raise RuntimeError("perf failed to disable profiling")
 
     perf_control.close()
