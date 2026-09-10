@@ -1605,21 +1605,28 @@ self.onmessage = async event => {
         function sampleAgentRail(points, distanceMeters) {
             if (!points.length) return null;
             let traveledMeters = 0;
+            let segmentStartHeading = points[0].h;
             for (let pointIdx=0; pointIdx<points.length-1; pointIdx++) {
                 const deltaX = points[pointIdx+1].x - points[pointIdx].x;
                 const deltaY = points[pointIdx+1].y - points[pointIdx].y;
                 const segmentMeters = Math.hypot(deltaX, deltaY);
-                if (traveledMeters + segmentMeters < distanceMeters) { traveledMeters += segmentMeters; continue; }
+                if (traveledMeters + segmentMeters < distanceMeters) {
+                    traveledMeters += segmentMeters;
+                    if (segmentMeters > 1e-6) segmentStartHeading = points[pointIdx+1].h;
+                    continue;
+                }
                 const fraction = segmentMeters > 1e-6 ? Math.max(0, Math.min(1, (distanceMeters-traveledMeters)/segmentMeters)) : 0;
-                return {x:points[pointIdx].x+fraction*deltaX, y:points[pointIdx].y+fraction*deltaY, h:segmentMeters>1e-6 ? Math.atan2(deltaY,deltaX) : points[pointIdx].h};
+                const segmentEndHeading = segmentMeters > 1e-6 ? points[pointIdx+1].h : segmentStartHeading;
+                const headingDelta = Math.atan2(Math.sin(segmentEndHeading-segmentStartHeading),Math.cos(segmentEndHeading-segmentStartHeading));
+                return {x:points[pointIdx].x+fraction*deltaX, y:points[pointIdx].y+fraction*deltaY, h:segmentStartHeading+fraction*headingDelta};
             }
             if (points.length === 1) return {x:points[0].x+distanceMeters*Math.cos(points[0].h), y:points[0].y+distanceMeters*Math.sin(points[0].h), h:points[0].h};
             const lastIdx = points.length-1;
             const deltaX = points[lastIdx].x-points[lastIdx-1].x;
             const deltaY = points[lastIdx].y-points[lastIdx-1].y;
-            const heading = Math.hypot(deltaX,deltaY)>1e-6 ? Math.atan2(deltaY,deltaX) : points[lastIdx].h;
+            const pathHeading = Math.hypot(deltaX,deltaY)>1e-6 ? Math.atan2(deltaY,deltaX) : points[lastIdx].h;
             const overshootMeters = Math.max(0, distanceMeters-traveledMeters);
-            return {x:points[lastIdx].x+overshootMeters*Math.cos(heading), y:points[lastIdx].y+overshootMeters*Math.sin(heading), h:heading};
+            return {x:points[lastIdx].x+overshootMeters*Math.cos(pathHeading), y:points[lastIdx].y+overshootMeters*Math.sin(pathHeading), h:segmentStartHeading};
         }
         function counterfactualAgent(base, point, speedMps, color, braking) {
             return {...base, x:point.x, y:point.y, h:point.h, s:Math.abs(speedMps), vx:speedMps*Math.cos(point.h), vy:speedMps*Math.sin(point.h), stopped:Math.abs(speedMps)<=1e-6, al:braking ? -Number(avoidability.constants.braking_deceleration) : 0, c:color, diagnostic:true, braking};

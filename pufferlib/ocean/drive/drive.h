@@ -2411,19 +2411,23 @@ static void target_brake_path_sample(
     float path_x[TARGET_TRAJECTORY_HISTORY_LEN + 1];
     float path_y[TARGET_TRAJECTORY_HISTORY_LEN + 1];
     float path_z[TARGET_TRAJECTORY_HISTORY_LEN + 1];
+    float path_heading[TARGET_TRAJECTORY_HISTORY_LEN + 1];
     int path_point_count = 0;
     for (int history_idx = history_start_idx; history_idx < TARGET_TRAJECTORY_HISTORY_LEN; history_idx++) {
         path_x[path_point_count] = target->trajectory_hist_x[history_idx];
         path_y[path_point_count] = target->trajectory_hist_y[history_idx];
         path_z[path_point_count] = target->trajectory_hist_z[history_idx];
+        path_heading[path_point_count] = target->trajectory_hist_heading[history_idx];
         path_point_count++;
     }
     path_x[path_point_count] = target->sim_x;
     path_y[path_point_count] = target->sim_y;
     path_z[path_point_count] = target->sim_z;
+    path_heading[path_point_count] = target->sim_heading;
     path_point_count++;
 
     float traveled_meters = 0.0f;
+    float segment_start_heading = normalize_heading(path_heading[0]);
     for (int path_idx = 0; path_idx < path_point_count - 1; path_idx++) {
         float delta_x = path_x[path_idx + 1] - path_x[path_idx];
         float delta_y = path_y[path_idx + 1] - path_y[path_idx];
@@ -2431,6 +2435,9 @@ static void target_brake_path_sample(
         float segment_length_meters = sqrtf(delta_x * delta_x + delta_y * delta_y);
         if (traveled_meters + segment_length_meters < distance_meters) {
             traveled_meters += segment_length_meters;
+            if (segment_length_meters > 1e-6f) {
+                segment_start_heading = normalize_heading(path_heading[path_idx + 1]);
+            }
             continue;
         }
         float segment_fraction = segment_length_meters > 1e-6f
@@ -2439,7 +2446,9 @@ static void target_brake_path_sample(
         *sample_x = path_x[path_idx] + segment_fraction * delta_x;
         *sample_y = path_y[path_idx] + segment_fraction * delta_y;
         *sample_z = path_z[path_idx] + segment_fraction * delta_z;
-        *sample_heading = segment_length_meters > 1e-6f ? atan2f(delta_y, delta_x) : target->sim_heading;
+        float segment_end_heading = segment_length_meters > 1e-6f ? path_heading[path_idx + 1] : segment_start_heading;
+        float heading_delta = normalize_heading(segment_end_heading - segment_start_heading);
+        *sample_heading = normalize_heading(segment_start_heading + segment_fraction * heading_delta);
         return;
     }
 
@@ -2447,12 +2456,13 @@ static void target_brake_path_sample(
     float final_delta_x = path_x[last_path_idx] - path_x[last_path_idx - 1];
     float final_delta_y = path_y[last_path_idx] - path_y[last_path_idx - 1];
     float final_segment_length = sqrtf(final_delta_x * final_delta_x + final_delta_y * final_delta_y);
-    float final_heading = final_segment_length > 1e-6f ? atan2f(final_delta_y, final_delta_x) : target->sim_heading;
+    float final_path_heading
+        = final_segment_length > 1e-6f ? atan2f(final_delta_y, final_delta_x) : path_heading[last_path_idx];
     float overshoot_meters = distance_meters - traveled_meters;
-    *sample_x = path_x[last_path_idx] + overshoot_meters * cosf(final_heading);
-    *sample_y = path_y[last_path_idx] + overshoot_meters * sinf(final_heading);
+    *sample_x = path_x[last_path_idx] + overshoot_meters * cosf(final_path_heading);
+    *sample_y = path_y[last_path_idx] + overshoot_meters * sinf(final_path_heading);
     *sample_z = path_z[last_path_idx];
-    *sample_heading = final_heading;
+    *sample_heading = segment_start_heading;
 }
 
 static bool target_braking_avoids_collision(
