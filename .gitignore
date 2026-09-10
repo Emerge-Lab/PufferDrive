@@ -224,3 +224,6 @@ episode_metrics
 
 # King folder
 king/
+
+# ReGentS upstream reference checkout (not part of this repo)
+ReGentS/
