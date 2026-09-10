@@ -88,6 +88,44 @@ HIDDEN_DASHBOARD_METRICS = {
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
 
+TARGET_REWARD_CONDITIONING_BOUNDS = (
+    (2.0, 12.0, None),
+    (0.0, 20.0, None),
+    (0.0, 3.0, None),
+    (0.0, 3.0, None),
+    (0.0, 0.1, 1e-5),
+    (2.5e-4, 2.5e-2, 2.5e-4),
+    (0.0, 1.0, None),
+    (2.5e-4, 7.5e-3, 2.5e-4),
+    (-0.5, 0.5, None),
+    (0.0, 5e-3, None),
+    (2.5e-4, 7.5e-3, 2.5e-4),
+    (0.0, 1.0, None),
+    (0.0, 5e-5, None),
+    (0.0, 1.0, None),
+    (0.8, 1.25, None),
+    (0.8, 1.25, None),
+    (0.666, 1.5, None),
+    (0.666, 1.5, None),
+)
+
+TARGET_REWARD_CONDITIONING_FIELDS = (
+    "goal_radius",
+    "goal_speed",
+    "reward_collision",
+    "reward_offroad",
+    "reward_comfort",
+    "reward_lane_align",
+    "reward_vel_align",
+    "reward_lane_center",
+    "reward_center_bias",
+    "reward_velocity",
+    "reward_reverse",
+    "reward_stop_line",
+    "reward_timestep",
+    "reward_overspeed",
+)
+
 
 def environment_metric_log_key(metric_name):
     if metric_name.startswith("sdc_reward_components/"):
@@ -1692,7 +1730,39 @@ def _prepare_target_policy_args(args, target_policy_path):
         if section in target_config and isinstance(target_config[section], dict):
             target_args[section].update(target_config[section])
 
+    target_args["_target_policy_env_config"] = target_config.get("env", {})
+
     return target_args
+
+
+def _fixed_target_reward_conditioning(live_env, target_env_config):
+    values = [
+        float(target_env_config.get(field, getattr(live_env, field))) for field in TARGET_REWARD_CONDITIONING_FIELDS
+    ]
+    values.extend((1.0, 1.0, 1.0, 1.0))
+    use_log_scale = bool(target_env_config.get("reward_log_sampling", False))
+    normalized = []
+    for value, (minimum, maximum, log_minimum) in zip(values, TARGET_REWARD_CONDITIONING_BOUNDS):
+        if use_log_scale and log_minimum is not None:
+            minimum = log_minimum
+            value = np.log(np.clip(value, minimum, maximum))
+            minimum = np.log(minimum)
+            maximum = np.log(maximum)
+        coefficient = np.clip((value - minimum) / (maximum - minimum), 0.0, 1.0)
+        normalized.append(2.0 * coefficient - 1.0)
+    return tuple(normalized)
+
+
+def _make_target_policy_env_view(live_env, target_args):
+    target_env = copy.copy(live_env)
+    target_env_config = target_args.get("_target_policy_env_config", {})
+    target_env.live_num_reward_coefs = live_env.num_reward_coefs
+    target_env.reward_conditioning = bool(target_env_config.get("reward_conditioning", live_env.reward_conditioning))
+    target_env.num_reward_coefs = len(TARGET_REWARD_CONDITIONING_BOUNDS) if target_env.reward_conditioning else 0
+    target_env.fixed_reward_conditioning = (
+        _fixed_target_reward_conditioning(live_env, target_env_config) if target_env.reward_conditioning else ()
+    )
+    return target_env
 
 
 def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop_fn=None):
@@ -1780,7 +1850,8 @@ def train(env_name, args=None, vecenv=None, policy=None, logger=None, early_stop
     elif target_policy_path is not None:
         target_args = _prepare_target_policy_args(args, target_policy_path)
         target_args["policy_name"] = "TargetDrive"
-        target_policy = load_policy(target_args, vecenv, env_name)
+        target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
+        target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
         if base_policy(target_policy).is_continuous != base_policy(policy).is_continuous:
             raise pufferlib.APIUsageError("Target and adversarial policies must use the same action representation")
         for parameter in target_policy.parameters():
@@ -2382,7 +2453,8 @@ def _run_eval_rollout(
             if "target_policy" not in evaluation_policy_cache:
                 target_args = _prepare_target_policy_args(args, target_policy_path)
                 target_args["policy_name"] = "TargetDrive"
-                target_policy = load_policy(target_args, vecenv, env_name)
+                target_env = _make_target_policy_env_view(vecenv.driver_env, target_args)
+                target_policy = load_policy(target_args, vecenv, env_name, policy_env=target_env)
                 target_policy.eval()
                 target_policy_forward_eval = target_policy.forward_eval
                 if args["train"]["compile"]:
@@ -2706,19 +2778,20 @@ def load_env(env_name, args, seed=None):
     return pufferlib.vector.make(make_env, env_kwargs=args["env"], **vec_kwargs)
 
 
-def load_policy(args, vecenv, env_name=""):
+def load_policy(args, vecenv, env_name="", policy_env=None):
     package = args["package"]
     module_name = "pufferlib.ocean" if package == "ocean" else f"pufferlib.environments.{package}"
     env_module = importlib.import_module(module_name)
 
     device = torch_device(args["train"]["device"])
     policy_cls = getattr(env_module.torch, args["policy_name"])
-    policy = policy_cls(vecenv.driver_env, **args["policy"])
+    policy_env = policy_env or vecenv.driver_env
+    policy = policy_cls(policy_env, **args["policy"])
 
     rnn_name = args["rnn_name"]
     if rnn_name is not None:
         rnn_cls = getattr(env_module.torch, args["rnn_name"])
-        policy = rnn_cls(vecenv.driver_env, policy, **args["rnn"])
+        policy = rnn_cls(policy_env, policy, **args["rnn"])
 
     policy = policy.to(device)
 
