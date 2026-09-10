@@ -15,6 +15,7 @@ import yaml
 import pufferlib
 from pufferlib import pufferl
 from pufferlib.config_schema import validate_puffer_drive_config
+from pufferlib.ocean.drive import binding
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.evaluation_utils import evaluation_utils as drive_benchmark
 from pufferlib.ocean.evaluation_utils import eval_replay as drive_eval_replay
@@ -394,7 +395,24 @@ def _read_replay_header(replay_path):
     return json.loads(payload[4 : 4 + header_length])
 
 
-def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch):
+def _read_replay_float32_chunk(replay_path, chunk_name):
+    payload = zlib.decompress(replay_path.read_bytes())
+    header_length = struct.unpack_from("<I", payload)[0]
+    header = json.loads(payload[4 : 4 + header_length])
+    chunk = header["chunks"][chunk_name]
+    assert chunk["dtype"] == "float32"
+    data_start = 4 + header_length + (-(4 + header_length) % 4)
+    values = np.frombuffer(
+        payload,
+        dtype=np.float32,
+        count=chunk["nbytes"] // np.dtype(np.float32).itemsize,
+        offset=data_start + chunk["offset"],
+    )
+    return values.reshape(chunk["shape"])
+
+
+@pytest.mark.parametrize("capture_observations", [False, True], ids=["without_observations", "with_observations"])
+def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch, capture_observations):
     args = _replay_render_args()
     map_seed_pairs = [(0, 1234), (0, 5678)]
     worker_env_kwargs, total_steps = drive_benchmark._plan_failure_replay_workers(
@@ -421,7 +439,7 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         expected_episodes=2,
         policy=ZeroPolicy(action_count=12),
         replay_output_dir=replay_output_dir,
-        capture_observations=True,
+        capture_observations=capture_observations,
     )
 
     assert len(multiprocessing_calls) == 1
@@ -436,22 +454,43 @@ def test_multiprocess_replay_capture_renders_zlib_to_html(tmp_path, monkeypatch)
         "agent_i32",
         "metrics_f32",
         "traffic_i16",
-        "obs",
+        "goals_f32",
+        "rewards_f32",
+        "coefs_f32",
         "raw_action",
         "policy_probs",
     }
+    if capture_observations:
+        required_chunks.add("obs")
     for replay_path in replay_paths:
         header = _read_replay_header(replay_path)
         assert header["frames"] == 64
         assert header["active_count"] == 1
-        assert header["obs_dim"] > 0
+        assert (header["obs_dim"] > 0) is capture_observations
         assert required_chunks <= set(header["chunks"])
+        assert header["agent_goal_radius_field"] == 12
+        assert header["chunks"]["agent_f32"]["shape"][2] == 13
+        assert header["chunks"]["rewards_f32"]["shape"][2] == 14
+        agent_frames = _read_replay_float32_chunk(replay_path, "agent_f32")
+        assert np.any(agent_frames[..., header["agent_goal_radius_field"]] > 0.0)
+        rewards = _read_replay_float32_chunk(replay_path, "rewards_f32")
+        assert np.any(rewards[..., 0] != 0.0)
+        np.testing.assert_allclose(rewards[..., 0], rewards[..., 1:].sum(axis=-1), atol=1e-4)
+
+        coefs = _read_replay_float32_chunk(replay_path, "coefs_f32")
+        assert header["chunks"]["coefs_f32"]["shape"][2] == binding.NUM_REWARD_COEFS
+        goal_radius_coefs = coefs[..., 0]
+        agent_goal_radii = agent_frames[..., header["agent_goal_radius_field"]]
+        np.testing.assert_allclose(goal_radius_coefs, agent_goal_radii, atol=1e-6)
 
     render_dir = Path(drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=True))
     rendered_pages = sorted(path for path in render_dir.glob("*.html") if path.name != "index.html")
     assert len(rendered_pages) == 2
     assert (render_dir / "index.html").is_file()
-    assert all('class="payload-chunk"' in page.read_text() for page in rendered_pages)
+    rendered_html = [page.read_text() for page in rendered_pages]
+    assert all('class="payload-chunk"' in html for html in rendered_html)
+    assert all('id="reward-grid"' in html and '"return (cum)"' in html for html in rendered_html)
+    assert all("ctx.arc(g.x,g.y,g.radius" in html for html in rendered_html)
     assert all(replay_path.is_file() for replay_path in replay_paths)
 
     drive_eval_replay._render_eval_replays(summaries, str(tmp_path), keep_zlib_replays=False)

@@ -1739,8 +1739,15 @@ static PyObject *my_shared(PyObject *self, PyObject *args, PyObject *kwargs) {
 
         int offset = 0;
         for (int i = 0; i < env_count; i++) {
+            int map_id;
+            if (eval_mode) {
+                map_id = use_eval_map_indices ? (int) PyLong_AsLong(PyList_GetItem(eval_map_indices, i))
+                                              : (s_map_counter + i) % num_maps;
+            } else {
+                map_id = rng_below(&shared_rng, num_maps);
+            }
             PyList_SetItem(agent_offsets, i, PyLong_FromLong(offset));
-            PyList_SetItem(map_ids_list, i, PyLong_FromLong(rng_below(&shared_rng, num_maps)));
+            PyList_SetItem(map_ids_list, i, PyLong_FromLong(map_id));
             offset += agent_counts[i];
         }
         PyList_SetItem(agent_offsets, env_count, PyLong_FromLong(offset));
