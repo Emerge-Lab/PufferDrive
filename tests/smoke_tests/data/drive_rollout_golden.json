@@ -22,9 +22,11 @@
     "reward_components/overspeed": 0.0,
     "reward_components/red_light": -0.0007146410954495271,
     "reward_components/reverse": -0.010871957583973805,
+    "reward_components/stop_sign": 0.0,
     "reward_components/timestep": -8.810036033537471e-05,
     "reward_components/velocity": 0.00020452999203068127,
     "score": 0.0,
+    "stop_sign_violation_rate": 0.0,
     "total_distance_travelled_sum": 131.91801204681397,
     "total_infraction_count": 10.55,
     "velocity_progress_sum": 0.019642803197105724
