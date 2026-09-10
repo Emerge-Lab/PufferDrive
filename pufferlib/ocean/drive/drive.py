@@ -947,22 +947,3 @@ class Drive(pufferlib.PufferEnv):
             rewards_f32,
             coefs_f32,
         )
-
-
-def test_performance(timeout=10, atn_cache=1024, num_agents=1024):
-    import time
-
-    env = Drive(num_agents=num_agents)
-    env.reset()
-    tick = 0
-    num_agents = 1024
-    actions = np.random.randint(0, env.single_action_space.n, (atn_cache, num_agents))
-
-    start = time.time()
-    while time.time() - start < timeout:
-        atn = actions[tick % atn_cache]
-        env.step(atn)
-        tick += 1
-
-    print(f"SPS: {num_agents * tick / (time.time() - start)}")
-    env.close()

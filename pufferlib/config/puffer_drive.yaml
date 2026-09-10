@@ -28,6 +28,13 @@ policy_name: Drive
 # Options: Recurrent, None (null)
 rnn_name: null
 max_suggestion_cost: 3600
+profile:
+  # Options: sim, training, all
+  mode: all
+  output_dir: profiles
+  warmup_cycles: 1
+  trace_cycles: 1
+  perf_frequency_hz: 99
 vec:
   backend: Multiprocessing
   num_envs: 20

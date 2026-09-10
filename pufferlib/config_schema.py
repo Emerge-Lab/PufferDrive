@@ -213,6 +213,12 @@ class ActionSelection(Enum):
     mean = 2
 
 
+class ProfileMode(Enum):
+    sim = 0
+    training = 1
+    all = 2
+
+
 @dataclass
 class VectorConfig:
     backend: VectorBackend = MISSING
@@ -221,6 +227,15 @@ class VectorConfig:
     batch_size: int | str | None = MISSING
     zero_copy: bool = MISSING
     seed: int | None = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+
+
+@dataclass
+class ProfileConfig:
+    mode: ProfileMode = MISSING
+    output_dir: str = _constrained_field(NONEMPTY_STRING_CONSTRAINT)
+    warmup_cycles: int = _constrained_field(NONNEGATIVE_INT_CONSTRAINT)
+    trace_cycles: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    perf_frequency_hz: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
 
 
 @dataclass
@@ -461,6 +476,7 @@ class PufferDriveConfig:
     policy_name: PolicyName = MISSING
     rnn_name: RNNName | None = MISSING
     max_suggestion_cost: int = _constrained_field(POSITIVE_INT_CONSTRAINT)
+    profile: ProfileConfig = MISSING
     vec: VectorConfig = MISSING
     env: DriveEnvConfig = MISSING
     policy: DrivePolicyConfig = MISSING
@@ -609,7 +625,7 @@ def _validate_cross_field_constraints(config, context):
         not isinstance(evaluation_benchmarks, str) or not evaluation_benchmarks.strip()
     ):
         _raise_config_error(context, "train.evaluation_benchmarks", "must be a non-empty string")
-    if not context.startswith("evaluation"):
+    if not context.startswith("evaluation") and context != "simulation profiling":
         for field_name in ("batch_size", "bptt_horizon"):
             if train[field_name] != "auto":
                 _validate_value_constraint(train[field_name], POSITIVE_INT_CONSTRAINT, context, f"train.{field_name}")

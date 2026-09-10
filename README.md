@@ -129,6 +129,26 @@ puffer train puffer_drive train.device=cpu vec.backend=Serial env.num_agents=64 
 torchrun --standalone --nnodes=1 --nproc-per-node=6 -m pufferlib.pufferl train puffer_drive
 ```
 
+## Profile
+
+Profiling requires Linux and `perf`. Select simulation, PPO training, or both
+with `profile.mode=sim`, `training`, or `all`:
+
+```bash
+# Rebuild native extensions with symbols and frame pointers
+PROFILE=1 python setup.py build_ext --inplace --force
+
+puffer profile puffer_drive profile.mode=all \
+    profile.warmup_cycles=1 profile.trace_cycles=1
+```
+
+Warmup cycles run before recording. Set `profile.warmup_cycles=0` to capture
+the first cycle after setup; environment and policy initialization remain
+excluded. Results are written to a timestamped directory under
+`profile.output_dir` (default `profiles/`). `perf.data` and
+`profile.linux-perf.txt` contain native samples; non-sim modes also write
+`torch_ops.txt` and a Perfetto-compatible `torch_trace.json`.
+
 ## Eval
 
 The eval command loads one or more named benchmarks from the benchmark YAML and

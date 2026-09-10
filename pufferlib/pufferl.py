@@ -20,6 +20,8 @@ import random
 import shutil
 import subprocess
 import importlib
+import platform
+import shlex
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict, deque
@@ -86,6 +88,16 @@ HIDDEN_DASHBOARD_METRICS = {
 # Metric key prefixes for benchmark results. Training evaluation logs a step series;
 # a standalone eval writes run-level summaries, so the two never share a key.
 TRAINING_EVAL_KEY_PREFIX = "eval_"
+
+# Environment variables coordinate the perf launcher and profiled child.
+PROFILE_SUBPROCESS_ENV = "PUFFER_PROFILE_SUBPROCESS"
+PROFILE_OUTPUT_ENV = "PUFFER_PROFILE_OUTPUT_DIR"
+# FIFO paths: child sends enable/disable; perf acknowledges completion.
+PROFILE_CONTROL_ENV = "PUFFER_PROFILE_CONTROL"
+PROFILE_ACK_ENV = "PUFFER_PROFILE_ACK"
+PROFILE_ACK = b"ack\n\0"
+# Sim-only profiles define a cycle as a fixed number of environment steps.
+PROFILE_SIM_STEPS_PER_CYCLE = 16_384
 
 
 def torch_device(device):
@@ -1909,24 +1921,230 @@ def controlled_exp(env_name, args=None):
     print(f"\n✓ Completed all {len(combinations)} experiments")
 
 
-def profile(args=None, env_name=None, vecenv=None, policy=None):
-    args = load_config()
-    vecenv = vecenv or load_env(env_name, args)
-    policy = policy or load_policy(args, vecenv)
+def profile(env_name):
+    args = load_config(env_name)
+    # Parent starts perf disabled, then reruns this command as the profiled child.
+    if os.environ.get(PROFILE_SUBPROCESS_ENV) != "1":
+        if platform.system() != "Linux":
+            raise pufferlib.APIUsageError("Profiling requires Linux perf")
+        perf = shutil.which("perf")
+        if perf is None:
+            raise pufferlib.APIUsageError("Profiling requires the Linux perf executable")
 
-    train_config = dict(**args["train"], env=args["env_name"], tag=args["tag"])
-    pufferl = PuffeRL(train_config, vecenv, policy, neptune=args["neptune"], wandb=args["wandb"])
+        output_root = os.path.abspath(args["profile"]["output_dir"])
+        output_dir = os.path.join(output_root, datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+        os.makedirs(output_dir)
+        perf_data_path = os.path.join(output_dir, "perf.data")
+        perf_text_path = os.path.join(output_dir, "profile.linux-perf.txt")
+        perf_report_path = os.path.join(output_dir, "profile.linux-perf.report.txt")
+        perf_control_path = os.path.join(output_dir, "perf.control")
+        perf_ack_path = os.path.join(output_dir, "perf.ack")
+        os.mkfifo(perf_control_path)
+        os.mkfifo(perf_ack_path)
+        subprocess_env = os.environ.copy()
+        subprocess_env[PROFILE_SUBPROCESS_ENV] = "1"
+        subprocess_env[PROFILE_OUTPUT_ENV] = output_dir
+        subprocess_env[PROFILE_CONTROL_ENV] = perf_control_path
+        subprocess_env[PROFILE_ACK_ENV] = perf_ack_path
+        subprocess.run(
+            [
+                perf,
+                "record",
+                "-e",
+                "cpu-clock:u",
+                "--call-graph",
+                "fp",
+                "-F",
+                str(args["profile"]["perf_frequency_hz"]),
+                "--delay=-1",
+                f"--control=fifo:{perf_control_path},{perf_ack_path}",
+                "-o",
+                perf_data_path,
+                "--",
+                sys.executable,
+                "-m",
+                "pufferlib.pufferl",
+                "profile",
+                env_name,
+                *sys.argv[1:],
+            ],
+            check=True,
+            env=subprocess_env,
+        )
+        os.unlink(perf_control_path)
+        os.unlink(perf_ack_path)
+        perf_script = subprocess.run(
+            [perf, "script", "--inline", "-i", perf_data_path], check=True, capture_output=True, text=True
+        ).stdout
+        native_profile_blocks = []
+        for block in perf_script.split("\n\n"):
+            lines = block.splitlines()
+            native_line_indices = [
+                line_idx for line_idx, line in enumerate(lines) if "/pufferlib/ocean/drive/binding." in line
+            ]
+            if native_line_indices:
+                native_profile_blocks.append("\n".join(lines[: native_line_indices[-1] + 1]))
+        with open(perf_text_path, "w") as perf_text_file:
+            perf_text_file.write("\n\n".join(native_profile_blocks) + "\n")
+        perf_report = subprocess.run(
+            [
+                perf,
+                "report",
+                "--stdio",
+                "--show-nr-samples",
+                "--show-total-period",
+                "--percent-limit",
+                "0",
+                "--parent",
+                "^c_step$|^c_reset$|^init$",
+                "--exclude-other",
+                "--call-graph",
+                "graph,0,caller,function,percent",
+                "-i",
+                perf_data_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        with open(perf_report_path, "w") as perf_report_file:
+            perf_report_file.write("# Children: inclusive sampled CPU time. Self: exclusive sampled CPU time.\n")
+            perf_report_file.write("# Period: sampled CPU time in nanoseconds.\n")
+            perf_report_file.write(perf_report)
 
-    from torch.profiler import profile, record_function, ProfilerActivity
+        quoted_perf_data = shlex.quote(perf_data_path)
+        quoted_perf_text = shlex.quote(perf_text_path)
+        quoted_perf_report = shlex.quote(perf_report_path)
+        print(f"Profile artifacts: {output_dir}")
+        print(f"Speedscope C profile: {quoted_perf_text}")
+        print(f"C inclusive/self time report: {quoted_perf_report}")
+        print(f"perf report: perf report -i {quoted_perf_data}")
+        print(f"perf annotate: perf annotate -i {quoted_perf_data} --symbol c_step")
+        if args["profile"]["mode"] != "sim":
+            quoted_trace = shlex.quote(os.path.join(output_dir, "torch_trace.json"))
+            print(f"Perfetto PyTorch trace: {quoted_trace}")
+        print("Source-line timings are samples; cold or optimized-away lines may have no samples.")
 
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-        with record_function("model_inference"):
-            for _ in range(10):
-                stats = pufferl.evaluate()
-                pufferl.train()
+        return
 
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    prof.export_chrome_trace("trace.json")
+    # Child warmup remains outside the native recording window.
+    output_dir = os.environ[PROFILE_OUTPUT_ENV]
+    profile_config = args["profile"]
+    profile_mode = profile_config["mode"]
+    args["wandb"] = False
+    args["neptune"] = False
+    args["tb"] = False
+    args["load_id"] = None
+    args["render"] = False
+    args["env"]["compute_eval_metrics"] = False
+    args["env"]["eval_training_render"] = False
+    args["env"]["num_agents"] = 256
+    args["vec"]["backend"] = "Serial"
+    args["vec"]["num_envs"] = 1
+    args["vec"]["num_workers"] = 1
+    args["vec"]["batch_size"] = 1
+    args["train"]["render"] = False
+    args["train"]["minibatch_size"] = args["env"]["num_agents"] * args["train"]["bptt_horizon"] // 16
+    args["train"]["checkpoint_interval"] = profile_config["warmup_cycles"] + profile_config["trace_cycles"] + 1
+    validation_context = "simulation profiling" if profile_mode == "sim" else "profiling"
+    validate_puffer_drive_config(args, validation_context)
+    validate_puffer_drive_resources(args, "profiling")
+
+    # Acknowledged FIFO commands make the trace boundaries exact.
+    perf_control = open(os.environ[PROFILE_CONTROL_ENV], "w")
+    perf_ack = open(os.environ[PROFILE_ACK_ENV], "rb")
+
+    train_seed = args["train"]["seed"]
+    if train_seed is None:
+        train_seed = time.time_ns() & 0xFFFFFFFF
+    torch_seed, env_seed = derive_rank_seeds(args["vec"]["seed"], train_seed, 1, 0)
+
+    if profile_mode == "sim":
+        perf_control.write("enable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to enable setup profiling")
+        vecenv = load_env(env_name, args, seed=env_seed)
+        vecenv.async_reset(env_seed)
+        vecenv.recv()
+        perf_control.write("disable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to disable setup profiling")
+        actions = np.zeros(vecenv.action_space.shape, dtype=vecenv.action_space.dtype)
+
+        for _ in range(profile_config["warmup_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
+            vecenv.send(actions)
+            vecenv.recv()
+        profiler = contextlib.nullcontext()
+    else:
+        from torch.profiler import ProfilerActivity, profile as torch_profile, record_function
+
+        torch.manual_seed(torch_seed)
+        vecenv = load_env(env_name, args, seed=env_seed)
+        policy = load_policy(args, vecenv, env_name)
+        train_config = dict(**args["train"], env=env_name, eval=args.get("eval", {}), run_name=args["run_name"])
+        pufferl = PuffeRL(train_config, vecenv, policy)
+        use_cuda = is_cuda_device(train_config["device"])
+        profile_rollouts = profile_mode != "training"
+        activities = [ProfilerActivity.CPU]
+        if use_cuda:
+            activities.append(ProfilerActivity.CUDA)
+
+        if not profile_rollouts:
+            pufferl.evaluate()
+        for _ in range(profile_config["warmup_cycles"]):
+            if use_cuda and profile_rollouts:
+                torch.compiler.cudagraph_mark_step_begin()
+            if profile_rollouts:
+                pufferl.evaluate()
+            if use_cuda:
+                torch.compiler.cudagraph_mark_step_begin()
+            pufferl.train()
+        profiler = torch_profile(activities=activities)
+
+    # Native and PyTorch profilers cover the same selected cycles.
+    with profiler as prof:
+        perf_control.write("enable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to enable profiling")
+        if profile_mode == "sim":
+            for _ in range(profile_config["trace_cycles"] * PROFILE_SIM_STEPS_PER_CYCLE):
+                vecenv.send(actions)
+                vecenv.recv()
+        else:
+            for _ in range(profile_config["trace_cycles"]):
+                if use_cuda and profile_rollouts:
+                    torch.compiler.cudagraph_mark_step_begin()
+                if profile_rollouts:
+                    with record_function("rollout"):
+                        pufferl.evaluate()
+                if use_cuda:
+                    torch.compiler.cudagraph_mark_step_begin()
+                with record_function("ppo_update"):
+                    pufferl.train()
+            if use_cuda:
+                torch.cuda.synchronize()
+        perf_control.write("disable\n")
+        perf_control.flush()
+        if perf_ack.read(len(PROFILE_ACK)) != PROFILE_ACK:
+            raise RuntimeError("perf failed to disable profiling")
+
+    perf_control.close()
+    perf_ack.close()
+    vecenv.close()
+    if profile_mode == "sim":
+        return
+
+    pufferl.utilization.stop()
+
+    torch_ops_path = os.path.join(output_dir, "torch_ops.txt")
+    with open(torch_ops_path, "w") as torch_ops_file:
+        sort_by = "self_cuda_time_total" if use_cuda else "self_cpu_time_total"
+        torch_ops_file.write(prof.key_averages().table(sort_by=sort_by, row_limit=-1))
+        torch_ops_file.write("\n")
+    prof.export_chrome_trace(os.path.join(output_dir, "torch_trace.json"))
 
 
 def export(args=None, env_name=None, vecenv=None, policy=None, path=None, silent=False):

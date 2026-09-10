@@ -1,5 +1,7 @@
 # Debug command:
 #    DEBUG=1 python setup.py build_ext --inplace --force
+# Profiling command:
+#    PROFILE=1 python setup.py build_ext --inplace --force
 
 from setuptools import find_namespace_packages, setup, Extension
 import numpy
@@ -20,6 +22,7 @@ BUILD_CUDA_EXT = bool(CUDA_HOME or ROCM_HOME)
 
 # Build with DEBUG=1 to enable debug symbols
 DEBUG = os.getenv("DEBUG", "0") == "1"
+PROFILE = os.getenv("PROFILE", "0") == "1"
 NO_OCEAN = os.getenv("NO_OCEAN", "0") == "1"
 NO_TRAIN = os.getenv("NO_TRAIN", "0") == "1"
 
@@ -86,7 +89,7 @@ cxx_args = [
 ]
 nvcc_args = []
 
-if DEBUG:
+if DEBUG and not PROFILE:
     # Apple clang has no LeakSanitizer; -fsanitize=leak is a hard error there.
     if platform.system() == "Darwin":
         sanitize_flag = "-fsanitize=address,undefined,bounds,pointer-overflow"
@@ -113,7 +116,7 @@ if DEBUG:
 else:
     extra_compile_args += [
         "-O2",
-        "-flto",
+        "-flto=auto" if PROFILE else "-flto",
     ]
     extra_link_args += [
         "-O2",
@@ -123,6 +126,31 @@ else:
     ]
     nvcc_args += [
         "-O3",
+    ]
+
+if PROFILE:
+    extra_compile_args += [
+        "-g",
+        "-fno-omit-frame-pointer",
+        "-mno-omit-leaf-frame-pointer",
+        "-fno-inline",
+        "-fno-builtin",
+    ]
+    extra_link_args += [
+        "-g",
+        "-flto=auto",
+        "-fno-inline",
+        "-fno-builtin",
+    ]
+    cxx_args += [
+        "-g",
+        "-fno-omit-frame-pointer",
+        "-mno-omit-leaf-frame-pointer",
+    ]
+    nvcc_args += [
+        "-lineinfo",
+        "-Xcompiler=-fno-omit-frame-pointer",
+        "-Xcompiler=-mno-omit-leaf-frame-pointer",
     ]
 
 system = platform.system()
