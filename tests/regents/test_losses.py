@@ -57,7 +57,7 @@ def _drivable_raster():
 
 
 def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
-    """Reference squared-center reductions, pair masking, and road time mean."""
+    """Paper box-distance reductions, pair masking, and road time mean."""
     default_config = ReGentSCostConfig()
     assert default_config.ego_collision_weight == 1.0
     assert default_config.background_collision_weight == 5.0
@@ -77,7 +77,18 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
         torch.tensor([[True, False, False, False]]),
         torch.tensor([[False, True, True, False]]),
     )
-    torch.testing.assert_close(ego_cost, torch.tensor([49.0], dtype=torch.float64))
+    torch.testing.assert_close(ego_cost, torch.tensor([3.0], dtype=torch.float64))
+
+    # Box extent, not center distance, determines which adversary wins the hard minimum.
+    size_sensitive_cost = ego_background_collision_cost(
+        _states([0.0, 8.0, 6.0], time_count=1),
+        torch.ones((1, 3, 1), dtype=torch.bool),
+        torch.tensor([[4.0, 10.0, 2.0]], dtype=torch.float64),
+        torch.full((1, 3), 2.0, dtype=torch.float64),
+        torch.tensor([[True, False, False]]),
+        torch.tensor([[False, True, True]]),
+    )
+    torch.testing.assert_close(size_sensitive_cost, torch.tensor([1.0], dtype=torch.float64))
 
     two_step_valid = torch.ones((1, 3, 2), dtype=torch.bool)
     three_length, three_width = _dimensions(3)
@@ -92,7 +103,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             background_mask,
             truncation_meters=1.25,
         ),
-        torch.tensor([-1.5625], dtype=torch.float64),
+        torch.tensor([-1.25], dtype=torch.float64),
     )
     torch.testing.assert_close(
         _background_cost(
@@ -104,7 +115,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             background_mask,
             truncation_meters=1.25,
         ),
-        torch.tensor([-1.0], dtype=torch.float64),
+        torch.tensor([2.0], dtype=torch.float64),
     )
     # A single remaining valid actor has no pair, so the term is neutral.
     one_actor_valid = torch.ones((1, 3, 2), dtype=torch.bool)
@@ -151,9 +162,9 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             all_background,
             separated_optimized,
         ),
-        torch.tensor([-1.5625], dtype=torch.float64),
+        torch.tensor([-1.25], dtype=torch.float64),
     )
-    # The same overlapping pair drives the term to its floor once both are optimized.
+    # An overlapping optimized pair has negative clearance, so negation penalizes penetration.
     overlapping_optimized = torch.tensor([[False, True, True]])
     torch.testing.assert_close(
         _background_cost(
@@ -164,7 +175,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             all_background,
             overlapping_optimized,
         ),
-        torch.zeros(1, dtype=torch.float64),
+        torch.tensor([2.0], dtype=torch.float64),
     )
     touching_states = _states([0.0, 0.0])
     torch.testing.assert_close(
@@ -185,7 +196,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
             torch.ones((1, 2), dtype=torch.bool),
             torch.ones((1, 2), dtype=torch.bool),
         ),
-        torch.tensor([-1.5625], dtype=torch.float64),
+        torch.tensor([-1.25], dtype=torch.float64),
     )
     torch.testing.assert_close(
         _background_cost(
@@ -212,12 +223,12 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
     )
     torch.testing.assert_close(
         diagnostic_costs.background_collision,
-        torch.tensor([-1.5625], dtype=torch.float64),
+        torch.tensor([-0.2], dtype=torch.float64),
     )
     assert diagnostic_costs.background_collision_first_agent_idx.item() == 1
     assert diagnostic_costs.background_collision_second_agent_idx.item() == 2
     assert diagnostic_costs.background_collision_timestep_idx.item() == 0
-    assert diagnostic_costs.background_collision_truncated.item()
+    assert not diagnostic_costs.background_collision_truncated.item()
     torch.testing.assert_close(
         diagnostic_costs.background_collision_signed_distance_meters,
         torch.tensor([0.2], dtype=torch.float64),
@@ -290,7 +301,7 @@ def test_cost_terms_use_the_documented_reduction_semantics(monkeypatch):
 
 def test_cost_gradients_reach_actions_and_the_combined_loss_decreases():
     """Repulsion, drivable attraction, action-space gradients, and end-to-end descent."""
-    repelled_states = _states([0.0, 0.0, 0.5], time_count=2).requires_grad_()
+    repelled_states = _states([0.0, 0.0, 4.5], time_count=2).requires_grad_()
     repulsion = _background_cost(
         repelled_states,
         torch.ones((1, 3, 2), dtype=torch.bool),
@@ -303,7 +314,18 @@ def test_cost_gradients_reach_actions_and_the_combined_loss_decreases():
     assert repulsion_gradient[0, 2, :, 0].abs().sum() > 0
     torch.testing.assert_close(repulsion_gradient[0, 2, :, 0], torch.full((2,), -0.5, dtype=torch.float64))
 
-    multi_candidate_states = _states([0.0, 0.2, 0.8, 1.5], time_count=2).requires_grad_()
+    saturated_states = _states([0.0, 0.0, 20.0], time_count=2).requires_grad_()
+    saturated_cost = _background_cost(
+        saturated_states,
+        torch.ones((1, 3, 2), dtype=torch.bool),
+        *_dimensions(3),
+        torch.tensor([[False, True, True]]),
+        torch.tensor([[False, True, True]]),
+    ).sum()
+    saturated_gradient = torch.autograd.grad(saturated_cost, saturated_states)[0]
+    torch.testing.assert_close(saturated_gradient, torch.zeros_like(saturated_gradient))
+
+    multi_candidate_states = _states([0.0, 4.2, 8.8, 20.0], time_count=2).requires_grad_()
     multi_candidate_cost = _background_cost(
         multi_candidate_states,
         torch.ones((1, 4, 2), dtype=torch.bool),

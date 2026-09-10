@@ -6,8 +6,16 @@ from enum import IntFlag
 
 import torch
 
-from pufferlib.ocean.regents.geometry import signed_box_distance
-from pufferlib.ocean.regents.state import STATE_HEADING, STATE_SPEED, STATE_X, STATE_Y, ScenarioBatch
+from pufferlib.ocean.regents.geometry import oriented_box_corners, signed_box_distance
+from pufferlib.ocean.regents.losses import _masked_boxes
+from pufferlib.ocean.regents.state import (
+    STATE_FEATURE_COUNT,
+    STATE_HEADING,
+    STATE_SPEED,
+    STATE_X,
+    STATE_Y,
+    ScenarioBatch,
+)
 
 
 DEFAULT_MINIMUM_VALID_STATE_FRACTION = 0.5
@@ -18,6 +26,7 @@ DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS = math.pi / 8.0
 # Disabled by default: a finite threshold obliges the caller to measure the drift
 # of the same baseline reconstruction the optimizer will start from.
 DEFAULT_MAXIMUM_RECONSTRUCTION_DRIFT_METERS = math.inf
+DEFAULT_FILTER_OFF_ROAD_START = True
 DEFAULT_FRONT_DIVERGENCE_FRACTION = 0.5
 PAPER_FRONT_APPLICABILITY_HALF_ANGLE_RADIANS = math.pi / 8.0
 REFERENCE_FRONT_YAW_HALF_ANGLE_RADIANS = math.pi / 2.0
@@ -33,6 +42,7 @@ class CandidateFilterReason(IntFlag):
     SCENE_UNSUITABLE = 1 << 5
     ORIGINAL_COLLISION = 1 << 6
     RECONSTRUCTION_FIDELITY = 1 << 7
+    OFF_ROAD_START = 1 << 8
 
 
 class SceneFilterReason(IntFlag):
@@ -50,8 +60,11 @@ class ReGentSFilterConfig:
     rear_sector_fraction: float = DEFAULT_REAR_SECTOR_FRACTION
     rear_sector_half_angle_radians: float = DEFAULT_REAR_SECTOR_HALF_ANGLE_RADIANS
     maximum_reconstruction_drift_meters: float = DEFAULT_MAXIMUM_RECONSTRUCTION_DRIFT_METERS
+    filter_off_road_start: bool = DEFAULT_FILTER_OFF_ROAD_START
 
     def __post_init__(self):
+        if not isinstance(self.filter_off_road_start, bool):
+            raise TypeError("filter_off_road_start must be a bool")
         for name in ("minimum_valid_state_fraction", "rear_sector_fraction"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0 or value > 1.0:
@@ -86,6 +99,7 @@ class CandidateSelection:
     maximum_reconstruction_residual_meters: torch.Tensor
     model_consistent_transition_fraction: torch.Tensor
     reconstruction_drift_meters: torch.Tensor
+    start_off_road: torch.Tensor
     horizon_transition_count: int
 
     def __post_init__(self):
@@ -113,7 +127,7 @@ class CandidateSelection:
         for name in ("scene_eligible", "scene_reason_bits"):
             if getattr(self, name).shape != (batch_count,):
                 raise ValueError(f"{name} must have shape [batch]")
-        for name in ("original_collision", "original_collision_timestep"):
+        for name in ("original_collision", "original_collision_timestep", "start_off_road"):
             if getattr(self, name).shape != self.candidate_mask.shape:
                 raise ValueError(f"{name} must have shape [batch, agent]")
 
@@ -220,6 +234,41 @@ def _motion_statistics(scenario):
     maximum_speed = masked_speed.max(dim=-1).values
     maximum_speed = torch.where(has_valid_state, maximum_speed, torch.zeros_like(maximum_speed))
     return displacement, maximum_speed
+
+
+def _start_off_road_flags(scenario):
+    """Flag agents whose whole footprint lies off the drivable raster at their logged start.
+
+    An agent that starts fully off the drivable surface has no lane the optimizer could
+    keep it on, so accelerating it into the ego would only manufacture an off-road
+    adversary. The footprint, rather than the center alone, decides: lane corridors are
+    rasterized to a nominal width, so a vehicle straddling a corridor edge is still on
+    road. Pixels are sampled at the nearest center, as the off-road cost signature does.
+    """
+    state = scenario.logged_state
+    valid = scenario.state_valid
+    has_valid_state = valid.any(dim=-1)
+    first_valid_idx = valid.to(torch.int8).argmax(dim=-1)
+    gather_shape = (*first_valid_idx.shape, 1, STATE_FEATURE_COUNT)
+    start_state = torch.gather(state, 2, first_valid_idx[..., None, None].expand(gather_shape))
+    start_boxes = _masked_boxes(
+        start_state, has_valid_state[..., None], scenario.length_meters, scenario.width_meters
+    ).squeeze(2)
+    sample_points = torch.cat((oriented_box_corners(start_boxes), start_boxes[..., None, :2]), dim=-2)
+    output = torch.zeros(state.shape[:2], dtype=torch.bool, device=state.device)
+    for batch_idx, raster in enumerate(scenario.drivable_area_rasters):
+        raster_mask = raster.mask.to(state.device)
+        grid = raster.transform.world_to_grid(sample_points[batch_idx])
+        column = torch.round(grid[..., 0]).to(torch.int64)
+        row = torch.round(grid[..., 1]).to(torch.int64)
+        inside_raster = (column >= 0) & (column < raster.transform.width)
+        inside_raster &= (row >= 0) & (row < raster.transform.height)
+        safe_column = column.clamp(0, raster.transform.width - 1)
+        safe_row = row.clamp(0, raster.transform.height - 1)
+        on_road = inside_raster & raster_mask[safe_row, safe_column]
+        # An agent with no valid state has no logged start to place on the map.
+        output[batch_idx] = ~on_road.any(dim=-1) & has_valid_state[batch_idx]
+    return output
 
 
 def _rear_sector_statistics(scenario, logged_time_count, half_angle_radians):
@@ -344,6 +393,9 @@ def select_adversary_candidates(
     reason_bits |= rear.to(torch.int64) * int(CandidateFilterReason.REAR_SECTOR)
     drifted = reconstruction_drift_meters > config.maximum_reconstruction_drift_meters
     reason_bits |= drifted.to(torch.int64) * int(CandidateFilterReason.RECONSTRUCTION_FIDELITY)
+    start_off_road = _start_off_road_flags(scenario)
+    if config.filter_off_road_start:
+        reason_bits |= start_off_road.to(torch.int64) * int(CandidateFilterReason.OFF_ROAD_START)
 
     ego_count = scenario.ego_mask.sum(dim=-1)
     ego_transition_count = (transition_valid & scenario.ego_mask[..., None]).sum(dim=(-2, -1))
@@ -375,6 +427,7 @@ def select_adversary_candidates(
         maximum_reconstruction_residual_meters=maximum_reconstruction_residual,
         model_consistent_transition_fraction=model_consistent_fraction,
         reconstruction_drift_meters=reconstruction_drift_meters,
+        start_off_road=start_off_road,
         horizon_transition_count=horizon_transition_count,
     )
 

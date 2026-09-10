@@ -47,6 +47,7 @@ from pufferlib.ocean.regents.state import (
 )
 from pufferlib.ocean.regents.waymax_actions import (
     NORMALIZED_CURVATURE_LIMIT,
+    WAYMAX_MAXIMUM_CURVATURE_PER_METER,
     curvature_from_target_steering,
     target_steering_from_curvature,
 )
@@ -76,6 +77,11 @@ DEFAULT_STEERING_UPDATE_SCALE = 0.5
 # A curvature sitting exactly at full lock round trips, in float32, to a wheel angle one
 # ulp above the action box, which the C injector rejects. Project just inside the limit.
 CURVATURE_PARAMETER_LIMIT_MARGIN = 1.0 - 1e-6
+
+# The reference bounds curvature at a flat 0.3 1/m for every object, whatever its size. Our
+# wheel angle caps a long vehicle below that, and a parameter past what the wheel can reach
+# converts to a saturated angle with no gradient, so the box is the tighter of the two.
+STEERING_PARAMETER_LIMIT_PER_METER = WAYMAX_MAXIMUM_CURVATURE_PER_METER
 
 
 # Every ego controller ReGentS can freeze. C owns the ego whatever the controller is;
@@ -664,7 +670,7 @@ def _selected_adversary(boxes, state_valid, ego_idx, candidate_mask):
     candidate_indices = torch.where(candidate_mask[0])[0]
     if candidate_indices.numel() == 0:
         return -1
-    distances = (boxes[0, candidate_indices, :, :2] - boxes[0, ego_idx, None, :, :2]).square().sum(dim=-1)
+    distances = signed_box_distance(boxes[0, candidate_indices], boxes[0, ego_idx, None])
     jointly_valid = state_valid[0, candidate_indices] & state_valid[0, ego_idx, None]
     jointly_valid_counts = jointly_valid.sum(dim=-1)
     summed_distances = torch.where(jointly_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
@@ -774,7 +780,10 @@ def optimize_frozen_ego_scenario(
     wheelbase_over_time, achievable_curvature = steering_conversion_metadata(
         scenario, selection.optimized_action_mask, baseline_actions.device
     )
-    steering_parameter_limit = achievable_curvature * CURVATURE_PARAMETER_LIMIT_MARGIN
+    steering_parameter_limit = torch.clamp(
+        achievable_curvature * CURVATURE_PARAMETER_LIMIT_MARGIN,
+        max=STEERING_PARAMETER_LIMIT_PER_METER,
+    )
     baseline_parameter = parameter_from_drive_actions(baseline_actions, wheelbase_over_time)
     action_parameter = torch.nn.Parameter(baseline_parameter.clone())
     # A saturated logged action reconstructs to the curvature limit, so projecting before

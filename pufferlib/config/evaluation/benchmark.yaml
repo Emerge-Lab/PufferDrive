@@ -106,6 +106,33 @@ benchmarks:
       map_dir: pufferlib/resources/drive/binaries/nuplan
       use_neighbor_cache: 0
 
+  # Controller-only WOMD evaluation: the C simulator owns the PDM ego and replays all
+  # backgrounds. No checkpoint is loaded, so this runs without a trained policy.
+  - name: womd_pdm
+    seed: 42
+    num_scenarios: 100
+    render_scenarios: true
+    env:
+      simulation_mode: replay
+      num_maps: 100
+      scenario_length: 91
+      max_scenarios_per_batch: 16
+      control_mode: control_sdc_only
+      sdc_controller: pdm
+      non_sdc_controller: replay
+      non_vehicle_controller: replay
+      action_type: continuous
+      dynamics_model: classic
+      dt: 0.1
+      init_step: 0
+      init_step_spread: false
+      reward_conditioning: false
+      reward_randomization: false
+      terminate_on_goal: false
+      goal_source: route
+      map_dir: pufferlib/resources/drive/binaries/wod-motion_val
+      use_neighbor_cache: 0
+
   # ReGentS Stage 0: the C simulator owns the IDM ego and replays all backgrounds.
   - name: regents_idm
     seed: 42

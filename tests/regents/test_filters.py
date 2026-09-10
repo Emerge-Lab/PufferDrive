@@ -312,3 +312,38 @@ def test_front_divergence_uses_separate_bearing_and_yaw_windows_and_a_strict_fra
     four_step_valid = torch.ones((1, 2, 4), dtype=torch.bool)
     assert not front_divergence_mask(half_diverging, four_step_valid, ego_mask, candidate_mask, tau_front=0.5)[0, 1]
     assert front_divergence_mask(half_diverging, four_step_valid, ego_mask, candidate_mask, tau_front=0.49)[0, 1]
+
+
+def test_off_road_start_filter_keeps_agents_whose_footprint_touches_the_drivable_area():
+    """A logged start fully off the raster is excluded; straddling its edge is not."""
+    drivable_mask = torch.zeros((101, 101), dtype=torch.bool)
+    drivable_mask[47:54] = True
+    states = torch.stack(
+        (
+            _linear_track(0.0, 0.0, 2.0),
+            _linear_track(8.0, 4.0, 2.0),
+            _linear_track(8.0, 20.0, 2.0),
+        )
+    )[None]
+    scenario = make_scenario(states, drivable_mask=drivable_mask)
+
+    selection = select_adversary_candidates(scenario)
+    assert selection.start_off_road.tolist() == [[False, False, True]]
+    assert selection.candidate_mask.tolist() == [[False, True, False]]
+    assert "off_road_start" in selection.reasons_for(0, 2)
+    assert "off_road_start" not in selection.reasons_for(0, 1)
+
+    unfiltered = select_adversary_candidates(scenario, ReGentSFilterConfig(filter_off_road_start=False))
+    assert unfiltered.start_off_road.tolist() == [[False, False, True]]
+    assert unfiltered.candidate_mask.tolist() == [[False, True, True]]
+    assert unfiltered.reasons_for(0, 2) == ()
+
+    # An agent that enters mid log is placed by its own first valid state, not by
+    # the zero-filled storage that precedes it.
+    late_states = states.clone()
+    late_states[0, 2, :2] = 0.0
+    late_states[0, 2, 2:, 1] = 2.0
+    late_valid = torch.ones((1, 3, 6), dtype=torch.bool)
+    late_valid[0, 2, :2] = False
+    late = select_adversary_candidates(make_scenario(late_states, late_valid, drivable_mask=drivable_mask))
+    assert late.start_off_road.tolist() == [[False, False, False]]

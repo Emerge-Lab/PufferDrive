@@ -11,8 +11,7 @@ from pufferlib.ocean.regents.optimizer import STEERING_PARAMETERIZATION_CURVATUR
 from pufferlib.ocean.regents.rollout import ReactiveGenerationResult
 
 
-ARTIFACT_SCHEMA = "pufferdrive_regents_generation_v2"
-SUPPORTED_ARTIFACT_SCHEMAS = ("pufferdrive_regents_generation_v1", ARTIFACT_SCHEMA)
+ARTIFACT_SCHEMA = "pufferdrive_regents_generation"
 BACKGROUND_COLLISION_LOSS_SCOPE = "candidate_pairs"
 MAX_ARTIFACT_ARRAY_ELEMENTS = 100_000_000
 
@@ -64,8 +63,8 @@ def save_generation_artifact(path, result, source_configuration, map_path):
         "ego_refresh_count": result.ego_refresh_count,
         "optimization": {
             "result_selection_policy": "current_iterate",
-            "candidate_filter_policy": "state_validity_displacement_speed_rear_sector_reconstruction_fidelity",
-            "collision_loss_metric": "squared_center_distance",
+            "candidate_filter_policy": "state_validity_displacement_speed_rear_sector_reconstruction_fidelity_off_road_start",
+            "collision_loss_metric": "signed_oriented_box_distance_meters",
             "road_loss_reduction": "mean_timesteps_sum_valid_agents_and_corners",
             "road_loss_kernel": "unit_mass_truncated_grid_convolution",
             "road_loss_baseline_subtracted": False,
@@ -150,6 +149,6 @@ def load_generation_artifact(path):
     if metadata_array.dtype != np.uint8 or metadata_array.ndim != 1:
         raise ValueError("Artifact metadata must be a one-dimensional uint8 array")
     metadata = json.loads(metadata_array.tobytes().decode("utf-8"))
-    if metadata.get("schema") not in SUPPORTED_ARTIFACT_SCHEMAS:
+    if metadata.get("schema") != ARTIFACT_SCHEMA:
         raise ValueError("Unknown ReGentS artifact schema")
     return metadata, arrays

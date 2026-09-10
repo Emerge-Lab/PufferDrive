@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from pufferlib.ocean.drive.drive import Drive
 from pufferlib.ocean.regents.adapter import DEFAULT_RASTER_RESOLUTION_METERS
+from pufferlib.ocean.regents.dynamics import ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
 from pufferlib.ocean.regents.artifacts import save_generation_artifact
 from pufferlib.ocean.regents.filters import ReGentSFilterConfig
 from pufferlib.ocean.regents.losses import ReGentSCostConfig
@@ -153,6 +154,13 @@ def load_generation_config(config_path, generation_name):
         config = yaml.safe_load(config_file)
     config = _require_mapping(config, "ReGentS generation config")
     shared_env = _require_mapping(config.get("env"), "ReGentS generation config env")
+    shared_optimizer = _require_mapping(config.get("optimizer", {}), "ReGentS generation config optimizer")
+    # Nested blocks would be clobbered wholesale by a generation's own, so the shared
+    # optimizer carries scalars only; shared cost geometry has its own top-level block.
+    nested_shared_keys = [key for key, value in shared_optimizer.items() if isinstance(value, dict)]
+    if nested_shared_keys:
+        raise ValueError(f"ReGentS generation config optimizer must not nest: {', '.join(sorted(nested_shared_keys))}")
+    shared_costs = _require_mapping(config.get("costs", {}), "ReGentS generation config costs")
     generations = config.get("generations")
     if not isinstance(generations, list) or not generations:
         raise ValueError("ReGentS generation config must contain a non-empty generations list")
@@ -181,7 +189,13 @@ def load_generation_config(config_path, generation_name):
     if unknown_keys:
         raise ValueError(f"ReGentS generation config has unsupported env keys: {', '.join(sorted(unknown_keys))}")
 
-    optimizer = _require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer")
+    optimizer = dict(shared_optimizer)
+    optimizer.update(_require_mapping(selected.get("optimizer", {}), f"Generation {generation_name} optimizer"))
+    # Shared cost geometry, overridden key by key by a generation that declares its own.
+    costs = dict(shared_costs)
+    costs.update(_require_mapping(optimizer.get("costs", {}), f"Generation {generation_name} optimizer costs"))
+    if costs:
+        optimizer["costs"] = costs
     ego_policy = _resolve_ego_policy(selected.get("ego_policy"), environment, generation_name)
     num_workers = selected.get("num_workers", 1)
     if num_workers != "auto":
@@ -322,6 +336,11 @@ def _truncated_at_ego_collision(frames, ego_actions, first_ego_collision_timeste
     return {key: array[:frame_count] for key, array in frames.items()}, ego_actions[:, : frame_count - 1]
 
 
+def candidate_plan(actions, candidate_rows, transition_count):
+    """Return the candidate rows of an action plan, cut to the rendered transitions."""
+    return actions[0][candidate_rows][:, :transition_count].detach().cpu().numpy()
+
+
 def render_scenario_replays(destination, scenario_idx, result, env_config):
     """Write logged and adversarial replays as interactive HTML with the shared viewer."""
     import pufferlib.viz
@@ -335,7 +354,8 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
     replays_dir.mkdir(parents=True, exist_ok=True)
     rendered = {}
     sources = (("logged", replay.baseline_frames), ("adversarial", replay.adversarial_frames))
-    candidate_adversary_ids = result.scenario.agent_id[0][result.optimization.selection.candidate_mask[0]].tolist()
+    candidate_rows = result.optimization.selection.candidate_mask[0]
+    candidate_adversary_ids = result.scenario.agent_id[0][candidate_rows].tolist()
     for label, frames in sources:
         stem = f"scenario_{scenario_idx:05d}.{label}"
         # Both replays are cut to the same length so the logged and adversarial pages
@@ -345,6 +365,16 @@ def render_scenario_replays(destination, scenario_idx, result, env_config):
         )
         bundle = _replay_bundle(env_config, cut_frames, cut_ego_actions)
         bundle["candidate_adversary_ids"] = candidate_adversary_ids
+        # The optimizer's plan for every candidate, so the viewer can show the acceleration
+        # the log started from next to the one Adam ended on, frame-aligned with the replay.
+        bundle["adversary_plan_ids"] = candidate_adversary_ids
+        bundle["adversary_plan_initial"] = candidate_plan(
+            result.optimization.initial_actions, candidate_rows, cut_ego_actions.shape[1]
+        )
+        bundle["adversary_plan_optimized"] = candidate_plan(
+            result.optimization.optimized_actions, candidate_rows, cut_ego_actions.shape[1]
+        )
+        bundle["adversary_plan_acceleration_scale"] = ACCELERATION_SCALE_METERS_PER_SECOND_SQUARED
         bundle["selected_adversary_idx"] = result.optimization.selected_adversary_idx
         bundle["selected_adversary_id"] = result.optimization.selected_adversary_id
         bundle["ego_collision_loss_adversary_idx"] = result.optimization.ego_collision_loss_adversary_idx

@@ -262,7 +262,7 @@ def test_synthetic_scenes_optimize_to_collision_and_preserve_frozen_actions(monk
 
 
 def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnostics():
-    """Ego overlap stops optimization even when regularizers fail to prevent infractions."""
+    """The current iterate and baseline-relative infraction diagnostics are returned."""
     mixed_control = optimize_frozen_ego_scenario(
         _scenario(
             torch.stack(
@@ -288,12 +288,12 @@ def test_current_iterate_is_returned_with_baseline_relative_infraction_diagnosti
     assert mixed_control.initial_costs.background_collision_first_agent_idx == 1
     assert mixed_control.initial_costs.background_collision_second_agent_idx == 3
     assert mixed_control.initial_costs.background_collision_timestep_idx == 7
-    assert mixed_control.initial_costs.background_collision == -1.5625
-    assert mixed_control.final_costs.background_collision == -1.5625
+    assert math.isclose(mixed_control.initial_costs.background_collision, -0.6, abs_tol=2e-6)
+    assert mixed_control.final_costs.background_collision == -1.25
     assert mixed_control.final_costs.background_collision_truncated
-    assert torch.equal(mixed_control.optimized_actions[0, 1], mixed_control.initial_actions[0, 1])
+    assert not torch.equal(mixed_control.optimized_actions[0, 1], mixed_control.initial_actions[0, 1])
     assert torch.equal(mixed_control.optimized_actions[0, 2], mixed_control.initial_actions[0, 2])
-    assert torch.equal(mixed_control.optimized_actions[0, 3], mixed_control.initial_actions[0, 3])
+    assert not torch.equal(mixed_control.optimized_actions[0, 3], mixed_control.initial_actions[0, 3])
     assert not mixed_control.background_collision
     assert mixed_control.iteration_count == 20
     assert mixed_control.best_iteration == 20

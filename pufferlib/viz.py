@@ -884,6 +884,9 @@ def encode_interactive_replay(scenario, replay):
         chunks["entropy"] = replay["entropy"].astype(np.float32, copy=False)
     if quantized_observations is not None:
         chunks["obs"] = quantized_observations
+    if replay.get("adversary_plan_initial") is not None:
+        chunks["adversary_plan_initial"] = replay["adversary_plan_initial"].astype(np.float32, copy=False)
+        chunks["adversary_plan_optimized"] = replay["adversary_plan_optimized"].astype(np.float32, copy=False)
     if replay.get("policy_probs") is not None:
         chunks["policy_probs"] = replay["policy_probs"].astype(np.float32, copy=False)
     if replay.get("policy_mean") is not None:
@@ -963,6 +966,8 @@ def encode_interactive_replay(scenario, replay):
         "optimization_update_count": int(replay.get("optimization_update_count", -1)),
         "optimization_ego_collision": bool(replay.get("optimization_ego_collision", False)),
         "ego_refresh_count": int(replay.get("ego_refresh_count", -1)),
+        "adversary_plan_ids": [int(agent_id) for agent_id in replay.get("adversary_plan_ids", [])],
+        "adversary_plan_acceleration_scale": float(replay.get("adversary_plan_acceleration_scale", 0.0)),
     }
     return _pack_replay_binary(metadata, chunks)
 
@@ -1038,6 +1043,8 @@ def _render_interactive_replay_payload(compressed_payload, filename):
         .heat-cell.selected::after { content:''; position:absolute; top:3px; right:3px; width:5px; height:5px; border-radius:50%; background:#fff; box-shadow:0 0 0 1px rgba(13,20,32,.75); }
         .heat-lab { display:flex; align-items:center; justify-content:center; height:19px; font-family:var(--mono); font-size:9px; color:#c8d1e0; }
         .heat-cap { grid-column:1 / -1; color:var(--muted); font-size:9.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+        #adv-plan-section { display:none; }
+        #adv-plan-canvas { width:100%; height:120px; margin-top:6px; border:1px solid var(--border); border-radius:7px; background:rgba(5,10,20,.18); }
         #warn-row { display:none; flex-wrap:wrap; gap:6px; margin-top:10px; }
         .warn-chip { padding:3px 9px; border-radius:5px; background:var(--danger); color:#fff; font-size:10px; font-weight:700; letter-spacing:.08em; }
         .speed-block { display:flex; align-items:baseline; gap:6px; margin-top:8px; }
@@ -1098,10 +1105,21 @@ def _render_interactive_replay_payload(compressed_payload, filename):
                 <div class="item"><span class="name">accel lat</span><span class="num" id="tel-alat">0</span></div>
                 <div class="item"><span class="name">jerk lon</span><span class="num" id="tel-jl">0</span></div>
                 <div class="item"><span class="name">jerk lat</span><span class="num" id="tel-jlat">0</span></div>
+                <div class="item"><span class="name">speed m/s</span><span class="num" id="tel-mps">0.00</span></div>
             </div>
             <div class="label">Position x / y / heading</div>
             <div class="mono dim" style="font-size:11.5px"><span id="tel-x">0</span>, <span id="tel-y">0</span>, <span id="tel-h">0</span></div>
             <div class="label" id="control-label">Policy</div><div id="policy-grid" class="grid"></div>
+            <div id="adv-plan-section">
+                <button type="button" class="toggle-header" data-target="adv-plan-body"><span>Adversary accel plan</span><span>&#9662;</span></button>
+                <div id="adv-plan-body" class="toggle-body">
+                    <canvas id="adv-plan-canvas"></canvas>
+                    <div class="grid">
+                        <div class="item"><span class="name">logged m/s&#178;</span><span class="num" id="adv-plan-init">-</span></div>
+                        <div class="item"><span class="name">optim m/s&#178;</span><span class="num" id="adv-plan-opt">-</span></div>
+                    </div>
+                </div>
+            </div>
             <button type="button" class="toggle-header" data-target="puffer-score-body"><span>Puffer score</span><span>&#9662;</span></button>
             <div id="puffer-score-body" class="toggle-body"><div id="tel-ps" class="score-num">0.000</div></div>
             <button type="button" class="toggle-header" data-target="puffer-grid"><span>Puffer metrics</span><span>&#9662;</span></button>
@@ -1139,6 +1157,7 @@ __PAYLOAD_CHUNKS__
         const SVG_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
         let H, C = {}, F, paths = {0:new Path2D(),1:new Path2D(),2:new Path2D()}, lastDrawn = -1;
         let adversaryIds = new Set(), egoCollisionLossAdversaryId = -1;
+        let adversaryPlanRows = new Map(), adversaryPlanTransitions = 0, adversaryPlanDims = 0, accelScale = 0;
         const c = document.getElementById('c'), ctx = c.getContext('2d');
         const obsC = document.getElementById('obs-canvas'), obsCtx = obsC.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
@@ -1249,6 +1268,12 @@ self.onmessage = async event => {
             expertAgentIndices = new Set(H.expert_indices);
             adversaryIds = new Set(H.candidate_adversary_ids || []);
             if (H.selected_adversary_id !== undefined && H.selected_adversary_id !== -1) adversaryIds.add(H.selected_adversary_id);
+            (H.adversary_plan_ids || []).forEach((agentId, row) => adversaryPlanRows.set(agentId, row));
+            if (C.adversary_plan_initial) {
+                adversaryPlanTransitions = H.chunks.adversary_plan_initial.shape[1];
+                adversaryPlanDims = H.chunks.adversary_plan_initial.shape[2];
+                accelScale = H.adversary_plan_acceleration_scale || 0;
+            }
             egoCollisionLossAdversaryId = H.ego_collision_loss_adversary_id ?? -1;
             if (egoCollisionLossAdversaryId !== -1) adversaryIds.add(egoCollisionLossAdversaryId);
             document.getElementById('regents-adversary-legend').style.display = adversaryIds.size ? '' : 'none';
@@ -1569,6 +1594,46 @@ self.onmessage = async event => {
             }
             if (C.policy_mean) { for (let i=0;i<refs.means.length;i++){ refs.means[i].textContent = C.policy_mean[ab+i].toFixed(3); refs.stds[i].textContent = C.policy_std[ab+i].toFixed(3); } refs.polLp.textContent = C.policy_log_prob[s].toFixed(3); }
         }
+        const ADV_PLAN_LOGGED_COLOR = "#aab3c5", ADV_PLAN_OPTIMIZED_COLOR = "#7cbcff";
+        function drawAdversaryPlan(frame, agentId) {
+            // Action i drives the transition frame i -> i+1, so it is plotted at frame i+1.
+            const section = document.getElementById('adv-plan-section');
+            const row = adversaryPlanRows.get(agentId);
+            if (!C.adversary_plan_initial || row === undefined || adversaryPlanTransitions === 0) { section.style.display = 'none'; return; }
+            section.style.display = '';
+            const canvas = document.getElementById('adv-plan-canvas'), rect = canvas.getBoundingClientRect();
+            if (rect.width <= 0) return;
+            const w = Math.max(1, Math.floor(rect.width * dpr)), h = Math.max(1, Math.floor(rect.height * dpr));
+            if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+            const g = canvas.getContext('2d'), pad = 6 * dpr;
+            const plotW = w - 2 * pad, plotH = h - 2 * pad;
+            const base = row * adversaryPlanTransitions * adversaryPlanDims;
+            const xOf = i => pad + plotW * (i + 1) / adversaryPlanTransitions;
+            const yOf = value => pad + plotH * (0.5 - 0.5 * Math.max(-1, Math.min(1, value)));
+            g.clearRect(0, 0, w, h);
+            g.strokeStyle = "#4a5468"; g.lineWidth = dpr;
+            g.beginPath(); g.moveTo(pad, yOf(0)); g.lineTo(w - pad, yOf(0)); g.stroke();
+            for (const [chunkName, color] of [["adversary_plan_initial", ADV_PLAN_LOGGED_COLOR], ["adversary_plan_optimized", ADV_PLAN_OPTIMIZED_COLOR]]) {
+                const series = C[chunkName];
+                g.strokeStyle = color; g.lineWidth = 1.6 * dpr; g.beginPath();
+                for (let i = 0; i < adversaryPlanTransitions; i++) {
+                    const value = series[base + i * adversaryPlanDims];
+                    if (i === 0) g.moveTo(xOf(i), yOf(value)); else g.lineTo(xOf(i), yOf(value));
+                }
+                g.stroke();
+            }
+            const cursor = Math.max(0, Math.min(adversaryPlanTransitions - 1, frame - 1));
+            g.strokeStyle = "#eef1f6"; g.lineWidth = dpr; g.setLineDash([3 * dpr, 3 * dpr]);
+            g.beginPath(); g.moveTo(xOf(cursor), pad); g.lineTo(xOf(cursor), h - pad); g.stroke(); g.setLineDash([]);
+            g.fillStyle = "#c8d1e0"; g.font = (9 * dpr) + 'px ui-monospace,monospace'; g.textAlign = 'left';
+            g.fillText('+' + accelScale.toFixed(1), pad + 2 * dpr, pad + 9 * dpr);
+            g.fillText('-' + accelScale.toFixed(1), pad + 2 * dpr, h - pad - 2 * dpr);
+            const readout = [["adv-plan-init", "adversary_plan_initial"], ["adv-plan-opt", "adversary_plan_optimized"]];
+            for (const [elementId, chunkName] of readout) {
+                const normalized = C[chunkName][base + cursor * adversaryPlanDims];
+                document.getElementById(elementId).textContent = (normalized * accelScale).toFixed(2) + ' / ' + normalized.toFixed(2);
+            }
+        }
         function updateUI(agent=null) {
             const f = Math.max(0, Math.min(frameMax(), Math.floor(step)));
             document.getElementById('stepNow').textContent = f;
@@ -1578,13 +1643,14 @@ self.onmessage = async event => {
             hud.style.display='block'; document.getElementById('camMode').textContent = isEgoCam ? 'ego cam' : 'world cam';
             ensurePanels();
             const mb = (f * H.agent_cap + agent.idx) * F.mf, pb = (f * H.agent_cap + agent.idx) * F.pf;
-            for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
+            for (const [id,val] of [["tel-id",agent.id],["tel-speed",(agent.s*3.6).toFixed(1)],["tel-st",(agent.st*180/Math.PI).toFixed(1)],["tel-al",agent.al.toFixed(2)],["tel-alat",agent.alat.toFixed(2)],["tel-jl",agent.jl.toFixed(2)],["tel-jlat",agent.jlat.toFixed(2)],["tel-mps",agent.s.toFixed(2)],["tel-x",agent.x.toFixed(1)],["tel-y",agent.y.toFixed(1)],["tel-h",agent.h.toFixed(3)],["tel-lane",agent.cl],["tel-ps",C.puffer_f32[pb].toFixed(3)]]) document.getElementById(id).textContent = val;
             for (let i=0;i<refs.metric.length;i++) refs.metric[i].textContent = C.metrics_f32[mb+i].toFixed(2);
             for (let i=0;i<refs.puffer.length;i++) refs.puffer[i].textContent = C.puffer_f32[pb+i].toFixed(3);
             updatePolicy(f, agent);
             const warnings = []; if(C.metrics_f32[mb] === 1) warnings.push("COLLISION"); if(C.metrics_f32[mb+1] === 1) warnings.push("OFFROAD"); if(C.metrics_f32[mb+2] === 1) warnings.push("RED LIGHT"); if(C.metrics_f32[mb+3] === 1) warnings.push("STOP SIGN");
             const warnKey = warnings.join('|'), warnRow = document.getElementById('warn-row');
             if (warnKey !== lastWarnKey) { lastWarnKey = warnKey; warnRow.style.display = warnings.length ? 'flex' : 'none'; warnRow.innerHTML = warnings.map(w=>`<span class="warn-chip">${w}</span>`).join(''); }
+            drawAdversaryPlan(f, agent.id);
             const obs = decodeObs(f, agent.slot); if (obs) { obsBox.style.display='block'; drawObs(obs); } else obsBox.style.display='none';
         }
         function draw(force=false) {

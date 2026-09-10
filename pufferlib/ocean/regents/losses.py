@@ -9,6 +9,7 @@ from pufferlib.ocean.regents.geometry import (
     DEFAULT_GAUSSIAN_SIGMA_METERS,
     DEFAULT_GAUSSIAN_TRUNCATE_SIGMA,
     SmoothedOutOfBoundsRaster,
+    box_separation_lower_bound,
     build_smoothed_out_of_bounds_raster,
     oriented_box_corners,
     sample_out_of_bounds_potential,
@@ -161,7 +162,7 @@ def ego_background_collision_cost(
     candidate_adversary_mask,
     boxes=None,
 ):
-    """Return the reference minimum of candidate mean squared center distances.
+    """Return the paper's minimum candidate mean signed box distance.
 
     ``boxes`` lets `combined_regents_cost` share one already-validated box tensor
     across the three terms instead of rebuilding and revalidating it per term.
@@ -175,19 +176,42 @@ def ego_background_collision_cost(
         if torch.any(ego_mask & candidate_adversary_mask):
             raise ValueError("The ego agent cannot be a candidate adversary")
         boxes = _masked_boxes(states, state_valid, length_meters, width_meters)
-    batch_indices = torch.arange(states.shape[0], device=states.device)
-    ego_indices = torch.argmax(ego_mask.to(torch.int64), dim=-1)
-    ego_boxes = boxes[batch_indices, ego_indices]
-    ego_valid = state_valid[batch_indices, ego_indices]
-    distances = (boxes[..., :2] - ego_boxes[:, None, ..., :2]).square().sum(dim=-1)
-    joint_valid = state_valid & ego_valid[:, None] & candidate_adversary_mask[..., None]
-    valid_counts = joint_valid.sum(dim=-1)
-    summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
-    averaged_distances = summed_distances / valid_counts.clamp_min(1)
-    averaged_distances = averaged_distances.masked_fill(valid_counts == 0, torch.inf)
-    if torch.any(~torch.isfinite(averaged_distances.min(dim=-1).values)):
-        raise ValueError("Every scenario needs a candidate with at least one jointly valid ego timestep")
-    return averaged_distances.min(dim=-1).values
+    scenario_costs = []
+    for scenario_idx in range(states.shape[0]):
+        ego_idx = int(torch.argmax(ego_mask[scenario_idx].to(torch.int64)).item())
+        candidate_indices = torch.where(candidate_adversary_mask[scenario_idx])[0]
+        if candidate_indices.numel() == 0:
+            raise ValueError("Every scenario needs a candidate with at least one jointly valid ego timestep")
+        joint_valid = state_valid[scenario_idx, candidate_indices] & state_valid[scenario_idx, ego_idx, None]
+        valid_counts = joint_valid.sum(dim=-1)
+        distances = signed_box_distance(
+            boxes[scenario_idx, candidate_indices],
+            boxes[scenario_idx, ego_idx, None],
+        )
+        summed_distances = torch.where(joint_valid, distances, torch.zeros_like(distances)).sum(dim=-1)
+        averaged_distances = summed_distances / valid_counts.clamp_min(1)
+        averaged_distances = averaged_distances.masked_fill(valid_counts == 0, torch.inf)
+        minimum = averaged_distances.min()
+        if not bool(torch.isfinite(minimum)):
+            raise ValueError("Every scenario needs a candidate with at least one jointly valid ego timestep")
+        scenario_costs.append(minimum)
+    return torch.stack(scenario_costs)
+
+
+def _truncated_signed_box_distances(boxes_a, boxes_b, valid, truncation_meters):
+    """Evaluate exact box clearance only where the truncated loss can have a gradient."""
+    # Retain a zero-gradient graph for fully truncated batches so this remains a
+    # differentiable loss even when no pair needs exact polygon geometry.
+    distances = (boxes_a[..., 0] + boxes_b[..., 0]) * 0.0 + float(truncation_meters)
+    potentially_active = valid & (box_separation_lower_bound(boxes_a, boxes_b) < truncation_meters)
+    active_indices = torch.where(potentially_active)
+    if active_indices[0].numel():
+        exact_distances = signed_box_distance(boxes_a[active_indices], boxes_b[active_indices])
+        distances = distances.index_put(
+            active_indices,
+            torch.clamp_max(exact_distances, float(truncation_meters)),
+        )
+    return torch.where(valid, distances, torch.full_like(distances, torch.inf))
 
 
 def _background_collision_avoidance_cost_and_diagnostics(
@@ -200,7 +224,7 @@ def _background_collision_avoidance_cost_and_diagnostics(
     truncation_meters=DEFAULT_BACKGROUND_DISTANCE_TRUNCATION_METERS,
     boxes=None,
 ):
-    """Return reference squared-center cost and box clearance of its winning pair."""
+    """Return the paper's truncated signed-box cost and its winning pair."""
     if not isinstance(truncation_meters, (float, int)) or not math.isfinite(truncation_meters):
         raise ValueError("truncation_meters must be a finite positive scalar")
     if truncation_meters <= 0:
@@ -261,23 +285,28 @@ def _background_collision_avoidance_cost_and_diagnostics(
         for chunk_start in range(0, pair_indices.shape[1], PAIRWISE_DISTANCE_CHUNK_SIZE):
             chunk_pairs = pair_indices[:, chunk_start : chunk_start + PAIRWISE_DISTANCE_CHUNK_SIZE]
             first_indices, second_indices = chunk_pairs
-            distances = (
-                (boxes[scenario_idx, first_indices, :, :2] - boxes[scenario_idx, second_indices, :, :2])
-                .square()
-                .sum(dim=-1)
-            )
             chunk_valid = pair_valid[chunk_start : chunk_start + chunk_pairs.shape[1]]
-            masked_distances = torch.where(chunk_valid, distances, torch.full_like(distances, torch.inf))
-            truncated_distances = torch.clamp_max(distances, float(truncation_meters) ** 2)
-            chunk_minima.append(
-                torch.where(chunk_valid, truncated_distances, torch.full_like(truncated_distances, torch.inf)).min()
+            first_boxes = boxes[scenario_idx, first_indices]
+            second_boxes = boxes[scenario_idx, second_indices]
+            truncated_distances = _truncated_signed_box_distances(
+                first_boxes,
+                second_boxes,
+                chunk_valid,
+                float(truncation_meters),
             )
-            flat_winner_idx = torch.argmin(masked_distances.reshape(-1))
+            chunk_minima.append(truncated_distances.min())
+            flat_winner_idx = torch.argmin(truncated_distances.reshape(-1))
             pair_winner_idx = torch.div(flat_winner_idx, states.shape[2], rounding_mode="floor")
-            chunk_raw_minima.append(masked_distances.reshape(-1)[flat_winner_idx].detach())
+            timestep_idx = flat_winner_idx % states.shape[2]
+            chunk_raw_minima.append(
+                signed_box_distance(
+                    first_boxes[pair_winner_idx, timestep_idx],
+                    second_boxes[pair_winner_idx, timestep_idx],
+                ).detach()
+            )
             chunk_first_agent_indices.append(first_indices[pair_winner_idx])
             chunk_second_agent_indices.append(second_indices[pair_winner_idx])
-            chunk_timestep_indices.append(flat_winner_idx % states.shape[2])
+            chunk_timestep_indices.append(timestep_idx)
         minimum = torch.stack(chunk_minima).min()
         scenario_costs.append(-minimum)
         winning_chunk_idx = int(torch.argmin(torch.stack(chunk_raw_minima)).item())
@@ -291,7 +320,7 @@ def _background_collision_avoidance_cost_and_diagnostics(
                 boxes[scenario_idx, second_agent_indices[-1], timestep_indices[-1]],
             ).detach()
         )
-        truncation_states.append(winning_distance >= float(truncation_meters) ** 2)
+        truncation_states.append(winning_distance >= float(truncation_meters))
     return (
         torch.stack(scenario_costs),
         torch.stack(first_agent_indices),
@@ -351,7 +380,7 @@ def combined_regents_cost(
     out_of_bounds_rasters,
     config=None,
 ):
-    """Combine released-code collision costs and the grid-approximated road cost."""
+    """Combine paper box-distance collision costs and the grid-approximated road cost."""
     if config is None:
         config = ReGentSCostConfig()
     if not isinstance(config, ReGentSCostConfig):

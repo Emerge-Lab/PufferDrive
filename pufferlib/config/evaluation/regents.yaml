@@ -25,9 +25,28 @@ env:
   reward_randomization: false
   terminate_on_goal: false
   goal_source: route
+  # Pin the PDM planning resolution. ReGentS builds its env from Drive.__init__ defaults
+  # (generation.py `_full_env_config`), not puffer_drive.yaml, so without this the pipeline
+  # would silently plan at the 0.5 s Python default while `puffer eval` uses 0.1.
+  pdm_horizon: 4.0
+  pdm_planning_dt: 0.1
   map_dir: pufferlib/resources/drive/binaries/nuplan
   use_neighbor_cache: 0
   use_map_cache: 0
+
+# Shared optimizer settings for every generation; a generation's own optimizer block
+# overrides these key by key. Adam displaces a parameter by about the learning rate per
+# iteration, so learning_rate * iteration_count is the action-space budget a run has.
+optimizer:
+  learning_rate: 0.001
+
+# Shared cost geometry for every generation; a generation's own optimizer.costs
+# overrides these key by key. KING road geometry: sigma 1.0 m (5 px at its 5 px/m)
+# with the +/-32 px crop expressed as 6.4 sigma. Weights stay ReGentS 1/5/20 so
+# this isolates geometry.
+costs:
+  gaussian_sigma_meters: 1.0
+  gaussian_truncate_sigma: 6.4
 
 generations:
   # The Stage 3 audit scenarios: the first 16 local NuPlan maps with seeds 42..57.
@@ -40,7 +59,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       # The ego is log replay here, so it cannot answer the adversary. Every profile asks for
       # a refresh per update; for a replay ego `run_reactive_generation` coerces this to 0,
@@ -65,7 +83,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.005
       iteration_count: 500
       # A reactive IDM ego answers each iterate before a contact is allowed to end the
       # run, so stopping on the first contact means stopping on an IDM-confirmed one.
@@ -100,7 +117,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.005
       iteration_count: 500
       # A reactive PDM ego answers each iterate before a contact is allowed to end the
       # run, so stopping on the first contact means stopping on a PDM-confirmed one.
@@ -134,7 +150,6 @@ generations:
       action_selection: mean
       device: cpu
     optimizer:
-      learning_rate: 0.005
       iteration_count: 500
       # A policy refresh is 90 C steps plus 90 forward passes, so this is the dominant
       # per-scenario cost: up to 45k inferences. Accepted deliberately, so the adversary is
@@ -169,7 +184,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       # IDM ego: re-rolled in C on every update, so the adversary is always optimized
       # against an ego that answers it.
@@ -199,7 +213,6 @@ generations:
       action_selection: mean
       device: cpu
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       # A policy refresh costs a full C rollout plus one forward pass per step, so this is
       # the dominant per-scenario cost. Accepted deliberately for maximum ego reactivity.
@@ -229,7 +242,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       ego_refresh_interval: 1
       filter:
@@ -253,7 +265,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       ego_refresh_interval: 1
       filter:
@@ -272,7 +283,6 @@ generations:
     output_dir: experiments/regents
     render_replays: true
     optimizer:
-      learning_rate: 0.001
       iteration_count: 500
       # One ego rollout per update: 500 updates is up to 500 ego trajectories.
       ego_refresh_interval: 1

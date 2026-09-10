@@ -479,6 +479,8 @@ def test_pufferl_regents_prints_success(tmp_path, capsys, monkeypatch):
     source_configuration = metadata["source_configuration"]
     assert source_configuration["experiment_name"] == "roadless"
     assert source_configuration["optimizer"]["costs"]["drivable_area_weight"] == 0.0
+    assert metadata["schema"] == "pufferdrive_regents_generation"
+    assert metadata["optimization"]["collision_loss_metric"] == "signed_oriented_box_distance_meters"
     assert metadata["optimization"]["road_loss_reduction"] == "mean_timesteps_sum_valid_agents_and_corners"
     assert metadata["optimization"]["road_loss_kernel"] == "unit_mass_truncated_grid_convolution"
 
